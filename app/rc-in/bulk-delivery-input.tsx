@@ -28,6 +28,7 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { submitBulkDeliveries, DeliveryRow } from './actions';
+import { calculateWhse } from '@/lib/rc-utils';
 
 type Batch = {
     id: string;
@@ -39,6 +40,7 @@ type Batch = {
 const createEmptyRow = (): DeliveryRow => ({
     transaction_date: new Date().toISOString().split('T')[0],
     batch_code: '',
+    block_loc: '',
     supplier: '',
     truck_plate: '',
     sacks: 0,
@@ -92,9 +94,7 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
 
     const handleSubmit = async () => {
         setIsSubmitting(true);
-        // Filter out rows with no batch code or 0 weight to avoid empty submissions?
-        // Let's assume validation happens server side or strict client requirement.
-        // For now, simple check:
+        // Simple validation
         const validRows = rows.filter(r => r.batch_code && r.weight_kg > 0);
 
         if (validRows.length === 0) {
@@ -128,12 +128,14 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                     <TableHeader>
                         <TableRow>
                             <TableHead className="w-[40px]"></TableHead>
-                            <TableHead className="w-[130px]">Date</TableHead>
-                            <TableHead className="w-[200px]">Batch Code</TableHead>
-                            <TableHead className="w-[150px]">Supplier</TableHead>
-                            <TableHead className="w-[120px]">Truck</TableHead>
-                            <TableHead className="w-[80px]">Sacks</TableHead>
-                            <TableHead className="w-[100px]">Wt (kg)</TableHead>
+                            <TableHead className="w-[130px]">DATE</TableHead>
+                            <TableHead className="w-[80px] bg-muted/30">WHSE</TableHead>
+                            <TableHead className="w-[150px]">SUPPLIER</TableHead>
+                            <TableHead className="w-[180px]">BLOCK</TableHead>
+                            <TableHead className="w-[100px]">BLOCK LOC</TableHead>
+                            <TableHead className="w-[120px]">TRUCK</TableHead>
+                            <TableHead className="w-[80px]">Sx</TableHead>
+                            <TableHead className="w-[100px]">WT (kg)</TableHead>
                             <TableHead className="w-[100px]">Price</TableHead>
                             {/* Lab Results Group */}
                             <TableHead className="w-[60px]">MC</TableHead>
@@ -162,12 +164,11 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                         className="border-none shadow-none focus-visible:ring-1 h-9 rounded-none"
                                     />
                                 </TableCell>
-                                <TableCell className="p-0">
-                                    <Combobox
-                                        batches={batches}
-                                        value={row.batch_code}
-                                        onSelect={(val) => updateRow(index, 'batch_code', val)}
-                                    />
+                                {/* READ ONLY WHSE */}
+                                <TableCell className="p-0 bg-muted/30">
+                                    <div className="px-2 py-2 text-sm text-muted-foreground font-medium">
+                                        {calculateWhse(row.block_loc)}
+                                    </div>
                                 </TableCell>
                                 <TableCell className="p-0">
                                     <Input
@@ -177,6 +178,29 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                         placeholder="Supplier"
                                     />
                                 </TableCell>
+                                <TableCell className="p-0">
+                                    <Combobox
+                                        batches={batches}
+                                        value={row.batch_code}
+                                        onSelect={(val) => {
+                                            // Optionally auto-fill block_loc if found in batch list
+                                            const batch = batches.find(b => b.batch_code === val);
+                                            updateRow(index, 'batch_code', val);
+                                            if (batch && batch.location_ref) {
+                                                updateRow(index, 'block_loc', batch.location_ref);
+                                            }
+                                        }}
+                                    />
+                                </TableCell>
+                                <TableCell className="p-0">
+                                    <Input
+                                        value={row.block_loc}
+                                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                                        className="border-none shadow-none focus-visible:ring-1 h-9 rounded-none"
+                                        placeholder="Loc"
+                                    />
+                                </TableCell>
+
                                 <TableCell className="p-0">
                                     <Input
                                         value={row.truck_plate}

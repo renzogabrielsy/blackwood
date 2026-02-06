@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase';
 export type DeliveryRow = {
     transaction_date: string;
     batch_code: string;
+    block_loc: string; // Added to match PDF input
     supplier: string;
     truck_plate: string;
     sacks: number;

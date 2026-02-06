@@ -26,9 +26,8 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { DeliveryRow } from './actions';
+import { calculateWhse } from '@/lib/rc-utils';
 
-// Extended type for history to include ID if needed, but for display we can use DeliveryRow + created_at?
-// Let's assume the data passed in matches DeliveryRowStructure + some extras.
 export type DeliveryHistoryRow = DeliveryRow & {
     id: string;
     created_at: string;
@@ -54,6 +53,15 @@ export const columns: ColumnDef<DeliveryHistoryRow>[] = [
         cell: ({ row }) => <div className="pl-4">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
     },
     {
+        id: 'whse',
+        header: 'WHSE',
+        cell: ({ row }) => {
+            // Use block_loc from row if saved, OR fallback to batch location ref if linked
+            const loc = row.original.block_loc || row.original.batches?.location_ref;
+            return <div>{calculateWhse(loc)}</div>;
+        }
+    },
+    {
         accessorKey: 'supplier',
         header: 'Supplier',
     },
@@ -64,19 +72,10 @@ export const columns: ColumnDef<DeliveryHistoryRow>[] = [
     {
         id: 'block_loc',
         header: 'Block Loc',
+        accessorKey: 'block_loc', // Ensure it tries to read the field
         cell: ({ row }) => {
-            // Handle array or object case for joined data, though select('*, batches(location_ref)') usually returns object or array depending on relation type (one-to-one/many)
-            // Since batch_code is text and not a true FK in schema (user said "linked via batch_code (Text)"),
-            // the join implies there IS a FK relationship setup? Or user just modified fetching? 
-            // User query: .select('*, batches(location_ref)')
-            // This implies a relationship exists in Supabase.
-            const batches = row.original.batches as any;
-            // If one-to-many or many-to-one, Supabase client might return array or object.
-            // Usually singular for 'belongs to'.
-            if (Array.isArray(batches)) {
-                return <div>{batches[0]?.location_ref || '-'}</div>;
-            }
-            return <div>{batches?.location_ref || '-'}</div>;
+            const val = row.original.block_loc || row.original.batches?.location_ref;
+            return <div>{val || '-'}</div>;
         }
     },
     {
@@ -103,7 +102,7 @@ export const columns: ColumnDef<DeliveryHistoryRow>[] = [
             return <div>{val.toFixed(2)}</div>;
         }
     },
-    // Lab Stats: We can accessor logic to get nested values
+    // Lab Stats
     {
         id: 'lab_stats',
         header: 'Lab Stats (MC / Ash / BD)',
