@@ -40,3 +40,33 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
     revalidatePath('/rc-in');
     return { success: true };
 }
+
+export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
+    const { error } = await supabase
+        .from('deliveries')
+        .update(data)
+        .eq('id', id);
+
+    if (error) {
+        console.error('Error updating delivery:', error);
+        return { success: false, message: error.message };
+    }
+
+    revalidatePath('/rc-in');
+    return { success: true };
+}
+
+export async function deleteDelivery(id: string) {
+    const { error } = await supabase
+        .from('deliveries')
+        .delete()
+        .eq('id', id);
+
+    if (error) {
+        console.error('Error deleting delivery:', error);
+        return { success: false, message: error.message };
+    }
+
+    revalidatePath('/rc-in');
+    return { success: true };
+}
