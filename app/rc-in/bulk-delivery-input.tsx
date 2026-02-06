@@ -277,7 +277,7 @@ function Combobox({ batches, value, onSelect }: { batches: Batch[], value: strin
                                             value === batch.batch_code ? "opacity-100" : "opacity-0"
                                         )}
                                     />
-                                    {batch.batch_code}
+                                    {batch.batch_code} ({batch.location_ref})
                                 </CommandItem>
                             ))}
                         </CommandGroup>

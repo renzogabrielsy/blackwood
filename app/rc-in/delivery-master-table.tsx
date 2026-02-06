@@ -32,6 +32,9 @@ import { DeliveryRow } from './actions';
 export type DeliveryHistoryRow = DeliveryRow & {
     id: string;
     created_at: string;
+    batches?: {
+        location_ref: string;
+    };
 };
 
 export const columns: ColumnDef<DeliveryHistoryRow>[] = [
@@ -57,6 +60,24 @@ export const columns: ColumnDef<DeliveryHistoryRow>[] = [
     {
         accessorKey: 'batch_code',
         header: 'Block (Batch)',
+    },
+    {
+        id: 'block_loc',
+        header: 'Block Loc',
+        cell: ({ row }) => {
+            // Handle array or object case for joined data, though select('*, batches(location_ref)') usually returns object or array depending on relation type (one-to-one/many)
+            // Since batch_code is text and not a true FK in schema (user said "linked via batch_code (Text)"),
+            // the join implies there IS a FK relationship setup? Or user just modified fetching? 
+            // User query: .select('*, batches(location_ref)')
+            // This implies a relationship exists in Supabase.
+            const batches = row.original.batches as any;
+            // If one-to-many or many-to-one, Supabase client might return array or object.
+            // Usually singular for 'belongs to'.
+            if (Array.isArray(batches)) {
+                return <div>{batches[0]?.location_ref || '-'}</div>;
+            }
+            return <div>{batches?.location_ref || '-'}</div>;
+        }
     },
     {
         accessorKey: 'truck_plate',

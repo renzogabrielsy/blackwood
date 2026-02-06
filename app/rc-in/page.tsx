@@ -15,7 +15,7 @@ export default async function RCInPage() {
     // 2. Fetch Recent Deliveries for Master Log
     const { data: deliveriesRaw, error } = await supabase
         .from('deliveries')
-        .select('*')
+        .select('*, batches(location_ref)')
         .order('transaction_date', { ascending: false }) // Order by Transaction Date, then Created
         .order('created_at', { ascending: false })
         .limit(100);
