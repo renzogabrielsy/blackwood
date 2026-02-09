@@ -15,7 +15,8 @@
  */
 export function calculateWhse(blockLoc: string | undefined | null, batchCode?: string | null): string {
     // Priority: If the Batch Code itself indicates FEED (suffix), it overrides location.
-    if (batchCode && batchCode.trim().toUpperCase().endsWith('FEED')) {
+    // Regex matches "FEED" optionally followed by digits at the end of the string (case-insensitive).
+    if (batchCode && /FEED\d*$/i.test(batchCode.trim())) {
         return 'FEED';
     }
 
