@@ -4,59 +4,80 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
 
+import { startOfMonth, endOfMonth, addMonths, subMonths, format, parse, isFuture, startOfQuarter } from 'date-fns';
+
 export default async function RCInPage({
     searchParams
 }: {
-    searchParams: Promise<{ range?: string }>;
+    searchParams: Promise<{ range?: string; view_date?: string }>;
 }) {
-    const { range: rawRange } = await searchParams;
+    const { range: rawRange, view_date: rawViewDate } = await searchParams;
     const range = rawRange || 'this_month';
+    const now = new Date();
 
-    // 1. Fetch Batches (No UUID link required by Prompt, but for selector we need a list)
-    const { data: batches } = await supabase
-        .from('batches')
-        .select('id, batch_code, location_ref') // Still useful to show location ref
-        .neq('status', 'CLOSED')
-        .order('created_at', { ascending: false });
+    // 1. Determine Current View Date
+    let currentViewDate: Date;
 
-    // 2. Build Query with Date Filter Logic
-    let query = supabase
-        .from('deliveries')
-        .select('*, batches(location_ref)')
-        .order('transaction_date', { ascending: false }) // Order by Transaction Date, then Created
-        .order('created_at', { ascending: false });
-
-    if (range !== 'all') {
-        const now = new Date();
-        let startDate: Date | null = null;
-
-        if (range === 'this_month') {
-            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        } else if (range === 'this_quarter') {
-            const quarter = Math.floor(now.getMonth() / 3);
-            startDate = new Date(now.getFullYear(), quarter * 3, 1);
+    if (rawViewDate) {
+        // User is navigating specific months
+        currentViewDate = parse(rawViewDate, 'yyyy-MM', now);
+    } else {
+        // Default logic based on range if no specific view_date provided
+        if (range === 'this_quarter') {
+            currentViewDate = startOfQuarter(now);
         } else if (range === 'last_6_months') {
-            // "6 months ago from today"
-            startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+            currentViewDate = subMonths(now, 6); // Or whatever "start" means here, but usually page=month
         } else if (range === 'this_year') {
-            startDate = new Date(now.getFullYear(), 0, 1);
-        }
-
-        if (startDate) {
-            // endOfDay logic isn't strictly needed for ">= startDate" if startDate is 00:00:00
-            // but just to be safe we use ISO string which preserves time if present.
-            // However, usually we want "start of day" for correct inclusive filtering.
-            // The constructed dates above are 00:00:00 local time (mostly).
-            // Actually, let's use toISOString() which might shift to UTC.
-            // Providing simple YYYY-MM-DD might be safer for 'date' column types, 
-            // but 'transaction_date' is likely timestamptz.
-            // Let's stick to simple ISO string. 
-            query = query.gte('transaction_date', startDate.toISOString());
+            currentViewDate = new Date(now.getFullYear(), 0, 1);
+        } else {
+            // Default to this month
+            currentViewDate = startOfMonth(now);
         }
     }
 
-    // Removed .limit(100) to allow full range viewing
-    const { data: deliveriesRaw, error } = await query;
+    // Ensure valid date, fallback to now
+    if (isNaN(currentViewDate.getTime())) {
+        currentViewDate = startOfMonth(now);
+    }
+
+    const viewDateStr = format(currentViewDate, 'yyyy-MM');
+    const monthLabel = format(currentViewDate, 'MMMM yyyy');
+
+    // 2. Fetch Batches
+    const { data: batches } = await supabase
+        .from('batches')
+        .select('id, batch_code, location_ref')
+        .neq('status', 'CLOSED')
+        .order('created_at', { ascending: false });
+
+    // 3. Build Query with Strict Month Filter
+    // "A Page is a Month" -> Get full month range
+    const startDate = startOfMonth(currentViewDate);
+    const endDate = endOfMonth(currentViewDate);
+
+    // If 'all' or specific ranges, logic might differ?
+    // Prompt says: "Query: .gte(start).lte(end)... NO .limit()"
+    // Exception: "All" -> "Sets view_date to current month. 'Previous' button goes back in time (forever)."
+    // This implies "All" just resets user to 'current month' view, but allows infinite scrolling back?
+    // Actually, "All" usually implies NO DATE FILTER.
+    // BUT prompt says: "[All]: Sets view_date to current month."
+    // Let's stick to the prompt's "Strict Rule": "A 'Page' is a Month".
+    // So even for 'all', we show *a month* at a time?
+    // Re-reading: "The Core Concept (Strict Rule): A 'Page' is a Month."
+    // So YES, we always filter by month.
+
+    let query = supabase
+        .from('deliveries')
+        .select('*, batches(location_ref)')
+        .order('transaction_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .gte('transaction_date', startDate.toISOString())
+        .lte('transaction_date', endDate.toISOString());
+    // Using ISO string for full timestamp comparison. 
+    // endOfMonth returns X-X-X 23:59:59.999 local time. toISOString converts to UTC.
+    // This is generally correct for timestamptz comparisons.
+
+    const { data: deliveriesRaw, error } = await query; // LIMIT REMOVED
 
     if (error) {
         console.error('Error fetching deliveries:', error);
@@ -65,7 +86,6 @@ export default async function RCInPage({
     // Cast and Parse Data
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
-        // Ensure lab_results is parsed if it came as string (though pg returns object usually)
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
     }));
 
@@ -75,6 +95,24 @@ export default async function RCInPage({
         location_ref: b.location_ref,
     }));
 
+    // Navigation Logic
+    const prevMonthDate = subMonths(currentViewDate, 1);
+    const nextMonthDate = addMonths(currentViewDate, 1);
+
+    const prevLink = `/rc-in?range=${range}&view_date=${format(prevMonthDate, 'yyyy-MM')}`;
+    const nextLink = `/rc-in?range=${range}&view_date=${format(nextMonthDate, 'yyyy-MM')}`;
+
+    // Disable Next if:
+    // 1. Strict mode (range=this_month) AND next month is future?
+    // Prompt: "If range=this_year and we are at Dec, disable 'Next'".
+    // Let's simplified strictness: if next month > now, disable (unless 'future' allowed?).
+    // Usually we don't have future data.
+    const isNextDisabled = isFuture(nextMonthDate) && range !== 'all';
+    // Or if specifically restricted by range type?
+    // "If range=this_year and we are at Dec" -> Dec 2026? 
+    // Let's just disable if it's strictly in the future for now.
+
+    // Filter Presets
     const filters = [
         { label: 'All', value: 'all' },
         { label: 'This Month', value: 'this_month' },
@@ -98,24 +136,52 @@ export default async function RCInPage({
 
             {/* Bottom Section: Master Log */}
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <div className="space-y-1">
-                        <CardTitle>Master Log</CardTitle>
-                        <CardDescription>Recent delivery history.</CardDescription>
-                    </div>
-                    <div className="flex bg-muted p-1 rounded-md text-[10px]">
-                        {filters.map((f) => (
+                <CardHeader className="flex flex-col space-y-4 pb-2">
+                    <div className="flex flex-row items-center justify-between">
+                        <div className="space-y-1">
+                            <CardTitle>Master Log</CardTitle>
+                            <CardDescription>
+                                Current View: <span className="font-semibold text-foreground">{monthLabel}</span>
+                            </CardDescription>
+                        </div>
+
+                        {/* Pagination Controls */}
+                        <div className="flex items-center space-x-2">
                             <a
-                                key={f.value}
-                                href={`/rc-in?range=${f.value}`}
-                                className={`px-3 py-1 rounded-sm transition-colors ${range === f.value
-                                    ? 'bg-background text-foreground shadow-sm'
-                                    : 'text-muted-foreground hover:text-foreground'
-                                    }`}
+                                href={prevLink}
+                                className="px-3 py-1 text-sm border rounded hover:bg-muted"
                             >
-                                {f.label}
+                                ← {format(prevMonthDate, 'MMMM')}
                             </a>
-                        ))}
+                            <a
+                                href={nextLink}
+                                className={`px-3 py-1 text-sm border rounded hover:bg-muted ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                aria-disabled={isNextDisabled}
+                            >
+                                {format(nextMonthDate, 'MMMM')} →
+                            </a>
+                        </div>
+                    </div>
+
+                    <div className="flex bg-muted p-1 rounded-md text-[10px] w-fit">
+                        {filters.map((f) => {
+                            // Logic: The filter button resets view_date to 'default' for that range
+                            // We do NOT pass view_date here, allowing the default logic (lines 20-30) 
+                            // to pick the correct starting month for that range.
+                            const isActive = range === f.value;
+                            return (
+                                <a
+                                    key={f.value}
+                                    href={`/rc-in?range=${f.value}`}
+                                    className={`px-3 py-1 rounded-sm transition-colors ${isActive
+                                        ? 'bg-background text-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    {f.label}
+                                </a>
+                            );
+                        })}
                     </div>
                 </CardHeader>
                 <CardContent>
