@@ -10,7 +10,7 @@ import {
     flexRender,
     getCoreRowModel,
     getFilteredRowModel,
-    getPaginationRowModel,
+    // getPaginationRowModel,
     getSortedRowModel,
     useReactTable,
 } from '@tanstack/react-table';
@@ -309,8 +309,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         onSortingChange: setSorting,
         onColumnFiltersChange: setColumnFilters,
         getCoreRowModel: getCoreRowModel(),
-        getPaginationRowModel: getPaginationRowModel(),
-        getSortedRowModel: getSortedRowModel(),
+        // getPaginationRowModel: getPaginationRowModel(), // Removed per request
         getFilteredRowModel: getFilteredRowModel(),
         onGlobalFilterChange: setGlobalFilter,
         globalFilterFn: (row, columnId, filterValue) => {
@@ -429,14 +428,14 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                         />
                     </div>
                 </div>
-                <div className="rounded-md border overflow-x-auto">
-                    <Table className="w-full table-fixed text-xs">
-                        <TableHeader className="bg-muted/50">
+                <div className="rounded-md border overflow-y-auto max-h-[600px]">
+                    <Table className="w-full table-fixed text-xs relative">
+                        <TableHeader className="bg-muted/50 sticky top-0 z-10">
                             {table.getHeaderGroups().map((headerGroup) => (
                                 <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent">
                                     {headerGroup.headers.map((header) => {
                                         return (
-                                            <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8">
+                                            <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-muted/50">
                                                 {header.isPlaceholder
                                                     ? null
                                                     : flexRender(
