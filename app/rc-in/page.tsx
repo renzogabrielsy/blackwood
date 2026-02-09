@@ -1,5 +1,6 @@
 
 import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
@@ -207,20 +208,20 @@ export default async function RCInPage({
 
                         {/* Pagination Controls */}
                         <div className="flex items-center space-x-2">
-                            <a
+                            <Link
                                 href={prevLink}
                                 className={`px-3 py-1 text-sm border rounded hover:bg-muted bg-background ${isPrevDisabled ? 'opacity-50 pointer-events-none' : ''}`}
                                 aria-disabled={isPrevDisabled}
                             >
                                 ← {format(prevMonthDate, 'MMMM yyyy')}
-                            </a>
-                            <a
+                            </Link>
+                            <Link
                                 href={nextLink}
                                 className={`px-3 py-1 text-sm border rounded hover:bg-muted bg-background ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
                                 aria-disabled={isNextDisabled}
                             >
                                 {format(nextMonthDate, 'MMMM yyyy')} →
-                            </a>
+                            </Link>
                         </div>
                     </div>
                 </CardContent>
