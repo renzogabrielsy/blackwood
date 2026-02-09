@@ -104,17 +104,17 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
     const columns: ColumnDef<DeliveryHistoryRow>[] = [
         {
             id: 'state',
-            header: 'State',
+            header: () => <div className="text-center px-1 font-mono font-bold">STATE</div>,
             size: 60,
             cell: ({ row }) => <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 rounded-sm">{row.original.state || 'STORED'}</div>,
         },
         {
             id: 'whse',
-            header: 'WHSE',
-            size: 50,
+            header: () => <div className="text-center px-1 font-mono font-bold">WHSE</div>,
+            size: 60,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="whitespace-nowrap font-medium text-center text-[10px] text-muted-foreground">{calculateWhse(loc)}</div>;
+                return <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold">{calculateWhse(loc)}</div>;
             }
         },
         {
@@ -124,105 +124,105 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                     <Button
                         variant="ghost"
                         onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-                        className="h-6 px-1 text-xs"
+                        className="h-6 px-1 text-xs font-mono font-bold text-[12px]"
                     >
-                        Date
+                        DATE
                         <ArrowUpDown className="ml-1 h-3 w-3" />
                     </Button>
                 );
             },
-            size: 90,
-            cell: ({ row }) => <div className="whitespace-nowrap px-1">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
+            size: 70,
+            cell: ({ row }) => <div className="whitespace-nowrap px-1 text-center font-mono font-bold text-[10px]">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
         },
         {
             accessorKey: 'supplier',
-            header: 'Supplier',
-            size: 120,
-            cell: ({ row }) => <div className="truncate px-1" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
+            size: 60,
+            cell: ({ row }) => <div className="truncate px-1 font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
-            header: 'Block',
-            size: 80,
-            cell: ({ row }) => <div className="truncate px-1" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
+            size: 72,
+            cell: ({ row }) => <div className="truncate px-1 text-center font-bold font-mono text-[10px]" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
         },
         {
             accessorKey: 'block_loc',
-            header: 'Loc',
-            size: 70,
+            header: () => <div className="text-center px-1 font-mono font-bold">LOC</div>,
+            size: 40,
             cell: ({ row }) => {
                 const val = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="text-center px-1">{val || '-'}</div>;
+                return <div className="text-center px-1 font-bold text-[10px] font-mono">{val || '-'}</div>;
             }
         },
         {
             accessorKey: 'truck_plate',
-            header: 'Truck',
-            size: 80,
-            cell: ({ row }) => <div className="truncate px-1">{row.getValue('truck_plate')}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold">TRUCK</div>,
+            size: 50,
+            cell: ({ row }) => <div className="truncate px-1 text-center font-mono text-[10px]">{row.getValue('truck_plate')}</div>
         },
         {
             accessorKey: 'weight_kg',
-            header: () => <div className="text-right px-1">WT</div>,
-            size: 70,
+            header: () => <div className="text-center px-1 font-mono font-bold">WT</div>,
+            size: 50,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('weight_kg'));
-                return <div className="font-medium text-right px-1">{Math.round(val).toLocaleString()}</div>;
+                return <div className="text-center text-[10px] px-1 font-mono font-bold">{Math.round(val).toLocaleString()}</div>;
             }
         },
         {
             accessorKey: 'sacks',
-            header: () => <div className="text-right px-1">SKS</div>,
-            size: 50,
-            cell: ({ row }) => <div className="text-right px-1">{row.getValue('sacks')}</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold ">SKS</div>,
+            size: 30,
+            cell: ({ row }) => <div className="text-center px-1 font-mono text-[10px]">{row.getValue('sacks')}</div>,
         },
         // Lab Results Split
         {
             id: 'mc',
-            header: 'MC',
-            size: 50,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">MC</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'grit',
-            header: 'GRIT',
-            size: 50,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">GRIT</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'bd_astm',
-            header: 'ASTM',
-            size: 60,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">ASTM</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'bd_jis',
-            header: 'JIS',
-            size: 60,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">JIS</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'vm',
-            header: 'VM',
-            size: 50,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">VM</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'ash',
-            header: 'ASH',
-            size: 50,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">ASH</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'fc',
-            header: 'FC',
-            size: 50,
-            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">FC</div>,
+            size: 35,
+            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
         },
         {
             accessorKey: 'remarks',
-            header: 'Rem',
-            size: 40,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">REMARKS</div>,
+            size: 60,
             cell: ({ row }) => {
                 const remarks = row.getValue('remarks') as string;
                 if (!remarks) return null;
@@ -242,21 +242,32 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         },
         {
             accessorKey: 'cost_basis',
-            header: () => <div className="text-right px-1">PHP/KG</div>,
-            size: 80,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">PHP/KG</div>,
+            size: 50,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('cost_basis'));
-                return <div className="text-right px-1">{val.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</div>;
+                return (
+                    <div className="flex items-center justify-between px-1">
+                        <span className="text-[10px] text-muted-foreground">₱</span>
+                        <span className="text-right font-mono font-bold text-[10px]">{val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                );
             }
         },
         {
             id: 'php_ttl',
-            header: () => <div className="text-right px-1">PHP TTL</div>,
-            size: 90,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">PHP TTL</div>,
+            size: 85,
             cell: ({ row }) => {
                 const wt = parseFloat(String(row.original.weight_kg)) || 0;
                 const price = parseFloat(String(row.original.cost_basis)) || 0;
-                return <div className="text-right font-semibold px-1 text-xs">{(wt * price).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</div>;
+                const total = wt * price;
+                return (
+                    <div className="flex items-center justify-between px-1">
+                        <span className="text-[10px] text-muted-foreground">₱</span>
+                        <span className="text-right font-mono font-bold text-[10px]">{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                );
             }
         },
         {

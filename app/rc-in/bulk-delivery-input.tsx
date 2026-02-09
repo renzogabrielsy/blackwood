@@ -177,25 +177,25 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                         <TableHeader className="bg-muted/50">
                             <TableRow className="h-8">
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-10 bg-muted/50"></TableHead>
-                                <TableHead className="w-[60px] px-1 h-8">State</TableHead>
-                                <TableHead className="w-[50px] bg-muted/30 px-1 h-8 text-center">WHSE</TableHead>
-                                <TableHead className="w-[90px] px-1 h-8">Date</TableHead>
-                                <TableHead className="w-[120px] px-1 h-8">Supplier</TableHead>
-                                <TableHead className="w-[80px] px-1 h-8">Block</TableHead>
-                                <TableHead className="w-[70px] px-1 h-8">Loc</TableHead>
-                                <TableHead className="w-[80px] px-1 h-8">Truck</TableHead>
-                                <TableHead className="w-[70px] px-1 h-8 text-right">WT</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-right">SKS</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-center">MC</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-center">GRIT</TableHead>
-                                <TableHead className="w-[60px] px-1 h-8 text-center">ASTM</TableHead>
-                                <TableHead className="w-[60px] px-1 h-8 text-center">JIS</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-center">VM</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-center">ASH</TableHead>
-                                <TableHead className="w-[50px] px-1 h-8 text-center">FC</TableHead>
-                                <TableHead className="w-[40px] px-1 h-8 text-center">Rem</TableHead>
-                                <TableHead className="w-[80px] px-1 h-8 text-right">PHP/KG</TableHead>
-                                <TableHead className="w-[90px] px-1 h-8 text-right bg-muted/30">PHP TTL</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 font-mono font-bold">STATE</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 font-mono font-bold">WHSE</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 font-mono font-bold">DATE</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 font-mono font-bold">SUPPLIER</TableHead>
+                                <TableHead className="w-[72px] text-center px-1 font-mono font-bold">BLOCK</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 font-mono font-bold">LOC</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold">TRUCK</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold">WT</TableHead>
+                                <TableHead className="w-[30px] text-center px-1 font-mono font-bold">SKS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">MC</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">GRIT</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">ASTM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">JIS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">VM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">ASH</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px]">FC</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 font-mono font-bold text-[11px]">REMARKS</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold text-[11px]">PHP/KG</TableHead>
+                                <TableHead className="w-[85px] text-center px-1 font-mono font-bold text-[11px]">PHP TTL</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -205,7 +205,7 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                 // Calculate TTL dynamically
                                 const wt = parseFloat(String(row.weight_kg)) || 0;
                                 const price = parseFloat(String(row.cost_basis)) || 0;
-                                const ttl = (wt * price).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+                                const ttlValue = wt * price;
 
                                 return (
                                     <TableRow key={index} className="hover:bg-muted/5 h-8">
@@ -214,36 +214,31 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                                 <Trash2 className="w-3 h-3" />
                                             </Button>
                                         </TableCell>
-                                        {/* 1. STATE */}
                                         <TableCell className="p-0 border-r h-8">
-                                            <div className="px-1 text-[10px] text-muted-foreground h-full flex items-center justify-center bg-muted/10 font-mono">
+                                            <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 rounded-sm h-full flex items-center justify-center">
                                                 {row.state}
                                             </div>
                                         </TableCell>
-                                        {/* 2. WHSE */}
-                                        <TableCell className="p-0 bg-muted/20 border-r text-center h-8">
-                                            <div className="px-1 text-[10px] text-muted-foreground font-medium h-full flex items-center justify-center">
+                                        <TableCell className="p-0 border-r text-center h-8">
+                                            <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold h-full flex items-center justify-center">
                                                 {whse}
                                             </div>
                                         </TableCell>
-                                        {/* 3. DATE */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="date"
                                                 value={row.transaction_date}
                                                 onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
-                                                className={inputClass}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent font-mono font-bold text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 4. SUPPLIER */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 value={row.supplier}
                                                 onChange={(e) => updateRow(index, 'supplier', e.target.value)}
-                                                className={inputClass}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent font-bold text-left bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 5. BLOCK (Batch) */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Combobox
                                                 batches={batches}
@@ -255,108 +250,94 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                                         updateRow(index, 'block_loc', batch.location_ref);
                                                     }
                                                 }}
-                                                className={inputClass}
+                                                className="h-6 text-[10px] font-bold font-mono"
                                             />
                                         </TableCell>
-                                        {/* 6. BLOCK LOC */}
                                         <TableCell className="p-0 border-r h-8">
-                                            <Input
-                                                value={row.block_loc}
-                                                onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
-                                                className={inputClass}
-                                            />
+                                            <div className="text-center px-1 font-bold text-[10px] font-mono h-full flex items-center justify-center">
+                                                {row.block_loc || '-'}
+                                            </div>
                                         </TableCell>
-                                        {/* 7. TRUCK */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 value={row.truck_plate}
                                                 onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
-                                                className={inputClass}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent font-mono text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 8. WT */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number"
                                                 step="1"
                                                 value={row.weight_kg}
                                                 onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
-                                                className={cn(inputClass, numberInputClass)}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent font-mono font-bold text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 9. SKS */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number"
                                                 value={row.sacks}
                                                 onChange={(e) => updateRow(index, 'sacks', e.target.value)}
-                                                className={cn(inputClass, numberInputClass)}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent font-mono text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 10. MC */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.01"
                                                 value={row.mc}
                                                 onChange={(e) => updateRow(index, 'mc', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 11. GRIT */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.01"
                                                 value={row.grit}
                                                 onChange={(e) => updateRow(index, 'grit', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 12. BD ASTM */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.001"
                                                 value={row.bd_astm}
                                                 onChange={(e) => updateRow(index, 'bd_astm', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 13. BD JIS */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.001"
                                                 value={row.bd_jis}
                                                 onChange={(e) => updateRow(index, 'bd_jis', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 14. VM */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.01"
                                                 value={row.vm}
                                                 onChange={(e) => updateRow(index, 'vm', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 15. ASH */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.01"
                                                 value={row.ash}
                                                 onChange={(e) => updateRow(index, 'ash', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 16. FC */}
                                         <TableCell className="p-0 border-r h-8">
                                             <Input
                                                 type="number" step="0.01"
                                                 value={row.fc}
                                                 onChange={(e) => updateRow(index, 'fc', e.target.value)}
-                                                className={cn(inputClass, "text-center px-1")}
+                                                className="h-6 w-full text-[10px] px-1 border-transparent text-center bg-transparent focus-visible:ring-1 focus-visible:ring-inset shadow-none rounded-none"
                                             />
                                         </TableCell>
-                                        {/* 17. REMARKS */}
                                         <TableCell className="p-0 border-r h-8 text-center">
                                             <Popover>
                                                 <PopoverTrigger asChild>
@@ -378,19 +359,25 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                                                 </PopoverContent>
                                             </Popover>
                                         </TableCell>
-                                        {/* 18. PHP/KG */}
                                         <TableCell className="p-0 border-r h-8">
-                                            <Input
-                                                type="number" step="0.01"
-                                                value={row.cost_basis}
-                                                onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
-                                                className={cn(inputClass, numberInputClass)}
-                                            />
+                                            <div className="flex items-center justify-between h-full px-1">
+                                                <span className="text-[10px] text-muted-foreground">₱</span>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    value={row.cost_basis}
+                                                    onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
+                                                    className="w-full text-right bg-transparent border-none p-0 h-full text-[10px] font-mono font-bold focus:outline-none"
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
                                         </TableCell>
-                                        {/* 19. PHP TTL */}
-                                        <TableCell className="p-0 bg-muted/20 text-right h-8">
-                                            <div className="px-1 text-[10px] text-muted-foreground font-semibold h-full flex items-center justify-end">
-                                                {ttl}
+                                        <TableCell className="p-0 text-right h-8">
+                                            <div className="flex items-center justify-between h-full px-1">
+                                                <span className="text-[10px] text-muted-foreground">₱</span>
+                                                <span className="text-right text-[10px] font-mono font-bold">
+                                                    {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                </span>
                                             </div>
                                         </TableCell>
                                     </TableRow>
