@@ -7,9 +7,10 @@ import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table
 export default async function RCInPage({
     searchParams
 }: {
-    searchParams: { range?: string };
+    searchParams: Promise<{ range?: string }>;
 }) {
-    const range = searchParams.range || 'this_month';
+    const { range: rawRange } = await searchParams;
+    const range = rawRange || 'this_month';
 
     // 1. Fetch Batches (No UUID link required by Prompt, but for selector we need a list)
     const { data: batches } = await supabase
@@ -27,7 +28,7 @@ export default async function RCInPage({
 
     if (range !== 'all') {
         const now = new Date();
-        let startDate = new Date();
+        let startDate: Date | null = null;
 
         if (range === 'this_month') {
             startDate = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -35,15 +36,27 @@ export default async function RCInPage({
             const quarter = Math.floor(now.getMonth() / 3);
             startDate = new Date(now.getFullYear(), quarter * 3, 1);
         } else if (range === 'last_6_months') {
+            // "6 months ago from today"
             startDate = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
         } else if (range === 'this_year') {
             startDate = new Date(now.getFullYear(), 0, 1);
         }
 
-        query = query.gte('transaction_date', startDate.toISOString().split('T')[0]);
+        if (startDate) {
+            // endOfDay logic isn't strictly needed for ">= startDate" if startDate is 00:00:00
+            // but just to be safe we use ISO string which preserves time if present.
+            // However, usually we want "start of day" for correct inclusive filtering.
+            // The constructed dates above are 00:00:00 local time (mostly).
+            // Actually, let's use toISOString() which might shift to UTC.
+            // Providing simple YYYY-MM-DD might be safer for 'date' column types, 
+            // but 'transaction_date' is likely timestamptz.
+            // Let's stick to simple ISO string. 
+            query = query.gte('transaction_date', startDate.toISOString());
+        }
     }
 
-    const { data: deliveriesRaw, error } = await query.limit(100);
+    // Removed .limit(100) to allow full range viewing
+    const { data: deliveriesRaw, error } = await query;
 
     if (error) {
         console.error('Error fetching deliveries:', error);
@@ -96,8 +109,8 @@ export default async function RCInPage({
                                 key={f.value}
                                 href={`/rc-in?range=${f.value}`}
                                 className={`px-3 py-1 rounded-sm transition-colors ${range === f.value
-                                        ? 'bg-background text-foreground shadow-sm'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                    ? 'bg-background text-foreground shadow-sm'
+                                    : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
                                 {f.label}
