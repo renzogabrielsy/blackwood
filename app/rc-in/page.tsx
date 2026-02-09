@@ -136,30 +136,13 @@ export default async function RCInPage({
 
             {/* Bottom Section: Master Log */}
             <Card>
-                <CardHeader className="flex flex-col space-y-4 pb-2">
+                <CardHeader className="pb-2">
                     <div className="flex flex-row items-center justify-between">
                         <div className="space-y-1">
                             <CardTitle>Master Log</CardTitle>
                             <CardDescription>
-                                Current View: <span className="font-semibold text-foreground">{monthLabel}</span>
+                                Recent delivery history.
                             </CardDescription>
-                        </div>
-
-                        {/* Pagination Controls */}
-                        <div className="flex items-center space-x-2">
-                            <a
-                                href={prevLink}
-                                className="px-3 py-1 text-sm border rounded hover:bg-muted"
-                            >
-                                ← {format(prevMonthDate, 'MMMM')}
-                            </a>
-                            <a
-                                href={nextLink}
-                                className={`px-3 py-1 text-sm border rounded hover:bg-muted ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
-                                aria-disabled={isNextDisabled}
-                            >
-                                {format(nextMonthDate, 'MMMM')} →
-                            </a>
                         </div>
                     </div>
 
