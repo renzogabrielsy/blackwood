@@ -2,6 +2,7 @@
 'use client';
 
 import * as React from 'react';
+import { format } from 'date-fns';
 import {
     ColumnDef,
     ColumnFiltersState,
@@ -132,7 +133,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                 );
             },
             size: 70,
-            cell: ({ row }) => <div className="whitespace-nowrap px-1 text-center font-mono font-bold text-[10px]">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
+            cell: ({ row }) => <div className="whitespace-nowrap px-1 text-center font-mono font-bold text-[10px]">{format(new Date(row.getValue('transaction_date')), 'MM/dd/yyyy')}</div>,
         },
         {
             accessorKey: 'supplier',
