@@ -186,6 +186,30 @@ export default async function RCInPage({
                 </CardHeader>
                 <CardContent>
                     <DeliveryMasterTable data={deliveries} />
+
+                    {/* Pagination Bar Relocation: Bottom of Table */}
+                    <div className="flex justify-between items-center mt-4 pt-4 border-t">
+                        <div className="text-sm text-muted-foreground">
+                            Current View: <span className="font-semibold text-foreground">{monthLabel}</span>
+                        </div>
+
+                        {/* Pagination Controls */}
+                        <div className="flex items-center space-x-2">
+                            <a
+                                href={prevLink}
+                                className="px-3 py-1 text-sm border rounded hover:bg-muted bg-background"
+                            >
+                                ← {format(prevMonthDate, 'MMMM yyyy')}
+                            </a>
+                            <a
+                                href={nextLink}
+                                className={`px-3 py-1 text-sm border rounded hover:bg-muted bg-background ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                aria-disabled={isNextDisabled}
+                            >
+                                {format(nextMonthDate, 'MMMM yyyy')} →
+                            </a>
+                        </div>
+                    </div>
                 </CardContent>
             </Card>
         </div>

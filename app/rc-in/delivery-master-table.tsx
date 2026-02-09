@@ -484,35 +484,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                                 </TableRow>
                             )}
                         </TableBody>
-                        <TableFooter className="bg-muted/50 font-medium">
-                            <TableRow className="h-8 hover:bg-transparent">
-                                <TableCell colSpan={7} className="text-right px-2">Total</TableCell>
-                                <TableCell className="text-right px-1">{Math.round(totalWeight).toLocaleString()}</TableCell>
-                                <TableCell className="text-right px-1">{totalSacks.toLocaleString()}</TableCell>
-                                <TableCell colSpan={9} className="text-center px-1">-</TableCell>
-                                <TableCell className="text-right px-1">{totalAmount.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</TableCell>
-                                <TableCell></TableCell>
-                            </TableRow>
-                        </TableFooter>
                     </Table>
-                </div>
-                <div className="flex items-center justify-end space-x-2 py-4">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => table.previousPage()}
-                        disabled={!table.getCanPreviousPage()}
-                    >
-                        Previous
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => table.nextPage()}
-                        disabled={!table.getCanNextPage()}
-                    >
-                        Next
-                    </Button>
                 </div>
             </div>
         </TooltipProvider>
