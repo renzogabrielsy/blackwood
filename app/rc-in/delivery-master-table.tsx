@@ -111,16 +111,17 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         {
             id: 'state',
             header: () => <div className="text-center px-1 font-mono font-bold">STATE</div>,
-            size: 60,
+            size: 40,
             cell: ({ row }) => <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 rounded-sm">{row.original.state || 'STORED'}</div>,
         },
         {
             id: 'whse',
             header: () => <div className="text-center px-1 font-mono font-bold">WHSE</div>,
-            size: 60,
+            size: 40,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold">{calculateWhse(loc)}</div>;
+                const batch = row.original.batch_code;
+                return <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold">{calculateWhse(loc, batch)}</div>;
             }
         },
         {
@@ -143,13 +144,13 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         {
             accessorKey: 'supplier',
             header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
-            size: 60,
+            size: 120,
             cell: ({ row }) => <div className="truncate px-1 font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
             header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
-            size: 72,
+            size: 80,
             cell: ({ row }) => <div className="truncate px-1 text-center font-bold font-mono text-[10px]" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
         },
         {
