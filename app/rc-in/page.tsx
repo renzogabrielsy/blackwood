@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
 
-import { startOfMonth, endOfMonth, addMonths, subMonths, format, parse, isFuture, startOfQuarter } from 'date-fns';
+import { startOfMonth, endOfMonth, addMonths, subMonths, format, parse, isFuture, startOfQuarter, endOfQuarter, isBefore, isAfter } from 'date-fns';
 
 export default async function RCInPage({
     searchParams
@@ -99,18 +99,47 @@ export default async function RCInPage({
     const prevMonthDate = subMonths(currentViewDate, 1);
     const nextMonthDate = addMonths(currentViewDate, 1);
 
-    const prevLink = `/rc-in?range=${range}&view_date=${format(prevMonthDate, 'yyyy-MM')}`;
-    const nextLink = `/rc-in?range=${range}&view_date=${format(nextMonthDate, 'yyyy-MM')}`;
+    // Calculate Boundaries based on Range
+    let minDate: Date | null = null;
+    let maxDate: Date | null = null;
 
-    // Disable Next if:
-    // 1. Strict mode (range=this_month) AND next month is future?
-    // Prompt: "If range=this_year and we are at Dec, disable 'Next'".
-    // Let's simplified strictness: if next month > now, disable (unless 'future' allowed?).
-    // Usually we don't have future data.
-    const isNextDisabled = isFuture(nextMonthDate) && range !== 'all';
-    // Or if specifically restricted by range type?
-    // "If range=this_year and we are at Dec" -> Dec 2026? 
-    // Let's just disable if it's strictly in the future for now.
+    if (range === 'this_month') {
+        minDate = startOfMonth(now);
+        maxDate = endOfMonth(now);
+    } else if (range === 'this_quarter') {
+        minDate = startOfQuarter(now);
+        maxDate = endOfQuarter(now);
+    } else if (range === 'this_year') {
+        minDate = new Date(now.getFullYear(), 0, 1); // Start of Year
+        maxDate = new Date(now.getFullYear(), 11, 31); // End of Year
+    }
+    // 'all' and 'last_6_months' (rolling) generally don't have hard forward/backward limits 
+    // unrelated to "future" or "data existence", but 'last_6_months' implies a window.
+    // However, user only specified strictness for Month, Quarter, Year.
+
+    // Disable Logic
+    // Prev: If minDate exists AND prevMonth is BEFORE minDate (strict month check)
+    // We compare start of months to be safe.
+    const isPrevDisabled = minDate ? isBefore(startOfMonth(prevMonthDate), startOfMonth(minDate)) : false;
+
+    // Next: 
+    // 1. If maxDate exists AND nextMonth is AFTER maxDate
+    // 2. OR if nextMonth is in the Future (unless 'all' allows future, but standard is no future)
+    // 3. User said: "if we are in march then it should just be march" -> strict single month implies next/prev disabled.
+    //    Our min/max logic handles this: min=Mar1, max=Mar31. Prev(Feb) < Mar1 -> Disabled. Next(Apr) > Mar31 -> Disabled. Correct.
+
+    // Future Check:
+    // "For this quarter it should just be the current months WITHIN the current quarter."
+    // If Quarter is Jan-Mar, and today is Feb. Next is Mar. Mar is <= EndOfQuarter. 
+    // BUT is Mar in the future? If today is Feb 9, Mar 1 is future. 
+    // Do we allow navigating to empty future months? "months WITHIN the current quarter" implies valid months.
+    // Usually we disable future.
+    const isFutureDate = isFuture(startOfMonth(nextMonthDate));
+    const isNextDisabled = (maxDate ? isAfter(startOfMonth(nextMonthDate), startOfMonth(maxDate)) : false) || isFutureDate;
+
+
+    const prevLink = isPrevDisabled ? '#' : `/rc-in?range=${range}&view_date=${format(prevMonthDate, 'yyyy-MM')}`;
+    const nextLink = isNextDisabled ? '#' : `/rc-in?range=${range}&view_date=${format(nextMonthDate, 'yyyy-MM')}`;
 
     // Filter Presets
     const filters = [
@@ -180,7 +209,8 @@ export default async function RCInPage({
                         <div className="flex items-center space-x-2">
                             <a
                                 href={prevLink}
-                                className="px-3 py-1 text-sm border rounded hover:bg-muted bg-background"
+                                className={`px-3 py-1 text-sm border rounded hover:bg-muted bg-background ${isPrevDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                aria-disabled={isPrevDisabled}
                             >
                                 ← {format(prevMonthDate, 'MMMM yyyy')}
                             </a>
