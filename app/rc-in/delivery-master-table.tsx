@@ -14,7 +14,7 @@ import {
     getSortedRowModel,
     useReactTable,
 } from '@tanstack/react-table';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -24,6 +24,7 @@ import {
     TableHead,
     TableHeader,
     TableRow,
+    TableFooter,
 } from '@/components/ui/table';
 import {
     DropdownMenu,
@@ -42,6 +43,12 @@ import {
     DialogTitle,
     DialogTrigger,
 } from '@/components/ui/dialog';
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Label } from '@/components/ui/label';
 import { DeliveryRow, deleteDelivery, updateDelivery } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
@@ -98,14 +105,16 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         {
             id: 'state',
             header: 'State',
-            cell: ({ row }) => <div className="text-xs text-muted-foreground text-center font-mono uppercase">{row.original.state || 'STORED'}</div>,
+            size: 60,
+            cell: ({ row }) => <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 rounded-sm">{row.original.state || 'STORED'}</div>,
         },
         {
             id: 'whse',
             header: 'WHSE',
+            size: 50,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="whitespace-nowrap font-medium text-center">{calculateWhse(loc)}</div>;
+                return <div className="whitespace-nowrap font-medium text-center text-[10px] text-muted-foreground">{calculateWhse(loc)}</div>;
             }
         },
         {
@@ -115,115 +124,153 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                     <Button
                         variant="ghost"
                         onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+                        className="h-6 px-1 text-xs"
                     >
                         Date
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
                     </Button>
                 );
             },
-            cell: ({ row }) => <div className="whitespace-nowrap">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
+            size: 90,
+            cell: ({ row }) => <div className="whitespace-nowrap px-1">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
         },
         {
             accessorKey: 'supplier',
             header: 'Supplier',
+            size: 120,
+            cell: ({ row }) => <div className="truncate px-1" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
             header: 'Block',
+            size: 80,
+            cell: ({ row }) => <div className="truncate px-1" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
         },
         {
             accessorKey: 'block_loc',
-            header: 'Block Loc',
+            header: 'Loc',
+            size: 70,
             cell: ({ row }) => {
                 const val = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="text-center">{val || '-'}</div>;
+                return <div className="text-center px-1">{val || '-'}</div>;
             }
         },
         {
             accessorKey: 'truck_plate',
             header: 'Truck',
+            size: 80,
+            cell: ({ row }) => <div className="truncate px-1">{row.getValue('truck_plate')}</div>
         },
         {
             accessorKey: 'weight_kg',
-            header: 'WT',
+            header: () => <div className="text-right px-1">WT</div>,
+            size: 70,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('weight_kg'));
-                return <div className="font-medium text-right">{val.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>;
+                return <div className="font-medium text-right px-1">{Math.round(val).toLocaleString()}</div>;
             }
         },
         {
             accessorKey: 'sacks',
-            header: 'SKS',
-            cell: ({ row }) => <div className="text-right">{row.getValue('sacks')}</div>,
+            header: () => <div className="text-right px-1">SKS</div>,
+            size: 50,
+            cell: ({ row }) => <div className="text-right px-1">{row.getValue('sacks')}</div>,
         },
         // Lab Results Split
         {
             id: 'mc',
             header: 'MC',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
+            size: 50,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'grit',
             header: 'GRIT',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
+            size: 50,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'bd_astm',
-            header: 'BD ASTM',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.bd_astm?.toFixed(2) ?? '-'}</div>
+            header: 'ASTM',
+            size: 60,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'bd_jis',
-            header: 'BD JIS',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.bd_jis?.toFixed(2) ?? '-'}</div>
+            header: 'JIS',
+            size: 60,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'vm',
             header: 'VM',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
+            size: 50,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'ash',
             header: 'ASH',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
+            size: 50,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'fc',
             header: 'FC',
-            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
+            size: 50,
+            cell: ({ row }) => <div className="text-center px-1">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
         },
         {
             accessorKey: 'remarks',
-            header: 'Remarks',
+            header: 'Rem',
+            size: 40,
+            cell: ({ row }) => {
+                const remarks = row.getValue('remarks') as string;
+                if (!remarks) return null;
+                return (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="flex justify-center cursor-help">
+                                <MessageSquareText className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            <p className="text-xs max-w-[200px]">{remarks}</p>
+                        </TooltipContent>
+                    </Tooltip>
+                );
+            }
         },
         {
             accessorKey: 'cost_basis',
-            header: 'PHP/KG',
+            header: () => <div className="text-right px-1">PHP/KG</div>,
+            size: 80,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('cost_basis'));
-                return <div className="text-right">{val.toFixed(2)}</div>;
+                return <div className="text-right px-1">{val.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</div>;
             }
         },
         {
             id: 'php_ttl',
-            header: 'PHP TTL',
+            header: () => <div className="text-right px-1">PHP TTL</div>,
+            size: 90,
             cell: ({ row }) => {
                 const wt = parseFloat(String(row.original.weight_kg)) || 0;
                 const price = parseFloat(String(row.original.cost_basis)) || 0;
-                return <div className="text-right font-semibold">{(wt * price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
+                return <div className="text-right font-semibold px-1 text-xs">{(wt * price).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</div>;
             }
         },
         {
             id: 'actions',
             header: '',
+            size: 40,
             cell: ({ row }) => {
                 const delivery = row.original;
                 return (
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" className="h-8 w-8 p-0">
+                            <Button variant="ghost" className="h-6 w-6 p-0">
                                 <span className="sr-only">Open menu</span>
-                                <MoreHorizontal className="h-4 w-4" />
+                                <MoreHorizontal className="h-3 w-3" />
                             </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
@@ -268,176 +315,195 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         },
     });
 
-    return (
-        <div className="w-full space-y-4">
-            {/* Edit Dialog */}
-            <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-                <DialogContent className="max-w-2xl">
-                    <DialogHeader>
-                        <DialogTitle>Edit Delivery</DialogTitle>
-                        <DialogDescription>
-                            Make changes to the delivery record here. Click save when you're done.
-                        </DialogDescription>
-                    </DialogHeader>
-                    {editingRow && (
-                        <form onSubmit={handleEditSubmit} className="grid gap-4 py-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="grid gap-2">
-                                    <Label htmlFor="date">Date</Label>
-                                    <Input id="date" type="date" value={editingRow.transaction_date} onChange={e => setEditingRow({ ...editingRow, transaction_date: e.target.value })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="supplier">Supplier</Label>
-                                    <Input id="supplier" value={editingRow.supplier} onChange={e => setEditingRow({ ...editingRow, supplier: e.target.value })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="batch">Block (Batch)</Label>
-                                    <Input id="batch" value={editingRow.batch_code} onChange={e => setEditingRow({ ...editingRow, batch_code: e.target.value })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="loc">Block Loc</Label>
-                                    <Input id="loc" value={editingRow.block_loc} onChange={e => setEditingRow({ ...editingRow, block_loc: e.target.value })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="truck">Truck</Label>
-                                    <Input id="truck" value={editingRow.truck_plate} onChange={e => setEditingRow({ ...editingRow, truck_plate: e.target.value })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="sacks">Sacks</Label>
-                                    <Input id="sacks" type="number" value={editingRow.sacks} onChange={e => setEditingRow({ ...editingRow, sacks: parseInt(e.target.value) || 0 })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="weight">Weight (kg)</Label>
-                                    <Input id="weight" type="number" step="0.01" value={editingRow.weight_kg} onChange={e => setEditingRow({ ...editingRow, weight_kg: parseFloat(e.target.value) || 0 })} />
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="price">Price</Label>
-                                    <Input id="price" type="number" step="0.01" value={editingRow.cost_basis} onChange={e => setEditingRow({ ...editingRow, cost_basis: parseFloat(e.target.value) || 0 })} />
-                                </div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label>Lab Results (MC / Ash / BD / JIS / Grit / VM / FC)</Label>
-                                <div className="grid grid-cols-7 gap-2">
-                                    {['mc', 'ash', 'bd', 'jis', 'grit', 'vm', 'fc'].map(field => (
-                                        <Input
-                                            key={field}
-                                            placeholder={field.toUpperCase()}
-                                            type="number" step="0.01"
-                                            className="px-1 text-center text-xs"
-                                            value={(editingRow.lab_results as any)?.[field] || 0}
-                                            onChange={e => setEditingRow({
-                                                ...editingRow,
-                                                lab_results: {
-                                                    ...editingRow.lab_results,
-                                                    [field]: parseFloat(e.target.value) || 0
-                                                }
-                                            })}
-                                        />
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="grid gap-2">
-                                <Label htmlFor="remarks">Remarks</Label>
-                                <Input id="remarks" value={editingRow.remarks || ''} onChange={e => setEditingRow({ ...editingRow, remarks: e.target.value })} />
-                            </div>
-                            <DialogFooter>
-                                <Button type="submit">Save changes</Button>
-                            </DialogFooter>
-                        </form>
-                    )}
-                </DialogContent>
-            </Dialog>
+    // Calculate totals for footer
+    const totalWeight = table.getFilteredRowModel().rows.reduce((sum, row) => sum + (parseFloat(String(row.original.weight_kg)) || 0), 0);
+    const totalSacks = table.getFilteredRowModel().rows.reduce((sum, row) => sum + (parseInt(String(row.original.sacks)) || 0), 0);
+    const totalAmount = table.getFilteredRowModel().rows.reduce((sum, row) => {
+        const wt = parseFloat(String(row.original.weight_kg)) || 0;
+        const price = parseFloat(String(row.original.cost_basis)) || 0;
+        return sum + (wt * price);
+    }, 0);
 
-            <div className="flex items-center py-4">
-                <div className="relative max-w-sm w-full">
-                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        placeholder="Search Supplier or Batch..."
-                        value={globalFilter ?? ''}
-                        onChange={(event) =>
-                            setGlobalFilter(event.target.value)
-                        }
-                        className="pl-8"
-                    />
+    return (
+        <TooltipProvider>
+            <div className="w-full space-y-4">
+                {/* Edit Dialog */}
+                <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+                    <DialogContent className="max-w-2xl">
+                        <DialogHeader>
+                            <DialogTitle>Edit Delivery</DialogTitle>
+                            <DialogDescription>
+                                Make changes to the delivery record here. Click save when you're done.
+                            </DialogDescription>
+                        </DialogHeader>
+                        {editingRow && (
+                            <form onSubmit={handleEditSubmit} className="grid gap-4 py-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="date">Date</Label>
+                                        <Input id="date" type="date" value={editingRow.transaction_date} onChange={e => setEditingRow({ ...editingRow, transaction_date: e.target.value })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="supplier">Supplier</Label>
+                                        <Input id="supplier" value={editingRow.supplier} onChange={e => setEditingRow({ ...editingRow, supplier: e.target.value })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="batch">Block (Batch)</Label>
+                                        <Input id="batch" value={editingRow.batch_code} onChange={e => setEditingRow({ ...editingRow, batch_code: e.target.value })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="loc">Block Loc</Label>
+                                        <Input id="loc" value={editingRow.block_loc} onChange={e => setEditingRow({ ...editingRow, block_loc: e.target.value })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="truck">Truck</Label>
+                                        <Input id="truck" value={editingRow.truck_plate} onChange={e => setEditingRow({ ...editingRow, truck_plate: e.target.value })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="sacks">Sacks</Label>
+                                        <Input id="sacks" type="number" value={editingRow.sacks} onChange={e => setEditingRow({ ...editingRow, sacks: parseInt(e.target.value) || 0 })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="weight">Weight (kg)</Label>
+                                        <Input id="weight" type="number" step="0.01" value={editingRow.weight_kg} onChange={e => setEditingRow({ ...editingRow, weight_kg: parseFloat(e.target.value) || 0 })} />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="price">Price</Label>
+                                        <Input id="price" type="number" step="0.01" value={editingRow.cost_basis} onChange={e => setEditingRow({ ...editingRow, cost_basis: parseFloat(e.target.value) || 0 })} />
+                                    </div>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label>Lab Results (MC / Ash / BD / JIS / Grit / VM / FC)</Label>
+                                    <div className="grid grid-cols-7 gap-2">
+                                        {['mc', 'ash', 'bd', 'jis', 'grit', 'vm', 'fc'].map(field => (
+                                            <Input
+                                                key={field}
+                                                placeholder={field.toUpperCase()}
+                                                type="number" step="0.01"
+                                                className="px-1 text-center text-xs"
+                                                value={(editingRow.lab_results as any)?.[field] || 0}
+                                                onChange={e => setEditingRow({
+                                                    ...editingRow,
+                                                    lab_results: {
+                                                        ...editingRow.lab_results,
+                                                        [field]: parseFloat(e.target.value) || 0
+                                                    }
+                                                })}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="grid gap-2">
+                                    <Label htmlFor="remarks">Remarks</Label>
+                                    <Input id="remarks" value={editingRow.remarks || ''} onChange={e => setEditingRow({ ...editingRow, remarks: e.target.value })} />
+                                </div>
+                                <DialogFooter>
+                                    <Button type="submit">Save changes</Button>
+                                </DialogFooter>
+                            </form>
+                        )}
+                    </DialogContent>
+                </Dialog>
+
+                <div className="flex items-center py-4">
+                    <div className="relative max-w-sm w-full">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            placeholder="Search Supplier or Batch..."
+                            value={globalFilter ?? ''}
+                            onChange={(event) =>
+                                setGlobalFilter(event.target.value)
+                            }
+                            className="pl-8 h-8 text-sm"
+                        />
+                    </div>
+                </div>
+                <div className="rounded-md border overflow-x-auto">
+                    <Table className="w-full table-fixed text-xs">
+                        <TableHeader className="bg-muted/50">
+                            {table.getHeaderGroups().map((headerGroup) => (
+                                <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent">
+                                    {headerGroup.headers.map((header) => {
+                                        return (
+                                            <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8">
+                                                {header.isPlaceholder
+                                                    ? null
+                                                    : flexRender(
+                                                        header.column.columnDef.header,
+                                                        header.getContext()
+                                                    )}
+                                            </TableHead>
+                                        );
+                                    })}
+                                </TableRow>
+                            ))}
+                        </TableHeader>
+                        <TableBody>
+                            {table.getRowModel().rows?.length ? (
+                                table.getRowModel().rows.map((row) => (
+                                    <TableRow
+                                        key={row.id}
+                                        data-state={row.getIsSelected() && "selected"}
+                                        className="cursor-pointer hover:bg-muted/50 h-8"
+                                        onClick={(e) => {
+                                            // Only trigger edit if clicking row, not if clicking actions
+                                            if ((e.target as HTMLElement).closest('[data-radix-collection-item]')) return;
+                                            setEditingRow(row.original);
+                                            setIsEditOpen(true);
+                                        }}
+                                    >
+                                        {row.getVisibleCells().map((cell) => (
+                                            <TableCell key={cell.id} className="p-0 border-r last:border-0 h-8">
+                                                {flexRender(
+                                                    cell.column.columnDef.cell,
+                                                    cell.getContext()
+                                                )}
+                                            </TableCell>
+                                        ))}
+                                    </TableRow>
+                                ))
+                            ) : (
+                                <TableRow>
+                                    <TableCell
+                                        colSpan={columns.length}
+                                        className="h-24 text-center"
+                                    >
+                                        No results.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                        </TableBody>
+                        <TableFooter className="bg-muted/50 font-medium">
+                            <TableRow className="h-8 hover:bg-transparent">
+                                <TableCell colSpan={7} className="text-right px-2">Total</TableCell>
+                                <TableCell className="text-right px-1">{Math.round(totalWeight).toLocaleString()}</TableCell>
+                                <TableCell className="text-right px-1">{totalSacks.toLocaleString()}</TableCell>
+                                <TableCell colSpan={9} className="text-center px-1">-</TableCell>
+                                <TableCell className="text-right px-1">{totalAmount.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}</TableCell>
+                                <TableCell></TableCell>
+                            </TableRow>
+                        </TableFooter>
+                    </Table>
+                </div>
+                <div className="flex items-center justify-end space-x-2 py-4">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => table.previousPage()}
+                        disabled={!table.getCanPreviousPage()}
+                    >
+                        Previous
+                    </Button>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => table.nextPage()}
+                        disabled={!table.getCanNextPage()}
+                    >
+                        Next
+                    </Button>
                 </div>
             </div>
-            <div className="rounded-md border">
-                <Table>
-                    <TableHeader>
-                        {table.getHeaderGroups().map((headerGroup) => (
-                            <TableRow key={headerGroup.id}>
-                                {headerGroup.headers.map((header) => {
-                                    return (
-                                        <TableHead key={header.id}>
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
-                                        </TableHead>
-                                    );
-                                })}
-                            </TableRow>
-                        ))}
-                    </TableHeader>
-                    <TableBody>
-                        {table.getRowModel().rows?.length ? (
-                            table.getRowModel().rows.map((row) => (
-                                <TableRow
-                                    key={row.id}
-                                    data-state={row.getIsSelected() && "selected"}
-                                    className="cursor-pointer hover:bg-muted/50"
-                                    onClick={(e) => {
-                                        // Only trigger edit if clicking row, not if clicking actions
-                                        // But wait, user requirement says: "When a row is clicked, it should toggle into 'Edit Mode' or open a small Dialog"
-                                        // Let's make row click open edit, but avoid conflict with dropdown
-                                        if ((e.target as HTMLElement).closest('[data-radix-collection-item]')) return;
-                                        setEditingRow(row.original);
-                                        setIsEditOpen(true);
-                                    }}
-                                >
-                                    {row.getVisibleCells().map((cell) => (
-                                        <TableCell key={cell.id}>
-                                            {flexRender(
-                                                cell.column.columnDef.cell,
-                                                cell.getContext()
-                                            )}
-                                        </TableCell>
-                                    ))}
-                                </TableRow>
-                            ))
-                        ) : (
-                            <TableRow>
-                                <TableCell
-                                    colSpan={columns.length}
-                                    className="h-24 text-center"
-                                >
-                                    No results.
-                                </TableCell>
-                            </TableRow>
-                        )}
-                    </TableBody>
-                </Table>
-            </div>
-            <div className="flex items-center justify-end space-x-2 py-4">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => table.previousPage()}
-                    disabled={!table.getCanPreviousPage()}
-                >
-                    Previous
-                </Button>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => table.nextPage()}
-                    disabled={!table.getCanNextPage()}
-                >
-                    Next
-                </Button>
-            </div>
-        </div>
+        </TooltipProvider>
     );
 }
