@@ -72,11 +72,9 @@ export default async function RCInPage({
         .select('*, batches(location_ref)')
         .order('transaction_date', { ascending: false })
         .order('created_at', { ascending: false })
-        .gte('transaction_date', startDate.toISOString())
-        .lte('transaction_date', endDate.toISOString());
-    // Using ISO string for full timestamp comparison. 
-    // endOfMonth returns X-X-X 23:59:59.999 local time. toISOString converts to UTC.
-    // This is generally correct for timestamptz comparisons.
+        .gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
+        .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
+    // Using simple date string 'YYYY-MM-DD' for date column comparison avoids timezone offsets.
 
     const { data: deliveriesRaw, error } = await query; // LIMIT REMOVED
 
