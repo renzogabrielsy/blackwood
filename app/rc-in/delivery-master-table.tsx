@@ -45,6 +45,11 @@ import {
     DialogTrigger,
 } from '@/components/ui/dialog';
 import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
+import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
@@ -228,16 +233,16 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                 const remarks = row.getValue('remarks') as string;
                 if (!remarks) return null;
                 return (
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <div className="flex justify-center cursor-help">
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <div className="flex justify-center cursor-pointer hover:text-foreground transition-colors">
                                 <MessageSquareText className="h-4 w-4 text-muted-foreground" />
                             </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            <p className="text-xs max-w-[200px]">{remarks}</p>
-                        </TooltipContent>
-                    </Tooltip>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-80">
+                            <p className="text-sm">{remarks}</p>
+                        </PopoverContent>
+                    </Popover>
                 );
             }
         },
@@ -311,6 +316,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         onColumnFiltersChange: setColumnFilters,
         getCoreRowModel: getCoreRowModel(),
         // getPaginationRowModel: getPaginationRowModel(), // Removed per request
+        getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
         onGlobalFilterChange: setGlobalFilter,
         globalFilterFn: (row, columnId, filterValue) => {
@@ -455,13 +461,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                                     <TableRow
                                         key={row.id}
                                         data-state={row.getIsSelected() && "selected"}
-                                        className="cursor-pointer hover:bg-muted/50 h-8"
-                                        onClick={(e) => {
-                                            // Only trigger edit if clicking row, not if clicking actions
-                                            if ((e.target as HTMLElement).closest('[data-radix-collection-item]')) return;
-                                            setEditingRow(row.original);
-                                            setIsEditOpen(true);
-                                        }}
+                                        className="hover:bg-muted/50 h-8"
                                     >
                                         {row.getVisibleCells().map((cell) => (
                                             <TableCell key={cell.id} className="p-0 border-r last:border-0 h-8">
