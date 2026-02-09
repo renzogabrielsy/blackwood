@@ -7,7 +7,8 @@ import { supabase } from '@/lib/supabase';
 export type DeliveryRow = {
     transaction_date: string;
     batch_code: string;
-    block_loc: string; // Added to match PDF input
+    state?: string; // Optional for now, corresponds to DB status
+    block_loc: string;
     supplier: string;
     truck_plate: string;
     sacks: number;
@@ -17,8 +18,8 @@ export type DeliveryRow = {
     lab_results: {
         mc: number;
         ash: number;
-        bd: number;
-        jis: number;
+        bd_astm: number; // Renamed from bd
+        bd_jis: number;  // New field
         grit: number;
         vm: number;
         fc: number;

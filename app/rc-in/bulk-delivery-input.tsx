@@ -36,48 +36,48 @@ type Batch = {
     location_ref: string;
 };
 
-// Local type to allow "empty" strings for numbers during input
+// Flat Input Structure for CSV Compatibility
 type InputDeliveryRow = {
+    state: string; // Read-only, default 'STORED'
+    whse: string; // Read-only, auto-calc
     transaction_date: string;
-    batch_code: string;
-    block_loc: string;
     supplier: string;
+    batch_code: string; // Block
+    block_loc: string; // Block Loc
     truck_plate: string;
-    sacks: number | string;
-    weight_kg: number | string;
-    cost_basis: number | string;
+    weight_kg: number | string; // WT
+    sacks: number | string; // SKS
+    mc: number | string;
+    grit: number | string;
+    bd_astm: number | string;
+    bd_jis: number | string;
+    vm: number | string;
+    ash: number | string;
+    fc: number | string;
     remarks: string;
-    lab_results: {
-        mc: number | string;
-        ash: number | string;
-        bd: number | string;
-        jis: number | string;
-        grit: number | string;
-        vm: number | string;
-        fc: number | string;
-    };
+    cost_basis: number | string; // PHP/KG
+    // PHP TTL is calculated on the fly: weight_kg * cost_basis
 };
 
-// Helper for default new row
 const createEmptyRow = (): InputDeliveryRow => ({
+    state: 'STORED',
+    whse: '',
     transaction_date: new Date().toISOString().split('T')[0],
+    supplier: '',
     batch_code: '',
     block_loc: '',
-    supplier: '',
     truck_plate: '',
-    sacks: '',
     weight_kg: '',
-    cost_basis: '',
+    sacks: '',
+    mc: '',
+    grit: '',
+    bd_astm: '',
+    bd_jis: '',
+    vm: '',
+    ash: '',
+    fc: '',
     remarks: '',
-    lab_results: {
-        mc: '',
-        ash: '',
-        bd: '',
-        jis: '',
-        grit: '',
-        vm: '',
-        fc: '',
-    },
+    cost_basis: '',
 });
 
 export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
@@ -102,43 +102,34 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
         setRows(newRows);
     };
 
-    const updateLabResult = (index: number, field: string, value: string | number) => {
-        const newRows = [...rows];
-        newRows[index] = {
-            ...newRows[index],
-            lab_results: {
-                ...newRows[index].lab_results,
-                [field]: value,
-            },
-        };
-        setRows(newRows);
-    };
-
     const handleSubmit = async () => {
         setIsSubmitting(true);
 
-        // Validate and Convert
         const validRows: DeliveryRow[] = [];
 
         for (const row of rows) {
-            // Skip completely empty rows (checking batch and weight)
-            // If weight is string empty, parseFloat returns NaN -> falsy check works? No, NaN is false.
             const weight = parseFloat(String(row.weight_kg)) || 0;
-
+            // Check essential fields: Batch Code and Weight must be present
             if (row.batch_code && weight > 0) {
                 validRows.push({
-                    ...row,
+                    state: row.state,
+                    block_loc: row.block_loc, // Ensure this updates WHSE logic in actions if needed, but here it's just data
+                    transaction_date: row.transaction_date,
+                    supplier: row.supplier,
+                    batch_code: row.batch_code,
+                    truck_plate: row.truck_plate,
                     sacks: parseInt(String(row.sacks)) || 0,
                     weight_kg: weight,
                     cost_basis: parseFloat(String(row.cost_basis)) || 0,
+                    remarks: row.remarks,
                     lab_results: {
-                        mc: parseFloat(String(row.lab_results.mc)) || 0,
-                        ash: parseFloat(String(row.lab_results.ash)) || 0,
-                        bd: parseFloat(String(row.lab_results.bd)) || 0,
-                        jis: parseFloat(String(row.lab_results.jis)) || 0,
-                        grit: parseFloat(String(row.lab_results.grit)) || 0,
-                        vm: parseFloat(String(row.lab_results.vm)) || 0,
-                        fc: parseFloat(String(row.lab_results.fc)) || 0,
+                        mc: parseFloat(String(row.mc)) || 0,
+                        ash: parseFloat(String(row.ash)) || 0,
+                        bd_astm: parseFloat(String(row.bd_astm)) || 0,
+                        bd_jis: parseFloat(String(row.bd_jis)) || 0,
+                        grit: parseFloat(String(row.grit)) || 0,
+                        vm: parseFloat(String(row.vm)) || 0,
+                        fc: parseFloat(String(row.fc)) || 0,
                     }
                 });
             }
@@ -152,7 +143,7 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
 
         const res = await submitBulkDeliveries(validRows);
         if (res.success) {
-            setRows([createEmptyRow()]); // Reset to 1 empty row
+            setRows([createEmptyRow()]);
             alert('Deliveries logged successfully!');
         } else {
             alert('Error: ' + res.message);
@@ -160,8 +151,8 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
         setIsSubmitting(false);
     };
 
-    // Base input styling for clarity
-    const inputClass = "h-9 w-full border-transparent bg-transparent rounded-none px-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors";
+    const inputClass = "h-9 w-full border-transparent bg-transparent rounded-none px-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
+    const numberInputClass = "text-right"; // Right augment for numbers if desired
 
     return (
         <div className="space-y-4">
@@ -173,140 +164,215 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
                 </div>
             </div>
 
-            <div className="border rounded-md overflow-hidden">
-                <Table>
+            <div className="border rounded-md overflow-hidden overflow-x-auto">
+                <Table className="w-max min-w-full table-fixed">
                     <TableHeader className="bg-muted/50">
                         <TableRow>
-                            <TableHead className="w-[40px]"></TableHead>
-                            <TableHead className="w-[130px] px-2">DATE</TableHead>
+                            <TableHead className="w-[40px] sticky left-0 z-10 bg-muted/50"></TableHead>
+                            <TableHead className="w-[80px] px-2">State</TableHead>
                             <TableHead className="w-[80px] bg-muted/30 px-2">WHSE</TableHead>
-                            <TableHead className="w-[150px] px-2">SUPPLIER</TableHead>
-                            <TableHead className="w-[180px] px-2">BLOCK</TableHead>
-                            <TableHead className="w-[100px] px-2">BLOCK LOC</TableHead>
-                            <TableHead className="w-[120px] px-2">TRUCK</TableHead>
-                            <TableHead className="w-[80px] px-2">Sx</TableHead>
-                            <TableHead className="w-[100px] px-2">WT (kg)</TableHead>
-                            <TableHead className="w-[100px] px-2">Price</TableHead>
-                            {/* Lab Results Group */}
-                            <TableHead className="w-[60px] px-1 text-center">MC</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">Ash</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">BD</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">JIS</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">Grit</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">VM</TableHead>
-                            <TableHead className="w-[60px] px-1 text-center">FC</TableHead>
-                            <TableHead className="px-2">Remarks</TableHead>
+                            <TableHead className="w-[130px] px-2">Date</TableHead>
+                            <TableHead className="w-[150px] px-2">Supplier</TableHead>
+                            <TableHead className="w-[120px] px-2">Block</TableHead>
+                            <TableHead className="w-[100px] px-2">Block Loc</TableHead>
+                            <TableHead className="w-[120px] px-2">Truck</TableHead>
+                            <TableHead className="w-[100px] px-2 text-right">WT</TableHead>
+                            <TableHead className="w-[80px] px-2 text-right">SKS</TableHead>
+                            <TableHead className="w-[70px] px-1 text-center">MC</TableHead>
+                            <TableHead className="w-[70px] px-1 text-center">GRIT</TableHead>
+                            <TableHead className="w-[80px] px-1 text-center">BD ASTM</TableHead>
+                            <TableHead className="w-[80px] px-1 text-center">BD JIS</TableHead>
+                            <TableHead className="w-[70px] px-1 text-center">VM</TableHead>
+                            <TableHead className="w-[70px] px-1 text-center">ASH</TableHead>
+                            <TableHead className="w-[70px] px-1 text-center">FC</TableHead>
+                            <TableHead className="w-[150px] px-2">Remarks</TableHead>
+                            <TableHead className="w-[100px] px-2 text-right">PHP/KG</TableHead>
+                            <TableHead className="w-[120px] px-2 text-right bg-muted/30">PHP TTL</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {rows.map((row, index) => (
-                            <TableRow key={index} className="hover:bg-muted/5">
-                                <TableCell className="p-1">
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeRow(index)}>
-                                        <Trash2 className="w-4 h-4" />
-                                    </Button>
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        type="date"
-                                        value={row.transaction_date}
-                                        onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
-                                        className={cn(inputClass, "shadow-none")}
-                                    />
-                                </TableCell>
-                                {/* READ ONLY WHSE */}
-                                <TableCell className="p-0 bg-muted/30 border-r border-l border-border/50">
-                                    <div className="px-2 py-2 text-sm text-muted-foreground font-medium h-9 flex items-center">
-                                        {calculateWhse(row.block_loc)}
-                                    </div>
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        value={row.supplier}
-                                        onChange={(e) => updateRow(index, 'supplier', e.target.value)}
-                                        className={inputClass}
-                                        placeholder="Supplier"
-                                    />
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Combobox
-                                        batches={batches}
-                                        value={row.batch_code}
-                                        onSelect={(val) => {
-                                            // Optionally auto-fill block_loc if found in batch list
-                                            const batch = batches.find(b => b.batch_code === val);
-                                            updateRow(index, 'batch_code', val);
-                                            if (batch && batch.location_ref) {
-                                                updateRow(index, 'block_loc', batch.location_ref);
-                                            }
-                                        }}
-                                        className={inputClass}
-                                    />
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        value={row.block_loc}
-                                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
-                                        className={inputClass}
-                                        placeholder="Loc"
-                                    />
-                                </TableCell>
+                        {rows.map((row, index) => {
+                            // Calculate WHSE dynamically
+                            const whse = calculateWhse(row.block_loc);
+                            // Calculate TTL dynamically
+                            const wt = parseFloat(String(row.weight_kg)) || 0;
+                            const price = parseFloat(String(row.cost_basis)) || 0;
+                            const ttl = (wt * price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-                                <TableCell className="p-0">
-                                    <Input
-                                        value={row.truck_plate}
-                                        onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
-                                        className={inputClass}
-                                        placeholder="Plate"
-                                    />
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        type="number"
-                                        value={row.sacks}
-                                        onChange={(e) => updateRow(index, 'sacks', e.target.value)}
-                                        className={inputClass}
-                                    />
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        type="number" step="0.01"
-                                        value={row.weight_kg}
-                                        onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
-                                        className={inputClass}
-                                    />
-                                </TableCell>
-                                <TableCell className="p-0">
-                                    <Input
-                                        type="number" step="0.01"
-                                        value={row.cost_basis}
-                                        onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
-                                        className={inputClass}
-                                    />
-                                </TableCell>
-
-                                {/* Lab Results */}
-                                {['mc', 'ash', 'bd', 'jis', 'grit', 'vm', 'fc'].map((field) => (
-                                    <TableCell key={field} className="p-0">
+                            return (
+                                <TableRow key={index} className="hover:bg-muted/5">
+                                    <TableCell className="p-1 sticky left-0 bg-background z-10 border-r">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => removeRow(index)}>
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    </TableCell>
+                                    {/* 1. STATE */}
+                                    <TableCell className="p-0 border-r">
+                                        <div className="px-2 py-2 text-sm text-muted-foreground h-9 flex items-center justify-center bg-muted/10">
+                                            {row.state}
+                                        </div>
+                                    </TableCell>
+                                    {/* 2. WHSE */}
+                                    <TableCell className="p-0 bg-muted/20 border-r text-center">
+                                        <div className="px-2 py-2 text-sm text-muted-foreground font-medium h-9 flex items-center justify-center">
+                                            {whse}
+                                        </div>
+                                    </TableCell>
+                                    {/* 3. DATE */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="date"
+                                            value={row.transaction_date}
+                                            onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 4. SUPPLIER */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            value={row.supplier}
+                                            onChange={(e) => updateRow(index, 'supplier', e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 5. BLOCK (Batch) */}
+                                    <TableCell className="p-0 border-r">
+                                        <Combobox
+                                            batches={batches}
+                                            value={row.batch_code}
+                                            onSelect={(val) => {
+                                                const batch = batches.find(b => b.batch_code === val);
+                                                updateRow(index, 'batch_code', val);
+                                                if (batch && batch.location_ref) {
+                                                    updateRow(index, 'block_loc', batch.location_ref);
+                                                }
+                                            }}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 6. BLOCK LOC */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            value={row.block_loc}
+                                            onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 7. TRUCK */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            value={row.truck_plate}
+                                            onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 8. WT */}
+                                    <TableCell className="p-0 border-r">
                                         <Input
                                             type="number" step="0.01"
-                                            value={(row.lab_results as any)[field]}
-                                            onChange={(e) => updateLabResult(index, field, e.target.value)}
+                                            value={row.weight_kg}
+                                            onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
+                                            className={cn(inputClass, numberInputClass)}
+                                        />
+                                    </TableCell>
+                                    {/* 9. SKS */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number"
+                                            value={row.sacks}
+                                            onChange={(e) => updateRow(index, 'sacks', e.target.value)}
+                                            className={cn(inputClass, numberInputClass)}
+                                        />
+                                    </TableCell>
+                                    {/* 10. MC */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.mc}
+                                            onChange={(e) => updateRow(index, 'mc', e.target.value)}
                                             className={cn(inputClass, "text-center px-1")}
                                         />
                                     </TableCell>
-                                ))}
-
-                                <TableCell className="p-0">
-                                    <Input
-                                        value={row.remarks || ''}
-                                        onChange={(e) => updateRow(index, 'remarks', e.target.value)}
-                                        className={inputClass}
-                                        placeholder="Remarks"
-                                    />
-                                </TableCell>
-                            </TableRow>
-                        ))}
+                                    {/* 11. GRIT */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.grit}
+                                            onChange={(e) => updateRow(index, 'grit', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 12. BD ASTM */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.bd_astm}
+                                            onChange={(e) => updateRow(index, 'bd_astm', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 13. BD JIS */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.bd_jis}
+                                            onChange={(e) => updateRow(index, 'bd_jis', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 14. VM */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.vm}
+                                            onChange={(e) => updateRow(index, 'vm', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 15. ASH */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.ash}
+                                            onChange={(e) => updateRow(index, 'ash', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 16. FC */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.fc}
+                                            onChange={(e) => updateRow(index, 'fc', e.target.value)}
+                                            className={cn(inputClass, "text-center px-1")}
+                                        />
+                                    </TableCell>
+                                    {/* 17. REMARKS */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            value={row.remarks}
+                                            onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                                            className={inputClass}
+                                        />
+                                    </TableCell>
+                                    {/* 18. PHP/KG */}
+                                    <TableCell className="p-0 border-r">
+                                        <Input
+                                            type="number" step="0.01"
+                                            value={row.cost_basis}
+                                            onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
+                                            className={cn(inputClass, numberInputClass)}
+                                        />
+                                    </TableCell>
+                                    {/* 19. PHP TTL */}
+                                    <TableCell className="p-0 bg-muted/20 text-right">
+                                        <div className="px-2 py-2 text-sm text-muted-foreground font-medium h-9 flex items-center justify-end">
+                                            {ttl}
+                                        </div>
+                                    </TableCell>
+                                </TableRow>
+                            );
+                        })}
                     </TableBody>
                 </Table>
             </div>
@@ -314,7 +380,6 @@ export function BulkDeliveryInput({ batches }: { batches: Batch[] }) {
     );
 }
 
-// Combobox Subcomponent for Batch Code
 function Combobox({ batches, value, onSelect, className }: { batches: Batch[], value: string, onSelect: (val: string) => void, className?: string }) {
     const [open, setOpen] = React.useState(false);
 
@@ -325,10 +390,10 @@ function Combobox({ batches, value, onSelect, className }: { batches: Batch[], v
                     variant="ghost"
                     role="combobox"
                     aria-expanded={open}
-                    className={cn("justify-between font-normal hover:bg-transparent", className)}
+                    className={cn("justify-between font-normal hover:bg-transparent px-2 w-full", className)}
                 >
                     <span className="truncate">
-                        {value || <span className="text-muted-foreground opacity-50">Select...</span>}
+                        {value || <span className="opacity-50">...</span>}
                     </span>
                     <ChevronsUpDown className="ml-2 h-3 w-3 shrink-0 opacity-50" />
                 </Button>

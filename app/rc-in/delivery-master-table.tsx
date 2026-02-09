@@ -96,6 +96,19 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
 
     const columns: ColumnDef<DeliveryHistoryRow>[] = [
         {
+            id: 'state',
+            header: 'State',
+            cell: ({ row }) => <div className="text-xs text-muted-foreground text-center font-mono uppercase">{row.original.state || 'STORED'}</div>,
+        },
+        {
+            id: 'whse',
+            header: 'WHSE',
+            cell: ({ row }) => {
+                const loc = row.original.block_loc || row.original.batches?.location_ref;
+                return <div className="whitespace-nowrap font-medium text-center">{calculateWhse(loc)}</div>;
+            }
+        },
+        {
             accessorKey: 'transaction_date',
             header: ({ column }) => {
                 return (
@@ -108,15 +121,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
                     </Button>
                 );
             },
-            cell: ({ row }) => <div className="pl-4 whitespace-nowrap">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
-        },
-        {
-            id: 'whse',
-            header: 'WHSE',
-            cell: ({ row }) => {
-                const loc = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="whitespace-nowrap">{calculateWhse(loc)}</div>;
-            }
+            cell: ({ row }) => <div className="whitespace-nowrap">{new Date(row.getValue('transaction_date')).toLocaleDateString()}</div>,
         },
         {
             accessorKey: 'supplier',
@@ -127,12 +132,11 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
             header: 'Block',
         },
         {
-            id: 'block_loc',
-            header: 'Block Loc',
             accessorKey: 'block_loc',
+            header: 'Block Loc',
             cell: ({ row }) => {
                 const val = row.original.block_loc || row.original.batches?.location_ref;
-                return <div>{val || '-'}</div>;
+                return <div className="text-center">{val || '-'}</div>;
             }
         },
         {
@@ -140,42 +144,78 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
             header: 'Truck',
         },
         {
-            accessorKey: 'sacks',
-            header: 'Sks',
-        },
-        {
             accessorKey: 'weight_kg',
-            header: 'Wt (kg)',
+            header: 'WT',
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('weight_kg'));
-                return <div className="font-medium">{val.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>;
+                return <div className="font-medium text-right">{val.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>;
             }
         },
         {
-            accessorKey: 'cost_basis',
-            header: 'Price',
-            cell: ({ row }) => {
-                const val = parseFloat(row.getValue('cost_basis'));
-                return <div>{val.toFixed(2)}</div>;
-            }
+            accessorKey: 'sacks',
+            header: 'SKS',
+            cell: ({ row }) => <div className="text-right">{row.getValue('sacks')}</div>,
+        },
+        // Lab Results Split
+        {
+            id: 'mc',
+            header: 'MC',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
         },
         {
-            id: 'lab_stats',
-            header: 'Lab Stats',
-            cell: ({ row }) => {
-                const lab = row.original.lab_results || {};
-                const mc = lab.mc?.toFixed(2) ?? '-';
-                const ash = lab.ash?.toFixed(2) ?? '-';
-                const bd = lab.bd?.toFixed(2) ?? '-';
-                return <div className="text-xs text-muted-foreground whitespace-nowrap">{mc} / {ash} / {bd}</div>;
-            }
+            id: 'grit',
+            header: 'GRIT',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
+        },
+        {
+            id: 'bd_astm',
+            header: 'BD ASTM',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.bd_astm?.toFixed(2) ?? '-'}</div>
+        },
+        {
+            id: 'bd_jis',
+            header: 'BD JIS',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.bd_jis?.toFixed(2) ?? '-'}</div>
+        },
+        {
+            id: 'vm',
+            header: 'VM',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
+        },
+        {
+            id: 'ash',
+            header: 'ASH',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
+        },
+        {
+            id: 'fc',
+            header: 'FC',
+            cell: ({ row }) => <div className="text-center">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
         },
         {
             accessorKey: 'remarks',
             header: 'Remarks',
         },
         {
+            accessorKey: 'cost_basis',
+            header: 'PHP/KG',
+            cell: ({ row }) => {
+                const val = parseFloat(row.getValue('cost_basis'));
+                return <div className="text-right">{val.toFixed(2)}</div>;
+            }
+        },
+        {
+            id: 'php_ttl',
+            header: 'PHP TTL',
+            cell: ({ row }) => {
+                const wt = parseFloat(String(row.original.weight_kg)) || 0;
+                const price = parseFloat(String(row.original.cost_basis)) || 0;
+                return <div className="text-right font-semibold">{(wt * price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>;
+            }
+        },
+        {
             id: 'actions',
+            header: '',
             cell: ({ row }) => {
                 const delivery = row.original;
                 return (
