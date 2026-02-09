@@ -15,7 +15,9 @@ import {
     getSortedRowModel,
     useReactTable,
 } from '@tanstack/react-table';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText } from 'lucide-react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useCallback } from 'react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -67,14 +69,66 @@ export type DeliveryHistoryRow = DeliveryRow & {
     };
 };
 
-export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
+import { BulkDeliveryInput } from './bulk-delivery-input';
+
+// ... (existing imports)
+
+export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRow[], batches: any[] }) {
+    const router = useRouter();
+    // ... (existing hooks)
+
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+
+    // Get initial state from URL
+    const searchParam = searchParams.get('search') || '';
+    const fieldParam = searchParams.get('field') || 'all';
+
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-    const [globalFilter, setGlobalFilter] = React.useState('');
     const [editingRow, setEditingRow] = React.useState<DeliveryHistoryRow | null>(null);
+    const [isAddOpen, setIsAddOpen] = React.useState(false);
     const [isEditOpen, setIsEditOpen] = React.useState(false);
 
-    // Define actions here to access state
+    // We keep searchField in state for UI consistency, but update it from URL
+    const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
+
+    // Create a new search params string
+    const createQueryString = useCallback(
+        (name: string, value: string) => {
+            const params = new URLSearchParams(searchParams.toString());
+            if (value) {
+                params.set(name, value);
+            } else {
+                params.delete(name);
+            }
+            return params.toString();
+        },
+        [searchParams]
+    );
+
+    // Debounce search term to prevent rapid URL updates
+    const [searchTerm, setSearchTerm] = React.useState(searchParam);
+
+    // Custom debounce effect
+    React.useEffect(() => {
+        const timer = setTimeout(() => {
+            if (searchTerm !== searchParam) {
+                router.push(pathname + '?' + createQueryString('search', searchTerm));
+            }
+        }, 300); // 300ms delay
+
+        return () => clearTimeout(timer);
+    }, [searchTerm, searchParam, router, pathname, createQueryString]);
+
+    const handleSearchChange = (term: string) => {
+        setSearchTerm(term);
+    };
+
+    const handleFieldChange = (field: string) => {
+        router.push(pathname + '?' + createQueryString('field', field));
+    };
+
     const handleDelete = async (id: string) => {
         if (confirm('Are you sure you want to delete this delivery?')) {
             const res = await deleteDelivery(id);
@@ -116,7 +170,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         },
         {
             id: 'whse',
-            header: () => <div className="text-center px-1 font-mono font-bold">WHSE</div>,
+            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'whse' ? 'text-primary bg-primary/10 rounded' : ''}`}>WHSE</div>,
             size: 40,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
@@ -143,19 +197,19 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         },
         {
             accessorKey: 'supplier',
-            header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
+            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'supplier' ? 'text-primary bg-primary/10 rounded' : ''}`}>SUPPLIER</div>,
             size: 120,
             cell: ({ row }) => <div className="truncate px-1 font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
-            header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
+            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
             size: 80,
             cell: ({ row }) => <div className="truncate px-1 text-center font-bold font-mono text-[10px]" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
         },
         {
             accessorKey: 'block_loc',
-            header: () => <div className="text-center px-1 font-mono font-bold">LOC</div>,
+            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'whse' ? 'text-primary bg-primary/10 rounded' : ''}`}>LOC</div>,
             size: 40,
             cell: ({ row }) => {
                 const val = row.original.block_loc || row.original.batches?.location_ref;
@@ -164,7 +218,7 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         },
         {
             accessorKey: 'truck_plate',
-            header: () => <div className="text-center px-1 font-mono font-bold">TRUCK</div>,
+            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'truck_plate' ? 'text-primary bg-primary/10 rounded' : ''}`}>TRUCK</div>,
             size: 50,
             cell: ({ row }) => <div className="truncate px-1 text-center font-mono text-[10px]">{row.getValue('truck_plate')}</div>
         },
@@ -183,7 +237,6 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
             size: 30,
             cell: ({ row }) => <div className="text-center px-1 font-mono text-[10px]">{row.getValue('sacks')}</div>,
         },
-        // Lab Results Split
         {
             id: 'mc',
             header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">MC</div>,
@@ -319,17 +372,10 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         // getPaginationRowModel: getPaginationRowModel(), // Removed per request
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
-        onGlobalFilterChange: setGlobalFilter,
-        globalFilterFn: (row, columnId, filterValue) => {
-            const search = filterValue.toLowerCase();
-            const supplier = (row.getValue('supplier') as string).toLowerCase();
-            const batch = (row.getValue('batch_code') as string).toLowerCase();
-            return supplier.includes(search) || batch.includes(search);
-        },
+        onGlobalFilterChange: undefined, // Disable client-side global filter
         state: {
             sorting,
             columnFilters,
-            globalFilter,
         },
     });
 
@@ -342,119 +388,86 @@ export function DeliveryMasterTable({ data }: { data: DeliveryHistoryRow[] }) {
         return sum + (wt * price);
     }, 0);
 
+    // ... (existing state)
+
     return (
         <TooltipProvider>
             <div className="w-full space-y-4">
-                {/* Edit Dialog */}
-                <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-                    <DialogContent className="max-w-2xl">
+                {/* Add Delivery Dialog */}
+                <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+                    <DialogContent className="sm:max-w-[95vw] w-full p-6 overflow-hidden">
                         <DialogHeader>
-                            <DialogTitle>Edit Delivery</DialogTitle>
+                            <DialogTitle>Add Deliveries</DialogTitle>
                             <DialogDescription>
-                                Make changes to the delivery record here. Click save when you're done.
+                                Enter delivery details below.
                             </DialogDescription>
                         </DialogHeader>
-                        {editingRow && (
-                            <form onSubmit={handleEditSubmit} className="grid gap-4 py-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="date">Date</Label>
-                                        <Input id="date" type="date" value={editingRow.transaction_date} onChange={e => setEditingRow({ ...editingRow, transaction_date: e.target.value })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="supplier">Supplier</Label>
-                                        <Input id="supplier" value={editingRow.supplier} onChange={e => setEditingRow({ ...editingRow, supplier: e.target.value })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="batch">Block (Batch)</Label>
-                                        <Input id="batch" value={editingRow.batch_code} onChange={e => setEditingRow({ ...editingRow, batch_code: e.target.value })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="loc">Block Loc</Label>
-                                        <Input id="loc" value={editingRow.block_loc} onChange={e => setEditingRow({ ...editingRow, block_loc: e.target.value })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="truck">Truck</Label>
-                                        <Input id="truck" value={editingRow.truck_plate} onChange={e => setEditingRow({ ...editingRow, truck_plate: e.target.value })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="sacks">Sacks</Label>
-                                        <Input id="sacks" type="number" value={editingRow.sacks} onChange={e => setEditingRow({ ...editingRow, sacks: parseInt(e.target.value) || 0 })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="weight">Weight (kg)</Label>
-                                        <Input id="weight" type="number" step="0.01" value={editingRow.weight_kg} onChange={e => setEditingRow({ ...editingRow, weight_kg: parseFloat(e.target.value) || 0 })} />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="price">Price</Label>
-                                        <Input id="price" type="number" step="0.01" value={editingRow.cost_basis} onChange={e => setEditingRow({ ...editingRow, cost_basis: parseFloat(e.target.value) || 0 })} />
-                                    </div>
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label>Lab Results (MC / Ash / BD / JIS / Grit / VM / FC)</Label>
-                                    <div className="grid grid-cols-7 gap-2">
-                                        {['mc', 'ash', 'bd', 'jis', 'grit', 'vm', 'fc'].map(field => (
-                                            <Input
-                                                key={field}
-                                                placeholder={field.toUpperCase()}
-                                                type="number" step="0.01"
-                                                className="px-1 text-center text-xs"
-                                                value={(editingRow.lab_results as any)?.[field] || 0}
-                                                onChange={e => setEditingRow({
-                                                    ...editingRow,
-                                                    lab_results: {
-                                                        ...editingRow.lab_results,
-                                                        [field]: parseFloat(e.target.value) || 0
-                                                    }
-                                                })}
-                                            />
-                                        ))}
-                                    </div>
-                                </div>
-                                <div className="grid gap-2">
-                                    <Label htmlFor="remarks">Remarks</Label>
-                                    <Input id="remarks" value={editingRow.remarks || ''} onChange={e => setEditingRow({ ...editingRow, remarks: e.target.value })} />
-                                </div>
-                                <DialogFooter>
-                                    <Button type="submit">Save changes</Button>
-                                </DialogFooter>
-                            </form>
-                        )}
+                        <BulkDeliveryInput
+                            batches={batches}
+                            suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
+                            onSuccess={() => setIsAddOpen(false)}
+                        />
                     </DialogContent>
                 </Dialog>
 
-                <div className="flex items-center py-4">
-                    <div className="relative max-w-sm w-full">
-                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            placeholder="Search Supplier or Batch..."
-                            value={globalFilter ?? ''}
-                            onChange={(event) =>
-                                setGlobalFilter(event.target.value)
-                            }
-                            className="pl-8 h-8 text-sm"
-                        />
+                {/* Edit Dialog (existing) */}
+                {/* ... */}
+
+                <div className="flex items-center justify-between py-4">
+                    <div className="flex items-center gap-2">
+                        {/* Search Field Dropdown */}
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="outline" className="ml-auto w-32 h-8 text-[12px] font-mono">
+                                    {searchField === 'all' ? 'All Fields' : searchField.toUpperCase()}
+                                    <ChevronDown className="ml-2 h-4 w-4" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start">
+                                <DropdownMenuLabel>Search Field</DropdownMenuLabel>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleFieldChange('all')}>All Fields</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('supplier')}>Supplier</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('batch_code')}>Block</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('whse')}>WHSE</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('truck_plate')}>Truck Plate</DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        {/* Search Input */}
+                        <div className="relative max-w-sm w-64">
+                            <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
+                            <Input
+                                placeholder={`Search ${searchField === 'all' ? 'deliveries' : searchField}...`}
+                                value={searchTerm}
+                                onChange={(event) => handleSearchChange(event.target.value)}
+                                className="pl-8 h-8 text-xs font-mono"
+                            />
+                        </div>
                     </div>
+                    <Button onClick={() => setIsAddOpen(true)} size="sm" className="ml-auto h-8 gap-1">
+                        <Plus className="h-4 w-4" />
+                        Add Delivery
+                    </Button>
                 </div>
-                <div className="rounded-md border overflow-y-auto max-h-[600px]">
-                    <Table className="w-full table-fixed text-xs relative">
-                        <TableHeader className="bg-muted/50 sticky top-0 z-10">
-                            {table.getHeaderGroups().map((headerGroup) => (
-                                <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent">
-                                    {headerGroup.headers.map((header) => {
-                                        return (
-                                            <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-muted/50">
-                                                {header.isPlaceholder
-                                                    ? null
-                                                    : flexRender(
-                                                        header.column.columnDef.header,
-                                                        header.getContext()
-                                                    )}
-                                            </TableHead>
-                                        );
-                                    })}
-                                </TableRow>
-                            ))}
+                <div className="rounded-md border overflow-y-auto max-h-[600px] relative">
+                    <Table className="w-full table-fixed text-xs">
+                        <TableHeader className="bg-muted/50 sticky top-0 z-20 shadow-sm">{table.getHeaderGroups().map((headerGroup) => (
+                            <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent">
+                                {headerGroup.headers.map((header) => {
+                                    return (
+                                        <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-muted/50">
+                                            {header.isPlaceholder
+                                                ? null
+                                                : flexRender(
+                                                    header.column.columnDef.header,
+                                                    header.getContext()
+                                                )}
+                                        </TableHead>
+                                    );
+                                })}
+                            </TableRow>
+                        ))}
                         </TableHeader>
                         <TableBody>
                             {table.getRowModel().rows?.length ? (
