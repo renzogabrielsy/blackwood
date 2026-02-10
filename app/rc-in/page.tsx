@@ -106,37 +106,40 @@ export default async function RCInPage({
             <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 md:pb-6">
                 <Card className="h-full flex flex-col border-none shadow-sm">
                     <CardHeader className="p-0 hidden" />
-                    <CardContent className="flex-1 min-h-0 p-0 flex flex-col relative">
-                        <DeliveryMasterTable data={deliveries} batches={activeBatches} />
+                    <CardContent className="flex-1 min-h-0 p-2 md:p-4 flex flex-col relative">
+                        <DeliveryMasterTable
+                            data={deliveries}
+                            batches={activeBatches}
+                            customFooter={
+                                <div className="flex-none flex justify-between items-center p-2 border-t bg-background/30 backdrop-blur-xl backdrop-saturate-150 z-10">
+                                    <div className="text-xs text-muted-foreground">
+                                        {search ? (
+                                            <span>Found <span className="font-semibold text-foreground">{deliveries.length}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo;</span>
+                                        ) : (
+                                            <span>Current View: <span className="font-semibold text-foreground">{monthLabel}</span></span>
+                                        )}
+                                    </div>
 
-                        {/* Pagination Bar */}
-                        <div className="flex-none flex justify-between items-center p-2 border-t bg-background rounded-b-lg">
-                            <div className="text-xs text-muted-foreground">
-                                {search ? (
-                                    <span>Found <span className="font-semibold text-foreground">{deliveries.length}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo;</span>
-                                ) : (
-                                    <span>Current View: <span className="font-semibold text-foreground">{monthLabel}</span></span>
-                                )}
-                            </div>
-
-                            {!search && (
-                                <div className="flex items-center space-x-2">
-                                    <Link
-                                        href={prevLink}
-                                        className="px-3 py-1 text-xs border rounded hover:bg-muted bg-background"
-                                    >
-                                        &larr; {format(prevMonthDate, 'MMM yyyy')}
-                                    </Link>
-                                    <Link
-                                        href={nextLink}
-                                        className={`px-3 py-1 text-xs border rounded hover:bg-muted bg-background ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
-                                        aria-disabled={isNextDisabled}
-                                    >
-                                        {format(nextMonthDate, 'MMM yyyy')} &rarr;
-                                    </Link>
+                                    {!search && (
+                                        <div className="flex items-center space-x-2">
+                                            <Link
+                                                href={prevLink}
+                                                className="px-3 py-1 text-xs border rounded hover:bg-muted bg-background"
+                                            >
+                                                &larr; {format(prevMonthDate, 'MMM yyyy')}
+                                            </Link>
+                                            <Link
+                                                href={nextLink}
+                                                className={`px-3 py-1 text-xs border rounded hover:bg-muted bg-background ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
+                                                aria-disabled={isNextDisabled}
+                                            >
+                                                {format(nextMonthDate, 'MMM yyyy')} &rarr;
+                                            </Link>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
-                        </div>
+                            }
+                        />
                     </CardContent>
                 </Card>
             </div>

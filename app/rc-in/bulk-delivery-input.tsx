@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/tooltip';
 import { submitBulkDeliveries, DeliveryRow } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
+import { useTableSettings } from './table-settings';
 
 type Batch = {
     id: string;
@@ -83,9 +84,10 @@ const createEmptyRow = (): InputDeliveryRow => ({
     cost_basis: '',
 });
 
-const inputClass = "h-8 w-full text-[10px] px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
+const inputClass = "h-8 w-full text-[10px] md:text-[10px] px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
 export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: Batch[], suppliers: string[], onSuccess?: () => void }) {
+    const { fontSize, rowDensity } = useTableSettings();
     const [rows, setRows] = React.useState<InputDeliveryRow[]>([createEmptyRow()]);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
 
@@ -194,27 +196,27 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                 <div className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh]">
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
                         <TableHeader className="bg-background sticky top-0 z-50 shadow-sm">
-                            <TableRow className="h-8 hover:bg-transparent border-b">
+                            <TableRow className={`${rowDensity === 'compact' ? 'h-8' : 'h-10'} hover:bg-transparent border-b`}>
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-background border-r"></TableHead>
-                                <TableHead className="w-[40px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">STATE</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">WHSE</TableHead>
-                                <TableHead className="w-[70px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">DATE</TableHead>
-                                <TableHead className="w-[120px] text-center px-1 font-bold border-r bg-background sticky top-0 z-50">SUPPLIER</TableHead>
-                                <TableHead className="w-[80px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">BLOCK</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">LOC</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">TRUCK</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">WT</TableHead>
-                                <TableHead className="w-[30px] text-center px-1 font-mono font-bold border-r bg-background sticky top-0 z-50">SKS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">MC</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">GRIT</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">ASTM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">JIS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">VM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">ASH</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">FC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">REMARKS</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 font-mono font-bold text-[11px] border-r bg-background sticky top-0 z-50">PHP/KG</TableHead>
-                                <TableHead className="w-[85px] text-center px-1 font-mono font-bold text-[11px] bg-background sticky top-0 z-50">PHP TTL</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>SUPPLIER</TableHead>
+                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>LOC</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>TRUCK</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
+                                <TableHead className="w-[30px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>SKS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>MC</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>GRIT</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>ASTM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>JIS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>VM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>ASH</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
+                                <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -229,6 +231,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                                     updateRow={updateRow}
                                     updateRowFields={updateRowFields}
                                     removeRow={removeRow}
+                                    fontSize={fontSize}
+                                    rowDensity={rowDensity}
                                 />
                             ))}
                         </TableBody>
@@ -249,6 +253,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRow,
     updateRowFields,
     removeRow,
+    fontSize,
+    rowDensity,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -258,43 +264,48 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRow: (index: number, field: keyof InputDeliveryRow, value: any) => void;
     updateRowFields: (index: number, updates: Partial<InputDeliveryRow>) => void;
     removeRow: (index: number) => void;
+    fontSize: number;
+    rowDensity: 'compact' | 'comfortable';
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
     const wt = parseFloat(String(row.weight_kg)) || 0;
     const price = parseFloat(String(row.cost_basis)) || 0;
     const ttlValue = wt * price;
 
+    const inputStyle = { fontSize: `${fontSize}px` };
+
     return (
-        <TableRow className="hover:bg-muted/5 h-8">
-            <TableCell className="p-0 sticky left-0 bg-background z-10 border-r h-8">
+        <TableRow className={`hover:bg-muted/50 ${rowDensity === 'compact' ? 'h-8' : 'h-10'} transition-colors`}>
+            <TableCell className={`p-0 sticky left-0 bg-background z-10 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Button variant="ghost" size="icon" className="h-full w-full rounded-none text-destructive hover:text-white hover:bg-destructive/90" onClick={() => removeRow(index)}>
                     <Trash2 className="w-3 h-3" />
                 </Button>
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 h-full flex items-center justify-center">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1.5 rounded-sm h-full flex items-center justify-center" style={inputStyle}>
                     {row.state}
                 </div>
             </TableCell>
-            <TableCell className="p-0 border-r text-center h-8">
-                <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold h-full flex items-center justify-center">
+            <TableCell className={`px-1 py-0 border-r text-center ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <div className="whitespace-nowrap text-center font-mono font-bold h-full flex items-center justify-center" style={inputStyle}>
                     {whse}
                 </div>
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <div className="relative w-full h-full group">
                     <input
                         type="date"
                         value={row.transaction_date}
                         onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
                         className={cn(
-                            "w-full h-full bg-transparent border-none text-[10px] font-mono font-bold text-center focus:outline-none px-0 uppercase appearance-none [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer",
+                            "w-full h-full bg-transparent border-none font-mono font-bold text-center focus:outline-none px-0 uppercase appearance-none [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer",
                             !row.transaction_date && "text-muted-foreground"
                         )}
+                        style={inputStyle}
                     />
                 </div>
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <AutocompleteInput
                     value={row.supplier}
                     onChange={(val) => updateRow(index, 'supplier', val)}
@@ -302,9 +313,10 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     onSelect={(val) => updateRow(index, 'supplier', val)}
                     className={cn(inputClass, "font-bold text-left")}
                     placeholder="Supplier..."
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8 relative">
+            <TableCell className={`px-1 py-0 border-r relative ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <AutocompleteInput
                     value={row.batch_code}
                     onChange={(val) => updateRow(index, 'batch_code', val)}
@@ -322,60 +334,65 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     }}
                     className={cn(inputClass, "font-bold text-center font-mono")}
                     placeholder="..."
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Input
                     value={row.block_loc}
                     onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
                     className={cn(inputClass, "font-bold text-center font-mono")}
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Input
                     value={row.truck_plate}
                     onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
                     className={cn(inputClass, "text-center font-mono")}
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Input
                     type="number" step="1"
                     value={row.weight_kg}
                     onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
                     className={cn(inputClass, "font-bold text-center font-mono")}
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Input
                     type="number"
                     value={row.sacks}
                     onChange={(e) => updateRow(index, 'sacks', e.target.value)}
                     className={cn(inputClass, "text-center font-mono")}
+                    style={inputStyle}
                 />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <Input type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} />
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <Input type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className="p-0 border-r h-8 text-center">
+            <TableCell className={`px-1 py-0 border-r text-center ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                 <Popover>
                     <PopoverTrigger asChild>
                         <Button variant="ghost" size="icon" className={cn("h-6 w-6", row.remarks ? "text-primary" : "text-muted-foreground")}>
@@ -396,23 +413,24 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     </PopoverContent>
                 </Popover>
             </TableCell>
-            <TableCell className="p-0 border-r h-8">
-                <div className="flex items-center justify-between h-full px-1">
-                    <span className="text-[10px] text-muted-foreground">₱</span>
+            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <div className="flex items-center justify-between h-full">
+                    <span className="text-muted-foreground" style={inputStyle}>₱</span>
                     <input
                         type="number"
                         step="0.01"
                         value={row.cost_basis}
                         onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
-                        className="w-full text-right bg-transparent border-none p-0 h-full text-[10px] font-mono font-bold focus:outline-none"
+                        className="w-full text-right bg-transparent border-none p-0 h-full font-mono font-bold focus:outline-none"
                         placeholder="0.00"
+                        style={inputStyle}
                     />
                 </div>
             </TableCell>
-            <TableCell className="p-0 text-right h-8">
-                <div className="flex items-center justify-between h-full px-1">
-                    <span className="text-[10px] text-muted-foreground">₱</span>
-                    <span className="text-right text-[10px] font-mono font-bold">
+            <TableCell className={`px-1 py-0 text-right ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                <div className="flex items-center justify-between h-full">
+                    <span className="text-muted-foreground" style={inputStyle}>₱</span>
+                    <span className="text-right font-mono font-bold" style={inputStyle}>
                         {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                 </div>
@@ -422,57 +440,140 @@ const BulkInputRow = React.memo(function BulkInputRow({
 });
 
 // Unified autocomplete — replaces both BlockInput and SupplierInput
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder }: {
+function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style }: {
     value: string;
     onChange: (val: string) => void;
     onSelect: (val: string) => void;
     items: AutocompleteItem[];
     className?: string;
     placeholder?: string;
+    style?: React.CSSProperties;
 }) {
     const [open, setOpen] = React.useState(false);
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    const [selectedIndex, setSelectedIndex] = React.useState(0);
 
     const filtered = React.useMemo(
         () => items.filter(item => item.value.toLowerCase().includes(value.toLowerCase())).slice(0, 5),
         [items, value]
     );
 
+    // Reset selected index when filtered items change
+    React.useEffect(() => {
+        setSelectedIndex(0);
+    }, [filtered]);
+
+    const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            e.preventDefault();
+            setOpen(true);
+            return;
+        }
+
+        if (!open) return;
+
+        switch (e.key) {
+            case 'ArrowDown':
+                e.preventDefault();
+                setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                setSelectedIndex(prev => Math.max(prev - 1, 0));
+                break;
+            case 'Enter':
+                e.preventDefault();
+                if (filtered.length > 0) {
+                    onSelect(filtered[selectedIndex].value);
+                    setOpen(false);
+                    inputRef.current?.blur();
+                }
+                break;
+            case 'Tab':
+                // Select current suggestion and allow natural tab navigation
+                if (filtered.length > 0) {
+                    onSelect(filtered[selectedIndex].value);
+                    setOpen(false);
+                    // Don't prevent default - let tab work naturally
+                }
+                break;
+            case 'Escape':
+                e.preventDefault();
+                setOpen(false);
+                break;
+        }
+    }, [open, filtered, selectedIndex, onSelect]);
+
+    const handleOpenChange = React.useCallback((newOpen: boolean) => {
+        // Only allow closing via our explicit controls, not Radix's auto-close
+        if (newOpen) {
+            setOpen(true);
+        }
+    }, []);
+
+    const handleSelect = React.useCallback((itemValue: string) => {
+        onSelect(itemValue);
+        setOpen(false);
+    }, [onSelect]);
+
     return (
-        <Popover open={open} onOpenChange={setOpen} modal={true}>
+        <Popover open={open && filtered.length > 0} onOpenChange={handleOpenChange} modal={false}>
             <PopoverTrigger asChild>
                 <div className="w-full h-full relative">
                     <Input
+                        ref={inputRef}
                         value={value}
                         onChange={(e) => {
                             onChange(e.target.value);
                             setOpen(true);
                         }}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            if (!open) setOpen(true);
+                        onKeyDown={handleKeyDown}
+                        onFocus={() => {
+                            if (filtered.length > 0) setOpen(true);
                         }}
-                        onFocus={() => setOpen(true)}
+                        onBlur={() => {
+                            // Delay to allow click to register
+                            setTimeout(() => setOpen(false), 150);
+                        }}
                         className={className}
                         placeholder={placeholder}
+                        style={style}
                     />
                 </div>
             </PopoverTrigger>
             <PopoverContent
                 className="w-[200px] p-0"
                 onOpenAutoFocus={(e) => e.preventDefault()}
+                onCloseAutoFocus={(e) => e.preventDefault()}
+                side="bottom"
+                align="start"
+                sideOffset={4}
+                onPointerDownOutside={(e) => {
+                    // Prevent default closing behavior from Radix
+                    if (e.target === inputRef.current) {
+                        e.preventDefault();
+                    }
+                }}
+                onInteractOutside={(e) => {
+                    // Prevent closing when interacting with input
+                    if (e.target === inputRef.current) {
+                        e.preventDefault();
+                    }
+                }}
             >
                 <Command shouldFilter={false}>
                     <CommandList>
-                        <CommandGroup heading="Suggestions">
-                            {filtered.map((item) => (
+                        <CommandGroup>
+                            {filtered.map((item, idx) => (
                                 <CommandItem
                                     key={item.value}
                                     value={item.value}
-                                    onSelect={() => {
-                                        onSelect(item.value);
-                                        setOpen(false);
-                                    }}
-                                    className="text-xs font-mono"
+                                    onSelect={() => handleSelect(item.value)}
+                                    className={cn(
+                                        "text-xs font-mono cursor-pointer",
+                                        idx === selectedIndex && "bg-accent text-accent-foreground"
+                                    )}
+                                    onMouseEnter={() => setSelectedIndex(idx)}
                                 >
                                     <Check
                                         className={cn(
@@ -486,9 +587,6 @@ function AutocompleteInput({ value, onChange, onSelect, items, className, placeh
                                     )}
                                 </CommandItem>
                             ))}
-                            {filtered.length === 0 && (
-                                <div className="py-2 text-center text-xs text-muted-foreground">No matches</div>
-                            )}
                         </CommandGroup>
                     </CommandList>
                 </Command>
