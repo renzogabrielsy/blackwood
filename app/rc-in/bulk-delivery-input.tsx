@@ -87,7 +87,7 @@ const createEmptyRow = (): InputDeliveryRow => ({
 const inputClass = "h-8 w-full text-[10px] md:text-[10px] px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
 export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: Batch[], suppliers: string[], onSuccess?: () => void }) {
-    const { fontSize, rowDensity } = useTableSettings();
+    const { fontSize, rowHeight } = useTableSettings();
     const [rows, setRows] = React.useState<InputDeliveryRow[]>([createEmptyRow()]);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
 
@@ -195,28 +195,28 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
 
                 <div className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh]">
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
-                        <TableHeader className="bg-background sticky top-0 z-50 shadow-sm">
-                            <TableRow className={`${rowDensity === 'compact' ? 'h-8' : 'h-10'} hover:bg-transparent border-b`}>
-                                <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-background border-r"></TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
-                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
-                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>SUPPLIER</TableHead>
-                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>LOC</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>TRUCK</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
-                                <TableHead className="w-[30px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>SKS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>MC</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>GRIT</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>ASTM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>JIS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>VM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>ASH</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-r bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
-                                <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-background sticky top-0 z-50" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
+                        <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                            <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
+                                <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-muted border-b border-foreground/20 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden"></TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SUPPLIER</TableHead>
+                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>LOC</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>TRUCK</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
+                                <TableHead className="w-[30px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SKS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>MC</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>GRIT</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASTM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>JIS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>VM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASH</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
+                                <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -232,7 +232,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                                     updateRowFields={updateRowFields}
                                     removeRow={removeRow}
                                     fontSize={fontSize}
-                                    rowDensity={rowDensity}
+                                    rowHeight={rowHeight}
                                 />
                             ))}
                         </TableBody>
@@ -254,7 +254,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRowFields,
     removeRow,
     fontSize,
-    rowDensity,
+    rowHeight,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -265,7 +265,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRowFields: (index: number, updates: Partial<InputDeliveryRow>) => void;
     removeRow: (index: number) => void;
     fontSize: number;
-    rowDensity: 'compact' | 'comfortable';
+    rowHeight: number;
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
     const wt = parseFloat(String(row.weight_kg)) || 0;
@@ -275,23 +275,23 @@ const BulkInputRow = React.memo(function BulkInputRow({
     const inputStyle = { fontSize: `${fontSize}px` };
 
     return (
-        <TableRow className={`hover:bg-muted/50 ${rowDensity === 'compact' ? 'h-8' : 'h-10'} transition-colors`}>
-            <TableCell className={`p-0 sticky left-0 bg-background z-10 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+        <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
+            <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
                 <Button variant="ghost" size="icon" className="h-full w-full rounded-none text-destructive hover:text-white hover:bg-destructive/90" onClick={() => removeRow(index)}>
                     <Trash2 className="w-3 h-3" />
                 </Button>
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1.5 rounded-sm h-full flex items-center justify-center" style={inputStyle}>
                     {row.state}
                 </div>
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r text-center ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
                 <div className="whitespace-nowrap text-center font-mono font-bold h-full flex items-center justify-center" style={inputStyle}>
                     {whse}
                 </div>
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="relative w-full h-full group">
                     <input
                         type="date"
@@ -305,7 +305,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     />
                 </div>
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <AutocompleteInput
                     value={row.supplier}
                     onChange={(val) => updateRow(index, 'supplier', val)}
@@ -316,7 +316,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r relative ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r relative" style={{ height: `${rowHeight}px` }}>
                 <AutocompleteInput
                     value={row.batch_code}
                     onChange={(val) => updateRow(index, 'batch_code', val)}
@@ -337,7 +337,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     value={row.block_loc}
                     onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
@@ -345,7 +345,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     value={row.truck_plate}
                     onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
@@ -353,7 +353,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     type="number" step="1"
                     value={row.weight_kg}
@@ -362,7 +362,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     type="number"
                     value={row.sacks}
@@ -371,28 +371,28 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r text-center ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
                 <Popover>
                     <PopoverTrigger asChild>
                         <Button variant="ghost" size="icon" className={cn("h-6 w-6", row.remarks ? "text-primary" : "text-muted-foreground")}>
@@ -413,7 +413,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     </PopoverContent>
                 </Popover>
             </TableCell>
-            <TableCell className={`px-1 py-0 border-r ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="flex items-center justify-between h-full">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
                     <input
@@ -427,7 +427,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     />
                 </div>
             </TableCell>
-            <TableCell className={`px-1 py-0 text-right ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+            <TableCell className="px-1 py-0 text-right" style={{ height: `${rowHeight}px` }}>
                 <div className="flex items-center justify-between h-full">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
                     <span className="text-right font-mono font-bold" style={inputStyle}>

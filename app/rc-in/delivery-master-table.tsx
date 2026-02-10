@@ -76,7 +76,7 @@ export function DeliveryMasterTable({ data, batches, customFooter }: { data: Del
 }
 
 function DeliveryMasterTableContent({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
-    const { fontSize, rowDensity, setFontSize, setRowDensity } = useTableSettings();
+    const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -137,14 +137,14 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
     const columns: ColumnDef<DeliveryHistoryRow>[] = [
         {
             id: 'state',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">STATE</div>,
-            size: 40,
-            cell: ({ row }) => <div className="text-[9px] lg:text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-0.5 rounded-sm truncate" title={row.original.state || 'STORED'}>{row.original.state || 'STORED'}</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>STATE</div>,
+            size: 50,
+            cell: ({ row }) => <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-0.5 rounded-sm truncate" style={{ fontSize: `${fontSize}px` }} title={row.original.state || 'STORED'}>{row.original.state || 'STORED'}</div>,
         },
         {
             id: 'whse',
             header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>WHSE</div>,
-            size: 40,
+            size: 50,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
                 const whse = calculateWhse(loc, row.original.batch_code);
@@ -173,7 +173,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
             accessorKey: 'supplier',
             header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'supplier' ? 'text-primary bg-primary/10 rounded' : ''}`}>SUPPLIER</div>,
             size: 120,
-            cell: ({ row }) => <div className="truncate font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
+            cell: ({ row }) => <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }} title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
@@ -213,50 +213,50 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         },
         {
             id: 'mc',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">MC</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>MC</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'grit',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">GRIT</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>GRIT</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'bd_astm',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">ASTM</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>ASTM</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'bd_jis',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">JIS</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>JIS</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'vm',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">VM</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>VM</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'ash',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">ASH</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>ASH</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'fc',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">FC</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>FC</div>,
             size: 35,
             cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
         },
         {
             accessorKey: 'remarks',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">REMARKS</div>,
-            size: 60,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>REMARKS</div>,
+            size: 40,
             cell: ({ row }) => {
                 const remarks = row.getValue('remarks') as string;
                 if (!remarks) return null;
@@ -276,13 +276,13 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         },
         {
             accessorKey: 'cost_basis',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">PHP/KG</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>PHP/KG</div>,
             size: 50,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('cost_basis'));
                 return (
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-muted-foreground">₱</span>
+                        <span className="text-muted-foreground" style={{ fontSize: `${fontSize}px` }}>₱</span>
                         <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 );
@@ -290,7 +290,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         },
         {
             id: 'php_ttl',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">PHP TTL</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>PHP TTL</div>,
             size: 85,
             cell: ({ row }) => {
                 const wt = parseFloat(String(row.original.weight_kg)) || 0;
@@ -298,7 +298,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                 const total = wt * price;
                 return (
                     <div className="flex items-center justify-between">
-                        <span className="text-[10px] text-muted-foreground">₱</span>
+                        <span className="text-muted-foreground" style={{ fontSize: `${fontSize}px` }}>₱</span>
                         <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 );
@@ -307,7 +307,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         {
             id: 'actions',
             header: '',
-            size: 40,
+            size: 20,
             cell: ({ row }) => {
                 const delivery = row.original;
                 return (
@@ -447,12 +447,17 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                         onValueChange={(value) => setFontSize(value[0])}
                                     />
                                 </div>
-                                <div className="flex items-center justify-between">
-                                    <Label htmlFor="row-density">Compact Rows</Label>
-                                    <Switch
-                                        id="row-density"
-                                        checked={rowDensity === 'compact'}
-                                        onCheckedChange={(checked) => setRowDensity(checked ? 'compact' : 'comfortable')}
+                                <div className="grid gap-2">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
+                                    </div>
+                                    <Slider
+                                        id="row-height"
+                                        min={20}
+                                        max={60}
+                                        step={1}
+                                        value={[rowHeight]}
+                                        onValueChange={(value: number[]) => setRowHeight(value[0])}
                                     />
                                 </div>
                             </div>
@@ -464,12 +469,14 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     <div className="flex-1 overflow-auto relative w-full h-full">
                         <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
-                            <TableHeader className="bg-background sticky top-0 z-50 shadow-sm">
+                            <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
                                 {table.getHeaderGroups().map((headerGroup) => (
-                                    <TableRow key={headerGroup.id} className={`${rowDensity === 'compact' ? 'h-8' : 'h-10'} hover:bg-transparent border-b`}>
+                                    <TableRow key={headerGroup.id} className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                         {headerGroup.headers.map((header) => {
                                             return (
-                                                <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-full bg-background sticky top-0 z-50 font-bold text-foreground">
+
+
+                                                <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden">
                                                     <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
                                                         {header.isPlaceholder
                                                             ? null
@@ -490,10 +497,11 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                         <TableRow
                                             key={row.id}
                                             data-state={row.getIsSelected() && "selected"}
-                                            className={`hover:bg-muted/50 ${rowDensity === 'compact' ? 'h-8' : 'h-10'} border-b last:border-0`}
+                                            className="hover:bg-muted/50 border-b last:border-0"
+                                            style={{ height: `${rowHeight}px` }}
                                         >
                                             {row.getVisibleCells().map((cell) => (
-                                                <TableCell key={cell.id} className={`px-1 border-r last:border-0 ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
+                                                <TableCell key={cell.id} className="px-1 py-0 border-r last:border-0" style={{ height: `${rowHeight}px` }}>
                                                     {flexRender(
                                                         cell.column.columnDef.cell,
                                                         cell.getContext()
@@ -513,31 +521,51 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     </TableRow>
                                 )}
                             </TableBody>
-                            <TableFooter className="bg-muted/30 sticky bottom-0">
-                                <TableRow className="h-8 hover:bg-muted/30">
+                            <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
+                                <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
                                     {/* STATE + WHSE + DATE + SUPPLIER + BLOCK + LOC + TRUCK = 7 columns */}
-                                    <TableCell colSpan={7} className="px-2 text-[10px] font-mono font-bold text-right">
+                                    <TableCell colSpan={7} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                         TOTALS
                                     </TableCell>
                                     {/* WT */}
-                                    <TableCell className="px-1 text-center text-[10px] font-mono font-bold">
+                                    <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                         {Math.round(totalWeight).toLocaleString()}
                                     </TableCell>
-                                    {/* SKS */}
-                                    <TableCell className="px-1 text-center text-[10px] font-mono font-bold">
-                                        {totalSacks.toLocaleString()}
+                                    {/* SKS - REMOVED TOTAL, LEFT EMPTY */}
+                                    <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                     </TableCell>
-                                    {/* MC + GRIT + ASTM + JIS + VM + ASH + FC + REMARKS + PHP/KG = 9 columns */}
-                                    <TableCell colSpan={9} />
-                                    {/* PHP TTL */}
-                                    <TableCell className="px-1 text-[10px] font-mono font-bold">
+                                    {/* MC + GRIT + ASTM + JIS + VM + ASH + FC = 7 columns - WEIGHTED AVERAGES */}
+                                    {['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc'].map((key) => {
+                                        const rows = table.getFilteredRowModel().rows;
+                                        const weightedSum = rows.reduce((sum: number, row: any) => {
+                                            const labResults = row.original.lab_results || {};
+                                            const val = parseFloat(String(labResults[key as keyof typeof labResults])) || 0;
+                                            const wt = parseFloat(String(row.getValue('weight_kg'))) || 0;
+                                            return sum + (val * wt);
+                                        }, 0);
+                                        const weightedAvg = totalWeight > 0 ? weightedSum / totalWeight : 0;
+
+                                        // Different formatting for different fields if needed, currently all roughly 2-3 decimals based on input but let's standardize
+                                        // MC, GRIT, VM, ASH, FC usually 2 decimals. BD usually 3.
+                                        const decimals = ['bd_astm', 'bd_jis'].includes(key) ? 3 : 2;
+
+                                        return (
+                                            <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                {weightedAvg > 0 ? weightedAvg.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : '-'}
+                                            </TableCell>
+                                        );
+                                    })}
+                                    {/* REMARKS */}
+                                    <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" />
+                                    {/* PHP TTL -> Converted to WEIGHTED AVG PHP/KG */}
+                                    <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                         <div className="flex items-center justify-between">
                                             <span className="text-muted-foreground">₱</span>
-                                            <span>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                            <span>{(totalWeight > 0 ? totalAmount / totalWeight : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                         </div>
                                     </TableCell>
                                     {/* Actions */}
-                                    <TableCell />
+                                    <TableCell className="py-0" />
                                 </TableRow>
                             </TableFooter>
                         </table>

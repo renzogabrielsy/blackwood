@@ -2,26 +2,24 @@
 
 import * as React from 'react';
 
-type RowDensity = 'compact' | 'comfortable';
-
 interface TableSettings {
     fontSize: number;
-    rowDensity: RowDensity;
+    rowHeight: number;
 }
 
 interface TableSettingsContextType extends TableSettings {
     setFontSize: (size: number) => void;
-    setRowDensity: (density: RowDensity) => void;
+    setRowHeight: (height: number) => void;
 }
 
 const TableSettingsContext = React.createContext<TableSettingsContextType | undefined>(undefined);
 
 export function TableSettingsProvider({ children }: { children: React.ReactNode }) {
     const [fontSize, setFontSize] = React.useState(10);
-    const [rowDensity, setRowDensity] = React.useState<RowDensity>('compact');
+    const [rowHeight, setRowHeight] = React.useState(32);
 
     return (
-        <TableSettingsContext.Provider value={{ fontSize, rowDensity, setFontSize, setRowDensity }}>
+        <TableSettingsContext.Provider value={{ fontSize, rowHeight, setFontSize, setRowHeight }}>
             {children}
         </TableSettingsContext.Provider>
     );
