@@ -113,53 +113,70 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
     };
 
     const handleSubmit = async () => {
+        console.log("🖱️ Submit Clicked");
         setIsSubmitting(true);
 
-        const validRows: DeliveryRow[] = [];
+        try {
+            console.log("📝 Form Data (Raw): ", rows);
+            const validRows: DeliveryRow[] = [];
 
-        for (const row of rows) {
-            const weight = parseFloat(String(row.weight_kg)) || 0;
-            // Check essential fields: Batch Code and Weight must be present
-            if (row.batch_code && weight > 0) {
-                validRows.push({
-                    state: row.state,
-                    block_loc: row.block_loc, // Ensure this updates WHSE logic in actions if needed, but here it's just data
-                    transaction_date: row.transaction_date,
-                    supplier: row.supplier,
-                    batch_code: row.batch_code,
-                    truck_plate: row.truck_plate,
-                    sacks: parseInt(String(row.sacks)) || 0,
-                    weight_kg: weight,
-                    cost_basis: parseFloat(String(row.cost_basis)) || 0,
-                    remarks: row.remarks,
-                    lab_results: {
-                        mc: parseFloat(String(row.mc)) || 0,
-                        ash: parseFloat(String(row.ash)) || 0,
-                        bd_astm: parseFloat(String(row.bd_astm)) || 0,
-                        bd_jis: parseFloat(String(row.bd_jis)) || 0,
-                        grit: parseFloat(String(row.grit)) || 0,
-                        vm: parseFloat(String(row.vm)) || 0,
-                        fc: parseFloat(String(row.fc)) || 0,
-                    }
-                });
+            for (const row of rows) {
+                const weight = parseFloat(String(row.weight_kg)) || 0;
+                // Check essential fields: Batch Code and Weight must be present
+                if (row.batch_code && weight > 0) {
+                    validRows.push({
+                        state: row.state,
+                        block_loc: row.block_loc,
+                        transaction_date: row.transaction_date,
+                        supplier: row.supplier,
+                        batch_code: row.batch_code,
+                        truck_plate: row.truck_plate,
+                        sacks: parseInt(String(row.sacks)) || 0,
+                        weight_kg: weight,
+                        cost_basis: parseFloat(String(row.cost_basis)) || 0,
+                        remarks: row.remarks,
+                        lab_results: {
+                            mc: parseFloat(String(row.mc)) || 0,
+                            ash: parseFloat(String(row.ash)) || 0,
+                            bd_astm: parseFloat(String(row.bd_astm)) || 0,
+                            bd_jis: parseFloat(String(row.bd_jis)) || 0,
+                            grit: parseFloat(String(row.grit)) || 0,
+                            vm: parseFloat(String(row.vm)) || 0,
+                            fc: parseFloat(String(row.fc)) || 0,
+                        }
+                    });
+                } else {
+                    console.warn("⚠️ Skipping invalid row:", row);
+                }
             }
-        }
 
-        if (validRows.length === 0) {
-            alert('Please fill in at least one valid row (Batch and Weight required).');
+            console.log("✅ Validation Passed. Valid Rows:", validRows);
+
+            if (validRows.length === 0) {
+                console.warn("⚠️ No valid rows to submit");
+                alert('Please fill in at least one valid row (Batch and Weight required).');
+                setIsSubmitting(false);
+                return;
+            }
+
+            console.log("🚀 Sending to Supabase...");
+            const res = await submitBulkDeliveries(validRows);
+            console.log("📡 Response:", res);
+
+            if (res.success) {
+                setRows([createEmptyRow()]);
+                alert('Deliveries logged successfully!');
+                onSuccess?.();
+            } else {
+                console.error("❌ Submission Error:", res.message);
+                alert('Error: ' + res.message);
+            }
+        } catch (error) {
+            console.error("❌ Unexpected Error caught:", error);
+            alert('An unexpected error occurred. Check console for details.');
+        } finally {
             setIsSubmitting(false);
-            return;
         }
-
-        const res = await submitBulkDeliveries(validRows);
-        if (res.success) {
-            setRows([createEmptyRow()]);
-            alert('Deliveries logged successfully!');
-            onSuccess?.();
-        } else {
-            alert('Error: ' + res.message);
-        }
-        setIsSubmitting(false);
     };
 
     // Compact input style - Removed global font-mono to allow specific columns to be sans
