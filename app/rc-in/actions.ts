@@ -57,24 +57,16 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
             const { state, ...deliveryData } = row;
             return {
                 ...deliveryData,
-                // Ensure numeric fields are numbers
                 weight_kg: Number(row.weight_kg),
                 sacks: Number(row.sacks),
                 cost_basis: Number(row.cost_basis),
-                // Pass lab_results AS IS (nested object), DO NOT SPREAD IT.
-                // This assumes the DB has a 'lab_results' JSONB column.
                 lab_results: row.lab_results
             };
         });
 
-        const finalDeliveries = deliveriesPayload.map(d => {
-            const { ...rest } = d;
-            return rest;
-        });
-
         const { error: deliveryError } = await supabase
             .from('deliveries')
-            .insert(finalDeliveries);
+            .insert(deliveriesPayload);
 
         if (deliveryError) {
             console.error('Error inserting deliveries:', deliveryError);

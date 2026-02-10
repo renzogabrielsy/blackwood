@@ -3,15 +3,14 @@
 
 import * as React from 'react';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 import {
     ColumnDef,
     ColumnFiltersState,
     SortingState,
-    VisibilityState,
     flexRender,
     getCoreRowModel,
     getFilteredRowModel,
-    // getPaginationRowModel,
     getSortedRowModel,
     useReactTable,
 } from '@tanstack/react-table';
@@ -21,7 +20,6 @@ import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, Messa
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-    Table,
     TableBody,
     TableCell,
     TableHead,
@@ -41,10 +39,8 @@ import {
     Dialog,
     DialogContent,
     DialogDescription,
-    DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from '@/components/ui/dialog';
 import {
     Popover,
@@ -52,13 +48,9 @@ import {
     PopoverTrigger,
 } from '@/components/ui/popover';
 import {
-    Tooltip,
-    TooltipContent,
     TooltipProvider,
-    TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { Label } from '@/components/ui/label';
-import { DeliveryRow, deleteDelivery, updateDelivery } from './actions';
+import { DeliveryRow, deleteDelivery } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
 
 export type DeliveryHistoryRow = DeliveryRow & {
@@ -71,29 +63,20 @@ export type DeliveryHistoryRow = DeliveryRow & {
 
 import { BulkDeliveryInput } from './bulk-delivery-input';
 
-// ... (existing imports)
-
 export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRow[], batches: any[] }) {
     const router = useRouter();
-    // ... (existing hooks)
-
     const pathname = usePathname();
     const searchParams = useSearchParams();
 
-    // Get initial state from URL
     const searchParam = searchParams.get('search') || '';
     const fieldParam = searchParams.get('field') || 'all';
 
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-    const [editingRow, setEditingRow] = React.useState<DeliveryHistoryRow | null>(null);
     const [isAddOpen, setIsAddOpen] = React.useState(false);
-    const [isEditOpen, setIsEditOpen] = React.useState(false);
 
-    // We keep searchField in state for UI consistency, but update it from URL
     const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
 
-    // Create a new search params string
     const createQueryString = useCallback(
         (name: string, value: string) => {
             const params = new URLSearchParams(searchParams.toString());
@@ -107,16 +90,14 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
         [searchParams]
     );
 
-    // Debounce search term to prevent rapid URL updates
     const [searchTerm, setSearchTerm] = React.useState(searchParam);
 
-    // Custom debounce effect
     React.useEffect(() => {
         const timer = setTimeout(() => {
             if (searchTerm !== searchParam) {
                 router.push(pathname + '?' + createQueryString('search', searchTerm));
             }
-        }, 300); // 300ms delay
+        }, 300);
 
         return () => clearTimeout(timer);
     }, [searchTerm, searchParam, router, pathname, createQueryString]);
@@ -132,32 +113,11 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
     const handleDelete = async (id: string) => {
         if (confirm('Are you sure you want to delete this delivery?')) {
             const res = await deleteDelivery(id);
-            if (!res.success) alert(res.message);
-        }
-    };
-
-    const handleEditSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!editingRow) return;
-
-        const res = await updateDelivery(editingRow.id, {
-            transaction_date: editingRow.transaction_date,
-            supplier: editingRow.supplier,
-            truck_plate: editingRow.truck_plate,
-            sacks: editingRow.sacks,
-            weight_kg: editingRow.weight_kg,
-            cost_basis: editingRow.cost_basis,
-            remarks: editingRow.remarks,
-            batch_code: editingRow.batch_code,
-            block_loc: editingRow.block_loc,
-            lab_results: editingRow.lab_results,
-        });
-
-        if (res.success) {
-            setIsEditOpen(false);
-            setEditingRow(null);
-        } else {
-            alert('Update failed: ' + res.message);
+            if (res.success) {
+                toast.success('Delivery deleted');
+            } else {
+                toast.error('Delete failed: ' + res.message);
+            }
         }
     };
 
@@ -346,10 +306,7 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => {
-                                setEditingRow(delivery);
-                                setIsEditOpen(true);
-                            }}>
+                            <DropdownMenuItem onClick={() => toast.info('Edit dialog coming soon')}>
                                 <Pencil className="mr-2 h-4 w-4" /> Edit
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -369,53 +326,54 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
         onSortingChange: setSorting,
         onColumnFiltersChange: setColumnFilters,
         getCoreRowModel: getCoreRowModel(),
-        // getPaginationRowModel: getPaginationRowModel(), // Removed per request
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
-        onGlobalFilterChange: undefined, // Disable client-side global filter
         state: {
             sorting,
             columnFilters,
         },
     });
 
-    // Calculate totals for footer
-    const totalWeight = table.getFilteredRowModel().rows.reduce((sum, row) => sum + (parseFloat(String(row.original.weight_kg)) || 0), 0);
-    const totalSacks = table.getFilteredRowModel().rows.reduce((sum, row) => sum + (parseInt(String(row.original.sacks)) || 0), 0);
-    const totalAmount = table.getFilteredRowModel().rows.reduce((sum, row) => {
-        const wt = parseFloat(String(row.original.weight_kg)) || 0;
-        const price = parseFloat(String(row.original.cost_basis)) || 0;
-        return sum + (wt * price);
-    }, 0);
-
-    // ... (existing state)
+    // Single-pass footer totals
+    const { totalWeight, totalSacks, totalAmount } = table.getFilteredRowModel().rows.reduce(
+        (acc, row) => {
+            const wt = parseFloat(String(row.original.weight_kg)) || 0;
+            const sacks = parseInt(String(row.original.sacks)) || 0;
+            const price = parseFloat(String(row.original.cost_basis)) || 0;
+            return {
+                totalWeight: acc.totalWeight + wt,
+                totalSacks: acc.totalSacks + sacks,
+                totalAmount: acc.totalAmount + (wt * price),
+            };
+        },
+        { totalWeight: 0, totalSacks: 0, totalAmount: 0 }
+    );
 
     return (
         <TooltipProvider>
-            <div className="w-full space-y-4">
+            <div className="flex flex-col h-full space-y-4">
                 {/* Add Delivery Dialog */}
                 <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-                    <DialogContent className="sm:max-w-[95vw] w-full p-6 overflow-hidden">
-                        <DialogHeader>
+                    <DialogContent className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50">
                             <DialogTitle>Add Deliveries</DialogTitle>
                             <DialogDescription>
                                 Enter delivery details below.
                             </DialogDescription>
                         </DialogHeader>
-                        <BulkDeliveryInput
-                            batches={batches}
-                            suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
-                            onSuccess={() => setIsAddOpen(false)}
-                        />
+                        <div className="flex-1 overflow-auto p-6 pt-2">
+                            <BulkDeliveryInput
+                                batches={batches}
+                                suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
+                                onSuccess={() => setIsAddOpen(false)}
+                            />
+                        </div>
                     </DialogContent>
                 </Dialog>
 
-                {/* Edit Dialog (existing) */}
-                {/* ... */}
-
-                <div className="flex items-center justify-between py-4">
+                {/* Toolbar */}
+                <div className="flex-none flex items-center justify-between py-1">
                     <div className="flex items-center gap-2">
-                        {/* Search Field Dropdown */}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button variant="outline" className="ml-auto w-32 h-8 text-[12px] font-mono">
@@ -434,7 +392,6 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                             </DropdownMenuContent>
                         </DropdownMenu>
 
-                        {/* Search Input */}
                         <div className="relative max-w-sm w-64">
                             <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
                             <Input
@@ -450,55 +407,87 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                         Add Delivery
                     </Button>
                 </div>
-                <div className="rounded-md border overflow-y-auto max-h-[600px] relative">
-                    <Table className="w-full table-fixed text-xs">
-                        <TableHeader className="bg-muted/50 sticky top-0 z-20 shadow-sm">{table.getHeaderGroups().map((headerGroup) => (
-                            <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent">
-                                {headerGroup.headers.map((header) => {
-                                    return (
-                                        <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-muted/50">
-                                            {header.isPlaceholder
-                                                ? null
-                                                : flexRender(
-                                                    header.column.columnDef.header,
-                                                    header.getContext()
-                                                )}
-                                        </TableHead>
-                                    );
-                                })}
-                            </TableRow>
-                        ))}
-                        </TableHeader>
-                        <TableBody>
-                            {table.getRowModel().rows?.length ? (
-                                table.getRowModel().rows.map((row) => (
-                                    <TableRow
-                                        key={row.id}
-                                        data-state={row.getIsSelected() && "selected"}
-                                        className="hover:bg-muted/50 h-8"
-                                    >
-                                        {row.getVisibleCells().map((cell) => (
-                                            <TableCell key={cell.id} className="p-0 border-r last:border-0 h-8">
-                                                {flexRender(
-                                                    cell.column.columnDef.cell,
-                                                    cell.getContext()
-                                                )}
-                                            </TableCell>
-                                        ))}
+
+                {/* Scrollable Table */}
+                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
+                    <div className="flex-1 overflow-auto relative w-full h-full">
+                        <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
+                            <TableHeader className="bg-background sticky top-0 z-50 shadow-sm">
+                                {table.getHeaderGroups().map((headerGroup) => (
+                                    <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent border-b">
+                                        {headerGroup.headers.map((header) => {
+                                            return (
+                                                <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-background sticky top-0 z-50 font-bold text-foreground">
+                                                    {header.isPlaceholder
+                                                        ? null
+                                                        : flexRender(
+                                                            header.column.columnDef.header,
+                                                            header.getContext()
+                                                        )}
+                                                </TableHead>
+                                            );
+                                        })}
                                     </TableRow>
-                                ))
-                            ) : (
-                                <TableRow>
-                                    <TableCell
-                                        colSpan={columns.length}
-                                        className="h-24 text-center"
-                                    >
-                                        No results.
+                                ))}
+                            </TableHeader>
+                            <TableBody>
+                                {table.getRowModel().rows?.length ? (
+                                    table.getRowModel().rows.map((row) => (
+                                        <TableRow
+                                            key={row.id}
+                                            data-state={row.getIsSelected() && "selected"}
+                                            className="hover:bg-muted/50 h-8 border-b last:border-0"
+                                        >
+                                            {row.getVisibleCells().map((cell) => (
+                                                <TableCell key={cell.id} className="p-0 border-r last:border-0 h-8">
+                                                    {flexRender(
+                                                        cell.column.columnDef.cell,
+                                                        cell.getContext()
+                                                    )}
+                                                </TableCell>
+                                            ))}
+                                        </TableRow>
+                                    ))
+                                ) : (
+                                    <TableRow>
+                                        <TableCell
+                                            colSpan={columns.length}
+                                            className="h-24 text-center"
+                                        >
+                                            No results.
+                                        </TableCell>
+                                    </TableRow>
+                                )}
+                            </TableBody>
+                            <TableFooter className="bg-muted/30 sticky bottom-0">
+                                <TableRow className="h-8 hover:bg-muted/30">
+                                    {/* STATE + WHSE + DATE + SUPPLIER + BLOCK + LOC + TRUCK = 7 columns */}
+                                    <TableCell colSpan={7} className="px-2 text-[10px] font-mono font-bold text-right">
+                                        TOTALS
                                     </TableCell>
+                                    {/* WT */}
+                                    <TableCell className="px-1 text-center text-[10px] font-mono font-bold">
+                                        {Math.round(totalWeight).toLocaleString()}
+                                    </TableCell>
+                                    {/* SKS */}
+                                    <TableCell className="px-1 text-center text-[10px] font-mono font-bold">
+                                        {totalSacks.toLocaleString()}
+                                    </TableCell>
+                                    {/* MC + GRIT + ASTM + JIS + VM + ASH + FC + REMARKS + PHP/KG = 9 columns */}
+                                    <TableCell colSpan={9} />
+                                    {/* PHP TTL */}
+                                    <TableCell className="px-1 text-[10px] font-mono font-bold">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-muted-foreground">₱</span>
+                                            <span>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                        </div>
+                                    </TableCell>
+                                    {/* Actions */}
+                                    <TableCell />
                                 </TableRow>
-                            )}
-                        </TableBody>
-                    </Table>
+                            </TableFooter>
+                        </table>
+                    </div>
                 </div>
             </div>
         </TooltipProvider>
