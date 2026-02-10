@@ -4,6 +4,10 @@
 import * as React from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { TableSettingsProvider, useTableSettings } from './table-settings';
+import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
     ColumnDef,
     ColumnFiltersState,
@@ -16,7 +20,7 @@ import {
 } from '@tanstack/react-table';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -63,7 +67,16 @@ export type DeliveryHistoryRow = DeliveryRow & {
 
 import { BulkDeliveryInput } from './bulk-delivery-input';
 
-export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRow[], batches: any[] }) {
+export function DeliveryMasterTable({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
+    return (
+        <TableSettingsProvider>
+            <DeliveryMasterTableContent data={data} batches={batches} customFooter={customFooter} />
+        </TableSettingsProvider>
+    );
+}
+
+function DeliveryMasterTableContent({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
+    const { fontSize, rowDensity, setFontSize, setRowDensity } = useTableSettings();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -124,18 +137,18 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
     const columns: ColumnDef<DeliveryHistoryRow>[] = [
         {
             id: 'state',
-            header: () => <div className="text-center px-1 font-mono font-bold">STATE</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">STATE</div>,
             size: 40,
-            cell: ({ row }) => <div className="text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1 rounded-sm">{row.original.state || 'STORED'}</div>,
+            cell: ({ row }) => <div className="text-[9px] lg:text-[10px] text-muted-foreground text-center font-mono uppercase bg-muted/10 py-0.5 rounded-sm truncate" title={row.original.state || 'STORED'}>{row.original.state || 'STORED'}</div>,
         },
         {
             id: 'whse',
-            header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'whse' ? 'text-primary bg-primary/10 rounded' : ''}`}>WHSE</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>WHSE</div>,
             size: 40,
             cell: ({ row }) => {
                 const loc = row.original.block_loc || row.original.batches?.location_ref;
-                const batch = row.original.batch_code;
-                return <div className="whitespace-nowrap text-center text-[10px] font-mono font-bold">{calculateWhse(loc, batch)}</div>;
+                const whse = calculateWhse(loc, row.original.batch_code);
+                return <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }} title={whse}>{whse}</div>;
             }
         },
         {
@@ -145,7 +158,8 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                     <Button
                         variant="ghost"
                         onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-                        className="h-6 px-1 text-xs font-mono font-bold text-[12px]"
+                        className="h-6 px-1 text-xs font-mono font-bold"
+                        style={{ fontSize: `${fontSize}px` }}
                     >
                         DATE
                         <ArrowUpDown className="ml-1 h-3 w-3" />
@@ -153,19 +167,19 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                 );
             },
             size: 70,
-            cell: ({ row }) => <div className="whitespace-nowrap px-1 text-center font-mono font-bold text-[10px]">{format(new Date(row.getValue('transaction_date')), 'MM/dd/yyyy')}</div>,
+            cell: ({ row }) => <div className="whitespace-nowrap text-center font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{format(new Date(row.getValue('transaction_date')), 'MM/dd/yyyy')}</div>,
         },
         {
             accessorKey: 'supplier',
             header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'supplier' ? 'text-primary bg-primary/10 rounded' : ''}`}>SUPPLIER</div>,
             size: 120,
-            cell: ({ row }) => <div className="truncate px-1 font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
+            cell: ({ row }) => <div className="truncate font-bold text-left text-[10px]" title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
         },
         {
             accessorKey: 'batch_code',
             header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
             size: 80,
-            cell: ({ row }) => <div className="truncate px-1 text-center font-bold font-mono text-[10px]" title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
+            cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }} title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
         },
         {
             accessorKey: 'block_loc',
@@ -173,14 +187,14 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
             size: 40,
             cell: ({ row }) => {
                 const val = row.original.block_loc || row.original.batches?.location_ref;
-                return <div className="text-center px-1 font-bold text-[10px] font-mono">{val || '-'}</div>;
+                return <div className="text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{val || '-'}</div>;
             }
         },
         {
             accessorKey: 'truck_plate',
             header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'truck_plate' ? 'text-primary bg-primary/10 rounded' : ''}`}>TRUCK</div>,
             size: 50,
-            cell: ({ row }) => <div className="truncate px-1 text-center font-mono text-[10px]">{row.getValue('truck_plate')}</div>
+            cell: ({ row }) => <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('truck_plate')}</div>
         },
         {
             accessorKey: 'weight_kg',
@@ -188,60 +202,60 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
             size: 50,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('weight_kg'));
-                return <div className="text-center text-[10px] px-1 font-mono font-bold">{Math.round(val).toLocaleString()}</div>;
+                return <div className="text-center font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{Math.round(val).toLocaleString()}</div>;
             }
         },
         {
             accessorKey: 'sacks',
             header: () => <div className="text-center px-1 font-mono font-bold ">SKS</div>,
             size: 30,
-            cell: ({ row }) => <div className="text-center px-1 font-mono text-[10px]">{row.getValue('sacks')}</div>,
+            cell: ({ row }) => <div className="text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('sacks')}</div>,
         },
         {
             id: 'mc',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">MC</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">MC</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'grit',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">GRIT</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">GRIT</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'bd_astm',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">ASTM</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">ASTM</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'bd_jis',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">JIS</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">JIS</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
         },
         {
             id: 'vm',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">VM</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">VM</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'ash',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">ASH</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">ASH</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
         },
         {
             id: 'fc',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">FC</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">FC</div>,
             size: 35,
-            cell: ({ row }) => <div className="text-center text-[10px] px-1">{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
+            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
         },
         {
             accessorKey: 'remarks',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">REMARKS</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">REMARKS</div>,
             size: 60,
             cell: ({ row }) => {
                 const remarks = row.getValue('remarks') as string;
@@ -262,30 +276,30 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
         },
         {
             accessorKey: 'cost_basis',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">PHP/KG</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">PHP/KG</div>,
             size: 50,
             cell: ({ row }) => {
                 const val = parseFloat(row.getValue('cost_basis'));
                 return (
-                    <div className="flex items-center justify-between px-1">
+                    <div className="flex items-center justify-between">
                         <span className="text-[10px] text-muted-foreground">₱</span>
-                        <span className="text-right font-mono font-bold text-[10px]">{val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 );
             }
         },
         {
             id: 'php_ttl',
-            header: () => <div className="text-center px-1 font-mono font-bold text-[11px]">PHP TTL</div>,
+            header: () => <div className="text-center px-1 font-mono font-bold text-[10px]">PHP TTL</div>,
             size: 85,
             cell: ({ row }) => {
                 const wt = parseFloat(String(row.original.weight_kg)) || 0;
                 const price = parseFloat(String(row.original.cost_basis)) || 0;
                 const total = wt * price;
                 return (
-                    <div className="flex items-center justify-between px-1">
+                    <div className="flex items-center justify-between">
                         <span className="text-[10px] text-muted-foreground">₱</span>
-                        <span className="text-right font-mono font-bold text-[10px]">{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 );
             }
@@ -406,6 +420,44 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                         <Plus className="h-4 w-4" />
                         Add Delivery
                     </Button>
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 ml-2">
+                                <Settings className="h-4 w-4" />
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-80" align="end">
+                            <div className="grid gap-4">
+                                <div className="space-y-2">
+                                    <h4 className="font-medium leading-none">View Options</h4>
+                                    <p className="text-sm text-muted-foreground">
+                                        Customize the table appearance.
+                                    </p>
+                                </div>
+                                <div className="grid gap-2">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
+                                    </div>
+                                    <Slider
+                                        id="font-size"
+                                        min={9}
+                                        max={14}
+                                        step={1}
+                                        value={[fontSize]}
+                                        onValueChange={(value) => setFontSize(value[0])}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <Label htmlFor="row-density">Compact Rows</Label>
+                                    <Switch
+                                        id="row-density"
+                                        checked={rowDensity === 'compact'}
+                                        onCheckedChange={(checked) => setRowDensity(checked ? 'compact' : 'comfortable')}
+                                    />
+                                </div>
+                            </div>
+                        </PopoverContent>
+                    </Popover>
                 </div>
 
                 {/* Scrollable Table */}
@@ -414,16 +466,18 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                         <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
                             <TableHeader className="bg-background sticky top-0 z-50 shadow-sm">
                                 {table.getHeaderGroups().map((headerGroup) => (
-                                    <TableRow key={headerGroup.id} className="h-8 hover:bg-transparent border-b">
+                                    <TableRow key={headerGroup.id} className={`${rowDensity === 'compact' ? 'h-8' : 'h-10'} hover:bg-transparent border-b`}>
                                         {headerGroup.headers.map((header) => {
                                             return (
-                                                <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-8 bg-background sticky top-0 z-50 font-bold text-foreground">
-                                                    {header.isPlaceholder
-                                                        ? null
-                                                        : flexRender(
-                                                            header.column.columnDef.header,
-                                                            header.getContext()
-                                                        )}
+                                                <TableHead key={header.id} style={{ width: header.getSize() }} className="px-1 h-full bg-background sticky top-0 z-50 font-bold text-foreground">
+                                                    <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
+                                                        {header.isPlaceholder
+                                                            ? null
+                                                            : flexRender(
+                                                                header.column.columnDef.header,
+                                                                header.getContext()
+                                                            )}
+                                                    </div>
                                                 </TableHead>
                                             );
                                         })}
@@ -436,10 +490,10 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                                         <TableRow
                                             key={row.id}
                                             data-state={row.getIsSelected() && "selected"}
-                                            className="hover:bg-muted/50 h-8 border-b last:border-0"
+                                            className={`hover:bg-muted/50 ${rowDensity === 'compact' ? 'h-8' : 'h-10'} border-b last:border-0`}
                                         >
                                             {row.getVisibleCells().map((cell) => (
-                                                <TableCell key={cell.id} className="p-0 border-r last:border-0 h-8">
+                                                <TableCell key={cell.id} className={`px-1 border-r last:border-0 ${rowDensity === 'compact' ? 'h-8' : 'h-10'}`}>
                                                     {flexRender(
                                                         cell.column.columnDef.cell,
                                                         cell.getContext()
@@ -488,8 +542,9 @@ export function DeliveryMasterTable({ data, batches }: { data: DeliveryHistoryRo
                             </TableFooter>
                         </table>
                     </div>
+                    {customFooter}
                 </div>
             </div>
-        </TooltipProvider>
+        </TooltipProvider >
     );
 }
