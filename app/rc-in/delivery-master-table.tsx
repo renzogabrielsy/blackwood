@@ -535,18 +535,18 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                 </div>
 
                 {/* Floating Action Bar */}
-                {selectedIds.size > 0 && (
+                {selectionMode && (
                     <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
-                        <span className="font-medium text-xs">{selectedIds.size} selected</span>
+                        <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
-                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())}>
+                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
                                 Deselect All
                             </Button>
-                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={handleBulkEdit}>
-                                <Pencil className="h-3 w-3" /> Edit ({selectedIds.size})
+                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={handleBulkEdit} disabled={selectedIds.size === 0}>
+                                <Pencil className="h-3 w-3" /> Edit{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
                             </Button>
-                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-destructive hover:text-destructive" onClick={handleBulkDelete}>
-                                <Trash2 className="h-3 w-3" /> Delete ({selectedIds.size})
+                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-destructive hover:text-destructive" onClick={handleBulkDelete} disabled={selectedIds.size === 0}>
+                                <Trash2 className="h-3 w-3" /> Delete{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
                             </Button>
                         </div>
                     </div>
