@@ -27,10 +27,13 @@ import {
 import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
-import { submitBulkDeliveries, bulkUpdateDeliveries, DeliveryRow } from './actions';
+import { submitBulkDeliveries, bulkUpdateDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
-import { useTableSettings } from './table-settings';
+import { useTableSettings } from '@/components/providers/table-settings';
 import { COLUMN_MAP, cleanCellValue } from './paste-utils';
+import type { DeliveryRow, InputDeliveryRow } from '@/types/rc-in';
+
+export type { InputDeliveryRow } from '@/types/rc-in';
 
 // --- TYPES ---
 type Batch = {
@@ -42,27 +45,6 @@ type Batch = {
 type AutocompleteItem = {
     value: string;
     detail?: string;
-};
-
-export type InputDeliveryRow = {
-    state: string;
-    whse: string;
-    transaction_date: string;
-    supplier: string;
-    batch_code: string;
-    block_loc: string;
-    truck_plate: string;
-    weight_kg: number | string;
-    sacks: number | string;
-    mc: number | string;
-    grit: number | string;
-    bd_astm: number | string;
-    bd_jis: number | string;
-    vm: number | string;
-    ash: number | string;
-    fc: number | string;
-    remarks: string;
-    cost_basis: number | string;
 };
 
 const createEmptyRow = (): InputDeliveryRow => ({
