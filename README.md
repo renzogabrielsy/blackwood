@@ -16,7 +16,14 @@ The **RC IN** (Raw Coconut Inbound) module manages the delivery and quality cont
         *   `PHP TTL` (Total Price) calculated real-time (`Weight * Price`).
     *   **Fields**: State, Date, Supplier, Block, Truck, Weight, Sacks, and comprehensive Lab Results (MC, Ash, BD ASTM, BD JIS, Grit, VM, FC).
 *   **Delivery Master Table**:
-    *   Live view of all historical deliveries.
+    *   **High Performance**: Implemented **Row Virtualization** (TanStack Virtual) to handle 1000+ records smoothly.
+    *   **Unified Navigation**:
+        *   Advanced footer with sliding animations for Year and Month selection.
+        *   **"All Years"** mode for complete historical analysis.
+        *   Optimistic UI updates for instant interaction response.
+    *   **Smart Filtering**:
+        *   **Search Predominance**: Text search overrides date filters for global lookup.
+        *   Hybrid Client/Server filtering for optimal speed.
     *   Matches the strict column order of the input.
     *   Displays individual lab statistics.
     *   Supports **Edit** and **Delete** actions for data correction.
@@ -36,6 +43,7 @@ Automation scripts for system administration and setup.
 *   **Database**: Supabase (PostgreSQL)
 *   **Styling**: Tailwind CSS
 *   **UI Components**: Shadcn UI (Radix Primitives)
+*   **Virtualization**: TanStack Virtual
 *   **Language**: TypeScript
 
 ## Getting Started
