@@ -36,6 +36,7 @@ export type AuditLogRow = {
     snapshot: Record<string, any> | null;
     performed_by: string | null;
     performed_at: string;
+    comment?: string | null;
     profiles?: {
         display_name: string | null;
         email: string;

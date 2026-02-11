@@ -2,8 +2,9 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Check, Plus, Trash2, MessageSquareText } from 'lucide-react';
+import { Check, Plus, Trash2, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import {
     Command,
@@ -25,7 +26,10 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import {
+    Tooltip,
+    TooltipContent,
     TooltipProvider,
+    TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { submitBulkDeliveries, bulkUpdateDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
@@ -126,6 +130,9 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         }
         return [createEmptyRow()];
     });
+    // Track audit comments by row index for edit mode
+    const [auditComments, setAuditComments] = React.useState<Record<number, string>>({});
+
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
@@ -138,6 +145,12 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
     const removeRow = React.useCallback((index: number) => {
         setRows(prev => prev.length > 1 ? prev.filter((_, i) => i !== index) : prev);
+        // Clean up comment if row removed
+        setAuditComments(prev => {
+            const next = { ...prev };
+            delete next[index];
+            return next;
+        });
     }, []);
 
     const updateRow = React.useCallback((index: number, field: keyof InputDeliveryRow, value: any) => {
@@ -456,6 +469,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                 const updates = validIndices.map((rowIdx, i) => ({
                     id: rowIdsRef.current[rowIdx],
                     data: validRows[i],
+                    comment: auditComments[rowIdx] // Pass the comment
                 }));
                 res = await bulkUpdateDeliveries(updates);
             } else {
@@ -568,6 +582,9 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                                     setIsEditing={setIsEditing}
                                     onStartEditing={startEditing}
                                     onRevert={revertChanges}
+                                    auditComment={auditComments[index] || ''}
+                                    onAuditCommentChange={(val) => setAuditComments(prev => ({ ...prev, [index]: val }))}
+                                    isEditMode={isEdit}
                                 />
                             ))}
                         </TableBody>
@@ -601,6 +618,9 @@ const BulkInputRow = React.memo(function BulkInputRow({
     setIsEditing,
     onStartEditing,
     onRevert,
+    auditComment,
+    onAuditCommentChange,
+    isEditMode = false,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -620,6 +640,9 @@ const BulkInputRow = React.memo(function BulkInputRow({
     setIsEditing: (editing: boolean) => void;
     onStartEditing: (row: number, col: number, char?: string) => void;
     onRevert: () => void;
+    auditComment: string;
+    onAuditCommentChange: (val: string) => void;
+    isEditMode?: boolean;
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
     const wt = parseFloat(String(row.weight_kg)) || 0;
@@ -818,22 +841,71 @@ const BulkInputRow = React.memo(function BulkInputRow({
             </TableCell>
 
             {/* 17: REMARKS */}
-            <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={17} value={row.remarks} {...commonCellProps}
-                    displayValue={
-                        <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground")}>
-                            <MessageSquareText className="w-3 h-3" />
+            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
+                <div className="flex items-center h-full group/remarks relative">
+                    <div className="flex-1 min-w-0">
+                        {/* We use GridCell here mostly for navigation/editing standard remarks */}
+                        <GridCell col={17} value={row.remarks} {...commonCellProps}
+                            displayValue={
+                                <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
+                                    <MessageSquareText className="w-3 h-3" />
+                                </div>
+                            }
+                        >
+                            <RemarksCellAdaptor
+                                value={row.remarks}
+                                onChange={(val) => updateRow(index, 'remarks', val)}
+                                onClose={() => setIsEditing(false)}
+                                onRevert={onRevert}
+                                fontSize={fontSize}
+                            />
+                        </GridCell>
+                    </div>
+
+                    {isEditMode && (
+                        <div className="shrink-0 px-1">
+                            <Popover>
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <PopoverTrigger asChild>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className={cn(
+                                                    "h-5 w-5 rounded-sm transition-opacity",
+                                                    auditComment ? "text-primary opacity-100 bg-primary/10" : "text-muted-foreground opacity-30 hover:opacity-100"
+                                                )}
+                                                tabIndex={-1}
+                                            >
+                                                <PencilLine className="h-3 w-3" />
+                                            </Button>
+                                        </PopoverTrigger>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        <p>Add Edit Remarks</p>
+                                    </TooltipContent>
+                                </Tooltip>
+                                <PopoverContent className="w-80 p-3 shadow-lg" align="end" side="top">
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <MessageSquarePlus className="h-4 w-4 text-muted-foreground" />
+                                            <h4 className="font-medium leading-none text-sm">Edit Remarks</h4>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            Reason for this change (saved to audit log).
+                                        </p>
+                                        <Textarea
+                                            value={auditComment}
+                                            onChange={(e) => onAuditCommentChange(e.target.value)}
+                                            placeholder="e.g. Corrected weight type..."
+                                            className="min-h-[80px] text-xs font-mono resize-none"
+                                        />
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
                         </div>
-                    }
-                >
-                    <RemarksCellAdaptor
-                        value={row.remarks}
-                        onChange={(val) => updateRow(index, 'remarks', val)}
-                        onClose={() => setIsEditing(false)}
-                        onRevert={onRevert}
-                        fontSize={fontSize}
-                    />
-                </GridCell>
+                    )}
+                </div>
             </TableCell>
 
             {/* 18: PRICE */}

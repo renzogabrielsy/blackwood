@@ -85,7 +85,7 @@ export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
     return { success: true };
 }
 
-export async function bulkUpdateDeliveries(updates: { id: string; data: DeliveryRow }[]) {
+export async function bulkUpdateDeliveries(updates: { id: string; data: DeliveryRow; comment?: string }[]) {
     if (!updates || updates.length === 0) {
         return { success: false, message: 'No rows to update' };
     }
@@ -95,7 +95,15 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         await upsertBatchesFromRows(rows);
 
         const supabase = await createClient();
-        for (const { id, data } of updates) {
+        for (const { id, data, comment } of updates) {
+            // Set audit comment if provided
+            if (comment) {
+                await supabase.rpc('set_audit_comment', { comment });
+            } else {
+                // Ensure it's cleared if not provided (though generic trigger might default it to null, safer to clear)
+                await supabase.rpc('set_audit_comment', { comment: null });
+            }
+
             const payload = toDeliveryPayload(data);
             const { error } = await supabase
                 .from('deliveries')

@@ -344,6 +344,12 @@ function DeliveryHistoryContent({
             {formatDistanceToNow(new Date(entry.performed_at), { addSuffix: true })}
           </span>
         </div>
+        {entry.comment && (
+          <div className="text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-md border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 mt-2">
+            <span className="font-semibold block mb-0.5 text-[10px] uppercase tracking-wider opacity-70">Edit Reason</span>
+            {entry.comment}
+          </div>
+        )}
         <DiffDisplay entry={entry} />
       </div>
     </div>
