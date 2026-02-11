@@ -5,8 +5,8 @@ import * as React from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { TableSettingsProvider, useTableSettings } from './table-settings';
-import { AuthProvider, useAuth, UserRole } from './auth-context';
+import { useTableSettings } from '@/components/providers/table-settings';
+import { useAuth, UserRole } from '@/components/providers/auth-context';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -20,7 +20,6 @@ import {
     useReactTable,
 } from '@tanstack/react-table';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { useCallback } from 'react';
 import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -55,30 +54,25 @@ import {
 import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
-import { DeliveryRow, deleteDelivery, bulkDeleteDeliveries } from './actions';
+import { deleteDelivery, bulkDeleteDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
+import type { DeliveryHistoryRow } from '@/types/rc-in';
 
-export type DeliveryHistoryRow = DeliveryRow & {
-    id: string;
-    created_at: string;
-    batches?: {
-        location_ref: string;
-    };
-};
+export type { DeliveryHistoryRow } from '@/types/rc-in';
 
 import { BulkDeliveryInput } from './bulk-delivery-input';
 
-export function DeliveryMasterTable({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
-    return (
-        <AuthProvider>
-            <TableSettingsProvider>
-                <DeliveryMasterTableContent data={data} batches={batches} customFooter={customFooter} />
-            </TableSettingsProvider>
-        </AuthProvider>
-    );
-}
+const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
+    { key: 'mc', label: 'MC', decimals: 2 },
+    { key: 'grit', label: 'GRIT', decimals: 2 },
+    { key: 'bd_astm', label: 'ASTM', decimals: 3 },
+    { key: 'bd_jis', label: 'JIS', decimals: 3 },
+    { key: 'vm', label: 'VM', decimals: 2 },
+    { key: 'ash', label: 'ASH', decimals: 2 },
+    { key: 'fc', label: 'FC', decimals: 2 },
+];
 
-function DeliveryMasterTableContent({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
+export function DeliveryMasterTable({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { role, setRole, hasPermission } = useAuth();
     const router = useRouter();
@@ -102,7 +96,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
 
     const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
 
-    const createQueryString = useCallback(
+    const createQueryString = React.useCallback(
         (name: string, value: string) => {
             const params = new URLSearchParams(searchParams.toString());
             if (value) {
@@ -212,7 +206,18 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         setEditRows([delivery]);
     };
 
-    const columns = React.useMemo<ColumnDef<DeliveryHistoryRow>[]>(() => [
+    const columns = React.useMemo<ColumnDef<DeliveryHistoryRow>[]>(() => {
+    const labColumnDefs = LAB_COLUMNS.map(({ key, label, decimals }): ColumnDef<DeliveryHistoryRow> => ({
+        id: key,
+        header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{label}</div>,
+        size: 35,
+        cell: ({ row }) => {
+            const val = row.original.lab_results?.[key as keyof DeliveryHistoryRow['lab_results']];
+            return <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{val != null ? val.toFixed(decimals) : '-'}</div>;
+        },
+    }));
+
+    const allColumns: ColumnDef<DeliveryHistoryRow>[] = [
         {
             id: 'state',
             header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>STATE</div>,
@@ -289,48 +294,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
             size: 30,
             cell: ({ row }) => <div className="text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('sacks')}</div>,
         },
-        {
-            id: 'mc',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>MC</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.mc?.toFixed(2) ?? '-'}</div>
-        },
-        {
-            id: 'grit',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>GRIT</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.grit?.toFixed(2) ?? '-'}</div>
-        },
-        {
-            id: 'bd_astm',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>ASTM</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_astm?.toFixed(3) ?? '-'}</div>
-        },
-        {
-            id: 'bd_jis',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>JIS</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.bd_jis?.toFixed(3) ?? '-'}</div>
-        },
-        {
-            id: 'vm',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>VM</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.vm?.toFixed(2) ?? '-'}</div>
-        },
-        {
-            id: 'ash',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>ASH</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.ash?.toFixed(2) ?? '-'}</div>
-        },
-        {
-            id: 'fc',
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>FC</div>,
-            size: 35,
-            cell: ({ row }) => <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{row.original.lab_results?.fc?.toFixed(2) ?? '-'}</div>
-        },
+        ...labColumnDefs,
         {
             accessorKey: 'remarks',
             header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>REMARKS</div>,
@@ -410,12 +374,15 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                 )
             }
         }
-    ].filter(col => {
+    ];
+
+    return allColumns.filter(col => {
         if (col.id === 'cost_basis' || (col as any).accessorKey === 'cost_basis' || col.id === 'php_ttl') {
             return hasPermission('view:prices');
         }
         return true;
-    }), [fontSize, searchField, data, hasPermission]);
+    });
+    }, [fontSize, searchField, data, hasPermission]);
 
     const table = useReactTable({
         data,
@@ -738,7 +705,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                     </TableCell>
                                     {/* MC + GRIT + ASTM + JIS + VM + ASH + FC = 7 columns - WEIGHTED AVERAGES */}
-                                    {['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc'].map((key) => {
+                                    {LAB_COLUMNS.map(({ key, decimals }) => {
                                         const rows = table.getFilteredRowModel().rows;
                                         const weightedSum = rows.reduce((sum: number, row: any) => {
                                             const labResults = row.original.lab_results || {};
@@ -747,10 +714,6 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                             return sum + (val * wt);
                                         }, 0);
                                         const weightedAvg = totalWeight > 0 ? weightedSum / totalWeight : 0;
-
-                                        // Different formatting for different fields if needed, currently all roughly 2-3 decimals based on input but let's standardize
-                                        // MC, GRIT, VM, ASH, FC usually 2 decimals. BD usually 3.
-                                        const decimals = ['bd_astm', 'bd_jis'].includes(key) ? 3 : 2;
 
                                         return (
                                             <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
