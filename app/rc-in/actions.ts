@@ -1,13 +1,14 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { supabase } from '@/lib/supabase';
-import type { DeliveryRow } from '@/types/rc-in';
+import { createClient } from '@/lib/supabase/server';
+import type { DeliveryRow, AuditLogRow } from '@/types/rc-in';
 
-export type { DeliveryRow } from '@/types/rc-in';
+export type { DeliveryRow, AuditLogRow } from '@/types/rc-in';
 
 /** Deduplicates and upserts batches from delivery rows */
 async function upsertBatchesFromRows(rows: DeliveryRow[]) {
+    const supabase = await createClient();
     const batchUpserts = rows.map(row => ({
         batch_code: row.batch_code,
         status: row.state || 'STORED',
@@ -47,6 +48,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
     try {
         await upsertBatchesFromRows(rows);
 
+        const supabase = await createClient();
         const deliveriesPayload = rows.map(toDeliveryPayload);
 
         const { error: deliveryError } = await supabase
@@ -68,6 +70,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
 }
 
 export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .update(data)
@@ -91,7 +94,7 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         const rows = updates.map(u => u.data);
         await upsertBatchesFromRows(rows);
 
-        // Update each delivery
+        const supabase = await createClient();
         for (const { id, data } of updates) {
             const payload = toDeliveryPayload(data);
             const { error } = await supabase
@@ -117,6 +120,7 @@ export async function bulkDeleteDeliveries(ids: string[]) {
         return { success: false, message: 'No IDs to delete' };
     }
 
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .delete()
@@ -131,7 +135,73 @@ export async function bulkDeleteDeliveries(ids: string[]) {
     return { success: true };
 }
 
+export async function getDeliveryHistory(deliveryId: string) {
+    const supabase = await createClient();
+
+    // 1. Fetch delivery and raw audit logs (no join)
+    const [deliveryRes, logsRes] = await Promise.all([
+        supabase
+            .from('deliveries')
+            .select('*')
+            .eq('id', deliveryId)
+            .single(),
+        supabase
+            .from('audit_logs')
+            .select('*')
+            .eq('record_id', deliveryId)
+            .order('performed_at', { ascending: false }),
+    ]);
+
+    if (deliveryRes.error) {
+        return { success: false as const, message: deliveryRes.error.message };
+    }
+
+    if (logsRes.error) {
+        console.error('Error fetching audit logs:', logsRes.error);
+        // Return empty history but successful delivery fetch
+        return {
+            success: true as const,
+            current: deliveryRes.data,
+            history: [],
+        };
+    }
+
+    const logs = logsRes.data || [];
+
+    // 2. Extract unique user IDs from logs
+    const userIds = Array.from(new Set(logs.map(log => log.performed_by).filter(Boolean)));
+
+    // 3. Fetch profiles for these users
+    let profilesMap: Record<string, any> = {};
+    if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, display_name, email, avatar_url')
+            .in('id', userIds);
+
+        if (profiles) {
+            profilesMap = profiles.reduce((acc, p) => {
+                acc[p.id] = p;
+                return acc;
+            }, {} as Record<string, any>);
+        }
+    }
+
+    // 4. Attach profiles to logs
+    const historyWithProfiles: AuditLogRow[] = logs.map(log => ({
+        ...log,
+        profiles: profilesMap[log.performed_by] || { email: 'Unknown' }
+    }));
+
+    return {
+        success: true as const,
+        current: deliveryRes.data,
+        history: historyWithProfiles,
+    };
+}
+
 export async function deleteDelivery(id: string) {
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .delete()

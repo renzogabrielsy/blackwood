@@ -21,7 +21,7 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Shield, Loader2 } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Shield, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -62,6 +62,7 @@ import type { DeliveryHistoryRow } from '@/types/rc-in';
 export type { DeliveryHistoryRow };
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from './components/DeliverySheetFooter';
+import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 
 const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
     { key: 'mc', label: 'MC', decimals: 2 },
@@ -75,7 +76,7 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
 
 export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryHistoryRow[], batches: any[], search?: string }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { role, setRole, hasPermission } = useAuth();
+    const { user, role, dbRole, setRole, hasPermission } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -101,7 +102,13 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
     const [selectionMode, setSelectionMode] = React.useState(false);
     const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
     const [editRows, setEditRows] = React.useState<DeliveryHistoryRow[] | null>(null);
+    const [historyDelivery, setHistoryDelivery] = React.useState<DeliveryHistoryRow | null>(null);
+    const [historyOpen, setHistoryOpen] = React.useState(false);
 
+    const handleViewHistory = (delivery: DeliveryHistoryRow) => {
+        setHistoryDelivery(delivery);
+        setHistoryOpen(true);
+    };
     const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
 
     const createQueryString = React.useCallback(
@@ -430,6 +437,9 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                <DropdownMenuItem onClick={() => handleViewHistory(delivery)}>
+                                    <Clock className="mr-2 h-4 w-4" /> Info
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleSingleEdit(delivery)}>
                                     <Pencil className="mr-2 h-4 w-4" /> Edit
                                 </DropdownMenuItem>
@@ -620,6 +630,13 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                     </DialogContent>
                 </Dialog>
 
+                <DeliveryHistoryDialog
+                    open={historyOpen}
+                    deliveryId={historyDelivery?.id ?? null}
+                    initialData={historyDelivery}
+                    onOpenChange={setHistoryOpen}
+                />
+
                 {/* Toolbar */}
                 <div className="flex-none flex items-center justify-between py-1">
                     <div className="flex items-center gap-2">
@@ -677,7 +694,15 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                             </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Dev: Switch Role</DropdownMenuLabel>
+                            {user && (
+                                <>
+                                    <DropdownMenuItem onClick={() => setRole('logged-in')}>
+                                        Logged In ({user.email}) — {dbRole}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                </>
+                            )}
+                            <DropdownMenuLabel>Dev Override</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             {(['Owner', 'Admin', 'Dev', 'Employee'] as UserRole[]).map((r) => (
                                 <DropdownMenuItem key={r} onClick={() => setRole(r)} className={role === r ? "bg-accent" : ""}>
@@ -930,6 +955,8 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                         statusText={statusText}
                     />
                 </div>
+
+
             </div>
         </TooltipProvider >
     );
