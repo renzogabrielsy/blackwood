@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { TableSettingsProvider, useTableSettings } from './table-settings';
+import { AuthProvider, useAuth, UserRole } from './auth-context';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -20,7 +21,7 @@ import {
 } from '@tanstack/react-table';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -69,14 +70,17 @@ import { BulkDeliveryInput } from './bulk-delivery-input';
 
 export function DeliveryMasterTable({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
     return (
-        <TableSettingsProvider>
-            <DeliveryMasterTableContent data={data} batches={batches} customFooter={customFooter} />
-        </TableSettingsProvider>
+        <AuthProvider>
+            <TableSettingsProvider>
+                <DeliveryMasterTableContent data={data} batches={batches} customFooter={customFooter} />
+            </TableSettingsProvider>
+        </AuthProvider>
     );
 }
 
 function DeliveryMasterTableContent({ data, batches, customFooter }: { data: DeliveryHistoryRow[], batches: any[], customFooter?: React.ReactNode }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
+    const { role, setRole, hasPermission } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -208,7 +212,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         setEditRows([delivery]);
     };
 
-    const columns: ColumnDef<DeliveryHistoryRow>[] = [
+    const columns = React.useMemo<ColumnDef<DeliveryHistoryRow>[]>(() => [
         {
             id: 'state',
             header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>STATE</div>,
@@ -406,7 +410,12 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                 )
             }
         }
-    ];
+    ].filter(col => {
+        if (col.id === 'cost_basis' || (col as any).accessorKey === 'cost_basis' || col.id === 'php_ttl') {
+            return hasPermission('view:prices');
+        }
+        return true;
+    }), [fontSize, searchField, data, hasPermission]);
 
     const table = useReactTable({
         data,
@@ -564,6 +573,25 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                         <Plus className="h-4 w-4" />
                         Add Delivery
                     </Button>
+
+                    {/* Role Switcher (Dev Only) */}
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 ml-2 text-muted-foreground hover:text-foreground">
+                                <Shield className="h-4 w-4" />
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Dev: Switch Role</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            {(['Owner', 'Admin', 'Dev', 'Employee'] as UserRole[]).map((r) => (
+                                <DropdownMenuItem key={r} onClick={() => setRole(r)} className={role === r ? "bg-accent" : ""}>
+                                    {r} {role === r && "(Active)"}
+                                </DropdownMenuItem>
+                            ))}
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+
                     <Popover>
                         <PopoverTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8 ml-2">
@@ -732,13 +760,48 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     })}
                                     {/* REMARKS */}
                                     <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" />
-                                    {/* PHP TTL -> Converted to WEIGHTED AVG PHP/KG */}
-                                    <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                        <div className="flex items-center justify-between">
-                                            <span className="text-muted-foreground">₱</span>
-                                            <span>{(totalWeight > 0 ? totalAmount / totalWeight : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                        </div>
-                                    </TableCell>
+                                    {/* PHP/KG + PHP TTL combined column in footer? No, header has PHP/KG and PHP TTL separate */}
+                                    {/* Actually wait, looking at columns line 355: PHP/KG is cost_basis. line 369: PHP TTL is php_ttl. */}
+                                    {/* Footer currently has: 7 cols (totals) + 1 (WT) + 1 (SKS empty) + 7 (weighted avgs) + 1 (Remarks) + 1 (PHP Combined?) */}
+                                    {/* Line 763 comment says: "PHP TTL -> Converted to WEIGHTED AVG PHP/KG" */}
+                                    {/* This suggests the footer merges them or I am misaligning. */}
+                                    {/* Let's look at the columns again. */}
+                                    {/* Columns: state, whse, date, supplier, block, loc, truck (7) */}
+                                    {/* weight_kg (8) */}
+                                    {/* sacks (9) */}
+                                    {/* mc, grit, bd_astm, bd_jis, vm, ash, fc (7) -> Total 16 */}
+                                    {/* remarks (17) */}
+                                    {/* cost_basis (18) */}
+                                    {/* php_ttl (19) */}
+                                    {/* actions (20) */}
+
+                                    {/* Footer Row: */}
+                                    {/* Cell 1: colSpan 7 (matches first 7) */}
+                                    {/* Cell 2: WT (matches weight_kg) */}
+                                    {/* Cell 3: SKS (matches sacks) - empty */}
+                                    {/* Cell 4-10: Weighted Avgs (matches mc...fc - 7 cols) */}
+                                    {/* Cell 11: Remarks (matches remarks) */}
+
+                                    {/* Now we need to match cost_basis and php_ttl */}
+                                    {hasPermission('view:prices') && (
+                                        <>
+                                            {/* Cost Basis (PHP/KG) Weighted Avg */}
+                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{(totalWeight > 0 ? totalAmount / totalWeight : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                </div>
+                                            </TableCell>
+
+                                            {/* PHP TTL Total */}
+                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                </div>
+                                            </TableCell>
+                                        </>
+                                    )}
                                     {/* Actions */}
                                     <TableCell className="py-0" />
                                 </TableRow>
