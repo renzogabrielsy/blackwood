@@ -1,13 +1,14 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase/server';
 import type { DeliveryRow } from '@/types/rc-in';
 
 export type { DeliveryRow } from '@/types/rc-in';
 
 /** Deduplicates and upserts batches from delivery rows */
 async function upsertBatchesFromRows(rows: DeliveryRow[]) {
+    const supabase = await createClient();
     const batchUpserts = rows.map(row => ({
         batch_code: row.batch_code,
         status: row.state || 'STORED',
@@ -47,6 +48,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
     try {
         await upsertBatchesFromRows(rows);
 
+        const supabase = await createClient();
         const deliveriesPayload = rows.map(toDeliveryPayload);
 
         const { error: deliveryError } = await supabase
@@ -68,6 +70,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
 }
 
 export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .update(data)
@@ -91,7 +94,7 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         const rows = updates.map(u => u.data);
         await upsertBatchesFromRows(rows);
 
-        // Update each delivery
+        const supabase = await createClient();
         for (const { id, data } of updates) {
             const payload = toDeliveryPayload(data);
             const { error } = await supabase
@@ -117,6 +120,7 @@ export async function bulkDeleteDeliveries(ids: string[]) {
         return { success: false, message: 'No IDs to delete' };
     }
 
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .delete()
@@ -132,6 +136,7 @@ export async function bulkDeleteDeliveries(ids: string[]) {
 }
 
 export async function deleteDelivery(id: string) {
+    const supabase = await createClient();
     const { error } = await supabase
         .from('deliveries')
         .delete()

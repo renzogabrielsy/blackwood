@@ -75,7 +75,7 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
 
 export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryHistoryRow[], batches: any[], search?: string }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { role, setRole, hasPermission } = useAuth();
+    const { user, role, dbRole, setRole, hasPermission } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -677,7 +677,15 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                             </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                            <DropdownMenuLabel>Dev: Switch Role</DropdownMenuLabel>
+                            {user && (
+                                <>
+                                    <DropdownMenuItem onClick={() => setRole('logged-in')}>
+                                        Logged In ({user.email}) — {dbRole}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                </>
+                            )}
+                            <DropdownMenuLabel>Dev Override</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             {(['Owner', 'Admin', 'Dev', 'Employee'] as UserRole[]).map((r) => (
                                 <DropdownMenuItem key={r} onClick={() => setRole(r)} className={role === r ? "bg-accent" : ""}>
