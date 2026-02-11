@@ -110,7 +110,7 @@ function deliveryToInputRow(d: DeliveryRow & { id?: string }): InputDeliveryRow 
     };
 }
 
-const inputClass = "h-8 w-full text-[10px] md:text-[10px] px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
+const inputClass = "h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
 /** Focus an input in the grid by row/col data attributes */
 function focusCell(container: HTMLElement | null, row: number, col: number) {
@@ -144,6 +144,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         return [createEmptyRow()];
     });
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
+    const [isEditing, setIsEditing] = React.useState(false);
 
     // --- ROW MANAGEMENT ---
     const addRow = React.useCallback(() => {
@@ -169,6 +171,111 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             return newRows;
         });
     }, []);
+
+    // --- GRID NAVIGATION ---
+    // Defined after updateRow to avoid "used before declaration"
+    const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
+        if (!activeCell) return;
+
+        // If editing, only handle Escape to exit, or Tab/Enter to commit & move
+        if (isEditing) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                e.nativeEvent.stopImmediatePropagation(); // Prevent Radix/Dialog from catching this
+                setIsEditing(false);
+                // Return focus to the grid container
+                gridRef.current?.focus();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                setIsEditing(false);
+                moveSelection(e.key, e.shiftKey);
+                gridRef.current?.focus();
+            }
+            return;
+        }
+
+        // --- NAVIGATION (Not Editing) ---
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
+            e.preventDefault();
+            moveSelection(e.key, e.shiftKey);
+            return;
+        }
+
+        // --- EDIT MODE triggers ---
+        if (e.key === 'F2') {
+            e.preventDefault();
+            setIsEditing(true);
+            return;
+        }
+
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+            e.preventDefault();
+            // Clear value
+            const field = COLUMN_MAP[activeCell.col];
+            if (field) {
+                updateRow(activeCell.row, field, '');
+            }
+            setIsEditing(true);
+            return;
+        }
+
+        // Printable characters -> Enter edit mode with value
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            const field = COLUMN_MAP[activeCell.col];
+            if (field) {
+                // Prevent default so the subsequent input focus doesn't double-type the char
+                e.preventDefault();
+                updateRow(activeCell.row, field, e.key);
+                setIsEditing(true);
+            }
+        }
+    }, [activeCell, isEditing, rows.length, updateRow]);
+
+    const moveSelection = (key: string, shift: boolean) => {
+        if (!activeCell) return;
+        let { row, col } = activeCell;
+
+        if (key === 'ArrowUp' || (key === 'Enter' && shift)) {
+            row = Math.max(0, row - 1);
+        } else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) {
+            row = Math.min(rows.length - 1, row + 1);
+        } else if (key === 'ArrowLeft') {
+            do {
+                col--;
+            } while (col > 0 && COLUMN_MAP[col] === null); // Skip nulls
+            col = Math.max(0, col);
+        } else if (key === 'ArrowRight') {
+            do {
+                col++;
+            } while (col < COLUMN_MAP.length && COLUMN_MAP[col] === null);
+            col = Math.min(COLUMN_MAP.length - 1, col);
+        } else if (key === 'Tab') {
+            if (shift) {
+                // Previous writable cell
+                do {
+                    col--;
+                    if (col < 0) {
+                        row--;
+                        col = COLUMN_MAP.length - 1;
+                    }
+                } while (row >= 0 && COLUMN_MAP[col] === null);
+                if (row < 0) { row = 0; col = activeCell.col; } // Boundary check
+            } else {
+                // Next writable cell
+                do {
+                    col++;
+                    if (col >= COLUMN_MAP.length) {
+                        row++;
+                        col = 0;
+                    }
+                } while (row < rows.length && COLUMN_MAP[col] === null);
+                if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; } // Boundary check
+            }
+        }
+
+        setActiveCell({ row, col });
+    };
 
     // --- PASTE LOGIC (The Magic) ---
     const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRowIndex: number, startColIndex: number) => {
@@ -215,6 +322,13 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
         toast.success(`Pasted ${pastedRows.length} rows`);
     }, []);
+
+    // Handle paste on the grid container when in selection mode
+    const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
+        if (!isEditing && activeCell) {
+            handleSmartPaste(e, activeCell.row, activeCell.col);
+        }
+    }, [isEditing, activeCell, handleSmartPaste]);
 
     // --- SUBMISSION ---
     const inputRowToDelivery = (row: InputDeliveryRow): DeliveryRow => ({
@@ -307,7 +421,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                             <span>Editing {rows.length} deliver{rows.length === 1 ? 'y' : 'ies'}.</span>
                         ) : (
                             <>
-                                <span className="hidden md:inline">Pro Tip: You can copy cells from Excel and paste them directly into the grid. </span>
+                                <span className="hidden md:inline">Pro Tip: Click a cell to select, type to edit. Arrow keys to navigate. </span>
                                 Click &ldquo;Add Row&rdquo; for manual entry.
                             </>
                         )}
@@ -324,7 +438,13 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                     </div>
                 </div>
 
-                <div ref={gridRef} className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh]">
+                <div
+                    ref={gridRef}
+                    className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh] outline-none"
+                    tabIndex={0}
+                    onKeyDown={handleGridKeyDown}
+                    onPaste={handleGridPaste}
+                >
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
                         <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
                             <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
@@ -367,6 +487,10 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                                     gridRef={gridRef}
                                     fontSize={fontSize}
                                     rowHeight={rowHeight}
+                                    activeCell={activeCell}
+                                    isEditing={isEditing}
+                                    setActiveCell={setActiveCell}
+                                    setIsEditing={setIsEditing}
                                 />
                             ))}
                         </TableBody>
@@ -378,7 +502,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 }
 
 // --- ROW COMPONENT ---
-// Added `onPaste` prop and wired it to inputs
+
+// --- ROW COMPONENT ---
 
 const BulkInputRow = React.memo(function BulkInputRow({
     row,
@@ -393,6 +518,10 @@ const BulkInputRow = React.memo(function BulkInputRow({
     gridRef,
     fontSize,
     rowHeight,
+    activeCell,
+    isEditing,
+    setActiveCell,
+    setIsEditing,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -406,27 +535,32 @@ const BulkInputRow = React.memo(function BulkInputRow({
     gridRef: React.RefObject<HTMLDivElement | null>;
     fontSize: number;
     rowHeight: number;
+    activeCell: { row: number; col: number } | null;
+    isEditing: boolean;
+    setActiveCell: (cell: { row: number; col: number }) => void;
+    setIsEditing: (editing: boolean) => void;
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
-
-    /** Enter = move down, Shift+Enter = move up (same column) */
-    const cellKeyDown = React.useCallback((e: React.KeyboardEvent, col: number) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            const targetRow = e.shiftKey ? index - 1 : index + 1;
-            focusCell(gridRef.current, targetRow, col);
-        }
-    }, [index, gridRef]);
     const wt = parseFloat(String(row.weight_kg)) || 0;
     const price = parseFloat(String(row.cost_basis)) || 0;
     const ttlValue = wt * price;
 
     const inputStyle = { fontSize: `${fontSize}px` };
 
+    const commonCellProps = {
+        row: index,
+        activeCell,
+        isEditing,
+        setActiveCell,
+        setIsEditing,
+        className: "font-mono font-bold text-center",
+        gridRef
+    };
+
     return (
         <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
             <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
-                <Button variant="ghost" size="icon" className="h-full w-full rounded-none text-destructive hover:text-white hover:bg-destructive/90" onClick={() => removeRow(index)}>
+                <Button variant="ghost" size="icon" className="h-full w-full rounded-none text-destructive hover:text-white hover:bg-destructive/90" onClick={() => removeRow(index)} tabIndex={-1}>
                     <Trash2 className="w-3 h-3" />
                 </Button>
             </TableCell>
@@ -447,176 +581,204 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 3: DATE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input
-                    data-row={index} data-col={3}
-                    value={row.transaction_date}
-                    onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
-                    onPaste={(e) => onPaste(e, index, 3)}
-                    onKeyDown={(e) => cellKeyDown(e, 3)}
-                    className={cn(inputClass, "font-bold text-center font-mono")}
-                    placeholder="YYYY-MM-DD"
-                    style={inputStyle}
-                />
+                <GridCell col={3} value={row.transaction_date} {...commonCellProps}>
+                    <Input
+                        autoFocus
+                        value={row.transaction_date}
+                        onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        placeholder="YYYY-MM-DD"
+                        style={inputStyle}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 4: SUPPLIER */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <AutocompleteInput
-                    dataRow={index} dataCol={4}
-                    value={row.supplier}
-                    onChange={(val) => updateRow(index, 'supplier', val)}
-                    onPaste={(e) => onPaste(e, index, 4)}
-                    onCellNav={cellKeyDown}
-                    items={supplierItems}
-                    onSelect={(val) => updateRow(index, 'supplier', val)}
-                    className={cn(inputClass, "font-bold text-left")}
-                    placeholder="Supplier..."
-                    style={inputStyle}
-                />
+                <GridCell col={4} value={row.supplier} {...commonCellProps} className="font-bold text-left pl-1">
+                    <AutocompleteInput
+                        value={row.supplier}
+                        onChange={(val) => updateRow(index, 'supplier', val)}
+                        items={supplierItems}
+                        onSelect={(val) => updateRow(index, 'supplier', val)}
+                        className={cn(inputClass, "font-bold text-left")}
+                        placeholder="Supplier..."
+                        style={inputStyle}
+                        autoFocus
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 5: BLOCK */}
             <TableCell className="px-1 py-0 border-r relative" style={{ height: `${rowHeight}px` }}>
-                <AutocompleteInput
-                    dataRow={index} dataCol={5}
-                    value={row.batch_code}
-                    onChange={(val) => updateRow(index, 'batch_code', val)}
-                    onPaste={(e) => onPaste(e, index, 5)}
-                    onCellNav={cellKeyDown}
-                    items={batchItems}
-                    onSelect={(val) => {
-                        const batch = batches.find(b => b.batch_code === val);
-                        if (batch) {
-                            updateRowFields(index, {
-                                batch_code: batch.batch_code,
-                                ...(batch.location_ref ? { block_loc: batch.location_ref } : {})
-                            });
-                        } else {
-                            updateRow(index, 'batch_code', val);
-                        }
-                    }}
-                    className={cn(inputClass, "font-bold text-center font-mono")}
-                    placeholder="..."
-                    style={inputStyle}
-                />
+                <GridCell col={5} value={row.batch_code} {...commonCellProps}>
+                    <AutocompleteInput
+                        value={row.batch_code}
+                        onChange={(val) => updateRow(index, 'batch_code', val)}
+                        items={batchItems}
+                        onSelect={(val) => {
+                            const batch = batches.find(b => b.batch_code === val);
+                            if (batch) {
+                                updateRowFields(index, {
+                                    batch_code: batch.batch_code,
+                                    ...(batch.location_ref ? { block_loc: batch.location_ref } : {})
+                                });
+                            } else {
+                                updateRow(index, 'batch_code', val);
+                            }
+                        }}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        placeholder="..."
+                        style={inputStyle}
+                        autoFocus
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 6: LOC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input
-                    data-row={index} data-col={6}
-                    value={row.block_loc}
-                    onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
-                    onPaste={(e) => onPaste(e, index, 6)}
-                    onKeyDown={(e) => cellKeyDown(e, 6)}
-                    className={cn(inputClass, "font-bold text-center font-mono")}
-                    style={inputStyle}
-                />
+                <GridCell col={6} value={row.block_loc} {...commonCellProps}>
+                    <Input
+                        autoFocus
+                        value={row.block_loc}
+                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        style={inputStyle}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 7: TRUCK */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input
-                    data-row={index} data-col={7}
-                    value={row.truck_plate}
-                    onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
-                    onPaste={(e) => onPaste(e, index, 7)}
-                    onKeyDown={(e) => cellKeyDown(e, 7)}
-                    className={cn(inputClass, "text-center font-mono")}
-                    style={inputStyle}
-                />
+                <GridCell col={7} value={row.truck_plate} {...commonCellProps} className="text-center font-mono">
+                    <Input
+                        autoFocus
+                        value={row.truck_plate}
+                        onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
+                        className={cn(inputClass, "text-center font-mono")}
+                        style={inputStyle}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 8: WT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input
-                    data-row={index} data-col={8}
-                    type="number" step="1"
-                    value={row.weight_kg}
-                    onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
-                    onPaste={(e) => onPaste(e, index, 8)}
-                    onKeyDown={(e) => cellKeyDown(e, 8)}
-                    className={cn(inputClass, "font-bold text-center font-mono")}
-                    style={inputStyle}
-                />
+                <GridCell col={8} value={row.weight_kg} {...commonCellProps}>
+                    <Input
+                        autoFocus
+                        type="number" step="1"
+                        value={row.weight_kg}
+                        onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        style={inputStyle}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 9: SKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input
-                    data-row={index} data-col={9}
-                    type="number"
-                    value={row.sacks}
-                    onChange={(e) => updateRow(index, 'sacks', e.target.value)}
-                    onPaste={(e) => onPaste(e, index, 9)}
-                    onKeyDown={(e) => cellKeyDown(e, 9)}
-                    className={cn(inputClass, "text-center font-mono")}
-                    style={inputStyle}
-                />
+                <GridCell col={9} value={row.sacks} {...commonCellProps} className="text-center font-mono">
+                    <Input
+                        autoFocus
+                        type="number"
+                        value={row.sacks}
+                        onChange={(e) => updateRow(index, 'sacks', e.target.value)}
+                        className={cn(inputClass, "text-center font-mono")}
+                        style={inputStyle}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 10: MC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={10} type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} onPaste={(e) => onPaste(e, index, 10)} onKeyDown={(e) => cellKeyDown(e, 10)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={10} value={row.mc} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 11: GRIT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={11} type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} onPaste={(e) => onPaste(e, index, 11)} onKeyDown={(e) => cellKeyDown(e, 11)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={11} value={row.grit} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 12: ASTM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={12} type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} onPaste={(e) => onPaste(e, index, 12)} onKeyDown={(e) => cellKeyDown(e, 12)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={12} value={row.bd_astm} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 13: JIS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={13} type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} onPaste={(e) => onPaste(e, index, 13)} onKeyDown={(e) => cellKeyDown(e, 13)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={13} value={row.bd_jis} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 14: VM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={14} type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} onPaste={(e) => onPaste(e, index, 14)} onKeyDown={(e) => cellKeyDown(e, 14)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={14} value={row.vm} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 15: ASH */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={15} type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} onPaste={(e) => onPaste(e, index, 15)} onKeyDown={(e) => cellKeyDown(e, 15)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={15} value={row.ash} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
             {/* 16: FC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input data-row={index} data-col={16} type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} onPaste={(e) => onPaste(e, index, 16)} onKeyDown={(e) => cellKeyDown(e, 16)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <GridCell col={16} value={row.fc} {...commonCellProps} className="text-center font-mono">
+                    <Input autoFocus type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                </GridCell>
             </TableCell>
 
             {/* 17: REMARKS */}
-            <RemarksCell
-                index={index}
-                value={row.remarks}
-                onChange={(val) => updateRow(index, 'remarks', val)}
-                onPaste={(e) => onPaste(e, index, 17)}
-                onCellNav={cellKeyDown}
-                gridRef={gridRef}
-                rowHeight={rowHeight}
-            />
+            <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
+                <GridCell col={17} value={row.remarks} {...commonCellProps}
+                    displayValue={
+                        <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground")}>
+                            <MessageSquareText className="w-3 h-3" />
+                        </div>
+                    }
+                >
+                    <RemarksCellAdaptor
+                        value={row.remarks}
+                        onChange={(val) => updateRow(index, 'remarks', val)}
+                        onClose={() => setIsEditing(false)}
+                        fontSize={fontSize}
+                    />
+                </GridCell>
+            </TableCell>
 
             {/* 18: PRICE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <div className="flex items-center justify-between h-full">
-                    <span className="text-muted-foreground" style={inputStyle}>₱</span>
-                    <input
-                        data-row={index} data-col={18}
-                        type="number"
-                        step="0.01"
-                        value={row.cost_basis}
-                        onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
-                        onPaste={(e) => onPaste(e, index, 18)}
-                        onKeyDown={(e) => cellKeyDown(e, 18)}
-                        className="w-full text-right bg-transparent border-none p-0 h-full font-mono font-bold focus:outline-none"
-                        placeholder="0.00"
-                        style={inputStyle}
-                    />
-                </div>
+                <GridCell col={18} value={row.cost_basis} {...commonCellProps}
+                    displayValue={
+                        <div className="flex items-center justify-between h-full w-full px-1">
+                            <span className="text-muted-foreground mr-1">₱</span>
+                            <span>{row.cost_basis}</span>
+                        </div>
+                    }
+                >
+                    <div className="flex items-center justify-between h-full w-full relative">
+                        <span className="text-muted-foreground absolute left-0 pl-1 z-10" style={inputStyle}>₱</span>
+                        <Input
+                            autoFocus
+                            type="number"
+                            step="0.01"
+                            value={row.cost_basis}
+                            onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
+                            className={cn(inputClass, "w-full text-right font-mono font-bold pr-1")}
+                            placeholder="0.00"
+                            style={{ ...inputStyle, paddingLeft: '16px' }}
+                        />
+                    </div>
+                </GridCell>
             </TableCell>
 
             {/* 19: TTL (Calculated) */}
             <TableCell className="px-1 py-0 text-right" style={{ height: `${rowHeight}px` }}>
-                <div className="flex items-center justify-between h-full">
+                <div className="flex items-center justify-between h-full px-1">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
                     <span className="text-right font-mono font-bold" style={inputStyle}>
                         {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -627,90 +789,115 @@ const BulkInputRow = React.memo(function BulkInputRow({
     );
 });
 
-// --- REMARKS CELL ---
-function RemarksCell({ index, value, onChange, onPaste, onCellNav, gridRef, rowHeight }: {
-    index: number;
-    value: string;
-    onChange: (val: string) => void;
-    onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void;
-    onCellNav: (e: React.KeyboardEvent, col: number) => void;
-    gridRef: React.RefObject<HTMLDivElement | null>;
-    rowHeight: number;
+// --- GRID CELL HELPERS ---
+
+function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, children, displayValue, className, tabIndex, gridRef }: {
+    row: number;
+    col: number;
+    value: string | number;
+    activeCell: { row: number; col: number } | null;
+    isEditing: boolean;
+    setActiveCell: (cell: { row: number; col: number }) => void;
+    setIsEditing: (editing: boolean) => void;
+    children: React.ReactNode;
+    displayValue?: React.ReactNode;
+    className?: string;
+    tabIndex?: number;
+    gridRef?: React.RefObject<HTMLDivElement | null>;
 }) {
-    const [open, setOpen] = React.useState(false);
-    const triggerRef = React.useRef<HTMLButtonElement>(null);
+    const isActive = activeCell?.row === row && activeCell?.col === col;
+    const isEditingThis = isActive && isEditing;
+
+    React.useEffect(() => {
+        if (isActive && !isEditing && gridRef?.current) {
+            // ensure grid has focus so arrows work
+        }
+    }, [isActive, isEditing, gridRef]);
+
+    if (isEditingThis) {
+        return <div className={cn("h-full w-full relative", className)}>{children}</div>;
+    }
 
     return (
-        <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
-            <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                    <Button
-                        ref={triggerRef}
-                        variant="ghost"
-                        size="icon"
-                        data-row={index}
-                        data-col={17}
-                        className={cn("h-6 w-6", value ? "text-primary" : "text-muted-foreground")}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                onCellNav(e, 17);
-                            }
-                        }}
-                    >
-                        <MessageSquareText className="w-3 h-3" />
-                    </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-80 p-2" onOpenAutoFocus={(e) => e.preventDefault()}>
-                    <div className="space-y-2">
-                        <h4 className="font-medium leading-none">Remarks</h4>
-                        <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
-                        <Input
-                            autoFocus
-                            value={value}
-                            onChange={(e) => onChange(e.target.value)}
-                            onPaste={onPaste}
-                            className="h-8 text-sm"
-                            placeholder="Enter remarks..."
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    e.preventDefault();
-                                    setOpen(false);
-                                    onCellNav(e, 17);
-                                } else if (e.key === 'Tab') {
-                                    e.preventDefault();
-                                    setOpen(false);
-                                    if (e.shiftKey) {
-                                        focusCell(gridRef.current, index, 16);
-                                    } else {
-                                        focusCell(gridRef.current, index, 18);
-                                    }
-                                } else if (e.key === 'Escape') {
-                                    setOpen(false);
-                                    triggerRef.current?.focus();
-                                }
-                            }}
-                        />
-                    </div>
-                </PopoverContent>
-            </Popover>
-        </TableCell>
+        <div
+            data-row={row}
+            data-col={col}
+            tabIndex={tabIndex ?? 0}
+            className={cn(
+                "h-full w-full flex items-center justify-center outline-none cursor-default select-none",
+                isActive && "ring-2 ring-primary ring-inset z-10",
+                className
+            )}
+            style={{ minHeight: '100%' }}
+            onClick={(e) => {
+                e.stopPropagation();
+                setActiveCell({ row, col });
+                setIsEditing(false);
+                gridRef?.current?.focus();
+            }}
+            onDoubleClick={(e) => {
+                e.stopPropagation();
+                setActiveCell({ row, col });
+                setIsEditing(true);
+            }}
+        >
+            {displayValue ?? value}
+        </div>
     );
 }
 
-// --- AUTOCOMPLETE ---
-function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, dataRow, dataCol, items, className, placeholder, style }: {
+function RemarksCellAdaptor({ value, onChange, onClose, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, fontSize: number }) {
+    const [open, setOpen] = React.useState(true);
+
+    const onOpenChange = (isOpen: boolean) => {
+        setOpen(isOpen);
+        if (!isOpen) {
+            onClose();
+        }
+    }
+
+    return (
+        <Popover open={open} onOpenChange={onOpenChange}>
+            <PopoverTrigger asChild>
+                <div className="w-full h-full" />
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-2" align="center" side="bottom">
+                <div className="space-y-2">
+                    <h4 className="font-medium leading-none">Remarks</h4>
+                    <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
+                    <Input
+                        autoFocus
+                        value={value}
+                        onChange={(e) => onChange(e.target.value)}
+                        className="h-8"
+                        style={{ fontSize: `${fontSize}px` }}
+                        placeholder="Enter remarks..."
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.stopPropagation();
+                                setOpen(false);
+                            } else if (e.key === 'Escape') {
+                                e.stopPropagation();
+                                e.nativeEvent.stopImmediatePropagation();
+                                setOpen(false);
+                            }
+                        }}
+                    />
+                </div>
+            </PopoverContent>
+        </Popover>
+    )
+}
+
+function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus }: {
     value: string;
     onChange: (val: string) => void;
     onSelect: (val: string) => void;
-    onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void;
-    onCellNav?: (e: React.KeyboardEvent, col: number) => void;
-    dataRow?: number;
-    dataCol?: number;
     items: AutocompleteItem[];
     className?: string;
     placeholder?: string;
     style?: React.CSSProperties;
+    autoFocus?: boolean;
 }) {
     const [open, setOpen] = React.useState(false);
     const inputRef = React.useRef<HTMLInputElement>(null);
@@ -721,67 +908,53 @@ function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, data
         [items, value]
     );
 
-    // Reset selected index when filtered items change
     React.useEffect(() => {
         setSelectedIndex(0);
     }, [filtered]);
 
+    React.useEffect(() => {
+        if (autoFocus && filtered.length > 0) {
+            setOpen(true);
+        }
+    }, [autoFocus, filtered.length]);
+
+
     const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
-            e.preventDefault();
-            setOpen(true);
-            return;
-        }
-
-        // When popover is closed, let Enter/Shift+Enter navigate vertically
-        if (!open && e.key === 'Enter' && onCellNav && dataCol !== undefined) {
-            onCellNav(e, dataCol);
-            return;
-        }
-
-        if (!open) return;
-
-        switch (e.key) {
-            case 'ArrowDown':
-                e.preventDefault();
-                setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
-                break;
-            case 'ArrowUp':
-                e.preventDefault();
-                setSelectedIndex(prev => Math.max(prev - 1, 0));
-                break;
-            case 'Enter':
-                e.preventDefault();
-                if (filtered.length > 0) {
-                    onSelect(filtered[selectedIndex].value);
+        if (open) {
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
+                    return;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSelectedIndex(prev => Math.max(prev - 1, 0));
+                    return;
+                case 'Enter':
+                    e.preventDefault();
+                    if (filtered.length > 0) {
+                        onSelect(filtered[selectedIndex].value);
+                        setOpen(false);
+                        e.stopPropagation();
+                    }
+                    return;
+                case 'Tab':
+                    if (filtered.length > 0) {
+                        onSelect(filtered[selectedIndex].value);
+                        setOpen(false);
+                    }
+                    return;
+                case 'Escape':
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.nativeEvent.stopImmediatePropagation();
                     setOpen(false);
-                }
-                // After selecting, navigate to next/prev row
-                if (onCellNav && dataCol !== undefined) {
-                    onCellNav(e, dataCol);
-                }
-                break;
-            case 'Tab':
-                // Select current suggestion and allow natural tab navigation
-                if (filtered.length > 0) {
-                    onSelect(filtered[selectedIndex].value);
-                    setOpen(false);
-                    // Don't prevent default - let tab work naturally
-                }
-                break;
-            case 'Escape':
-                e.preventDefault();
-                setOpen(false);
-                break;
+                    return;
+            }
         }
-    }, [open, filtered, selectedIndex, onSelect, onCellNav, dataCol]);
-
-    const handleOpenChange = React.useCallback((newOpen: boolean) => {
-        // Only allow closing via our explicit controls, not Radix's auto-close
-        if (newOpen) {
-            setOpen(true);
-        }
-    }, []);
+    }, [open, filtered, selectedIndex, onSelect]);
 
     const handleSelect = React.useCallback((itemValue: string) => {
         onSelect(itemValue);
@@ -789,30 +962,24 @@ function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, data
     }, [onSelect]);
 
     return (
-        <Popover open={open && filtered.length > 0} onOpenChange={handleOpenChange} modal={false}>
+        <Popover open={open && filtered.length > 0} onOpenChange={setOpen} modal={false}>
             <PopoverTrigger asChild>
                 <div className="w-full h-full relative">
                     <Input
                         ref={inputRef}
-                        data-row={dataRow}
-                        data-col={dataCol}
                         value={value}
                         onChange={(e) => {
                             onChange(e.target.value);
                             setOpen(true);
                         }}
-                        onPaste={onPaste}
                         onKeyDown={handleKeyDown}
                         onFocus={() => {
                             if (filtered.length > 0) setOpen(true);
                         }}
-                        onBlur={() => {
-                            // Delay to allow click to register
-                            setTimeout(() => setOpen(false), 150);
-                        }}
                         className={className}
                         placeholder={placeholder}
                         style={style}
+                        autoFocus={autoFocus}
                     />
                 </div>
             </PopoverTrigger>
@@ -823,18 +990,7 @@ function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, data
                 side="bottom"
                 align="start"
                 sideOffset={4}
-                onPointerDownOutside={(e) => {
-                    // Prevent default closing behavior from Radix
-                    if (e.target === inputRef.current) {
-                        e.preventDefault();
-                    }
-                }}
-                onInteractOutside={(e) => {
-                    // Prevent closing when interacting with input
-                    if (e.target === inputRef.current) {
-                        e.preventDefault();
-                    }
-                }}
+                onContextMenu={(e) => e.preventDefault()}
             >
                 <Command shouldFilter={false}>
                     <CommandList>
