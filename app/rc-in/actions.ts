@@ -97,6 +97,74 @@ export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
     return { success: true };
 }
 
+export async function bulkUpdateDeliveries(updates: { id: string; data: DeliveryRow }[]) {
+    if (!updates || updates.length === 0) {
+        return { success: false, message: 'No rows to update' };
+    }
+
+    try {
+        // Upsert batches first (same pattern as submitBulkDeliveries)
+        const batchUpserts = updates.map(u => ({
+            batch_code: u.data.batch_code,
+            status: u.data.state || 'STORED',
+            location_ref: u.data.block_loc,
+        }));
+        const uniqueBatches = Array.from(new Map(batchUpserts.map(item => [item.batch_code, item])).values());
+
+        const { error: batchError } = await supabase
+            .from('batches')
+            .upsert(uniqueBatches, { onConflict: 'batch_code' });
+
+        if (batchError) {
+            throw new Error(`Batch Error: ${batchError.message}`);
+        }
+
+        // Update each delivery
+        for (const { id, data } of updates) {
+            const { state, ...deliveryData } = data;
+            const { error } = await supabase
+                .from('deliveries')
+                .update({
+                    ...deliveryData,
+                    weight_kg: Number(data.weight_kg),
+                    sacks: Number(data.sacks),
+                    cost_basis: Number(data.cost_basis),
+                    lab_results: data.lab_results,
+                })
+                .eq('id', id);
+
+            if (error) {
+                throw new Error(`Update Error (${id}): ${error.message}`);
+            }
+        }
+
+        revalidatePath('/rc-in');
+        return { success: true };
+    } catch (error: any) {
+        console.error('Bulk Update Failed:', error);
+        return { success: false, message: error.message || 'Unknown error occurred' };
+    }
+}
+
+export async function bulkDeleteDeliveries(ids: string[]) {
+    if (!ids || ids.length === 0) {
+        return { success: false, message: 'No IDs to delete' };
+    }
+
+    const { error } = await supabase
+        .from('deliveries')
+        .delete()
+        .in('id', ids);
+
+    if (error) {
+        console.error('Error bulk deleting deliveries:', error);
+        return { success: false, message: error.message };
+    }
+
+    revalidatePath('/rc-in');
+    return { success: true };
+}
+
 export async function deleteDelivery(id: string) {
     const { error } = await supabase
         .from('deliveries')
