@@ -1,5 +1,5 @@
 
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase/server';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
 
@@ -11,6 +11,7 @@ export default async function RCInPage({
 }: {
     searchParams: Promise<{ year?: string; search?: string; field?: string }>;
 }) {
+    const supabase = await createClient();
     const { year: rawYear, search, field } = await searchParams;
     const now = new Date();
 
