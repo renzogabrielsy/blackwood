@@ -127,9 +127,10 @@ type BulkDeliveryInputProps = {
     onSuccess?: () => void;
     mode?: 'create' | 'edit';
     initialData?: (DeliveryRow & { id: string })[];
+    onDirtyChange?: (isDirty: boolean) => void;
 };
 
-export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'create', initialData }: BulkDeliveryInputProps) {
+export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'create', initialData, onDirtyChange }: BulkDeliveryInputProps) {
     const { fontSize, rowHeight } = useTableSettings();
     const isEdit = mode === 'edit';
 
@@ -146,6 +147,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
+    const preEditValue = React.useRef<any>(null);
 
     // --- ROW MANAGEMENT ---
     const addRow = React.useCallback(() => {
@@ -172,6 +174,39 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         });
     }, []);
 
+    const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
+        const field = COLUMN_MAP[colIdx];
+        if (!field) return;
+
+        // 1. Capture current value BEFORE any edit
+        const currentRow = rows[rowIdx];
+        const currentValue = currentRow ? currentRow[field] : '';
+        preEditValue.current = currentValue;
+
+        // 2. Set Editing
+        setActiveCell({ row: rowIdx, col: colIdx }); // Ensure active
+        setIsEditing(true);
+
+        // 3. Optional: Immediate update (Type-over)
+        if (initialChar !== undefined) {
+            updateRow(rowIdx, field, initialChar);
+        }
+    }, [rows, updateRow]);
+
+    const revertChanges = React.useCallback(() => {
+        if (!activeCell) return;
+        // REVERT changes
+        if (preEditValue.current !== null) {
+            const field = COLUMN_MAP[activeCell.col];
+            if (field) {
+                updateRow(activeCell.row, field, preEditValue.current);
+            }
+        }
+        setIsEditing(false);
+        // Return focus to the grid container
+        gridRef.current?.focus();
+    }, [activeCell, updateRow]);
+
     // --- GRID NAVIGATION ---
     // Defined after updateRow to avoid "used before declaration"
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
@@ -183,9 +218,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                 e.preventDefault();
                 e.stopPropagation();
                 e.nativeEvent.stopImmediatePropagation(); // Prevent Radix/Dialog from catching this
-                setIsEditing(false);
-                // Return focus to the grid container
-                gridRef.current?.focus();
+
+                revertChanges();
             } else if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault();
                 setIsEditing(false);
@@ -205,18 +239,17 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         // --- EDIT MODE triggers ---
         if (e.key === 'F2') {
             e.preventDefault();
-            setIsEditing(true);
+            startEditing(activeCell.row, activeCell.col);
             return;
         }
 
         if (e.key === 'Backspace' || e.key === 'Delete') {
             e.preventDefault();
-            // Clear value
             const field = COLUMN_MAP[activeCell.col];
             if (field) {
-                updateRow(activeCell.row, field, '');
+                // Capture first, then clear
+                startEditing(activeCell.row, activeCell.col, '');
             }
-            setIsEditing(true);
             return;
         }
 
@@ -226,11 +259,10 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             if (field) {
                 // Prevent default so the subsequent input focus doesn't double-type the char
                 e.preventDefault();
-                updateRow(activeCell.row, field, e.key);
-                setIsEditing(true);
+                startEditing(activeCell.row, activeCell.col, e.key);
             }
         }
-    }, [activeCell, isEditing, rows.length, updateRow]);
+    }, [activeCell, isEditing, rows, updateRow, startEditing, revertChanges]);
 
     const moveSelection = (key: string, shift: boolean) => {
         if (!activeCell) return;
@@ -330,7 +362,68 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         }
     }, [isEditing, activeCell, handleSmartPaste]);
 
-    // --- SUBMISSION ---
+    // --- DIRTY CHECKING ---
+    React.useEffect(() => {
+        if (!onDirtyChange) return;
+
+        let isDirty = false;
+
+        if (mode === 'create') {
+            // In create mode, check if we have more than 1 row (added rows)
+            // OR if the single row has any value filled
+            if (rows.length > 1) {
+                isDirty = true;
+            } else {
+                const r = rows[0];
+                // Check relevant fields (ignore strictly internal or default empty fields)
+                // Default empty row has mostly empty strings.
+                // We check basic fields that user would type in.
+                const hasData = r.transaction_date || r.supplier || r.batch_code || r.truck_plate ||
+                    !!r.weight_kg || !!r.sacks || !!r.cost_basis;
+                if (hasData) isDirty = true;
+            }
+        } else if (mode === 'edit' && initialData) {
+            // In edit mode, compare with initialData
+            // initialData is DeliveryRow[], rows is InputDeliveryRow[]
+            // We need to convert initialData to InputDeliveryRow format for comparison, or vice versa.
+            // Converting initialData to InputDeliveryRow is easier since we have `deliveryToInputRow`.
+
+            if (rows.length !== initialData.length) {
+                isDirty = true;
+            } else {
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i];
+                    const initial = deliveryToInputRow(initialData[i]);
+
+                    // Simple shallow comparison of key fields
+                    const diff =
+                        row.transaction_date !== initial.transaction_date ||
+                        row.supplier !== initial.supplier ||
+                        row.batch_code !== initial.batch_code ||
+                        row.block_loc !== initial.block_loc ||
+                        row.truck_plate !== initial.truck_plate ||
+                        row.weight_kg != initial.weight_kg || // loose comparison for numbers/strings
+                        row.sacks != initial.sacks ||
+                        row.mc != initial.mc ||
+                        row.grit != initial.grit ||
+                        row.bd_astm != initial.bd_astm ||
+                        row.bd_jis != initial.bd_jis ||
+                        row.vm != initial.vm ||
+                        row.ash != initial.ash ||
+                        row.fc != initial.fc ||
+                        row.remarks !== initial.remarks ||
+                        row.cost_basis != initial.cost_basis;
+
+                    if (diff) {
+                        isDirty = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        onDirtyChange(isDirty);
+    }, [rows, mode, initialData, onDirtyChange]);
     const inputRowToDelivery = (row: InputDeliveryRow): DeliveryRow => ({
         state: row.state,
         block_loc: row.block_loc,
@@ -491,6 +584,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                                     isEditing={isEditing}
                                     setActiveCell={setActiveCell}
                                     setIsEditing={setIsEditing}
+                                    onStartEditing={startEditing}
+                                    onRevert={revertChanges}
                                 />
                             ))}
                         </TableBody>
@@ -522,6 +617,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
     isEditing,
     setActiveCell,
     setIsEditing,
+    onStartEditing,
+    onRevert,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -539,6 +636,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
     isEditing: boolean;
     setActiveCell: (cell: { row: number; col: number }) => void;
     setIsEditing: (editing: boolean) => void;
+    onStartEditing: (row: number, col: number, char?: string) => void;
+    onRevert: () => void;
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
     const wt = parseFloat(String(row.weight_kg)) || 0;
@@ -553,6 +652,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
         isEditing,
         setActiveCell,
         setIsEditing,
+        onStartEditing,
+        onRevert,
         className: "font-mono font-bold text-center",
         gridRef
     };
@@ -605,6 +706,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                         placeholder="Supplier..."
                         style={inputStyle}
                         autoFocus
+                        onRevert={onRevert}
                     />
                 </GridCell>
             </TableCell>
@@ -631,6 +733,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                         placeholder="..."
                         style={inputStyle}
                         autoFocus
+                        onRevert={onRevert}
                     />
                 </GridCell>
             </TableCell>
@@ -745,6 +848,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                         value={row.remarks}
                         onChange={(val) => updateRow(index, 'remarks', val)}
                         onClose={() => setIsEditing(false)}
+                        onRevert={onRevert}
                         fontSize={fontSize}
                     />
                 </GridCell>
@@ -791,7 +895,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
 // --- GRID CELL HELPERS ---
 
-function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, children, displayValue, className, tabIndex, gridRef }: {
+function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef }: {
     row: number;
     col: number;
     value: string | number;
@@ -799,6 +903,8 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
     isEditing: boolean;
     setActiveCell: (cell: { row: number; col: number }) => void;
     setIsEditing: (editing: boolean) => void;
+    onStartEditing: (row: number, col: number, char?: string) => void;
+    onRevert?: () => void;
     children: React.ReactNode;
     displayValue?: React.ReactNode;
     className?: string;
@@ -837,8 +943,8 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
             }}
             onDoubleClick={(e) => {
                 e.stopPropagation();
-                setActiveCell({ row, col });
-                setIsEditing(true);
+                // Use startEditing to capture initial value
+                onStartEditing(row, col);
             }}
         >
             {displayValue ?? value}
@@ -846,7 +952,7 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
     );
 }
 
-function RemarksCellAdaptor({ value, onChange, onClose, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, fontSize: number }) {
+function RemarksCellAdaptor({ value, onChange, onClose, onRevert, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, onRevert: () => void, fontSize: number }) {
     const [open, setOpen] = React.useState(true);
 
     const onOpenChange = (isOpen: boolean) => {
@@ -861,7 +967,12 @@ function RemarksCellAdaptor({ value, onChange, onClose, fontSize }: { value: str
             <PopoverTrigger asChild>
                 <div className="w-full h-full" />
             </PopoverTrigger>
-            <PopoverContent className="w-80 p-2" align="center" side="bottom">
+            <PopoverContent
+                className="w-80 p-2"
+                align="center"
+                side="bottom"
+                onEscapeKeyDown={(e) => e.preventDefault()}
+            >
                 <div className="space-y-2">
                     <h4 className="font-medium leading-none">Remarks</h4>
                     <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
@@ -877,9 +988,12 @@ function RemarksCellAdaptor({ value, onChange, onClose, fontSize }: { value: str
                                 e.stopPropagation();
                                 setOpen(false);
                             } else if (e.key === 'Escape') {
+                                // Prevent default to avoid browser quirks
+                                e.preventDefault();
                                 e.stopPropagation();
                                 e.nativeEvent.stopImmediatePropagation();
-                                setOpen(false);
+                                // Directly call revert logic
+                                onRevert();
                             }
                         }}
                     />
@@ -889,7 +1003,7 @@ function RemarksCellAdaptor({ value, onChange, onClose, fontSize }: { value: str
     )
 }
 
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus }: {
+function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus, onRevert }: {
     value: string;
     onChange: (val: string) => void;
     onSelect: (val: string) => void;
@@ -898,6 +1012,7 @@ function AutocompleteInput({ value, onChange, onSelect, items, className, placeh
     placeholder?: string;
     style?: React.CSSProperties;
     autoFocus?: boolean;
+    onRevert?: () => void;
 }) {
     const [open, setOpen] = React.useState(false);
     const inputRef = React.useRef<HTMLInputElement>(null);
@@ -951,6 +1066,8 @@ function AutocompleteInput({ value, onChange, onSelect, items, className, placeh
                     e.stopPropagation();
                     e.nativeEvent.stopImmediatePropagation();
                     setOpen(false);
+                    // Force revert immediately
+                    if (onRevert) onRevert();
                     return;
             }
         }
@@ -972,7 +1089,17 @@ function AutocompleteInput({ value, onChange, onSelect, items, className, placeh
                             onChange(e.target.value);
                             setOpen(true);
                         }}
-                        onKeyDown={handleKeyDown}
+                        onKeyDown={(e) => {
+                            // If NOT open, handle Escape to revert (bubble up) NO, handle specifically
+                            if (!open && e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                e.nativeEvent.stopImmediatePropagation();
+                                if (onRevert) onRevert();
+                                return;
+                            }
+                            handleKeyDown(e);
+                        }}
                         onFocus={() => {
                             if (filtered.length > 0) setOpen(true);
                         }}

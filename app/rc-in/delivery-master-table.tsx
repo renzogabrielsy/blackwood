@@ -86,6 +86,11 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
 
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+
+    // fontSize and rowHeight are from useTableSettings hook above
+    const [isInputDirty, setIsInputDirty] = React.useState(false);
+    const [showExitConfirmation, setShowExitConfirmation] = React.useState(false);
+    const [pendingAction, setPendingAction] = React.useState<() => void>(() => { });
     const [isAddOpen, setIsAddOpen] = React.useState(false);
     const [selectionMode, setSelectionMode] = React.useState(false);
     const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
@@ -159,6 +164,40 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
             }
         }
     };
+
+    const handleCloseAdd = () => {
+        if (isInputDirty) {
+            setPendingAction(() => () => setIsAddOpen(false));
+            setShowExitConfirmation(true);
+        } else {
+            setIsAddOpen(false);
+        }
+    };
+
+    const handleCloseEdit = () => {
+        if (isInputDirty) {
+            setPendingAction(() => () => {
+                setEditRows(null);
+                // Also clear selection logic if needed, but setEditRows(null) is main close
+            });
+            setShowExitConfirmation(true);
+        } else {
+            setEditRows(null);
+        }
+    };
+
+    const confirmExit = () => {
+        setShowExitConfirmation(false);
+        setIsInputDirty(false); // Reset dirty state
+        if (pendingAction) pendingAction();
+    };
+
+    // Reset dirty state when dialogs open/close naturally
+    React.useEffect(() => {
+        if (!isAddOpen && !editRows) {
+            setIsInputDirty(false);
+        }
+    }, [isAddOpen, editRows]);
 
     const handleBulkEdit = () => {
         const rows = data.filter(d => selectedIds.has(d.id));
@@ -402,7 +441,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         <TooltipProvider>
             <div className="flex flex-col h-full space-y-4">
                 {/* Add Delivery Dialog */}
-                <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+                <Dialog open={isAddOpen} onOpenChange={(open) => { if (!open) handleCloseAdd(); }}>
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
@@ -415,7 +454,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     Enter delivery details below.
                                 </DialogDescription>
                             </div>
-                            <Button variant="ghost" size="icon" onClick={() => setIsAddOpen(false)}>
+                            <Button variant="ghost" size="icon" onClick={handleCloseAdd}>
                                 <X className="h-4 w-4" />
                             </Button>
                         </DialogHeader>
@@ -424,13 +463,14 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                 batches={batches}
                                 suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
                                 onSuccess={() => setIsAddOpen(false)}
+                                onDirtyChange={setIsInputDirty}
                             />
                         </div>
                     </DialogContent>
                 </Dialog>
 
                 {/* Edit Delivery Dialog */}
-                <Dialog open={editRows !== null} onOpenChange={(open) => { if (!open) setEditRows(null); }}>
+                <Dialog open={editRows !== null} onOpenChange={(open) => { if (!open) handleCloseEdit(); }}>
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
@@ -443,7 +483,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     Modify delivery details below.
                                 </DialogDescription>
                             </div>
-                            <Button variant="ghost" size="icon" onClick={() => setEditRows(null)}>
+                            <Button variant="ghost" size="icon" onClick={handleCloseEdit}>
                                 <X className="h-4 w-4" />
                             </Button>
                         </DialogHeader>
@@ -455,8 +495,25 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                     batches={batches}
                                     suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
                                     onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
+                                    onDirtyChange={setIsInputDirty}
                                 />
                             )}
+                        </div>
+                    </DialogContent>
+                </Dialog>
+
+                {/* Exit Confirmation Dialog */}
+                <Dialog open={showExitConfirmation} onOpenChange={setShowExitConfirmation}>
+                    <DialogContent className="sm:max-w-[425px]">
+                        <DialogHeader>
+                            <DialogTitle>Unsaved Changes</DialogTitle>
+                            <DialogDescription>
+                                You have unsaved changes. Are you sure you want to discard them and exit?
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="flex justify-end space-x-2 pt-4">
+                            <Button variant="outline" onClick={() => setShowExitConfirmation(false)}>Cancel</Button>
+                            <Button variant="destructive" onClick={confirmExit}>Discard & Exit</Button>
                         </div>
                     </DialogContent>
                 </Dialog>
