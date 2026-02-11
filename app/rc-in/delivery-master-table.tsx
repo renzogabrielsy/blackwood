@@ -87,6 +87,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
     const [isAddOpen, setIsAddOpen] = React.useState(false);
+    const [selectionMode, setSelectionMode] = React.useState(false);
     const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
     const [editRows, setEditRows] = React.useState<DeliveryHistoryRow[] | null>(null);
 
@@ -473,7 +474,18 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                             />
                         </div>
                     </div>
-                    <Button onClick={() => setIsAddOpen(true)} size="sm" className="ml-auto h-8 gap-1">
+                    <Button
+                        variant={selectionMode ? "default" : "outline"}
+                        size="sm"
+                        className="ml-auto h-8 gap-1"
+                        onClick={() => {
+                            setSelectionMode(prev => !prev);
+                            if (selectionMode) setSelectedIds(new Set());
+                        }}
+                    >
+                        Select
+                    </Button>
+                    <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1 ml-2">
                         <Plus className="h-4 w-4" />
                         Add Delivery
                     </Button>
@@ -527,6 +539,9 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                     <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
                         <span className="font-medium text-xs">{selectedIds.size} selected</span>
                         <div className="ml-auto flex gap-2">
+                            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())}>
+                                Deselect All
+                            </Button>
                             <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={handleBulkEdit}>
                                 <Pencil className="h-3 w-3" /> Edit ({selectedIds.size})
                             </Button>
@@ -572,11 +587,12 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                                 key={row.id}
                                                 data-state={isSelected ? "selected" : undefined}
                                                 className={cn(
-                                                    "hover:bg-muted/50 border-b last:border-0 cursor-pointer transition-colors",
+                                                    "hover:bg-muted/50 border-b last:border-0 transition-colors",
+                                                    selectionMode && "cursor-pointer",
                                                     isSelected && "bg-primary/5"
                                                 )}
                                                 style={{ height: `${rowHeight}px` }}
-                                                onClick={() => toggleSelect(row.original.id)}
+                                                onClick={selectionMode ? () => toggleSelect(row.original.id) : undefined}
                                             >
                                                 {row.getVisibleCells().map((cell) => (
                                                     <TableCell
