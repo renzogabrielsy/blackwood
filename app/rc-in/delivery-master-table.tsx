@@ -20,7 +20,7 @@ import {
 } from '@tanstack/react-table';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -403,12 +403,21 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
             <div className="flex flex-col h-full space-y-4">
                 {/* Add Delivery Dialog */}
                 <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-                    <DialogContent className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl">
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50">
-                            <DialogTitle>Add Deliveries</DialogTitle>
-                            <DialogDescription>
-                                Enter delivery details below.
-                            </DialogDescription>
+                    <DialogContent
+                        onEscapeKeyDown={(e) => e.preventDefault()}
+                        onInteractOutside={(e) => e.preventDefault()}
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                    >
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                            <div>
+                                <DialogTitle>Add Deliveries</DialogTitle>
+                                <DialogDescription>
+                                    Enter delivery details below.
+                                </DialogDescription>
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => setIsAddOpen(false)}>
+                                <X className="h-4 w-4" />
+                            </Button>
                         </DialogHeader>
                         <div className="flex-1 overflow-auto p-6 pt-2">
                             <BulkDeliveryInput
@@ -422,12 +431,21 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
 
                 {/* Edit Delivery Dialog */}
                 <Dialog open={editRows !== null} onOpenChange={(open) => { if (!open) setEditRows(null); }}>
-                    <DialogContent className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl">
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50">
-                            <DialogTitle>Edit Deliver{editRows?.length === 1 ? 'y' : 'ies'}</DialogTitle>
-                            <DialogDescription>
-                                Modify delivery details below.
-                            </DialogDescription>
+                    <DialogContent
+                        onEscapeKeyDown={(e) => e.preventDefault()}
+                        onInteractOutside={(e) => e.preventDefault()}
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                    >
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                            <div>
+                                <DialogTitle>Edit Deliver{editRows?.length === 1 ? 'y' : 'ies'}</DialogTitle>
+                                <DialogDescription>
+                                    Modify delivery details below.
+                                </DialogDescription>
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => setEditRows(null)}>
+                                <X className="h-4 w-4" />
+                            </Button>
                         </DialogHeader>
                         <div className="flex-1 overflow-auto p-6 pt-2">
                             {editRows && (
