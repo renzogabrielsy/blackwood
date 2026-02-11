@@ -28,6 +28,21 @@ export type DeliveryHistoryRow = DeliveryRow & {
     };
 };
 
+export type AuditLogRow = {
+    id: string;
+    record_id: string;
+    operation: 'INSERT' | 'UPDATE' | 'DELETE';
+    diff: Record<string, { old: any; new: any }> | null;
+    snapshot: Record<string, any> | null;
+    performed_by: string | null;
+    performed_at: string;
+    profiles?: {
+        display_name: string | null;
+        email: string;
+        avatar_url: string | null;
+    } | null;
+};
+
 export type InputDeliveryRow = {
     state: string;
     whse: string;
