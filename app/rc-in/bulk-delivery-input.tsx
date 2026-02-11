@@ -585,28 +585,15 @@ const BulkInputRow = React.memo(function BulkInputRow({
             </TableCell>
 
             {/* 17: REMARKS */}
-            <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
-                <Popover>
-                    <PopoverTrigger asChild>
-                        <Button variant="ghost" size="icon" className={cn("h-6 w-6", row.remarks ? "text-primary" : "text-muted-foreground")}>
-                            <MessageSquareText className="w-3 h-3" />
-                        </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-80 p-2">
-                        <div className="space-y-2">
-                            <h4 className="font-medium leading-none">Remarks</h4>
-                            <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
-                            <Input
-                                value={row.remarks}
-                                onChange={(e) => updateRow(index, 'remarks', e.target.value)}
-                                onPaste={(e) => onPaste(e, index, 17)}
-                                className="h-8 text-sm"
-                                placeholder="Enter remarks..."
-                            />
-                        </div>
-                    </PopoverContent>
-                </Popover>
-            </TableCell>
+            <RemarksCell
+                index={index}
+                value={row.remarks}
+                onChange={(val) => updateRow(index, 'remarks', val)}
+                onPaste={(e) => onPaste(e, index, 17)}
+                onCellNav={cellKeyDown}
+                gridRef={gridRef}
+                rowHeight={rowHeight}
+            />
 
             {/* 18: PRICE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
@@ -640,7 +627,78 @@ const BulkInputRow = React.memo(function BulkInputRow({
     );
 });
 
-// --- HELPER ---
+// --- REMARKS CELL ---
+function RemarksCell({ index, value, onChange, onPaste, onCellNav, gridRef, rowHeight }: {
+    index: number;
+    value: string;
+    onChange: (val: string) => void;
+    onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => void;
+    onCellNav: (e: React.KeyboardEvent, col: number) => void;
+    gridRef: React.RefObject<HTMLDivElement | null>;
+    rowHeight: number;
+}) {
+    const [open, setOpen] = React.useState(false);
+    const triggerRef = React.useRef<HTMLButtonElement>(null);
+
+    return (
+        <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
+            <Popover open={open} onOpenChange={setOpen}>
+                <PopoverTrigger asChild>
+                    <Button
+                        ref={triggerRef}
+                        variant="ghost"
+                        size="icon"
+                        data-row={index}
+                        data-col={17}
+                        className={cn("h-6 w-6", value ? "text-primary" : "text-muted-foreground")}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                onCellNav(e, 17);
+                            }
+                        }}
+                    >
+                        <MessageSquareText className="w-3 h-3" />
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-2" onOpenAutoFocus={(e) => e.preventDefault()}>
+                    <div className="space-y-2">
+                        <h4 className="font-medium leading-none">Remarks</h4>
+                        <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
+                        <Input
+                            autoFocus
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                            onPaste={onPaste}
+                            className="h-8 text-sm"
+                            placeholder="Enter remarks..."
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    setOpen(false);
+                                    onCellNav(e, 17);
+                                } else if (e.key === 'Tab') {
+                                    e.preventDefault();
+                                    setOpen(false);
+                                    if (e.shiftKey) {
+                                        focusCell(gridRef.current, index, 16);
+                                    } else {
+                                        focusCell(gridRef.current, index, 18);
+                                    }
+                                } else if (e.key === 'Escape') {
+                                    setOpen(false);
+                                    triggerRef.current?.focus();
+                                }
+                            }}
+                        />
+                    </div>
+                </PopoverContent>
+            </Popover>
+        </TableCell>
+    );
+}
+
+// --- AUTOCOMPLETE ---
 function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, dataRow, dataCol, items, className, placeholder, style }: {
     value: string;
     onChange: (val: string) => void;
@@ -697,7 +755,10 @@ function AutocompleteInput({ value, onChange, onSelect, onPaste, onCellNav, data
                 if (filtered.length > 0) {
                     onSelect(filtered[selectedIndex].value);
                     setOpen(false);
-                    inputRef.current?.blur();
+                }
+                // After selecting, navigate to next/prev row
+                if (onCellNav && dataCol !== undefined) {
+                    onCellNav(e, dataCol);
                 }
                 break;
             case 'Tab':
