@@ -1,29 +1,20 @@
 
 import { supabase } from '@/lib/supabase';
-import Link from 'next/link';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
 
-import { startOfMonth, endOfMonth, addMonths, subMonths, format, parse, isFuture } from 'date-fns';
+
+import { startOfMonth, endOfMonth, format } from 'date-fns';
 
 export default async function RCInPage({
     searchParams
 }: {
-    searchParams: Promise<{ view_date?: string; search?: string; field?: string }>;
+    searchParams: Promise<{ year?: string; search?: string; field?: string }>;
 }) {
-    const { view_date: rawViewDate, search, field } = await searchParams;
+    const { year: rawYear, search, field } = await searchParams;
     const now = new Date();
 
-    // A "Page" is a Month — parse view_date or default to current month
-    let currentViewDate = rawViewDate
-        ? parse(rawViewDate, 'yyyy-MM', now)
-        : startOfMonth(now);
-
-    if (isNaN(currentViewDate.getTime())) {
-        currentViewDate = startOfMonth(now);
-    }
-
-    const monthLabel = format(currentViewDate, 'MMMM yyyy');
+    const year = rawYear ? parseInt(rawYear, 10) : now.getFullYear();
 
     // Fetch active batches for the input form
     const { data: batches } = await supabase
@@ -33,9 +24,6 @@ export default async function RCInPage({
         .order('created_at', { ascending: false });
 
     // Build deliveries query
-    const startDate = startOfMonth(currentViewDate);
-    const endDate = endOfMonth(currentViewDate);
-
     let query = supabase
         .from('deliveries')
         .select('*, batches(location_ref)')
@@ -58,9 +46,15 @@ export default async function RCInPage({
             query = query.or(`block_loc.ilike.${term},batch_code.ilike.${term}`);
         }
     } else {
-        query = query
-            .gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
-            .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
+        // Fetch full year or all years
+        if (rawYear !== 'all') {
+            const startDate = new Date(year, 0, 1);
+            const endDate = new Date(year, 11, 31);
+
+            query = query
+                .gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
+                .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
+        }
     }
 
     const { data: deliveriesRaw, error } = await query;
@@ -79,14 +73,6 @@ export default async function RCInPage({
         batch_code: b.batch_code,
         location_ref: b.location_ref,
     }));
-
-    // Navigation — no future months allowed
-    const prevMonthDate = subMonths(currentViewDate, 1);
-    const nextMonthDate = addMonths(currentViewDate, 1);
-    const isNextDisabled = isFuture(startOfMonth(nextMonthDate));
-
-    const prevLink = `/rc-in?view_date=${format(prevMonthDate, 'yyyy-MM')}`;
-    const nextLink = isNextDisabled ? '#' : `/rc-in?view_date=${format(nextMonthDate, 'yyyy-MM')}`;
 
     return (
         <div className="flex flex-col h-screen overflow-hidden bg-muted/10">
@@ -110,35 +96,7 @@ export default async function RCInPage({
                         <DeliveryMasterTable
                             data={deliveries}
                             batches={activeBatches}
-                            customFooter={
-                                <div className="flex-none flex justify-between items-center p-2 border-t bg-background/30 backdrop-blur-xl backdrop-saturate-150 z-10">
-                                    <div className="text-xs text-muted-foreground">
-                                        {search ? (
-                                            <span>Found <span className="font-semibold text-foreground">{deliveries.length}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo;</span>
-                                        ) : (
-                                            <span>Current View: <span className="font-semibold text-foreground">{monthLabel}</span></span>
-                                        )}
-                                    </div>
-
-                                    {!search && (
-                                        <div className="flex items-center space-x-2">
-                                            <Link
-                                                href={prevLink}
-                                                className="px-3 py-1 text-xs border rounded hover:bg-muted bg-background"
-                                            >
-                                                &larr; {format(prevMonthDate, 'MMM yyyy')}
-                                            </Link>
-                                            <Link
-                                                href={nextLink}
-                                                className={`px-3 py-1 text-xs border rounded hover:bg-muted bg-background ${isNextDisabled ? 'opacity-50 pointer-events-none' : ''}`}
-                                                aria-disabled={isNextDisabled}
-                                            >
-                                                {format(nextMonthDate, 'MMM yyyy')} &rarr;
-                                            </Link>
-                                        </div>
-                                    )}
-                                </div>
-                            }
+                            search={search}
                         />
                     </CardContent>
                 </Card>
