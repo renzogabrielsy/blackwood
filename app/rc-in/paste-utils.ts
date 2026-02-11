@@ -1,4 +1,4 @@
-import type { InputDeliveryRow } from './bulk-delivery-input';
+import type { InputDeliveryRow } from '@/types/rc-in';
 
 // Maps visual column index to the data key. null = read-only/skipped during paste.
 export const COLUMN_MAP: (keyof InputDeliveryRow | null)[] = [
