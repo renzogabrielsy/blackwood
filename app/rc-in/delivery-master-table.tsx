@@ -4,10 +4,10 @@
 import * as React from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import { TableSettingsProvider, useTableSettings } from './table-settings';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import {
     ColumnDef,
     ColumnFiltersState,
@@ -54,7 +54,7 @@ import {
 import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
-import { DeliveryRow, deleteDelivery } from './actions';
+import { DeliveryRow, deleteDelivery, bulkDeleteDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
 
 export type DeliveryHistoryRow = DeliveryRow & {
@@ -87,6 +87,8 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
     const [isAddOpen, setIsAddOpen] = React.useState(false);
+    const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+    const [editRows, setEditRows] = React.useState<DeliveryHistoryRow[] | null>(null);
 
     const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
 
@@ -123,15 +125,47 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         router.push(pathname + '?' + createQueryString('field', field));
     };
 
+    const toggleSelect = React.useCallback((id: string) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }, []);
+
     const handleDelete = async (id: string) => {
         if (confirm('Are you sure you want to delete this delivery?')) {
             const res = await deleteDelivery(id);
             if (res.success) {
                 toast.success('Delivery deleted');
+                setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
             } else {
                 toast.error('Delete failed: ' + res.message);
             }
         }
+    };
+
+    const handleBulkDelete = async () => {
+        const count = selectedIds.size;
+        if (confirm(`Are you sure you want to delete ${count} deliver${count === 1 ? 'y' : 'ies'}?`)) {
+            const res = await bulkDeleteDeliveries([...selectedIds]);
+            if (res.success) {
+                toast.success(`${count} deliver${count === 1 ? 'y' : 'ies'} deleted`);
+                setSelectedIds(new Set());
+            } else {
+                toast.error('Bulk delete failed: ' + res.message);
+            }
+        }
+    };
+
+    const handleBulkEdit = () => {
+        const rows = data.filter(d => selectedIds.has(d.id));
+        setEditRows(rows);
+    };
+
+    const handleSingleEdit = (delivery: DeliveryHistoryRow) => {
+        setEditRows([delivery]);
     };
 
     const columns: ColumnDef<DeliveryHistoryRow>[] = [
@@ -193,7 +227,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
         {
             accessorKey: 'truck_plate',
             header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'truck_plate' ? 'text-primary bg-primary/10 rounded' : ''}`}>TRUCK</div>,
-            size: 50,
+            size: 40,
             cell: ({ row }) => <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('truck_plate')}</div>
         },
         {
@@ -311,7 +345,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
             cell: ({ row }) => {
                 const delivery = row.original;
                 return (
-                    <DropdownMenu>
+                    <DropdownMenu modal={false}>
                         <DropdownMenuTrigger asChild>
                             <Button variant="ghost" className="h-6 w-6 p-0">
                                 <span className="sr-only">Open menu</span>
@@ -320,7 +354,7 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                            <DropdownMenuItem onClick={() => toast.info('Edit dialog coming soon')}>
+                            <DropdownMenuItem onClick={() => handleSingleEdit(delivery)}>
                                 <Pencil className="mr-2 h-4 w-4" /> Edit
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -381,6 +415,29 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                                 suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
                                 onSuccess={() => setIsAddOpen(false)}
                             />
+                        </div>
+                    </DialogContent>
+                </Dialog>
+
+                {/* Edit Delivery Dialog */}
+                <Dialog open={editRows !== null} onOpenChange={(open) => { if (!open) setEditRows(null); }}>
+                    <DialogContent className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50">
+                            <DialogTitle>Edit Deliver{editRows?.length === 1 ? 'y' : 'ies'}</DialogTitle>
+                            <DialogDescription>
+                                Modify delivery details below.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="flex-1 overflow-auto p-6 pt-2">
+                            {editRows && (
+                                <BulkDeliveryInput
+                                    mode="edit"
+                                    initialData={editRows}
+                                    batches={batches}
+                                    suppliers={Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort()}
+                                    onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
+                                />
+                            )}
                         </div>
                     </DialogContent>
                 </Dialog>
@@ -465,6 +522,21 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                     </Popover>
                 </div>
 
+                {/* Floating Action Bar */}
+                {selectedIds.size > 0 && (
+                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
+                        <span className="font-medium text-xs">{selectedIds.size} selected</span>
+                        <div className="ml-auto flex gap-2">
+                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={handleBulkEdit}>
+                                <Pencil className="h-3 w-3" /> Edit ({selectedIds.size})
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 gap-1 text-xs text-destructive hover:text-destructive" onClick={handleBulkDelete}>
+                                <Trash2 className="h-3 w-3" /> Delete ({selectedIds.size})
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Scrollable Table */}
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     <div className="flex-1 overflow-auto relative w-full h-full">
@@ -493,23 +565,35 @@ function DeliveryMasterTableContent({ data, batches, customFooter }: { data: Del
                             </TableHeader>
                             <TableBody>
                                 {table.getRowModel().rows?.length ? (
-                                    table.getRowModel().rows.map((row) => (
-                                        <TableRow
-                                            key={row.id}
-                                            data-state={row.getIsSelected() && "selected"}
-                                            className="hover:bg-muted/50 border-b last:border-0"
-                                            style={{ height: `${rowHeight}px` }}
-                                        >
-                                            {row.getVisibleCells().map((cell) => (
-                                                <TableCell key={cell.id} className="px-1 py-0 border-r last:border-0" style={{ height: `${rowHeight}px` }}>
-                                                    {flexRender(
-                                                        cell.column.columnDef.cell,
-                                                        cell.getContext()
-                                                    )}
-                                                </TableCell>
-                                            ))}
-                                        </TableRow>
-                                    ))
+                                    table.getRowModel().rows.map((row) => {
+                                        const isSelected = selectedIds.has(row.original.id);
+                                        return (
+                                            <TableRow
+                                                key={row.id}
+                                                data-state={isSelected ? "selected" : undefined}
+                                                className={cn(
+                                                    "hover:bg-muted/50 border-b last:border-0 cursor-pointer transition-colors",
+                                                    isSelected && "bg-primary/5"
+                                                )}
+                                                style={{ height: `${rowHeight}px` }}
+                                                onClick={() => toggleSelect(row.original.id)}
+                                            >
+                                                {row.getVisibleCells().map((cell) => (
+                                                    <TableCell
+                                                        key={cell.id}
+                                                        className="px-1 py-0 border-r last:border-0"
+                                                        style={{ height: `${rowHeight}px` }}
+                                                        onClick={cell.column.id === 'actions' ? (e) => e.stopPropagation() : undefined}
+                                                    >
+                                                        {flexRender(
+                                                            cell.column.columnDef.cell,
+                                                            cell.getContext()
+                                                        )}
+                                                    </TableCell>
+                                                ))}
+                                            </TableRow>
+                                        );
+                                    })
                                 ) : (
                                     <TableRow>
                                         <TableCell

@@ -27,10 +27,12 @@ import {
 import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
-import { submitBulkDeliveries, DeliveryRow } from './actions';
+import { submitBulkDeliveries, bulkUpdateDeliveries, DeliveryRow } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
 import { useTableSettings } from './table-settings';
+import { COLUMN_MAP, cleanCellValue } from './paste-utils';
 
+// --- TYPES ---
 type Batch = {
     id: string;
     batch_code: string;
@@ -42,7 +44,7 @@ type AutocompleteItem = {
     detail?: string;
 };
 
-type InputDeliveryRow = {
+export type InputDeliveryRow = {
     state: string;
     whse: string;
     transaction_date: string;
@@ -84,13 +86,58 @@ const createEmptyRow = (): InputDeliveryRow => ({
     cost_basis: '',
 });
 
+/** Convert a DeliveryRow (from DB) into an InputDeliveryRow (for the grid editor) */
+function deliveryToInputRow(d: DeliveryRow & { id?: string }): InputDeliveryRow {
+    return {
+        state: d.state || 'STORED',
+        whse: '',
+        transaction_date: d.transaction_date,
+        supplier: d.supplier,
+        batch_code: d.batch_code,
+        block_loc: d.block_loc,
+        truck_plate: d.truck_plate,
+        weight_kg: d.weight_kg,
+        sacks: d.sacks,
+        mc: d.lab_results?.mc ?? '',
+        grit: d.lab_results?.grit ?? '',
+        bd_astm: d.lab_results?.bd_astm ?? '',
+        bd_jis: d.lab_results?.bd_jis ?? '',
+        vm: d.lab_results?.vm ?? '',
+        ash: d.lab_results?.ash ?? '',
+        fc: d.lab_results?.fc ?? '',
+        remarks: d.remarks || '',
+        cost_basis: d.cost_basis,
+    };
+}
+
 const inputClass = "h-8 w-full text-[10px] md:text-[10px] px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
-export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: Batch[], suppliers: string[], onSuccess?: () => void }) {
+// --- MAIN COMPONENT ---
+
+type BulkDeliveryInputProps = {
+    batches: Batch[];
+    suppliers: string[];
+    onSuccess?: () => void;
+    mode?: 'create' | 'edit';
+    initialData?: (DeliveryRow & { id: string })[];
+};
+
+export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'create', initialData }: BulkDeliveryInputProps) {
     const { fontSize, rowHeight } = useTableSettings();
-    const [rows, setRows] = React.useState<InputDeliveryRow[]>([createEmptyRow()]);
+    const isEdit = mode === 'edit';
+
+    // In edit mode, store original IDs aligned by row index
+    const rowIdsRef = React.useRef<string[]>(initialData?.map(d => d.id) ?? []);
+
+    const [rows, setRows] = React.useState<InputDeliveryRow[]>(() => {
+        if (initialData && initialData.length > 0) {
+            return initialData.map(deliveryToInputRow);
+        }
+        return [createEmptyRow()];
+    });
     const [isSubmitting, setIsSubmitting] = React.useState(false);
 
+    // --- ROW MANAGEMENT ---
     const addRow = React.useCallback(() => {
         setRows(prev => [...prev, createEmptyRow()]);
     }, []);
@@ -115,38 +162,90 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
         });
     }, []);
 
+    // --- PASTE LOGIC (The Magic) ---
+    const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRowIndex: number, startColIndex: number) => {
+        e.preventDefault();
+        const clipboardData = e.clipboardData.getData('text');
+        if (!clipboardData) return;
+
+        // Parse Excel/TSV format
+        const pastedRows = clipboardData.split(/\r\n|\n|\r/).filter(row => row.trim() !== '');
+        if (pastedRows.length === 0) return;
+
+        setRows(prev => {
+            const newRows = [...prev];
+
+            pastedRows.forEach((pastedRow, rOffset) => {
+                const targetRowIndex = startRowIndex + rOffset;
+                const columns = pastedRow.split('\t');
+
+                // If we need more rows than exist, create them
+                if (targetRowIndex >= newRows.length) {
+                    newRows.push(createEmptyRow());
+                }
+
+                columns.forEach((cellValue, cOffset) => {
+                    const targetColIndex = startColIndex + cOffset;
+
+                    // Safety check: Don't paste beyond defined columns
+                    if (targetColIndex < COLUMN_MAP.length) {
+                        const fieldKey = COLUMN_MAP[targetColIndex];
+
+                        // Only paste into writable fields
+                        if (fieldKey) {
+                            newRows[targetRowIndex] = {
+                                ...newRows[targetRowIndex],
+                                [fieldKey]: cleanCellValue(cellValue, fieldKey)
+                            };
+                        }
+                    }
+                });
+            });
+
+            return newRows;
+        });
+
+        toast.success(`Pasted ${pastedRows.length} rows`);
+    }, []);
+
+    // --- SUBMISSION ---
+    const inputRowToDelivery = (row: InputDeliveryRow): DeliveryRow => ({
+        state: row.state,
+        block_loc: row.block_loc,
+        transaction_date: row.transaction_date,
+        supplier: row.supplier,
+        batch_code: row.batch_code,
+        truck_plate: row.truck_plate,
+        sacks: parseInt(String(row.sacks)) || 0,
+        weight_kg: parseFloat(String(row.weight_kg)) || 0,
+        cost_basis: parseFloat(String(row.cost_basis)) || 0,
+        remarks: row.remarks,
+        lab_results: {
+            mc: parseFloat(String(row.mc)) || 0,
+            ash: parseFloat(String(row.ash)) || 0,
+            bd_astm: parseFloat(String(row.bd_astm)) || 0,
+            bd_jis: parseFloat(String(row.bd_jis)) || 0,
+            grit: parseFloat(String(row.grit)) || 0,
+            vm: parseFloat(String(row.vm)) || 0,
+            fc: parseFloat(String(row.fc)) || 0,
+        }
+    });
+
     const handleSubmit = async () => {
         setIsSubmitting(true);
 
         try {
+            // Validate: needs Batch and Weight
+            const validIndices: number[] = [];
             const validRows: DeliveryRow[] = [];
 
-            for (const row of rows) {
+            rows.forEach((row, i) => {
                 const weight = parseFloat(String(row.weight_kg)) || 0;
                 if (row.batch_code && weight > 0) {
-                    validRows.push({
-                        state: row.state,
-                        block_loc: row.block_loc,
-                        transaction_date: row.transaction_date,
-                        supplier: row.supplier,
-                        batch_code: row.batch_code,
-                        truck_plate: row.truck_plate,
-                        sacks: parseInt(String(row.sacks)) || 0,
-                        weight_kg: weight,
-                        cost_basis: parseFloat(String(row.cost_basis)) || 0,
-                        remarks: row.remarks,
-                        lab_results: {
-                            mc: parseFloat(String(row.mc)) || 0,
-                            ash: parseFloat(String(row.ash)) || 0,
-                            bd_astm: parseFloat(String(row.bd_astm)) || 0,
-                            bd_jis: parseFloat(String(row.bd_jis)) || 0,
-                            grit: parseFloat(String(row.grit)) || 0,
-                            vm: parseFloat(String(row.vm)) || 0,
-                            fc: parseFloat(String(row.fc)) || 0,
-                        }
-                    });
+                    validIndices.push(i);
+                    validRows.push(inputRowToDelivery(row));
                 }
-            }
+            });
 
             if (validRows.length === 0) {
                 toast.warning('Please fill in at least one valid row (Batch and Weight required).');
@@ -154,14 +253,25 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                 return;
             }
 
-            const res = await submitBulkDeliveries(validRows);
+            let res: { success: boolean; message?: string };
+
+            if (isEdit) {
+                const updates = validIndices.map((rowIdx, i) => ({
+                    id: rowIdsRef.current[rowIdx],
+                    data: validRows[i],
+                }));
+                res = await bulkUpdateDeliveries(updates);
+            } else {
+                res = await submitBulkDeliveries(validRows);
+            }
 
             if (res.success) {
-                setRows([createEmptyRow()]);
-                toast.success(`${validRows.length} deliver${validRows.length === 1 ? 'y' : 'ies'} logged successfully`);
+                if (!isEdit) setRows([createEmptyRow()]);
+                const noun = validRows.length === 1 ? 'delivery' : 'deliveries';
+                toast.success(`${validRows.length} ${noun} ${isEdit ? 'updated' : 'logged'} successfully`);
                 onSuccess?.();
             } else {
-                toast.error('Submission failed: ' + res.message);
+                toast.error(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
             }
         } catch (error: any) {
             toast.error('An unexpected error occurred: ' + (error.message || 'Unknown'));
@@ -185,11 +295,24 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
             <div className="space-y-4">
                 <div className="flex items-center justify-between">
                     <div className="text-sm text-muted-foreground">
-                        Fill in the details below. Press &ldquo;Add Row&rdquo; for more entries.
+                        {isEdit ? (
+                            <span>Editing {rows.length} deliver{rows.length === 1 ? 'y' : 'ies'}.</span>
+                        ) : (
+                            <>
+                                <span className="hidden md:inline">Pro Tip: You can copy cells from Excel and paste them directly into the grid. </span>
+                                Click &ldquo;Add Row&rdquo; for manual entry.
+                            </>
+                        )}
                     </div>
                     <div className="space-x-2">
-                        <Button variant="outline" size="sm" onClick={addRow}><Plus className="w-4 h-4 mr-2" /> Add Row</Button>
-                        <Button size="sm" onClick={handleSubmit} disabled={isSubmitting}>Submit All</Button>
+                        {!isEdit && (
+                            <Button variant="outline" size="sm" onClick={addRow}><Plus className="w-4 h-4 mr-2" /> Add Row</Button>
+                        )}
+                        <Button size="sm" onClick={handleSubmit} disabled={isSubmitting}>
+                            {isEdit
+                                ? `Update Deliver${rows.length === 1 ? 'y' : 'ies'}`
+                                : 'Submit All'}
+                        </Button>
                     </div>
                 </div>
 
@@ -197,6 +320,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
                         <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
                             <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
+                                {/* Updated Header to include visual index reference if needed, but keeping clean for now */}
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-muted border-b border-foreground/20 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden"></TableHead>
                                 <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
                                 <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
@@ -231,6 +355,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
                                     updateRow={updateRow}
                                     updateRowFields={updateRowFields}
                                     removeRow={removeRow}
+                                    onPaste={handleSmartPaste}
                                     fontSize={fontSize}
                                     rowHeight={rowHeight}
                                 />
@@ -243,7 +368,9 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess }: { batches: 
     );
 }
 
-// Memoized row component — only re-renders when its own row data changes
+// --- ROW COMPONENT ---
+// Added `onPaste` prop and wired it to inputs
+
 const BulkInputRow = React.memo(function BulkInputRow({
     row,
     index,
@@ -253,6 +380,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRow,
     updateRowFields,
     removeRow,
+    onPaste,
     fontSize,
     rowHeight,
 }: {
@@ -264,6 +392,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     updateRow: (index: number, field: keyof InputDeliveryRow, value: any) => void;
     updateRowFields: (index: number, updates: Partial<InputDeliveryRow>) => void;
     removeRow: (index: number) => void;
+    onPaste: (e: React.ClipboardEvent, rowIndex: number, colIndex: number) => void;
     fontSize: number;
     rowHeight: number;
 }) {
@@ -281,34 +410,39 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     <Trash2 className="w-3 h-3" />
                 </Button>
             </TableCell>
+
+            {/* 1: STATE (Read Only) */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1.5 rounded-sm h-full flex items-center justify-center" style={inputStyle}>
                     {row.state}
                 </div>
             </TableCell>
+
+            {/* 2: WHSE (Calculated) */}
             <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
                 <div className="whitespace-nowrap text-center font-mono font-bold h-full flex items-center justify-center" style={inputStyle}>
                     {whse}
                 </div>
             </TableCell>
+
+            {/* 3: DATE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <div className="relative w-full h-full group">
-                    <input
-                        type="date"
-                        value={row.transaction_date}
-                        onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
-                        className={cn(
-                            "w-full h-full bg-transparent border-none font-mono font-bold text-center focus:outline-none px-0 uppercase appearance-none [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:top-0 [&::-webkit-calendar-picker-indicator]:left-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer",
-                            !row.transaction_date && "text-muted-foreground"
-                        )}
-                        style={inputStyle}
-                    />
-                </div>
+                <Input
+                    value={row.transaction_date}
+                    onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
+                    onPaste={(e) => onPaste(e, index, 3)}
+                    className={cn(inputClass, "font-bold text-center font-mono")}
+                    placeholder="YYYY-MM-DD"
+                    style={inputStyle}
+                />
             </TableCell>
+
+            {/* 4: SUPPLIER */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <AutocompleteInput
                     value={row.supplier}
                     onChange={(val) => updateRow(index, 'supplier', val)}
+                    onPaste={(e) => onPaste(e, index, 4)}
                     items={supplierItems}
                     onSelect={(val) => updateRow(index, 'supplier', val)}
                     className={cn(inputClass, "font-bold text-left")}
@@ -316,10 +450,13 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 5: BLOCK */}
             <TableCell className="px-1 py-0 border-r relative" style={{ height: `${rowHeight}px` }}>
                 <AutocompleteInput
                     value={row.batch_code}
                     onChange={(val) => updateRow(index, 'batch_code', val)}
+                    onPaste={(e) => onPaste(e, index, 5)}
                     items={batchItems}
                     onSelect={(val) => {
                         const batch = batches.find(b => b.batch_code === val);
@@ -337,61 +474,83 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 6: LOC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     value={row.block_loc}
                     onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                    onPaste={(e) => onPaste(e, index, 6)}
                     className={cn(inputClass, "font-bold text-center font-mono")}
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 7: TRUCK */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     value={row.truck_plate}
                     onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
+                    onPaste={(e) => onPaste(e, index, 7)}
                     className={cn(inputClass, "text-center font-mono")}
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 8: WT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     type="number" step="1"
                     value={row.weight_kg}
                     onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
+                    onPaste={(e) => onPaste(e, index, 8)}
                     className={cn(inputClass, "font-bold text-center font-mono")}
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 9: SKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <Input
                     type="number"
                     value={row.sacks}
                     onChange={(e) => updateRow(index, 'sacks', e.target.value)}
+                    onPaste={(e) => onPaste(e, index, 9)}
                     className={cn(inputClass, "text-center font-mono")}
                     style={inputStyle}
                 />
             </TableCell>
+
+            {/* 10: MC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} onPaste={(e) => onPaste(e, index, 10)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 11: GRIT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} onPaste={(e) => onPaste(e, index, 11)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 12: ASTM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} onPaste={(e) => onPaste(e, index, 12)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 13: JIS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} onPaste={(e) => onPaste(e, index, 13)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 14: VM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} onPaste={(e) => onPaste(e, index, 14)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 15: ASH */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} onPaste={(e) => onPaste(e, index, 15)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+            {/* 16: FC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <Input type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                <Input type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} onPaste={(e) => onPaste(e, index, 16)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
             </TableCell>
+
+            {/* 17: REMARKS */}
             <TableCell className="px-1 py-0 border-r text-center" style={{ height: `${rowHeight}px` }}>
                 <Popover>
                     <PopoverTrigger asChild>
@@ -406,6 +565,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                             <Input
                                 value={row.remarks}
                                 onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                                onPaste={(e) => onPaste(e, index, 17)}
                                 className="h-8 text-sm"
                                 placeholder="Enter remarks..."
                             />
@@ -413,6 +573,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     </PopoverContent>
                 </Popover>
             </TableCell>
+
+            {/* 18: PRICE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="flex items-center justify-between h-full">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
@@ -421,12 +583,15 @@ const BulkInputRow = React.memo(function BulkInputRow({
                         step="0.01"
                         value={row.cost_basis}
                         onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
+                        onPaste={(e) => onPaste(e, index, 18)}
                         className="w-full text-right bg-transparent border-none p-0 h-full font-mono font-bold focus:outline-none"
                         placeholder="0.00"
                         style={inputStyle}
                     />
                 </div>
             </TableCell>
+
+            {/* 19: TTL (Calculated) */}
             <TableCell className="px-1 py-0 text-right" style={{ height: `${rowHeight}px` }}>
                 <div className="flex items-center justify-between h-full">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
@@ -439,11 +604,12 @@ const BulkInputRow = React.memo(function BulkInputRow({
     );
 });
 
-// Unified autocomplete — replaces both BlockInput and SupplierInput
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style }: {
+// --- HELPER ---
+function AutocompleteInput({ value, onChange, onSelect, onPaste, items, className, placeholder, style }: {
     value: string;
     onChange: (val: string) => void;
     onSelect: (val: string) => void;
+    onPaste?: (e: React.ClipboardEvent<HTMLInputElement>) => void;
     items: AutocompleteItem[];
     className?: string;
     placeholder?: string;
@@ -527,6 +693,7 @@ function AutocompleteInput({ value, onChange, onSelect, items, className, placeh
                             onChange(e.target.value);
                             setOpen(true);
                         }}
+                        onPaste={onPaste}
                         onKeyDown={handleKeyDown}
                         onFocus={() => {
                             if (filtered.length > 0) setOpen(true);
