@@ -504,6 +504,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     return (
         <TooltipProvider>
             <div className="space-y-4">
+
                 <div className="flex items-center justify-between">
                     <div className="text-sm text-muted-foreground">
                         {isEdit ? (

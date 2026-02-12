@@ -21,7 +21,7 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Shield, Loader2, Clock } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -76,7 +76,7 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
 
 export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryHistoryRow[], batches: any[], search?: string }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { user, role, dbRole, setRole, hasPermission } = useAuth();
+    const { user, role, hasPermission } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -685,32 +685,6 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                         <Plus className="h-4 w-4" />
                         Add Delivery
                     </Button>
-
-                    {/* Role Switcher (Dev Only) */}
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 ml-2 text-muted-foreground hover:text-foreground">
-                                <Shield className="h-4 w-4" />
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                            {user && (
-                                <>
-                                    <DropdownMenuItem onClick={() => setRole('logged-in')}>
-                                        Logged In ({user.email}) — {dbRole}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                </>
-                            )}
-                            <DropdownMenuLabel>Dev Override</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            {(['Owner', 'Admin', 'Dev', 'Employee'] as UserRole[]).map((r) => (
-                                <DropdownMenuItem key={r} onClick={() => setRole(r)} className={role === r ? "bg-accent" : ""}>
-                                    {r} {role === r && "(Active)"}
-                                </DropdownMenuItem>
-                            ))}
-                        </DropdownMenuContent>
-                    </DropdownMenu>
 
                     <Popover>
                         <PopoverTrigger asChild>
