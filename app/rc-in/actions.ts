@@ -95,12 +95,13 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         await upsertBatchesFromRows(rows);
 
         const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
         for (const { id, data, comment } of updates) {
             // Set audit comment if provided
             if (comment) {
                 await supabase.rpc('set_audit_comment', { comment });
             } else {
-                // Ensure it's cleared if not provided (though generic trigger might default it to null, safer to clear)
                 await supabase.rpc('set_audit_comment', { comment: null });
             }
 
@@ -112,6 +113,27 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
 
             if (error) {
                 throw new Error(`Update Error (${id}): ${error.message}`);
+            }
+
+            // Also post the edit remark as a discussion comment on the new audit log
+            if (comment && user) {
+                const { data: latestLog } = await supabase
+                    .from('audit_logs')
+                    .select('id')
+                    .eq('record_id', id)
+                    .order('performed_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (latestLog) {
+                    await supabase
+                        .from('audit_comments')
+                        .insert({
+                            audit_log_id: latestLog.id,
+                            user_id: user.id,
+                            body: comment,
+                        });
+                }
             }
         }
 
