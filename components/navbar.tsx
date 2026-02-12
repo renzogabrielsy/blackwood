@@ -1,7 +1,9 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useTheme } from 'next-themes';
 import { ArrowLeft, Bell, LogOut, Moon, Settings, Shield, Sun } from 'lucide-react';
 import { useAuth, type UserRole } from '@/components/providers/auth-context';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -62,18 +64,27 @@ export function Navbar() {
     const { user, role, dbRole, displayName, avatarUrl, setRole, signOut } = useAuth();
     const pathname = usePathname();
     const router = useRouter();
+    const { theme, setTheme, resolvedTheme } = useTheme();
+    const [mounted, setMounted] = React.useState(false);
+
+    React.useEffect(() => setMounted(true), []);
 
     const breadcrumb = getBreadcrumb(pathname);
     const initials = getInitials(displayName, user?.email ?? null);
     const canSwitchRoles = PRIVILEGED_ROLES.includes(dbRole);
+    const isDark = resolvedTheme === 'dark';
 
     const handleSignOut = async () => {
         await signOut();
         router.push('/login');
     };
 
+    const toggleTheme = () => {
+        setTheme(isDark ? 'light' : 'dark');
+    };
+
     return (
-        <nav className="flex-none h-12 border-b border-zinc-700 bg-zinc-900 px-8 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
+        <nav className="flex-none h-12 border-b border-zinc-700 bg-zinc-800 dark:bg-zinc-700 px-8 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
             {/* Left — breadcrumb */}
             <div className="flex-1 flex items-center gap-2 min-w-0">
                 {breadcrumb && (
@@ -115,7 +126,7 @@ export function Navbar() {
                             <Tooltip>
                                 <TooltipTrigger asChild>
                                     <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600">
                                             <Shield className="h-4 w-4" />
                                         </Button>
                                     </DropdownMenuTrigger>
@@ -142,22 +153,29 @@ export function Navbar() {
                         </DropdownMenu>
                     )}
 
-                    {/* Dark Mode Toggle — scaffold */}
-                    <button
-                        type="button"
-                        className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full bg-zinc-700 transition-colors mx-0.5"
-                    >
-                        <Sun className="absolute left-1.5 h-3 w-3 text-zinc-400" />
-                        <Moon className="absolute right-1.5 h-3 w-3 text-zinc-400" />
-                        <span className="pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-zinc-200 shadow-sm translate-x-0.5 transition-transform">
-                            <Sun className="h-3 w-3 text-zinc-700" />
-                        </span>
-                    </button>
+                    {/* Dark Mode Toggle */}
+                    {mounted && (
+                        <button
+                            type="button"
+                            onClick={toggleTheme}
+                            className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full bg-zinc-600 transition-colors mx-0.5"
+                            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+                        >
+                            <Sun className="absolute left-1.5 h-3 w-3 text-amber-300" />
+                            <Moon className="absolute right-1.5 h-3 w-3 text-blue-300" />
+                            <span className={`pointer-events-none flex h-5 w-5 items-center justify-center rounded-full bg-zinc-200 shadow-sm transition-transform duration-200 ${isDark ? 'translate-x-[22px]' : 'translate-x-0.5'}`}>
+                                {isDark
+                                    ? <Moon className="h-3 w-3 text-zinc-700" />
+                                    : <Sun className="h-3 w-3 text-amber-500" />
+                                }
+                            </span>
+                        </button>
+                    )}
 
                     {/* Notifications — scaffold */}
                     <Tooltip>
                         <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800">
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600">
                                 <Bell className="h-4 w-4" />
                             </Button>
                         </TooltipTrigger>
@@ -168,7 +186,7 @@ export function Navbar() {
                 {/* Profile */}
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" className="h-8 w-8 rounded-full p-0 hover:bg-zinc-800">
+                        <Button variant="ghost" className="h-8 w-8 rounded-full p-0 hover:bg-zinc-600">
                             <Avatar className="h-7 w-7">
                                 {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName ?? ''} />}
                                 <AvatarFallback className="text-[11px] bg-zinc-700 text-zinc-200">{initials}</AvatarFallback>

@@ -132,7 +132,7 @@ export function DeliverySheetFooter({
                 >
                     {/* Sliding indicator */}
                     <div
-                        className="absolute rounded-md bg-foreground shadow-sm transition-all duration-300 ease-in-out"
+                        className="absolute rounded-md bg-zinc-800 dark:bg-zinc-200 shadow-sm transition-all duration-300 ease-in-out"
                         style={{
                             left: `${yearIndicator.left}px`,
                             width: `${yearIndicator.width}px`,
@@ -195,7 +195,7 @@ export function DeliverySheetFooter({
                 >
                     {/* Sliding indicator */}
                     <div
-                        className="absolute rounded-md bg-foreground shadow-sm transition-all duration-300 ease-in-out"
+                        className="absolute rounded-md bg-zinc-800 dark:bg-zinc-200 shadow-sm transition-all duration-300 ease-in-out"
                         style={{
                             left: `${monthIndicator.left}px`,
                             width: `${monthIndicator.width}px`,
