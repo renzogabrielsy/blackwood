@@ -2,16 +2,17 @@
 
 import * as React from 'react';
 import { format, formatDistanceToNow } from 'date-fns';
-import { Clock, Loader2 } from 'lucide-react';
+import { Clock, Loader2, MessageSquareText, Send, ArrowRight, CheckCircle2 } from 'lucide-react';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import {
   getFieldLabel,
-  isHiddenField,
   formatFieldValue,
   flattenLabResultsDiff,
 } from '@/lib/field-labels';
-import { getDeliveryHistory } from '../actions';
-import type { AuditLogRow } from '@/types/rc-in';
+import { getDeliveryHistory, getAuditComments, addAuditComment } from '../actions';
+import type { AuditLogRow, AuditComment } from '@/types/rc-in';
+import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from './audit-shared';
 import {
   Dialog,
   DialogContent,
@@ -31,106 +32,163 @@ import {
   TooltipTrigger,
   TooltipProvider,
 } from '@/components/ui/tooltip';
-
-// Fields displayed in the "current state" hero grid, matching Master Table order
-// Date, Supplier, Batch, Block, Truck, Sacks, Weight, [Labs], Remarks, Cost
-const HERO_FIELDS = [
-  'transaction_date',
-  'supplier',
-  'batch_code',
-  'block_loc',
-  'truck_plate',
-  'sacks',
-  'weight_kg',
-  // Lab results are handled separately in the layout map below or injected
-  'remarks',
-  'cost_basis',
-];
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { calculateWhse } from '@/lib/rc-utils';
 
 const LAB_KEYS = ['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc'];
 
-function getUserInitials(profile: AuditLogRow['profiles']): string {
-  if (!profile) return '?';
-  if (profile.display_name) {
-    return profile.display_name
-      .split(' ')
-      .map((n) => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  }
-  return profile.email[0].toUpperCase();
-}
+/** Popover for viewing/adding remarks on an audit log entry */
+function RemarkPopover({ entry }: { entry: AuditLogRow }) {
+  const [open, setOpen] = React.useState(false);
+  const [comments, setComments] = React.useState<AuditComment[]>([]);
+  const [loading, setLoading] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [body, setBody] = React.useState('');
 
-function getUserName(entry: AuditLogRow): string {
-  if (!entry.profiles) return 'System Import';
-  return entry.profiles.display_name || entry.profiles.email;
-}
+  const hasComment = !!entry.comment;
+  const commentCount = comments.length;
 
-function OperationBadge({ op }: { op: AuditLogRow['operation'] }) {
-  const styles = {
-    INSERT: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-    UPDATE: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-    DELETE: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
-  };
-  return (
-    <span className={cn('text-[10px] font-mono font-bold px-1.5 py-0.5 rounded', styles[op])}>
-      {op}
-    </span>
-  );
-}
+  React.useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    getAuditComments(entry.id).then((res) => {
+      setComments(res);
+      setLoading(false);
+    });
+  }, [open, entry.id]);
 
-/** Renders diff rows for a single audit entry */
-function DiffDisplay({ entry }: { entry: AuditLogRow }) {
-  if (entry.operation === 'INSERT') {
-    return <p className="text-xs text-muted-foreground italic">Record created</p>;
-  }
-  if (entry.operation === 'DELETE') {
-    return <p className="text-xs text-muted-foreground italic">Record deleted</p>;
-  }
-  if (!entry.diff || Object.keys(entry.diff).length === 0) {
-    return <p className="text-xs text-muted-foreground italic">No changes recorded</p>;
-  }
-
-  const rows: { label: string; oldVal: string; newVal: string }[] = [];
-
-  for (const [key, change] of Object.entries(entry.diff)) {
-    if (isHiddenField(key)) continue;
-
-    if (key === 'lab_results') {
-      const labDiffs = flattenLabResultsDiff(change.old, change.new);
-      for (const ld of labDiffs) {
-        rows.push({ label: ld.label, oldVal: ld.oldFormatted, newVal: ld.newFormatted });
-      }
-    } else {
-      rows.push({
-        label: getFieldLabel(key),
-        oldVal: formatFieldValue(key, change.old),
-        newVal: formatFieldValue(key, change.new),
-      });
+  async function handleSubmit() {
+    if (!body.trim()) return;
+    setSubmitting(true);
+    const result = await addAuditComment(entry.id, body);
+    if (result.success) {
+      setBody('');
+      // Refresh comments
+      const updated = await getAuditComments(entry.id);
+      setComments(updated);
     }
+    setSubmitting(false);
   }
 
-  if (rows.length === 0) return null;
-
   return (
-    <div className="space-y-1">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-baseline gap-2 text-xs">
-          <span className="font-medium text-muted-foreground w-24 shrink-0">{r.label}</span>
-          <span className="line-through text-red-500 dark:text-red-400 font-mono">{r.oldVal}</span>
-          <span className="text-muted-foreground">→</span>
-          <span className="text-green-600 dark:text-green-400 font-mono">{r.newVal}</span>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            'h-6 w-6 shrink-0',
+            hasComment || commentCount > 0
+              ? 'text-amber-600 dark:text-amber-400'
+              : 'text-muted-foreground/40 hover:text-muted-foreground'
+          )}
+        >
+          <MessageSquareText className="h-3.5 w-3.5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="end" side="left">
+        <div className="p-3 space-y-3">
+          {/* Resolved indicator */}
+          {entry.resolved && (
+            <div className="flex items-center gap-1.5 text-[10px] text-green-600 dark:text-green-400 font-medium bg-green-50 dark:bg-green-950/30 px-2 py-1.5 rounded-md border border-green-200 dark:border-green-800">
+              <CheckCircle2 className="h-3 w-3" />
+              This edit has been resolved
+            </div>
+          )}
+
+          {/* Edit reason from audit_logs.comment */}
+          {entry.comment && (
+            <div className="text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-md border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200">
+              <span className="font-semibold block mb-0.5 text-[10px] uppercase tracking-wider opacity-70">Edit Reason</span>
+              {entry.comment}
+            </div>
+          )}
+
+          {/* Comments list */}
+          {loading ? (
+            <div className="flex items-center justify-center py-3">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : comments.length > 0 ? (
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {comments.map((c) => {
+                const isSystemMessage = c.body === 'marked this edit as resolved' || c.body === 'reopened this edit';
+                return (
+                <div key={c.id} className="flex gap-2 text-xs">
+                  <Avatar className="h-5 w-5 shrink-0 mt-0.5">
+                    <AvatarImage src={c.profiles?.avatar_url ?? undefined} />
+                    <AvatarFallback className="text-[8px]">
+                      {c.profiles?.display_name?.[0]?.toUpperCase() || c.profiles?.email?.[0]?.toUpperCase() || '?'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="font-medium truncate">
+                        {c.profiles?.display_name || c.profiles?.email || 'Unknown'}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground ml-auto whitespace-nowrap">
+                        {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
+                      </span>
+                    </div>
+                    {isSystemMessage ? (
+                      <p className="text-muted-foreground mt-0.5 italic">{c.body}</p>
+                    ) : (
+                      <p className="text-muted-foreground mt-0.5 whitespace-pre-wrap">{c.body}</p>
+                    )}
+                  </div>
+                </div>
+              );
+              })}
+            </div>
+          ) : !entry.comment ? (
+            <p className="text-xs text-muted-foreground text-center py-2">No remarks yet</p>
+          ) : null}
+
+          {/* Quick comment input */}
+          <div className="flex gap-2">
+            <Textarea
+              placeholder="Add a comment..."
+              className="text-xs min-h-[60px] resize-none"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  handleSubmit();
+                }
+              }}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <Button
+              size="sm"
+              variant="default"
+              className="h-7 text-xs gap-1"
+              disabled={!body.trim() || submitting}
+              onClick={handleSubmit}
+            >
+              {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              Comment
+            </Button>
+            <Link
+              href={`/rc-in/edit/${entry.id}`}
+              className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+              onClick={() => setOpen(false)}
+            >
+              See full discussion
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
         </div>
-      ))}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
-
-import { calculateWhse } from '@/lib/rc-utils';
-// ... previous imports
-
-// ... helper functions ...
 
 export function DeliveryHistoryDialog({
   deliveryId,
@@ -153,7 +211,7 @@ export function DeliveryHistoryDialog({
           </DialogTitle>
         </DialogHeader>
 
-        {/* 
+        {/*
           We use a key here to force a complete remount of the content when the deliveryId changes.
           This ensures that the internal state (loading, history) is always fresh and starts in the 'loading' state,
           preventing any stale data from being visible and avoiding complex derived state logic.
@@ -187,7 +245,6 @@ function DeliveryHistoryContent({
 
     let cancelled = false;
 
-    // We are guaranteed to be fresh due to key={deliveryId}, so just fetch.
     getDeliveryHistory(deliveryId).then((res) => {
       if (cancelled) return;
       if (res.success) {
@@ -201,10 +258,8 @@ function DeliveryHistoryContent({
     };
   }, [deliveryId]);
 
-  // Use initialData for immediate rendering of current state, or empty object to prevent crashes
   const current = initialData || {};
 
-  // If no data at all, render a skeletal empty state but keep layout
   if (!initialData && !deliveryId) {
     return (
       <div className="py-12 text-center text-sm text-muted-foreground">
@@ -213,14 +268,11 @@ function DeliveryHistoryContent({
     );
   }
 
-  // Find the INSERT entry (creation)
   const insertEntry = history.find((h) => h.operation === 'INSERT');
-  // Find the most recent UPDATE to determine last-changed fields
   const lastUpdate = history.find((h) => h.operation === 'UPDATE');
   const lastChangedKeys = new Set(
     lastUpdate?.diff ? Object.keys(lastUpdate.diff) : []
   );
-  // Expand lab_results into sub-keys for highlight detection
   const lastChangedLabKeys = new Set<string>();
   if (lastUpdate?.diff?.lab_results) {
     const labDiffs = flattenLabResultsDiff(
@@ -230,7 +282,6 @@ function DeliveryHistoryContent({
     labDiffs.forEach((ld) => lastChangedLabKeys.add(ld.key));
   }
 
-  // Get previous values for tooltips
   const getPreviousValue = (key: string): string | null => {
     if (!lastUpdate?.diff?.[key]) return null;
     return formatFieldValue(key, lastUpdate.diff[key].old);
@@ -244,7 +295,6 @@ function DeliveryHistoryContent({
     return formatFieldValue(subKey, oldLab?.[subKey]);
   };
 
-  // Helper to render a standard field cell
   const renderField = (
     key: string,
     current: Record<string, any>,
@@ -288,7 +338,6 @@ function DeliveryHistoryContent({
     return cell;
   };
 
-  // Helper to render a lab field cell
   const renderLabField = (
     subKey: string,
     labData: Record<string, any> | null,
@@ -327,7 +376,6 @@ function DeliveryHistoryContent({
     return cell;
   };
 
-  // ... (renderHistoryEntry remains same) ...
   const renderHistoryEntry = (entry: AuditLogRow) => (
     <div key={entry.id} className="flex gap-3 text-sm">
       <Avatar className="h-7 w-7 shrink-0 mt-0.5">
@@ -340,9 +388,15 @@ function DeliveryHistoryContent({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-xs">{getUserName(entry)}</span>
           <OperationBadge op={entry.operation} />
-          <span className="text-[10px] text-muted-foreground ml-auto whitespace-nowrap" title={format(new Date(entry.performed_at), 'MMM d, yyyy h:mm:ss a')}>
-            {formatDistanceToNow(new Date(entry.performed_at), { addSuffix: true })}
-          </span>
+          {entry.resolved && (
+            <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
+          )}
+          <div className="ml-auto flex items-center gap-1">
+            <RemarkPopover entry={entry} />
+            <span className="text-[10px] text-muted-foreground whitespace-nowrap" title={format(new Date(entry.performed_at), 'MMM d, yyyy h:mm:ss a')}>
+              {formatDistanceToNow(new Date(entry.performed_at), { addSuffix: true })}
+            </span>
+          </div>
         </div>
         {entry.comment && (
           <div className="text-xs bg-amber-50 dark:bg-amber-950/30 p-2 rounded-md border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 mt-2">
@@ -355,7 +409,6 @@ function DeliveryHistoryContent({
     </div>
   );
 
-  // Calculate generic WHSE for current display
   const whse = current ? calculateWhse(current.block_loc, current.batch_code) : '-';
 
   return (
@@ -400,7 +453,6 @@ function DeliveryHistoryContent({
             <div className="grid grid-cols-3 gap-2">
               {renderField('batch_code', current, lastChangedKeys, getPreviousValue)}
               {renderField('block_loc', current, lastChangedKeys, getPreviousValue)}
-              {/* Computed WHSE field */}
               <div className="rounded-md border px-2 py-1.5 overflow-hidden">
                 <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">WHSE</div>
                 <div className="text-xs font-mono truncate font-bold">{whse}</div>
