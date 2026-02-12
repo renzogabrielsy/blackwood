@@ -4,7 +4,8 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { ArrowLeft, Bell, LogOut, Moon, Settings, Shield, Sun } from 'lucide-react';
+import { ArrowLeft, LogOut, Moon, Settings, Shield, Sun } from 'lucide-react';
+import { NotificationBell } from '@/components/notification-bell';
 import { useAuth, type UserRole } from '@/components/providers/auth-context';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -37,6 +38,9 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname === '/rc-in') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
     }
+    if (pathname === '/notifications') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
+    }
     if (pathname === '/settings') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' };
     }
@@ -64,7 +68,7 @@ export function Navbar() {
     const { user, role, dbRole, displayName, avatarUrl, setRole, signOut } = useAuth();
     const pathname = usePathname();
     const router = useRouter();
-    const { theme, setTheme, resolvedTheme } = useTheme();
+    const { setTheme, resolvedTheme } = useTheme();
     const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => setMounted(true), []);
@@ -172,15 +176,8 @@ export function Navbar() {
                         </button>
                     )}
 
-                    {/* Notifications — scaffold */}
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600">
-                                <Bell className="h-4 w-4" />
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Notifications</TooltipContent>
-                    </Tooltip>
+                    {/* Notifications */}
+                    <NotificationBell />
                 </TooltipProvider>
 
                 {/* Profile */}
