@@ -36,6 +36,30 @@ export type AuditLogRow = {
     snapshot: Record<string, any> | null;
     performed_by: string | null;
     performed_at: string;
+    comment?: string | null;
+    resolved: boolean;
+    resolved_by: string | null;
+    resolved_at: string | null;
+    resolve_requested: boolean;
+    resolve_request_type: 'resolve' | 'reopen' | null;
+    resolve_requested_by: string | null;
+    resolve_requested_at: string | null;
+    profiles?: {
+        display_name: string | null;
+        email: string;
+        avatar_url: string | null;
+    } | null;
+};
+
+export type AuditComment = {
+    id: string;
+    audit_log_id: string;
+    user_id: string;
+    body: string;
+    resolved: boolean;
+    resolved_by: string | null;
+    resolved_at: string | null;
+    created_at: string;
     profiles?: {
         display_name: string | null;
         email: string;
