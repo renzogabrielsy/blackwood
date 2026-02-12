@@ -17,7 +17,7 @@ export default async function SettingsPage() {
 
   if (!isAdmin) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-muted/10">
+      <div className="flex flex-1 items-center justify-center bg-muted/10">
         <Card className="max-w-md">
           <CardHeader>
             <CardTitle>Access Denied</CardTitle>
@@ -41,22 +41,8 @@ export default async function SettingsPage() {
     .order('created_at', { ascending: true });
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-muted/10">
-      <div className="flex-none p-4 md:p-6 pb-2">
-        <div className="flex items-center justify-between">
-          <div className="space-y-1">
-            <h2 className="text-2xl font-semibold tracking-tight">Settings</h2>
-            <p className="text-sm text-muted-foreground">
-              Manage user roles and permissions.
-            </p>
-          </div>
-          <Link href="/" className="text-sm text-muted-foreground hover:text-foreground underline">
-            Dashboard
-          </Link>
-        </div>
-      </div>
-
-      <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 md:pb-6">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-muted/10">
+      <div className="flex-1 min-h-0 px-4 md:px-6 py-4 md:py-6">
         <Card className="border-none shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">User Roles</CardTitle>

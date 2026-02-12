@@ -76,22 +76,10 @@ export default async function RCInPage({
     }));
 
     return (
-        <div className="flex flex-col h-screen overflow-hidden bg-muted/10">
-            {/* Header */}
-            <div className="flex-none p-4 md:p-6 pb-2">
-                <div className="flex flex-row items-center justify-between">
-                    <div className="space-y-1">
-                        <h2 className="text-2xl font-semibold tracking-tight">Master Log</h2>
-                        <p className="text-sm text-muted-foreground">
-                            Recent delivery history.
-                        </p>
-                    </div>
-                </div>
-            </div>
-
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-muted/20">
             {/* Main Content */}
-            <div className="flex-1 min-h-0 px-4 md:px-6 pb-4 md:pb-6">
-                <Card className="h-full flex flex-col border-none shadow-sm">
+            <div className="flex-1 min-h-0 px-4 md:px-6 py-4 md:py-6">
+                <Card className="h-full flex flex-col border-none shadow-xl">
                     <CardHeader className="p-0 hidden" />
                     <CardContent className="flex-1 min-h-0 p-2 md:p-4 flex flex-col relative">
                         <DeliveryMasterTable
