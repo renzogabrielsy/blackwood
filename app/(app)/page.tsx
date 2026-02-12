@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { SignOutButton } from './components/SignOutButton';
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -21,20 +20,14 @@ export default async function DashboardPage() {
   ];
 
   return (
-    <div className="flex min-h-screen flex-col bg-muted/10">
-      <header className="flex-none border-b px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Blackwood</h1>
-            <p className="text-sm text-muted-foreground">
-              Welcome, {displayName}
-            </p>
-          </div>
-          <SignOutButton />
-        </div>
-      </header>
+    <div className="flex flex-col flex-1 bg-muted/10">
+      <div className="flex-none px-6 py-4">
+        <p className="text-sm text-muted-foreground">
+          Welcome, {displayName}
+        </p>
+      </div>
 
-      <main className="flex-1 p-6">
+      <main className="flex-1 px-6 pb-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 max-w-4xl">
           {modules.map((mod) => (
             <Link key={mod.href} href={mod.href}>

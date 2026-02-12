@@ -81,6 +81,18 @@ Strict left-to-right order for the delivery input/table:
 | PHP Total | accounting (₱) |
 | Remarks | truncated text |
 
+## Navbar & Page Titles
+
+The persistent navbar (`components/navbar.tsx`) owns all page titles and descriptions — **pages must not render their own title/description headers**. Instead, add entries to `getBreadcrumb()` in the navbar component.
+
+- **Left side:** Breadcrumb — `← Back to {parent} / {Page Title}` + muted description
+- **Center:** "Blackwood" (always visible, links to `/`)
+- **Right side:** Dev role switcher (Owner/Admin/Dev only), dark mode toggle, notifications, profile dropdown
+- On the dashboard (`/`), the left side is empty — no redundant "Dashboard" label
+- The navbar is dark-themed (`bg-zinc-900`) and uses `ssr: false` dynamic import to avoid Radix hydration mismatches
+
+When adding a new page/module, register it in `getBreadcrumb()` with `backLabel`, `backHref`, `pageTitle`, and optionally `pageDescription`.
+
 ## Module Pattern (RC IN as reference)
 
 Each module follows this structure in `app/<module>/`:
