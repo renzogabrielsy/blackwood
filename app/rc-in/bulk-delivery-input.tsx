@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Check, Plus, Trash2, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
+import { Check, Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
@@ -533,6 +533,13 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                     tabIndex={0}
                     onKeyDown={handleGridKeyDown}
                     onPaste={handleGridPaste}
+                    onBlur={(e) => {
+                        // Clear active cell when focus leaves the grid entirely
+                        if (!e.currentTarget.contains(e.relatedTarget)) {
+                            setActiveCell(null);
+                            setIsEditing(false);
+                        }
+                    }}
                 >
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
                         <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
@@ -557,7 +564,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                                 <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
                                 <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
                                 <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
-                                <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
+                                <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
+                                <TableHead className="w-[20px] p-0 bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -666,9 +674,49 @@ const BulkInputRow = React.memo(function BulkInputRow({
     return (
         <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
             <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
-                <Button variant="ghost" size="icon" className="h-full w-full rounded-none text-destructive hover:text-white hover:bg-destructive/90" onClick={() => removeRow(index)} tabIndex={-1}>
-                    <Trash2 className="w-3 h-3" />
-                </Button>
+                {isEditMode ? (
+                    <Popover>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <PopoverTrigger asChild>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className={cn(
+                                            "h-full w-full rounded-none",
+                                            auditComment ? "text-primary bg-primary/10" : "text-muted-foreground/30 hover:text-muted-foreground"
+                                        )}
+                                        tabIndex={-1}
+                                    >
+                                        <PencilLine className="w-3 h-3" />
+                                    </Button>
+                                </PopoverTrigger>
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                                <p>Edit Remarks</p>
+                            </TooltipContent>
+                        </Tooltip>
+                        <PopoverContent className="w-72 p-3 shadow-lg" align="start" side="right" onKeyDown={(e) => e.stopPropagation()}>
+                            <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                    <MessageSquarePlus className="h-4 w-4 text-muted-foreground" />
+                                    <h4 className="font-medium leading-none text-sm">Edit Remarks</h4>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Reason for this change (saved to audit log).
+                                </p>
+                                <Textarea
+                                    value={auditComment}
+                                    onChange={(e) => onAuditCommentChange(e.target.value)}
+                                    placeholder="e.g. Corrected weight typo..."
+                                    className="min-h-[80px] text-xs font-mono resize-none"
+                                />
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+                ) : (
+                    <div className="h-full w-full" />
+                )}
             </TableCell>
 
             {/* 1: STATE (Read Only) */}
@@ -842,70 +890,21 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 17: REMARKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <div className="flex items-center h-full group/remarks relative">
-                    <div className="flex-1 min-w-0">
-                        {/* We use GridCell here mostly for navigation/editing standard remarks */}
-                        <GridCell col={17} value={row.remarks} {...commonCellProps}
-                            displayValue={
-                                <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
-                                    <MessageSquareText className="w-3 h-3" />
-                                </div>
-                            }
-                        >
-                            <RemarksCellAdaptor
-                                value={row.remarks}
-                                onChange={(val) => updateRow(index, 'remarks', val)}
-                                onClose={() => setIsEditing(false)}
-                                onRevert={onRevert}
-                                fontSize={fontSize}
-                            />
-                        </GridCell>
-                    </div>
-
-                    {isEditMode && (
-                        <div className="shrink-0 px-1">
-                            <Popover>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <PopoverTrigger asChild>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon"
-                                                className={cn(
-                                                    "h-5 w-5 rounded-sm transition-opacity",
-                                                    auditComment ? "text-primary opacity-100 bg-primary/10" : "text-muted-foreground opacity-30 hover:opacity-100"
-                                                )}
-                                                tabIndex={-1}
-                                            >
-                                                <PencilLine className="h-3 w-3" />
-                                            </Button>
-                                        </PopoverTrigger>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        <p>Add Edit Remarks</p>
-                                    </TooltipContent>
-                                </Tooltip>
-                                <PopoverContent className="w-80 p-3 shadow-lg" align="end" side="top">
-                                    <div className="space-y-2">
-                                        <div className="flex items-center gap-2">
-                                            <MessageSquarePlus className="h-4 w-4 text-muted-foreground" />
-                                            <h4 className="font-medium leading-none text-sm">Edit Remarks</h4>
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                            Reason for this change (saved to audit log).
-                                        </p>
-                                        <Textarea
-                                            value={auditComment}
-                                            onChange={(e) => onAuditCommentChange(e.target.value)}
-                                            placeholder="e.g. Corrected weight type..."
-                                            className="min-h-[80px] text-xs font-mono resize-none"
-                                        />
-                                    </div>
-                                </PopoverContent>
-                            </Popover>
+                <GridCell col={17} value={row.remarks} {...commonCellProps}
+                    displayValue={
+                        <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
+                            <MessageSquareText className="w-3 h-3" />
                         </div>
-                    )}
-                </div>
+                    }
+                >
+                    <RemarksCellAdaptor
+                        value={row.remarks}
+                        onChange={(val) => updateRow(index, 'remarks', val)}
+                        onClose={() => setIsEditing(false)}
+                        onRevert={onRevert}
+                        fontSize={fontSize}
+                    />
+                </GridCell>
             </TableCell>
 
             {/* 18: PRICE */}
@@ -935,13 +934,25 @@ const BulkInputRow = React.memo(function BulkInputRow({
             </TableCell>
 
             {/* 19: TTL (Calculated) */}
-            <TableCell className="px-1 py-0 text-right" style={{ height: `${rowHeight}px` }}>
+            <TableCell className="px-1 py-0 text-right border-r" style={{ height: `${rowHeight}px` }}>
                 <div className="flex items-center justify-between h-full px-1">
                     <span className="text-muted-foreground" style={inputStyle}>₱</span>
                     <span className="text-right font-mono font-bold" style={inputStyle}>
                         {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                 </div>
+            </TableCell>
+
+            {/* Remove row */}
+            <TableCell className="p-0 w-[20px]" style={{ height: `${rowHeight}px` }}>
+                <button
+                    className="h-full w-full flex items-center justify-center text-muted-foreground/40 hover:text-destructive transition-colors"
+                    onClick={() => removeRow(index)}
+                    tabIndex={-1}
+                    type="button"
+                >
+                    <X className="w-3 h-3" />
+                </button>
             </TableCell>
         </TableRow>
     );
