@@ -226,6 +226,77 @@ export type Database = {
           },
         ]
       }
+      notification_subscriptions: {
+        Row: {
+          audit_log_id: string
+          created_at: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          audit_log_id: string
+          created_at?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          audit_log_id?: string
+          created_at?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notification_subscriptions_audit_log_id_fkey"
+            columns: ["audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "audit_logs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notifications: {
+        Row: {
+          archived: boolean | null
+          body: string | null
+          created_at: string | null
+          id: string
+          metadata: Json | null
+          read: boolean | null
+          read_at: string | null
+          source_user_id: string | null
+          title: string
+          type: Database["public"]["Enums"]["notification_type"]
+          user_id: string
+        }
+        Insert: {
+          archived?: boolean | null
+          body?: string | null
+          created_at?: string | null
+          id?: string
+          metadata?: Json | null
+          read?: boolean | null
+          read_at?: string | null
+          source_user_id?: string | null
+          title: string
+          type: Database["public"]["Enums"]["notification_type"]
+          user_id: string
+        }
+        Update: {
+          archived?: boolean | null
+          body?: string | null
+          created_at?: string | null
+          id?: string
+          metadata?: Json | null
+          read?: boolean | null
+          read_at?: string | null
+          source_user_id?: string | null
+          title?: string
+          type?: Database["public"]["Enums"]["notification_type"]
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -329,10 +400,30 @@ export type Database = {
       }
     }
     Functions: {
+      _insert_notification: {
+        Args: {
+          p_body: string
+          p_metadata: Json
+          p_source_user_id?: string
+          p_title: string
+          p_type: Database["public"]["Enums"]["notification_type"]
+          p_user_id: string
+        }
+        Returns: undefined
+      }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
     }
     Enums: {
       batch_status: "STORED" | "IN-USE" | "CLOSED" | "FEED"
+      notification_type:
+        | "resolve_request"
+        | "resolve_approved"
+        | "resolve_denied"
+        | "delivery_created"
+        | "delivery_edited"
+        | "delivery_deleted"
+        | "remarks_added"
+        | "audit_comment_reply"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -464,6 +555,16 @@ export const Constants = {
   public: {
     Enums: {
       batch_status: ["STORED", "IN-USE", "CLOSED", "FEED"],
+      notification_type: [
+        "resolve_request",
+        "resolve_approved",
+        "resolve_denied",
+        "delivery_created",
+        "delivery_edited",
+        "delivery_deleted",
+        "remarks_added",
+        "audit_comment_reply",
+      ],
     },
   },
 } as const
