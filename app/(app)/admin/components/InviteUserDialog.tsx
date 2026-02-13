@@ -27,7 +27,7 @@ import type { UserRole } from '@/components/providers/auth-context';
 export function InviteUserDialog() {
   const [open, setOpen] = React.useState(false);
   const [email, setEmail] = React.useState('');
-  const [role, setRole] = React.useState<UserRole>('Employee');
+  const [role, setRole] = React.useState<UserRole>('Production');
   const [isLoading, setIsLoading] = React.useState(false);
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,7 +88,8 @@ export function InviteUserDialog() {
                 <SelectItem value="Owner">Owner</SelectItem>
                 <SelectItem value="Admin">Admin</SelectItem>
                 <SelectItem value="Dev">Dev</SelectItem>
-                <SelectItem value="Employee">Employee</SelectItem>
+                <SelectItem value="Production">Production</SelectItem>
+                <SelectItem value="Accounting">Accounting</SelectItem>
               </SelectContent>
             </Select>
           </div>

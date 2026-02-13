@@ -7,7 +7,7 @@ export type DeliveryRow = {
     truck_plate: string;
     sacks: number;
     weight_kg: number;
-    cost_basis: number;
+    cost_basis?: number;
     remarks?: string;
     lab_results: {
         mc: number;

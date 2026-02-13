@@ -120,7 +120,8 @@ export function UserManagementTable({
                         <SelectItem value="Owner">Owner</SelectItem>
                         <SelectItem value="Admin">Admin</SelectItem>
                         <SelectItem value="Dev">Dev</SelectItem>
-                        <SelectItem value="Employee">Employee</SelectItem>
+                        <SelectItem value="Production">Production</SelectItem>
+                        <SelectItem value="Accounting">Accounting</SelectItem>
                       </SelectContent>
                     </Select>
                   </TableCell>
