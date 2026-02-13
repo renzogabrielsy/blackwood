@@ -21,7 +21,7 @@ interface Profile {
   created_at: string;
 }
 
-const roles: UserRole[] = ['Owner', 'Admin', 'Dev', 'Employee'];
+const roles: UserRole[] = ['Owner', 'Admin', 'Dev', 'Production', 'Accounting'];
 
 export function RoleAssignmentTable({ profiles }: { profiles: Profile[] }) {
   const [updating, setUpdating] = useState<string | null>(null);

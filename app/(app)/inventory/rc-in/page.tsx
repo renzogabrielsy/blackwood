@@ -64,9 +64,21 @@ export default async function RCInPage({
         throw new Error(`Failed to fetch deliveries: ${error.message}`);
     }
 
+    const { data: userRaw } = await supabase.auth.getUser();
+    let role = 'Production';
+    if (userRaw?.user) {
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', userRaw.user.id)
+            .single();
+        if (profile?.role) role = profile.role;
+    }
+
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
+        cost_basis: role === 'Production' ? undefined : d.cost_basis,
     }));
 
     const activeBatches = (batches || []).map(b => ({
