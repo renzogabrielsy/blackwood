@@ -27,6 +27,7 @@ export default async function DashboardPage() {
 
   const modules = [
     { name: 'RC IN', href: '/inventory/rc-in', description: 'Raw charcoal receiving & delivery logs' },
+    { name: 'RC OUT', href: '/inventory/rc-out', description: 'Raw charcoal usage & depletion logs' },
     { name: 'Settings', href: '/settings', description: 'User management & role assignments' },
     ...(isAdmin ? [{
       name: 'Admin Panel',
