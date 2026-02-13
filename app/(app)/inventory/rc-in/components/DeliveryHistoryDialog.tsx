@@ -351,7 +351,7 @@ function DeliveryHistoryContent({
       <div
         key={subKey}
         className={cn(
-          'flex-1 min-w-[3rem] rounded-md border px-1 py-1 text-center',
+          'flex-1 min-w-12 rounded-md border px-1 py-1 text-center',
           isChanged && 'bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800'
         )}
       >
