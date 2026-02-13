@@ -24,6 +24,16 @@ No test framework is configured.
 - **Shadcn UI** (new-york style, zinc base) with Radix primitives in `components/ui/`
 - **TanStack Table** for data tables, **date-fns** for dates, **cmdk** for command menus
 - **Tailwind CSS v4** with dark mode support via CSS variables
+- **next-themes** for dark mode toggling and persistence
+
+## Theming
+
+- **Dark mode** is powered by `next-themes` (`ThemeProvider` in `components/providers/theme-provider.tsx`)
+- CSS variables in `globals.css` — `:root` for light, `.dark` for dark
+- `next-themes` adds/removes `.dark` class on `<html>` and persists the user's choice to **localStorage** automatically
+- **Always use semantic tokens** (`bg-primary`, `text-muted-foreground`, `bg-card`, `border-border`, etc.) — not hardcoded colors like `bg-white` or `text-black`
+- The navbar is always dark-themed: `bg-zinc-800` (light) / `dark:bg-zinc-700` (dark mode) — it intentionally stays dark in both modes but shifts one shade lighter in dark mode to maintain contrast against the `zinc-950` background
+- Footer sliding indicators use `bg-zinc-800 dark:bg-zinc-200` to invert properly
 
 ## Architecture
 
@@ -38,12 +48,32 @@ No test framework is configured.
 
 ## Database Schema (Supabase)
 
-Two main tables:
+Auto-generated TypeScript types live in `types/supabase.ts` — **never hand-edit this file**, regenerate with `/supabase` workflow or:
+```bash
+supabase gen types typescript --linked > types/supabase.ts
+```
 
-- **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` ('STORED'/'CLOSED'), `created_at`
-- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc), `created_at`
+**Tables:**
+- **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum: STORED/IN-USE/CLOSED/FEED), `avg_cost`, `current_weight`, `quality_stats` (JSONB)
+- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc)
+- **`usage`** — `id`, `batch_id` (FK→batches), `destination`, `transaction_date`, `weight_kg`, `snapshot_location`, `snapshot_price`
+- **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`
+- **`audit_logs`** — `id`, `table_name`, `record_id`, `operation`, `diff` (JSONB), `snapshot` (JSONB), `comment`, `performed_by`, resolve fields
+- **`audit_comments`** — `id`, `audit_log_id` (FK→audit_logs), `body`, `user_id`, `resolved`
+
+**Views:** `view_rc_in_master`
+**Functions:** `set_audit_comment(comment text)`
+**Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED`
 
 Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
+
+## Supabase CLI
+
+The project is linked to Supabase. Common commands (see `/supabase` workflow for full details):
+- `supabase gen types typescript --linked > types/supabase.ts` — regenerate types after schema changes
+- `supabase migration new <name>` — create a migration file in `supabase/migrations/`
+- `supabase db push` — push migrations to remote
+- `supabase db diff` — see schema changes as SQL
 
 ## Database Rules
 
@@ -80,6 +110,18 @@ Strict left-to-right order for the delivery input/table:
 | PHP/KG | accounting (₱) |
 | PHP Total | accounting (₱) |
 | Remarks | truncated text |
+
+## Navbar & Page Titles
+
+The persistent navbar (`components/navbar.tsx`) owns all page titles and descriptions — **pages must not render their own title/description headers**. Instead, add entries to `getBreadcrumb()` in the navbar component.
+
+- **Left side:** Breadcrumb — `← Back to {parent} / {Page Title}` + muted description
+- **Center:** "Blackwood" (always visible, links to `/`)
+- **Right side:** Dev role switcher (Owner/Admin/Dev only), dark mode toggle, notifications, profile dropdown
+- On the dashboard (`/`), the left side is empty — no redundant "Dashboard" label
+- The navbar is dark-themed (`bg-zinc-800 dark:bg-zinc-700`) and uses `ssr: false` dynamic import to avoid Radix hydration mismatches
+
+When adding a new page/module, register it in `getBreadcrumb()` with `backLabel`, `backHref`, `pageTitle`, and optionally `pageDescription`.
 
 ## Module Pattern (RC IN as reference)
 
