@@ -4,7 +4,7 @@ A comprehensive logistics and inventory management system built with Next.js and
 
 ## Functionality Overview
 
-### 1. RC IN Module (`/rc-in`)
+### 1. RC IN Module (`/inventory/rc-in`)
 The **RC IN** (Raw Coconut Inbound) module manages the delivery and quality control of incoming shipments.
 
 **Key Features:**
