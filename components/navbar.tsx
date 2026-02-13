@@ -4,7 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { ArrowLeft, LogOut, Moon, Settings, Shield, Sun } from 'lucide-react';
+import { ArrowLeft, Factory, LogOut, Moon, Settings, Shield, Sun } from 'lucide-react';
 import { NotificationBell } from '@/components/notification-bell';
 import { useAuth, type UserRole } from '@/components/providers/auth-context';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -32,10 +32,10 @@ interface Breadcrumb {
 }
 
 function getBreadcrumb(pathname: string): Breadcrumb | null {
-    if (pathname.startsWith('/rc-in/edit/')) {
-        return { backLabel: 'Back to Master Log', backHref: '/rc-in', pageTitle: 'Edit Remarks' };
+    if (pathname.startsWith('/inventory/rc-in/edit/')) {
+        return { backLabel: 'Back to Master Log', backHref: '/inventory/rc-in', pageTitle: 'Edit Remarks' };
     }
-    if (pathname === '/rc-in') {
+    if (pathname === '/inventory/rc-in') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
     }
     if (pathname === '/notifications') {
@@ -124,6 +124,27 @@ export function Navbar() {
             {/* Right — controls */}
             <div className="flex-1 flex items-center justify-end gap-1.5">
                 <TooltipProvider delayDuration={300}>
+                    {/* Modules */}
+                    <DropdownMenu>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-600">
+                                        <Factory className="h-4 w-4" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                            </TooltipTrigger>
+                            <TooltipContent>Modules</TooltipContent>
+                        </Tooltip>
+                        <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Modules</DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem>Inventory</DropdownMenuItem>
+                            <DropdownMenuItem>Production</DropdownMenuItem>
+                            <DropdownMenuItem>Accounting</DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+
                     {/* Role Switcher — Owner/Admin/Dev only */}
                     {canSwitchRoles && (
                         <DropdownMenu>
