@@ -1,56 +1,84 @@
 import { createClient } from '@/lib/supabase/server';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { RoleAssignmentTable } from './components/RoleAssignmentTable';
-import Link from 'next/link';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { SignOutButton } from './components/SignOutButton';
+import { Badge } from '@/components/ui/badge';
+
+function getInitials(name: string | null, email: string | null): string {
+  if (name) {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  }
+  if (email) {
+    return email[0].toUpperCase();
+  }
+  return '?';
+}
 
 export default async function SettingsPage() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  const { data: currentProfile } = await supabase
+  const { data: profile } = await supabase
     .from('profiles')
-    .select('role')
+    .select('*')
     .eq('id', user!.id)
     .single();
 
-  const isAdmin = currentProfile?.role === 'Owner' || currentProfile?.role === 'Admin' || currentProfile?.role === 'Dev';
-
-  if (!isAdmin) {
-    return (
-      <div className="flex flex-1 items-center justify-center bg-muted/10">
-        <Card className="max-w-md">
-          <CardHeader>
-            <CardTitle>Access Denied</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              You do not have permission to access this page. Only Owner and Admin roles can manage users.
-            </p>
-            <Link href="/" className="text-sm underline">
-              Back to Dashboard
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('id, email, display_name, avatar_url, role, created_at')
-    .order('created_at', { ascending: true });
+  const displayName = profile?.display_name || 'User';
+  const email = profile?.email || user?.email || '';
+  const role = profile?.role || 'Production';
+  const avatarUrl = profile?.avatar_url;
+  const initials = getInitials(displayName, email);
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-muted/10">
-      <div className="flex-1 min-h-0 px-4 md:px-6 py-4 md:py-6">
-        <Card className="border-none shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg">User Roles</CardTitle>
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-muted/10 p-4 md:p-6">
+      <div className="max-w-2xl mx-auto w-full space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          <p className="text-muted-foreground">Manage your account preferences</p>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Profile</CardTitle>
+            <CardDescription>Your personal information</CardDescription>
           </CardHeader>
-          <CardContent>
-            <RoleAssignmentTable profiles={profiles ?? []} />
+          <CardContent className="space-y-6">
+            <div className="flex items-center gap-4">
+              <Avatar className="h-20 w-20">
+                {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
+                <AvatarFallback className="text-lg bg-zinc-700 text-zinc-200">{initials}</AvatarFallback>
+              </Avatar>
+              <div className="space-y-1">
+                <h3 className="font-medium text-lg">{displayName}</h3>
+                <p className="text-sm text-muted-foreground">{email}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-1">
+              <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                Current Role
+              </label>
+              <div className="flex items-center mt-1.5">
+                <Badge variant="outline" className="text-sm px-3 py-1 font-normal">
+                  {role}
+                </Badge>
+              </div>
+              <p className="text-[13px] text-muted-foreground mt-1.5">
+                Contact an administrator to change your role permissions.
+              </p>
+            </div>
           </CardContent>
         </Card>
+
+        <div className="flex justify-end">
+          <SignOutButton />
+        </div>
       </div>
     </div>
   );

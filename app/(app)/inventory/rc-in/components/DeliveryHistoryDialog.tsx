@@ -10,6 +10,7 @@ import {
   formatFieldValue,
   flattenLabResultsDiff,
 } from '@/lib/field-labels';
+import { useAuth } from '@/components/providers/auth-context';
 import { getDeliveryHistory, getAuditComments, addAuditComment } from '../actions';
 import type { AuditLogRow, AuditComment } from '@/types/rc-in';
 import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from './audit-shared';
@@ -120,30 +121,30 @@ function RemarkPopover({ entry }: { entry: AuditLogRow }) {
               {comments.map((c) => {
                 const isSystemMessage = c.body === 'marked this edit as resolved' || c.body === 'reopened this edit';
                 return (
-                <div key={c.id} className="flex gap-2 text-xs">
-                  <Avatar className="h-5 w-5 shrink-0 mt-0.5">
-                    <AvatarImage src={c.profiles?.avatar_url ?? undefined} />
-                    <AvatarFallback className="text-[8px]">
-                      {c.profiles?.display_name?.[0]?.toUpperCase() || c.profiles?.email?.[0]?.toUpperCase() || '?'}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1">
-                      <span className="font-medium truncate">
-                        {c.profiles?.display_name || c.profiles?.email || 'Unknown'}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground ml-auto whitespace-nowrap">
-                        {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
-                      </span>
+                  <div key={c.id} className="flex gap-2 text-xs">
+                    <Avatar className="h-5 w-5 shrink-0 mt-0.5">
+                      <AvatarImage src={c.profiles?.avatar_url ?? undefined} />
+                      <AvatarFallback className="text-[8px]">
+                        {c.profiles?.display_name?.[0]?.toUpperCase() || c.profiles?.email?.[0]?.toUpperCase() || '?'}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium truncate">
+                          {c.profiles?.display_name || c.profiles?.email || 'Unknown'}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground ml-auto whitespace-nowrap">
+                          {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
+                        </span>
+                      </div>
+                      {isSystemMessage ? (
+                        <p className="text-muted-foreground mt-0.5 italic">{c.body}</p>
+                      ) : (
+                        <p className="text-muted-foreground mt-0.5 whitespace-pre-wrap">{c.body}</p>
+                      )}
                     </div>
-                    {isSystemMessage ? (
-                      <p className="text-muted-foreground mt-0.5 italic">{c.body}</p>
-                    ) : (
-                      <p className="text-muted-foreground mt-0.5 whitespace-pre-wrap">{c.body}</p>
-                    )}
                   </div>
-                </div>
-              );
+                );
               })}
             </div>
           ) : !entry.comment ? (
@@ -236,6 +237,8 @@ function DeliveryHistoryContent({
 }) {
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [history, setHistory] = React.useState<AuditLogRow[]>([]);
+  const { hasPermission } = useAuth();
+  const canViewPrices = hasPermission('view:prices');
 
   React.useEffect(() => {
     if (!deliveryId) {
@@ -444,7 +447,7 @@ function DeliveryHistoryContent({
             <div className="grid grid-cols-3 gap-2">
               {renderField('transaction_date', current, lastChangedKeys, getPreviousValue)}
               {renderField('supplier', current, lastChangedKeys, getPreviousValue)}
-              {renderField('cost_basis', current, lastChangedKeys, getPreviousValue, '', 'Price')}
+              {canViewPrices && renderField('cost_basis', current, lastChangedKeys, getPreviousValue, '', 'Price')}
             </div>
 
             <div className="h-px bg-border/50" />
@@ -471,22 +474,26 @@ function DeliveryHistoryContent({
             <div className="h-px bg-border/50" />
 
             {/* Liquidation */}
-            <div>
-              <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Liquidation</div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-md border px-2 py-1.5 overflow-hidden">
-                  <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">PHP/TTL</div>
-                  <div className="text-xs font-mono truncate font-bold">
-                    {(() => {
-                      const wt = parseFloat(String(current.weight_kg)) || 0;
-                      const price = parseFloat(String(current.cost_basis)) || 0;
-                      const total = wt * price;
-                      return total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                    })()}
+            {canViewPrices && (
+              <div>
+                <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Liquidation</div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">PHP/TTL</div>
+                    <div className="text-xs font-mono truncate font-bold">
+                      {(() => {
+                        const wt = parseFloat(String(current.weight_kg)) || 0;
+                        const price = parseFloat(String(current.cost_basis)) || 0;
+                        const total = wt * price;
+                        return total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      })()}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
+
+            {canViewPrices && <div className="h-px bg-border/50" />}
 
             <div className="h-px bg-border/50" />
 

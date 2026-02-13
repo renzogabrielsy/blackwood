@@ -4,7 +4,7 @@ import * as React from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js';
 
-export type UserRole = 'Owner' | 'Admin' | 'Dev' | 'Employee';
+export type UserRole = 'Owner' | 'Admin' | 'Dev' | 'Production' | 'Accounting';
 
 export type Permission =
     | 'view:all'
@@ -28,7 +28,7 @@ const AuthContext = React.createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = React.useState<User | null>(null);
-    const [dbRole, setDbRole] = React.useState<UserRole>('Employee');
+    const [dbRole, setDbRole] = React.useState<UserRole>('Production');
     const [displayName, setDisplayName] = React.useState<string | null>(null);
     const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
     const [devOverride, setDevOverride] = React.useState<UserRole | null>(null);
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         // Check for dev override in localStorage
         const stored = localStorage.getItem('dev_mock_role');
-        if (stored && ['Owner', 'Admin', 'Dev', 'Employee'].includes(stored)) {
+        if (stored && ['Owner', 'Admin', 'Dev', 'Production', 'Accounting'].includes(stored)) {
             setDevOverride(stored as UserRole);
         }
 
@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 if (currentUser) {
                     fetchProfile(currentUser.id);
                 } else {
-                    setDbRole('Employee');
+                    setDbRole('Production');
                     setIsLoading(false);
                 }
             }
@@ -111,9 +111,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (newRole === 'logged-in') {
             setDevOverride(null);
             localStorage.removeItem('dev_mock_role');
+            document.cookie = 'dev_mock_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
         } else {
             setDevOverride(newRole);
             localStorage.setItem('dev_mock_role', newRole);
+            document.cookie = `dev_mock_role=${newRole}; path=/; max-age=31536000`;
         }
     };
 
@@ -121,7 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const supabase = createClient();
         await supabase.auth.signOut();
         setUser(null);
-        setDbRole('Employee');
+        setDbRole('Production');
         setDevOverride(null);
         localStorage.removeItem('dev_mock_role');
     };
@@ -132,7 +134,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             case 'Admin':
             case 'Dev':
                 return true;
-            case 'Employee':
+            case 'Accounting':
+                // Accounting permissions:
+                // - Can see prices (view:prices = true)
+                // - CANNOT edit everything? (Task says "most probably only have access to /inventory/rc-in", "must not have same access as Admins")
+                // - Let's assume they can view/edit in their scope, but maybe restricts delete?
+                // For now, allow verify prices.
+                if (permission === 'delete:all') return false;
+                return true;
+            case 'Production':
+                // Production permissions:
+                // - STRICTLY NO PRICE ACCESS
                 if (permission === 'view:prices') return false;
                 if (permission === 'delete:all') return false;
                 return true;

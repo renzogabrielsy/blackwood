@@ -4,6 +4,9 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
 
+import { getUserRole } from '@/lib/auth';
+import { UserRole, PRIVILEGED_ROLES } from '@/types/auth';
+
 export type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
 
 /** Deduplicates and upserts batches from delivery rows */
@@ -35,7 +38,8 @@ function toDeliveryPayload(row: DeliveryRow) {
         ...deliveryData,
         weight_kg: Number(row.weight_kg),
         sacks: Number(row.sacks),
-        cost_basis: Number(row.cost_basis),
+        sacks: Number(row.sacks),
+        cost_basis: row.cost_basis === undefined || row.cost_basis === null ? 0 : Number(row.cost_basis),
         lab_results: row.lab_results,
     };
 }
@@ -167,6 +171,14 @@ export async function bulkDeleteDeliveries(ids: string[]) {
 
 export async function getDeliveryHistory(deliveryId: string) {
     const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    let role: UserRole = 'Production';
+
+    if (user) {
+        role = await getUserRole(user.id);
+    }
+
+    const isProduction = role === 'Production';
 
     // 1. Fetch delivery and raw audit logs (no join)
     const [deliveryRes, logsRes] = await Promise.all([
@@ -218,14 +230,38 @@ export async function getDeliveryHistory(deliveryId: string) {
     }
 
     // 4. Attach profiles to logs
-    const historyWithProfiles: AuditLogRow[] = logs.map(log => ({
-        ...log,
-        profiles: profilesMap[log.performed_by] || { email: 'Unknown' }
-    }));
+    // 4. Attach profiles to logs and scrub sensitive data if needed
+    const historyWithProfiles: AuditLogRow[] = logs.map(log => {
+        const enrichedLog = {
+            ...log,
+            profiles: profilesMap[log.performed_by] || { email: 'Unknown' }
+        };
+
+        if (isProduction) {
+            // Scrub snapshot
+            if (enrichedLog.snapshot && 'cost_basis' in enrichedLog.snapshot) {
+                delete enrichedLog.snapshot['cost_basis'];
+            }
+            // Scrub diff
+            if (enrichedLog.diff && 'cost_basis' in enrichedLog.diff) {
+                delete enrichedLog.diff['cost_basis'];
+            }
+        }
+        return enrichedLog;
+    });
+
+    const currentDelivery = deliveryRes.data;
+    if (isProduction && currentDelivery) {
+        // We can't delete property from typed object easily if it relies on return type inference 
+        // but explicit cast or optional field helps.
+        // However, generic Record<string, any> or just setting to undefined if optional.
+        // The type definition says cost_basis is optional number now.
+        currentDelivery.cost_basis = undefined;
+    }
 
     return {
         success: true as const,
-        current: deliveryRes.data,
+        current: currentDelivery,
         history: historyWithProfiles,
     };
 }
@@ -310,18 +346,7 @@ export async function addAuditComment(auditLogId: string, body: string) {
     return { success: true };
 }
 
-type UserRole = 'Owner' | 'Admin' | 'Dev' | 'Employee';
 
-async function getUserRole(supabase: any, userId: string): Promise<UserRole> {
-    const { data } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', userId)
-        .single();
-    return (data?.role as UserRole) || 'Employee';
-}
-
-const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
 export async function resolveAuditLog(auditLogId: string) {
     const supabase = await createClient();
@@ -332,7 +357,7 @@ export async function resolveAuditLog(auditLogId: string) {
     }
 
     // Only Admin/Owner/Dev can directly resolve
-    const role = await getUserRole(supabase, user.id);
+    const role = await getUserRole(user.id);
     if (!PRIVILEGED_ROLES.includes(role)) {
         return { success: false, message: 'Only Admin, Owner, or Dev can directly resolve edits' };
     }
@@ -425,7 +450,7 @@ export async function approveResolveRequest(auditLogId: string) {
         return { success: false, message: 'Not authenticated' };
     }
 
-    const role = await getUserRole(supabase, user.id);
+    const role = await getUserRole(user.id);
     if (!PRIVILEGED_ROLES.includes(role)) {
         return { success: false, message: 'Only Admin, Owner, or Dev can approve requests' };
     }
@@ -486,7 +511,7 @@ export async function denyResolveRequest(auditLogId: string, reason: string) {
         return { success: false, message: 'Not authenticated' };
     }
 
-    const role = await getUserRole(supabase, user.id);
+    const role = await getUserRole(user.id);
     if (!PRIVILEGED_ROLES.includes(role)) {
         return { success: false, message: 'Only Admin, Owner, or Dev can deny requests' };
     }
@@ -537,6 +562,12 @@ export async function denyResolveRequest(auditLogId: string, reason: string) {
 
 export async function getAuditLogEntry(auditLogId: string) {
     const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    let role: UserRole = 'Production';
+    if (user) {
+        role = await getUserRole(user.id);
+    }
+    const isProduction = role === 'Production';
 
     const { data: log, error } = await supabase
         .from('audit_logs')
@@ -568,6 +599,12 @@ export async function getAuditLogEntry(auditLogId: string) {
             .eq('id', log.record_id)
             .single();
         delivery = data;
+    }
+
+    if (isProduction) {
+        if (log && log.snapshot && 'cost_basis' in log.snapshot) delete log.snapshot['cost_basis'];
+        if (log && log.diff && 'cost_basis' in log.diff) delete log.diff['cost_basis'];
+        if (delivery) delivery.cost_basis = undefined;
     }
 
     return {
