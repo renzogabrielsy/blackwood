@@ -311,7 +311,7 @@ export function NotificationBell() {
             // WSS is blocked — immediately fall back to polling
             isRealtimeConnectedRef.current = false;
             isPollingFallbackRef.current = true;
-            console.warn('[NotificationBell] Realtime connection blocked. Falling back to polling.');
+            // console.warn('[NotificationBell] Realtime connection blocked. Falling back to polling.');
             startPolling();
             setRealtimeStatus('CHANNEL_ERROR');
           } else if (status === 'TIMED_OUT') {
@@ -319,7 +319,7 @@ export function NotificationBell() {
             // If already polling, maintain current backoff — don't reset
             if (pollTimeout === null) {
               isPollingFallbackRef.current = true;
-              console.warn('[NotificationBell] Realtime timed out. Starting polling.');
+              // console.warn('[NotificationBell] Realtime timed out. Starting polling.');
               startPolling();
             }
             setRealtimeStatus('TIMED_OUT');

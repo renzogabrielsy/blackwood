@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { LoginForm } from './components/LoginForm';
 
 export default function LoginPage() {
@@ -10,7 +11,9 @@ export default function LoginPage() {
             Industrial Inventory Management
           </p>
         </div>
-        <LoginForm />
+        <Suspense>
+          <LoginForm />
+        </Suspense>
       </div>
     </div>
   );
