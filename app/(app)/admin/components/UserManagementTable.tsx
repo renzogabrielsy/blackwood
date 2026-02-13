@@ -23,7 +23,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { UserStatusBadge } from './UserStatusBadge';
 import { RevokeAccessDialog } from './RevokeAccessDialog';
 import { InviteUserDialog } from './InviteUserDialog';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { UserRole } from '@/components/providers/auth-context';
 
 interface User {
@@ -48,7 +48,6 @@ export function UserManagementTable({
   const [selectedUserId, setSelectedUserId] = React.useState<string | null>(null);
   const [revokeDialogOpen, setRevokeDialogOpen] = React.useState(false);
   const [updatingUserId, setUpdatingUserId] = React.useState<string | null>(null);
-  const { toast } = useToast();
 
   const selectedUser = users.find((u) => u.id === selectedUserId);
 
@@ -57,16 +56,9 @@ export function UserManagementTable({
     try {
       const result = await updateUserRole(userId, newRole as UserRole);
       if (result.success) {
-        toast({
-          title: 'Success',
-          description: result.message,
-        });
+        toast.success(result.message);
       } else {
-        toast({
-          variant: 'destructive',
-          title: 'Error',
-          description: result.message,
-        });
+        toast.error(result.message);
       }
     } finally {
       setUpdatingUserId(null);

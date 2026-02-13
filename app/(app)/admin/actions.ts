@@ -50,42 +50,39 @@ export async function inviteUser(
   }
 
   try {
-    // Use admin client to send invitation
+    // Use admin client for all operations on user_invites to bypass RLS
     const adminClient = createAdminClient();
-    const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
-      data: { role },
-      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/auth/callback`,
-    });
 
-    if (error) {
-      return { success: false, message: error.message };
+    // Check if user is already invited
+    const { data: existingInvite } = await adminClient
+      .from('user_invites')
+      .select('email')
+      .eq('email', email)
+      .single();
+
+    if (existingInvite) {
+      return { success: false, message: 'User already invited' };
     }
 
-    // Create profile for invited user
-    const { error: profileError } = await supabase
-      .from('profiles')
+    // Add to whitelist
+    const { error } = await adminClient
+      .from('user_invites')
       .insert({
-        id: data.user.id,
         email,
         role,
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        invited_by: user.id,
       });
 
-    if (profileError) {
-      console.error('Profile creation error:', profileError);
-      // User was invited but profile creation failed - still return success
-      // since the invitation email was sent
-      revalidatePath('/admin');
-      return { success: true, message: 'Invitation sent (profile creation had an issue)' };
+    if (error) {
+      console.error(`Invite Error: ${error.message} (Code: ${error.code})`);
+      return { success: false, message: `DB Error: ${error.message}` };
     }
 
     revalidatePath('/admin');
-    return { success: true, message: `Invitation sent to ${email}` };
-  } catch (error) {
-    console.error('Invitation error:', error);
-    return { success: false, message: 'Failed to send invitation' };
+    return { success: true, message: `Added ${email} to whitelist` };
+  } catch (err: any) {
+    console.error(`Invitation Exception: ${err.message}`);
+    return { success: false, message: `Exception: ${err.message}` };
   }
 }
 

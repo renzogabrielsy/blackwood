@@ -147,7 +147,7 @@ export function Navbar() {
                             </DropdownMenuItem>
                             <DropdownMenuItem>Production</DropdownMenuItem>
                             <DropdownMenuItem>Accounting</DropdownMenuItem>
-                            {PRIVILEGED_ROLES.includes(dbRole) && (
+                            {PRIVILEGED_ROLES.includes(role) && (
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem asChild>

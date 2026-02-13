@@ -21,7 +21,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { UserPlus } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 import type { UserRole } from '@/components/providers/auth-context';
 
 export function InviteUserDialog() {
@@ -29,8 +29,6 @@ export function InviteUserDialog() {
   const [email, setEmail] = React.useState('');
   const [role, setRole] = React.useState<UserRole>('Employee');
   const [isLoading, setIsLoading] = React.useState(false);
-  const { toast } = useToast();
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -38,26 +36,15 @@ export function InviteUserDialog() {
     try {
       const result = await inviteUser(email, role);
       if (result.success) {
-        toast({
-          title: 'Success',
-          description: result.message || 'User invited successfully',
-        });
+        toast.success(result.message || 'User invited successfully');
         setEmail('');
         setRole('Employee');
         setOpen(false);
       } else {
-        toast({
-          variant: 'destructive',
-          title: 'Error',
-          description: result.message || 'Failed to invite user',
-        });
+        toast.error(result.message || 'Failed to invite user');
       }
     } catch {
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'An unexpected error occurred',
-      });
+      toast.error('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }

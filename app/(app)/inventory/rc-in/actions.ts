@@ -56,7 +56,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
             .insert(deliveriesPayload);
 
         if (deliveryError) {
-            console.error('Error inserting deliveries:', deliveryError);
+            console.error(`Error inserting deliveries: ${deliveryError.message}`);
             throw new Error(`Delivery Insert Error: ${deliveryError.message}`);
         }
 

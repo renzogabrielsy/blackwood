@@ -11,7 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { useToast } from '@/hooks/use-toast';
+import { toast } from 'sonner';
 
 interface RevokeAccessDialogProps {
   userId: string;
@@ -29,7 +29,6 @@ export function RevokeAccessDialog({
   onOpenChange,
 }: RevokeAccessDialogProps) {
   const [isLoading, setIsLoading] = React.useState(false);
-  const { toast } = useToast();
 
   const isDisabled = status === 'disabled';
 
@@ -41,17 +40,10 @@ export function RevokeAccessDialog({
         : await revokeUserAccess(userId);
 
       if (result.success) {
-        toast({
-          title: 'Success',
-          description: result.message,
-        });
+        toast.success(result.message);
         onOpenChange(false);
       } else {
-        toast({
-          variant: 'destructive',
-          title: 'Error',
-          description: result.message,
-        });
+        toast.error(result.message);
       }
     } finally {
       setIsLoading(false);
