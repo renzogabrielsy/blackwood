@@ -136,17 +136,6 @@ const POLL_BASE_INTERVAL = 30_000;  // 30s initial
 const POLL_MAX_INTERVAL = 120_000;  // 2min cap
 const POLL_BACKOFF_FACTOR = 1.5;
 
-/** Direct client-side count query — 1 PostgREST call instead of 3 hops via server action */
-async function pollUnreadCount(): Promise<number> {
-  const sb = createClient();
-  const { count } = await sb
-    .from('notifications')
-    .select('*', { count: 'exact', head: true })
-    .eq('read', false)
-    .eq('archived', false);
-  return count ?? 0;
-}
-
 export function NotificationBell() {
   const { user } = useAuth();
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
@@ -186,6 +175,18 @@ export function NotificationBell() {
     // Use the singleton client to share auth token refresh and avoid duplicate auth calls
     const supabase = createClient();
     let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    /** Direct client-side count query — 1 PostgREST call instead of 3 hops via server action */
+    const userId = user.id;
+    async function pollUnreadCount(): Promise<number> {
+      const { count } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('read', false)
+        .eq('archived', false);
+      return count ?? 0;
+    }
 
     // Adaptive polling state
     let pollTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -245,6 +246,7 @@ export function NotificationBell() {
             event: 'INSERT',
             schema: 'public',
             table: 'notifications',
+            filter: `user_id=eq.${user.id}`,
           },
           (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
             if (!mounted) return;
@@ -271,6 +273,7 @@ export function NotificationBell() {
             event: 'UPDATE',
             schema: 'public',
             table: 'notifications',
+            filter: `user_id=eq.${user.id}`,
           },
           (payload: RealtimePostgresChangesPayload<Record<string, unknown>>) => {
             if (!mounted) return;

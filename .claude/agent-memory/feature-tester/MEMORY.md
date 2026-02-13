@@ -40,3 +40,24 @@
 - Service role SQL bypasses auth.uid() -- triggers that depend on auth.uid() behave differently
 - Use `_insert_notification()` function directly to test dedup
 - Test data prefix: `QA_` for suppliers/batch codes, metadata keys like `QA_DEDUP_001`
+- To impersonate a user in MCP SQL: `SELECT set_config('request.jwt.claims', '{"sub":"<user_id>","role":"authenticated"}', true);`
+  - This makes auth.uid() return the user's ID in triggers
+  - The `true` param means "local to transaction" -- all statements in same MCP call share the transaction
+- `set_audit_comment()` also uses set_config internally -- must be in same MCP call as the mutation
+
+## Verified Trigger Behavior (2026-02-13)
+- INSERT delivery -> `log_delivery_changes` creates audit_log (INSERT) -> `fn_notify_delivery_created` fires
+  - `fn_notify_delivery_created` sends to ALL profiles (including the creator) -- no self-exclusion
+  - `fn_notify_delivery_edited` does NOT fire on INSERT audit logs (correctly filtered by operation='UPDATE')
+- UPDATE delivery (remarks change) -> `log_delivery_changes` creates audit_log (UPDATE) -> `fn_notify_delivery_edited` fires
+  - `fn_notify_delivery_edited` correctly SKIPS the editor (Test User) and notifies others (Owner)
+  - `fn_notify_remarks_added` did NOT fire a separate notification -- likely because creator=editor (Test User edited own entry)
+- `set_audit_comment` did NOT persist on the audit log -- the comment field was NULL despite calling it
+  - Root cause: `log_delivery_changes` trigger NEVER reads `current_setting('app.audit_comment')` -- it simply
+    does not include a comment column in the INSERT INTO audit_logs. The function is a dead-end.
+  - The app works around this by inserting into `audit_comments` table AFTER the update (separate table/row)
+- `fn_notify_audit_comment` fires on audit_comments INSERT:
+  - Auto-subscribes the commenter to the thread via notification_subscriptions
+  - Notifies all OTHER subscribers (excluding the commenter) with type 'audit_comment_reply'
+  - First comment on a thread creates no reply notifications (no prior subscribers)
+  - Second+ comments notify all previously subscribed users except the current commenter
