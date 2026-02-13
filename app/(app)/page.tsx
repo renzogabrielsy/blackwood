@@ -14,9 +14,16 @@ export default async function DashboardPage() {
 
   const displayName = profile?.display_name ?? user!.email ?? 'User';
 
+  const isAdmin = ['Owner', 'Admin', 'Dev'].includes(profile?.role ?? '');
+
   const modules = [
     { name: 'RC IN', href: '/inventory/rc-in', description: 'Raw charcoal receiving & delivery logs' },
     { name: 'Settings', href: '/settings', description: 'User management & role assignments' },
+    ...(isAdmin ? [{
+      name: 'Admin Panel',
+      href: '/admin',
+      description: 'Manage users, invitations, and access control'
+    }] : []),
   ];
 
   return (

@@ -44,6 +44,9 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname === '/settings') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' };
     }
+    if (pathname === '/admin') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' };
+    }
     return null;
 }
 
@@ -139,9 +142,19 @@ export function Navbar() {
                         <DropdownMenuContent align="end">
                             <DropdownMenuLabel>Modules</DropdownMenuLabel>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem>Inventory</DropdownMenuItem>
+                            <DropdownMenuItem asChild>
+                                <Link href="/inventory/rc-in">Inventory</Link>
+                            </DropdownMenuItem>
                             <DropdownMenuItem>Production</DropdownMenuItem>
                             <DropdownMenuItem>Accounting</DropdownMenuItem>
+                            {PRIVILEGED_ROLES.includes(dbRole) && (
+                                <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem asChild>
+                                        <Link href="/admin">Admin Panel</Link>
+                                    </DropdownMenuItem>
+                                </>
+                            )}
                         </DropdownMenuContent>
                     </DropdownMenu>
 
