@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       audit_comments: {
@@ -305,6 +280,7 @@ export type Database = {
           email: string
           id: string
           role: string
+          status: string
           updated_at: string
         }
         Insert: {
@@ -314,6 +290,7 @@ export type Database = {
           email: string
           id: string
           role?: string
+          status?: string
           updated_at?: string
         }
         Update: {
@@ -323,6 +300,7 @@ export type Database = {
           email?: string
           id?: string
           role?: string
+          status?: string
           updated_at?: string
         }
         Relationships: []
@@ -371,6 +349,35 @@ export type Database = {
           },
         ]
       }
+      user_invites: {
+        Row: {
+          created_at: string | null
+          email: string
+          invited_by: string | null
+          role: string
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          invited_by?: string | null
+          role?: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          invited_by?: string | null
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_invites_invited_by_fkey"
+            columns: ["invited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       view_rc_in_master: {
@@ -411,6 +418,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      is_admin: { Args: { user_id: string }; Returns: boolean }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
     }
     Enums: {
@@ -549,9 +557,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       batch_status: ["STORED", "IN-USE", "CLOSED", "FEED"],

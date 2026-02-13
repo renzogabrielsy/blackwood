@@ -77,11 +77,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function fetchProfile(userId: string) {
         const supabase = createClient();
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('profiles')
-            .select('role, display_name, avatar_url')
+            .select('role, display_name, avatar_url, status')
             .eq('id', userId)
             .single();
+
+        if (error) {
+            // console.error(`Failed to fetch profile: ${error.message}`);
+            setIsLoading(false);
+            return;
+        }
+
+        if (data?.status !== 'active') {
+            await supabase.auth.signOut();
+            if (data?.status === 'disabled') {
+                window.location.href = '/access-denied';
+            } else {
+                window.location.href = '/login?error=not_invited';
+            }
+            return;
+        }
 
         if (data?.role) {
             setDbRole(data.role as UserRole);
