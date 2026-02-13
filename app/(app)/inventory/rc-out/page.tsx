@@ -64,9 +64,7 @@ export default async function RcOutPage({
                 <Card className="h-full flex flex-col border-none shadow-xl">
                     <CardHeader className="p-0 hidden" />
                     <CardContent className="flex-1 min-h-0 p-2 md:p-4 flex flex-col relative">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-3xl font-bold tracking-tight">Inventory Usage</h2>
-                        </div>
+
                         <Suspense fallback={
                             <div className="h-full w-full flex items-center justify-center">
                                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
