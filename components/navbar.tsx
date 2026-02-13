@@ -39,7 +39,7 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
     }
     if (pathname === '/inventory/rc-out') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory Depletion', pageDescription: 'Raw charcoal usage & depletion' };
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory Usage', pageDescription: 'Raw charcoal usage & depletion' };
     }
     if (pathname === '/notifications') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
