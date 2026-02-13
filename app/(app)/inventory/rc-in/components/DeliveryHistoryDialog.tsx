@@ -176,7 +176,7 @@ function RemarkPopover({ entry }: { entry: AuditLogRow }) {
               Comment
             </Button>
             <Link
-              href={`/rc-in/edit/${entry.id}`}
+              href={`/inventory/rc-in/edit/${entry.id}`}
               className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
               onClick={() => setOpen(false)}
             >

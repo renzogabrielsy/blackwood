@@ -15,7 +15,7 @@ export default async function DashboardPage() {
   const displayName = profile?.display_name ?? user!.email ?? 'User';
 
   const modules = [
-    { name: 'RC IN', href: '/rc-in', description: 'Raw charcoal receiving & delivery logs' },
+    { name: 'RC IN', href: '/inventory/rc-in', description: 'Raw charcoal receiving & delivery logs' },
     { name: 'Settings', href: '/settings', description: 'User management & role assignments' },
   ];
 
