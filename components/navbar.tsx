@@ -182,7 +182,7 @@ export function Navbar() {
                                 )}
                                 <DropdownMenuLabel>Dev Override</DropdownMenuLabel>
                                 <DropdownMenuSeparator />
-                                {(['Owner', 'Admin', 'Dev', 'Employee'] as UserRole[]).map((r) => (
+                                {(['Owner', 'Admin', 'Dev', 'Production', 'Accounting'] as UserRole[]).map((r) => (
                                     <DropdownMenuItem key={r} onClick={() => setRole(r)} className={role === r ? "bg-accent" : ""}>
                                         {r} {role === r && "(Active)"}
                                     </DropdownMenuItem>
