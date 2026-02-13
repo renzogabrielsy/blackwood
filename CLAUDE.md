@@ -6,6 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The UX goal is an **Industrial Spreadsheet**: dense, keyboard-navigable tables that feel like Excel but enforce data integrity underneath.
 
+## Skills
+
+This project uses the **`nextstack-design`** skill for UI and design guidance. When planning frontend features, designing UI components, or reviewing code quality, Claude will reference this skill for best practices on:
+- Next.js App Router patterns and Server Components
+- shadcn/ui component composition and Tailwind CSS
+- Information-dense UI design (Notion/Raycast aesthetic)
+- TypeScript and Supabase architecture patterns
+
+**Reference the skill:** When working on frontend UI and design, Claude will automatically consult this skill for architectural decisions and component patterns.
+
 ## Commands
 
 ```bash
