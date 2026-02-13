@@ -349,6 +349,35 @@ export type Database = {
           },
         ]
       }
+      user_invites: {
+        Row: {
+          created_at: string | null
+          email: string
+          invited_by: string | null
+          role: string
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          invited_by?: string | null
+          role?: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          invited_by?: string | null
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_invites_invited_by_fkey"
+            columns: ["invited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       view_rc_in_master: {
@@ -389,6 +418,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      is_admin: { Args: { user_id: string }; Returns: boolean }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
     }
     Enums: {

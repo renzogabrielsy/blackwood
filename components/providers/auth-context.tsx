@@ -1,7 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js';
 
@@ -28,7 +27,6 @@ interface AuthContextType {
 const AuthContext = React.createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-    const router = useRouter();
     const [user, setUser] = React.useState<User | null>(null);
     const [dbRole, setDbRole] = React.useState<UserRole>('Employee');
     const [displayName, setDisplayName] = React.useState<string | null>(null);
@@ -79,17 +77,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function fetchProfile(userId: string) {
         const supabase = createClient();
-        const { data } = await supabase
+        const { data, error } = await supabase
             .from('profiles')
             .select('role, display_name, avatar_url, status')
             .eq('id', userId)
             .single();
 
-        // Check if user is disabled
-        if (data?.status === 'disabled') {
-            await supabase.auth.signOut();
-            router.push('/access-denied');
+        if (error) {
+            // console.error(`Failed to fetch profile: ${error.message}`);
             setIsLoading(false);
+            return;
+        }
+
+        if (data?.status !== 'active') {
+            await supabase.auth.signOut();
+            if (data?.status === 'disabled') {
+                window.location.href = '/access-denied';
+            } else {
+                window.location.href = '/login?error=not_invited';
+            }
             return;
         }
 
