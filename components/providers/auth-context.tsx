@@ -16,6 +16,8 @@ interface AuthContextType {
     user: User | null;
     role: UserRole;
     dbRole: UserRole;
+    displayName: string | null;
+    avatarUrl: string | null;
     setRole: (role: UserRole | 'logged-in') => void;
     hasPermission: (permission: Permission) => boolean;
     signOut: () => Promise<void>;
@@ -27,6 +29,8 @@ const AuthContext = React.createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = React.useState<User | null>(null);
     const [dbRole, setDbRole] = React.useState<UserRole>('Employee');
+    const [displayName, setDisplayName] = React.useState<string | null>(null);
+    const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
     const [devOverride, setDevOverride] = React.useState<UserRole | null>(null);
     const [isLoading, setIsLoading] = React.useState(true);
 
@@ -75,13 +79,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const supabase = createClient();
         const { data } = await supabase
             .from('profiles')
-            .select('role')
+            .select('role, display_name, avatar_url')
             .eq('id', userId)
             .single();
 
         if (data?.role) {
             setDbRole(data.role as UserRole);
         }
+        setDisplayName(data?.display_name ?? null);
+        setAvatarUrl(data?.avatar_url ?? null);
         setIsLoading(false);
     }
 
@@ -124,6 +130,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             user,
             role,
             dbRole,
+            displayName,
+            avatarUrl,
             setRole,
             hasPermission,
             signOut,
