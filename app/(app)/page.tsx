@@ -26,8 +26,7 @@ export default async function DashboardPage() {
   const isAdmin = PRIVILEGED_ROLES.includes(role);
 
   const modules = [
-    { name: 'RC IN', href: '/inventory/rc-in', description: 'Raw charcoal receiving & delivery logs' },
-    { name: 'RC OUT', href: '/inventory/rc-out', description: 'Raw charcoal usage & depletion logs' },
+    { name: 'Inventory', href: '/inventory', description: 'Raw charcoal receiving, usage, and blocking' },
     { name: 'Settings', href: '/settings', description: 'User management & role assignments' },
     ...(isAdmin ? [{
       name: 'Admin Panel',

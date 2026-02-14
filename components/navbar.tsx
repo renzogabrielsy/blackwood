@@ -15,6 +15,9 @@ import {
     DropdownMenuItem,
     DropdownMenuLabel,
     DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -36,10 +39,16 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
         return { backLabel: 'Back to Master Log', backHref: '/inventory/rc-in', pageTitle: 'Edit Remarks' };
     }
     if (pathname === '/inventory/rc-in') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
+        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
     }
     if (pathname === '/inventory/rc-out') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory Usage', pageDescription: 'Raw charcoal usage & depletion' };
+        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Inventory Usage', pageDescription: 'Raw charcoal usage & depletion' };
+    }
+    if (pathname === '/inventory/blocking') {
+        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Block location inventory' };
+    }
+    if (pathname === '/inventory') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal inventory management' };
     }
     if (pathname === '/notifications') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
@@ -70,12 +79,30 @@ function getInitials(name: string | null, email: string | null): string {
 
 const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
+type SubModule = { name: string; href: string };
+type Module = { name: string; href?: string; subModules?: SubModule[] };
+
+const MODULES: Module[] = [
+    {
+        name: 'Inventory',
+        href: '/inventory',
+        subModules: [
+            { name: 'Deliveries', href: '/inventory/rc-in' },
+            { name: 'Usage', href: '/inventory/rc-out' },
+            { name: 'Blocking', href: '/inventory/blocking' },
+        ],
+    },
+    { name: 'Production' },
+    { name: 'Accounting' },
+];
+
 export function Navbar() {
     const { user, role, dbRole, displayName, avatarUrl, setRole, signOut } = useAuth();
     const pathname = usePathname();
     const router = useRouter();
     const { setTheme, resolvedTheme } = useTheme();
     const [mounted, setMounted] = React.useState(false);
+    const [modulesOpen, setModulesOpen] = React.useState(false);
 
     React.useEffect(() => setMounted(true), []);
 
@@ -131,7 +158,7 @@ export function Navbar() {
             <div className="flex-1 flex items-center justify-end gap-1.5">
                 <TooltipProvider delayDuration={300}>
                     {/* Modules */}
-                    <DropdownMenu>
+                    <DropdownMenu open={modulesOpen} onOpenChange={setModulesOpen}>
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
@@ -142,14 +169,37 @@ export function Navbar() {
                             </TooltipTrigger>
                             <TooltipContent>Modules</TooltipContent>
                         </Tooltip>
-                        <DropdownMenuContent align="end">
+                        <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
                             <DropdownMenuLabel>Modules</DropdownMenuLabel>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem asChild>
-                                <Link href="/inventory/rc-in">Inventory</Link>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>Production</DropdownMenuItem>
-                            <DropdownMenuItem>Accounting</DropdownMenuItem>
+                            {MODULES.map((mod) =>
+                                mod.subModules ? (
+                                    <DropdownMenuSub key={mod.name}>
+                                        <DropdownMenuSubTrigger
+                                            onClick={(e) => {
+                                                if (mod.href) {
+                                                    e.preventDefault();
+                                                    setModulesOpen(false);
+                                                    router.push(mod.href);
+                                                }
+                                            }}
+                                        >
+                                            {mod.name}
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuSubContent>
+                                            {mod.subModules.map((sub) => (
+                                                <DropdownMenuItem key={sub.href} asChild>
+                                                    <Link href={sub.href}>{sub.name}</Link>
+                                                </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                ) : (
+                                    <DropdownMenuItem key={mod.name} disabled>
+                                        {mod.name}
+                                    </DropdownMenuItem>
+                                )
+                            )}
                             {PRIVILEGED_ROLES.includes(role) && (
                                 <>
                                     <DropdownMenuSeparator />
