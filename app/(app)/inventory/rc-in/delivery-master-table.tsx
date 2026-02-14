@@ -64,6 +64,16 @@ import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from './components/DeliverySheetFooter';
 import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 
+function getStateClasses(state: string): string {
+    switch (state) {
+        case 'IN-USE': return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
+        case 'CLOSED': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
+        case 'SUNDRYING': return 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30';
+        case 'FEED': return 'text-green-700 bg-green-100 dark:text-green-300 dark:bg-green-900/30';
+        default: return 'text-muted-foreground bg-muted/10'; // STORED
+    }
+}
+
 const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
     { key: 'mc', label: 'MC', decimals: 2 },
     { key: 'grit', label: 'GRIT', decimals: 2 },
@@ -297,7 +307,18 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                 id: 'state',
                 header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>STATE</div>,
                 size: 50,
-                cell: ({ row }) => <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-0.5 rounded-sm truncate" style={{ fontSize: `${fontSize}px` }} title={row.original.state || 'STORED'}>{row.original.state || 'STORED'}</div>,
+                cell: ({ row }) => {
+                    const state = row.original.state || 'STORED';
+                    return (
+                        <div
+                            className={cn("text-center font-mono uppercase py-0.5 rounded-sm truncate", getStateClasses(state))}
+                            style={{ fontSize: `${fontSize}px` }}
+                            title={state}
+                        >
+                            {state}
+                        </div>
+                    );
+                },
             },
             {
                 id: 'whse',

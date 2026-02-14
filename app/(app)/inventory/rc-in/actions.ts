@@ -14,7 +14,6 @@ async function upsertBatchesFromRows(rows: DeliveryRow[]) {
     const supabase = await createClient();
     const batchUpserts = rows.map(row => ({
         batch_code: row.batch_code,
-        status: row.state || 'STORED',
         location_ref: row.block_loc,
     }));
 

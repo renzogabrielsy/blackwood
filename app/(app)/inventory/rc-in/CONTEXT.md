@@ -36,6 +36,13 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - **Audit resolve workflow:** Employees request resolve/reopen; Admins directly toggle or approve/deny requests; system messages auto-posted to `audit_comments`
 - **Keyboard nav:** Arrow keys, Tab, Enter, F2 (edit), Escape (revert), printable chars (type-over)
 
+### STATE Column (Derived)
+- STATE is `batches.status`, managed by the `fn_process_blackwood_usage` trigger on `rc_out`
+- Values: STORED (default), IN-USE, CLOSED, SUNDRYING, FEED
+- Color-coded in both master table and bulk input
+- Trigger handles INSERT/UPDATE/DELETE on rc_out to keep status accurate
+- RC IN batch upsert does NOT set status (let DB default + trigger manage it)
+
 ## Dependencies
 - `@/lib/rc-utils.ts` — `calculateWhse()` derives warehouse from block_loc first letter
 - `@/lib/field-labels.ts` — `getFieldLabel()`, `formatFieldValue()`, `flattenLabResultsDiff()`

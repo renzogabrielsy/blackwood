@@ -97,6 +97,16 @@ function deliveryToInputRow(d: DeliveryRow & { id?: string }): InputDeliveryRow 
     };
 }
 
+function getStateClasses(state: string): string {
+    switch (state) {
+        case 'IN-USE': return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
+        case 'CLOSED': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
+        case 'SUNDRYING': return 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30';
+        case 'FEED': return 'text-green-700 bg-green-100 dark:text-green-300 dark:bg-green-900/30';
+        default: return 'text-muted-foreground bg-muted/10'; // STORED
+    }
+}
+
 const inputClass = "h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
 /** Focus an input in the grid by row/col data attributes */
@@ -731,8 +741,8 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 1: STATE (Read Only) */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <div className="text-muted-foreground text-center font-mono uppercase bg-muted/10 py-1.5 rounded-sm h-full flex items-center justify-center" style={inputStyle}>
-                    {row.state}
+                <div className={cn("text-center font-mono uppercase rounded-sm py-0.5 truncate h-full flex items-center justify-center", getStateClasses(row.state || 'STORED'))} style={inputStyle}>
+                    {row.state || 'STORED'}
                 </div>
             </TableCell>
 

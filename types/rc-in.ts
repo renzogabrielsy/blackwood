@@ -25,6 +25,7 @@ export type DeliveryHistoryRow = DeliveryRow & {
     created_at: string;
     batches?: {
         location_ref: string;
+        status: string;
     };
 };
 

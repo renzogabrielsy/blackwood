@@ -27,7 +27,7 @@ export default async function RCInPage({
     // Build deliveries query
     let query = supabase
         .from('deliveries')
-        .select('*, batches(location_ref)')
+        .select('*, batches(location_ref, status)')
         .order('transaction_date', { ascending: false })
         .order('created_at', { ascending: false });
 
@@ -77,6 +77,7 @@ export default async function RCInPage({
 
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
+        state: (d as any).batches?.status || 'STORED',
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
         cost_basis: role === 'Production' ? undefined : d.cost_basis,
     }));

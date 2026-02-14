@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       audit_comments: {
@@ -305,37 +330,37 @@ export type Database = {
         }
         Relationships: []
       }
-      usage: {
+      rc_out: {
         Row: {
           batch_id: string
+          block_loc: string | null
           created_at: string | null
           destination: string
           id: string
+          production_batch: string | null
           remarks: string | null
-          snapshot_location: string | null
-          snapshot_price: number | null
           transaction_date: string
           weight_kg: number
         }
         Insert: {
           batch_id: string
+          block_loc?: string | null
           created_at?: string | null
           destination: string
           id?: string
+          production_batch?: string | null
           remarks?: string | null
-          snapshot_location?: string | null
-          snapshot_price?: number | null
           transaction_date: string
           weight_kg: number
         }
         Update: {
           batch_id?: string
+          block_loc?: string | null
           created_at?: string | null
           destination?: string
           id?: string
+          production_batch?: string | null
           remarks?: string | null
-          snapshot_location?: string | null
-          snapshot_price?: number | null
           transaction_date?: string
           weight_kg?: number
         }
@@ -390,6 +415,7 @@ export type Database = {
           lab_results: Json | null
           remarks: string | null
           sacks: number | null
+          state: Database["public"]["Enums"]["batch_status"] | null
           supplier: string | null
           transaction_date: string | null
           truck_plate: string | null
@@ -419,10 +445,18 @@ export type Database = {
         Returns: undefined
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }
+      rc_out_avg_price: {
+        Args: { rc_out_row: Database["public"]["Tables"]["rc_out"]["Row"] }
+        Returns: number
+      }
+      rc_out_avg_wtd_value: {
+        Args: { rc_out_row: Database["public"]["Tables"]["rc_out"]["Row"] }
+        Returns: number
+      }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
     }
     Enums: {
-      batch_status: "STORED" | "IN-USE" | "CLOSED" | "FEED"
+      batch_status: "STORED" | "IN-USE" | "CLOSED" | "FEED" | "SUNDRYING"
       notification_type:
         | "resolve_request"
         | "resolve_approved"
@@ -557,9 +591,12 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
-      batch_status: ["STORED", "IN-USE", "CLOSED", "FEED"],
+      batch_status: ["STORED", "IN-USE", "CLOSED", "FEED", "SUNDRYING"],
       notification_type: [
         "resolve_request",
         "resolve_approved",
