@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { Metadata } from 'next';
 import { startOfMonth, endOfMonth, format } from "date-fns";
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { createClient } from '@/lib/supabase/server';
 
 export const metadata: Metadata = {
     title: 'Inventory Usage | Blackwood',
@@ -55,7 +56,29 @@ export default async function RcOutPage({
     }
 
     // Fetch data on the server - Initial load of 40 to fill viewport, then client loads 15 at a time
-    const data = await getRcOutRecords(search, 0, 40, startDate, endDate);
+    const supabase = await createClient();
+
+    const [data, batchesRes, destinationsRes, productionBatchesRes] = await Promise.all([
+        getRcOutRecords(search, 0, 40, startDate, endDate),
+        supabase
+            .from('batches')
+            .select('id, batch_code, location_ref')
+            .order('batch_code'),
+        supabase
+            .from('rc_out')
+            .select('destination')
+            .not('destination', 'is', null)
+            .order('destination'),
+        supabase
+            .from('rc_out')
+            .select('production_batch')
+            .not('production_batch', 'is', null)
+            .order('production_batch'),
+    ]);
+
+    const batches = batchesRes.data ?? [];
+    const destinations = Array.from(new Set((destinationsRes.data ?? []).map(d => d.destination).filter(Boolean)));
+    const productionBatches = Array.from(new Set((productionBatchesRes.data ?? []).map(d => d.production_batch).filter(Boolean)));
 
     return (
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden bg-muted/20">
@@ -75,6 +98,9 @@ export default async function RcOutPage({
                                 search={search}
                                 year={year}
                                 month={month}
+                                batches={batches}
+                                destinations={destinations}
+                                productionBatches={productionBatches}
                             />
                         </Suspense>
                     </CardContent>

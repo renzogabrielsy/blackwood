@@ -38,7 +38,6 @@ function toDeliveryPayload(row: DeliveryRow) {
         ...deliveryData,
         weight_kg: Number(row.weight_kg),
         sacks: Number(row.sacks),
-        sacks: Number(row.sacks),
         cost_basis: row.cost_basis === undefined || row.cost_basis === null ? 0 : Number(row.cost_basis),
         lab_results: row.lab_results,
     };

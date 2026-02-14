@@ -38,7 +38,7 @@ export function InviteUserDialog() {
       if (result.success) {
         toast.success(result.message || 'User invited successfully');
         setEmail('');
-        setRole('Employee');
+        setRole('Production');
         setOpen(false);
       } else {
         toast.error(result.message || 'Failed to invite user');

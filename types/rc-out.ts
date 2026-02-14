@@ -29,3 +29,13 @@ export type RcOutInput = {
     block_loc: string;
     batch_id: string; // User selects Block -> we store ID
 };
+
+export type InputRcOutRow = {
+    transaction_date: string;
+    production_batch: string;
+    batch_code: string;      // Display field — maps to batch_id on submit
+    destination: string;
+    weight_kg: number | string;
+    block_loc: string;
+    remarks: string;
+};

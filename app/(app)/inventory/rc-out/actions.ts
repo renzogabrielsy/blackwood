@@ -91,11 +91,88 @@ export async function bulkDeleteRcOut(ids: string[]) {
     return { success: true };
 }
 
-// Placeholder for Create/Update - will implement with Input Form
 export async function createRcOutRecord(input: RcOutInput) {
     const supabase = await createClient();
     const { error } = await supabase.from('rc_out').insert(input);
     if (error) return { success: false, message: error.message };
     revalidatePath('/inventory/rc-out');
     return { success: true };
+}
+
+export async function submitBulkUsage(rows: RcOutInput[]) {
+    if (!rows || rows.length === 0) {
+        return { success: false, message: 'No rows to submit' };
+    }
+
+    try {
+        const supabase = await createClient();
+        const { error } = await supabase.from('rc_out').insert(rows);
+
+        if (error) {
+            console.error('Error inserting RC OUT records:', error.message);
+            throw new Error(`Insert Error: ${error.message}`);
+        }
+
+        revalidatePath('/inventory/rc-out');
+        return { success: true };
+    } catch (error: any) {
+        console.error('Submit Bulk Usage Failed:', error);
+        return { success: false, message: error.message || 'Unknown error occurred' };
+    }
+}
+
+export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; comment?: string }[]) {
+    if (!updates || updates.length === 0) {
+        return { success: false, message: 'No rows to update' };
+    }
+
+    try {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
+        for (const { id, data, comment } of updates) {
+            // Set audit comment if provided
+            if (comment) {
+                await supabase.rpc('set_audit_comment', { comment });
+            } else {
+                await supabase.rpc('set_audit_comment', { comment: null });
+            }
+
+            const { error } = await supabase
+                .from('rc_out')
+                .update(data)
+                .eq('id', id);
+
+            if (error) {
+                throw new Error(`Update Error (${id}): ${error.message}`);
+            }
+
+            // Post the edit remark as a discussion comment on the new audit log
+            if (comment && user) {
+                const { data: latestLog } = await supabase
+                    .from('audit_logs')
+                    .select('id')
+                    .eq('record_id', id)
+                    .order('performed_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (latestLog) {
+                    await supabase
+                        .from('audit_comments')
+                        .insert({
+                            audit_log_id: latestLog.id,
+                            user_id: user.id,
+                            body: comment,
+                        });
+                }
+            }
+        }
+
+        revalidatePath('/inventory/rc-out');
+        return { success: true };
+    } catch (error: any) {
+        console.error('Bulk Update Usage Failed:', error);
+        return { success: false, message: error.message || 'Unknown error occurred' };
+    }
 }
