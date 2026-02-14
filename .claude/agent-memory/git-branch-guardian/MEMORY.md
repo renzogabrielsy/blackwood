@@ -23,14 +23,33 @@
 - Files verified present and git-clean
 - Route should work after next `npm run dev` or rebuild
 
-## Key Git Patterns Used
-1. **Merge strategy:** Simple FF-enabled merges for feature branches
-2. **Commit message style:** Conventional commits with feat/fix/refactor prefixes
-3. **Branch naming:** `feat/UI/*` for UI features
-4. **Merge commit naming:** "Merge pull request #N from..." (GitHub auto-generated)
+## Workflow Assessment (2026-02-14)
+
+### Current State Summary
+- **17 local branches** (including 1 local-only `feat/userContext` without tracking branch)
+- **28 remote branches** including stale/abandoned feature branches
+- **Main-to-Dev Gap:** Main is 65 commits behind dev (dev has absorbed all development)
+- **Dev-to-HEAD Gap:** dev is 2 commits behind current HEAD (feat/UI/rcOut-table)
+- **Unmerged Feature Branches:** 8+ feature branches not yet merged to dev or main
+- **Dead Code:** At least 5 branches appear stale/abandoned (no commits in weeks)
+
+### Branch Graveyard (Cleanup Needed)
+- `feat/rc-in-inputs` — behind by 5 commits (orphaned)
+- `feat/userContext` — local only, no remote tracking
+- `revert-1-feat/rc-in-inputs` — leftover revert branch
+- `feat/userContext-oAuth` — functionality likely merged elsewhere
+- `origin/feat/rc-in-excel-grid` — remote only, no local tracking
+- Several early navBar branches merged but never cleaned up
+
+### Key Git Patterns Used
+1. **Merge strategy:** GitHub PR merge commits (non-FF) via PRs
+2. **Commit message style:** Good — Conventional commits with feat/fix/refactor
+3. **Branch naming:** `feat/<UI|backend>/<feature-name>` pattern (consistent)
+4. **Integration Branch:** `dev` acts as staging (unused main branch)
 
 ## Development Notes
 - Project uses Supabase with PostgreSQL
 - All mutations via Server Actions with `revalidatePath()`
 - Route group structure: `(app)` groups protected routes
-- Inventory module location: `app/(app)/inventory/` (recently reorganized from flat structure)
+- Inventory module location: `app/(app)/inventory/`
+- Working tree is always clean — excellent hygiene

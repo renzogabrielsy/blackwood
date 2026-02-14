@@ -1,7 +1,7 @@
 ---
 name: senior-frontend-engineer
 description: "Use this agent when frontend code needs to be generated, refactored, or debugged. This includes building new UI components, pages, layouts, fixing visual bugs, refactoring client components, implementing responsive designs, creating forms, tables, modals, and any work involving Next.js App Router pages/layouts, TypeScript types for UI, Tailwind CSS styling, or Shadcn UI components. Do NOT use this agent for backend logic, database queries, API design, or server-side business logic.\\n\\nExamples:\\n\\n- User: \"Create a new data table component for the production module\"\\n  Assistant: \"I'll use the senior-frontend-engineer agent to build this data table component following our Industrial Spreadsheet design system.\"\\n\\n- User: \"The bulk input form is broken, rows aren't rendering correctly\"\\n  Assistant: \"Let me launch the senior-frontend-engineer agent to debug the form rendering issue.\"\\n\\n- User: \"Refactor the RC IN page to use proper TypeScript types and clean up the Tailwind classes\"\\n  Assistant: \"I'll use the senior-frontend-engineer agent to refactor this component with proper typing and cleaner styles.\"\\n\\n- User: \"Add a new filter dropdown using cmdk to the deliveries table\"\\n  Assistant: \"I'll use the senior-frontend-engineer agent to implement the command menu filter component.\"\\n\\n- User: \"The dark mode toggle isn't working on the settings page\"\\n  Assistant: \"Let me use the senior-frontend-engineer agent to debug the dark mode issue.\""
-model: sonnet
+model: opus
 color: pink
 ---
 
