@@ -15,23 +15,11 @@ export const metadata: Metadata = {
 export default async function RcOutPage({
     searchParams,
 }: {
-    searchParams: Promise<{ search?: string; year?: string; month?: string }>;
+    searchParams: Promise<{ search?: string; field?: string; year?: string; month?: string }>;
 }) {
-    const { search, year: yearParam, month: monthParam } = await searchParams;
+    const { search, field, year: yearParam, month: monthParam } = await searchParams;
 
-    // Date Logic
-    // Default to 'All Years' if not specified? Or current year?
-    // RC IN defaults to current year.
-    // If year is 'all', we don't apply date filter (fetch all).
-    // If year is selected but month is 'all', filter by year.
-    // If year and month selected, filter by month.
-
-    // However, for infinite scroll, let's default to CURRENT MONTH to populate the table nicely without fetching 1000s of old records?
-    // User requested "Same footer year month picker". RC IN typically defaults to current year.
-    // Let's default to Current Year, All Months for broad overview, OR Current Month?
-    // Given "Inventory Depletion" is high volume, Current Month is safer.
-    // Let's try: Year = Current, Month = Current.
-
+    // Date Logic - bypass when searching
     const now = new Date();
     const year = yearParam ?? String(now.getFullYear());
     const month = monthParam ?? String(now.getMonth()); // 0-indexed in JS, but usually stored as 0-11 string in params?
@@ -39,19 +27,22 @@ export default async function RcOutPage({
     let startDate: string | undefined;
     let endDate: string | undefined;
 
-    if (year !== 'all') {
-        const y = parseInt(year, 10);
-        if (month !== 'all') {
-            const m = parseInt(month, 10);
-            const start = new Date(y, m, 1);
-            const end = endOfMonth(start);
-            startDate = format(start, 'yyyy-MM-dd');
-            endDate = format(end, 'yyyy-MM-dd');
-        } else {
-            const start = new Date(y, 0, 1);
-            const end = new Date(y, 11, 31);
-            startDate = format(start, 'yyyy-MM-dd');
-            endDate = format(end, 'yyyy-MM-dd');
+    if (!search) {
+        // Only apply date filters when NOT searching
+        if (year !== 'all') {
+            const y = parseInt(year, 10);
+            if (month !== 'all') {
+                const m = parseInt(month, 10);
+                const start = new Date(y, m, 1);
+                const end = endOfMonth(start);
+                startDate = format(start, 'yyyy-MM-dd');
+                endDate = format(end, 'yyyy-MM-dd');
+            } else {
+                const start = new Date(y, 0, 1);
+                const end = new Date(y, 11, 31);
+                startDate = format(start, 'yyyy-MM-dd');
+                endDate = format(end, 'yyyy-MM-dd');
+            }
         }
     }
 
@@ -59,7 +50,7 @@ export default async function RcOutPage({
     const supabase = await createClient();
 
     const [data, batchesRes, destinationsRes, productionBatchesRes] = await Promise.all([
-        getRcOutRecords(search, 0, 40, startDate, endDate),
+        getRcOutRecords(search, field, 0, 40, startDate, endDate),
         supabase
             .from('batches')
             .select('id, batch_code, location_ref')

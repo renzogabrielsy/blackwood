@@ -6,6 +6,7 @@ import type { RcOutRow, RcOutInput } from '@/types/rc-out';
 
 export async function getRcOutRecords(
     search?: string,
+    field?: string,
     offset: number = 0,
     limit: number = 15,
     startDate?: string,
@@ -39,14 +40,47 @@ export async function getRcOutRecords(
     }
 
     if (search) {
-        // Search on Block Code (via join), Destination, or Remarks
-        // Note: Supabase complex filtering on joined tables can be tricky.
-        // We might need to split this if we want deep search, but for now let's try basic text search on local columns
-        // or rely on client-side filtering if dataset is small enough (1400 rows is small).
-        // Ideally, we search on everything.
-        query = query.or(`production_batch.ilike.%${search}%,destination.ilike.%${search}%,remarks.ilike.%${search}%,block_loc.ilike.%${search}%`);
-        // For joined batch_code, we might need a separate filter or flattened view. 
-        // Let's stick to returning all and letting client filter OR basic server filter.
+        const term = `%${search}%`;
+        const searchField = field || 'all';
+
+        if (searchField === 'all') {
+            // Search local columns + batch_code via subquery
+            const { data: matchingBatches } = await supabase
+                .from('batches')
+                .select('id')
+                .ilike('batch_code', term);
+            const batchIds = (matchingBatches || []).map(b => b.id);
+
+            if (batchIds.length > 0) {
+                query = query.or(
+                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term},batch_id.in.(${batchIds.join(',')})`
+                );
+            } else {
+                query = query.or(
+                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term}`
+                );
+            }
+        } else if (searchField === 'batch_code') {
+            // Search via batches join
+            const { data: matchingBatches } = await supabase
+                .from('batches')
+                .select('id')
+                .ilike('batch_code', term);
+            const batchIds = (matchingBatches || []).map(b => b.id);
+            if (batchIds.length > 0) {
+                query = query.in('batch_id', batchIds);
+            } else {
+                query = query.in('batch_id', ['__no_match__']);
+            }
+        } else if (searchField === 'production_batch') {
+            query = query.ilike('production_batch', term);
+        } else if (searchField === 'destination') {
+            query = query.ilike('destination', term);
+        } else if (searchField === 'block_loc') {
+            query = query.ilike('block_loc', term);
+        } else if (searchField === 'remarks') {
+            query = query.ilike('remarks', term);
+        }
     }
 
     const { data, error } = await query;

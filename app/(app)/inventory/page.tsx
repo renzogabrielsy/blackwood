@@ -9,8 +9,8 @@ const submodules = [
 
 export default function InventoryPage() {
   return (
-    <div className="flex flex-col flex-1 bg-muted/10">
-      <main className="flex-1 px-6 py-6">
+    <div className="flex flex-col flex-1 min-h-0 bg-muted/10">
+      <main className="flex-1 px-4 md:px-6 py-4 md:py-6 overflow-auto">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 max-w-4xl">
           {submodules.map((mod) => (
             <Link key={mod.href} href={mod.href}>

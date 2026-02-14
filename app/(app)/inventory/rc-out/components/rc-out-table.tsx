@@ -89,6 +89,9 @@ export function RcOutTable({
     const pathname = usePathname();
     const searchParams = useSearchParams();
 
+    // Search field param (needed by loadMore for field-specific infinite scroll)
+    const searchFieldParam = searchParams.get('field') || 'all';
+
     // Infinite Scroll State
     const [allData, setAllData] = React.useState<RcOutRow[]>(data);
     const [offset, setOffset] = React.useState(data.length);
@@ -128,7 +131,7 @@ export function RcOutTable({
         setIsLoadingMore(true);
         try {
             const { startDate, endDate } = getDateRange();
-            const nextData = await getRcOutRecords(search, offset, ITEMS_PER_PAGE, startDate, endDate);
+            const nextData = await getRcOutRecords(search, searchFieldParam, offset, ITEMS_PER_PAGE, startDate, endDate);
 
             if (nextData.length < ITEMS_PER_PAGE) {
                 setHasMore(false);
@@ -143,7 +146,7 @@ export function RcOutTable({
         } finally {
             setIsLoadingMore(false);
         }
-    }, [isLoadingMore, hasMore, offset, search, getDateRange]);
+    }, [isLoadingMore, hasMore, offset, search, searchFieldParam, getDateRange]);
 
     // Sorting state
     const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -161,8 +164,8 @@ export function RcOutTable({
 
     // Search Debounce
     const [searchTerm, setSearchTerm] = React.useState(search || '');
-    const searchFieldParam = searchParams.get('field') || 'all';
-    const searchField = searchFieldParam as 'all' | 'production_batch' | 'destination' | 'remarks' | 'block_loc';
+    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
+    const searchField = searchFieldParam as 'all' | 'batch_code' | 'production_batch' | 'destination' | 'remarks' | 'block_loc';
 
     const createQueryString = React.useCallback(
         (name: string, value: string) => {
@@ -323,7 +326,7 @@ export function RcOutTable({
             {
                 id: 'batch_code',
                 accessorKey: 'batches.batch_code',
-                header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
+                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
                 size: 80,
                 cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.batches?.batch_code || '-'}</div>
             },
@@ -571,10 +574,11 @@ export function RcOutTable({
                                 <DropdownMenuLabel>Search Field</DropdownMenuLabel>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleFieldChange('all')}>All Fields</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('batch_code')}>Block</DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleFieldChange('production_batch')}>Batch</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('destination')}>Destination</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('remarks')}>Remarks</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('destination')}>Plant/Etc</DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleFieldChange('block_loc')}>Block Loc</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleFieldChange('remarks')}>Remarks</DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
 
@@ -584,6 +588,8 @@ export function RcOutTable({
                                 placeholder={`Search ${searchField === 'all' ? 'records' : searchField}...`}
                                 value={searchTerm}
                                 onChange={(event) => handleSearchChange(event.target.value)}
+                                onFocus={() => setIsSearchFocused(true)}
+                                onBlur={() => setIsSearchFocused(false)}
                                 className="pl-8 h-8 text-xs font-mono"
                             />
                         </div>
@@ -802,6 +808,7 @@ export function RcOutTable({
                         year={year}
                         onMonthChange={handleMonthChange}
                         onYearChange={handleYearChange}
+                        disabled={!!search || isSearchFocused}
                         statusText={statusText}
                     />
                 </div>

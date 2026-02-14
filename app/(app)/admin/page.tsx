@@ -41,8 +41,12 @@ export default async function AdminPage() {
     .order('created_at', { ascending: false });
 
   return (
-    <div className="space-y-6">
-      <UserManagementTable users={users ?? []} currentUserId={user.id} />
+    <div className="flex flex-col flex-1 min-h-0 bg-muted/10">
+      <main className="flex-1 px-4 md:px-6 py-4 md:py-6 overflow-auto">
+        <div className="space-y-6">
+          <UserManagementTable users={users ?? []} currentUserId={user.id} />
+        </div>
+      </main>
     </div>
   );
 }
