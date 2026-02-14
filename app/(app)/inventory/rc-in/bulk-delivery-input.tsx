@@ -102,7 +102,6 @@ function getStateClasses(state: string): string {
         case 'IN-USE': return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
         case 'CLOSED': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
         case 'SUNDRYING': return 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30';
-        case 'FEED': return 'text-green-700 bg-green-100 dark:text-green-300 dark:bg-green-900/30';
         default: return 'text-muted-foreground bg-muted/10'; // STORED
     }
 }

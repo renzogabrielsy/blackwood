@@ -38,10 +38,11 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 
 ### STATE Column (Derived)
 - STATE is `batches.status`, managed by the `fn_process_blackwood_usage` trigger on `rc_out`
-- Values: STORED (default), IN-USE, CLOSED, SUNDRYING, FEED
+- Values: STORED (default), IN-USE, CLOSED, SUNDRYING
 - Color-coded in both master table and bulk input
 - Trigger handles INSERT/UPDATE/DELETE on rc_out to keep status accurate
 - RC IN batch upsert does NOT set status (let DB default + trigger manage it)
+- Note: FEED location is indicated by WHSE column (derived from block_loc starting with 'F'), not status
 
 ## Dependencies
 - `@/lib/rc-utils.ts` — `calculateWhse()` derives warehouse from block_loc first letter

@@ -11,9 +11,10 @@
 - `IN-USE` — batch has rc_out entry with `destination='MAIN'`, no CLOSED remarks
 - `CLOSED` — batch has rc_out with `destination='MAIN'` AND `remarks ILIKE '%CLOSED%'`
 - `SUNDRYING` — batch has rc_out with `destination='SUNDRY'`
-- `FEED` — preserved for batches with `batch_code ILIKE '%FEED%'` (takes priority)
 
-**Priority Order:** FEED > CLOSED > SUNDRYING > IN-USE > STORED
+**Priority Order:** CLOSED > SUNDRYING > IN-USE > STORED
+
+**Note on FEED:** The `FEED` enum value still exists in `batch_status` but is no longer actively set by triggers (as of 2026-02-15). FEED location is indicated by the WHSE column in RC IN (derived from `block_loc` starting with 'F'), not by batch status. FEED batches follow the same status rules as other batches.
 
 ### Trigger: fn_process_blackwood_usage
 
@@ -102,11 +103,8 @@ SELECT status, COUNT(*) FROM batches GROUP BY status ORDER BY count DESC;
 ```
 
 Expected distribution post-migration (2026-02-15):
-- CLOSED: 258
-- STORED: 154
-- FEED: 73
-- IN-USE: 5
-- SUNDRYING: 3
+- Initial (after STATE rewrite): CLOSED: 258, STORED: 154, FEED: 73, IN-USE: 5, SUNDRYING: 3
+- After FEED removal: CLOSED: 322, STORED: 159, IN-USE: 9, SUNDRYING: 3 (0 FEED)
 
 ### Test Trigger Operations
 
@@ -129,6 +127,7 @@ SELECT batch_code, status FROM batches WHERE batch_code = 'TEST-BATCH';
 **Migrations:**
 1. `20260214173510_rewrite_state_column_derive_from_rc_out.sql` — Add SUNDRYING enum
 2. `20260214173709_rewrite_trigger_view_and_data_fix.sql` — Rewrite trigger, update view, fix data
+3. `20260215XXXXXX_remove_feed_status_from_triggers.sql` — Remove FEED from trigger logic
 
 **Changes:**
 - Added SUNDRYING to batch_status enum
@@ -138,11 +137,15 @@ SELECT batch_code, status FROM batches WHERE batch_code = 'TEST-BATCH';
 - Removed status from batch upsert in RC IN actions
 - Updated RC IN page to fetch and map batch status
 - Updated DeliveryHistoryRow type to include status
+- Removed FEED priority checks from both fn_process_blackwood_usage and fn_update_blackwood_state
+- Recalculated all FEED batches to proper status based on rc_out records
 
 **Files Modified:**
-- `supabase/migrations/` (2 new migrations)
+- `supabase/migrations/` (3 migrations)
 - `app/(app)/inventory/rc-in/actions.ts` (line 17 — removed status)
 - `app/(app)/inventory/rc-in/page.tsx` (line 30, 79 — added status)
+- `app/(app)/inventory/rc-in/CONTEXT.md` (removed FEED from status list)
+- `app/(app)/inventory/rc-out/CONTEXT.md` (removed FEED from trigger priority)
 - `types/rc-in.ts` (line 27 — added status to batches type)
 - `types/supabase.ts` (regenerated)
 

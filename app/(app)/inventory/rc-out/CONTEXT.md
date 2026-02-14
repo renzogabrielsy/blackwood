@@ -29,9 +29,10 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 ### Batch Status Trigger
 - `fn_process_blackwood_usage` fires on `rc_out` INSERT/UPDATE/DELETE
 - Updates `batches.status` and `batches.current_weight` automatically
-- INSERT: Depletes weight, sets status (FEED > CLOSED > SUNDRYING > IN-USE)
+- INSERT: Depletes weight, sets status (CLOSED > SUNDRYING > IN-USE > STORED)
 - DELETE: Adds back weight, recalculates status from remaining records
 - UPDATE: Adjusts weight delta, recalculates status; handles batch_id changes
+- Note: FEED location is indicated by WHSE column in RC IN (derived from block_loc), not by batch status
 
 ## Dependencies
 - `../rc-in/paste-utils` — shares `parseExcelDate()` for paste operations
