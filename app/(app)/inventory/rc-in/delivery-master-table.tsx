@@ -753,7 +753,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     {/* Loading Overlay */}
                     {isYearLoading && (
-                        <div className="absolute inset-0 z-[60] bg-background/50 backdrop-blur-sm flex items-center justify-center">
+                        <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center">
                             <div className="flex flex-col items-center gap-2">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                 <span className="text-sm font-medium text-muted-foreground">Loading Data...</span>
@@ -772,7 +772,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                                 return (
 
 
-                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20 last:after:hidden">
+                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
                                                         <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
                                                             {header.isPlaceholder
                                                                 ? null
@@ -851,25 +851,25 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                 <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
                                     <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
                                         {/* STATE + WHSE + DATE + SUPPLIER + BLOCK + LOC + TRUCK = 7 columns */}
-                                        <TableCell colSpan={7} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                        <TableCell colSpan={7} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                             TOTALS
                                         </TableCell>
                                         {/* WT */}
-                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                             {Math.round(totalWeight).toLocaleString()}
                                         </TableCell>
                                         {/* SKS - REMOVED TOTAL, LEFT EMPTY */}
-                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                         </TableCell>
                                         {/* MC + GRIT + ASTM + JIS + VM + ASH + FC = 7 columns - WEIGHTED AVERAGES */}
                                         {/* Fix #3: Use pre-computed labAverages instead of 7x iteration */}
                                         {LAB_COLUMNS.map(({ key, decimals }) => (
-                                            <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                            <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                                 {labAverages[key] > 0 ? labAverages[key].toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : '-'}
                                             </TableCell>
                                         ))}
                                         {/* REMARKS */}
-                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" />
+                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
                                         {/* PHP/KG + PHP TTL combined column in footer? No, header has PHP/KG and PHP TTL separate */}
                                         {/* Actually wait, looking at columns line 355: PHP/KG is cost_basis. line 369: PHP TTL is php_ttl. */}
                                         {/* Footer currently has: 7 cols (totals) + 1 (WT) + 1 (SKS empty) + 7 (weighted avgs) + 1 (Remarks) + 1 (PHP Combined?) */}
@@ -896,7 +896,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                         {hasPermission('view:prices') && (
                                             <>
                                                 {/* Cost Basis (PHP/KG) Weighted Avg */}
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                                     <div className="flex items-center justify-between">
                                                         <span className="text-muted-foreground">₱</span>
                                                         <span>{(totalWeight > 0 ? totalAmount / totalWeight : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
@@ -904,7 +904,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                                 </TableCell>
 
                                                 {/* PHP TTL Total */}
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-[1px] after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                                     <div className="flex items-center justify-between">
                                                         <span className="text-muted-foreground">₱</span>
                                                         <span>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
