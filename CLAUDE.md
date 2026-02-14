@@ -67,7 +67,7 @@ supabase gen types typescript --linked > types/supabase.ts
 - **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum: STORED/IN-USE/CLOSED/FEED), `avg_cost`, `current_weight`, `quality_stats` (JSONB)
 - **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc)
 - **`usage`** — `id`, `batch_id` (FK→batches), `destination`, `transaction_date`, `weight_kg`, `snapshot_location`, `snapshot_price`
-- **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`
+- **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`, `status` (`'active'` | `'disabled'` | `'pending'`), `created_at`, `updated_at`
 - **`audit_logs`** — `id`, `table_name`, `record_id`, `operation`, `diff` (JSONB), `snapshot` (JSONB), `comment`, `performed_by`, resolve fields
 - **`audit_comments`** — `id`, `audit_log_id` (FK→audit_logs), `body`, `user_id`, `resolved`
 
@@ -76,6 +76,21 @@ supabase gen types typescript --linked > types/supabase.ts
 **Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED`
 
 Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
+
+**Additional Tables:**
+- **`rc_out`** — `id`, `transaction_date`, `batch_id` (FK→batches), `production_batch`, `destination`, `weight_kg`, `block_loc`, `remarks`, `created_at`. Computed columns: `rc_out_avg_price`, `rc_out_avg_wtd_value`
+- **`notifications`** — `id`, `user_id`, `type` (`notification_type` enum), `title`, `body`, `source_user_id`, `metadata` (JSONB), `read`, `read_at`, `archived`, `created_at`
+- **`notification_subscriptions`** — `id`, `user_id`, `audit_log_id` (FK→audit_logs), `created_at`
+- **`user_invites`** — `email` (PK), `role`, `invited_by` (FK→profiles), `created_at`. Whitelist for invite-only access.
+
+**Additional Functions:** `_insert_notification(p_user_id, p_title, p_body, p_type, p_source_user_id, p_metadata)`, `is_admin(user_id)`
+**Additional Enums:** `notification_type` = `resolve_request | resolve_approved | resolve_denied | delivery_created | delivery_edited | delivery_deleted | remarks_added | audit_comment_reply`
+
+**Triggers:**
+- **`handle_new_user()`** — After INSERT on `auth.users`: creates profile from `user_invites` whitelist (role + status='active') or with default role + status='pending'
+- **`handle_invite_creation()`** — After INSERT on `user_invites`: activates matching pending profiles
+
+**Dev Role Override:** Privileged users (Owner/Admin/Dev) can impersonate any role via localStorage (`dev_mock_role`) + cookie. Server-side `getUserRole()` in `lib/auth.ts` reads the cookie. UI controlled via navbar Shield icon dropdown.
 
 ## Supabase CLI
 
@@ -149,6 +164,31 @@ Each module follows this structure in `app/<module>/`:
 - Month-based pagination: each "page" represents a calendar month
 - Lab results are stored as nested JSONB, not flat columns
 - Seeding script at `scripts/seed_rc_in.ts` for CSV import of legacy data
+
+## Component Context Files
+
+Each major module has a co-located `.md` context file documenting its files, data, behaviors, and cross-references. These eliminate redundant codebase exploration.
+
+### Reading Rule (MANDATORY)
+Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` first. Check for `CONTEXT.md` in the working directory and parent directories.
+
+**Context file locations:**
+- `app/(app)/inventory/rc-in/CONTEXT.md` — RC IN (Delivery Master Log)
+- `app/(app)/inventory/rc-out/CONTEXT.md` — RC OUT (Inventory Usage)
+- `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
+- `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
+- `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
+- `components/NOTIFICATIONS.md` — Notifications (realtime bell)
+
+### Update Rule (STRICT)
+Every code change **MUST** update the relevant `CONTEXT.md` in the same changeset. This includes: adding/removing files, changing server actions, adding DB tables/columns, changing cross-module imports, adding new pages.
+
+### Creation Rule
+Create a new `CONTEXT.md` when a module reaches 3+ files AND 200+ total lines. Use the standard template: **Purpose > Files > Data > Key Behaviors > Dependencies > See Also**.
+
+**Naming convention:**
+- Modules (directories): `CONTEXT.md`
+- Standalone components (single file in shared dir): `<NAME>.md` (e.g., `NAVBAR.md`)
 
 ## Git Workflow
 
