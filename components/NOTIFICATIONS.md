@@ -47,12 +47,13 @@ Real-time notification bell (500 lines, `components/notification-bell.tsx`) with
 - INSERT callback checks `source_user_id === user.id` — skips own actions
 
 ### Status Indicator
-- Fixed bottom-right pill shows connection state: green (Realtime), amber (Polling), red (Disconnected), orange+pulse (Connecting)
+- Connection status is pushed to `StatusBarProvider` context via `useStatusBar().setConnectionStatus()` and displayed in the unified `FloatingStatusBar` (bottom-right). The fixed bottom-left indicator was removed from this component.
 
 ## Dependencies
 - `@/app/(app)/notifications/actions` — server actions for fetch/read
 - `@/lib/supabase/client` — singleton browser client for realtime channel
 - `@/components/providers/auth-context` — `useAuth()` for user ID
+- `@/components/providers/status-bar-context` — `useStatusBar()` for pushing connection status to FloatingStatusBar
 - `@supabase/supabase-js` — `RealtimePostgresChangesPayload` type
 - `date-fns`, `lucide-react`, shadcn: Popover, Tooltip, Button
 

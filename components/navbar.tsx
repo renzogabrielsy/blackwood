@@ -36,19 +36,10 @@ interface Breadcrumb {
 
 function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname.startsWith('/inventory/rc-in/edit/')) {
-        return { backLabel: 'Back to Master Log', backHref: '/inventory/rc-in', pageTitle: 'Edit Remarks' };
+        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Remarks' };
     }
-    if (pathname === '/inventory/rc-in') {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Master Log', pageDescription: 'Recent delivery history' };
-    }
-    if (pathname === '/inventory/rc-out') {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Inventory Usage', pageDescription: 'Raw charcoal usage & depletion' };
-    }
-    if (pathname === '/inventory/blocking') {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Block location inventory' };
-    }
-    if (pathname === '/inventory') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal inventory management' };
+    if (pathname.startsWith('/inventory')) {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' };
     }
     if (pathname === '/notifications') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
@@ -87,9 +78,9 @@ const MODULES: Module[] = [
         name: 'Inventory',
         href: '/inventory',
         subModules: [
-            { name: 'Deliveries', href: '/inventory/rc-in' },
-            { name: 'Usage', href: '/inventory/rc-out' },
-            { name: 'Blocking', href: '/inventory/blocking' },
+            { name: 'Deliveries', href: '/inventory' },
+            { name: 'Usage', href: '/inventory' },
+            { name: 'Blocking', href: '/inventory' },
         ],
     },
     { name: 'Production' },

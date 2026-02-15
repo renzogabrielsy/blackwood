@@ -62,7 +62,7 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
             throw new Error(`Delivery Insert Error: ${deliveryError.message}`);
         }
 
-        revalidatePath('/inventory/rc-in');
+        revalidatePath('/inventory');
         return { success: true };
 
     } catch (error: any) {
@@ -83,7 +83,7 @@ export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
         return { success: false, message: error.message };
     }
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -139,7 +139,7 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
             }
         }
 
-        revalidatePath('/inventory/rc-in');
+        revalidatePath('/inventory');
         return { success: true };
     } catch (error: any) {
         console.error('Bulk Update Failed:', error);
@@ -163,7 +163,7 @@ export async function bulkDeleteDeliveries(ids: string[]) {
         return { success: false, message: error.message };
     }
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -276,7 +276,7 @@ export async function deleteDelivery(id: string) {
         return { success: false, message: error.message };
     }
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -340,7 +340,7 @@ export async function addAuditComment(auditLogId: string, body: string) {
         return { success: false, message: error.message };
     }
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -396,7 +396,7 @@ export async function resolveAuditLog(auditLogId: string) {
             body: nowResolved ? 'marked this edit as resolved' : 'reopened this edit',
         });
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
@@ -435,7 +435,7 @@ export async function requestResolveAuditLog(auditLogId: string, type: 'resolve'
                 : 'requested to reopen this edit',
         });
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
     return { success: true };
 }
@@ -496,7 +496,7 @@ export async function approveResolveRequest(auditLogId: string) {
                 : 'approved the reopen request',
         });
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
@@ -553,7 +553,7 @@ export async function denyResolveRequest(auditLogId: string, reason: string) {
                 : `denied the reopen request: ${reason.trim()}`,
         });
 
-    revalidatePath('/inventory/rc-in');
+    revalidatePath('/inventory');
     revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
     return { success: true };
 }

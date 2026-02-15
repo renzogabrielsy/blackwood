@@ -36,6 +36,10 @@ import { calculateWhse } from '@/lib/rc-utils';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { useAuth } from '@/components/providers/auth-context';
 import { COLUMN_MAP, cleanCellValue } from './paste-utils';
+import { useCellSelection } from '@/lib/hooks/use-cell-selection';
+import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useCellDelete } from '@/lib/hooks/use-cell-delete';
+import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { DeliveryRow, InputDeliveryRow } from '@/types/rc-in';
 
 export type { InputDeliveryRow } from '@/types/rc-in';
@@ -129,6 +133,7 @@ type BulkDeliveryInputProps = {
 export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'create', initialData, onDirtyChange }: BulkDeliveryInputProps) {
     const { fontSize, rowHeight } = useTableSettings();
     const { hasPermission } = useAuth();
+    const { setCellSelectionCount } = useStatusBar();
     const canViewPrices = hasPermission('view:prices');
     const isEdit = mode === 'edit';
 
@@ -149,6 +154,68 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
     const preEditValue = React.useRef<any>(null);
+
+    // --- Cell range selection ---
+    const cellSelection = useCellSelection({
+        rowCount: rows.length,
+        colCount: COLUMN_MAP.length,
+        isSelectableColumn: (colIdx) => COLUMN_MAP[colIdx] !== null && colIdx !== 0,
+        scrollContainerRef: gridRef,
+        enabled: true,
+    });
+
+    // Push cell selection count to shared context
+    React.useEffect(() => {
+        const count = cellSelection.range ? cellSelection.getSelectionSize() : 0;
+        setCellSelectionCount(count);
+        return () => setCellSelectionCount(0);
+    }, [cellSelection.range, cellSelection, setCellSelectionCount]);
+
+    const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
+        const row = rows[rowIdx];
+        if (!row) return '';
+        const field = COLUMN_MAP[colIdx];
+        if (!field) return '';
+        const val = row[field];
+        return val != null ? String(val) : '';
+    }, [rows]);
+
+    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
+        getSelectedRange: cellSelection.getSelectedRange,
+        getCellValue,
+        getSelectionSize: cellSelection.getSelectionSize,
+    });
+
+    // --- Click-vs-drag mouse handlers ---
+    const mouseDownCellRef = React.useRef<{ row: number; col: number } | null>(null);
+    const dragMovedRef = React.useRef(false);
+
+    const handleGridCellMouseDown = React.useCallback((rowIdx: number, colIdx: number, e: React.MouseEvent) => {
+        mouseDownCellRef.current = { row: rowIdx, col: colIdx };
+        dragMovedRef.current = false;
+        cellSelection.handleCellMouseDown(rowIdx, colIdx, e);
+    }, [cellSelection]);
+
+    const handleGridCellMouseUp = React.useCallback((rowIdx: number, colIdx: number) => {
+        const downCell = mouseDownCellRef.current;
+        mouseDownCellRef.current = null;
+        // If mouse up on same cell as mouse down and no drag happened -> single cell click
+        if (downCell && downCell.row === rowIdx && downCell.col === colIdx && !dragMovedRef.current) {
+            cellSelection.clearSelection();
+            setActiveCell({ row: rowIdx, col: colIdx });
+            setIsEditing(false);
+            gridRef.current?.focus();
+        }
+        dragMovedRef.current = false;
+    }, [cellSelection, setActiveCell, setIsEditing]);
+
+    const handleGridCellMouseEnter = React.useCallback((rowIdx: number, colIdx: number) => {
+        // Use mouseDownCellRef (set synchronously) instead of cellSelection.isDragging (stale state)
+        if (mouseDownCellRef.current) {
+            dragMovedRef.current = true;
+            cellSelection.handleCellMouseEnter(rowIdx, colIdx);
+        }
+    }, [cellSelection]);
 
     // --- ROW MANAGEMENT ---
     const addRow = React.useCallback(() => {
@@ -180,6 +247,22 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             return newRows;
         });
     }, []);
+
+    // Cell delete (placed after updateRow to avoid "used before declaration")
+    const clearCellByIndex = React.useCallback((rowIdx: number, colIdx: number) => {
+        const field = COLUMN_MAP[colIdx];
+        if (field && field !== 'state') {
+            updateRow(rowIdx, field, '');
+        }
+    }, [updateRow]);
+
+    const { handleKeyDown: handleDeleteKeyDown } = useCellDelete({
+        getSelectedRange: cellSelection.getSelectedRange,
+        getSelectionSize: cellSelection.getSelectionSize,
+        clearCell: clearCellByIndex,
+    });
+
+    const isRangeSelected = cellSelection.getSelectionSize() > 1;
 
     const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
         const field = COLUMN_MAP[colIdx];
@@ -236,9 +319,58 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             return;
         }
 
+        // --- Range selection mode handling ---
+        if (isRangeSelected) {
+            // Shift+Arrow -> extend selection (delegate to hook)
+            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                cellSelection.handleKeyDown(e);
+                return;
+            }
+            // Copy (Ctrl+C / Cmd+C)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+                handleCopyKeyDown(e);
+                return;
+            }
+            // Delete/Backspace -> clear selected cells
+            if (e.key === 'Backspace' || e.key === 'Delete') {
+                handleDeleteKeyDown(e);
+                cellSelection.clearSelection();
+                return;
+            }
+            // Escape -> clear range
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                cellSelection.clearSelection();
+                return;
+            }
+            // Non-shift nav keys -> exit range, do normal single-cell nav
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
+                cellSelection.clearSelection();
+                // fall through to existing nav handling below
+            }
+            // Printable char -> exit range, start editing anchor cell
+            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                const range = cellSelection.range;
+                if (range) {
+                    cellSelection.clearSelection();
+                    setActiveCell({ row: range.startRow, col: range.startCol });
+                }
+                // fall through to existing char handling below
+            }
+        }
+
         // --- NAVIGATION (Not Editing) ---
         if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
             e.preventDefault();
+            // Shift+Arrow from single cell -> enter range selection
+            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
+                // Seed anchor at current cell, then extend with Shift+Arrow
+                cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, preventDefault: () => {} } as unknown as React.MouseEvent);
+                cellSelection.handleMouseUp();
+                cellSelection.handleKeyDown(e);
+                return;
+            }
             moveSelection(e.key, e.shiftKey);
             return;
         }
@@ -269,7 +401,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                 startEditing(activeCell.row, activeCell.col, e.key);
             }
         }
-    }, [activeCell, isEditing, rows, updateRow, startEditing, revertChanges]);
+    }, [activeCell, isEditing, isRangeSelected, rows, updateRow, startEditing, revertChanges, cellSelection, handleCopyKeyDown, handleDeleteKeyDown]);
 
     const moveSelection = (key: string, shift: boolean) => {
         if (!activeCell) return;
@@ -366,8 +498,9 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
         if (!isEditing && activeCell) {
             handleSmartPaste(e, activeCell.row, activeCell.col);
+            cellSelection.clearSelection();
         }
-    }, [isEditing, activeCell, handleSmartPaste]);
+    }, [isEditing, activeCell, handleSmartPaste, cellSelection]);
 
     // --- DIRTY CHECKING ---
     React.useEffect(() => {
@@ -542,8 +675,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
                 <div
                     ref={gridRef}
-                    className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh] outline-none"
-                    tabIndex={0}
+                    className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh] outline-none select-none"
+                    tabIndex={-1}
                     onKeyDown={handleGridKeyDown}
                     onPaste={handleGridPaste}
                     onBlur={(e) => {
@@ -611,6 +744,12 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                                     onAuditCommentChange={(val) => setAuditComments(prev => ({ ...prev, [index]: val }))}
                                     isEditMode={isEdit}
                                     canViewPrices={canViewPrices}
+                                    cellMouseDown={(col, e) => handleGridCellMouseDown(index, col, e)}
+                                    cellMouseUp={(col) => handleGridCellMouseUp(index, col)}
+                                    cellMouseEnter={(col) => handleGridCellMouseEnter(index, col)}
+                                    isCellSelected={(col) => cellSelection.isSelected(index, col)}
+                                    isCellAnchor={(col) => cellSelection.isAnchor(index, col)}
+                                    isDragging={cellSelection.isDragging}
                                 />
                             ))}
                         </TableBody>
@@ -648,6 +787,12 @@ const BulkInputRow = React.memo(function BulkInputRow({
     onAuditCommentChange,
     isEditMode = false,
     canViewPrices,
+    cellMouseDown,
+    cellMouseUp,
+    cellMouseEnter,
+    isCellSelected,
+    isCellAnchor,
+    isDragging,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -671,6 +816,12 @@ const BulkInputRow = React.memo(function BulkInputRow({
     onAuditCommentChange: (val: string) => void;
     isEditMode?: boolean;
     canViewPrices: boolean;
+    cellMouseDown: (col: number, e: React.MouseEvent) => void;
+    cellMouseUp: (col: number) => void;
+    cellMouseEnter: (col: number) => void;
+    isCellSelected: (col: number) => boolean;
+    isCellAnchor: (col: number) => boolean;
+    isDragging: boolean;
 }) {
     const whse = calculateWhse(row.block_loc, row.batch_code);
     const wt = parseFloat(String(row.weight_kg)) || 0;
@@ -678,6 +829,16 @@ const BulkInputRow = React.memo(function BulkInputRow({
     const ttlValue = wt * price;
 
     const inputStyle = { fontSize: `${fontSize}px` };
+
+    // Helper to generate cell selection props for a given column
+    const selectionPropsForCol = (col: number) => ({
+        onCellMouseDown: (e: React.MouseEvent) => cellMouseDown(col, e),
+        onCellMouseUp: () => cellMouseUp(col),
+        onCellMouseEnter: () => cellMouseEnter(col),
+        isCellRangeSelected: isCellSelected(col),
+        isCellRangeAnchor: isCellAnchor(col),
+        isDragActive: isDragging,
+    });
 
     const commonCellProps = {
         row: index,
@@ -755,7 +916,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 3: DATE */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={3} value={row.transaction_date} {...commonCellProps}>
+                <GridCell col={3} value={row.transaction_date} {...commonCellProps} {...selectionPropsForCol(3)}>
                     <Input
                         autoFocus
                         value={row.transaction_date}
@@ -769,7 +930,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 4: SUPPLIER */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={4} value={row.supplier} {...commonCellProps} className="font-bold text-left pl-1">
+                <GridCell col={4} value={row.supplier} {...commonCellProps} {...selectionPropsForCol(4)} className="font-bold text-left pl-1">
                     <AutocompleteInput
                         value={row.supplier}
                         onChange={(val) => updateRow(index, 'supplier', val)}
@@ -786,7 +947,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 5: BLOCK */}
             <TableCell className="px-1 py-0 border-r relative" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={5} value={row.batch_code} {...commonCellProps}>
+                <GridCell col={5} value={row.batch_code} {...commonCellProps} {...selectionPropsForCol(5)}>
                     <AutocompleteInput
                         value={row.batch_code}
                         onChange={(val) => updateRow(index, 'batch_code', val)}
@@ -813,7 +974,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 6: LOC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={6} value={row.block_loc} {...commonCellProps}>
+                <GridCell col={6} value={row.block_loc} {...commonCellProps} {...selectionPropsForCol(6)}>
                     <Input
                         autoFocus
                         value={row.block_loc}
@@ -826,7 +987,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 7: TRUCK */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={7} value={row.truck_plate} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={7} value={row.truck_plate} {...commonCellProps} {...selectionPropsForCol(7)} className="text-center font-mono">
                     <Input
                         autoFocus
                         value={row.truck_plate}
@@ -839,7 +1000,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 8: WT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={8} value={row.weight_kg} {...commonCellProps}>
+                <GridCell col={8} value={row.weight_kg} {...commonCellProps} {...selectionPropsForCol(8)}>
                     <Input
                         autoFocus
                         type="number" step="1"
@@ -853,7 +1014,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 9: SKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={9} value={row.sacks} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={9} value={row.sacks} {...commonCellProps} {...selectionPropsForCol(9)} className="text-center font-mono">
                     <Input
                         autoFocus
                         type="number"
@@ -867,50 +1028,50 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
             {/* 10: MC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={10} value={row.mc} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={10} value={row.mc} {...commonCellProps} {...selectionPropsForCol(10)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 11: GRIT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={11} value={row.grit} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={11} value={row.grit} {...commonCellProps} {...selectionPropsForCol(11)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 12: ASTM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={12} value={row.bd_astm} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={12} value={row.bd_astm} {...commonCellProps} {...selectionPropsForCol(12)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 13: JIS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={13} value={row.bd_jis} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={13} value={row.bd_jis} {...commonCellProps} {...selectionPropsForCol(13)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 14: VM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={14} value={row.vm} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={14} value={row.vm} {...commonCellProps} {...selectionPropsForCol(14)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 15: ASH */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={15} value={row.ash} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={15} value={row.ash} {...commonCellProps} {...selectionPropsForCol(15)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 16: FC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={16} value={row.fc} {...commonCellProps} className="text-center font-mono">
+                <GridCell col={16} value={row.fc} {...commonCellProps} {...selectionPropsForCol(16)} className="text-center font-mono">
                     <Input autoFocus type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
 
             {/* 17: REMARKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={17} value={row.remarks} {...commonCellProps}
+                <GridCell col={17} value={row.remarks} {...commonCellProps} {...selectionPropsForCol(17)}
                     displayValue={
                         <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
                             <MessageSquareText className="w-3 h-3" />
@@ -930,7 +1091,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             {/* 18: PRICE */}
             {canViewPrices && (
                 <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                    <GridCell col={18} value={row.cost_basis} {...commonCellProps}
+                    <GridCell col={18} value={row.cost_basis} {...commonCellProps} {...selectionPropsForCol(18)}
                         displayValue={
                             <div className="flex items-center justify-between h-full w-full px-1">
                                 <span className="text-muted-foreground mr-1">₱</span>
@@ -984,7 +1145,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
 
 // --- GRID CELL HELPERS ---
 
-function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef }: {
+function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef, onCellMouseDown, onCellMouseUp, onCellMouseEnter, isCellRangeSelected, isCellRangeAnchor, isDragActive }: {
     row: number;
     col: number;
     value: string | number;
@@ -999,6 +1160,12 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
     className?: string;
     tabIndex?: number;
     gridRef?: React.RefObject<HTMLDivElement | null>;
+    onCellMouseDown?: (e: React.MouseEvent) => void;
+    onCellMouseUp?: () => void;
+    onCellMouseEnter?: () => void;
+    isCellRangeSelected?: boolean;
+    isCellRangeAnchor?: boolean;
+    isDragActive?: boolean;
 }) {
     const isActive = activeCell?.row === row && activeCell?.col === col;
     const isEditingThis = isActive && isEditing;
@@ -1010,7 +1177,17 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
     }, [isActive, isEditing, gridRef]);
 
     if (isEditingThis) {
-        return <div className={cn("h-full w-full relative", className)}>{children}</div>;
+        return (
+            <div
+                className={cn("h-full w-full relative", className)}
+                style={isDragActive ? { pointerEvents: 'none' } : undefined}
+                onMouseEnter={() => {
+                    onCellMouseEnter?.();
+                }}
+            >
+                {children}
+            </div>
+        );
     }
 
     return (
@@ -1020,15 +1197,30 @@ function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIs
             tabIndex={tabIndex ?? 0}
             className={cn(
                 "h-full w-full flex items-center justify-center outline-none cursor-default select-none",
-                isActive && "ring-2 ring-primary ring-inset z-10",
+                isActive && !isCellRangeSelected && "ring-2 ring-primary ring-inset z-10",
+                isCellRangeSelected && "bg-primary/10 dark:bg-primary/20",
+                isCellRangeAnchor && "ring-2 ring-primary ring-inset z-10",
                 className
             )}
             style={{ minHeight: '100%' }}
-            onClick={(e) => {
+            onMouseDown={(e) => {
+                e.preventDefault();
                 e.stopPropagation();
-                setActiveCell({ row, col });
-                setIsEditing(false);
-                gridRef?.current?.focus();
+                if (onCellMouseDown) {
+                    onCellMouseDown(e);
+                } else {
+                    // No cell selection -> original click behavior
+                    setActiveCell({ row, col });
+                    setIsEditing(false);
+                    gridRef?.current?.focus();
+                }
+            }}
+            onMouseUp={(e) => {
+                e.stopPropagation();
+                onCellMouseUp?.();
+            }}
+            onMouseEnter={() => {
+                onCellMouseEnter?.();
             }}
             onDoubleClick={(e) => {
                 e.stopPropagation();

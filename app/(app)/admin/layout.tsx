@@ -18,7 +18,7 @@ export default async function AdminLayout({
     const role = await getUserRole(user.id);
 
     if (!PRIVILEGED_ROLES.includes(role)) {
-        redirect('/inventory/rc-in');
+        redirect('/inventory');
     }
 
     return <>{children}</>;

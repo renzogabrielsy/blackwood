@@ -33,6 +33,38 @@
 
 **Common Pitfall:** Previously, the RC IN batch upsert **overrode** trigger-managed status back to 'STORED'. This was fixed by removing the `status` field from `upsertBatchesFromRows()` in `app/(app)/inventory/rc-in/actions.ts` (line 17).
 
+### Trigger: fn_update_blackwood_state (2026-02-16 Fix)
+
+**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16
+
+**Operations Supported:**
+1. **INSERT** — Uses incremental weighted average formula to update `avg_cost`, `quality_stats`, `current_weight`
+2. **UPDATE** — Recalculates `avg_cost` from scratch when cost data or `batch_code` changes
+3. **DELETE** — Recalculates `avg_cost` from scratch for the old batch (if trigger is configured)
+
+**Critical UPDATE Behavior:**
+- When `batch_code` changes: recalculates BOTH old and new batches from all their deliveries
+- When `cost_basis` or `weight_kg` changes (same batch): recalculates that batch from all its deliveries
+- Uses full aggregation query: `SUM(cost_basis * weight_kg) / NULLIF(SUM(weight_kg), 0)`
+
+**Why the Fix Was Needed:**
+- The trigger originally only fired on INSERT (tgtype=5)
+- When users edited deliveries in RC IN (changing batch_code or cost data), the batch avg_cost was never updated
+- This caused `rc_out.rc_out_avg_price` (a generated column derived from `batches.avg_cost`) to show stale data
+- Migration `fix_delivery_trigger_handle_updates.sql` added UPDATE support (tgtype=23: BEFORE INSERT OR UPDATE)
+
+**Data Cleanup:** If batches have stale avg_cost, run:
+```sql
+UPDATE batches b
+SET avg_cost = COALESCE(calc.avg, 0)
+FROM (
+  SELECT batch_code, SUM(cost_basis * weight_kg) / NULLIF(SUM(weight_kg), 0) as avg
+  FROM deliveries
+  GROUP BY batch_code
+) calc
+WHERE calc.batch_code = b.batch_code;
+```
+
 ### View: view_rc_in_master
 
 **Columns Include:** `state` (aliased from `batches.status`)

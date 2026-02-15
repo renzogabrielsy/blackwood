@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
+import { endOfMonth, format } from 'date-fns';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
 
 export async function getRcOutRecords(
@@ -110,7 +111,7 @@ export async function deleteRcOutRecord(id: string) {
     if (error) {
         return { success: false, message: error.message };
     }
-    revalidatePath('/inventory/rc-out');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -121,7 +122,7 @@ export async function bulkDeleteRcOut(ids: string[]) {
     if (error) {
         return { success: false, message: error.message };
     }
-    revalidatePath('/inventory/rc-out');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -129,7 +130,7 @@ export async function createRcOutRecord(input: RcOutInput) {
     const supabase = await createClient();
     const { error } = await supabase.from('rc_out').insert(input);
     if (error) return { success: false, message: error.message };
-    revalidatePath('/inventory/rc-out');
+    revalidatePath('/inventory');
     return { success: true };
 }
 
@@ -147,7 +148,7 @@ export async function submitBulkUsage(rows: RcOutInput[]) {
             throw new Error(`Insert Error: ${error.message}`);
         }
 
-        revalidatePath('/inventory/rc-out');
+        revalidatePath('/inventory');
         return { success: true };
     } catch (error: any) {
         console.error('Submit Bulk Usage Failed:', error);
@@ -203,10 +204,56 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
             }
         }
 
-        revalidatePath('/inventory/rc-out');
+        revalidatePath('/inventory');
         return { success: true };
     } catch (error: any) {
         console.error('Bulk Update Usage Failed:', error);
         return { success: false, message: error.message || 'Unknown error occurred' };
     }
+}
+
+export async function fetchRcOutTabData() {
+    const supabase = await createClient();
+    const now = new Date();
+    const year = String(now.getFullYear());
+    const month = String(now.getMonth()); // 0-indexed
+
+    // Same date logic as the old rc-out/page.tsx
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10);
+    const start = new Date(y, m, 1);
+    const end = endOfMonth(start);
+    const startDate = format(start, 'yyyy-MM-dd');
+    const endDate = format(end, 'yyyy-MM-dd');
+
+    const [records, batchesRes, destinationsRes, productionBatchesRes] = await Promise.all([
+        getRcOutRecords(undefined, undefined, 0, 40, startDate, endDate),
+        supabase
+            .from('batches')
+            .select('id, batch_code, location_ref')
+            .order('batch_code'),
+        supabase
+            .from('rc_out')
+            .select('destination')
+            .not('destination', 'is', null)
+            .order('destination'),
+        supabase
+            .from('rc_out')
+            .select('production_batch')
+            .not('production_batch', 'is', null)
+            .order('production_batch'),
+    ]);
+
+    const batches = batchesRes.data ?? [];
+    const destinations = Array.from(new Set((destinationsRes.data ?? []).map(d => d.destination).filter(Boolean)));
+    const productionBatches = Array.from(new Set((productionBatchesRes.data ?? []).map(d => d.production_batch).filter(Boolean)));
+
+    return {
+        records,
+        batches,
+        destinations,
+        productionBatches,
+        year,
+        month,
+    };
 }

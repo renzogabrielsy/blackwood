@@ -62,6 +62,9 @@ import {
     CommandList,
 } from '@/components/ui/command';
 import {
+    Tooltip,
+    TooltipTrigger,
+    TooltipContent,
     TooltipProvider,
 } from '@/components/ui/tooltip';
 import { deleteDelivery, bulkDeleteDeliveries } from './actions';
@@ -69,6 +72,9 @@ import { calculateWhse } from '@/lib/rc-utils';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 
 export type { DeliveryHistoryRow };
+import { useCellSelection } from '@/lib/hooks/use-cell-selection';
+import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from './components/DeliverySheetFooter';
 import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
@@ -113,6 +119,7 @@ const formatCompact = (value: number, decimals: number = 2): string => {
 export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: any[], search?: string, allSuppliers: string[], allLocations: string[] }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { user, role, hasPermission } = useAuth();
+    const { setCellSelectionCount } = useStatusBar();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -586,13 +593,19 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 cell: ({ row }) => {
                     const state = row.original.state || 'STORED';
                     return (
-                        <div
-                            className={cn("text-center font-mono uppercase py-0.5 rounded-sm truncate", getStateClasses(state))}
-                            style={{ fontSize: `${fontSize}px` }}
-                            title={state}
-                        >
-                            {state}
-                        </div>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div
+                                    className={cn("text-center font-mono uppercase py-0.5 rounded-sm truncate", getStateClasses(state))}
+                                    style={{ fontSize: `${fontSize}px` }}
+                                >
+                                    {state}
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                                {state}
+                            </TooltipContent>
+                        </Tooltip>
                     );
                 },
             },
@@ -603,7 +616,16 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 cell: ({ row }) => {
                     const loc = row.original.block_loc || row.original.batches?.location_ref;
                     const whse = calculateWhse(loc, row.original.batch_code);
-                    return <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }} title={whse}>{whse}</div>;
+                    return whse ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }}>{whse}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                                {whse}
+                            </TooltipContent>
+                        </Tooltip>
+                    ) : <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }}>{whse}</div>;
                 }
             },
             {
@@ -628,13 +650,37 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 accessorKey: 'supplier',
                 header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
                 size: 120,
-                cell: ({ row }) => <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }} title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
+                cell: ({ row }) => {
+                    const supplier = row.getValue('supplier') as string;
+                    return supplier ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }}>{supplier}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">
+                                {supplier}
+                            </TooltipContent>
+                        </Tooltip>
+                    ) : <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }}>{supplier}</div>;
+                }
             },
             {
                 accessorKey: 'batch_code',
                 header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
                 size: 80,
-                cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }} title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
+                cell: ({ row }) => {
+                    const batchCode = row.getValue('batch_code') as string;
+                    return batchCode ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{batchCode}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">
+                                {batchCode}
+                            </TooltipContent>
+                        </Tooltip>
+                    ) : <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{batchCode}</div>;
+                }
             },
             {
                 accessorKey: 'block_loc',
@@ -649,7 +695,19 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 accessorKey: 'truck_plate',
                 header: () => <div className="text-center px-1 font-mono font-bold">TRUCK</div>,
                 size: 40,
-                cell: ({ row }) => <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('truck_plate')}</div>
+                cell: ({ row }) => {
+                    const truckPlate = row.getValue('truck_plate') as string;
+                    return truckPlate ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{truckPlate}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">
+                                {truckPlate}
+                            </TooltipContent>
+                        </Tooltip>
+                    ) : <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{truckPlate}</div>;
+                }
             },
             {
                 accessorKey: 'weight_kg',
@@ -669,7 +727,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             ...labColumnDefs,
             {
                 accessorKey: 'remarks',
-                header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>REMARKS</div>,
+                header: () => <div className="flex justify-center"><MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" /></div>,
                 size: 40,
                 cell: ({ row }) => {
                     const remarks = row.getValue('remarks') as string;
@@ -787,6 +845,104 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         overscan: 15,
     });
 
+    // --- Cell selection for copy-paste ---
+    const visibleColumns = table.getAllColumns().filter(c => c.getIsVisible());
+    const cellSelection = useCellSelection({
+        rowCount: rows.length,
+        colCount: visibleColumns.length,
+        isSelectableColumn: (colIdx) => {
+            const col = visibleColumns[colIdx];
+            return col ? col.id !== 'actions' : false;
+        },
+        scrollContainerRef: tableContainerRef,
+        enabled: !selectionMode,
+    });
+
+    // Push cell selection count to shared context
+    React.useEffect(() => {
+        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
+        setCellSelectionCount(count);
+        return () => setCellSelectionCount(0);
+    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+
+    const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
+        const row = rows[rowIdx];
+        if (!row) return '';
+        const data = row.original;
+        const col = visibleColumns[colIdx];
+        if (!col) return '';
+
+        switch (col.id) {
+            case 'state': return data.state || 'STORED';
+            case 'whse': return calculateWhse(data.block_loc || data.batches?.location_ref, data.batch_code);
+            case 'transaction_date': return format(new Date(data.transaction_date), 'MM/dd/yyyy');
+            case 'supplier': return data.supplier || '';
+            case 'batch_code': return data.batch_code || '';
+            case 'block_loc': return data.block_loc || data.batches?.location_ref || '';
+            case 'truck_plate': return data.truck_plate || '';
+            case 'weight_kg': return String(Math.round(parseFloat(String(data.weight_kg)) || 0));
+            case 'sacks': return String(data.sacks || '');
+            case 'mc': return data.lab_results?.mc != null ? data.lab_results.mc.toFixed(2) : '';
+            case 'grit': return data.lab_results?.grit != null ? data.lab_results.grit.toFixed(2) : '';
+            case 'bd_astm': return data.lab_results?.bd_astm != null ? data.lab_results.bd_astm.toFixed(3) : '';
+            case 'bd_jis': return data.lab_results?.bd_jis != null ? data.lab_results.bd_jis.toFixed(3) : '';
+            case 'vm': return data.lab_results?.vm != null ? data.lab_results.vm.toFixed(2) : '';
+            case 'ash': return data.lab_results?.ash != null ? data.lab_results.ash.toFixed(2) : '';
+            case 'fc': return data.lab_results?.fc != null ? data.lab_results.fc.toFixed(2) : '';
+            case 'remarks': return data.remarks || '';
+            case 'cost_basis': {
+                const val = parseFloat(String(data.cost_basis));
+                return isNaN(val) ? '' : val.toFixed(2);
+            }
+            case 'php_ttl': {
+                const wt = parseFloat(String(data.weight_kg)) || 0;
+                const price = parseFloat(String(data.cost_basis)) || 0;
+                return (wt * price).toFixed(2);
+            }
+            default: return '';
+        }
+    }, [rows, visibleColumns]);
+
+    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
+        getSelectedRange: cellSelection.getSelectedRange,
+        getCellValue,
+        getSelectionSize: cellSelection.getSelectionSize,
+        enabled: !selectionMode,
+    });
+
+    // Clear cell selection when filters/sorting change
+    React.useEffect(() => { cellSelection.clearSelection(); }, [filteredData]);
+    React.useEffect(() => { cellSelection.clearSelection(); }, [sorting]);
+
+    // Clear cell selection when clicking outside the scroll container
+    React.useEffect(() => {
+        if (!cellSelection.range) return;
+
+        const handleClickOutside = (e: MouseEvent) => {
+            const container = tableContainerRef.current;
+            if (container && !container.contains(e.target as Node)) {
+                cellSelection.clearSelection();
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [cellSelection.range, cellSelection.clearSelection]);
+
+    // Clear cell selection on Escape key (global listener so it works regardless of focus)
+    React.useEffect(() => {
+        if (!cellSelection.range) return;
+
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                cellSelection.clearSelection();
+            }
+        };
+
+        document.addEventListener('keydown', handleEscape);
+        return () => document.removeEventListener('keydown', handleEscape);
+    }, [cellSelection.range, cellSelection.clearSelection]);
+
     // Unique filter options — hardcoded for STATE/WHSE, from props for Supplier/LOC
     const uniqueStates = React.useMemo(
         () => ['STORED', 'IN-USE', 'CLOSED', 'SUNDRYING', 'SUNDRIED'],
@@ -876,33 +1032,19 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     );
 
     // Fix #7: Move statusText useMemo to top-level
-    // Build active filter labels for status text
-    const activeFilterLabels = React.useMemo(() => {
-        const labels: string[] = [];
-        if (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) labels.push(`STATE (-${stateExcluded.size})`);
-        if (whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length) labels.push(`WHSE (-${whseExcluded.size})`);
-        if (supIncluded.size > 0) labels.push(`SUPPLIER (${supIncluded.size})`);
-        if (locIncluded.size > 0) labels.push(`LOC (${locIncluded.size})`);
-        return labels;
-    }, [stateExcluded, whseExcluded, supIncluded, locIncluded, uniqueStates.length, uniqueWhse.length]);
-
     const statusText = React.useMemo(() => {
         const count = filteredData.length;
         const displayYear = (yearParam === 'all' || search) ? 'All Years' : yearParam;
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-        const filterSuffix = activeFilterLabels.length > 0
-            ? <> &middot; Filtered: <span className="font-semibold text-foreground">{activeFilterLabels.join(', ')}</span></>
-            : null;
-
         if (search) {
-            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo; in <span className="font-semibold text-foreground">{displayYear}</span>{filterSuffix}</span>;
+            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo; in <span className="font-semibold text-foreground">{displayYear}</span></span>;
         }
         if (month === 'all') {
-            return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months){filterSuffix}</span>;
+            return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months)</span>;
         }
-        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span>{filterSuffix}</span>;
-    }, [filteredData.length, search, month, yearParam, activeFilterLabels]);
+        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span></span>;
+    }, [filteredData.length, search, month, yearParam]);
 
     return (
         <TooltipProvider>
@@ -1209,6 +1351,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             onClick={() => {
                                 setSelectionMode(prev => !prev);
                                 if (selectionMode) setSelectedIds(new Set());
+                                else cellSelection.clearSelection();
                             }}
                         >
                             Select
@@ -1322,7 +1465,15 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         </div>
                     )}
 
-                    <div className="flex-1 overflow-auto relative w-full h-full" ref={tableContainerRef}>
+                    <div
+                        className="flex-1 overflow-auto relative w-full outline-none select-none"
+                        ref={tableContainerRef}
+                        tabIndex={-1}
+                        onKeyDown={(e) => {
+                            cellSelection.handleKeyDown(e);
+                            handleCopyKeyDown(e);
+                        }}
+                    >
                         {/* Fix #1: No key-based remounting — content updates in place */}
                         <div className="w-full h-full">
                             <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
@@ -1379,12 +1530,22 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                             style={{ height: `${rowHeight}px` }}
                                                             onClick={selectionMode ? () => toggleSelect(row.original.id) : undefined}
                                                         >
-                                                            {row.getVisibleCells().map((cell) => (
+                                                            {row.getVisibleCells().map((cell, cellIndex) => (
                                                                 <TableCell
                                                                     key={cell.id}
-                                                                    className="px-1 py-0 border-r last:border-0"
+                                                                    className={cn(
+                                                                        "px-1 py-0 border-r last:border-0",
+                                                                        !selectionMode && cellSelection.isSelected(virtualRow.index, cellIndex) && "bg-primary/10 dark:bg-primary/20",
+                                                                        !selectionMode && cellSelection.isAnchor(virtualRow.index, cellIndex) && "ring-2 ring-primary ring-inset"
+                                                                    )}
                                                                     style={{ height: `${rowHeight}px` }}
                                                                     onClick={cell.column.id === 'actions' ? (e) => e.stopPropagation() : undefined}
+                                                                    onMouseDown={cell.column.id !== 'actions' && !selectionMode ? (e) => {
+                                                                        e.preventDefault();
+                                                                        cellSelection.handleCellMouseDown(virtualRow.index, cellIndex, e);
+                                                                        tableContainerRef.current?.focus({ preventScroll: true });
+                                                                    } : undefined}
+                                                                    onMouseEnter={cellSelection.isDragging && !selectionMode ? () => cellSelection.handleCellMouseEnter(virtualRow.index, cellIndex) : undefined}
                                                                 >
                                                                     {flexRender(
                                                                         cell.column.columnDef.cell,
@@ -1422,7 +1583,16 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         {/* WT */}
                                         {!hiddenColumns.has('weight_kg') && (
                                             <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {formatCompact(Math.round(totalWeight), 2)}
+                                                {totalWeight > 0 ? (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span>{formatCompact(Math.round(totalWeight), 2)}</span>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="top">
+                                                            {Math.round(totalWeight).toLocaleString()}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                ) : formatCompact(Math.round(totalWeight), 2)}
                                             </TableCell>
                                         )}
                                         {/* SKS */}
@@ -1433,7 +1603,16 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         {/* Lab weighted averages — only visible columns */}
                                         {LAB_COLUMNS.filter(({ key }) => !hiddenColumns.has(key)).map(({ key, decimals }) => (
                                             <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {labAverages[key] > 0 ? formatCompact(labAverages[key], decimals) : '-'}
+                                                {labAverages[key] > 0 ? (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span>{formatCompact(labAverages[key], decimals)}</span>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="top">
+                                                            {labAverages[key].toFixed(decimals)}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                ) : '-'}
                                             </TableCell>
                                         ))}
                                         {/* REMARKS */}
@@ -1443,19 +1622,47 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         {/* PHP/KG */}
                                         {hasPermission('view:prices') && !hiddenColumns.has('cost_basis') && (
                                             <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-muted-foreground">₱</span>
-                                                    <span>{formatCompact(totalWeight > 0 ? totalAmount / totalWeight : 0, 2)}</span>
-                                                </div>
+                                                {totalWeight > 0 ? (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span>{formatCompact(totalAmount / totalWeight, 2)}</span>
+                                                            </div>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="top">
+                                                            {(totalAmount / totalWeight).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                ) : (
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-muted-foreground">₱</span>
+                                                        <span>{formatCompact(0, 2)}</span>
+                                                    </div>
+                                                )}
                                             </TableCell>
                                         )}
                                         {/* PHP TTL */}
                                         {hasPermission('view:prices') && !hiddenColumns.has('php_ttl') && (
                                             <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-muted-foreground">₱</span>
-                                                    <span>{formatCompact(totalAmount, 2)}</span>
-                                                </div>
+                                                {totalAmount > 0 ? (
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span>{formatCompact(totalAmount, 2)}</span>
+                                                            </div>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="top">
+                                                            {totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                ) : (
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-muted-foreground">₱</span>
+                                                        <span>{formatCompact(totalAmount, 2)}</span>
+                                                    </div>
+                                                )}
                                             </TableCell>
                                         )}
                                         {/* Actions */}

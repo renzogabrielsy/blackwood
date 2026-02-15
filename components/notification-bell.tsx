@@ -35,6 +35,7 @@ import {
   type NotificationType,
 } from '@/app/(app)/notifications/actions';
 import { useAuth } from '@/components/providers/auth-context';
+import { useStatusBar } from '@/components/providers/status-bar-context';
 import { createClient } from '@/lib/supabase/client';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
@@ -57,13 +58,13 @@ function getNavigationTarget(notification: Notification): string {
     case 'resolve_denied':
     case 'delivery_edited':
     case 'audit_comment_reply':
-      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory/rc-in';
+      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory';
     case 'delivery_created':
-      return meta?.date ? `/inventory/rc-in?date=${meta.date}` : '/inventory/rc-in';
+      return meta?.date ? `/inventory?date=${meta.date}` : '/inventory';
     case 'remarks_added':
-      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory/rc-in';
+      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory';
     case 'delivery_deleted':
-      return '/inventory/rc-in';
+      return '/inventory';
     default:
       return '/';
   }
@@ -138,6 +139,7 @@ const POLL_BACKOFF_FACTOR = 1.5;
 
 export function NotificationBell() {
   const { user } = useAuth();
+  const { setConnectionStatus } = useStatusBar();
   const [notifications, setNotifications] = React.useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = React.useState(0);
   const [open, setOpen] = React.useState(false);
@@ -397,27 +399,13 @@ export function NotificationBell() {
 
   const badgeText = unreadCount > 9 ? '9+' : String(unreadCount);
 
-  // Status Indicator Logic
-  const getStatusColor = () => {
-    if (realtimeStatus === 'SUBSCRIBED') return 'bg-green-500';
-    if (realtimeStatus === 'TIMED_OUT' || realtimeStatus === 'CHANNEL_ERROR') return 'bg-amber-500';
-    if (realtimeStatus === 'CLOSED') return 'bg-red-500';
-    return 'bg-orange-500'; // Connecting or other
-  };
-
-  const getStatusText = () => {
-    if (realtimeStatus === 'SUBSCRIBED') return 'Realtime';
-    if (realtimeStatus === 'TIMED_OUT' || realtimeStatus === 'CHANNEL_ERROR') return 'Polling (Fallback)';
-    if (realtimeStatus === 'CLOSED') return 'Disconnected';
-    return 'Connecting...';
-  };
+  // Push connection status to shared context
+  React.useEffect(() => {
+    setConnectionStatus(realtimeStatus);
+  }, [realtimeStatus, setConnectionStatus]);
 
   return (
     <>
-      <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full bg-background/95 px-3 py-1.5 text-xs font-medium shadow-sm border backdrop-blur supports-backdrop-filter:bg-background/60">
-        <span className={`h-2 w-2 rounded-full ${getStatusColor()} ${realtimeStatus === 'CONNECTING' ? 'animate-pulse' : ''}`} />
-        <span className="text-muted-foreground">{getStatusText()}</span>
-      </div>
       <Popover open={open} onOpenChange={handleOpenChange}>
         <Tooltip>
           <TooltipTrigger asChild>

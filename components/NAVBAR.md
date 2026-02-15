@@ -11,11 +11,8 @@ Persistent navigation bar (302 lines, `components/navbar.tsx`). Owns ALL page ti
 ## Registered Breadcrumbs (`getBreadcrumb()`)
 | Path | Back Label | Page Title | Description |
 |------|-----------|------------|-------------|
-| `/inventory/rc-in/edit/*` | Back to Master Log | Edit Remarks | — |
-| `/inventory/rc-in` | Back to Inventory | Master Log | Recent delivery history |
-| `/inventory/rc-out` | Back to Inventory | Inventory Usage | Raw charcoal usage & depletion |
-| `/inventory/blocking` | Back to Inventory | Blocking | Block location inventory |
-| `/inventory` | Back to Dashboard | Inventory | Raw charcoal inventory management |
+| `/inventory/rc-in/edit/*` | Back to Inventory | Edit Remarks | — |
+| `/inventory*` (catch-all) | Back to Dashboard | Inventory | Raw charcoal deliveries, usage & tracking |
 | `/notifications` | Back to Dashboard | Notifications | — |
 | `/settings` | Back to Dashboard | Settings | Manage user roles and permissions |
 | `/admin` | Back to Dashboard | Admin Panel | Manage users and invitations |
@@ -25,14 +22,16 @@ Dashboard (`/`) returns `null` — no breadcrumb shown.
 ## Module Dropdown (`MODULES` constant)
 ```
 Inventory (/inventory)
-  -> Deliveries (/inventory/rc-in)
-  -> Usage (/inventory/rc-out)
-  -> Blocking (/inventory/blocking)
+  -> Deliveries (/inventory)
+  -> Usage (/inventory)
+  -> Blocking (/inventory)
 Production (disabled)
 Accounting (disabled)
 ---
 Admin Panel (/admin) — only if PRIVILEGED_ROLES
 ```
+
+Note: All inventory sub-module links point to `/inventory` — tab switching is client-side via `InventoryTabContext`.
 
 ## Role-Based Visibility
 - **Dev Role Switcher (Shield icon):** Visible only if `dbRole` is Owner/Admin/Dev. Dropdown lists all 5 roles.

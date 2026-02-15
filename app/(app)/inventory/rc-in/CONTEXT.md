@@ -6,10 +6,11 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 ## Files
 | File | Lines | Role |
 |------|-------|------|
-| `page.tsx` | 117 | Server component — fetches deliveries, batches, role, allSuppliers, allLocations; year-based pagination |
+| `page.tsx` | ~5 | Redirect stub — redirects to `/inventory`. Data fetching moved to `../page.tsx` (parent inventory page) |
 | `actions.ts` | 617 | 9 server actions: `submitBulkDeliveries`, `bulkUpdateDeliveries`, `bulkDeleteDeliveries`, `deleteDelivery`, `updateDelivery`, `getDeliveryHistory`, `getAuditComments`, `getAuditLogEntry`, `addAuditComment` + 4 resolve actions |
-| `bulk-delivery-input.tsx` | 1229 | Client grid editor — paste, keyboard nav, autocomplete, edit tracking |
-| `delivery-master-table.tsx` | ~1490 | Client data table — virtual scroll, header bar filters, column visibility, year/month controls |
+| `bulk-delivery-input.tsx` | ~1420 | Client grid editor — paste, keyboard nav, autocomplete, edit tracking, cell range selection + copy + delete |
+| `components/delivery-master-table-wrapper.tsx` | ~31 | Client wrapper — `dynamic()` with `ssr: false` to avoid Radix hydration mismatch |
+| `delivery-master-table.tsx` | ~1570 | Client data table — virtual scroll, header bar filters, column visibility, year/month controls, cell selection + clipboard copy |
 | `paste-utils.ts` | 81 | Excel date parsing, cell value cleaning |
 | `components/DeliveryHistoryDialog.tsx` | 561 | Delivery history + audit trail dialog |
 | `components/DeliverySheetFooter.tsx` | 228 | Year selector + sliding month indicators (shared with RC OUT) |
@@ -33,12 +34,15 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - **Year-based pagination:** URL param `?year=2024`; month filtering done client-side via string slicing on `YYYY-MM-DD` (avoids timezone issues). **Defaults to current year and current month on initial load** (no year param = current year via `new Date().getFullYear()`; month state initializes to `new Date().getMonth()`). When a header bar filter (STATE, WHSE, Supplier, LOC) is activated, the year auto-switches to "All Years" via `activateAllYearsIfNeeded()` to ensure the filter operates on the full dataset.
 - **Header bar filters:** Client-side WHSE, STATE, LOC, and Supplier multi-select checkbox filters in the toolbar (order: Search, WHSE, STATE, LOC, SUPPLIER, Clear). **Two filter models are used:** STATE/WHSE use an **exclusion set pattern** (all included by default; unchecking excludes); Supplier/LOC use an **inclusion set pattern** (empty = show all; checking includes only selected values). WHSE/STATE use `Popover`+`Checkbox` labels with Select All / Deselect All buttons. Supplier/LOC use `Popover`+`Command`+`Checkbox` (searchable) with a "Clear" link (shown only when selections exist). Filters persist with search — search only overrides the FooterBar month filter, not header filters. Each active filter shows a count label (e.g., `State (3)` for exclusion remaining, `Supplier (2)` for inclusion selected) and an inline X button to clear. WHSE options are hardcoded (`WHSE A-D`, `FEED`). LOC/Supplier values come from server-fetched `allLocations`/`allSuppliers` props (all distinct values from entire DB, not scoped by year). LOC options use natural sort (`localeCompare` with `numeric: true`).
 - **STATE filter default:** On fresh page load (no `sx` URL param), the STATE filter defaults to excluding CLOSED so users see only active inventory (STORED, IN-USE, SUNDRYING, SUNDRIED). Users can manually re-enable CLOSED via the STATE filter popover. Uses a URL sentinel value `sx=_all` to distinguish "user explicitly cleared the filter" from "fresh load (apply default)". This prevents the default from being re-applied after Suspense remounts when the user has intentionally shown all states.
-- **Search always uses all fields:** The search field dropdown was removed. Server-side search in `page.tsx` always queries across supplier, batch_code, truck_plate, and block_loc.
+- **Data fetching moved to parent:** RC IN data is fetched server-side in `../page.tsx` and passed to `DeliveryMasterTableWrapper` via `InventoryView`. The `rc-in/page.tsx` is now a redirect stub to `/inventory`.
+- **Search always uses all fields:** The search field dropdown was removed. Server-side search in `../page.tsx` always queries across supplier, batch_code, truck_plate, and block_loc.
 - **Cost column visibility:** Both header and body cells in `BulkInputRow` are gated behind `canViewPrices` prop (`hasPermission('view:prices')`), ensuring column count matches for all roles in the edit dialog
 - **Paste-grid:** Tab-separated clipboard → Excel serial date parsing, currency stripping, auto-row expansion
 - **Virtual scroll:** `@tanstack/react-virtual` with `overscan: 15`, respects user's `rowHeight` setting
 - **Audit resolve workflow:** Employees request resolve/reopen; Admins directly toggle or approve/deny requests; system messages auto-posted to `audit_comments`
 - **Keyboard nav:** Arrow keys, Tab, Enter, F2 (edit), Escape (revert), printable chars (type-over)
+- **Cell selection + clipboard copy (master table):** `useCellSelection` and `useClipboardCopy` hooks enable rectangular cell selection (click-drag, Shift+click, Shift+Arrow, Ctrl+A) and Ctrl+C copy as TSV. Mutually exclusive with row selection mode (`enabled: !selectionMode`). Selection count is pushed to `StatusBarProvider` context via `useStatusBar().setCellSelectionCount()` and displayed in the unified `FloatingStatusBar`. Clears on filteredData/sorting changes, clicking outside the scroll container, or pressing Escape.
+- **Cell selection + copy + delete (bulk input):** All 3 hooks (`useCellSelection`, `useClipboardCopy`, `useCellDelete`) with two-mode system: single-cell edit (click without drag) vs range selection (click+drag, Shift+Arrow). Range mode: Ctrl+C copies as TSV, Backspace/Delete clears all cells. Non-shift nav exits range. Printable char exits range and edits anchor cell. Selection count pushed to `StatusBarProvider` context (same as master table).
 
 ### Filter Interaction Model
 - **Server-side:** `year` (URL param) + `search` (URL param, always "all fields")
@@ -82,6 +86,10 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - `@/lib/auth.ts` — `getUserRole()` (includes dev override check)
 - `@/components/providers/auth-context` — `useAuth()`, `hasPermission('view:prices')`
 - `@/components/providers/table-settings` — `useTableSettings()` (fontSize, rowHeight)
+- `@/components/providers/status-bar-context` — `useStatusBar()` for pushing cell selection count to FloatingStatusBar
+- `@/lib/hooks/use-cell-selection` — rectangular cell selection with drag, keyboard, and auto-scroll
+- `@/lib/hooks/use-clipboard-copy` — Ctrl+C copies selected cells as TSV
+- `@/lib/hooks/use-cell-delete` — Backspace/Delete clears multi-cell selection (bulk input only)
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `date-fns`, `sonner`
 
 ## See Also

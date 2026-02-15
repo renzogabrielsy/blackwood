@@ -18,8 +18,7 @@ import {
     useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Plus, Settings, Loader2, Trash2, Pencil, X } from 'lucide-react';
+import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Plus, Settings, Loader2, Trash2, Pencil, X, MessageSquareText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -51,12 +50,18 @@ import {
     PopoverTrigger,
 } from '@/components/ui/popover';
 import {
+    Tooltip,
+    TooltipContent,
     TooltipProvider,
+    TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { getRcOutRecords, deleteRcOutRecord, bulkDeleteRcOut } from '../actions';
 import type { RcOutRow } from '@/types/rc-out';
 import { BulkUsageInput } from '../bulk-usage-input';
 import { DeliverySheetFooter } from '../../rc-in/components/DeliverySheetFooter';
+import { useCellSelection } from '@/lib/hooks/use-cell-selection';
+import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useStatusBar } from '@/components/providers/status-bar-context';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -85,12 +90,17 @@ export function RcOutTable({
 }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { hasPermission } = useAuth();
-    const router = useRouter();
-    const pathname = usePathname();
-    const searchParams = useSearchParams();
+    const { setCellSelectionCount } = useStatusBar();
 
-    // Search field param (needed by loadMore for field-specific infinite scroll)
-    const searchFieldParam = searchParams.get('field') || 'all';
+    // Internal date state (not URL-driven) so month/year changes work inside lazy-loaded tab
+    const [currentYear, setCurrentYear] = React.useState(year);
+    const [currentMonth, setCurrentMonth] = React.useState(month);
+    const [isDateLoading, setIsDateLoading] = React.useState(false);
+
+    // Search state (internal, not URL-driven) — same approach as year/month
+    const [searchTerm, setSearchTerm] = React.useState(search || '');
+    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
+    const [searchField, setSearchField] = React.useState<'all' | 'batch_code' | 'production_batch' | 'destination' | 'remarks' | 'block_loc'>('all');
 
     // Infinite Scroll State
     const [allData, setAllData] = React.useState<RcOutRow[]>(data);
@@ -102,16 +112,16 @@ export function RcOutTable({
         setAllData(data);
         setOffset(data.length);
         setHasMore(data.length > 0);
-    }, [data, search]);
+    }, [data]);
 
     const getDateRange = React.useCallback(() => {
         let startDate: string | undefined;
         let endDate: string | undefined;
 
-        if (year !== 'all') {
-            const y = parseInt(year, 10);
-            if (month !== 'all') {
-                const m = parseInt(month, 10);
+        if (currentYear !== 'all') {
+            const y = parseInt(currentYear, 10);
+            if (currentMonth !== 'all') {
+                const m = parseInt(currentMonth, 10);
                 const start = new Date(y, m, 1);
                 const end = endOfMonth(start);
                 startDate = format(start, 'yyyy-MM-dd');
@@ -124,14 +134,14 @@ export function RcOutTable({
             }
         }
         return { startDate, endDate };
-    }, [year, month]);
+    }, [currentYear, currentMonth]);
 
     const loadMore = React.useCallback(async () => {
         if (isLoadingMore || !hasMore) return;
         setIsLoadingMore(true);
         try {
             const { startDate, endDate } = getDateRange();
-            const nextData = await getRcOutRecords(search, searchFieldParam, offset, ITEMS_PER_PAGE, startDate, endDate);
+            const nextData = await getRcOutRecords(searchTerm || undefined, searchField, offset, ITEMS_PER_PAGE, startDate, endDate);
 
             if (nextData.length < ITEMS_PER_PAGE) {
                 setHasMore(false);
@@ -146,7 +156,7 @@ export function RcOutTable({
         } finally {
             setIsLoadingMore(false);
         }
-    }, [isLoadingMore, hasMore, offset, search, searchFieldParam, getDateRange]);
+    }, [isLoadingMore, hasMore, offset, searchTerm, searchField, getDateRange]);
 
     // Sorting state
     const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -162,32 +172,39 @@ export function RcOutTable({
     const [showExitConfirmation, setShowExitConfirmation] = React.useState(false);
     const [pendingAction, setPendingAction] = React.useState<() => void>(() => { });
 
-    // Search Debounce
-    const [searchTerm, setSearchTerm] = React.useState(search || '');
-    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
-    const searchField = searchFieldParam as 'all' | 'batch_code' | 'production_batch' | 'destination' | 'remarks' | 'block_loc';
-
-    const createQueryString = React.useCallback(
-        (name: string, value: string) => {
-            const params = new URLSearchParams(searchParams.toString());
-            if (value) {
-                params.set(name, value);
-            } else {
-                params.delete(name);
-            }
-            return params.toString();
-        },
-        [searchParams]
-    );
+    // Debounced search — refetch data directly via server action (no URL navigation)
+    const isFirstSearchMount = React.useRef(true);
 
     React.useEffect(() => {
+        // Skip the initial mount — data is already provided via props
+        if (isFirstSearchMount.current) {
+            isFirstSearchMount.current = false;
+            return;
+        }
+
         const timer = setTimeout(() => {
-            if (searchTerm !== (search || '')) {
-                router.push(pathname + '?' + createQueryString('search', searchTerm));
-            }
+            let mounted = true;
+            setIsDateLoading(true);
+
+            const fetchData = async () => {
+                const { startDate, endDate } = getDateRange();
+                const newData = await getRcOutRecords(
+                    searchTerm || undefined, searchField, 0, 40, startDate, endDate
+                );
+
+                if (mounted) {
+                    setAllData(newData);
+                    setOffset(newData.length);
+                    setHasMore(newData.length >= 40);
+                    setIsDateLoading(false);
+                }
+            };
+
+            fetchData();
+            return () => { mounted = false; };
         }, 300);
         return () => clearTimeout(timer);
-    }, [searchTerm, search, router, pathname, createQueryString]);
+    }, [searchTerm, searchField]);
 
     const toggleSelect = React.useCallback((id: string) => {
         setSelectedIds(prev => {
@@ -266,20 +283,67 @@ export function RcOutTable({
     }, [isAddOpen, editRows]);
 
     const handleSearchChange = (term: string) => setSearchTerm(term);
-    const handleFieldChange = (field: string) => router.push(pathname + '?' + createQueryString('field', field));
+    const handleFieldChange = (field: string) => setSearchField(field as typeof searchField);
 
     const handleYearChange = (newYear: string) => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set('year', newYear);
-        if (newYear === 'all') params.set('month', 'all');
-        router.push(pathname + '?' + params.toString());
+        let newMonth = currentMonth;
+        if (newYear === 'all') {
+            newMonth = 'all';
+        } else if (currentMonth === 'all') {
+            newMonth = '0';
+        }
+        setCurrentYear(newYear);
+        setCurrentMonth(newMonth);
     };
 
     const handleMonthChange = (newMonth: string) => {
-        const params = new URLSearchParams(searchParams.toString());
-        params.set('month', newMonth);
-        router.push(pathname + '?' + params.toString());
+        setCurrentMonth(newMonth);
     };
+
+    // Refetch data when year/month changes (skip initial mount)
+    const isFirstMount = React.useRef(true);
+
+    React.useEffect(() => {
+        if (isFirstMount.current) {
+            isFirstMount.current = false;
+            return;
+        }
+
+        let mounted = true;
+        setIsDateLoading(true);
+
+        const fetchData = async () => {
+            let startDate: string | undefined;
+            let endDate: string | undefined;
+            if (currentYear !== 'all') {
+                const y = parseInt(currentYear, 10);
+                if (currentMonth !== 'all') {
+                    const m = parseInt(currentMonth, 10);
+                    const start = new Date(y, m, 1);
+                    const end = endOfMonth(start);
+                    startDate = format(start, 'yyyy-MM-dd');
+                    endDate = format(end, 'yyyy-MM-dd');
+                } else {
+                    startDate = format(new Date(y, 0, 1), 'yyyy-MM-dd');
+                    endDate = format(new Date(y, 11, 31), 'yyyy-MM-dd');
+                }
+            }
+
+            const newData = await getRcOutRecords(
+                searchTerm || undefined, searchField, 0, 40, startDate, endDate
+            );
+
+            if (mounted) {
+                setAllData(newData);
+                setOffset(newData.length);
+                setHasMore(newData.length >= 40);
+                setIsDateLoading(false);
+            }
+        };
+
+        fetchData();
+        return () => { mounted = false; };
+    }, [currentYear, currentMonth]);
 
     // Footer totals
     const { totalWeight, totalAvgPrice, totalAvgWtdValue } = React.useMemo(() => {
@@ -321,14 +385,28 @@ export function RcOutTable({
                 accessorKey: 'production_batch',
                 header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'production_batch' ? 'text-primary bg-primary/10 rounded' : ''}`}>BATCH</div>,
                 size: 80,
-                cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.production_batch}</div>
+                cell: ({ row }) => row.original.production_batch ? (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.production_batch}</div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">{row.original.production_batch}</TooltipContent>
+                    </Tooltip>
+                ) : <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }} />
             },
             {
                 id: 'batch_code',
                 accessorKey: 'batches.batch_code',
                 header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
                 size: 80,
-                cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.batches?.batch_code || '-'}</div>
+                cell: ({ row }) => row.original.batches?.batch_code ? (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.batches.batch_code}</div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">{row.original.batches.batch_code}</TooltipContent>
+                    </Tooltip>
+                ) : <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>-</div>
             },
             {
                 accessorKey: 'weight_kg',
@@ -340,19 +418,44 @@ export function RcOutTable({
                 accessorKey: 'destination',
                 header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'destination' ? 'text-primary bg-primary/10 rounded' : ''}`}>PLANT/ETC</div>,
                 size: 100,
-                cell: ({ row }) => <div className="truncate text-left font-bold" style={{ fontSize: `${fontSize}px` }}>{row.original.destination}</div>
+                cell: ({ row }) => row.original.destination ? (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="truncate text-left font-bold" style={{ fontSize: `${fontSize}px` }}>{row.original.destination}</div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">{row.original.destination}</TooltipContent>
+                    </Tooltip>
+                ) : <div className="truncate text-left font-bold" style={{ fontSize: `${fontSize}px` }} />
             },
             {
                 accessorKey: 'block_loc',
                 header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'block_loc' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK LOC</div>,
                 size: 80,
-                cell: ({ row }) => <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.block_loc}</div>
+                cell: ({ row }) => row.original.block_loc ? (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.block_loc}</div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">{row.original.block_loc}</TooltipContent>
+                    </Tooltip>
+                ) : <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }} />
             },
             {
                 accessorKey: 'remarks',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'remarks' ? 'text-primary bg-primary/10 rounded' : ''}`}>REMARKS</div>,
-                size: 150,
-                cell: ({ row }) => <div className="truncate text-left" title={row.original.remarks || ''} style={{ fontSize: `${fontSize}px` }}>{row.original.remarks}</div>
+                header: () => <div className={`flex justify-center ${searchField === 'remarks' ? 'text-primary bg-primary/10 rounded' : ''}`}><MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" /></div>,
+                size: 50,
+                cell: ({ row }) => row.original.remarks ? (
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <button className="flex items-center justify-center w-full opacity-40 hover:opacity-100 transition-opacity">
+                                <MessageSquareText className="h-3.5 w-3.5" />
+                            </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-80 p-3">
+                            <p className="text-sm">{row.original.remarks}</p>
+                        </PopoverContent>
+                    </Popover>
+                ) : null
             },
             {
                 accessorKey: 'avg_price',
@@ -429,6 +532,91 @@ export function RcOutTable({
     // Virtualizer
     const tableContainerRef = React.useRef<HTMLDivElement>(null);
     const { rows } = table.getRowModel();
+
+    // --- Cell selection for copy-paste ---
+    const visibleColumns = table.getAllColumns().filter(c => c.getIsVisible());
+    const cellSelection = useCellSelection({
+        rowCount: rows.length,
+        colCount: visibleColumns.length,
+        isSelectableColumn: (colIdx) => {
+            const col = visibleColumns[colIdx];
+            return col ? col.id !== 'actions' : false;
+        },
+        scrollContainerRef: tableContainerRef,
+        enabled: !selectionMode,
+    });
+
+    // Push cell selection count to shared context
+    React.useEffect(() => {
+        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
+        setCellSelectionCount(count);
+        return () => setCellSelectionCount(0);
+    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+
+    const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
+        const row = rows[rowIdx];
+        if (!row) return '';
+        const data = row.original;
+        const col = visibleColumns[colIdx];
+        if (!col) return '';
+
+        const colId = col.id || ('accessorKey' in col.columnDef ? col.columnDef.accessorKey as string : '');
+
+        switch (colId) {
+            case 'transaction_date': return data.transaction_date || '';
+            case 'production_batch': return data.production_batch || '';
+            case 'batch_code':
+            case 'batches.batch_code': return data.batches?.batch_code || '';
+            case 'weight_kg': return data.weight_kg != null ? data.weight_kg.toLocaleString() : '';
+            case 'destination': return data.destination || '';
+            case 'block_loc': return data.block_loc || '';
+            case 'remarks': return data.remarks || '';
+            case 'avg_price': return data.avg_price != null ? data.avg_price.toFixed(2) : '';
+            case 'avg_wtd_value': return data.avg_wtd_value != null ? data.avg_wtd_value.toFixed(2) : '';
+            default: return '';
+        }
+    }, [rows, visibleColumns]);
+
+    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
+        getSelectedRange: cellSelection.getSelectedRange,
+        getCellValue,
+        getSelectionSize: cellSelection.getSelectionSize,
+        enabled: !selectionMode,
+    });
+
+    // Clear cell selection when data/sorting changes
+    React.useEffect(() => { cellSelection.clearSelection(); }, [allData]);
+    React.useEffect(() => { cellSelection.clearSelection(); }, [sorting]);
+
+    // Clear cell selection when clicking outside the scroll container
+    React.useEffect(() => {
+        if (!cellSelection.range) return;
+
+        const handleClickOutside = (e: MouseEvent) => {
+            const container = tableContainerRef.current;
+            if (container && !container.contains(e.target as Node)) {
+                cellSelection.clearSelection();
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [cellSelection.range, cellSelection.clearSelection]);
+
+    // Clear cell selection on Escape key (global listener so it works regardless of focus)
+    React.useEffect(() => {
+        if (!cellSelection.range) return;
+
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                cellSelection.clearSelection();
+            }
+        };
+
+        document.addEventListener('keydown', handleEscape);
+        return () => document.removeEventListener('keydown', handleEscape);
+    }, [cellSelection.range, cellSelection.clearSelection]);
+
     const rowVirtualizer = useVirtualizer({
         count: rows.length,
         getScrollElement: () => tableContainerRef.current,
@@ -460,16 +648,16 @@ export function RcOutTable({
     const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const statusText = React.useMemo(() => {
         const count = allData.length;
-        const displayYear = (year === 'all' || search) ? 'All Years' : year;
+        const displayYear = (currentYear === 'all' || searchTerm) ? 'All Years' : currentYear;
 
-        if (search) {
-            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo;</span>;
+        if (searchTerm) {
+            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{searchTerm}</span>&rdquo;</span>;
         }
-        if (month === 'all') {
+        if (currentMonth === 'all') {
             return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months)</span>;
         }
-        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span></span>;
-    }, [allData.length, search, month, year]);
+        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(currentMonth)]} {displayYear}</span></span>;
+    }, [allData.length, searchTerm, currentMonth, currentYear]);
 
     // Count non-price visible columns for footer colSpan
     // DATE + BATCH + BLOCK + WT + PLANT/ETC + BLOCK LOC + REMARKS = 7
@@ -601,6 +789,7 @@ export function RcOutTable({
                         onClick={() => {
                             setSelectionMode(prev => !prev);
                             if (selectionMode) setSelectedIds(new Set());
+                            else cellSelection.clearSelection();
                         }}
                     >
                         Select
@@ -675,7 +864,15 @@ export function RcOutTable({
 
                 {/* Scrollable Table */}
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
-                    <div className="flex-1 overflow-auto relative w-full h-full" ref={tableContainerRef}>
+                    <div
+                        className="flex-1 overflow-auto relative w-full outline-none select-none"
+                        ref={tableContainerRef}
+                        tabIndex={-1}
+                        onKeyDown={(e) => {
+                            cellSelection.handleKeyDown(e);
+                            handleCopyKeyDown(e);
+                        }}
+                    >
                         <div className="w-full h-full">
                             <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
                                 <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
@@ -726,12 +923,22 @@ export function RcOutTable({
                                                             style={{ height: `${rowHeight}px` }}
                                                             onClick={selectionMode ? () => toggleSelect(row.original.id) : undefined}
                                                         >
-                                                            {row.getVisibleCells().map((cell) => (
+                                                            {row.getVisibleCells().map((cell, cellIndex) => (
                                                                 <TableCell
                                                                     key={cell.id}
-                                                                    className="px-1 py-0 border-r last:border-0"
+                                                                    className={cn(
+                                                                        "px-1 py-0 border-r last:border-0",
+                                                                        !selectionMode && cellSelection.isSelected(virtualRow.index, cellIndex) && "bg-primary/10 dark:bg-primary/20",
+                                                                        !selectionMode && cellSelection.isAnchor(virtualRow.index, cellIndex) && "ring-2 ring-primary ring-inset"
+                                                                    )}
                                                                     style={{ height: `${rowHeight}px` }}
                                                                     onClick={cell.column.id === 'actions' ? (e) => e.stopPropagation() : undefined}
+                                                                    onMouseDown={cell.column.id !== 'actions' && !selectionMode ? (e) => {
+                                                                        e.preventDefault();
+                                                                        cellSelection.handleCellMouseDown(virtualRow.index, cellIndex, e);
+                                                                        tableContainerRef.current?.focus({ preventScroll: true });
+                                                                    } : undefined}
+                                                                    onMouseEnter={cellSelection.isDragging && !selectionMode ? () => cellSelection.handleCellMouseEnter(virtualRow.index, cellIndex) : undefined}
                                                                 >
                                                                     {flexRender(
                                                                         cell.column.columnDef.cell,
@@ -804,14 +1011,17 @@ export function RcOutTable({
                         </div>
                     </div>
                     <DeliverySheetFooter
-                        month={month}
-                        year={year}
+                        month={currentMonth}
+                        year={currentYear}
                         onMonthChange={handleMonthChange}
                         onYearChange={handleYearChange}
-                        disabled={!!search || isSearchFocused}
+                        disabled={!!searchTerm || isSearchFocused || isDateLoading}
+                        monthsDisabled={currentYear === 'all'}
                         statusText={statusText}
                     />
                 </div>
+
+
             </div>
         </TooltipProvider>
     );
