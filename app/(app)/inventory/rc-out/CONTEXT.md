@@ -41,8 +41,8 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 - Note: FEED location is indicated by WHSE column in RC IN (derived from block_loc), not by batch status
 
 ## Dependencies
-- `../rc-in/paste-utils` — shares `parseExcelDate()` for paste operations
-- `../../rc-in/components/DeliverySheetFooter` — shared footer with sliding month/year indicators
+- `@/lib/paste-utils` — shares `parseExcelDate()` for paste operations
+- `../../components/DeliverySheetFooter` — shared footer with sliding month/year indicators (at `app/(app)/inventory/components/`)
 - `@/components/providers/auth-context` — `hasPermission('view:prices')` gates price columns
 - `@/components/providers/table-settings` — fontSize, rowHeight settings
 - `@/components/providers/status-bar-context` — `useStatusBar()` for pushing cell selection count to FloatingStatusBar

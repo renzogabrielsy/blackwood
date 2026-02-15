@@ -11,14 +11,11 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 | `bulk-delivery-input.tsx` | ~1420 | Client grid editor — paste, keyboard nav, autocomplete, edit tracking, cell range selection + copy + delete |
 | `components/delivery-master-table-wrapper.tsx` | ~31 | Client wrapper — `dynamic()` with `ssr: false` to avoid Radix hydration mismatch |
 | `delivery-master-table.tsx` | ~1570 | Client data table — virtual scroll, header bar filters, column visibility, year/month controls, cell selection + clipboard copy |
-| `paste-utils.ts` | 81 | Excel date parsing, cell value cleaning |
+| `paste-utils.ts` | 47 | Column mapping and cell value cleaning (imports `parseExcelDate` from `@/lib/paste-utils`) |
 | `components/DeliveryHistoryDialog.tsx` | 561 | Delivery history + audit trail dialog |
-| `components/DeliverySheetFooter.tsx` | 228 | Year selector + sliding month indicators (shared with RC OUT) |
 | `components/audit-shared.tsx` | 87 | Shared audit display utilities |
 | `edit/[auditLogId]/page.tsx` | 30 | Server component for edit discussion page |
 | `edit/[auditLogId]/edit-discussion.tsx` | 452 | Resolve/request workflows, comments, diff display |
-| `auth-context.tsx` | 3 | Re-export from shared location |
-| `table-settings.tsx` | 2 | Re-export from shared location |
 | `error.tsx` | 25 | Error boundary |
 | `loading.tsx` | 47 | Loading skeleton |
 
@@ -93,6 +90,6 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `date-fns`, `sonner`
 
 ## See Also
-- [RC OUT](../rc-out/CONTEXT.md) — shares `DeliverySheetFooter` and `parseExcelDate()`
+- [RC OUT](../rc-out/CONTEXT.md) — shares `DeliverySheetFooter` (at `../components/DeliverySheetFooter`) and `parseExcelDate()` (at `@/lib/paste-utils`)
 - [Auth Provider](../../../../components/providers/AUTH.md) — permission model for cost visibility
 - [Navbar](../../../../components/NAVBAR.md) — breadcrumb registration

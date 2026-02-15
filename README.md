@@ -1,57 +1,133 @@
 # Blackwood
 
-A comprehensive logistics and inventory management system built with Next.js and Supabase.
-
-## Functionality Overview
-
-### 1. RC IN Module (`/inventory/rc-in`)
-The **RC IN** (Raw Coconut Inbound) module manages the delivery and quality control of incoming shipments.
-
-**Key Features:**
-*   **Bulk Delivery Input**:
-    *   Efficient data entry table for logging deliveries.
-    *   **Flat & Strict Data Structure**: Ensuring compatibility with CSV/Spreadsheet logic.
-    *   **Dynamic Calculations**:
-        *   `WHSE` (Warehouse) is auto-calculated based on `Block Loc`.
-        *   `PHP TTL` (Total Price) calculated real-time (`Weight * Price`).
-    *   **Fields**: State, Date, Supplier, Block, Truck, Weight, Sacks, and comprehensive Lab Results (MC, Ash, BD ASTM, BD JIS, Grit, VM, FC).
-*   **Delivery Master Table**:
-    *   **High Performance**: Implemented **Row Virtualization** (TanStack Virtual) to handle 1000+ records smoothly.
-    *   **Unified Navigation**:
-        *   Advanced footer with sliding animations for Year and Month selection.
-        *   **"All Years"** mode for complete historical analysis.
-        *   Optimistic UI updates for instant interaction response.
-    *   **Smart Filtering**:
-        *   **Search Predominance**: Text search overrides date filters for global lookup.
-        *   Hybrid Client/Server filtering for optimal speed.
-    *   Matches the strict column order of the input.
-    *   Displays individual lab statistics.
-    *   Supports **Edit** and **Delete** actions for data correction.
-
-### 2. Data Management Scripts
-Automation scripts for system administration and setup.
-
-*   **RC IN Seeder** (`scripts/seed_rc_in.ts`):
-    *   Robust seeding script compatible with legacy data CSVs (`260209_rc_in_samples.csv`).
-    *   **Advanced Logic**:
-        *   Automatically upserts **Batches** (Blocks) if they don't exist.
-        *   Converts **Excel Serial Dates** to PostgreSQL timestamps.
-        *   Safe parsing handling BOM and quoted CSV fields without external dependencies.
+Industrial inventory management system for a charcoal processing plant. Tracks inbound deliveries, outbound usage, batch state, and user access through dense, spreadsheet-style interfaces.
 
 ## Tech Stack
-*   **Framework**: Next.js 16 (App Router)
-*   **Database**: Supabase (PostgreSQL)
-*   **Styling**: Tailwind CSS
-*   **UI Components**: Shadcn UI (Radix Primitives)
-*   **Virtualization**: TanStack Virtual
-*   **Language**: TypeScript
+
+- **Next.js 16** (App Router) with **React 19** and **TypeScript** (strict mode)
+- **Supabase** (PostgreSQL) with Row Level Security
+- **Tailwind CSS v4** with **Shadcn UI** (new-york style, zinc base)
+- **TanStack Table** + TanStack Virtual for virtualized data grids
+- **date-fns** for date formatting, **cmdk** for command menus
+- **next-themes** for dark mode
+
+## Modules
+
+### Inventory (`/inventory`)
+
+- **Deliveries (RC IN)** — Inbound delivery logging with bulk grid input, quality tracking (lab results as JSONB), audit trail with resolve workflow
+- **Usage (RC OUT)** — Outbound consumption tracking, batch depletion, DB-computed pricing columns, infinite scroll
+- **Shared** — Tab-based navigation, DeliverySheetFooter with year/month selection, cell selection + clipboard copy
+
+### Admin (`/admin`)
+
+- User management — invite, revoke, reactivate
+- Role-based access — Owner, Admin, Dev, Employee
+- Supabase Auth integration with invite-only whitelist (`user_invites` table)
+
+### Notifications
+
+- Realtime notification bell (polling-based)
+- Audit trail subscriptions
+- Resolve request workflow notifications
+
+### Settings (`/settings`)
+
+- Profile management (display name, avatar)
+- Sign out
+
+## Architecture
+
+    User Action -> Client Component -> Server Action -> Supabase -> revalidatePath() -> Re-render
+
+- **Server Components** (`page.tsx`) handle data fetching
+- **Client Components** (`'use client'`) handle interactivity
+- **Server Actions** (`actions.ts`) handle all mutations
+- DB triggers derive batch state (`status`, `avg_cost`, `current_weight`) automatically
+- URL search params for RC IN filters; internal React state for RC OUT
+- **"Separate Inputs, Unified State"** — each module captures data independently, the database unifies state via triggers and views
+
+## Database
+
+**Tables:** `batches`, `deliveries`, `rc_out`, `profiles`, `audit_logs`, `audit_comments`, `notifications`, `notification_subscriptions`, `user_invites`
+
+**Key triggers:**
+- `fn_update_blackwood_state` — delivery inserts/updates → batch cost recalculation
+- `fn_process_blackwood_usage` — usage inserts → batch status and weight updates
+- `handle_new_user` — auth signup → profile creation from invite whitelist
+
+**Generated columns** on `rc_out` for `rc_out_avg_price` and `rc_out_avg_wtd_value`.
+
+**Views:** `view_rc_in_master` — joined delivery + batch data for the RC IN table.
+
+## Project Structure
+
+```
+app/
+  (app)/                    # Auth-protected routes
+    inventory/              # Inventory module
+      components/           # Shared inventory components
+      rc-in/                # Deliveries (inbound)
+      rc-out/               # Usage (outbound)
+    admin/                  # User management
+    settings/               # Profile & preferences
+    notifications/          # Notification center
+  login/                    # Public auth page
+  auth/callback/            # OAuth callback
+components/
+  ui/                       # Shadcn primitives
+  providers/                # Context providers (auth, theme)
+lib/
+  hooks/                    # Reusable hooks (cell selection, clipboard)
+  supabase/                 # Client, server, admin Supabase clients
+types/                      # TypeScript type definitions
+supabase/migrations/        # Database migrations
+scripts/                    # Data seeding scripts
+```
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+
+- npm
+- Supabase project (with linked CLI)
+
+### Environment Variables
+
+Create `.env.local` in the project root:
 
 ```bash
+NEXT_PUBLIC_SUPABASE_URL=<your_supabase_url>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<your_anon_key>
+SUPABASE_SERVICE_ROLE_KEY=<your_service_role_key>
+```
+
+### Install & Run
+
+```bash
+npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
+
+## Development
+
+```bash
+npm run dev          # Start dev server
+npm run build        # Production build
+npm run lint         # ESLint
+
+# Supabase
+supabase gen types typescript --linked > types/supabase.ts   # Regenerate types
+supabase migration new <name>                                 # New migration
+supabase db push                                              # Push migrations
+```
+
+## Git Workflow
+
+- **`main`** — production-ready
+- **`dev`** — staging/integration
+- **`feat/*`** — feature branches from `dev`
+- Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`

@@ -76,7 +76,7 @@ import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
-import { DeliverySheetFooter } from './components/DeliverySheetFooter';
+import { DeliverySheetFooter } from '../components/DeliverySheetFooter';
 import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 
 function getStateClasses(state: string): string {

@@ -58,7 +58,7 @@ import {
 import { getRcOutRecords, deleteRcOutRecord, bulkDeleteRcOut } from '../actions';
 import type { RcOutRow } from '@/types/rc-out';
 import { BulkUsageInput } from '../bulk-usage-input';
-import { DeliverySheetFooter } from '../../rc-in/components/DeliverySheetFooter';
+import { DeliverySheetFooter } from '../../components/DeliverySheetFooter';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useStatusBar } from '@/components/providers/status-bar-context';

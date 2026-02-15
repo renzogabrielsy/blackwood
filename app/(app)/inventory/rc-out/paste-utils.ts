@@ -1,5 +1,5 @@
 import type { InputRcOutRow } from '@/types/rc-out';
-import { parseExcelDate } from '../rc-in/paste-utils';
+import { parseExcelDate } from '@/lib/paste-utils';
 
 // Maps visual column index to the data key. null = read-only/skipped during paste.
 export const COLUMN_MAP: (keyof InputRcOutRow | null)[] = [
