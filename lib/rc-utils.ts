@@ -13,7 +13,13 @@
  * @param blockLoc The Block Location string (e.g., "A-12", "F-BLK1")
  * @returns The warehouse name or "-" if undetermined.
  */
-export function calculateWhse(blockLoc: string | undefined | null): string {
+export function calculateWhse(blockLoc: string | undefined | null, batchCode?: string | null): string {
+    // Priority: If the Batch Code itself indicates FEED (suffix), it overrides location.
+    // Regex matches "FEED" optionally followed by digits at the end of the string (case-insensitive).
+    if (batchCode && /FEED\d*$/i.test(batchCode.trim())) {
+        return 'FEED';
+    }
+
     if (!blockLoc) return '-';
 
     const firstChar = blockLoc.trim().toUpperCase().charAt(0);
