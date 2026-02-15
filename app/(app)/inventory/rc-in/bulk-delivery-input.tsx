@@ -99,9 +99,9 @@ function deliveryToInputRow(d: DeliveryRow & { id?: string }): InputDeliveryRow 
 
 function getStateClasses(state: string): string {
     switch (state) {
-        case 'IN-USE': return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
-        case 'CLOSED': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
-        case 'SUNDRYING': return 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30';
+        case 'IN-USE': return 'text-blue-700 bg-blue-200 dark:text-blue-300 dark:bg-blue-900 shadow-sm ring-1 ring-blue-300/60 dark:ring-blue-600/40';
+        case 'CLOSED': return 'text-red-700 bg-red-200 dark:text-red-300 dark:bg-red-900 shadow-sm ring-1 ring-red-300/60 dark:ring-red-600/40';
+        case 'SUNDRYING': return 'text-amber-700 bg-amber-200 dark:text-amber-300 dark:bg-amber-900 shadow-sm ring-1 ring-amber-300/60 dark:ring-amber-600/40';
         default: return 'text-muted-foreground bg-muted/10'; // STORED
     }
 }
@@ -647,6 +647,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     auditComment,
     onAuditCommentChange,
     isEditMode = false,
+    canViewPrices,
 }: {
     row: InputDeliveryRow;
     index: number;
@@ -927,40 +928,44 @@ const BulkInputRow = React.memo(function BulkInputRow({
             </TableCell>
 
             {/* 18: PRICE */}
-            <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={18} value={row.cost_basis} {...commonCellProps}
-                    displayValue={
-                        <div className="flex items-center justify-between h-full w-full px-1">
-                            <span className="text-muted-foreground mr-1">₱</span>
-                            <span>{row.cost_basis}</span>
+            {canViewPrices && (
+                <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
+                    <GridCell col={18} value={row.cost_basis} {...commonCellProps}
+                        displayValue={
+                            <div className="flex items-center justify-between h-full w-full px-1">
+                                <span className="text-muted-foreground mr-1">₱</span>
+                                <span>{row.cost_basis}</span>
+                            </div>
+                        }
+                    >
+                        <div className="flex items-center justify-between h-full w-full relative">
+                            <span className="text-muted-foreground absolute left-0 pl-1 z-10" style={inputStyle}>₱</span>
+                            <Input
+                                autoFocus
+                                type="number"
+                                step="0.01"
+                                value={row.cost_basis}
+                                onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
+                                className={cn(inputClass, "w-full text-right font-mono font-bold pr-1")}
+                                placeholder="0.00"
+                                style={{ ...inputStyle, paddingLeft: '16px' }}
+                            />
                         </div>
-                    }
-                >
-                    <div className="flex items-center justify-between h-full w-full relative">
-                        <span className="text-muted-foreground absolute left-0 pl-1 z-10" style={inputStyle}>₱</span>
-                        <Input
-                            autoFocus
-                            type="number"
-                            step="0.01"
-                            value={row.cost_basis}
-                            onChange={(e) => updateRow(index, 'cost_basis', e.target.value)}
-                            className={cn(inputClass, "w-full text-right font-mono font-bold pr-1")}
-                            placeholder="0.00"
-                            style={{ ...inputStyle, paddingLeft: '16px' }}
-                        />
-                    </div>
-                </GridCell>
-            </TableCell>
+                    </GridCell>
+                </TableCell>
+            )}
 
             {/* 19: TTL (Calculated) */}
-            <TableCell className="px-1 py-0 text-right border-r" style={{ height: `${rowHeight}px` }}>
-                <div className="flex items-center justify-between h-full px-1">
-                    <span className="text-muted-foreground" style={inputStyle}>₱</span>
-                    <span className="text-right font-mono font-bold" style={inputStyle}>
-                        {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                </div>
-            </TableCell>
+            {canViewPrices && (
+                <TableCell className="px-1 py-0 text-right border-r" style={{ height: `${rowHeight}px` }}>
+                    <div className="flex items-center justify-between h-full px-1">
+                        <span className="text-muted-foreground" style={inputStyle}>₱</span>
+                        <span className="text-right font-mono font-bold" style={inputStyle}>
+                            {ttlValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                    </div>
+                </TableCell>
+            )}
 
             {/* Remove row */}
             <TableCell className="p-0 w-[20px]" style={{ height: `${rowHeight}px` }}>

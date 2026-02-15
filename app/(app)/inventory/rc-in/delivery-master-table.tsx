@@ -21,8 +21,9 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock } from 'lucide-react';
+import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import {
     TableBody,
@@ -53,6 +54,14 @@ import {
     PopoverTrigger,
 } from '@/components/ui/popover';
 import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList,
+} from '@/components/ui/command';
+import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
 import { deleteDelivery, bulkDeleteDeliveries } from './actions';
@@ -66,10 +75,19 @@ import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 
 function getStateClasses(state: string): string {
     switch (state) {
-        case 'IN-USE': return 'text-blue-700 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/30';
-        case 'CLOSED': return 'text-red-700 bg-red-100 dark:text-red-300 dark:bg-red-900/30';
-        case 'SUNDRYING': return 'text-amber-700 bg-amber-100 dark:text-amber-300 dark:bg-amber-900/30';
+        case 'IN-USE': return 'text-blue-700 bg-blue-200 dark:text-blue-300 dark:bg-blue-900 shadow-sm ring-1 ring-blue-300/60 dark:ring-blue-600/40';
+        case 'CLOSED': return 'text-red-700 bg-red-200 dark:text-red-300 dark:bg-red-900 shadow-sm ring-1 ring-red-300/60 dark:ring-red-600/40';
+        case 'SUNDRYING': return 'text-amber-700 bg-amber-200 dark:text-amber-300 dark:bg-amber-900 shadow-sm ring-1 ring-amber-300/60 dark:ring-amber-600/40';
         default: return 'text-muted-foreground bg-muted/10'; // STORED
+    }
+}
+
+function getRowStateClasses(state: string): string {
+    switch (state) {
+        case 'IN-USE':    return 'bg-blue-100/70 dark:bg-blue-950/40';
+        case 'CLOSED':    return 'bg-red-100/70 dark:bg-red-950/40';
+        case 'SUNDRYING': return 'bg-amber-100/70 dark:bg-amber-950/40';
+        default:          return ''; // STORED — no row highlight
     }
 }
 
@@ -83,22 +101,86 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
     { key: 'fc', label: 'FC', decimals: 2 },
 ];
 
-export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryHistoryRow[], batches: any[], search?: string }) {
+const formatCompact = (value: number, decimals: number = 2): string => {
+    const abs = Math.abs(value);
+    if (abs >= 1e12) return (value / 1e12).toFixed(decimals) + 't';
+    if (abs >= 1e9) return (value / 1e9).toFixed(decimals) + 'b';
+    if (abs >= 1e6) return (value / 1e6).toFixed(decimals) + 'm';
+    if (abs >= 1e3) return (value / 1e3).toFixed(decimals) + 'k';
+    return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+};
+
+export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: any[], search?: string, allSuppliers: string[], allLocations: string[] }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { user, role, hasPermission } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
 
-    const [month, setMonth] = React.useState<string>(() => String(new Date().getMonth()));
+    const [month, setMonth] = React.useState<string>(() => searchParams.get('m') || String(new Date().getMonth()));
 
-    // Sync month from URL if present (initial load or back/forward nav), but strictly it's state-driven now.
-    // However, the plan says month is removed from URL. So we initialize from current date.
-    // Actually, if we want to preserve state on navigation, we might want to use a query param but not for server fetching?
-    // The plan said: "month becomes client-side state... month is removed from URL entirely".
-    // So useState is correct.
+    // Ref to save the user's year+month before header filters auto-switch to All Years
+    const preFilterDate = React.useRef<{ year: string; month: string } | null>(null);
 
-    const fieldParam = searchParams.get('field') || 'all';
+    // Header bar filter state — exclusion sets initialized from URL params to survive Suspense remounts
+    // STATE defaults to excluding CLOSED on fresh load (no sx param) so users see active inventory first.
+    // Sentinel value '_all' in URL means "user explicitly cleared the filter" (show all states).
+    // Absent sx param means "fresh load, apply default exclusion".
+    const STATE_DEFAULT_EXCLUDED = ['CLOSED'];
+    const [stateExcluded, setStateExcluded] = React.useState<Set<string>>(() => {
+        const param = searchParams.get('sx');
+        if (param === '_all') return new Set();        // user explicitly cleared — show all
+        if (param) return new Set(param.split(','));   // user-set exclusions
+        return new Set(STATE_DEFAULT_EXCLUDED);        // fresh load — exclude CLOSED
+    });
+    const [whseExcluded, setWhseExcluded] = React.useState<Set<string>>(() => {
+        const param = searchParams.get('wx');
+        return param ? new Set(param.split(',')) : new Set();
+    });
+    // Supplier & LOC use INCLUSION model: empty set = show all (no filter), non-empty = show ONLY those values
+    const [supIncluded, setSupIncluded] = React.useState<Set<string>>(() => {
+        const param = searchParams.get('sup');
+        return param ? new Set(param.split(',')) : new Set();
+    });
+    const [locIncluded, setLocIncluded] = React.useState<Set<string>>(() => {
+        const param = searchParams.get('loc');
+        return param ? new Set(param.split(',')) : new Set();
+    });
+
+    // Silently sync a param to URL without triggering Next.js navigation
+    const syncParamToUrl = React.useCallback((key: string, value: string, defaultVal: string = 'all') => {
+        const params = new URLSearchParams(window.location.search);
+        if (value !== defaultVal) params.set(key, value);
+        else params.delete(key);
+        const qs = params.toString();
+        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+    }, [pathname]);
+
+    const syncExclusionToUrl = React.useCallback((key: string, excluded: Set<string>) => {
+        const params = new URLSearchParams(window.location.search);
+        if (excluded.size > 0) {
+            params.set(key, [...excluded].join(','));
+        } else if (key === 'sx') {
+            // Sentinel: distinguish "user cleared filter" from "fresh load (apply default)"
+            params.set(key, '_all');
+        } else {
+            params.delete(key);
+        }
+        const qs = params.toString();
+        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+    }, [pathname]);
+
+    // Silently sync an inclusion set to URL (non-empty = set param, empty = delete param)
+    const syncInclusionToUrl = React.useCallback((key: string, included: Set<string>) => {
+        const params = new URLSearchParams(window.location.search);
+        if (included.size > 0) {
+            params.set(key, [...included].join(','));
+        } else {
+            params.delete(key);
+        }
+        const qs = params.toString();
+        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+    }, [pathname]);
 
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -114,12 +196,65 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
     const [historyDelivery, setHistoryDelivery] = React.useState<DeliveryHistoryRow | null>(null);
     const [historyOpen, setHistoryOpen] = React.useState(false);
 
+    // Column visibility — persisted to localStorage
+    const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(() => {
+        if (typeof window === 'undefined') return new Set();
+        try {
+            const saved = localStorage.getItem('rc-in-hidden-columns');
+            return saved ? new Set(JSON.parse(saved)) : new Set();
+        } catch { return new Set(); }
+    });
+
+    React.useEffect(() => {
+        if (hiddenColumns.size > 0) {
+            localStorage.setItem('rc-in-hidden-columns', JSON.stringify([...hiddenColumns]));
+        } else {
+            localStorage.removeItem('rc-in-hidden-columns');
+        }
+    }, [hiddenColumns]);
+
+    const toggleColumnVisibility = (colId: string) => {
+        setHiddenColumns(prev => {
+            const next = new Set(prev);
+            if (next.has(colId)) next.delete(colId);
+            else next.add(colId);
+            return next;
+        });
+    };
+
+    const showAllColumns = () => setHiddenColumns(new Set());
+
+    const hideableColumns = React.useMemo(() => {
+        const cols = [
+            { id: 'whse', label: 'WHSE' },
+            { id: 'state', label: 'STATE' },
+            { id: 'transaction_date', label: 'DATE' },
+            { id: 'supplier', label: 'SUPPLIER' },
+            { id: 'batch_code', label: 'BLOCK' },
+            { id: 'block_loc', label: 'LOC' },
+            { id: 'truck_plate', label: 'TRUCK' },
+            { id: 'weight_kg', label: 'WT' },
+            { id: 'sacks', label: 'SKS' },
+            { id: 'mc', label: 'MC' },
+            { id: 'grit', label: 'GRIT' },
+            { id: 'bd_astm', label: 'ASTM' },
+            { id: 'bd_jis', label: 'JIS' },
+            { id: 'vm', label: 'VM' },
+            { id: 'ash', label: 'ASH' },
+            { id: 'fc', label: 'FC' },
+            { id: 'remarks', label: 'REMARKS' },
+        ];
+        if (hasPermission('view:prices')) {
+            cols.push({ id: 'cost_basis', label: 'PHP/KG' });
+            cols.push({ id: 'php_ttl', label: 'PHP TTL' });
+        }
+        return cols;
+    }, [hasPermission]);
+
     const handleViewHistory = (delivery: DeliveryHistoryRow) => {
         setHistoryDelivery(delivery);
         setHistoryOpen(true);
     };
-    const searchField = (fieldParam as 'all' | 'supplier' | 'batch_code' | 'whse' | 'truck_plate');
-
     const createQueryString = React.useCallback(
         (name: string, value: string) => {
             const params = new URLSearchParams(searchParams.toString());
@@ -139,7 +274,26 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
     const [isYearLoading, setIsYearLoading] = React.useState(false);
     const [minLoadingTimer, setMinLoadingTimer] = React.useState<NodeJS.Timeout | null>(null);
 
-    const handleYearChange = (newYear: string) => {
+    // Build URL with all current filter + month state for navigation
+    const buildFilterParams = (base: URLSearchParams, filterOverrides: Record<string, string> = {}) => {
+        const filters: Record<string, string> = {
+            sx: stateExcluded.size > 0 ? [...stateExcluded].join(',') : '_all',
+            wx: [...whseExcluded].join(','),
+            sup: [...supIncluded].join(','),
+            loc: [...locIncluded].join(','),
+            ...filterOverrides,
+        };
+        // Clean up legacy exclusion params if present
+        base.delete('supx');
+        base.delete('lx');
+        Object.entries(filters).forEach(([key, value]) => {
+            if (value) base.set(key, value);
+            else base.delete(key);
+        });
+        return base;
+    };
+
+    const handleYearChange = (newYear: string, filterOverrides: Record<string, string> = {}) => {
         setIsYearLoading(true);
         // Start min 2s timer
         const timer = setTimeout(() => {
@@ -148,12 +302,15 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         }, 2000);
         setMinLoadingTimer(timer);
 
+        let newMonth = month;
         // When selecting ALL years: force month to ALL and disable month buttons
         if (newYear === 'all') {
+            newMonth = 'all';
             setMonth('all');
         } else if (month === 'all') {
             // When switching to a specific year from ALL months, default to JAN
             // to avoid rendering every entry client-side
+            newMonth = '0';
             setMonth('0');
         }
         // Otherwise keep the current month selection
@@ -161,6 +318,13 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         const params = new URLSearchParams(searchParams.toString());
         params.set('year', newYear);
         params.delete('view_date');
+        // Sync month param for remount
+        const defaultMonth = String(new Date().getMonth());
+        if (newMonth !== defaultMonth) params.set('m', newMonth);
+        else params.delete('m');
+        // Persist filter state in URL for Suspense remount
+        buildFilterParams(params, filterOverrides);
+
         router.replace(pathname + '?' + params.toString(), { scroll: false });
     };
 
@@ -171,19 +335,136 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         };
     }, [minLoadingTimer]);
 
+    // Auto-switch to "All Years" when a header filter activates
+    const yearParam = searchParams.get('year') || String(new Date().getFullYear());
+
+    const buildFilterOverrides = (urlKey: string, filterSet: Set<string>) => {
+        if (filterSet.size > 0) return { [urlKey]: [...filterSet].join(',') };
+        // For sx: use sentinel to preserve "show all" across remounts
+        return { [urlKey]: urlKey === 'sx' ? '_all' : '' };
+    };
+
+    // Restore user's previous year+month when all filters become empty
+    // STATE has 5 values, WHSE has 5 values (hardcoded)
+    const STATE_COUNT = 5;
+    const WHSE_COUNT = 5;
+    const maybeRestoreDate = (clearedKey?: string) => {
+        if (!preFilterDate.current) return;
+        // Check all filter sets are effectively inactive (treat clearedKey as already cleared)
+        // STATE/WHSE: exclusion model — size 0 = no filter; size >= total = full exclusion (Deselect All) = no filter
+        // Supplier/LOC: inclusion model — size 0 = no filter
+        const isInactive = (key: string): boolean => {
+            if (key === clearedKey) return true;
+            if (key === 'sx') return stateExcluded.size === 0 || stateExcluded.size >= STATE_COUNT;
+            if (key === 'wx') return whseExcluded.size === 0 || whseExcluded.size >= WHSE_COUNT;
+            if (key === 'sup') return supIncluded.size === 0;
+            if (key === 'loc') return locIncluded.size === 0;
+            return true;
+        };
+        const allClear = ['sx', 'wx', 'sup', 'loc'].every(isInactive);
+        if (allClear) {
+            const { year, month: savedMonth } = preFilterDate.current;
+            preFilterDate.current = null;
+            if (year !== 'all') {
+                handleYearChange(year);
+                setMonth(savedMonth);
+                syncParamToUrl('m', savedMonth, String(new Date().getMonth()));
+            }
+        }
+    };
+
+    const toggleFilterValue = (urlKey: string, value: string, exclude: boolean, current: Set<string>, setter: (s: Set<string>) => void) => {
+        const next = new Set(current);
+        if (exclude) next.add(value);
+        else next.delete(value);
+        setter(next);
+        syncExclusionToUrl(urlKey, next);
+        if (next.size > 0 && yearParam !== 'all') {
+            if (preFilterDate.current === null) {
+                preFilterDate.current = { year: yearParam, month };
+            }
+            handleYearChange('all', buildFilterOverrides(urlKey, next));
+        }
+        if (next.size === 0) {
+            maybeRestoreDate(urlKey);
+        }
+    };
+
+    const clearFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
+        setter(new Set());
+        syncExclusionToUrl(urlKey, new Set());
+        maybeRestoreDate(urlKey);
+    };
+
+    const selectAllFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
+        setter(new Set());
+        syncExclusionToUrl(urlKey, new Set());
+        maybeRestoreDate(urlKey);
+    };
+
+    const deselectAllFilter = (_urlKey: string, allValues: string[], setter: (s: Set<string>) => void) => {
+        setter(new Set(allValues)); // UI-only: no URL sync, no year switch
+    };
+
+    // Inclusion model helpers for Supplier/LOC
+    const toggleInclusionFilter = (urlKey: string, value: string, current: Set<string>, setter: (s: Set<string>) => void) => {
+        const next = new Set(current);
+        if (next.has(value)) next.delete(value);
+        else next.add(value);
+        setter(next);
+        syncInclusionToUrl(urlKey, next);
+        if (next.size > 0 && yearParam !== 'all') {
+            if (preFilterDate.current === null) {
+                preFilterDate.current = { year: yearParam, month };
+            }
+            handleYearChange('all', buildFilterOverrides(urlKey, next));
+        }
+        if (next.size === 0) {
+            maybeRestoreDate(urlKey);
+        }
+    };
+
+    const clearInclusionFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
+        setter(new Set());
+        syncInclusionToUrl(urlKey, new Set());
+        maybeRestoreDate(urlKey);
+    };
+
+    const handleMonthChange = (value: string) => {
+        setMonth(value);
+        syncParamToUrl('m', value, String(new Date().getMonth()));
+    };
+
     // Client-side filtering (Fix #4: string slicing instead of new Date())
+    // Execution order: 1) HeaderBar filters (always), 2) search overrides month, 3) FooterBar month
     const filteredData = React.useMemo(() => {
         let filtered = data;
 
-        // Search Dominance: If searching, ignore footer filters entirely
-        if (search) {
-            return filtered;
+        // HeaderBar filters — ALWAYS apply (even with search)
+        // Guard: full exclusion (size >= total) = "Deselect All" = UI-only, treat as no filter
+        if (stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT) {
+            filtered = filtered.filter(d => !stateExcluded.has(d.state || 'STORED'));
+        }
+        if (whseExcluded.size > 0 && whseExcluded.size < WHSE_COUNT) {
+            filtered = filtered.filter(d =>
+                !whseExcluded.has(calculateWhse(d.block_loc || d.batches?.location_ref, d.batch_code))
+            );
+        }
+        if (supIncluded.size > 0) {
+            filtered = filtered.filter(d => supIncluded.has(d.supplier));
+        }
+        if (locIncluded.size > 0) {
+            filtered = filtered.filter(d =>
+                locIncluded.has(d.block_loc || d.batches?.location_ref || '')
+            );
         }
 
-        // Normal filtering (No search)
+        // Search overrides FooterBar month filter
+        if (search) return filtered;
+
+        // FooterBar month filter (no search active)
         if (month !== 'all') {
             const monthNum = parseInt(month, 10);
-            // Use string slicing on 'YYYY-MM-DD' format to avoid Date construction
             filtered = filtered.filter(d => {
                 const m = parseInt(d.transaction_date.slice(5, 7), 10) - 1;
                 return m === monthNum;
@@ -191,7 +472,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         }
 
         return filtered;
-    }, [data, month, search]);
+    }, [data, month, search, stateExcluded, whseExcluded, supIncluded, locIncluded]);
 
     const [searchTerm, setSearchTerm] = React.useState(search || '');
 
@@ -207,10 +488,6 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
 
     const handleSearchChange = (term: string) => {
         setSearchTerm(term);
-    };
-
-    const handleFieldChange = (field: string) => {
-        router.push(pathname + '?' + createQueryString('field', field));
     };
 
     const toggleSelect = React.useCallback((id: string) => {
@@ -349,19 +626,19 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
             },
             {
                 accessorKey: 'supplier',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'supplier' ? 'text-primary bg-primary/10 rounded' : ''}`}>SUPPLIER</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
                 size: 120,
                 cell: ({ row }) => <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }} title={row.getValue('supplier')}>{row.getValue('supplier')}</div>
             },
             {
                 accessorKey: 'batch_code',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
                 size: 80,
                 cell: ({ row }) => <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }} title={row.getValue('batch_code')}>{row.getValue('batch_code')}</div>
             },
             {
                 accessorKey: 'block_loc',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'whse' ? 'text-primary bg-primary/10 rounded' : ''}`}>LOC</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">LOC</div>,
                 size: 40,
                 cell: ({ row }) => {
                     const val = row.original.block_loc || row.original.batches?.location_ref;
@@ -370,7 +647,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
             },
             {
                 accessorKey: 'truck_plate',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'truck_plate' ? 'text-primary bg-primary/10 rounded' : ''}`}>TRUCK</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">TRUCK</div>,
                 size: 40,
                 cell: ({ row }) => <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('truck_plate')}</div>
             },
@@ -475,12 +752,15 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         ];
 
         return allColumns.filter(col => {
-            if (col.id === 'cost_basis' || (col as any).accessorKey === 'cost_basis' || col.id === 'php_ttl') {
+            const id = col.id || (col as { accessorKey?: string }).accessorKey;
+            if (id === 'actions') return true; // never hide actions
+            if (id && hiddenColumns.has(id)) return false;
+            if (id === 'cost_basis' || id === 'php_ttl') {
                 return hasPermission('view:prices');
             }
             return true;
         });
-    }, [fontSize, searchField, hasPermission]); // Fix #2: removed `data` — columns don't reference data
+    }, [fontSize, hasPermission, hiddenColumns]);
 
     const table = useReactTable({
         data: filteredData,
@@ -507,11 +787,45 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         overscan: 15,
     });
 
-    // Fix #5: Memoize unique suppliers
-    const uniqueSuppliers = React.useMemo(
-        () => Array.from(new Set(data.map(d => d.supplier))).filter(Boolean).sort(),
-        [data]
+    // Unique filter options — hardcoded for STATE/WHSE, from props for Supplier/LOC
+    const uniqueStates = React.useMemo(
+        () => ['STORED', 'IN-USE', 'CLOSED', 'SUNDRYING', 'SUNDRIED'],
+        []
     );
+
+    const uniqueWhse = React.useMemo(
+        () => ['WHSE A', 'WHSE B', 'WHSE C', 'WHSE D', 'FEED'],
+        []
+    );
+
+    const hasActiveFilters = (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) || (whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length) || supIncluded.size > 0 || locIncluded.size > 0;
+
+    const clearAllFilters = () => {
+        setStateExcluded(new Set());
+        setWhseExcluded(new Set());
+        setSupIncluded(new Set());
+        setLocIncluded(new Set());
+        const params = new URLSearchParams(window.location.search);
+        params.set('sx', '_all'); // sentinel: user explicitly cleared (don't re-apply default on remount)
+        params.delete('wx');
+        params.delete('sup');
+        params.delete('loc');
+        // Clean up legacy params
+        params.delete('supx');
+        params.delete('lx');
+        const qs = params.toString();
+        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+        // Restore saved year+month if available
+        if (preFilterDate.current) {
+            const { year, month: savedMonth } = preFilterDate.current;
+            preFilterDate.current = null;
+            if (year !== 'all') {
+                handleYearChange(year);
+                setMonth(savedMonth);
+                syncParamToUrl('m', savedMonth, String(new Date().getMonth()));
+            }
+        }
+    };
 
     // Fix #6: Memoize footer totals
     const filteredRows = table.getFilteredRowModel().rows;
@@ -553,21 +867,42 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
         }, {} as Record<string, number>);
     }, [filteredRows]);
 
+    // Footer: count visible prefix columns for dynamic colSpan
+    const PREFIX_COLUMN_IDS = ['state', 'whse', 'transaction_date', 'supplier', 'batch_code', 'block_loc', 'truck_plate'];
+
+    const visiblePrefixCount = React.useMemo(
+        () => PREFIX_COLUMN_IDS.filter(id => !hiddenColumns.has(id)).length,
+        [hiddenColumns]
+    );
+
     // Fix #7: Move statusText useMemo to top-level
+    // Build active filter labels for status text
+    const activeFilterLabels = React.useMemo(() => {
+        const labels: string[] = [];
+        if (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) labels.push(`STATE (-${stateExcluded.size})`);
+        if (whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length) labels.push(`WHSE (-${whseExcluded.size})`);
+        if (supIncluded.size > 0) labels.push(`SUPPLIER (${supIncluded.size})`);
+        if (locIncluded.size > 0) labels.push(`LOC (${locIncluded.size})`);
+        return labels;
+    }, [stateExcluded, whseExcluded, supIncluded, locIncluded, uniqueStates.length, uniqueWhse.length]);
+
     const statusText = React.useMemo(() => {
         const count = filteredData.length;
-        const yearParam = searchParams.get('year') || String(new Date().getFullYear());
         const displayYear = (yearParam === 'all' || search) ? 'All Years' : yearParam;
         const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
+        const filterSuffix = activeFilterLabels.length > 0
+            ? <> &middot; Filtered: <span className="font-semibold text-foreground">{activeFilterLabels.join(', ')}</span></>
+            : null;
+
         if (search) {
-            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo; in <span className="font-semibold text-foreground">{displayYear}</span></span>;
+            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{search}</span>&rdquo; in <span className="font-semibold text-foreground">{displayYear}</span>{filterSuffix}</span>;
         }
         if (month === 'all') {
-            return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months)</span>;
+            return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months){filterSuffix}</span>;
         }
-        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span></span>;
-    }, [filteredData.length, search, month, searchParams]);
+        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span>{filterSuffix}</span>;
+    }, [filteredData.length, search, month, yearParam, activeFilterLabels]);
 
     return (
         <TooltipProvider>
@@ -593,7 +928,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                         <div className="flex-1 overflow-auto p-6 pt-2">
                             <BulkDeliveryInput
                                 batches={batches}
-                                suppliers={uniqueSuppliers}
+                                suppliers={allSuppliers}
                                 onSuccess={() => setIsAddOpen(false)}
                                 onDirtyChange={setIsInputDirty}
                             />
@@ -625,7 +960,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                     mode="edit"
                                     initialData={editRows}
                                     batches={batches}
-                                    suppliers={uniqueSuppliers}
+                                    suppliers={allSuppliers}
                                     onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
                                     onDirtyChange={setIsInputDirty}
                                 />
@@ -659,29 +994,11 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
 
                 {/* Toolbar */}
                 <div className="flex-none flex items-center justify-between py-1">
-                    <div className="flex items-center gap-2">
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="ml-auto w-32 h-8 text-[12px] font-mono">
-                                    {searchField === 'all' ? 'All Fields' : searchField.toUpperCase()}
-                                    <ChevronDown className="ml-2 h-4 w-4" />
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                                <DropdownMenuLabel>Search Field</DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => handleFieldChange('all')}>All Fields</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('supplier')}>Supplier</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('batch_code')}>Block</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('whse')}>WHSE</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('truck_plate')}>Truck Plate</DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <div className="relative max-w-sm w-64">
+                    <div className="flex items-center gap-1.5">
+                        <div className="relative w-52">
                             <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
                             <Input
-                                placeholder={`Search ${searchField === 'all' ? 'deliveries' : searchField}...`}
+                                placeholder="Search deliveries..."
                                 value={searchTerm}
                                 onChange={(event) => handleSearchChange(event.target.value)}
                                 onFocus={() => setIsSearchFocused(true)}
@@ -689,66 +1006,290 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                 className="pl-8 h-8 text-xs font-mono"
                             />
                         </div>
-                    </div>
-                    <Button
-                        variant={selectionMode ? "default" : "outline"}
-                        size="sm"
-                        className="ml-auto h-8 gap-1"
-                        onClick={() => {
-                            setSelectionMode(prev => !prev);
-                            if (selectionMode) setSelectedIds(new Set());
-                        }}
-                    >
-                        Select
-                    </Button>
-                    <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1 ml-2">
-                        <Plus className="h-4 w-4" />
-                        Add Delivery
-                    </Button>
 
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 ml-2">
-                                <Settings className="h-4 w-4" />
+                        {/* WHSE filter */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
+                                    whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length && "border-primary bg-primary/5"
+                                )}>
+                                    {whseExcluded.size === 0 || whseExcluded.size >= uniqueWhse.length
+                                        ? 'WHSE'
+                                        : `WHSE (${uniqueWhse.length - whseExcluded.size})`}
+                                    {whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); clearFilter('wx', setWhseExcluded); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[180px] p-2" align="start">
+                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
+                                    <button onClick={() => selectAllFilter('wx', setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
+                                    <button onClick={() => deselectAllFilter('wx', uniqueWhse, setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
+                                </div>
+                                {uniqueWhse.map(w => (
+                                    <label key={w} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
+                                        <Checkbox
+                                            checked={!whseExcluded.has(w)}
+                                            onCheckedChange={(checked) => toggleFilterValue('wx', w, !checked, whseExcluded, setWhseExcluded)}
+                                            className="h-3.5 w-3.5"
+                                        />
+                                        {w}
+                                    </label>
+                                ))}
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* STATE filter */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
+                                    stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length && "border-primary bg-primary/5"
+                                )}>
+                                    {stateExcluded.size === 0 || stateExcluded.size >= uniqueStates.length
+                                        ? 'State'
+                                        : `State (${uniqueStates.length - stateExcluded.size})`}
+                                    {stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); clearFilter('sx', setStateExcluded); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[180px] p-2" align="start">
+                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
+                                    <button onClick={() => selectAllFilter('sx', setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
+                                    <button onClick={() => deselectAllFilter('sx', uniqueStates, setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
+                                </div>
+                                {uniqueStates.map(s => (
+                                    <label key={s} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
+                                        <Checkbox
+                                            checked={!stateExcluded.has(s)}
+                                            onCheckedChange={(checked) => toggleFilterValue('sx', s, !checked, stateExcluded, setStateExcluded)}
+                                            className="h-3.5 w-3.5"
+                                        />
+                                        <span className={cn("uppercase", getStateClasses(s), "px-1 rounded-sm")}>{s}</span>
+                                    </label>
+                                ))}
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* LOC filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[60px] text-xs font-mono px-2",
+                                    locIncluded.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {locIncluded.size === 0
+                                        ? 'LOC'
+                                        : `LOC (${locIncluded.size})`}
+                                    {locIncluded.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('loc', setLocIncluded); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[180px] p-0" align="start">
+                                {locIncluded.size > 0 && (
+                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                                        <button onClick={() => clearInclusionFilter('loc', setLocIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <Command>
+                                    <CommandInput placeholder="Search locations..." className="text-xs" />
+                                    <CommandList>
+                                        <CommandEmpty>No location found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {allLocations.map(l => (
+                                                <CommandItem
+                                                    key={l}
+                                                    value={l}
+                                                    onSelect={() => toggleInclusionFilter('loc', l, locIncluded, setLocIncluded)}
+                                                    className="text-xs font-mono"
+                                                >
+                                                    <Checkbox checked={locIncluded.has(l)} className="mr-2 h-3.5 w-3.5" />
+                                                    {l}
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* SUPPLIER filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
+                                    supIncluded.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {supIncluded.size === 0
+                                        ? 'Supplier'
+                                        : `Supplier (${supIncluded.size})`}
+                                    {supIncluded.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('sup', setSupIncluded); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[220px] p-0" align="start">
+                                {supIncluded.size > 0 && (
+                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                                        <button onClick={() => clearInclusionFilter('sup', setSupIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <Command>
+                                    <CommandInput placeholder="Search suppliers..." className="text-xs" />
+                                    <CommandList>
+                                        <CommandEmpty>No supplier found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {allSuppliers.map(s => (
+                                                <CommandItem
+                                                    key={s}
+                                                    value={s}
+                                                    onSelect={() => toggleInclusionFilter('sup', s, supIncluded, setSupIncluded)}
+                                                    className="text-xs font-mono"
+                                                >
+                                                    <Checkbox checked={supIncluded.has(s)} className="mr-2 h-3.5 w-3.5" />
+                                                    {s}
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* Clear all filters button */}
+                        {hasActiveFilters && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                onClick={clearAllFilters}
+                            >
+                                <X className="mr-1 h-3 w-3" />
+                                Clear
                             </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-80" align="end">
-                            <div className="grid gap-4">
-                                <div className="space-y-2">
-                                    <h4 className="font-medium leading-none">View Options</h4>
-                                    <p className="text-sm text-muted-foreground">
-                                        Customize the table appearance.
-                                    </p>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                        <Button
+                            variant={selectionMode ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 gap-1"
+                            onClick={() => {
+                                setSelectionMode(prev => !prev);
+                                if (selectionMode) setSelectedIds(new Set());
+                            }}
+                        >
+                            Select
+                        </Button>
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" size="sm" className={cn("h-8 gap-1", hiddenColumns.size > 0 && "border-primary bg-primary/5")}>
+                                    <SlidersHorizontal className="h-3.5 w-3.5" /> Columns
+                                    {hiddenColumns.size > 0 && <span className="text-xs">({hiddenColumns.size})</span>}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[200px] p-2" align="end">
+                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
+                                    <span className="text-xs font-medium">Visible Columns</span>
+                                    {hiddenColumns.size > 0 && (
+                                        <button onClick={showAllColumns} className="text-[10px] text-muted-foreground hover:text-foreground">
+                                            Show All
+                                        </button>
+                                    )}
                                 </div>
-                                <div className="grid gap-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
+                                {hideableColumns.map(col => (
+                                    <label key={col.id} className="flex items-center gap-2 px-1 py-0.5 text-xs font-mono rounded hover:bg-muted cursor-pointer">
+                                        <Checkbox
+                                            checked={!hiddenColumns.has(col.id)}
+                                            onCheckedChange={() => toggleColumnVisibility(col.id)}
+                                            className="h-3.5 w-3.5"
+                                        />
+                                        {col.label}
+                                    </label>
+                                ))}
+                            </PopoverContent>
+                        </Popover>
+                        <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1">
+                            <Plus className="h-4 w-4" />
+                            Add Delivery
+                        </Button>
+
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8">
+                                    <Settings className="h-4 w-4" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-80" align="end">
+                                <div className="grid gap-4">
+                                    <div className="space-y-2">
+                                        <h4 className="font-medium leading-none">View Options</h4>
+                                        <p className="text-sm text-muted-foreground">
+                                            Customize the table appearance.
+                                        </p>
                                     </div>
-                                    <Slider
-                                        id="font-size"
-                                        min={9}
-                                        max={14}
-                                        step={1}
-                                        value={[fontSize]}
-                                        onValueChange={(value) => setFontSize(value[0])}
-                                    />
-                                </div>
-                                <div className="grid gap-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
+                                    <div className="grid gap-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
+                                        </div>
+                                        <Slider
+                                            id="font-size"
+                                            min={9}
+                                            max={14}
+                                            step={1}
+                                            value={[fontSize]}
+                                            onValueChange={(value) => setFontSize(value[0])}
+                                        />
                                     </div>
-                                    <Slider
-                                        id="row-height"
-                                        min={20}
-                                        max={60}
-                                        step={1}
-                                        value={[rowHeight]}
-                                        onValueChange={(value: number[]) => setRowHeight(value[0])}
-                                    />
+                                    <div className="grid gap-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
+                                        </div>
+                                        <Slider
+                                            id="row-height"
+                                            min={20}
+                                            max={60}
+                                            step={1}
+                                            value={[rowHeight]}
+                                            onValueChange={(value: number[]) => setRowHeight(value[0])}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                        </PopoverContent>
-                    </Popover>
+                            </PopoverContent>
+                        </Popover>
+                    </div>
                 </div>
 
                 {/* Floating Action Bar */}
@@ -824,12 +1365,14 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                                 {virtualRows.map((virtualRow) => {
                                                     const row = rows[virtualRow.index];
                                                     const isSelected = selectedIds.has(row.original.id);
+                                                    const rowState = row.original.state || 'STORED';
                                                     return (
                                                         <TableRow
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
                                                                 "hover:bg-muted/50 border-b last:border-0 transition-colors",
+                                                                getRowStateClasses(rowState),
                                                                 selectionMode && "cursor-pointer",
                                                                 isSelected && "bg-primary/5"
                                                             )}
@@ -870,67 +1413,50 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                                 </TableBody>
                                 <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
                                     <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
-                                        {/* STATE + WHSE + DATE + SUPPLIER + BLOCK + LOC + TRUCK = 7 columns */}
-                                        <TableCell colSpan={7} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                            TOTALS
-                                        </TableCell>
+                                        {/* TOTALS label — dynamic colSpan based on visible prefix columns */}
+                                        {visiblePrefixCount > 0 && (
+                                            <TableCell colSpan={visiblePrefixCount} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                TOTALS
+                                            </TableCell>
+                                        )}
                                         {/* WT */}
-                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                            {Math.round(totalWeight).toLocaleString()}
-                                        </TableCell>
-                                        {/* SKS - REMOVED TOTAL, LEFT EMPTY */}
-                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                        </TableCell>
-                                        {/* MC + GRIT + ASTM + JIS + VM + ASH + FC = 7 columns - WEIGHTED AVERAGES */}
-                                        {/* Fix #3: Use pre-computed labAverages instead of 7x iteration */}
-                                        {LAB_COLUMNS.map(({ key, decimals }) => (
+                                        {!hiddenColumns.has('weight_kg') && (
+                                            <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                {formatCompact(Math.round(totalWeight), 2)}
+                                            </TableCell>
+                                        )}
+                                        {/* SKS */}
+                                        {!hiddenColumns.has('sacks') && (
+                                            <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                            </TableCell>
+                                        )}
+                                        {/* Lab weighted averages — only visible columns */}
+                                        {LAB_COLUMNS.filter(({ key }) => !hiddenColumns.has(key)).map(({ key, decimals }) => (
                                             <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {labAverages[key] > 0 ? labAverages[key].toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) : '-'}
+                                                {labAverages[key] > 0 ? formatCompact(labAverages[key], decimals) : '-'}
                                             </TableCell>
                                         ))}
                                         {/* REMARKS */}
-                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                        {/* PHP/KG + PHP TTL combined column in footer? No, header has PHP/KG and PHP TTL separate */}
-                                        {/* Actually wait, looking at columns line 355: PHP/KG is cost_basis. line 369: PHP TTL is php_ttl. */}
-                                        {/* Footer currently has: 7 cols (totals) + 1 (WT) + 1 (SKS empty) + 7 (weighted avgs) + 1 (Remarks) + 1 (PHP Combined?) */}
-                                        {/* Line 763 comment says: "PHP TTL -> Converted to WEIGHTED AVG PHP/KG" */}
-                                        {/* This suggests the footer merges them or I am misaligning. */}
-                                        {/* Let's look at the columns again. */}
-                                        {/* Columns: state, whse, date, supplier, block, loc, truck (7) */}
-                                        {/* weight_kg (8) */}
-                                        {/* sacks (9) */}
-                                        {/* mc, grit, bd_astm, bd_jis, vm, ash, fc (7) -> Total 16 */}
-                                        {/* remarks (17) */}
-                                        {/* cost_basis (18) */}
-                                        {/* php_ttl (19) */}
-                                        {/* actions (20) */}
-
-                                        {/* Footer Row: */}
-                                        {/* Cell 1: colSpan 7 (matches first 7) */}
-                                        {/* Cell 2: WT (matches weight_kg) */}
-                                        {/* Cell 3: SKS (matches sacks) - empty */}
-                                        {/* Cell 4-10: Weighted Avgs (matches mc...fc - 7 cols) */}
-                                        {/* Cell 11: Remarks (matches remarks) */}
-
-                                        {/* Now we need to match cost_basis and php_ttl */}
-                                        {hasPermission('view:prices') && (
-                                            <>
-                                                {/* Cost Basis (PHP/KG) Weighted Avg */}
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{(totalWeight > 0 ? totalAmount / totalWeight : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                </TableCell>
-
-                                                {/* PHP TTL Total */}
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                </TableCell>
-                                            </>
+                                        {!hiddenColumns.has('remarks') && (
+                                            <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
+                                        )}
+                                        {/* PHP/KG */}
+                                        {hasPermission('view:prices') && !hiddenColumns.has('cost_basis') && (
+                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{formatCompact(totalWeight > 0 ? totalAmount / totalWeight : 0, 2)}</span>
+                                                </div>
+                                            </TableCell>
+                                        )}
+                                        {/* PHP TTL */}
+                                        {hasPermission('view:prices') && !hiddenColumns.has('php_ttl') && (
+                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{formatCompact(totalAmount, 2)}</span>
+                                                </div>
+                                            </TableCell>
                                         )}
                                         {/* Actions */}
                                         <TableCell className="py-0" />
@@ -942,7 +1468,7 @@ export function DeliveryMasterTable({ data, batches, search }: { data: DeliveryH
                     <DeliverySheetFooter
                         month={month}
                         year={searchParams.get('year') || String(new Date().getFullYear())}
-                        onMonthChange={setMonth}
+                        onMonthChange={handleMonthChange}
                         onYearChange={handleYearChange}
                         disabled={!!search || isSearchFocused || isYearLoading}
                         monthsDisabled={(searchParams.get('year') || '') === 'all' && !isYearLoading}

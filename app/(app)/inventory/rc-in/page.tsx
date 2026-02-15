@@ -4,17 +4,16 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { DeliveryMasterTable, DeliveryHistoryRow } from './delivery-master-table';
 
 
-import { startOfMonth, endOfMonth, format } from 'date-fns';
+import { format } from 'date-fns';
 
 export default async function RCInPage({
     searchParams
 }: {
-    searchParams: Promise<{ year?: string; search?: string; field?: string }>;
+    searchParams: Promise<{ year?: string; search?: string }>;
 }) {
     const supabase = await createClient();
-    const { year: rawYear, search, field } = await searchParams;
+    const { year: rawYear, search } = await searchParams;
     const now = new Date();
-
     const year = rawYear ? parseInt(rawYear, 10) : now.getFullYear();
 
     // Fetch active batches for the input form
@@ -24,45 +23,48 @@ export default async function RCInPage({
         .neq('status', 'CLOSED')
         .order('created_at', { ascending: false });
 
-    // Build deliveries query
-    let query = supabase
-        .from('deliveries')
-        .select('*, batches(location_ref, status)')
-        .order('transaction_date', { ascending: false })
-        .order('created_at', { ascending: false });
+    // Build deliveries query (reusable for paginated fetch)
+    const buildDeliveriesQuery = () => {
+        let q = supabase
+            .from('deliveries')
+            .select('*, batches(location_ref, status)')
+            .order('transaction_date', { ascending: false })
+            .order('created_at', { ascending: false });
 
-    if (search) {
-        const term = `%${search}%`;
-        const searchField = field || 'all';
-
-        if (searchField === 'all') {
-            query = query.or(`supplier.ilike.${term},batch_code.ilike.${term},truck_plate.ilike.${term},block_loc.ilike.${term}`);
-        } else if (searchField === 'supplier') {
-            query = query.ilike('supplier', term);
-        } else if (searchField === 'batch_code') {
-            query = query.ilike('batch_code', term);
-        } else if (searchField === 'truck_plate') {
-            query = query.ilike('truck_plate', term);
-        } else if (searchField === 'whse') {
-            query = query.or(`block_loc.ilike.${term},batch_code.ilike.${term}`);
-        }
-    } else {
-        // Fetch full year or all years
-        if (rawYear !== 'all') {
+        if (search) {
+            const term = `%${search}%`;
+            q = q.or(`supplier.ilike.${term},batch_code.ilike.${term},truck_plate.ilike.${term},block_loc.ilike.${term}`);
+        } else if (rawYear !== 'all') {
             const startDate = new Date(year, 0, 1);
             const endDate = new Date(year, 11, 31);
-
-            query = query
-                .gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
-                .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
+            q = q.gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
+                 .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
         }
+        return q;
+    };
+
+    // Paginated fetch — bypasses PostgREST max_rows (default 1000)
+    const PAGE_SIZE = 1000;
+    let deliveriesRaw: any[] = [];
+    let from = 0;
+    let hasMore = true;
+    while (hasMore) {
+        const { data, error } = await buildDeliveriesQuery().range(from, from + PAGE_SIZE - 1);
+        if (error) throw new Error(`Failed to fetch deliveries: ${error.message}`);
+        deliveriesRaw = deliveriesRaw.concat(data || []);
+        hasMore = (data?.length || 0) === PAGE_SIZE;
+        from += PAGE_SIZE;
     }
 
-    const { data: deliveriesRaw, error } = await query;
-
-    if (error) {
-        throw new Error(`Failed to fetch deliveries: ${error.message}`);
-    }
+    // Fetch ALL distinct suppliers and locations (not scoped by year) for header bar filters
+    const [{ data: supRows }, { data: locRows }] = await Promise.all([
+        supabase.from('deliveries').select('supplier').not('supplier', 'is', null),
+        supabase.from('deliveries').select('block_loc').not('block_loc', 'is', null),
+    ]);
+    const allSuppliers = [...new Set((supRows || []).map(r => r.supplier).filter(Boolean))].sort() as string[];
+    const allLocations = [...new Set((locRows || []).map(r => r.block_loc).filter(Boolean))].sort(
+        (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    ) as string[];
 
     const { data: userRaw } = await supabase.auth.getUser();
     let role = 'Production';
@@ -99,6 +101,8 @@ export default async function RCInPage({
                             data={deliveries}
                             batches={activeBatches}
                             search={search}
+                            allSuppliers={allSuppliers}
+                            allLocations={allLocations}
                         />
                     </CardContent>
                 </Card>
