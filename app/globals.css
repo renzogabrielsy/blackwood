@@ -136,3 +136,111 @@ input::-webkit-inner-spin-button {
 input[type=number] {
   -moz-appearance: textfield;
 }
+
+/* ─── Motion & Glass Design System ─── */
+
+/* Keyframes — compositor-only properties (transform, opacity, filter) */
+@keyframes bw-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bw-scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bw-blur-in {
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+@keyframes bw-modal-enter {
+  0% { opacity: 0; transform: scale(0.95); }
+  60% { opacity: 1; transform: scale(1.01); }
+  100% { transform: scale(1); }
+}
+
+@keyframes bw-badge-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+/* Single element reveals */
+.animate-fade-up {
+  animation: bw-fade-up 250ms ease-out both;
+}
+
+.animate-scale-in {
+  animation: bw-scale-in 200ms ease-out both;
+}
+
+.animate-blur-in {
+  animation: bw-blur-in 300ms ease-out both;
+}
+
+.animate-modal-enter {
+  animation: bw-modal-enter 250ms ease-out both;
+}
+
+.animate-badge-pop {
+  animation: bw-badge-pop 250ms ease-out both;
+}
+
+@keyframes bw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: bw-fade-in 150ms ease-out both;
+}
+
+/* Staggered children — 6 slots, 250ms base + 50ms stagger */
+.stagger-children > * {
+  opacity: 0;
+  animation: bw-fade-up 250ms ease-out both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 50ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 100ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 150ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+/* Fast stagger — 200ms base + 30ms stagger */
+.stagger-fast > * {
+  opacity: 0;
+  animation: bw-fade-up 200ms ease-out both;
+}
+.stagger-fast > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-fast > *:nth-child(2) { animation-delay: 30ms; }
+.stagger-fast > *:nth-child(3) { animation-delay: 60ms; }
+.stagger-fast > *:nth-child(4) { animation-delay: 90ms; }
+.stagger-fast > *:nth-child(5) { animation-delay: 120ms; }
+.stagger-fast > *:nth-child(6) { animation-delay: 150ms; }
+
+/* Hover lift — cards/containers only, never table rows */
+.hover-lift {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Scroll fade — gradient at bottom edge of scrollable containers */
+.scroll-fade-bottom {
+  position: relative;
+}
+.scroll-fade-bottom::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: linear-gradient(to top, var(--background), transparent);
+  pointer-events: none;
+}

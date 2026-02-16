@@ -20,6 +20,10 @@ export function TableSettingsProvider({ children }: { children: React.ReactNode 
     const [fontSize, setFontSizeState] = React.useState(10);
     const [rowHeight, setRowHeightState] = React.useState(32);
 
+    // Debounce timer refs for localStorage writes
+    const fontSizeTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+    const rowHeightTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
     // Load settings when role changes
     React.useEffect(() => {
         const stored = localStorage.getItem(`table_settings_${role}`);
@@ -38,14 +42,36 @@ export function TableSettingsProvider({ children }: { children: React.ReactNode 
         }
     }, [role]);
 
+    // Cleanup timers on unmount
+    React.useEffect(() => {
+        return () => {
+            if (fontSizeTimerRef.current) clearTimeout(fontSizeTimerRef.current);
+            if (rowHeightTimerRef.current) clearTimeout(rowHeightTimerRef.current);
+        };
+    }, []);
+
     const setFontSize = (size: number) => {
+        // Immediate state update for responsive UI
         setFontSizeState(size);
-        saveSettings(role, { fontSize: size, rowHeight });
+
+        // Debounce localStorage write (150ms) to reduce thrashing during slider drag
+        if (fontSizeTimerRef.current) clearTimeout(fontSizeTimerRef.current);
+        fontSizeTimerRef.current = setTimeout(() => {
+            saveSettings(role, { fontSize: size, rowHeight });
+            fontSizeTimerRef.current = null;
+        }, 150);
     };
 
     const setRowHeight = (height: number) => {
+        // Immediate state update for responsive UI
         setRowHeightState(height);
-        saveSettings(role, { fontSize, rowHeight: height });
+
+        // Debounce localStorage write (150ms) to reduce thrashing during slider drag
+        if (rowHeightTimerRef.current) clearTimeout(rowHeightTimerRef.current);
+        rowHeightTimerRef.current = setTimeout(() => {
+            saveSettings(role, { fontSize, rowHeight: height });
+            rowHeightTimerRef.current = null;
+        }, 150);
     };
 
     const saveSettings = (currentRole: string, settings: TableSettings) => {

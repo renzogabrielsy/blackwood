@@ -46,6 +46,16 @@ All data tables and dense UI must follow these rules strictly:
 - **Date format:** `yyyy-MM-dd`
 - **Lab results:** MC, Grit, VM, Ash, FC → 2 decimal places; BD ASTM, BD JIS → 3 decimal places
 
+## Motion & Animation Guidelines
+
+- **Use CSS utility classes** from `globals.css` — `animate-fade-up`, `animate-modal-enter`, `stagger-children`, `hover-lift`, etc. Don't create one-off `@keyframes` or inline animation styles
+- **Glass effect canonical pattern:** `bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60` — use this exact pattern for frosted glass surfaces (footers, status bars, sticky elements)
+- **Duration budget:** 150ms for micro-interactions (hover, active), 250ms for reveals/entrances, 300ms absolute max
+- **Compositor-only rule:** Only animate `transform`, `opacity`, `filter`. Never animate `width`, `height`, `top`, `left`, `margin`, `padding` — these trigger layout recalculation
+- **Stagger restrictions:** `stagger-children` is for small groups (dashboard cards, settings panels). NEVER apply to table rows, list items in long lists, or any element that renders 100+ instances
+- **Hover-lift:** Use only on cards and containers, never on table rows or inline elements
+- **Backdrop-filter placement:** Only on fixed/sticky elements (footers, status bars, overlays), not on frequently re-rendered components
+
 ## Code Quality Standards
 
 1. **TypeScript:** Always use strict types. Define interfaces/types for all props, data shapes, and function signatures. Never use `any`. Prefer `interface` for component props and `type` for unions/utilities.

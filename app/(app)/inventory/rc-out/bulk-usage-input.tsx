@@ -2,21 +2,10 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Check, Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
+import { Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import {
-    Command,
-    CommandGroup,
-    CommandItem,
-    CommandList,
-} from '@/components/ui/command';
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import {
     TableBody,
@@ -31,6 +20,11 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
 import { submitBulkUsage, bulkUpdateUsage } from './actions';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { COLUMN_MAP, cleanCellValue } from './paste-utils';
@@ -39,17 +33,15 @@ import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { InputRcOutRow, RcOutInput, RcOutRow } from '@/types/rc-out';
+import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
+import { GridCell } from '@/components/shared/grid/GridCell';
+import { RemarksCellAdaptor } from '@/components/shared/grid/RemarksCellAdaptor';
 
 // --- TYPES ---
 type Batch = {
     id: string;
     batch_code: string;
     location_ref: string;
-};
-
-type AutocompleteItem = {
-    value: string;
-    detail?: string;
 };
 
 const createEmptyRow = (): InputRcOutRow => ({
@@ -110,7 +102,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
-    const preEditValue = React.useRef<any>(null);
+    const preEditValue = React.useRef<InputRcOutRow[keyof InputRcOutRow] | null>(null);
 
     // --- Cell range selection ---
     const cellSelection = useCellSelection({
@@ -122,11 +114,12 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
     });
 
     // Push cell selection count to shared context
+    const selectionSize = cellSelection.getSelectionSize();
     React.useEffect(() => {
-        const count = cellSelection.range ? cellSelection.getSelectionSize() : 0;
+        const count = cellSelection.range ? selectionSize : 0;
         setCellSelectionCount(count);
         return () => setCellSelectionCount(0);
-    }, [cellSelection.range, cellSelection, setCellSelectionCount]);
+    }, [cellSelection.range, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -184,7 +177,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         });
     }, []);
 
-    const updateRow = React.useCallback((index: number, field: keyof InputRcOutRow, value: any) => {
+    const updateRow = React.useCallback((index: number, field: keyof InputRcOutRow, value: InputRcOutRow[keyof InputRcOutRow]) => {
         setRows(prev => {
             const newRows = [...prev];
             newRows[index] = { ...newRows[index], [field]: value };
@@ -534,8 +527,8 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
             } else {
                 toast.error(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
             }
-        } catch (error: any) {
-            toast.error('An unexpected error occurred: ' + (error.message || 'Unknown'));
+        } catch (error: unknown) {
+            toast.error('An unexpected error occurred: ' + (error instanceof Error ? error.message : 'Unknown'));
         } finally {
             setIsSubmitting(false);
         }
@@ -604,17 +597,17 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
                     }}
                 >
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
-                        <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                        <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                             <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-muted border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden"></TableHead>
-                                <TableHead className="w-[90px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
-                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BATCH</TableHead>
-                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
-                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
-                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PLANT/ETC</TableHead>
-                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK LOC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
-                                <TableHead className="w-[20px] p-0 bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
+                                <TableHead className="w-[90px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
+                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BATCH</TableHead>
+                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PLANT/ETC</TableHead>
+                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK LOC</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
+                                <TableHead className="w-[20px] p-0 bg-muted/90 sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -697,7 +690,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     batchItems: AutocompleteItem[];
     destinationItems: AutocompleteItem[];
     productionBatchItems: AutocompleteItem[];
-    updateRow: (index: number, field: keyof InputRcOutRow, value: any) => void;
+    updateRow: (index: number, field: keyof InputRcOutRow, value: InputRcOutRow[keyof InputRcOutRow]) => void;
     updateRowFields: (index: number, updates: Partial<InputRcOutRow>) => void;
     removeRow: (index: number) => void;
     onPaste: (e: React.ClipboardEvent, rowIndex: number, colIndex: number) => void;
@@ -735,7 +728,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     };
 
     return (
-        <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
+        <TableRow className="hover:bg-muted/50 transition-all duration-150" style={{ height: `${rowHeight}px` }}>
             {/* 0: Row action area */}
             <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
                 {isEditMode ? (
@@ -814,7 +807,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(2)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.production_batch}
                         onChange={(val) => updateRow(index, 'production_batch', val)}
                         items={productionBatchItems}
@@ -838,7 +831,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(3)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.batch_code}
                         onChange={(val) => updateRow(index, 'batch_code', val)}
                         items={batchItems}
@@ -893,7 +886,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(5)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.destination}
                         onChange={(val) => updateRow(index, 'destination', val)}
                         items={destinationItems}
@@ -968,279 +961,4 @@ const BulkInputRow = React.memo(function BulkInputRow({
 });
 
 // --- GRID CELL HELPERS ---
-
-function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef, onCellMouseDown, onCellMouseUp, onCellMouseEnter, isCellRangeSelected, isCellRangeAnchor, isDragActive }: {
-    row: number;
-    col: number;
-    value: string | number;
-    activeCell: { row: number; col: number } | null;
-    isEditing: boolean;
-    setActiveCell: (cell: { row: number; col: number }) => void;
-    setIsEditing: (editing: boolean) => void;
-    onStartEditing: (row: number, col: number, char?: string) => void;
-    onRevert?: () => void;
-    children: React.ReactNode;
-    displayValue?: React.ReactNode;
-    className?: string;
-    tabIndex?: number;
-    gridRef?: React.RefObject<HTMLDivElement | null>;
-    onCellMouseDown?: (e: React.MouseEvent) => void;
-    onCellMouseUp?: () => void;
-    onCellMouseEnter?: () => void;
-    isCellRangeSelected?: boolean;
-    isCellRangeAnchor?: boolean;
-    isDragActive?: boolean;
-}) {
-    const isActive = activeCell?.row === row && activeCell?.col === col;
-    const isEditingThis = isActive && isEditing;
-
-    if (isEditingThis) {
-        return (
-            <div
-                className={cn("h-full w-full relative", className)}
-                style={isDragActive ? { pointerEvents: 'none' } : undefined}
-                onMouseEnter={() => {
-                    onCellMouseEnter?.();
-                }}
-            >
-                {children}
-            </div>
-        );
-    }
-
-    return (
-        <div
-            data-row={row}
-            data-col={col}
-            tabIndex={tabIndex ?? 0}
-            className={cn(
-                "h-full w-full flex items-center justify-center outline-none cursor-default select-none",
-                isActive && !isCellRangeSelected && "ring-2 ring-primary ring-inset z-10",
-                isCellRangeSelected && "bg-primary/10 dark:bg-primary/20",
-                isCellRangeAnchor && "ring-2 ring-primary ring-inset z-10",
-                className
-            )}
-            style={{ minHeight: '100%' }}
-            onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (onCellMouseDown) {
-                    onCellMouseDown(e);
-                } else {
-                    setActiveCell({ row, col });
-                    setIsEditing(false);
-                    gridRef?.current?.focus();
-                }
-            }}
-            onMouseUp={(e) => {
-                e.stopPropagation();
-                onCellMouseUp?.();
-            }}
-            onMouseEnter={() => {
-                onCellMouseEnter?.();
-            }}
-            onDoubleClick={(e) => {
-                e.stopPropagation();
-                onStartEditing(row, col);
-            }}
-        >
-            {displayValue ?? value}
-        </div>
-    );
-}
-
-function RemarksCellAdaptor({ value, onChange, onClose, onRevert, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, onRevert: () => void, fontSize: number }) {
-    const [open, setOpen] = React.useState(true);
-
-    const onOpenChange = (isOpen: boolean) => {
-        setOpen(isOpen);
-        if (!isOpen) {
-            onClose();
-        }
-    }
-
-    return (
-        <Popover open={open} onOpenChange={onOpenChange}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full" />
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-80 p-2"
-                align="center"
-                side="bottom"
-                onEscapeKeyDown={(e) => e.preventDefault()}
-            >
-                <div className="space-y-2">
-                    <h4 className="font-medium leading-none">Remarks</h4>
-                    <p className="text-xs text-muted-foreground">Add notes about this usage record.</p>
-                    <Input
-                        autoFocus
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="h-8"
-                        style={{ fontSize: `${fontSize}px` }}
-                        placeholder="Enter remarks..."
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.stopPropagation();
-                                setOpen(false);
-                            } else if (e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                onRevert();
-                            }
-                        }}
-                    />
-                </div>
-            </PopoverContent>
-        </Popover>
-    )
-}
-
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus, onRevert }: {
-    value: string;
-    onChange: (val: string) => void;
-    onSelect: (val: string) => void;
-    items: AutocompleteItem[];
-    className?: string;
-    placeholder?: string;
-    style?: React.CSSProperties;
-    autoFocus?: boolean;
-    onRevert?: () => void;
-}) {
-    const [open, setOpen] = React.useState(false);
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    const [selectedIndex, setSelectedIndex] = React.useState(0);
-
-    const filtered = React.useMemo(
-        () => items.filter(item => item.value.toLowerCase().includes(value.toLowerCase())).slice(0, 5),
-        [items, value]
-    );
-
-    React.useEffect(() => {
-        setSelectedIndex(0);
-    }, [filtered]);
-
-    React.useEffect(() => {
-        if (autoFocus && filtered.length > 0) {
-            setOpen(true);
-        }
-    }, [autoFocus, filtered.length]);
-
-    const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (open) {
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
-                    return;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.max(prev - 1, 0));
-                    return;
-                case 'Enter':
-                    e.preventDefault();
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                        e.stopPropagation();
-                    }
-                    return;
-                case 'Tab':
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                    }
-                    return;
-                case 'Escape':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    setOpen(false);
-                    if (onRevert) onRevert();
-                    return;
-            }
-        }
-    }, [open, filtered, selectedIndex, onSelect, onRevert]);
-
-    const handleSelect = React.useCallback((itemValue: string) => {
-        onSelect(itemValue);
-        setOpen(false);
-    }, [onSelect]);
-
-    return (
-        <Popover open={open && filtered.length > 0} onOpenChange={setOpen} modal={false}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full relative">
-                    <Input
-                        ref={inputRef}
-                        value={value}
-                        onChange={(e) => {
-                            onChange(e.target.value);
-                            setOpen(true);
-                        }}
-                        onKeyDown={(e) => {
-                            if (!open && e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                if (onRevert) onRevert();
-                                return;
-                            }
-                            handleKeyDown(e);
-                        }}
-                        onFocus={() => {
-                            if (filtered.length > 0) setOpen(true);
-                        }}
-                        className={className}
-                        placeholder={placeholder}
-                        style={style}
-                        autoFocus={autoFocus}
-                    />
-                </div>
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-[200px] p-0"
-                onOpenAutoFocus={(e) => e.preventDefault()}
-                onCloseAutoFocus={(e) => e.preventDefault()}
-                side="bottom"
-                align="start"
-                sideOffset={4}
-                onContextMenu={(e) => e.preventDefault()}
-            >
-                <Command shouldFilter={false}>
-                    <CommandList>
-                        <CommandGroup>
-                            {filtered.map((item, idx) => (
-                                <CommandItem
-                                    key={item.value}
-                                    value={item.value}
-                                    onSelect={() => handleSelect(item.value)}
-                                    className={cn(
-                                        "text-xs font-mono cursor-pointer",
-                                        idx === selectedIndex && "bg-accent text-accent-foreground"
-                                    )}
-                                    onMouseEnter={() => setSelectedIndex(idx)}
-                                >
-                                    <Check
-                                        className={cn(
-                                            "mr-2 h-3 w-3",
-                                            value === item.value ? "opacity-100" : "opacity-0"
-                                        )}
-                                    />
-                                    {item.value}
-                                    {item.detail && (
-                                        <span className="ml-auto text-muted-foreground text-[10px]">{item.detail}</span>
-                                    )}
-                                </CommandItem>
-                            ))}
-                        </CommandGroup>
-                    </CommandList>
-                </Command>
-            </PopoverContent>
-        </Popover>
-    );
-}
+// GridCell, RemarksCellAdaptor, and AutocompletePopover are now imported from shared components

@@ -36,46 +36,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const role = devOverride ?? dbRole;
 
-    // Initialize: check session + subscribe to auth changes
-    React.useEffect(() => {
-        const supabase = createClient();
+    // Track last user ID to prevent unnecessary profile refetches
+    const lastUserIdRef = React.useRef<string | null>(null);
 
-        // Check for dev override in localStorage
-        const stored = localStorage.getItem('dev_mock_role');
-        if (stored && ['Owner', 'Admin', 'Dev', 'Production', 'Accounting'].includes(stored)) {
-            setDevOverride(stored as UserRole);
-        }
-
-        // Get initial session
-        const initSession = async () => {
-            const { data: { user: currentUser } } = await supabase.auth.getUser();
-            setUser(currentUser);
-            if (currentUser) {
-                fetchProfile(currentUser.id);
-            } else {
-                setIsLoading(false);
-            }
-        };
-        initSession();
-
-        // Subscribe to auth state changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            (_event: AuthChangeEvent, session: Session | null) => {
-                const currentUser = session?.user ?? null;
-                setUser(currentUser);
-                if (currentUser) {
-                    fetchProfile(currentUser.id);
-                } else {
-                    setDbRole('Production');
-                    setIsLoading(false);
-                }
-            }
-        );
-
-        return () => subscription.unsubscribe();
-    }, []);
-
-    async function fetchProfile(userId: string) {
+    // Helper to fetch profile (defined before useEffect to satisfy React Hooks rule)
+    const fetchProfile = React.useCallback(async (userId: string) => {
         const supabase = createClient();
         const { data, error } = await supabase
             .from('profiles')
@@ -105,9 +70,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setDisplayName(data?.display_name ?? null);
         setAvatarUrl(data?.avatar_url ?? null);
         setIsLoading(false);
-    }
+    }, [setDbRole, setDisplayName, setAvatarUrl, setIsLoading]);
 
-    const setRole = (newRole: UserRole | 'logged-in') => {
+    // Initialize: check session + subscribe to auth changes
+    React.useEffect(() => {
+        const supabase = createClient();
+
+        // Check for dev override in localStorage
+        const stored = localStorage.getItem('dev_mock_role');
+        if (stored && ['Owner', 'Admin', 'Dev', 'Production', 'Accounting'].includes(stored)) {
+            setDevOverride(stored as UserRole);
+        }
+
+        // Get initial session
+        const initSession = async () => {
+            const { data: { user: currentUser } } = await supabase.auth.getUser();
+            setUser(currentUser);
+            if (currentUser) {
+                lastUserIdRef.current = currentUser.id;
+                fetchProfile(currentUser.id);
+            } else {
+                setIsLoading(false);
+            }
+        };
+        initSession();
+
+        // Subscribe to auth state changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            (_event: AuthChangeEvent, session: Session | null) => {
+                const currentUser = session?.user ?? null;
+                setUser(currentUser);
+
+                // Only fetch profile if user ID actually changed (not on TOKEN_REFRESHED or SESSION_UPDATED)
+                if (currentUser) {
+                    if (lastUserIdRef.current !== currentUser.id) {
+                        lastUserIdRef.current = currentUser.id;
+                        fetchProfile(currentUser.id);
+                    }
+                } else {
+                    lastUserIdRef.current = null;
+                    setDbRole('Production');
+                    setIsLoading(false);
+                }
+            }
+        );
+
+        return () => subscription.unsubscribe();
+    }, [fetchProfile]);
+
+    const setRole = React.useCallback((newRole: UserRole | 'logged-in') => {
         if (newRole === 'logged-in') {
             setDevOverride(null);
             localStorage.removeItem('dev_mock_role');
@@ -117,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             localStorage.setItem('dev_mock_role', newRole);
             document.cookie = `dev_mock_role=${newRole}; path=/; max-age=31536000`;
         }
-    };
+    }, []);
 
     const signOut = async () => {
         const supabase = createClient();

@@ -39,15 +39,18 @@ export function DiffDisplay({ entry }: { entry: AuditLogRow }) {
     if (isHiddenField(key)) continue;
 
     if (key === 'lab_results') {
-      const labDiffs = flattenLabResultsDiff(change.old, change.new);
+      const labDiffs = flattenLabResultsDiff(
+        change.old as Record<string, unknown> | null,
+        change.new as Record<string, unknown> | null
+      );
       for (const ld of labDiffs) {
         rows.push({ label: ld.label, oldVal: ld.oldFormatted, newVal: ld.newFormatted });
       }
     } else {
       rows.push({
         label: getFieldLabel(key),
-        oldVal: formatFieldValue(key, change.old),
-        newVal: formatFieldValue(key, change.new),
+        oldVal: formatFieldValue(key, change.old as string | number | boolean | null),
+        newVal: formatFieldValue(key, change.new as string | number | boolean | null),
       });
     }
   }

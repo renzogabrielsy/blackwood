@@ -65,9 +65,9 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
         revalidatePath('/inventory');
         return { success: true };
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Submit Transaction Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 
@@ -141,9 +141,9 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Bulk Update Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 
@@ -212,7 +212,7 @@ export async function getDeliveryHistory(deliveryId: string) {
     const userIds = Array.from(new Set(logs.map(log => log.performed_by).filter(Boolean)));
 
     // 3. Fetch profiles for these users
-    let profilesMap: Record<string, any> = {};
+    let profilesMap: Record<string, { display_name: string | null; email: string; avatar_url: string | null }> = {};
     if (userIds.length > 0) {
         const { data: profiles } = await supabase
             .from('profiles')
@@ -223,7 +223,7 @@ export async function getDeliveryHistory(deliveryId: string) {
             profilesMap = profiles.reduce((acc, p) => {
                 acc[p.id] = p;
                 return acc;
-            }, {} as Record<string, any>);
+            }, {} as Record<string, { display_name: string | null; email: string; avatar_url: string | null }>);
         }
     }
 
@@ -298,7 +298,7 @@ export async function getAuditComments(auditLogId: string): Promise<AuditComment
 
     // Fetch profiles for comment authors
     const userIds = Array.from(new Set(comments.map(c => c.user_id).filter(Boolean)));
-    let profilesMap: Record<string, any> = {};
+    let profilesMap: Record<string, { display_name: string | null; email: string; avatar_url: string | null }> = {};
     if (userIds.length > 0) {
         const { data: profiles } = await supabase
             .from('profiles')
@@ -309,7 +309,7 @@ export async function getAuditComments(auditLogId: string): Promise<AuditComment
             profilesMap = profiles.reduce((acc, p) => {
                 acc[p.id] = p;
                 return acc;
-            }, {} as Record<string, any>);
+            }, {} as Record<string, { display_name: string | null; email: string; avatar_url: string | null }>);
         }
     }
 

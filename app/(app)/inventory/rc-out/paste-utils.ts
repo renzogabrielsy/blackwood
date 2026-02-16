@@ -1,5 +1,5 @@
 import type { InputRcOutRow } from '@/types/rc-out';
-import { parseExcelDate } from '@/lib/paste-utils';
+import { parseExcelDate, trimCellValue, stripNumericFormatting } from '@/lib/paste-utils';
 
 // Maps visual column index to the data key. null = read-only/skipped during paste.
 export const COLUMN_MAP: (keyof InputRcOutRow | null)[] = [
@@ -16,14 +16,17 @@ export const COLUMN_MAP: (keyof InputRcOutRow | null)[] = [
 
 const NUMERIC_FIELDS = new Set<keyof InputRcOutRow>(['weight_kg']);
 
-/** Cleans a single pasted cell value based on its target field */
+/**
+ * Cleans a single pasted cell value based on its target field
+ * Handles date parsing and numeric formatting for RC OUT module
+ */
 export function cleanCellValue(raw: string, fieldKey: keyof InputRcOutRow): string {
-    let value = raw.trim().replace(/^"|"$/g, '');
+    let value = trimCellValue(raw);
 
     if (fieldKey === 'transaction_date') {
         value = parseExcelDate(value);
     } else if (NUMERIC_FIELDS.has(fieldKey)) {
-        value = value.replace(/[₱,]/g, '');
+        value = stripNumericFormatting(value);
     }
 
     return value;

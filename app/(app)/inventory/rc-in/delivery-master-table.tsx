@@ -70,6 +70,7 @@ import {
 import { deleteDelivery, bulkDeleteDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
+import { formatCompact } from '@/lib/format-utils';
 
 export type { DeliveryHistoryRow };
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
@@ -107,16 +108,7 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
     { key: 'fc', label: 'FC', decimals: 2 },
 ];
 
-const formatCompact = (value: number, decimals: number = 2): string => {
-    const abs = Math.abs(value);
-    if (abs >= 1e12) return (value / 1e12).toFixed(decimals) + 't';
-    if (abs >= 1e9) return (value / 1e9).toFixed(decimals) + 'b';
-    if (abs >= 1e6) return (value / 1e6).toFixed(decimals) + 'm';
-    if (abs >= 1e3) return (value / 1e3).toFixed(decimals) + 'k';
-    return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-};
-
-export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: any[], search?: string, allSuppliers: string[], allLocations: string[] }) {
+export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: Array<{ id: string; batch_code: string; location_ref: string }>, search?: string, allSuppliers: string[], allLocations: string[] }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { user, role, hasPermission } = useAuth();
     const { setCellSelectionCount } = useStatusBar();
@@ -129,30 +121,34 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     // Ref to save the user's year+month before header filters auto-switch to All Years
     const preFilterDate = React.useRef<{ year: string; month: string } | null>(null);
 
-    // Header bar filter state — exclusion sets initialized from URL params to survive Suspense remounts
+    // Header bar filter state — consolidated into a single state object for reduced re-renders
     // STATE defaults to excluding CLOSED on fresh load (no sx param) so users see active inventory first.
     // Sentinel value '_all' in URL means "user explicitly cleared the filter" (show all states).
     // Absent sx param means "fresh load, apply default exclusion".
+    type FilterState = {
+        stateExcluded: Set<string>;
+        whseExcluded: Set<string>;
+        supIncluded: Set<string>;
+        locIncluded: Set<string>;
+    };
+
     const STATE_DEFAULT_EXCLUDED = ['CLOSED'];
-    const [stateExcluded, setStateExcluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('sx');
-        if (param === '_all') return new Set();        // user explicitly cleared — show all
-        if (param) return new Set(param.split(','));   // user-set exclusions
-        return new Set(STATE_DEFAULT_EXCLUDED);        // fresh load — exclude CLOSED
+    const [filters, setFilters] = React.useState<FilterState>(() => {
+        const sx = searchParams.get('sx');
+        const wx = searchParams.get('wx');
+        const sup = searchParams.get('sup');
+        const loc = searchParams.get('loc');
+
+        return {
+            stateExcluded: sx === '_all' ? new Set() : sx ? new Set(sx.split(',')) : new Set(STATE_DEFAULT_EXCLUDED),
+            whseExcluded: wx ? new Set(wx.split(',')) : new Set(),
+            supIncluded: sup ? new Set(sup.split(',')) : new Set(),
+            locIncluded: loc ? new Set(loc.split(',')) : new Set(),
+        };
     });
-    const [whseExcluded, setWhseExcluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('wx');
-        return param ? new Set(param.split(',')) : new Set();
-    });
-    // Supplier & LOC use INCLUSION model: empty set = show all (no filter), non-empty = show ONLY those values
-    const [supIncluded, setSupIncluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('sup');
-        return param ? new Set(param.split(',')) : new Set();
-    });
-    const [locIncluded, setLocIncluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('loc');
-        return param ? new Set(param.split(',')) : new Set();
-    });
+
+    // Helper to extract individual filters for readability
+    const { stateExcluded, whseExcluded, supIncluded, locIncluded } = filters;
 
     // Silently sync a param to URL without triggering Next.js navigation
     const syncParamToUrl = React.useCallback((key: string, value: string, defaultVal: string = 'all') => {
@@ -380,11 +376,18 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         }
     };
 
-    const toggleFilterValue = (urlKey: string, value: string, exclude: boolean, current: Set<string>, setter: (s: Set<string>) => void) => {
+    // Memoized filter toggle handlers — consolidate updates to single state setter
+    const toggleFilterValue = React.useCallback((urlKey: string, value: string, exclude: boolean, current: Set<string>) => {
         const next = new Set(current);
         if (exclude) next.add(value);
         else next.delete(value);
-        setter(next);
+
+        // Update consolidated filter state
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sx' ? 'stateExcluded' : 'whseExcluded']: next,
+        }));
+
         syncExclusionToUrl(urlKey, next);
         if (next.size > 0 && yearParam !== 'all') {
             if (preFilterDate.current === null) {
@@ -395,30 +398,45 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         if (next.size === 0) {
             maybeRestoreDate(urlKey);
         }
-    };
+    }, [yearParam, month, syncExclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate]);
 
-    const clearFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
+    const clearFilter = React.useCallback((urlKey: string) => {
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sx' ? 'stateExcluded' : 'whseExcluded']: new Set(),
+        }));
         syncExclusionToUrl(urlKey, new Set());
         maybeRestoreDate(urlKey);
-    };
+    }, [syncExclusionToUrl, maybeRestoreDate]);
 
-    const selectAllFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
+    const selectAllFilter = React.useCallback((urlKey: string) => {
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sx' ? 'stateExcluded' : 'whseExcluded']: new Set(),
+        }));
         syncExclusionToUrl(urlKey, new Set());
         maybeRestoreDate(urlKey);
-    };
+    }, [syncExclusionToUrl, maybeRestoreDate]);
 
-    const deselectAllFilter = (_urlKey: string, allValues: string[], setter: (s: Set<string>) => void) => {
-        setter(new Set(allValues)); // UI-only: no URL sync, no year switch
-    };
+    const deselectAllFilter = React.useCallback((_urlKey: string, allValues: string[], filterKey: 'stateExcluded' | 'whseExcluded') => {
+        setFilters(prev => ({
+            ...prev,
+            [filterKey]: new Set(allValues),
+        }));
+        // UI-only: no URL sync, no year switch
+    }, []);
 
     // Inclusion model helpers for Supplier/LOC
-    const toggleInclusionFilter = (urlKey: string, value: string, current: Set<string>, setter: (s: Set<string>) => void) => {
+    const toggleInclusionFilter = React.useCallback((urlKey: string, value: string, current: Set<string>) => {
         const next = new Set(current);
         if (next.has(value)) next.delete(value);
         else next.add(value);
-        setter(next);
+
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sup' ? 'supIncluded' : 'locIncluded']: next,
+        }));
+
         syncInclusionToUrl(urlKey, next);
         if (next.size > 0 && yearParam !== 'all') {
             if (preFilterDate.current === null) {
@@ -429,13 +447,16 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         if (next.size === 0) {
             maybeRestoreDate(urlKey);
         }
-    };
+    }, [yearParam, month, syncInclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate]);
 
-    const clearInclusionFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
+    const clearInclusionFilter = React.useCallback((urlKey: string) => {
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sup' ? 'supIncluded' : 'locIncluded']: new Set(),
+        }));
         syncInclusionToUrl(urlKey, new Set());
         maybeRestoreDate(urlKey);
-    };
+    }, [syncInclusionToUrl, maybeRestoreDate]);
 
     const handleMonthChange = (value: string) => {
         setMonth(value);
@@ -858,12 +879,18 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         enabled: !selectionMode,
     });
 
-    // Push cell selection count to shared context
+    // Push cell selection count to shared context with debounce to reduce status bar re-renders during drag
+    const selectionSize = cellSelection.getSelectionSize();
     React.useEffect(() => {
-        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
+
+        // Debounce by 50ms to prevent excessive updates during drag selection
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+        }, 50);
+
+        return () => clearTimeout(timer);
+    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -957,10 +984,12 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     const hasActiveFilters = (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) || (whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length) || supIncluded.size > 0 || locIncluded.size > 0;
 
     const clearAllFilters = () => {
-        setStateExcluded(new Set());
-        setWhseExcluded(new Set());
-        setSupIncluded(new Set());
-        setLocIncluded(new Set());
+        setFilters({
+            stateExcluded: new Set(),
+            whseExcluded: new Set(),
+            supIncluded: new Set(),
+            locIncluded: new Set(),
+        });
         const params = new URLSearchParams(window.location.search);
         params.set('sx', '_all'); // sentinel: user explicitly cleared (don't re-apply default on remount)
         params.delete('wx');
@@ -1056,7 +1085,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Add Deliveries</DialogTitle>
                                 <DialogDescription>
@@ -1085,7 +1114,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Edit Deliver{editRows?.length === 1 ? 'y' : 'ies'}</DialogTitle>
                                 <DialogDescription>
@@ -1161,7 +1190,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         : `WHSE (${uniqueWhse.length - whseExcluded.size})`}
                                     {whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length ? (
                                         <span
-                                            onClick={(e) => { e.stopPropagation(); clearFilter('wx', setWhseExcluded); }}
+                                            onClick={(e) => { e.stopPropagation(); clearFilter('wx'); }}
                                             className="ml-1 rounded-full p-0.5 hover:bg-muted"
                                         >
                                             <X className="h-3 w-3" />
@@ -1173,14 +1202,14 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             </PopoverTrigger>
                             <PopoverContent className="w-[180px] p-2" align="start">
                                 <div className="flex items-center justify-between mb-1 pb-1 border-b">
-                                    <button onClick={() => selectAllFilter('wx', setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
-                                    <button onClick={() => deselectAllFilter('wx', uniqueWhse, setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
+                                    <button onClick={() => selectAllFilter('wx')} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
+                                    <button onClick={() => deselectAllFilter('wx', uniqueWhse, 'whseExcluded')} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
                                 </div>
                                 {uniqueWhse.map(w => (
                                     <label key={w} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
                                         <Checkbox
                                             checked={!whseExcluded.has(w)}
-                                            onCheckedChange={(checked) => toggleFilterValue('wx', w, !checked, whseExcluded, setWhseExcluded)}
+                                            onCheckedChange={(checked) => toggleFilterValue('wx', w, !checked, whseExcluded)}
                                             className="h-3.5 w-3.5"
                                         />
                                         {w}
@@ -1201,7 +1230,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         : `State (${uniqueStates.length - stateExcluded.size})`}
                                     {stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length ? (
                                         <span
-                                            onClick={(e) => { e.stopPropagation(); clearFilter('sx', setStateExcluded); }}
+                                            onClick={(e) => { e.stopPropagation(); clearFilter('sx'); }}
                                             className="ml-1 rounded-full p-0.5 hover:bg-muted"
                                         >
                                             <X className="h-3 w-3" />
@@ -1213,14 +1242,14 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             </PopoverTrigger>
                             <PopoverContent className="w-[180px] p-2" align="start">
                                 <div className="flex items-center justify-between mb-1 pb-1 border-b">
-                                    <button onClick={() => selectAllFilter('sx', setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
-                                    <button onClick={() => deselectAllFilter('sx', uniqueStates, setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
+                                    <button onClick={() => selectAllFilter('sx')} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
+                                    <button onClick={() => deselectAllFilter('sx', uniqueStates, 'stateExcluded')} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
                                 </div>
                                 {uniqueStates.map(s => (
                                     <label key={s} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
                                         <Checkbox
                                             checked={!stateExcluded.has(s)}
-                                            onCheckedChange={(checked) => toggleFilterValue('sx', s, !checked, stateExcluded, setStateExcluded)}
+                                            onCheckedChange={(checked) => toggleFilterValue('sx', s, !checked, stateExcluded)}
                                             className="h-3.5 w-3.5"
                                         />
                                         <span className={cn("uppercase", getStateClasses(s), "px-1 rounded-sm")}>{s}</span>
@@ -1241,7 +1270,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         : `LOC (${locIncluded.size})`}
                                     {locIncluded.size > 0 ? (
                                         <span
-                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('loc', setLocIncluded); }}
+                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('loc'); }}
                                             className="ml-1 rounded-full p-0.5 hover:bg-muted"
                                         >
                                             <X className="h-3 w-3" />
@@ -1254,7 +1283,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             <PopoverContent className="w-[180px] p-0" align="start">
                                 {locIncluded.size > 0 && (
                                     <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
-                                        <button onClick={() => clearInclusionFilter('loc', setLocIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                        <button onClick={() => clearInclusionFilter('loc')} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
                                     </div>
                                 )}
                                 <Command>
@@ -1266,7 +1295,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                 <CommandItem
                                                     key={l}
                                                     value={l}
-                                                    onSelect={() => toggleInclusionFilter('loc', l, locIncluded, setLocIncluded)}
+                                                    onSelect={() => toggleInclusionFilter('loc', l, locIncluded)}
                                                     className="text-xs font-mono"
                                                 >
                                                     <Checkbox checked={locIncluded.has(l)} className="mr-2 h-3.5 w-3.5" />
@@ -1291,7 +1320,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         : `Supplier (${supIncluded.size})`}
                                     {supIncluded.size > 0 ? (
                                         <span
-                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('sup', setSupIncluded); }}
+                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('sup'); }}
                                             className="ml-1 rounded-full p-0.5 hover:bg-muted"
                                         >
                                             <X className="h-3 w-3" />
@@ -1304,7 +1333,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             <PopoverContent className="w-[220px] p-0" align="start">
                                 {supIncluded.size > 0 && (
                                     <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
-                                        <button onClick={() => clearInclusionFilter('sup', setSupIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                        <button onClick={() => clearInclusionFilter('sup')} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
                                     </div>
                                 )}
                                 <Command>
@@ -1316,7 +1345,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                 <CommandItem
                                                     key={s}
                                                     value={s}
-                                                    onSelect={() => toggleInclusionFilter('sup', s, supIncluded, setSupIncluded)}
+                                                    onSelect={() => toggleInclusionFilter('sup', s, supIncluded)}
                                                     className="text-xs font-mono"
                                                 >
                                                     <Checkbox checked={supIncluded.has(s)} className="mr-2 h-3.5 w-3.5" />
@@ -1437,7 +1466,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
 
                 {/* Floating Action Bar */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
+                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -1457,7 +1486,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     {/* Loading Overlay */}
                     {isYearLoading && (
-                        <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center">
+                        <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center animate-blur-in">
                             <div className="flex flex-col items-center gap-2">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                 <span className="text-sm font-medium text-muted-foreground">Loading Data...</span>
@@ -1477,14 +1506,14 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         {/* Fix #1: No key-based remounting — content updates in place */}
                         <div className="w-full h-full">
                             <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
-                                <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                                <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                                     {table.getHeaderGroups().map((headerGroup) => (
                                         <TableRow key={headerGroup.id} className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                             {headerGroup.headers.map((header) => {
                                                 return (
 
 
-                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
+                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted/90 sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
                                                         <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
                                                             {header.isPlaceholder
                                                                 ? null
@@ -1522,7 +1551,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
-                                                                "hover:bg-muted/50 border-b last:border-0 transition-colors",
+                                                                "hover:bg-muted/50 border-b last:border-0 transition-all duration-150",
                                                                 getRowStateClasses(rowState),
                                                                 selectionMode && "cursor-pointer",
                                                                 isSelected && "bg-primary/5"
@@ -1567,12 +1596,12 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                 colSpan={columns.length}
                                                 className="h-24 text-center"
                                             >
-                                                No results.
+                                                <span className="animate-fade-up text-muted-foreground">No results.</span>
                                             </TableCell>
                                         </TableRow>
                                     )}
                                 </TableBody>
-                                <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
+                                <TableFooter className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
                                     <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
                                         {/* TOTALS label — dynamic colSpan based on visible prefix columns */}
                                         {visiblePrefixCount > 0 && (

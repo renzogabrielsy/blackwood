@@ -12,7 +12,7 @@ import {
 } from '@/lib/field-labels';
 import { useAuth } from '@/components/providers/auth-context';
 import { getDeliveryHistory, getAuditComments, addAuditComment } from '../actions';
-import type { AuditLogRow, AuditComment } from '@/types/rc-in';
+import type { AuditLogRow, AuditComment, DeliveryHistoryRow } from '@/types/rc-in';
 import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from './audit-shared';
 import {
   Dialog,
@@ -198,7 +198,7 @@ export function DeliveryHistoryDialog({
   onOpenChange,
 }: {
   deliveryId: string | null;
-  initialData: Record<string, any> | null;
+  initialData: DeliveryHistoryRow | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -233,7 +233,7 @@ function DeliveryHistoryContent({
   initialData,
 }: {
   deliveryId: string | null;
-  initialData: Record<string, any> | null;
+  initialData: DeliveryHistoryRow | null;
 }) {
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [history, setHistory] = React.useState<AuditLogRow[]>([]);
@@ -261,7 +261,7 @@ function DeliveryHistoryContent({
     };
   }, [deliveryId]);
 
-  const current = initialData || {};
+  const current = initialData || ({} as DeliveryHistoryRow);
 
   if (!initialData && !deliveryId) {
     return (
@@ -279,28 +279,28 @@ function DeliveryHistoryContent({
   const lastChangedLabKeys = new Set<string>();
   if (lastUpdate?.diff?.lab_results) {
     const labDiffs = flattenLabResultsDiff(
-      lastUpdate.diff.lab_results.old,
-      lastUpdate.diff.lab_results.new
+      lastUpdate.diff.lab_results.old as Record<string, unknown> | null,
+      lastUpdate.diff.lab_results.new as Record<string, unknown> | null
     );
     labDiffs.forEach((ld) => lastChangedLabKeys.add(ld.key));
   }
 
   const getPreviousValue = (key: string): string | null => {
     if (!lastUpdate?.diff?.[key]) return null;
-    return formatFieldValue(key, lastUpdate.diff[key].old);
+    return formatFieldValue(key, lastUpdate.diff[key].old as string | number | boolean | null);
   };
 
   const getPreviousLabValue = (subKey: string): string | null => {
     if (!lastUpdate?.diff?.lab_results) return null;
-    const oldLab = lastUpdate.diff.lab_results.old;
-    const newLab = lastUpdate.diff.lab_results.new;
+    const oldLab = lastUpdate.diff.lab_results.old as Record<string, unknown> | null;
+    const newLab = lastUpdate.diff.lab_results.new as Record<string, unknown> | null;
     if (JSON.stringify(oldLab?.[subKey]) === JSON.stringify(newLab?.[subKey])) return null;
-    return formatFieldValue(subKey, oldLab?.[subKey]);
+    return formatFieldValue(subKey, oldLab?.[subKey] as string | number | boolean | null);
   };
 
   const renderField = (
     key: string,
-    current: Record<string, any>,
+    current: DeliveryHistoryRow,
     lastChangedKeys: Set<string>,
     getPreviousValue: (k: string) => string | null,
     className?: string,
@@ -320,8 +320,8 @@ function DeliveryHistoryContent({
         <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">
           {labelOverride || getFieldLabel(key)}
         </div>
-        <div className="text-xs font-mono truncate" title={String(current[key] ?? '-')}>
-          {formatFieldValue(key, current[key])}
+        <div className="text-xs font-mono truncate" title={String((current as Record<string, unknown>)[key] ?? '-')}>
+          {formatFieldValue(key, (current as Record<string, unknown>)[key] as string | number | boolean | null)}
         </div>
       </div>
     );
@@ -343,7 +343,7 @@ function DeliveryHistoryContent({
 
   const renderLabField = (
     subKey: string,
-    labData: Record<string, any> | null,
+    labData: { mc: number; ash: number; bd_astm: number; bd_jis: number; grit: number; vm: number; fc: number } | null,
     isChanged: boolean,
     prev: string | null
   ) => {
@@ -359,7 +359,7 @@ function DeliveryHistoryContent({
           {getFieldLabel(subKey)}
         </div>
         <div className="text-xs font-mono truncate font-bold">
-          {formatFieldValue(subKey, labData?.[subKey])}
+          {formatFieldValue(subKey, labData ? (labData as Record<string, unknown>)[subKey] as string | number | boolean | null : null)}
         </div>
       </div>
     );
@@ -441,7 +441,7 @@ function DeliveryHistoryContent({
       <div className="flex-1 overflow-y-auto space-y-5 pr-1 pt-0">
         {/* Card Body */}
         <TooltipProvider>
-          <div className="space-y-3">
+          <div className="space-y-3 stagger-fast">
 
             {/* Row 1: Date - Supplier - Price */}
             <div className="grid grid-cols-3 gap-2">
@@ -502,7 +502,7 @@ function DeliveryHistoryContent({
               <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Lab Results</div>
               <div className="flex gap-1 justify-between">
                 {LAB_KEYS.map((subKey) => {
-                  const labData = current.lab_results as Record<string, any> | null;
+                  const labData = current.lab_results;
                   const isChanged = lastChangedLabKeys.has(subKey);
                   const prev = getPreviousLabValue(subKey);
                   return renderLabField(subKey, labData, isChanged, prev);
@@ -515,7 +515,7 @@ function DeliveryHistoryContent({
         <div className="h-px bg-border" />
 
         {/* History Feed */}
-        <div className="space-y-3">
+        <div className="space-y-3 stagger-children">
           <h4 className="text-sm font-medium flex items-center gap-2">
             Activity Log
           </h4>

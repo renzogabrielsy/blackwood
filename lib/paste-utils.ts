@@ -1,8 +1,17 @@
+/**
+ * Shared paste utilities for Excel-like grid input
+ * Used by RC IN and RC OUT bulk input modules
+ */
+
 function formatYMD(d: Date): string {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Converts Excel serial numbers, common date formats, or ISO strings to yyyy-MM-dd */
+/**
+ * Converts Excel serial numbers, common date formats, or ISO strings to yyyy-MM-dd
+ * @param raw - The raw date string from clipboard
+ * @returns Formatted date string in yyyy-MM-dd format
+ */
 export function parseExcelDate(raw: string): string {
     const trimmed = raw.trim();
 
@@ -35,4 +44,23 @@ export function parseExcelDate(raw: string): string {
     if (!isNaN(parsed.getTime())) return formatYMD(parsed);
 
     return trimmed;
+}
+
+/**
+ * Strips common numeric formatting characters from a string
+ * Removes: currency symbols (₱), commas, quotes
+ * @param raw - The raw numeric string
+ * @returns Cleaned numeric string
+ */
+export function stripNumericFormatting(raw: string): string {
+    return raw.replace(/[₱,"']/g, '');
+}
+
+/**
+ * Trims and removes leading/trailing quotes from a cell value
+ * @param raw - The raw cell value
+ * @returns Cleaned cell value
+ */
+export function trimCellValue(raw: string): string {
+    return raw.trim().replace(/^"|"$/g, '');
 }

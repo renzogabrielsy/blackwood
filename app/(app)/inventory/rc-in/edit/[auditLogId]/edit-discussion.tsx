@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { Send, Loader2, CheckCircle2, ArrowUpDown, Clock } from 'lucide-react';
-import type { AuditLogRow, AuditComment } from '@/types/rc-in';
+import type { AuditLogRow, AuditComment, DeliveryHistoryRow } from '@/types/rc-in';
 import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from '../../components/audit-shared';
 import {
   addAuditComment,
@@ -49,7 +49,7 @@ export function EditDiscussion({
   initialComments,
 }: {
   log: AuditLogRow;
-  delivery: Record<string, any> | null;
+  delivery: DeliveryHistoryRow | null;
   initialComments: AuditComment[];
 }) {
   const { role, isLoading: authLoading } = useAuth();

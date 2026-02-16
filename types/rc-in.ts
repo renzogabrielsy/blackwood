@@ -33,8 +33,8 @@ export type AuditLogRow = {
     id: string;
     record_id: string;
     operation: 'INSERT' | 'UPDATE' | 'DELETE';
-    diff: Record<string, { old: any; new: any }> | null;
-    snapshot: Record<string, any> | null;
+    diff: Record<string, { old: unknown; new: unknown }> | null;
+    snapshot: Record<string, unknown> | null;
     performed_by: string | null;
     performed_at: string;
     comment?: string | null;

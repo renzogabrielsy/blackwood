@@ -21,7 +21,7 @@ export function InventorySheetTabs() {
                         type="button"
                         onClick={() => setActiveTab(tab.id)}
                         className={cn(
-                            "px-3 py-1 text-xs font-medium rounded-md transition-colors",
+                            "px-3 py-1 text-xs font-medium rounded-md transition-all duration-200",
                             isActive
                                 ? "bg-card text-foreground shadow-sm border border-border/50"
                                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50"

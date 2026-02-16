@@ -66,16 +66,21 @@ export function useCellSelection(config: CellSelectionConfig) {
   const isDraggingRef = useRef(isDragging);
   const rafIdRef = useRef<number | null>(null);
 
+  // Synchronous ref updates during render for performance (avoiding race conditions with batched state updates)
+  // eslint-disable-next-line react-hooks/refs
   anchorRef.current = anchor;
+  // eslint-disable-next-line react-hooks/refs
   focusRef.current = focus;
   // NOTE: isDraggingRef is also set synchronously in handlers below
   // to avoid race conditions with batched React state updates.
   // This render-time sync is kept as a fallback.
+  // eslint-disable-next-line react-hooks/refs
   isDraggingRef.current = isDragging;
 
   // Derived range
   const range = anchor && focus ? normalizeRange(anchor, focus) : null;
   const rangeRef = useRef(range);
+  // eslint-disable-next-line react-hooks/refs
   rangeRef.current = range;
 
   // Notify on selection change
@@ -122,6 +127,8 @@ export function useCellSelection(config: CellSelectionConfig) {
     }
   }, []);
 
+  const tickAutoScrollRef = useRef<(() => void) | undefined>(undefined);
+
   const tickAutoScroll = useCallback(() => {
     const container = scrollContainerRef?.current;
     const pointer = lastPointerRef.current;
@@ -150,8 +157,11 @@ export function useCellSelection(config: CellSelectionConfig) {
       container.scrollBy(dx, dy);
     }
 
-    rafIdRef.current = requestAnimationFrame(tickAutoScroll);
+    rafIdRef.current = requestAnimationFrame(() => tickAutoScrollRef.current?.());
   }, [scrollContainerRef, stopAutoScroll]);
+
+  // eslint-disable-next-line react-hooks/refs
+  tickAutoScrollRef.current = tickAutoScroll;
 
   // Track pointer position for auto-scroll
   useEffect(() => {
@@ -281,7 +291,7 @@ export function useCellSelection(config: CellSelectionConfig) {
 
       const base = currentFocus ?? currentAnchor;
       let nextCol = base.col + delta.col;
-      let nextRow = base.row + delta.row;
+      const nextRow = base.row + delta.row;
 
       // Skip non-selectable columns
       while (

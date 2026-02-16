@@ -93,15 +93,25 @@ export async function getRcOutRecords(
     }
 
     // Flatten the structure for the UI
-    return data.map((d: any) => ({
-        ...d,
-        // Flatten computed columns if they come back as objects/arrays (Supabase RPC behavior varies)
-        // Actually, computed cols in select usually come as direct values if scalar.
-        // Let's verify type.
-        avg_price: d.avg_price,
-        avg_wtd_value: d.avg_wtd_value,
-        batch_code: d.batches?.batch_code // Flatten for easier access
-    })) as RcOutRow[];
+    return data.map((d) => {
+        const batchesArray = Array.isArray(d.batches) ? d.batches : (d.batches ? [d.batches] : []);
+        const batchCode = batchesArray[0]?.batch_code;
+
+        return {
+            id: d.id,
+            transaction_date: d.transaction_date,
+            batch_id: d.batch_id,
+            production_batch: d.production_batch,
+            destination: d.destination,
+            weight_kg: d.weight_kg,
+            remarks: d.remarks,
+            block_loc: d.block_loc,
+            created_at: d.created_at,
+            avg_price: d.avg_price,
+            avg_wtd_value: d.avg_wtd_value,
+            batches: batchCode ? { batch_code: batchCode } : undefined,
+        } as RcOutRow;
+    });
 }
 
 export async function deleteRcOutRecord(id: string) {
@@ -150,9 +160,9 @@ export async function submitBulkUsage(rows: RcOutInput[]) {
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Submit Bulk Usage Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 
@@ -206,9 +216,9 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Bulk Update Usage Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 

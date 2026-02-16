@@ -115,7 +115,7 @@ export function DeliverySheetFooter({
 
     return (
         <div className={cn(
-            "flex-none flex items-center justify-between px-4 py-2 border-t bg-card/80 backdrop-blur-sm z-10 transition-all duration-200",
+            "flex-none flex items-center justify-between px-4 py-2 border-t bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 z-10 transition-all duration-200",
             disabled && "opacity-50 pointer-events-none grayscale"
         )}>
             {/* Left: Status */}

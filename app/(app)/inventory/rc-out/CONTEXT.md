@@ -31,6 +31,7 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 - **Auto-fill block_loc:** Selecting a batch auto-populates `block_loc` from `batch.location_ref`.
 - **Cell selection + clipboard copy (master table):** `useCellSelection` and `useClipboardCopy` hooks enable Excel-like rectangular cell selection (click-drag, Shift+Arrow, Ctrl+A) and Ctrl+C copy as TSV. Mutually exclusive with row selection mode. Selection count is pushed to `StatusBarProvider` context via `useStatusBar().setCellSelectionCount()` and displayed in the unified `FloatingStatusBar`. Clears on data/sorting changes, clicking outside the scroll container, or pressing Escape.
 - **Cell selection + copy + delete (bulk input):** All 3 hooks (`useCellSelection`, `useClipboardCopy`, `useCellDelete`) with two-mode system: single-cell edit (click without drag) vs range selection (click+drag, Shift+Arrow). Range mode: Ctrl+C copies as TSV, Backspace/Delete clears all cells. Non-shift nav exits range. Printable char exits range and edits anchor cell. Selection count pushed to `StatusBarProvider` context (same as master table).
+- **Glass & Motion:** Table header/footer use frosted glass (`bg-muted/90 backdrop-blur-sm`). Row hover uses `transition-all duration-150`. Empty state uses `animate-fade-up`. Selection bar uses `animate-fade-up`. Bulk input headers use `bg-muted/90 backdrop-blur-sm`.
 
 ### Batch Status Trigger
 - `fn_process_blackwood_usage` fires on `rc_out` INSERT/UPDATE/DELETE

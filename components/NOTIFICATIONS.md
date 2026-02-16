@@ -43,6 +43,10 @@ Real-time notification bell (500 lines, `components/notification-bell.tsx`) with
 - When realtime UPDATE arrives for a locally-read ID, skip decrement (prevents double-count)
 - ID removed from set after skip
 
+### Badge Animation
+- Uses `animate-badge-pop` (CSS keyframe in `globals.css`) — a spring-like scale 0 → 1.15 → 1 over 250ms
+- Triggered via `animateBadge` state on realtime INSERT, auto-clears after 600ms
+
 ### Self-Notification Filtering
 - INSERT callback checks `source_user_id === user.id` — skips own actions
 

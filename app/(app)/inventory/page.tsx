@@ -42,7 +42,7 @@ export default async function InventoryPage({
 
     // Paginated fetch — bypasses PostgREST max_rows (default 1000)
     const PAGE_SIZE = 1000;
-    let deliveriesRaw: any[] = [];
+    let deliveriesRaw: Awaited<ReturnType<ReturnType<typeof buildDeliveriesQuery>['range']>>['data'] = [];
     let from = 0;
     let hasMore = true;
     while (hasMore) {
@@ -76,7 +76,7 @@ export default async function InventoryPage({
 
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
-        state: (d as any).batches?.status || 'STORED',
+        state: (d.batches as Record<string, unknown> | null)?.status as string || 'STORED',
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
         cost_basis: role === 'Production' ? undefined : d.cost_basis,
     }));

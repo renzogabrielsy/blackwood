@@ -117,6 +117,50 @@ All data tables must feel like dense spreadsheets:
 - **Currency (Accounting format):** `flex justify-between` — ₱ symbol pinned left, number pinned right
 - **Remarks:** Truncate with `max-w-[200px] truncate`, show full text via Tooltip or Popover on hover
 
+## Motion & Glass Design System
+
+Blackwood uses selective animation and frosted glass effects for polish without sacrificing the Industrial Spreadsheet density.
+
+**Principles:**
+- **Functional, not decorative** — animations communicate state changes (reveals, entrances, feedback)
+- **Duration budget:** 150ms micro-interactions, 250ms reveals, 300ms max
+- **Compositor-only:** Only animate `transform`, `opacity`, `filter` — never `width`, `height`, `top`, `left`
+- **Never animate table rows** — no stagger, no fade-in on 600+ cell data tables
+
+**Canonical glass patterns** (by surface type):
+
+| Surface | Pattern | Use case |
+|---|---|---|
+| Sticky table header/footer | `bg-muted/90 backdrop-blur-sm` | TableHeader, TableFooter in master tables and bulk inputs |
+| Dialog/AlertDialog content | `bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80` | DialogContent, AlertDialogContent |
+| Dialog/sheet headers | `bg-background/90 backdrop-blur-sm` | Sticky headers inside add/edit dialogs |
+| Popovers & dropdowns | `bg-popover/95 backdrop-blur-lg` | PopoverContent, DropdownMenuContent |
+| Floating bars | `bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60` | FloatingStatusBar, DeliverySheetFooter |
+
+**Animation utilities** (defined in `globals.css`):
+
+| Class | Duration | Use case |
+|---|---|---|
+| `animate-fade-up` | 250ms | Single element reveal (empty states, selection bars) |
+| `animate-fade-in` | 150ms | Opacity-only fade (micro-interactions) |
+| `animate-scale-in` | 200ms | Container entrance |
+| `animate-blur-in` | 300ms | Page-level reveal, loading overlays |
+| `animate-modal-enter` | 250ms | Dialog/AlertDialog spring entrance |
+| `animate-badge-pop` | 250ms | Notification count |
+| `stagger-children` | 250ms + 50ms stagger (6 slots) | Dashboard cards, activity feeds |
+| `stagger-fast` | 200ms + 30ms stagger | Smaller groups, field change cards |
+| `hover-lift` | 200ms | Cards — translateY(-1px) + shadow |
+| `scroll-fade-bottom` | — | Gradient fade at scroll edge |
+
+**Row hover:** Use `transition-all duration-150` (not `transition-colors`) on table body rows for smooth hover effects.
+
+**What NOT to animate:**
+- Table rows, cells, or cell selection highlights
+- Per-row entrance on virtual scroll tables (rows recycle — animation would re-fire)
+- Filter changes or search results
+- Bulk input grid cells
+- Any element that renders 100+ instances
+
 ## RC IN Column Config
 
 Strict left-to-right order for the delivery input/table:

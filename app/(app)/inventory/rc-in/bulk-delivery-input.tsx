@@ -2,21 +2,10 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Check, Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
+import { Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import {
-    Command,
-    CommandGroup,
-    CommandItem,
-    CommandList,
-} from '@/components/ui/command';
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import {
     TableBody,
@@ -31,6 +20,11 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
 import { submitBulkDeliveries, bulkUpdateDeliveries } from './actions';
 import { calculateWhse } from '@/lib/rc-utils';
 import { useTableSettings } from '@/components/providers/table-settings';
@@ -41,6 +35,9 @@ import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { DeliveryRow, InputDeliveryRow } from '@/types/rc-in';
+import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
+import { GridCell } from '@/components/shared/grid/GridCell';
+import { RemarksCellAdaptor } from '@/components/shared/grid/RemarksCellAdaptor';
 
 export type { InputDeliveryRow } from '@/types/rc-in';
 
@@ -49,11 +46,6 @@ type Batch = {
     id: string;
     batch_code: string;
     location_ref: string;
-};
-
-type AutocompleteItem = {
-    value: string;
-    detail?: string;
 };
 
 const createEmptyRow = (): InputDeliveryRow => ({
@@ -153,7 +145,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
-    const preEditValue = React.useRef<any>(null);
+    const preEditValue = React.useRef<InputDeliveryRow[keyof InputDeliveryRow] | null>(null);
 
     // --- Cell range selection ---
     const cellSelection = useCellSelection({
@@ -165,11 +157,12 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     });
 
     // Push cell selection count to shared context
+    const selectionSize = cellSelection.getSelectionSize();
     React.useEffect(() => {
-        const count = cellSelection.range ? cellSelection.getSelectionSize() : 0;
+        const count = cellSelection.range ? selectionSize : 0;
         setCellSelectionCount(count);
         return () => setCellSelectionCount(0);
-    }, [cellSelection.range, cellSelection, setCellSelectionCount]);
+    }, [cellSelection.range, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -232,7 +225,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         });
     }, []);
 
-    const updateRow = React.useCallback((index: number, field: keyof InputDeliveryRow, value: any) => {
+    const updateRow = React.useCallback((index: number, field: keyof InputDeliveryRow, value: InputDeliveryRow[keyof InputDeliveryRow]) => {
         setRows(prev => {
             const newRows = [...prev];
             newRows[index] = { ...newRows[index], [field]: value };
@@ -629,8 +622,8 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             } else {
                 toast.error(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
             }
-        } catch (error: any) {
-            toast.error('An unexpected error occurred: ' + (error.message || 'Unknown'));
+        } catch (error: unknown) {
+            toast.error('An unexpected error occurred: ' + (error instanceof Error ? error.message : 'Unknown'));
         } finally {
             setIsSubmitting(false);
         }
@@ -688,34 +681,34 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                     }}
                 >
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
-                        <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                        <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                             <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                 {/* Updated Header to include visual index reference if needed, but keeping clean for now */}
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-muted border-b border-foreground/20 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden"></TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
-                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
-                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SUPPLIER</TableHead>
-                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
-                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>LOC</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>TRUCK</TableHead>
-                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
-                                <TableHead className="w-[30px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SKS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>MC</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>GRIT</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASTM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>JIS</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>VM</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASH</TableHead>
-                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>STATE</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WHSE</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SUPPLIER</TableHead>
+                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
+                                <TableHead className="w-[40px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>LOC</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>TRUCK</TableHead>
+                                <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
+                                <TableHead className="w-[30px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>SKS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>MC</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>GRIT</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASTM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>JIS</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>VM</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>ASH</TableHead>
+                                <TableHead className="w-[35px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>FC</TableHead>
+                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
                                 {canViewPrices && (
                                     <>
-                                        <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
-                                        <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
+                                        <TableHead className="w-[50px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP/KG</TableHead>
+                                        <TableHead className="w-[85px] text-center px-1 py-1 font-mono font-bold bg-muted/90 sticky top-0 z-50 border-b border-foreground/20 shadow-none  after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PHP TTL</TableHead>
                                     </>
                                 )}
-                                <TableHead className="w-[20px] p-0 bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
+                                <TableHead className="w-[20px] p-0 bg-muted/90 sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -799,7 +792,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     batches: Batch[];
     batchItems: AutocompleteItem[];
     supplierItems: AutocompleteItem[];
-    updateRow: (index: number, field: keyof InputDeliveryRow, value: any) => void;
+    updateRow: (index: number, field: keyof InputDeliveryRow, value: InputDeliveryRow[keyof InputDeliveryRow]) => void;
     updateRowFields: (index: number, updates: Partial<InputDeliveryRow>) => void;
     removeRow: (index: number) => void;
     onPaste: (e: React.ClipboardEvent, rowIndex: number, colIndex: number) => void;
@@ -853,7 +846,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     };
 
     return (
-        <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
+        <TableRow className="hover:bg-muted/50 transition-all duration-150" style={{ height: `${rowHeight}px` }}>
             <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
                 {isEditMode ? (
                     <Popover>
@@ -931,7 +924,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             {/* 4: SUPPLIER */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={4} value={row.supplier} {...commonCellProps} {...selectionPropsForCol(4)} className="font-bold text-left pl-1">
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.supplier}
                         onChange={(val) => updateRow(index, 'supplier', val)}
                         items={supplierItems}
@@ -948,7 +941,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             {/* 5: BLOCK */}
             <TableCell className="px-1 py-0 border-r relative" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={5} value={row.batch_code} {...commonCellProps} {...selectionPropsForCol(5)}>
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.batch_code}
                         onChange={(val) => updateRow(index, 'batch_code', val)}
                         items={batchItems}
@@ -1144,292 +1137,4 @@ const BulkInputRow = React.memo(function BulkInputRow({
 });
 
 // --- GRID CELL HELPERS ---
-
-function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef, onCellMouseDown, onCellMouseUp, onCellMouseEnter, isCellRangeSelected, isCellRangeAnchor, isDragActive }: {
-    row: number;
-    col: number;
-    value: string | number;
-    activeCell: { row: number; col: number } | null;
-    isEditing: boolean;
-    setActiveCell: (cell: { row: number; col: number }) => void;
-    setIsEditing: (editing: boolean) => void;
-    onStartEditing: (row: number, col: number, char?: string) => void;
-    onRevert?: () => void;
-    children: React.ReactNode;
-    displayValue?: React.ReactNode;
-    className?: string;
-    tabIndex?: number;
-    gridRef?: React.RefObject<HTMLDivElement | null>;
-    onCellMouseDown?: (e: React.MouseEvent) => void;
-    onCellMouseUp?: () => void;
-    onCellMouseEnter?: () => void;
-    isCellRangeSelected?: boolean;
-    isCellRangeAnchor?: boolean;
-    isDragActive?: boolean;
-}) {
-    const isActive = activeCell?.row === row && activeCell?.col === col;
-    const isEditingThis = isActive && isEditing;
-
-    React.useEffect(() => {
-        if (isActive && !isEditing && gridRef?.current) {
-            // ensure grid has focus so arrows work
-        }
-    }, [isActive, isEditing, gridRef]);
-
-    if (isEditingThis) {
-        return (
-            <div
-                className={cn("h-full w-full relative", className)}
-                style={isDragActive ? { pointerEvents: 'none' } : undefined}
-                onMouseEnter={() => {
-                    onCellMouseEnter?.();
-                }}
-            >
-                {children}
-            </div>
-        );
-    }
-
-    return (
-        <div
-            data-row={row}
-            data-col={col}
-            tabIndex={tabIndex ?? 0}
-            className={cn(
-                "h-full w-full flex items-center justify-center outline-none cursor-default select-none",
-                isActive && !isCellRangeSelected && "ring-2 ring-primary ring-inset z-10",
-                isCellRangeSelected && "bg-primary/10 dark:bg-primary/20",
-                isCellRangeAnchor && "ring-2 ring-primary ring-inset z-10",
-                className
-            )}
-            style={{ minHeight: '100%' }}
-            onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (onCellMouseDown) {
-                    onCellMouseDown(e);
-                } else {
-                    // No cell selection -> original click behavior
-                    setActiveCell({ row, col });
-                    setIsEditing(false);
-                    gridRef?.current?.focus();
-                }
-            }}
-            onMouseUp={(e) => {
-                e.stopPropagation();
-                onCellMouseUp?.();
-            }}
-            onMouseEnter={() => {
-                onCellMouseEnter?.();
-            }}
-            onDoubleClick={(e) => {
-                e.stopPropagation();
-                // Use startEditing to capture initial value
-                onStartEditing(row, col);
-            }}
-        >
-            {displayValue ?? value}
-        </div>
-    );
-}
-
-function RemarksCellAdaptor({ value, onChange, onClose, onRevert, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, onRevert: () => void, fontSize: number }) {
-    const [open, setOpen] = React.useState(true);
-
-    const onOpenChange = (isOpen: boolean) => {
-        setOpen(isOpen);
-        if (!isOpen) {
-            onClose();
-        }
-    }
-
-    return (
-        <Popover open={open} onOpenChange={onOpenChange}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full" />
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-80 p-2"
-                align="center"
-                side="bottom"
-                onEscapeKeyDown={(e) => e.preventDefault()}
-            >
-                <div className="space-y-2">
-                    <h4 className="font-medium leading-none">Remarks</h4>
-                    <p className="text-xs text-muted-foreground">Add notes about this delivery.</p>
-                    <Input
-                        autoFocus
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="h-8"
-                        style={{ fontSize: `${fontSize}px` }}
-                        placeholder="Enter remarks..."
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.stopPropagation();
-                                setOpen(false);
-                            } else if (e.key === 'Escape') {
-                                // Prevent default to avoid browser quirks
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                // Directly call revert logic
-                                onRevert();
-                            }
-                        }}
-                    />
-                </div>
-            </PopoverContent>
-        </Popover>
-    )
-}
-
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus, onRevert }: {
-    value: string;
-    onChange: (val: string) => void;
-    onSelect: (val: string) => void;
-    items: AutocompleteItem[];
-    className?: string;
-    placeholder?: string;
-    style?: React.CSSProperties;
-    autoFocus?: boolean;
-    onRevert?: () => void;
-}) {
-    const [open, setOpen] = React.useState(false);
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    const [selectedIndex, setSelectedIndex] = React.useState(0);
-
-    const filtered = React.useMemo(
-        () => items.filter(item => item.value.toLowerCase().includes(value.toLowerCase())).slice(0, 5),
-        [items, value]
-    );
-
-    React.useEffect(() => {
-        setSelectedIndex(0);
-    }, [filtered]);
-
-    React.useEffect(() => {
-        if (autoFocus && filtered.length > 0) {
-            setOpen(true);
-        }
-    }, [autoFocus, filtered.length]);
-
-
-    const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (open) {
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
-                    return;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.max(prev - 1, 0));
-                    return;
-                case 'Enter':
-                    e.preventDefault();
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                        e.stopPropagation();
-                    }
-                    return;
-                case 'Tab':
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                    }
-                    return;
-                case 'Escape':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    setOpen(false);
-                    // Force revert immediately
-                    if (onRevert) onRevert();
-                    return;
-            }
-        }
-    }, [open, filtered, selectedIndex, onSelect]);
-
-    const handleSelect = React.useCallback((itemValue: string) => {
-        onSelect(itemValue);
-        setOpen(false);
-    }, [onSelect]);
-
-    return (
-        <Popover open={open && filtered.length > 0} onOpenChange={setOpen} modal={false}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full relative">
-                    <Input
-                        ref={inputRef}
-                        value={value}
-                        onChange={(e) => {
-                            onChange(e.target.value);
-                            setOpen(true);
-                        }}
-                        onKeyDown={(e) => {
-                            // If NOT open, handle Escape to revert (bubble up) NO, handle specifically
-                            if (!open && e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                if (onRevert) onRevert();
-                                return;
-                            }
-                            handleKeyDown(e);
-                        }}
-                        onFocus={() => {
-                            if (filtered.length > 0) setOpen(true);
-                        }}
-                        className={className}
-                        placeholder={placeholder}
-                        style={style}
-                        autoFocus={autoFocus}
-                    />
-                </div>
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-[200px] p-0"
-                onOpenAutoFocus={(e) => e.preventDefault()}
-                onCloseAutoFocus={(e) => e.preventDefault()}
-                side="bottom"
-                align="start"
-                sideOffset={4}
-                onContextMenu={(e) => e.preventDefault()}
-            >
-                <Command shouldFilter={false}>
-                    <CommandList>
-                        <CommandGroup>
-                            {filtered.map((item, idx) => (
-                                <CommandItem
-                                    key={item.value}
-                                    value={item.value}
-                                    onSelect={() => handleSelect(item.value)}
-                                    className={cn(
-                                        "text-xs font-mono cursor-pointer",
-                                        idx === selectedIndex && "bg-accent text-accent-foreground"
-                                    )}
-                                    onMouseEnter={() => setSelectedIndex(idx)}
-                                >
-                                    <Check
-                                        className={cn(
-                                            "mr-2 h-3 w-3",
-                                            value === item.value ? "opacity-100" : "opacity-0"
-                                        )}
-                                    />
-                                    {item.value}
-                                    {item.detail && (
-                                        <span className="ml-auto text-muted-foreground text-[10px]">{item.detail}</span>
-                                    )}
-                                </CommandItem>
-                            ))}
-                        </CommandGroup>
-                    </CommandList>
-                </Command>
-            </PopoverContent>
-        </Popover>
-    );
-}
+// GridCell, RemarksCellAdaptor, and AutocompletePopover are now imported from shared components

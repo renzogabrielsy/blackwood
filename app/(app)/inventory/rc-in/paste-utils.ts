@@ -1,5 +1,5 @@
 import type { InputDeliveryRow } from '@/types/rc-in';
-import { parseExcelDate } from '@/lib/paste-utils';
+import { parseExcelDate, trimCellValue, stripNumericFormatting } from '@/lib/paste-utils';
 
 // Maps visual column index to the data key. null = read-only/skipped during paste.
 export const COLUMN_MAP: (keyof InputDeliveryRow | null)[] = [
@@ -29,14 +29,17 @@ const NUMERIC_FIELDS = new Set<keyof InputDeliveryRow>([
     'weight_kg', 'sacks', 'cost_basis', 'mc', 'ash', 'grit', 'bd_astm', 'bd_jis', 'vm', 'fc'
 ]);
 
-/** Cleans a single pasted cell value based on its target field */
+/**
+ * Cleans a single pasted cell value based on its target field
+ * Handles date parsing and numeric formatting for RC IN module
+ */
 export function cleanCellValue(raw: string, fieldKey: keyof InputDeliveryRow): string {
-    let value = raw.trim().replace(/^"|"$/g, '');
+    let value = trimCellValue(raw);
 
     if (fieldKey === 'transaction_date') {
         value = parseExcelDate(value);
     } else if (NUMERIC_FIELDS.has(fieldKey)) {
-        value = value.replace(/[₱,]/g, '');
+        value = stripNumericFormatting(value);
     }
 
     return value;

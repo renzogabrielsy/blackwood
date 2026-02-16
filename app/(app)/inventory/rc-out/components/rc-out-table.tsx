@@ -114,7 +114,7 @@ export function RcOutTable({
         setHasMore(data.length > 0);
     }, [data]);
 
-    const getDateRange = React.useCallback(() => {
+    const getDateRange = React.useMemo(() => {
         let startDate: string | undefined;
         let endDate: string | undefined;
 
@@ -140,7 +140,7 @@ export function RcOutTable({
         if (isLoadingMore || !hasMore) return;
         setIsLoadingMore(true);
         try {
-            const { startDate, endDate } = getDateRange();
+            const { startDate, endDate } = getDateRange;
             const nextData = await getRcOutRecords(searchTerm || undefined, searchField, offset, ITEMS_PER_PAGE, startDate, endDate);
 
             if (nextData.length < ITEMS_PER_PAGE) {
@@ -187,7 +187,7 @@ export function RcOutTable({
             setIsDateLoading(true);
 
             const fetchData = async () => {
-                const { startDate, endDate } = getDateRange();
+                const { startDate, endDate } = getDateRange;
                 const newData = await getRcOutRecords(
                     searchTerm || undefined, searchField, 0, 40, startDate, endDate
                 );
@@ -510,7 +510,7 @@ export function RcOutTable({
         ];
 
         return allColumns.filter(col => {
-            const key = (col as any).accessorKey;
+            const key = 'accessorKey' in col ? col.accessorKey : undefined;
             if (key === 'avg_price' || key === 'avg_wtd_value') {
                 return hasPermission('view:prices');
             }
@@ -546,12 +546,18 @@ export function RcOutTable({
         enabled: !selectionMode,
     });
 
-    // Push cell selection count to shared context
+    // Push cell selection count to shared context with debounce to reduce status bar re-renders during drag
+    const selectionSize = cellSelection.getSelectionSize();
     React.useEffect(() => {
-        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
+
+        // Debounce by 50ms to prevent excessive updates during drag selection
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+        }, 50);
+
+        return () => clearTimeout(timer);
+    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -675,7 +681,7 @@ export function RcOutTable({
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Add Usage Records</DialogTitle>
                                 <DialogDescription>
@@ -705,7 +711,7 @@ export function RcOutTable({
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Edit Record{editRows?.length === 1 ? '' : 's'}</DialogTitle>
                                 <DialogDescription>
@@ -846,7 +852,7 @@ export function RcOutTable({
 
                 {/* Floating Action Bar */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
+                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -875,12 +881,12 @@ export function RcOutTable({
                     >
                         <div className="w-full h-full">
                             <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
-                                <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                                <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                                     {table.getHeaderGroups().map((headerGroup) => (
                                         <TableRow key={headerGroup.id} className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                             {headerGroup.headers.map((header) => {
                                                 return (
-                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
+                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted/90 sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
                                                         <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
                                                             {header.isPlaceholder
                                                                 ? null
@@ -916,7 +922,7 @@ export function RcOutTable({
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
-                                                                "hover:bg-muted/50 border-b last:border-0 transition-colors",
+                                                                "hover:bg-muted/50 border-b last:border-0 transition-all duration-150",
                                                                 selectionMode && "cursor-pointer",
                                                                 isSelected && "bg-primary/5 hover:bg-primary/10 border-l-2 border-l-primary"
                                                             )}
@@ -967,12 +973,12 @@ export function RcOutTable({
                                     })() : (
                                         <TableRow>
                                             <TableCell colSpan={columns.length} className="h-24 text-center">
-                                                No results.
+                                                <span className="animate-fade-up text-muted-foreground">No results.</span>
                                             </TableCell>
                                         </TableRow>
                                     )}
                                 </TableBody>
-                                <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
+                                <TableFooter className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
                                     <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
                                         {/* DATE + BATCH + BLOCK = 3 columns */}
                                         <TableCell colSpan={colsBeforeWeight} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
