@@ -221,6 +221,53 @@ input[type=number] {
 .stagger-fast > *:nth-child(5) { animation-delay: 120ms; }
 .stagger-fast > *:nth-child(6) { animation-delay: 150ms; }
 
+/* Row fade — subtle opacity on virtual scroll recycle (100ms) */
+@keyframes bw-row-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-row-fade {
+  animation: bw-row-fade 100ms ease-out both;
+}
+
+/* Slide up — footer/bar reveal (250ms) */
+@keyframes bw-slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: bw-slide-up 250ms ease-out both;
+}
+
+/* Status bar grow — selection indicator entrance (200ms) */
+@keyframes bw-status-grow {
+  0% { opacity: 0; transform: scaleX(0.8) scaleY(0.9); }
+  60% { opacity: 1; transform: scaleX(1.02) scaleY(1.02); }
+  100% { transform: scaleX(1) scaleY(1); }
+}
+.animate-status-grow {
+  animation: bw-status-grow 200ms ease-out both;
+  transform-origin: right center;
+}
+
+/* Hover glow — card glow effect on hover */
+.hover-glow {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.hover-glow:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+:is(.dark) .hover-glow:hover {
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
 /* Hover lift — cards/containers only, never table rows */
 .hover-lift {
   transition: transform 200ms ease, box-shadow 200ms ease;
@@ -228,6 +275,9 @@ input[type=number] {
 .hover-lift:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+:is(.dark) .hover-lift:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 /* Scroll fade — gradient at bottom edge of scrollable containers */

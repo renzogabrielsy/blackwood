@@ -24,12 +24,12 @@ type Batch = {
 
 interface RcOutTableWrapperProps {
     data: RcOutRow[];
-    search?: string;
-    year?: string;
-    month?: string;
     batches: Batch[];
     destinations: string[];
-    productionBatches: string[];
+    batchOptions: string[];
+    yearOptions: number[];
+    blockLocs: string[];
+    onRefresh?: () => Promise<void>;
 }
 
 export function RcOutTableWrapper(props: RcOutTableWrapperProps) {

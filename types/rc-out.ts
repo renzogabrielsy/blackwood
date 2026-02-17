@@ -15,6 +15,8 @@ export type RcOutRow = {
     // Joined Fields
     batches?: {
         batch_code: string;
+        status: string;
+        location_ref: string;
     };
 
     created_at: string;

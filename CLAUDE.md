@@ -151,6 +151,7 @@ Blackwood uses selective animation and frosted glass effects for polish without 
 | `stagger-fast` | 200ms + 30ms stagger | Smaller groups, field change cards |
 | `hover-lift` | 200ms | Cards — translateY(-1px) + shadow |
 | `scroll-fade-bottom` | — | Gradient fade at scroll edge |
+| `animate-status-grow` | 200ms | Status bar selection indicator entrance (scaleX/Y from right) |
 
 **Row hover:** Use `transition-all duration-150` (not `transition-colors`) on table body rows for smooth hover effects.
 

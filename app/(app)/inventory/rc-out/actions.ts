@@ -2,7 +2,6 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
-import { endOfMonth, format } from 'date-fns';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
 
 export async function getRcOutRecords(
@@ -30,7 +29,9 @@ export async function getRcOutRecords(
       avg_price:rc_out_avg_price,
       avg_wtd_value:rc_out_avg_wtd_value,
       batches (
-        batch_code
+        batch_code,
+        status,
+        location_ref
       )
     `)
         .order('transaction_date', { ascending: false })
@@ -109,7 +110,7 @@ export async function getRcOutRecords(
             created_at: d.created_at,
             avg_price: d.avg_price,
             avg_wtd_value: d.avg_wtd_value,
-            batches: batchCode ? { batch_code: batchCode } : undefined,
+            batches: batchCode ? { batch_code: batchCode, status: batchesArray[0]?.status || 'STORED', location_ref: batchesArray[0]?.location_ref || '' } : undefined,
         } as RcOutRow;
     });
 }
@@ -224,46 +225,113 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
 
 export async function fetchRcOutTabData() {
     const supabase = await createClient();
-    const now = new Date();
-    const year = String(now.getFullYear());
-    const month = String(now.getMonth()); // 0-indexed
 
-    // Same date logic as the old rc-out/page.tsx
-    const y = parseInt(year, 10);
-    const m = parseInt(month, 10);
-    const start = new Date(y, m, 1);
-    const end = endOfMonth(start);
-    const startDate = format(start, 'yyyy-MM-dd');
-    const endDate = format(end, 'yyyy-MM-dd');
+    // Paginated fetch helper to bypass PostgREST max_rows (1000)
+    const PAGE = 1000;
+    async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
+        let all: T[] = [];
+        let from = 0;
+        let hasMore = true;
+        while (hasMore) {
+            const { data } = await buildQuery().range(from, from + PAGE - 1);
+            all = all.concat(data || []);
+            hasMore = (data?.length || 0) === PAGE;
+            from += PAGE;
+        }
+        return all;
+    }
 
-    const [records, batchesRes, destinationsRes, productionBatchesRes] = await Promise.all([
-        getRcOutRecords(undefined, undefined, 0, 40, startDate, endDate),
-        supabase
-            .from('batches')
-            .select('id, batch_code, location_ref')
-            .order('batch_code'),
-        supabase
-            .from('rc_out')
-            .select('destination')
-            .not('destination', 'is', null)
-            .order('destination'),
+    // Fetch ALL rc_out records with batch join
+    const rcOutRaw = await fetchAll<any>(() =>
         supabase
             .from('rc_out')
-            .select('production_batch')
-            .not('production_batch', 'is', null)
-            .order('production_batch'),
-    ]);
+            .select(`
+                id,
+                transaction_date,
+                batch_id,
+                production_batch,
+                destination,
+                weight_kg,
+                remarks,
+                block_loc,
+                created_at,
+                avg_price:rc_out_avg_price,
+                avg_wtd_value:rc_out_avg_wtd_value,
+                batches (
+                    batch_code,
+                    status,
+                    location_ref
+                )
+            `)
+            .order('transaction_date', { ascending: false })
+    );
 
+    // Flatten the batches join (same pattern as getRcOutRecords)
+    const records: RcOutRow[] = rcOutRaw.map((d) => {
+        const batchesArray = Array.isArray(d.batches) ? d.batches : (d.batches ? [d.batches] : []);
+        const batchCode = batchesArray[0]?.batch_code;
+
+        return {
+            id: d.id,
+            transaction_date: d.transaction_date,
+            batch_id: d.batch_id,
+            production_batch: d.production_batch,
+            destination: d.destination,
+            weight_kg: d.weight_kg,
+            remarks: d.remarks,
+            block_loc: d.block_loc,
+            created_at: d.created_at,
+            avg_price: d.avg_price,
+            avg_wtd_value: d.avg_wtd_value,
+            batches: batchCode ? { batch_code: batchCode, status: batchesArray[0]?.status || 'STORED', location_ref: batchesArray[0]?.location_ref || '' } : undefined,
+        } as RcOutRow;
+    });
+
+    // Fetch batches for bulk input resolution
+    const batchesRes = await supabase
+        .from('batches')
+        .select('id, batch_code, location_ref')
+        .order('batch_code');
     const batches = batchesRes.data ?? [];
-    const destinations = Array.from(new Set((destinationsRes.data ?? []).map(d => d.destination).filter(Boolean)));
-    const productionBatches = Array.from(new Set((productionBatchesRes.data ?? []).map(d => d.production_batch).filter(Boolean)));
+
+    // Fetch block_loc values from BOTH rc_out and batches.location_ref
+    const [blockLocsFromRcOut, blockLocsFromBatches] = await Promise.all([
+        fetchAll<{ block_loc: string }>(() =>
+            supabase.from('rc_out').select('block_loc').not('block_loc', 'is', null).order('block_loc')
+        ),
+        fetchAll<{ location_ref: string }>(() =>
+            supabase.from('batches').select('location_ref').not('location_ref', 'is', null).order('location_ref')
+        ),
+    ]);
+    const blockLocsSet = new Set<string>();
+    blockLocsFromRcOut.forEach(d => { if (d.block_loc) blockLocsSet.add(d.block_loc); });
+    blockLocsFromBatches.forEach(d => { if (d.location_ref) blockLocsSet.add(d.location_ref); });
+    // Natural sort: "A1" < "A10" < "B1"
+    const blockLocs = Array.from(blockLocsSet).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    // Derive distinct destinations, batchOptions, and yearOptions from records
+    const destinations = Array.from(new Set(records.map(r => r.destination).filter(Boolean))).sort();
+    const MONTH_ORDER: Record<string, number> = {
+        JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, MAY: 5, JUNE: 6,
+        JULY: 7, AUGUST: 8, SEPTEMBER: 9, OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12,
+    };
+    const batchOptions = Array.from(new Set(records.map(r => r.production_batch).filter(Boolean)))
+        .sort((a, b) => (MONTH_ORDER[a.toUpperCase()] ?? 99) - (MONTH_ORDER[b.toUpperCase()] ?? 99));
+    const yearOptions = Array.from(
+        new Set(records.map(r => {
+            const yr = parseInt(r.transaction_date?.slice(0, 4) || '');
+            return isNaN(yr) ? null : yr;
+        }).filter(Boolean) as number[])
+    ).sort((a, b) => b - a); // descending
 
     return {
         records,
         batches,
         destinations,
-        productionBatches,
-        year,
-        month,
+        batchOptions,
+        yearOptions,
+        blockLocs,
     };
 }

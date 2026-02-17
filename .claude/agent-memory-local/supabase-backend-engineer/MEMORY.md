@@ -2,23 +2,28 @@
 
 ## Database Schema Insights
 
-### Batch Status Management (Updated 2026-02-15)
+### Batch Status Management (Updated 2026-02-17)
 
-**Critical Discovery:** The `batch_status` enum drives the STATE column in RC IN. Status is now **fully derived from RC OUT data** via the `fn_process_blackwood_usage` trigger.
+**Critical Discovery:** The `batch_status` enum drives the STATE column in RC IN. Status is now **fully derived from RC OUT data** via the `fn_process_blackwood_usage` trigger, with one exception: SUNDRIED is set by `fn_update_blackwood_state` on RC IN deliveries.
 
 **Status Values:**
 - `STORED` — default for new batches, no rc_out entries
 - `IN-USE` — batch has rc_out entry with `destination='MAIN'`, no CLOSED remarks
-- `CLOSED` — batch has rc_out with `destination='MAIN'` AND `remarks ILIKE '%CLOSED%'`
-- `SUNDRYING` — batch has rc_out with `destination='SUNDRY'`
+- `CLOSED` — batch has ANY rc_out with `remarks ILIKE '%CLOSED%'` (regardless of destination)
+- `SUNDRYING` — batch has rc_out with `destination='SUNDRY'`, no CLOSED remarks
+- `SUNDRIED` — SUNDRY batch that has received deliveries but has no rc_out entries (sundrying complete, material stored)
 
-**Priority Order:** CLOSED > SUNDRYING > IN-USE > STORED
+**Priority Order:** CLOSED > SUNDRYING > IN-USE > SUNDRIED > STORED
+
+**CLOSED takes absolute priority** — a batch with both SUNDRY destination AND CLOSED remark becomes CLOSED, not SUNDRYING.
+
+**SUNDRIED Semantics:** SUNDRIED means "sundrying process complete, material received and stored." It is set by `fn_update_blackwood_state` when a delivery is added to a SUNDRY batch that is currently in STORED status. When RC OUT usage is recorded against a SUNDRIED batch, it moves to SUNDRYING (if destination='SUNDRY') or IN-USE (if destination='MAIN'). When all RC OUT records are deleted, it falls back to SUNDRIED (not STORED) because it's a SUNDRY batch.
 
 **Note on FEED:** The `FEED` enum value still exists in `batch_status` but is no longer actively set by triggers (as of 2026-02-15). FEED location is indicated by the WHSE column in RC IN (derived from `block_loc` starting with 'F'), not by batch status. FEED batches follow the same status rules as other batches.
 
-### Trigger: fn_process_blackwood_usage
+### Trigger: fn_process_blackwood_usage (2026-02-17 CLOSED Priority Fix)
 
-**File:** Located in `supabase/migrations/` — full rewrite completed 2026-02-15
+**File:** Located in `supabase/migrations/` — full rewrite 2026-02-15, CLOSED priority fix 2026-02-17
 
 **Operations Supported:**
 1. **INSERT** — Optimized, checks only new row, depletes weight, sets status
@@ -31,16 +36,28 @@
 - UPDATE/DELETE operations query ALL rc_out records to determine correct state
 - If batch_id changes during UPDATE, BOTH old and new batches are recalculated
 
+**Status Priority (CRITICAL):** CLOSED > SUNDRYING > IN-USE > SUNDRIED > STORED
+- **CLOSED remark ALWAYS takes highest priority** — regardless of destination
+- INSERT CASE statement checks `NEW.remarks ILIKE '%CLOSED%'` FIRST, before destination checks
+- This ensures SUNDRY + CLOSED → CLOSED (not SUNDRYING)
+- DELETE/UPDATE fallback: checks if batch is SUNDRY (`batch_code ILIKE '%SUNDRY%'`) before defaulting to STORED
+- Migration `fix_closed_remark_priority_in_rc_out_trigger.sql` (2026-02-17) fixed the INSERT logic
+
 **Common Pitfall:** Previously, the RC IN batch upsert **overrode** trigger-managed status back to 'STORED'. This was fixed by removing the `status` field from `upsertBatchesFromRows()` in `app/(app)/inventory/rc-in/actions.ts` (line 17).
 
-### Trigger: fn_update_blackwood_state (2026-02-16 Fix)
+### Trigger: fn_update_blackwood_state (2026-02-17 SUNDRIED Status)
 
-**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16
+**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16, SUNDRIED status added 2026-02-17
 
 **Operations Supported:**
-1. **INSERT** — Uses incremental weighted average formula to update `avg_cost`, `quality_stats`, `current_weight`
+1. **INSERT** — Uses incremental weighted average formula to update `avg_cost`, `quality_stats`, `current_weight`; sets SUNDRIED status for SUNDRY batches
 2. **UPDATE** — Recalculates `avg_cost` from scratch when cost data or `batch_code` changes
 3. **DELETE** — Recalculates `avg_cost` from scratch for the old batch (if trigger is configured)
+
+**Critical INSERT Behavior (SUNDRIED Status):**
+- After updating avg_cost/quality_stats, checks if `batch_code ILIKE '%SUNDRY%'` AND batch status is STORED
+- If both conditions are true, upgrades status to SUNDRIED
+- This only upgrades from STORED → SUNDRIED (won't override IN-USE or CLOSED)
 
 **Critical UPDATE Behavior:**
 - When `batch_code` changes: recalculates BOTH old and new batches from all their deliveries
@@ -83,6 +100,48 @@ PostgreSQL requires enum values to be committed before use in function definitio
 2. Migration 2: Function/trigger updates that reference the new value
 
 **Error if violated:** `unsafe use of new value "X" of enum type`
+
+## RC OUT Module Architecture (2026-02-17 Refactor)
+
+### fetchRcOutTabData() Server Action
+
+**Location:** `app/(app)/inventory/rc-out/actions.ts`, line ~226
+
+**Purpose:** Lazy-loads ALL rc_out records on first tab render (when user switches to Usage tab). No date scoping — loads entire dataset.
+
+**Return Shape:**
+```ts
+{
+  records: RcOutRow[];        // ALL rc_out records, desc by transaction_date
+  batches: Batch[];           // for bulk input batch resolution
+  destinations: string[];     // distinct rc_out.destination values
+  batchOptions: string[];     // plain production_batch codes (no year annotations)
+  yearOptions: number[];      // distinct years from transaction_date, descending
+  blockLocs: string[];        // union of rc_out.block_loc + batches.location_ref, natural sorted
+}
+```
+
+**Key Implementation Details:**
+1. **Paginated fetch with `fetchAll()`** — bypasses PostgREST 1000-row `max_rows` cap
+2. **Full join query:** Same select as `getRcOutRecords()` with batches join + generated columns
+3. **Flattening logic:** Handles array vs single object for `batches` join (same pattern as `getRcOutRecords`)
+4. **Natural sort for blockLocs:** `localeCompare(_, _, { numeric: true })` ensures "A1" < "A10"
+5. **Derived filters:** `destinations`, `batchOptions`, `yearOptions` all computed from `records` — no separate queries
+6. **blockLocs union:** Fetches BOTH `rc_out.block_loc` AND `batches.location_ref` (paginated), deduplicates, natural sorts
+
+**Data Volume:** 1,414 rc_out records — same ballpark as RC IN, proven safe with fetchAll + TanStack Virtual.
+
+**Previous Behavior (Removed 2026-02-17):**
+- Month-based date scoping with `startDate`/`endDate` from `date-fns`
+- Year annotations in `allBatchOptions` (e.g., "OCTOBER (2024, 2025)")
+- Separate query for `productionBatchesRaw` with transaction_date join
+- Returned `year`, `month` strings
+
+**Why Removed:**
+- RC OUT table already uses infinite scroll (not month-based pagination)
+- Client-side filtering handles year/month selection via footer controls
+- Loading ALL data upfront enables instant filter changes (no refetch needed)
+- Year annotations were redundant — batch codes are unique enough without year labels
 
 ## RC IN Module Architecture
 
@@ -180,6 +239,41 @@ SELECT batch_code, status FROM batches WHERE batch_code = 'TEST-BATCH';
 - `app/(app)/inventory/rc-out/CONTEXT.md` (removed FEED from trigger priority)
 - `types/rc-in.ts` (line 27 — added status to batches type)
 - `types/supabase.ts` (regenerated)
+
+## PostgREST Query Limits (2026-02-16 Discovery)
+
+### max_rows Cap: 1000
+
+PostgREST has a server-side `max_rows` setting (default 1000) that **silently truncates** result sets regardless of client-side `.limit()` values. This caused RC OUT filter queries with `.limit(5000)` to return only the first 1000 rows alphabetically.
+
+**Impact:** With 1,414 RC OUT rows where 1,395 are "MAIN" destination, alphabetical ordering meant the first 1000 were ALL "MAIN" — so rare values like "MAN", "MIAN", and "SUNDRY" (17 rows) never appeared in filter dropdowns.
+
+**Fix Pattern: Paginated `.range()` Loops**
+
+```ts
+const PAGE = 1000;
+async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
+    let all: T[] = [];
+    let from = 0;
+    let hasMore = true;
+    while (hasMore) {
+        const { data } = await buildQuery().range(from, from + PAGE - 1);
+        all = all.concat(data || []);
+        hasMore = (data?.length || 0) === PAGE;
+        from += PAGE;
+    }
+    return all;
+}
+
+// Usage
+const destinations = await fetchAll<{ destination: string }>(() =>
+    supabase.from('rc_out').select('destination').not('destination', 'is', null).order('destination')
+);
+```
+
+**Applied in:** `app/(app)/inventory/rc-out/actions.ts` `fetchRcOutTabData()` — all 3 filter queries (destinations, production_batch, block_loc) now use paginated fetch.
+
+**When to Use:** Any filter/autocomplete query that needs to collect ALL unique values from a table with >1000 rows.
 
 ## Supabase CLI Patterns
 

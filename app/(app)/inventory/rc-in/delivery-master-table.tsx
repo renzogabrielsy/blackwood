@@ -21,7 +21,7 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock, SlidersHorizontal } from 'lucide-react';
+import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock, SlidersHorizontal, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -75,6 +75,7 @@ import { formatCompact } from '@/lib/format-utils';
 export type { DeliveryHistoryRow };
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from '../components/DeliverySheetFooter';
@@ -85,6 +86,7 @@ function getStateClasses(state: string): string {
         case 'IN-USE': return 'text-blue-700 bg-blue-200 dark:text-blue-300 dark:bg-blue-900 shadow-sm ring-1 ring-blue-300/60 dark:ring-blue-600/40';
         case 'CLOSED': return 'text-red-700 bg-red-200 dark:text-red-300 dark:bg-red-900 shadow-sm ring-1 ring-red-300/60 dark:ring-red-600/40';
         case 'SUNDRYING': return 'text-amber-700 bg-amber-200 dark:text-amber-300 dark:bg-amber-900 shadow-sm ring-1 ring-amber-300/60 dark:ring-amber-600/40';
+        case 'SUNDRIED': return 'text-amber-800 bg-amber-100 dark:text-amber-200 dark:bg-amber-950/50 shadow-sm ring-1 ring-amber-200/60 dark:ring-amber-700/40';
         default: return 'text-muted-foreground bg-muted/10'; // STORED
     }
 }
@@ -94,6 +96,7 @@ function getRowStateClasses(state: string): string {
         case 'IN-USE':    return 'bg-blue-100/70 dark:bg-blue-950/40';
         case 'CLOSED':    return 'bg-red-100/70 dark:bg-red-950/40';
         case 'SUNDRYING': return 'bg-amber-100/70 dark:bg-amber-950/40';
+        case 'SUNDRIED':  return 'bg-amber-50/70 dark:bg-amber-950/20';
         default:          return ''; // STORED — no row highlight
     }
 }
@@ -111,10 +114,20 @@ const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
 export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: Array<{ id: string; batch_code: string; location_ref: string }>, search?: string, allSuppliers: string[], allLocations: string[] }) {
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { user, role, hasPermission } = useAuth();
-    const { setCellSelectionCount } = useStatusBar();
+    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
+
+    // Refresh state for manual and post-mutation data refresh
+    const [refreshing, setRefreshing] = React.useState(false);
+
+    const handleRefresh = React.useCallback(() => {
+        setRefreshing(true);
+        router.refresh();
+        // router.refresh() is fire-and-forget; reset spinner after a brief delay
+        setTimeout(() => setRefreshing(false), 1000);
+    }, [router]);
 
     const [month, setMonth] = React.useState<string>(() => searchParams.get('m') || String(new Date().getMonth()));
 
@@ -533,6 +546,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             if (res.success) {
                 toast.success('Delivery deleted');
                 setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+                handleRefresh();
             } else {
                 toast.error('Delete failed: ' + res.message);
             }
@@ -546,6 +560,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             if (res.success) {
                 toast.success(`${count} deliver${count === 1 ? 'y' : 'ies'} deleted`);
                 setSelectedIds(new Set());
+                handleRefresh();
             } else {
                 toast.error('Bulk delete failed: ' + res.message);
             }
@@ -879,18 +894,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         enabled: !selectionMode,
     });
 
-    // Push cell selection count to shared context with debounce to reduce status bar re-renders during drag
     const selectionSize = cellSelection.getSelectionSize();
-    React.useEffect(() => {
-        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
-
-        // Debounce by 50ms to prevent excessive updates during drag selection
-        const timer = setTimeout(() => {
-            setCellSelectionCount(count);
-        }, 50);
-
-        return () => clearTimeout(timer);
-    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -930,6 +934,64 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         }
     }, [rows, visibleColumns]);
 
+    const getNumericCellValue = React.useCallback((rowIdx: number, colIdx: number): number | null => {
+        const row = rows[rowIdx];
+        if (!row) return null;
+        const data = row.original;
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+
+        switch (col.id) {
+            case 'weight_kg': return parseFloat(String(data.weight_kg)) || null;
+            case 'sacks': return data.sacks != null ? Number(data.sacks) : null;
+            case 'mc': return data.lab_results?.mc ?? null;
+            case 'grit': return data.lab_results?.grit ?? null;
+            case 'bd_astm': return data.lab_results?.bd_astm ?? null;
+            case 'bd_jis': return data.lab_results?.bd_jis ?? null;
+            case 'vm': return data.lab_results?.vm ?? null;
+            case 'ash': return data.lab_results?.ash ?? null;
+            case 'fc': return data.lab_results?.fc ?? null;
+            case 'cost_basis': { const v = parseFloat(String(data.cost_basis)); return isNaN(v) ? null : v; }
+            case 'php_ttl': {
+                const wt = parseFloat(String(data.weight_kg)) || 0;
+                const price = parseFloat(String(data.cost_basis)) || 0;
+                const total = wt * price;
+                return total > 0 ? total : null;
+            }
+            default: return null;
+        }
+    }, [rows, visibleColumns]);
+
+    const getColumnDefaultCalcType = React.useCallback((colIdx: number): AggregationType | null => {
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+        switch (col.id) {
+            case 'weight_kg':
+            case 'sacks':
+            case 'php_ttl':
+                return 'SUM';
+            case 'mc': case 'grit': case 'bd_astm': case 'bd_jis': case 'vm': case 'ash': case 'fc':
+            case 'cost_basis':
+                return 'AVERAGE';
+            default: return null;
+        }
+    }, [visibleColumns]);
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    // Push cell selection count + aggregates to shared context with debounce to reduce status bar re-renders during drag
+    React.useEffect(() => {
+        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
+
+        // Debounce by 50ms to prevent excessive updates during drag selection
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+            setCellAggregates(count > 1 ? aggregates : null);
+        }, 50);
+
+        return () => clearTimeout(timer);
+    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
+
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
         getSelectedRange: cellSelection.getSelectedRange,
         getCellValue,
@@ -948,6 +1010,9 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         const handleClickOutside = (e: MouseEvent) => {
             const container = tableContainerRef.current;
             if (container && !container.contains(e.target as Node)) {
+                const target = e.target as HTMLElement;
+                // Don't clear selection when clicking the floating status bar or its popover
+                if (target.closest?.('[data-floating-status-bar]') || target.closest?.('[data-radix-popper-content-wrapper]')) return;
                 cellSelection.clearSelection();
             }
         };
@@ -1100,7 +1165,10 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             <BulkDeliveryInput
                                 batches={batches}
                                 suppliers={allSuppliers}
-                                onSuccess={() => setIsAddOpen(false)}
+                                onSuccess={() => {
+                                    setIsAddOpen(false);
+                                    handleRefresh();
+                                }}
                                 onDirtyChange={setIsInputDirty}
                             />
                         </div>
@@ -1132,7 +1200,11 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                     initialData={editRows}
                                     batches={batches}
                                     suppliers={allSuppliers}
-                                    onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
+                                    onSuccess={() => {
+                                        setEditRows(null);
+                                        setSelectedIds(new Set());
+                                        handleRefresh();
+                                    }}
                                     onDirtyChange={setIsInputDirty}
                                 />
                             )}
@@ -1418,6 +1490,21 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             Add Delivery
                         </Button>
 
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={handleRefresh}
+                                    disabled={refreshing}
+                                >
+                                    <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">Refresh data</TooltipContent>
+                        </Tooltip>
+
                         <Popover>
                             <PopoverTrigger asChild>
                                 <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -1551,7 +1638,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
-                                                                "hover:bg-muted/50 border-b last:border-0 transition-all duration-150",
+                                                                "hover:bg-muted/50 border-b last:border-0 transition-all duration-150 animate-row-fade",
                                                                 getRowStateClasses(rowState),
                                                                 selectionMode && "cursor-pointer",
                                                                 isSelected && "bg-primary/5"
@@ -1601,7 +1688,8 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         </TableRow>
                                     )}
                                 </TableBody>
-                                <TableFooter className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
+                                {hasActiveFilters && (
+                                <TableFooter className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50 animate-slide-up">
                                     <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
                                         {/* TOTALS label — dynamic colSpan based on visible prefix columns */}
                                         {visiblePrefixCount > 0 && (
@@ -1698,6 +1786,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                         <TableCell className="py-0" />
                                     </TableRow>
                                 </TableFooter>
+                                )}
                             </table>
                         </div>
                     </div>

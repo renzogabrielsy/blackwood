@@ -34,13 +34,17 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - **Data fetching moved to parent:** RC IN data is fetched server-side in `../page.tsx` and passed to `DeliveryMasterTableWrapper` via `InventoryView`. The `rc-in/page.tsx` is now a redirect stub to `/inventory`.
 - **Search always uses all fields:** The search field dropdown was removed. Server-side search in `../page.tsx` always queries across supplier, batch_code, truck_plate, and block_loc.
 - **Cost column visibility:** Both header and body cells in `BulkInputRow` are gated behind `canViewPrices` prop (`hasPermission('view:prices')`), ensuring column count matches for all roles in the edit dialog
+- **Data refresh mechanism:** After every add/edit/delete operation, the table calls `router.refresh()` to trigger a server-side re-render and re-fetch fresh data from the parent `page.tsx`. A manual refresh button (`RefreshCw` icon) in the toolbar provides a fallback. The `refreshing` state drives a spinner on the button (1-second timeout since `router.refresh()` is fire-and-forget). Server actions still call `revalidatePath` as before; the explicit `router.refresh()` ensures the UI picks up changes immediately after mutations.
 - **Paste-grid:** Tab-separated clipboard → Excel serial date parsing, currency stripping, auto-row expansion
 - **Virtual scroll:** `@tanstack/react-virtual` with `overscan: 15`, respects user's `rowHeight` setting
 - **Audit resolve workflow:** Employees request resolve/reopen; Admins directly toggle or approve/deny requests; system messages auto-posted to `audit_comments`
 - **Keyboard nav:** Arrow keys, Tab, Enter, F2 (edit), Escape (revert), printable chars (type-over)
-- **Cell selection + clipboard copy (master table):** `useCellSelection` and `useClipboardCopy` hooks enable rectangular cell selection (click-drag, Shift+click, Shift+Arrow, Ctrl+A) and Ctrl+C copy as TSV. Mutually exclusive with row selection mode (`enabled: !selectionMode`). Selection count is pushed to `StatusBarProvider` context via `useStatusBar().setCellSelectionCount()` and displayed in the unified `FloatingStatusBar`. Clears on filteredData/sorting changes, clicking outside the scroll container, or pressing Escape.
-- **Cell selection + copy + delete (bulk input):** All 3 hooks (`useCellSelection`, `useClipboardCopy`, `useCellDelete`) with two-mode system: single-cell edit (click without drag) vs range selection (click+drag, Shift+Arrow). Range mode: Ctrl+C copies as TSV, Backspace/Delete clears all cells. Non-shift nav exits range. Printable char exits range and edits anchor cell. Selection count pushed to `StatusBarProvider` context (same as master table).
-- **Glass & Motion:** Table header/footer use frosted glass (`bg-muted/90 backdrop-blur-sm`). Row hover uses `transition-all duration-150`. Empty state uses `animate-fade-up`. Loading overlay uses `animate-blur-in`. Selection bar uses `animate-fade-up`. Bulk input headers use `bg-muted/90 backdrop-blur-sm`. DeliveryHistoryDialog uses `stagger-fast` on field cards, `stagger-children` on activity feed.
+- **Cell selection + clipboard copy (master table):** `useCellSelection` and `useClipboardCopy` hooks enable rectangular cell selection (click-drag, Shift+click, Shift+Arrow, Ctrl+A) and Ctrl+C copy as TSV. Mutually exclusive with row selection mode (`enabled: !selectionMode`). Selection count and `useCellAggregation` aggregates are pushed to `StatusBarProvider` context via `useStatusBar()` and displayed in the unified `FloatingStatusBar` with a Google Sheets-like auto-calculate dropdown (SUM/AVERAGE/COUNT/MIN/MAX). Numeric columns for aggregation: weight_kg, sacks, mc, grit, bd_astm, bd_jis, vm, ash, fc, cost_basis, php_ttl. Clears on filteredData/sorting changes, clicking outside the scroll container, or pressing Escape.
+- **Cell selection + copy + delete (bulk input):** All 3 hooks (`useCellSelection`, `useClipboardCopy`, `useCellDelete`) plus `useCellAggregation` with two-mode system: single-cell edit (click without drag) vs range selection (click+drag, Shift+Arrow). Range mode: Ctrl+C copies as TSV, Backspace/Delete clears all cells. Non-shift nav exits range. Printable char exits range and edits anchor cell. Selection count and aggregates pushed to `StatusBarProvider` context (same as master table). Numeric columns for aggregation: weight_kg, sacks, mc, grit, bd_astm, bd_jis, vm, ash, fc, cost_basis.
+- **Glass & Motion:** Table header/footer use frosted glass (`bg-muted/90 backdrop-blur-sm`). Row hover uses `transition-all duration-150`. Empty state uses `animate-fade-up`. Loading overlay uses `animate-blur-in`. Selection bar uses `animate-fade-up`. Bulk input headers use `bg-muted/90 backdrop-blur-sm`. DeliveryHistoryDialog uses `stagger-fast` on field cards, `stagger-children` on activity feed. Virtual scroll rows use `animate-row-fade` (100ms opacity-only) for subtle recycle animation.
+- **Conditional TOTALS footer:** The TOTALS `<TableFooter>` row is conditionally rendered only when `hasActiveFilters` is true (any STATE, WHSE, Supplier, or LOC filter is active). Uses `animate-slide-up` (250ms translateY + opacity) for entrance. The `DeliverySheetFooter` (year/month nav bar) is always visible — only the TOTALS row is conditional.
+- **Tab crossfade:** Switching between Deliveries/Usage/Blocking tabs uses CSS `transition-opacity duration-150` on the visible tab container. Managed by `displayTab` + `transitioning` state in `inventory-view.tsx` — a single `setTimeout(150)` fades out, swaps content, then fades in. No CSS keyframes involved.
+- **Sheet tab bar:** Uses glass effect (`bg-muted/50 backdrop-blur-sm`) with a sliding indicator behind the active tab (same `bg-zinc-800 dark:bg-zinc-200 transition-all duration-300` pattern as DeliverySheetFooter year/month indicators). Active tab text inverts to `text-background`.
 
 ### Filter Interaction Model
 - **Server-side:** `year` (URL param) + `search` (URL param, always "all fields")
@@ -71,9 +75,9 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 
 ### STATE Column (Derived)
 - STATE is `batches.status`, managed by the `fn_process_blackwood_usage` trigger on `rc_out`
-- Values: STORED (default), IN-USE, CLOSED, SUNDRYING
-- Color-coded badges in both master table and bulk input with `shadow-sm ring-1` enhancement (IN-USE: blue ring, CLOSED: red ring, SUNDRYING: amber ring; STORED has no ring)
-- **Row highlighting:** Master table rows are tinted by state via `getRowStateClasses()` (IN-USE: blue-50, CLOSED: red-50, SUNDRYING: amber-50; STORED: no tint). Class ordering: state tint < selection (`bg-primary/5`) < hover (`hover:bg-muted/50`)
+- Values: STORED (default), IN-USE, CLOSED, SUNDRYING, SUNDRIED
+- Color-coded badges in both master table and bulk input with `shadow-sm ring-1` enhancement (IN-USE: blue ring, CLOSED: red ring, SUNDRYING: amber ring, SUNDRIED: muted-amber ring; STORED has no ring)
+- **Row highlighting:** Master table rows are tinted by state via `getRowStateClasses()` (IN-USE: blue-50, CLOSED: red-50, SUNDRYING: amber-50, SUNDRIED: amber-50 muted; STORED: no tint). Class ordering: state tint < selection (`bg-primary/5`) < hover (`hover:bg-muted/50`)
 - Trigger handles INSERT/UPDATE/DELETE on rc_out to keep status accurate
 - RC IN batch upsert does NOT set status (let DB default + trigger manage it)
 - Note: FEED location is indicated by WHSE column (derived from block_loc starting with 'F'), not status
@@ -84,10 +88,11 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - `@/lib/auth.ts` — `getUserRole()` (includes dev override check)
 - `@/components/providers/auth-context` — `useAuth()`, `hasPermission('view:prices')`
 - `@/components/providers/table-settings` — `useTableSettings()` (fontSize, rowHeight)
-- `@/components/providers/status-bar-context` — `useStatusBar()` for pushing cell selection count to FloatingStatusBar
+- `@/components/providers/status-bar-context` — `useStatusBar()` for pushing cell selection count and aggregates to FloatingStatusBar
 - `@/lib/hooks/use-cell-selection` — rectangular cell selection with drag, keyboard, and auto-scroll
 - `@/lib/hooks/use-clipboard-copy` — Ctrl+C copies selected cells as TSV
 - `@/lib/hooks/use-cell-delete` — Backspace/Delete clears multi-cell selection (bulk input only)
+- `@/lib/hooks/use-cell-aggregation` — computes SUM/AVERAGE/COUNT/MIN/MAX over selected numeric cells for status bar display
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `date-fns`, `sonner`
 
 ## See Also

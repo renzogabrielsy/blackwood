@@ -21,17 +21,14 @@ Dashboard (`/`) returns `null` — no breadcrumb shown.
 
 ## Module Dropdown (`MODULES` constant)
 ```
-Inventory (/inventory)
-  -> Deliveries (/inventory)
-  -> Usage (/inventory)
-  -> Blocking (/inventory)
+Inventory (/inventory) — direct link
 Production (disabled)
 Accounting (disabled)
 ---
 Admin Panel (/admin) — only if PRIVILEGED_ROLES
 ```
 
-Note: All inventory sub-module links point to `/inventory` — tab switching is client-side via `InventoryTabContext`.
+No "Modules" label or separator header in the dropdown. Inventory is a flat direct link (no sub-dropdown). Tab switching within Inventory is client-side via `InventoryTabContext`.
 
 ## Role-Based Visibility
 - **Dev Role Switcher (Shield icon):** Visible only if `dbRole` is Owner/Admin/Dev. Dropdown lists all 5 roles.

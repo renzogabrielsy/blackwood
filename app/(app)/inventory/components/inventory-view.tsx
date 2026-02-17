@@ -1,6 +1,7 @@
 'use client';
 
-import { useInventoryTab } from './inventory-tab-context';
+import { useState, useEffect } from 'react';
+import { useInventoryTab, type InventoryTab } from './inventory-tab-context';
 import { DeliveryMasterTableWrapper } from '../rc-in/components/delivery-master-table-wrapper';
 import { RcOutLazyTab } from './rc-out-lazy-tab';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
@@ -15,10 +16,31 @@ interface InventoryViewProps {
 
 export function InventoryView({ deliveries, batches, search, allSuppliers, allLocations }: InventoryViewProps) {
     const { activeTab } = useInventoryTab();
+    const [displayTab, setDisplayTab] = useState<InventoryTab>(activeTab);
+    const [transitioning, setTransitioning] = useState(false);
+
+    useEffect(() => {
+        if (activeTab === displayTab) return;
+        setTransitioning(true); // fade out current tab
+        const t = setTimeout(() => {
+            setDisplayTab(activeTab);  // swap content
+            setTransitioning(false);   // fade in new tab
+        }, 150);
+        return () => clearTimeout(t);
+    }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const getTabClass = (tabId: InventoryTab, extraClasses = '') => {
+        const isVisible = displayTab === tabId;
+        if (!isVisible) return 'absolute inset-0 invisible opacity-0 pointer-events-none';
+        const base = `flex flex-col flex-1 min-h-0 transition-opacity duration-150 ease-in-out ${extraClasses}`.trim();
+        return transitioning
+            ? `${base} opacity-0 pointer-events-none`
+            : `${base} opacity-100`;
+    };
 
     return (
         <>
-            <div className={activeTab === 'deliveries' ? 'flex flex-col flex-1 min-h-0' : 'absolute inset-0 invisible pointer-events-none'}>
+            <div className={getTabClass('deliveries')}>
                 <DeliveryMasterTableWrapper
                     data={deliveries}
                     batches={batches}
@@ -27,10 +49,10 @@ export function InventoryView({ deliveries, batches, search, allSuppliers, allLo
                     allLocations={allLocations}
                 />
             </div>
-            <div className={activeTab === 'usage' ? 'flex flex-col flex-1 min-h-0' : 'absolute inset-0 invisible pointer-events-none'}>
+            <div className={getTabClass('usage')}>
                 <RcOutLazyTab />
             </div>
-            <div className={activeTab === 'blocking' ? 'flex flex-col flex-1 min-h-0 items-center justify-center' : 'absolute inset-0 invisible pointer-events-none'}>
+            <div className={getTabClass('blocking', 'items-center justify-center')}>
                 <div className="text-muted-foreground text-sm">Coming soon</div>
             </div>
         </>

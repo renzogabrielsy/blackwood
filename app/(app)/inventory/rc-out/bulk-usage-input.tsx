@@ -31,6 +31,7 @@ import { COLUMN_MAP, cleanCellValue } from './paste-utils';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
+import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { InputRcOutRow, RcOutInput, RcOutRow } from '@/types/rc-out';
 import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
@@ -83,7 +84,7 @@ type BulkUsageInputProps = {
 
 export function BulkUsageInput({ batches, destinations, productionBatches, onSuccess, mode = 'create', initialData, onDirtyChange }: BulkUsageInputProps) {
     const { fontSize, rowHeight } = useTableSettings();
-    const { setCellSelectionCount } = useStatusBar();
+    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const isEdit = mode === 'edit';
 
     // In edit mode, store original IDs aligned by row index
@@ -113,13 +114,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         enabled: true,
     });
 
-    // Push cell selection count to shared context
     const selectionSize = cellSelection.getSelectionSize();
-    React.useEffect(() => {
-        const count = cellSelection.range ? selectionSize : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, selectionSize, setCellSelectionCount]);
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -129,6 +124,33 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         const val = row[field];
         return val != null ? String(val) : '';
     }, [rows]);
+
+    const getNumericCellValue = React.useCallback((rowIdx: number, colIdx: number): number | null => {
+        const row = rows[rowIdx];
+        if (!row) return null;
+        const field = COLUMN_MAP[colIdx];
+        if (field !== 'weight_kg') return null;
+        const val = parseFloat(String(row[field]));
+        return isNaN(val) ? null : val;
+    }, [rows]);
+
+    const getColumnDefaultCalcType = React.useCallback((colIdx: number): AggregationType | null => {
+        const field = COLUMN_MAP[colIdx];
+        if (field === 'weight_kg') return 'SUM';
+        return null;
+    }, []);
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    // Push cell selection count + aggregates to shared context (debounced to reduce re-renders during drag)
+    React.useEffect(() => {
+        const count = cellSelection.range ? selectionSize : 0;
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+            setCellAggregates(count > 1 ? aggregates : null);
+        }, 50);
+        return () => { clearTimeout(timer); setCellSelectionCount(0); setCellAggregates(null); };
+    }, [cellSelection.range, selectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
 
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
         getSelectedRange: cellSelection.getSelectedRange,

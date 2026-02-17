@@ -15,9 +15,6 @@ import {
     DropdownMenuItem,
     DropdownMenuLabel,
     DropdownMenuSeparator,
-    DropdownMenuSub,
-    DropdownMenuSubContent,
-    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -70,21 +67,12 @@ function getInitials(name: string | null, email: string | null): string {
 
 const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
-type SubModule = { name: string; href: string };
-type Module = { name: string; href?: string; subModules?: SubModule[] };
+type Module = { name: string; href: string; disabled?: boolean };
 
 const MODULES: Module[] = [
-    {
-        name: 'Inventory',
-        href: '/inventory',
-        subModules: [
-            { name: 'Deliveries', href: '/inventory' },
-            { name: 'Usage', href: '/inventory' },
-            { name: 'Blocking', href: '/inventory' },
-        ],
-    },
-    { name: 'Production' },
-    { name: 'Accounting' },
+    { name: 'Inventory', href: '/inventory' },
+    { name: 'Production', href: '/production', disabled: true },
+    { name: 'Accounting', href: '/accounting', disabled: true },
 ];
 
 export function Navbar() {
@@ -93,7 +81,6 @@ export function Navbar() {
     const router = useRouter();
     const { setTheme, resolvedTheme } = useTheme();
     const [mounted, setMounted] = React.useState(false);
-    const [modulesOpen, setModulesOpen] = React.useState(false);
 
     React.useEffect(() => setMounted(true), []);
 
@@ -149,7 +136,7 @@ export function Navbar() {
             <div className="flex-1 flex items-center justify-end gap-1.5">
                 <TooltipProvider delayDuration={300}>
                     {/* Modules */}
-                    <DropdownMenu open={modulesOpen} onOpenChange={setModulesOpen}>
+                    <DropdownMenu>
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
@@ -161,33 +148,14 @@ export function Navbar() {
                             <TooltipContent>Modules</TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
-                            <DropdownMenuLabel>Modules</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
                             {MODULES.map((mod) =>
-                                mod.subModules ? (
-                                    <DropdownMenuSub key={mod.name}>
-                                        <DropdownMenuSubTrigger
-                                            onClick={(e) => {
-                                                if (mod.href) {
-                                                    e.preventDefault();
-                                                    setModulesOpen(false);
-                                                    router.push(mod.href);
-                                                }
-                                            }}
-                                        >
-                                            {mod.name}
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent>
-                                            {mod.subModules.map((sub) => (
-                                                <DropdownMenuItem key={sub.href} asChild>
-                                                    <Link href={sub.href}>{sub.name}</Link>
-                                                </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuSubContent>
-                                    </DropdownMenuSub>
-                                ) : (
+                                mod.disabled ? (
                                     <DropdownMenuItem key={mod.name} disabled>
                                         {mod.name}
+                                    </DropdownMenuItem>
+                                ) : (
+                                    <DropdownMenuItem key={mod.name} asChild>
+                                        <Link href={mod.href}>{mod.name}</Link>
                                     </DropdownMenuItem>
                                 )
                             )}

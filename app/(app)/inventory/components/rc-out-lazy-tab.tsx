@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Loader2 } from 'lucide-react';
 import { RcOutTableWrapper } from '../rc-out/components/rc-out-table-wrapper';
 import { fetchRcOutTabData } from '../rc-out/actions';
@@ -16,14 +16,20 @@ interface RcOutTabData {
     records: RcOutRow[];
     batches: Batch[];
     destinations: string[];
-    productionBatches: string[];
-    year: string;
-    month: string;
+    batchOptions: string[];
+    yearOptions: number[];
+    blockLocs: string[];
 }
 
 export function RcOutLazyTab() {
     const [data, setData] = useState<RcOutTabData | null>(null);
     const [loading, setLoading] = useState(true);
+
+    const loadData = useCallback(async () => {
+        const result = await fetchRcOutTabData();
+        setData(result);
+        setLoading(false);
+    }, []);
 
     useEffect(() => {
         let mounted = true;
@@ -35,6 +41,10 @@ export function RcOutLazyTab() {
         });
         return () => { mounted = false; };
     }, []);
+
+    const refetch = useCallback(async () => {
+        await loadData();
+    }, [loadData]);
 
     if (loading || !data) {
         return (
@@ -49,9 +59,10 @@ export function RcOutLazyTab() {
             data={data.records}
             batches={data.batches}
             destinations={data.destinations}
-            productionBatches={data.productionBatches}
-            year={data.year}
-            month={data.month}
+            batchOptions={data.batchOptions}
+            yearOptions={data.yearOptions}
+            blockLocs={data.blockLocs}
+            onRefresh={refetch}
         />
     );
 }

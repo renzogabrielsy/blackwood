@@ -48,7 +48,7 @@ export default async function DashboardPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 max-w-4xl mt-4 stagger-children">
           {modules.map((mod) => (
             <Link key={mod.href} href={mod.href}>
-              <Card className="h-full transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 hover:bg-accent/50 cursor-pointer">
+              <Card className="h-full hover-lift hover-glow cursor-pointer">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-lg">{mod.name}</CardTitle>
                 </CardHeader>
