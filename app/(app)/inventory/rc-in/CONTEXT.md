@@ -7,15 +7,14 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 | File | Lines | Role |
 |------|-------|------|
 | `page.tsx` | ~5 | Redirect stub — redirects to `/inventory`. Data fetching moved to `../page.tsx` (parent inventory page) |
-| `actions.ts` | 617 | 9 server actions: `submitBulkDeliveries`, `bulkUpdateDeliveries`, `bulkDeleteDeliveries`, `deleteDelivery`, `updateDelivery`, `getDeliveryHistory`, `getAuditComments`, `getAuditLogEntry`, `addAuditComment` + 4 resolve actions |
+| `actions.ts` | ~680 | 9 server actions: `submitBulkDeliveries`, `bulkUpdateDeliveries`, `bulkDeleteDeliveries`, `deleteDelivery`, `updateDelivery`, `getDeliveryHistory`, `getAuditComments`, `getAuditLogEntry`, `addAuditComment` + 4 resolve actions. All mutation paths: (1) normalize `block_loc` via `normalizeBlockLoc()` before DB insert, (2) validate block_loc format + duplicate location on all writes, (3) translate DB constraint names to friendly errors via `translateDbError()` |
 | `bulk-delivery-input.tsx` | ~1420 | Client grid editor — paste, keyboard nav, autocomplete, edit tracking, cell range selection + copy + delete |
 | `components/delivery-master-table-wrapper.tsx` | ~31 | Client wrapper — `dynamic()` with `ssr: false` to avoid Radix hydration mismatch |
 | `delivery-master-table.tsx` | ~1570 | Client data table — virtual scroll, header bar filters, column visibility, year/month controls, cell selection + clipboard copy |
 | `paste-utils.ts` | 47 | Column mapping and cell value cleaning (imports `parseExcelDate` from `@/lib/paste-utils`) |
 | `components/DeliveryHistoryDialog.tsx` | 561 | Delivery history + audit trail dialog |
 | `components/audit-shared.tsx` | 87 | Shared audit display utilities |
-| `edit/[auditLogId]/page.tsx` | 30 | Server component for edit discussion page |
-| `edit/[auditLogId]/edit-discussion.tsx` | 452 | Resolve/request workflows, comments, diff display |
+| ~~`edit/[auditLogId]/`~~ | — | **Moved** to `app/(app)/edit/[auditLogId]/` (standalone route outside inventory layout) |
 | `error.tsx` | 25 | Error boundary |
 | `loading.tsx` | 47 | Loading skeleton |
 

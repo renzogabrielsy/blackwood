@@ -58,11 +58,11 @@ function getNavigationTarget(notification: Notification): string {
     case 'resolve_denied':
     case 'delivery_edited':
     case 'audit_comment_reply':
-      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory';
+      return meta?.audit_log_id ? `/edit/${meta.audit_log_id}` : '/inventory';
     case 'delivery_created':
       return meta?.date ? `/inventory?date=${meta.date}` : '/inventory';
     case 'remarks_added':
-      return meta?.audit_log_id ? `/inventory/rc-in/edit/${meta.audit_log_id}` : '/inventory';
+      return meta?.audit_log_id ? `/edit/${meta.audit_log_id}` : '/inventory';
     case 'delivery_deleted':
       return '/inventory';
     default:

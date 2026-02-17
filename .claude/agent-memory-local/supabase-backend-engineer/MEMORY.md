@@ -45,14 +45,14 @@
 
 **Common Pitfall:** Previously, the RC IN batch upsert **overrode** trigger-managed status back to 'STORED'. This was fixed by removing the `status` field from `upsertBatchesFromRows()` in `app/(app)/inventory/rc-in/actions.ts` (line 17).
 
-### Trigger: fn_update_blackwood_state (2026-02-17 SUNDRIED Status)
+### Trigger: fn_update_blackwood_state (2026-02-17 current_weight Fix)
 
-**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16, SUNDRIED status added 2026-02-17
+**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16, SUNDRIED status added 2026-02-17, current_weight recalculation added 2026-02-17
 
 **Operations Supported:**
-1. **INSERT** — Uses incremental weighted average formula to update `avg_cost`, `quality_stats`, `current_weight`; sets SUNDRIED status for SUNDRY batches
-2. **UPDATE** — Recalculates `avg_cost` from scratch when cost data or `batch_code` changes
-3. **DELETE** — Recalculates `avg_cost` from scratch for the old batch (if trigger is configured)
+1. **INSERT** — Incremental weighted average for `avg_cost`, `quality_stats`, `current_weight`; sets SUNDRIED for SUNDRY batches
+2. **UPDATE** — Recalculates `avg_cost` AND `current_weight` (delivery total − rc_out total) from scratch
+3. **DELETE** — Recalculates `avg_cost` AND `current_weight` (delivery total − rc_out total) from scratch
 
 **Critical INSERT Behavior (SUNDRIED Status):**
 - After updating avg_cost/quality_stats, checks if `batch_code ILIKE '%SUNDRY%'` AND batch status is STORED
@@ -64,11 +64,18 @@
 - When `cost_basis` or `weight_kg` changes (same batch): recalculates that batch from all its deliveries
 - Uses full aggregation query: `SUM(cost_basis * weight_kg) / NULLIF(SUM(weight_kg), 0)`
 
+**current_weight Formula (DELETE/UPDATE):**
+```sql
+current_weight = SUM(deliveries.weight_kg WHERE batch_code = X)
+               - SUM(rc_out.weight_kg JOIN batches WHERE batch_code = X)
+```
+
 **Why the Fix Was Needed:**
-- The trigger originally only fired on INSERT (tgtype=5)
-- When users edited deliveries in RC IN (changing batch_code or cost data), the batch avg_cost was never updated
-- This caused `rc_out.rc_out_avg_price` (a generated column derived from `batches.avg_cost`) to show stale data
-- Migration `fix_delivery_trigger_handle_updates.sql` added UPDATE support (tgtype=23: BEFORE INSERT OR UPDATE)
+- DELETE/UPDATE handlers only recalculated `avg_cost` — `current_weight` was never updated on edits/deletes
+- Migration `fix_delivery_trigger_current_weight` (2026-02-17) added current_weight to DELETE/UPDATE handlers
+- Migration `recalculate_all_batch_weights` (2026-02-17) one-time fixed all stale current_weight values
+- INSERT handler was left untouched (it correctly does incremental += already)
+- The original fix history: trigger added UPDATE support in `fix_delivery_trigger_handle_updates.sql` (2026-02-16)
 
 **Data Cleanup:** If batches have stale avg_cost, run:
 ```sql
@@ -81,6 +88,38 @@ FROM (
 ) calc
 WHERE calc.batch_code = b.batch_code;
 ```
+
+### Batches Table: Key Schema Facts
+
+- `location_ref` is **NOT NULL** — empty string `''` is the sentinel for "no location" (cannot use NULL)
+- When clearing location on CLOSED batches: `SET location_ref = ''` not `NULL`
+- `status` is nullable with default `'STORED'::batch_status`
+- No `updated_at` column exists in the current schema (trigger sets it — actually it does exist per trigger code; verify if issues arise)
+
+### Blocking Integrity Constraints (Added 2026-02-17)
+
+**Migration:** `add_blocking_integrity_constraints`
+
+- `chk_block_loc_format` on `deliveries`: `block_loc IS NULL OR block_loc ~ '^[A-DF]-\d{1,2}[A-D]$'`
+- `chk_location_ref_format` on `batches`: `location_ref = '' OR location_ref ~ '^[A-DF]-\d{1,2}[A-D]$'`
+- `idx_unique_active_batch_per_location`: partial unique index on `batches(location_ref)` WHERE status IN ('STORED','IN-USE') AND location_ref != ''
+
+**Format pattern:** `^[A-DF]-\d{1,2}[A-D]$` — WHSE A/B/C/D/F, hyphen, 1-2 digit column, letter row A-D
+
+**Pre-constraint cleanup done:**
+- Test/QA batches closed: `test`, `TEST_RT_BATCH`, `QA_NOTIF_TEST_001`, `QA_POLL_TEST_002`, `FEB-26-TEST1`, `JAN-25-BLK01`
+- Empty string `block_loc` values → NULL (85 rows cleaned)
+- Duplicate active locations resolved: keep highest `current_weight`, close others
+
+### View: view_blocking_grid (Updated 2026-02-17)
+
+**Migration:** `update_view_blocking_grid_dedup`
+
+Uses `DISTINCT ON (b.location_ref)` ordered by `current_weight DESC` to guarantee one row per location.
+
+**Columns:** `batch_id`, `batch_code`, `block_loc`, `status`, `balance`, `php_per_kg`, `bd`, `ash`, `mc`
+
+**Note:** Previous view had different column aliases (`avg_php_kg`, `avg_mc`, etc.) and more columns. The blocking module expects the new aliases. Drop + recreate was required (not `CREATE OR REPLACE`) because columns were removed.
 
 ### View: view_rc_in_master
 

@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
+import { Plus, X, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
@@ -36,7 +36,6 @@ import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { InputRcOutRow, RcOutInput, RcOutRow } from '@/types/rc-out';
 import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
 import { GridCell } from '@/components/shared/grid/GridCell';
-import { RemarksCellAdaptor } from '@/components/shared/grid/RemarksCellAdaptor';
 
 // --- TYPES ---
 type Batch = {
@@ -627,8 +626,8 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
                                 <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
                                 <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
                                 <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PLANT/ETC</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
                                 <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK LOC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
                                 <TableHead className="w-[20px] p-0 bg-muted/90 sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
                             </TableRow>
                         </TableHeader>
@@ -922,9 +921,9 @@ const BulkInputRow = React.memo(function BulkInputRow({
                 </GridCell>
             </TableCell>
 
-            {/* 6: BLOCK LOC */}
+            {/* 6: REMARKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={6} value={row.block_loc} {...commonCellProps}
+                <GridCell col={6} value={row.remarks} {...commonCellProps} className="font-bold text-left pl-1"
                     onCellMouseDown={(e) => cellMouseDown(6, e)}
                     onCellMouseUp={() => cellMouseUp(6)}
                     onCellMouseEnter={() => cellMouseEnter(6)}
@@ -934,35 +933,31 @@ const BulkInputRow = React.memo(function BulkInputRow({
                 >
                     <Input
                         autoFocus
-                        value={row.block_loc}
-                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
-                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        value={row.remarks}
+                        onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                        className={cn(inputClass, "font-bold text-left")}
+                        placeholder="Remarks..."
                         style={inputStyle}
                     />
                 </GridCell>
             </TableCell>
 
-            {/* 7: REMARKS */}
+            {/* 7: BLOCK LOC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={7} value={row.remarks} {...commonCellProps}
+                <GridCell col={7} value={row.block_loc} {...commonCellProps}
                     onCellMouseDown={(e) => cellMouseDown(7, e)}
                     onCellMouseUp={() => cellMouseUp(7)}
                     onCellMouseEnter={() => cellMouseEnter(7)}
                     isCellRangeSelected={isCellSelected(7)}
                     isCellRangeAnchor={isCellAnchor(7)}
                     isDragActive={cellDragging}
-                    displayValue={
-                        <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
-                            <MessageSquareText className="w-3 h-3" />
-                        </div>
-                    }
                 >
-                    <RemarksCellAdaptor
-                        value={row.remarks}
-                        onChange={(val) => updateRow(index, 'remarks', val)}
-                        onClose={() => setIsEditing(false)}
-                        onRevert={onRevert}
-                        fontSize={fontSize}
+                    <Input
+                        autoFocus
+                        value={row.block_loc}
+                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        style={inputStyle}
                     />
                 </GridCell>
             </TableCell>
@@ -983,4 +978,4 @@ const BulkInputRow = React.memo(function BulkInputRow({
 });
 
 // --- GRID CELL HELPERS ---
-// GridCell, RemarksCellAdaptor, and AutocompletePopover are now imported from shared components
+// GridCell and AutocompletePopover are imported from shared components

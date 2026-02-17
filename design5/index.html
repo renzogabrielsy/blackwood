@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BLOCKING — Modular Cards Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'SF Mono', 'Consolas', 'monospace'],
+          },
+          keyframes: {
+            'fade-up': {
+              '0%': { opacity: '0', transform: 'translateY(8px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+            'scale-in': {
+              '0%': { opacity: '0', transform: 'scale(0.96)' },
+              '100%': { opacity: '1', transform: 'scale(1)' },
+            },
+          },
+          animation: {
+            'fade-up': 'fade-up 250ms ease-out forwards',
+            'scale-in': 'scale-in 200ms ease-out forwards',
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgb(63 63 70); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgb(82 82 91); }
+
+    /* Card hover lift */
+    .card-occupied {
+      transition: transform 200ms ease, box-shadow 200ms ease;
+    }
+    .card-occupied:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.4), 0 4px 10px -6px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Ghost card subtle pulse on hover */
+    .card-ghost {
+      transition: border-color 200ms ease, background-color 200ms ease;
+    }
+    .card-ghost:hover {
+      border-color: rgb(63 63 70);
+      background-color: rgba(39, 39, 42, 0.3);
+    }
+
+    /* Chip transitions */
+    .chip {
+      transition: all 150ms ease;
+    }
+
+    /* Collapsible section */
+    .section-content {
+      overflow: hidden;
+      transition: max-height 300ms ease, opacity 250ms ease;
+      max-height: 5000px;
+      opacity: 1;
+    }
+    .section-content.collapsed {
+      max-height: 0;
+      opacity: 0;
+    }
+
+    /* Chevron rotation */
+    .chevron {
+      transition: transform 200ms ease;
+    }
+    .chevron.rotated {
+      transform: rotate(-90deg);
+    }
+
+    /* Progress bar shimmer for IN-USE */
+    .progress-bar-inuse {
+      position: relative;
+      overflow: hidden;
+    }
+    .progress-bar-inuse::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.08) 50%, transparent 100%);
+      animation: shimmer 3s infinite;
+    }
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* Search input focus ring */
+    .search-input:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.3);
+    }
+
+    /* Stat value counter style */
+    .stat-value {
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen antialiased">
+
+  <!-- Header Bar — Frosted Glass -->
+  <header class="sticky top-0 z-50 backdrop-blur-xl bg-zinc-900/80 border-b border-zinc-800/60">
+    <div class="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">
+          <svg class="w-4 h-4 text-zinc-900" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25a2.25 2.25 0 01-2.25-2.25v-2.25z" />
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-sm font-semibold tracking-wide text-zinc-100">BLOCKING</h1>
+          <p class="text-xs text-zinc-500">Warehouse Overview</p>
+        </div>
+      </div>
+
+      <!-- Summary Stats -->
+      <div class="flex items-center gap-6">
+        <div class="text-right">
+          <p class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Occupied</p>
+          <p class="text-sm font-semibold stat-value" id="stat-occupied">29 / 220</p>
+        </div>
+        <div class="w-px h-8 bg-zinc-800"></div>
+        <div class="text-right">
+          <p class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Total Balance</p>
+          <p class="text-sm font-semibold font-mono stat-value" id="stat-balance">1,162,300 kg</p>
+        </div>
+        <div class="w-px h-8 bg-zinc-800"></div>
+        <div class="text-right">
+          <p class="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Utilization</p>
+          <p class="text-sm font-semibold stat-value" id="stat-util">13.2%</p>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Filter Bar -->
+  <div class="sticky top-[73px] z-40 backdrop-blur-lg bg-zinc-950/90 border-b border-zinc-800/40">
+    <div class="max-w-[1600px] mx-auto px-6 py-3 flex items-center gap-4">
+      <!-- Warehouse Chips -->
+      <div class="flex items-center gap-1.5" id="chip-container">
+        <button class="chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-900" data-filter="ALL" onclick="setFilter('ALL')">
+          ALL
+        </button>
+        <button class="chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200" data-filter="A" onclick="setFilter('A')">
+          WHSE A
+        </button>
+        <button class="chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200" data-filter="B" onclick="setFilter('B')">
+          WHSE B
+        </button>
+        <button class="chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200" data-filter="C" onclick="setFilter('C')">
+          WHSE C
+        </button>
+        <button class="chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200" data-filter="D" onclick="setFilter('D')">
+          WHSE D
+        </button>
+      </div>
+
+      <div class="w-px h-6 bg-zinc-800"></div>
+
+      <!-- Search -->
+      <div class="relative flex-1 max-w-xs">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+        </svg>
+        <input
+          type="text"
+          id="search-input"
+          placeholder="Search batch code..."
+          class="search-input w-full bg-zinc-800/60 border border-zinc-700/50 rounded-lg pl-9 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500"
+          oninput="handleSearch(this.value)"
+        />
+      </div>
+
+      <!-- Status Filter -->
+      <div class="flex items-center gap-1.5">
+        <button class="chip px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700" data-status="ALL" onclick="setStatusFilter('ALL')">
+          All Status
+        </button>
+        <button class="chip px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700" data-status="STORED" onclick="setStatusFilter('STORED')">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1"></span>Stored
+        </button>
+        <button class="chip px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700" data-status="IN-USE" onclick="setStatusFilter('IN-USE')">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 mr-1"></span>In Use
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <main class="max-w-[1600px] mx-auto px-6 py-6 space-y-8" id="main-content">
+    <!-- Warehouse sections rendered by JS -->
+  </main>
+
+  <script>
+    // ─── MOCK DATA ───────────────────────────────────────────
+    const MAX_CAPACITY = 100000;
+
+    const warehouses = {
+      A: { cols: 20, rows: ['A', 'B', 'C'], totalSlots: 60 },
+      B: { cols: 20, rows: ['A', 'B'], totalSlots: 40 },
+      C: { cols: 20, rows: ['A', 'B'], totalSlots: 40 },
+      D: { cols: 20, rows: ['A', 'B', 'C', 'D'], totalSlots: 80 },
+    };
+
+    const occupiedSlots = [
+      // WHSE A
+      { loc: 'A-1A', batch: 'FEB-26-BLK3', status: 'STORED', balance: 45000, price: 18.50, bd: 0.552, ash: 3.2, mc: 9.8 },
+      { loc: 'A-2A', batch: 'FEB-26-BLK5', status: 'IN-USE', balance: 12500, price: 19.00, bd: 0.548, ash: 2.8, mc: 10.1 },
+      { loc: 'A-3B', batch: 'JAN-26-BLK1', status: 'STORED', balance: 67000, price: 17.75, bd: 0.561, ash: 3.5, mc: 8.9 },
+      { loc: 'A-5A', batch: 'DEC-25-BLK2', status: 'IN-USE', balance: 8200, price: 18.25, bd: 0.545, ash: 4.1, mc: 11.2 },
+      { loc: 'A-7C', batch: 'JAN-26-BLK4', status: 'STORED', balance: 52000, price: 18.00, bd: 0.558, ash: 3.0, mc: 9.5 },
+      { loc: 'A-10A', batch: 'FEB-26-BLK1', status: 'STORED', balance: 78000, price: 19.25, bd: 0.563, ash: 2.5, mc: 8.7 },
+      { loc: 'A-12B', batch: 'NOV-25-BLK3', status: 'IN-USE', balance: 3500, price: 17.50, bd: 0.540, ash: 4.5, mc: 12.3 },
+      { loc: 'A-15A', batch: 'FEB-26-BLK7', status: 'STORED', balance: 41000, price: 18.75, bd: 0.555, ash: 3.1, mc: 9.2 },
+      { loc: 'A-18C', batch: 'JAN-26-BLK2', status: 'STORED', balance: 59000, price: 18.50, bd: 0.550, ash: 3.3, mc: 10.0 },
+      { loc: 'A-20A', batch: 'DEC-25-BLK5', status: 'IN-USE', balance: 15000, price: 17.80, bd: 0.542, ash: 3.8, mc: 11.5 },
+      // WHSE B
+      { loc: 'B-2A', batch: 'FEB-26-BLK2', status: 'STORED', balance: 55000, price: 18.90, bd: 0.557, ash: 2.9, mc: 9.3 },
+      { loc: 'B-5B', batch: 'JAN-26-BLK3', status: 'IN-USE', balance: 22000, price: 18.10, bd: 0.549, ash: 3.4, mc: 10.5 },
+      { loc: 'B-8A', batch: 'DEC-25-BLK4', status: 'STORED', balance: 38000, price: 17.60, bd: 0.543, ash: 4.0, mc: 11.0 },
+      { loc: 'B-14A', batch: 'FEB-26-BLK4', status: 'STORED', balance: 71000, price: 19.10, bd: 0.560, ash: 2.7, mc: 8.8 },
+      { loc: 'B-19B', batch: 'NOV-25-BLK1', status: 'IN-USE', balance: 5800, price: 17.30, bd: 0.538, ash: 4.8, mc: 12.8 },
+      // WHSE C
+      { loc: 'C-3A', batch: 'JAN-26-BLK5', status: 'STORED', balance: 48000, price: 18.40, bd: 0.554, ash: 3.0, mc: 9.6 },
+      { loc: 'C-9B', batch: 'FEB-26-BLK6', status: 'IN-USE', balance: 19000, price: 18.80, bd: 0.551, ash: 3.2, mc: 10.3 },
+      { loc: 'C-15A', batch: 'SEPT-25-BLK1', status: 'IN-USE', balance: 6500, price: 16.90, bd: 0.535, ash: 4.3, mc: 12.0 },
+      { loc: 'C-20A', batch: 'JAN-26-BLK6', status: 'STORED', balance: 62000, price: 18.60, bd: 0.559, ash: 2.6, mc: 8.5 },
+      // WHSE D
+      { loc: 'D-1A', batch: 'FEB-26-BLK8', status: 'STORED', balance: 73000, price: 19.30, bd: 0.565, ash: 2.4, mc: 8.3 },
+      { loc: 'D-3C', batch: 'JAN-26-BLK7', status: 'IN-USE', balance: 28000, price: 18.20, bd: 0.547, ash: 3.6, mc: 10.8 },
+      { loc: 'D-5D', batch: 'DEC-25-BLK1', status: 'STORED', balance: 44000, price: 17.90, bd: 0.544, ash: 3.9, mc: 11.1 },
+      { loc: 'D-8A', batch: 'FEB-26-BLK9', status: 'STORED', balance: 81000, price: 19.50, bd: 0.568, ash: 2.2, mc: 8.0 },
+      { loc: 'D-10B', batch: 'NOV-25-BLK2', status: 'IN-USE', balance: 9800, price: 17.40, bd: 0.539, ash: 4.6, mc: 12.5 },
+      { loc: 'D-12D', batch: 'JAN-26-BLK8', status: 'STORED', balance: 56000, price: 18.30, bd: 0.553, ash: 3.1, mc: 9.7 },
+      { loc: 'D-15A', batch: 'FEB-26-BLK10', status: 'STORED', balance: 69000, price: 19.00, bd: 0.562, ash: 2.8, mc: 8.6 },
+      { loc: 'D-17C', batch: 'DEC-25-BLK3', status: 'IN-USE', balance: 11000, price: 17.70, bd: 0.541, ash: 4.2, mc: 11.8 },
+      { loc: 'D-20A', batch: 'JAN-26-BLK9', status: 'STORED', balance: 47000, price: 18.70, bd: 0.556, ash: 3.3, mc: 9.4 },
+      { loc: 'D-20D', batch: 'FEB-26-BLK11', status: 'STORED', balance: 35000, price: 18.95, bd: 0.558, ash: 2.9, mc: 9.1 },
+    ];
+
+    // ─── STATE ───────────────────────────────────────────────
+    let activeWhseFilter = 'ALL';
+    let activeStatusFilter = 'ALL';
+    let searchQuery = '';
+
+    // ─── HELPERS ─────────────────────────────────────────────
+    function getWhse(loc) {
+      return loc.charAt(0);
+    }
+
+    function formatNumber(n) {
+      return n.toLocaleString('en-US');
+    }
+
+    function getBalancePercent(balance) {
+      return Math.min((balance / MAX_CAPACITY) * 100, 100);
+    }
+
+    function getBalanceColor(percent, status) {
+      if (status === 'IN-USE') return { bar: 'bg-blue-500', bg: 'bg-blue-500/10' };
+      if (percent >= 70) return { bar: 'bg-emerald-500', bg: 'bg-emerald-500/10' };
+      if (percent >= 40) return { bar: 'bg-amber-500', bg: 'bg-amber-500/10' };
+      return { bar: 'bg-red-500', bg: 'bg-red-500/10' };
+    }
+
+    function getStatusBadge(status) {
+      if (status === 'STORED') {
+        return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-1 h-1 rounded-full bg-emerald-400"></span>STORED
+        </span>`;
+      }
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+        <span class="w-1 h-1 rounded-full bg-blue-400 animate-pulse"></span>IN-USE
+      </span>`;
+    }
+
+    // ─── CARD RENDERERS ──────────────────────────────────────
+    function renderOccupiedCard(slot) {
+      const pct = getBalancePercent(slot.balance);
+      const colors = getBalanceColor(pct, slot.status);
+      const isInUse = slot.status === 'IN-USE';
+
+      return `
+        <div class="card-occupied bg-zinc-800/80 border border-zinc-700/50 rounded-xl p-4 cursor-default" data-loc="${slot.loc}" data-batch="${slot.batch}" data-status="${slot.status}">
+          <!-- Header -->
+          <div class="flex items-start justify-between mb-3">
+            <div>
+              <span class="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">${slot.loc}</span>
+              <h3 class="text-sm font-semibold text-zinc-100 mt-0.5 leading-tight">${slot.batch}</h3>
+            </div>
+            ${getStatusBadge(slot.status)}
+          </div>
+
+          <!-- Balance Bar -->
+          <div class="mb-3">
+            <div class="flex items-baseline justify-between mb-1.5">
+              <span class="text-[10px] text-zinc-500 font-medium">BALANCE</span>
+              <span class="text-sm font-semibold font-mono text-zinc-100">${formatNumber(slot.balance)} <span class="text-[10px] text-zinc-500 font-normal">kg</span></span>
+            </div>
+            <div class="h-1.5 rounded-full ${colors.bg} overflow-hidden">
+              <div class="h-full rounded-full ${colors.bar} ${isInUse ? 'progress-bar-inuse' : ''}" style="width: ${pct}%; transition: width 500ms ease;"></div>
+            </div>
+            <div class="flex justify-between mt-1">
+              <span class="text-[9px] text-zinc-600">${pct.toFixed(0)}% capacity</span>
+              <span class="text-[9px] text-zinc-600">100,000 kg</span>
+            </div>
+          </div>
+
+          <!-- Metrics Grid -->
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-3 border-t border-zinc-700/40">
+            <div class="flex justify-between items-baseline">
+              <span class="text-[10px] text-zinc-500">PHP/KG</span>
+              <span class="text-xs font-mono font-medium text-zinc-300">${slot.price.toFixed(2)}</span>
+            </div>
+            <div class="flex justify-between items-baseline">
+              <span class="text-[10px] text-zinc-500">BD</span>
+              <span class="text-xs font-mono font-medium text-zinc-300">${slot.bd.toFixed(3)}</span>
+            </div>
+            <div class="flex justify-between items-baseline">
+              <span class="text-[10px] text-zinc-500">ASH</span>
+              <span class="text-xs font-mono font-medium text-zinc-300">${slot.ash.toFixed(2)}%</span>
+            </div>
+            <div class="flex justify-between items-baseline">
+              <span class="text-[10px] text-zinc-500">MC</span>
+              <span class="text-xs font-mono font-medium text-zinc-300">${slot.mc.toFixed(2)}%</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderGhostCard(loc) {
+      return `
+        <div class="card-ghost border border-dashed border-zinc-800 rounded-xl px-4 py-3 flex items-center justify-center min-h-[60px]" data-loc="${loc}">
+          <div class="text-center">
+            <span class="text-[10px] font-medium text-zinc-700 tracking-wider">${loc}</span>
+            <p class="text-[9px] text-zinc-800 mt-0.5">EMPTY</p>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderEmptySummary(emptyCount) {
+      return `
+        <div class="col-span-full flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-900/50 border border-zinc-800/30">
+          <svg class="w-3.5 h-3.5 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+          </svg>
+          <span class="text-xs text-zinc-600">+${emptyCount} empty slot${emptyCount !== 1 ? 's' : ''} available</span>
+        </div>
+      `;
+    }
+
+    // ─── WAREHOUSE SECTION ───────────────────────────────────
+    function renderWarehouseSection(whse, data) {
+      const info = warehouses[whse];
+      // data is already filtered to this warehouse
+      const whseSlots = data;
+      // Use total occupied (unfiltered) for empty count to keep section headers accurate
+      const totalOccupiedInWhse = occupiedSlots.filter(s => getWhse(s.loc) === whse).length;
+      const emptyCount = info.totalSlots - totalOccupiedInWhse;
+      const totalBalance = whseSlots.reduce((sum, s) => sum + s.balance, 0);
+      const storedCount = whseSlots.filter(s => s.status === 'STORED').length;
+      const inUseCount = whseSlots.filter(s => s.status === 'IN-USE').length;
+
+      // Build a few ghost cards for visual (skip when filtering by status or searching)
+      const showGhosts = activeStatusFilter === 'ALL' && !searchQuery;
+      const ghostLocs = [];
+      if (showGhosts) {
+        for (let col = 1; col <= info.cols && ghostLocs.length < 3; col++) {
+          for (const row of info.rows) {
+            const loc = `${whse}-${col}${row}`;
+            if (!occupiedSlots.find(s => s.loc === loc) && ghostLocs.length < 3) {
+              ghostLocs.push(loc);
+            }
+          }
+        }
+      }
+
+      return `
+        <section class="animate-fade-up" data-whse="${whse}">
+          <!-- Section Header -->
+          <button
+            class="w-full flex items-center justify-between px-1 py-2 group cursor-pointer"
+            onclick="toggleSection('${whse}')"
+          >
+            <div class="flex items-center gap-3">
+              <svg class="chevron w-4 h-4 text-zinc-500 group-hover:text-zinc-300" id="chevron-${whse}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+              <div class="flex items-center gap-2.5">
+                <span class="text-xs font-semibold text-zinc-300 tracking-wide">WAREHOUSE ${whse}</span>
+                <span class="text-[10px] text-zinc-600">${info.cols} cols &times; ${info.rows.length} rows</span>
+              </div>
+            </div>
+            <div class="flex items-center gap-4">
+              <div class="flex items-center gap-1.5">
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-500">${storedCount} stored</span>
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400">${inUseCount} in-use</span>
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-500">${emptyCount} empty</span>
+              </div>
+              <div class="w-px h-4 bg-zinc-800"></div>
+              <span class="text-xs font-mono text-zinc-400">${formatNumber(totalBalance)} kg</span>
+            </div>
+          </button>
+
+          <!-- Section Content -->
+          <div class="section-content" id="section-${whse}">
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pt-2 pb-4">
+              ${whseSlots.map(s => renderOccupiedCard(s)).join('')}
+              ${ghostLocs.map(loc => renderGhostCard(loc)).join('')}
+              ${showGhosts && emptyCount > ghostLocs.length ? renderEmptySummary(emptyCount - ghostLocs.length) : ''}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    // ─── RENDER ──────────────────────────────────────────────
+    function render() {
+      const main = document.getElementById('main-content');
+      const query = searchQuery.toLowerCase().trim();
+
+      // Filter data
+      let filtered = occupiedSlots;
+      if (activeWhseFilter !== 'ALL') {
+        filtered = filtered.filter(s => getWhse(s.loc) === activeWhseFilter);
+      }
+      if (activeStatusFilter !== 'ALL') {
+        filtered = filtered.filter(s => s.status === activeStatusFilter);
+      }
+      if (query) {
+        filtered = filtered.filter(s =>
+          s.batch.toLowerCase().includes(query) ||
+          s.loc.toLowerCase().includes(query)
+        );
+      }
+
+      // Determine which warehouses to show
+      const whseKeys = activeWhseFilter === 'ALL' ? ['A', 'B', 'C', 'D'] : [activeWhseFilter];
+
+      // Check if search returns nothing
+      if (filtered.length === 0 && query) {
+        main.innerHTML = `
+          <div class="flex flex-col items-center justify-center py-20 animate-fade-up">
+            <svg class="w-12 h-12 text-zinc-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+            <p class="text-sm text-zinc-500">No results for "<span class="text-zinc-300">${query}</span>"</p>
+            <p class="text-xs text-zinc-600 mt-1">Try a different batch code or location</p>
+          </div>
+        `;
+        updateStats(filtered);
+        return;
+      }
+
+      let html = '';
+      for (const whse of whseKeys) {
+        const whseData = filtered.filter(s => getWhse(s.loc) === whse);
+        // Skip warehouse sections with no matching results when filtering
+        if (whseData.length === 0 && (query || activeStatusFilter !== 'ALL')) continue;
+        html += renderWarehouseSection(whse, whseData);
+      }
+
+      main.innerHTML = html;
+      updateStats(filtered);
+    }
+
+    function updateStats(filtered) {
+      const totalOccupied = filtered.length;
+      const totalSlots = activeWhseFilter === 'ALL'
+        ? 220
+        : warehouses[activeWhseFilter].totalSlots;
+      const totalBalance = filtered.reduce((sum, s) => sum + s.balance, 0);
+      const utilPct = ((totalOccupied / totalSlots) * 100).toFixed(1);
+
+      document.getElementById('stat-occupied').textContent = `${totalOccupied} / ${totalSlots}`;
+      document.getElementById('stat-balance').textContent = `${formatNumber(totalBalance)} kg`;
+      document.getElementById('stat-util').textContent = `${utilPct}%`;
+    }
+
+    // ─── INTERACTIONS ────────────────────────────────────────
+    function setFilter(whse) {
+      activeWhseFilter = whse;
+      updateChips();
+      render();
+    }
+
+    function setStatusFilter(status) {
+      activeStatusFilter = status;
+      updateStatusChips();
+      render();
+    }
+
+    function updateChips() {
+      document.querySelectorAll('#chip-container .chip').forEach(btn => {
+        const f = btn.dataset.filter;
+        if (f === activeWhseFilter) {
+          btn.className = 'chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-100 text-zinc-900';
+        } else {
+          btn.className = 'chip px-3 py-1.5 rounded-full text-xs font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200';
+        }
+      });
+    }
+
+    function updateStatusChips() {
+      document.querySelectorAll('[data-status]').forEach(btn => {
+        const s = btn.dataset.status;
+        if (s === activeStatusFilter) {
+          btn.className = 'chip px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-900';
+        } else {
+          btn.className = 'chip px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700';
+        }
+      });
+    }
+
+    function handleSearch(value) {
+      searchQuery = value;
+      render();
+    }
+
+    function toggleSection(whse) {
+      const section = document.getElementById(`section-${whse}`);
+      const chevron = document.getElementById(`chevron-${whse}`);
+      section.classList.toggle('collapsed');
+      chevron.classList.toggle('rotated');
+    }
+
+    // ─── INIT ────────────────────────────────────────────────
+    render();
+  </script>
+</body>
+</html>

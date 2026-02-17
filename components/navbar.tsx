@@ -32,8 +32,8 @@ interface Breadcrumb {
 }
 
 function getBreadcrumb(pathname: string): Breadcrumb | null {
-    if (pathname.startsWith('/inventory/rc-in/edit/')) {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Remarks' };
+    if (pathname.startsWith('/edit/')) {
+        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' };
     }
     if (pathname.startsWith('/inventory')) {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' };

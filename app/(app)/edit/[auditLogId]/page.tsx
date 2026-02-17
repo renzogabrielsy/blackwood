@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { getAuditLogEntry, getAuditComments } from '../../actions';
+import { getAuditLogEntry, getAuditComments } from '@/app/(app)/inventory/rc-in/actions';
 import { EditDiscussion } from './edit-discussion';
 
 export default async function EditDiscussionPage({

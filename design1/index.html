@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLOCKING — Warehouse Grid</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'SF Mono', 'Consolas', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #09090b; color: #fafafa; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #18181b; }
+    ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+
+    /* Tab styling */
+    .tab-btn {
+      position: relative;
+      padding: 6px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #a1a1aa;
+      background: transparent;
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      cursor: pointer;
+      transition: all 150ms ease;
+      letter-spacing: 0.02em;
+    }
+    .tab-btn:hover { color: #e4e4e7; background: #18181b; }
+    .tab-btn.active {
+      color: #fafafa;
+      background: #18181b;
+      border-color: #27272a;
+      font-weight: 600;
+    }
+    .tab-btn .tab-count {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 6px;
+      font-size: 10px;
+      font-weight: 600;
+      background: #27272a;
+      color: #71717a;
+      border-radius: 9999px;
+    }
+    .tab-btn.active .tab-count {
+      background: #3f3f46;
+      color: #a1a1aa;
+    }
+
+    /* Grid table */
+    .grid-table {
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .grid-table th,
+    .grid-table td {
+      border: 1px solid #27272a;
+    }
+
+    /* Column header */
+    .col-header {
+      width: 120px;
+      min-width: 120px;
+      padding: 6px 0;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #71717a;
+      background: #18181b;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    /* Row header */
+    .row-header {
+      width: 40px;
+      min-width: 40px;
+      padding: 6px 0;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #71717a;
+      background: #18181b;
+      position: sticky;
+      left: 0;
+      z-index: 20;
+    }
+
+    /* Corner cell */
+    .corner-cell {
+      width: 40px;
+      min-width: 40px;
+      background: #18181b;
+      position: sticky;
+      top: 0;
+      left: 0;
+      z-index: 30;
+    }
+
+    /* Grid cell */
+    .grid-cell {
+      width: 120px;
+      min-width: 120px;
+      height: 110px;
+      vertical-align: top;
+      padding: 0;
+      background: #0a0a0b;
+      transition: background 150ms ease;
+      cursor: default;
+      position: relative;
+    }
+    .grid-cell:hover {
+      background: #141416;
+    }
+
+    /* Empty cell */
+    .grid-cell.empty {
+      background: #09090b;
+    }
+    .grid-cell.empty:hover {
+      background: #0f0f12;
+    }
+
+    /* Cell inner with status border */
+    .cell-inner {
+      height: 100%;
+      padding: 6px 8px 6px 10px;
+      border-left: 3px solid transparent;
+    }
+    .cell-inner.stored { border-left-color: #22c55e; }
+    .cell-inner.in-use { border-left-color: #3b82f6; }
+
+    /* Cell content */
+    .cell-batch {
+      font-size: 10px;
+      font-weight: 600;
+      color: #e4e4e7;
+      letter-spacing: 0.02em;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cell-metric {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 9px;
+      line-height: 14px;
+    }
+    .cell-metric .label {
+      color: #52525b;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .cell-metric .value {
+      font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+      color: #a1a1aa;
+      font-size: 10px;
+      font-weight: 400;
+    }
+    .cell-metric .value.balance {
+      color: #fafafa;
+      font-weight: 600;
+    }
+    .cell-metric .value.currency {
+      color: #d4d4d8;
+    }
+
+    /* Empty cell marker */
+    .empty-marker {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #27272a;
+      font-size: 18px;
+      font-weight: 300;
+    }
+
+    /* Status badge */
+    .status-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .status-dot.stored { background: #22c55e; }
+    .status-dot.in-use { background: #3b82f6; }
+
+    /* Stat cards */
+    .stat-card {
+      padding: 12px 16px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+    }
+    .stat-label {
+      font-size: 10px;
+      font-weight: 500;
+      color: #71717a;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 2px;
+    }
+    .stat-value {
+      font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+      font-size: 18px;
+      font-weight: 600;
+      color: #fafafa;
+    }
+    .stat-unit {
+      font-size: 11px;
+      font-weight: 400;
+      color: #71717a;
+      margin-left: 4px;
+    }
+
+    /* Tooltip */
+    .grid-cell:hover .cell-tooltip {
+      display: block;
+    }
+    .cell-tooltip {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #27272a;
+      border: 1px solid #3f3f46;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #e4e4e7;
+      white-space: nowrap;
+      z-index: 50;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .cell-tooltip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 5px solid transparent;
+      border-top-color: #27272a;
+    }
+
+    /* Legend */
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #71717a;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 3px;
+      border-radius: 1px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div style="background: #18181b; border-bottom: 1px solid #27272a;">
+    <div style="max-width: 100%; padding: 16px 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+          <div style="display: flex; align-items: baseline; gap: 12px;">
+            <h1 style="font-size: 16px; font-weight: 700; color: #fafafa; letter-spacing: -0.01em;">BLOCKING</h1>
+            <span style="font-size: 11px; color: #52525b; font-weight: 400;">Warehouse Grid</span>
+          </div>
+          <p style="font-size: 11px; color: #71717a; margin-top: 2px;">Physical block location mapping across all warehouses</p>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <div class="legend-item">
+            <div class="legend-swatch" style="background: #22c55e;"></div>
+            <span>STORED</span>
+          </div>
+          <div class="legend-item" style="margin-left: 8px;">
+            <div class="legend-swatch" style="background: #3b82f6;"></div>
+            <span>IN-USE</span>
+          </div>
+          <div class="legend-item" style="margin-left: 8px;">
+            <div class="legend-swatch" style="background: #27272a;"></div>
+            <span>EMPTY</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary Stats -->
+  <div style="padding: 16px 24px 0;">
+    <div id="stats-bar" style="display: flex; gap: 12px;"></div>
+  </div>
+
+  <!-- Tabs + Grid -->
+  <div style="padding: 16px 24px;">
+    <!-- Tabs -->
+    <div style="display: flex; gap: 2px; border-bottom: 1px solid #27272a; margin-bottom: 0;">
+      <button class="tab-btn active" onclick="switchTab('A')" id="tab-A">WHSE A <span class="tab-count" id="count-A">0</span></button>
+      <button class="tab-btn" onclick="switchTab('B')" id="tab-B">WHSE B <span class="tab-count" id="count-B">0</span></button>
+      <button class="tab-btn" onclick="switchTab('C')" id="tab-C">WHSE C <span class="tab-count" id="count-C">0</span></button>
+      <button class="tab-btn" onclick="switchTab('D')" id="tab-D">WHSE D <span class="tab-count" id="count-D">0</span></button>
+    </div>
+
+    <!-- Grid Container -->
+    <div style="overflow-x: auto; border: 1px solid #27272a; border-top: none; border-radius: 0 0 8px 8px; background: #09090b;">
+      <div id="grid-container"></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="padding: 8px 24px 20px; display: flex; justify-content: space-between; align-items: center;">
+    <span style="font-size: 10px; color: #3f3f46;">BLACKWOOD INVENTORY MANAGEMENT</span>
+    <span style="font-size: 10px; color: #3f3f46;">Design 1: The Excel Standard</span>
+  </div>
+
+<script>
+// ═══════════════════════════════════════
+// DATA
+// ═══════════════════════════════════════
+
+const warehouseConfig = {
+  A: { cols: 20, rows: ['A', 'B', 'C'] },
+  B: { cols: 20, rows: ['A', 'B'] },
+  C: { cols: 20, rows: ['A', 'B'] },
+  D: { cols: 20, rows: ['A', 'B', 'C', 'D'] },
+};
+
+const mockData = {
+  'A-1A':  { batch: 'FEB-26-BLK3',  status: 'STORED', balance: 45000, phpkg: 18.50, bd: 0.552, ash: 3.2, mc: 9.8 },
+  'A-2A':  { batch: 'FEB-26-BLK5',  status: 'IN-USE', balance: 12500, phpkg: 19.00, bd: 0.548, ash: 2.8, mc: 10.1 },
+  'A-3B':  { batch: 'JAN-26-BLK1',  status: 'STORED', balance: 67000, phpkg: 17.75, bd: 0.561, ash: 3.5, mc: 8.9 },
+  'A-5A':  { batch: 'DEC-25-BLK2',  status: 'IN-USE', balance: 8200,  phpkg: 18.25, bd: 0.545, ash: 4.1, mc: 11.2 },
+  'A-7C':  { batch: 'JAN-26-BLK4',  status: 'STORED', balance: 52000, phpkg: 18.00, bd: 0.558, ash: 3.0, mc: 9.5 },
+  'A-10A': { batch: 'FEB-26-BLK1',  status: 'STORED', balance: 78000, phpkg: 19.25, bd: 0.563, ash: 2.5, mc: 8.7 },
+  'A-12B': { batch: 'NOV-25-BLK3',  status: 'IN-USE', balance: 3500,  phpkg: 17.50, bd: 0.540, ash: 4.5, mc: 12.3 },
+  'A-15A': { batch: 'FEB-26-BLK7',  status: 'STORED', balance: 41000, phpkg: 18.75, bd: 0.555, ash: 3.1, mc: 9.2 },
+  'A-18C': { batch: 'JAN-26-BLK2',  status: 'STORED', balance: 59000, phpkg: 18.50, bd: 0.550, ash: 3.3, mc: 10.0 },
+  'A-20A': { batch: 'DEC-25-BLK5',  status: 'IN-USE', balance: 15000, phpkg: 17.80, bd: 0.542, ash: 3.8, mc: 11.5 },
+
+  'B-2A':  { batch: 'FEB-26-BLK2',  status: 'STORED', balance: 55000, phpkg: 18.90, bd: 0.557, ash: 2.9, mc: 9.3 },
+  'B-5B':  { batch: 'JAN-26-BLK3',  status: 'IN-USE', balance: 22000, phpkg: 18.10, bd: 0.549, ash: 3.4, mc: 10.5 },
+  'B-8A':  { batch: 'DEC-25-BLK4',  status: 'STORED', balance: 38000, phpkg: 17.60, bd: 0.543, ash: 4.0, mc: 11.0 },
+  'B-14A': { batch: 'FEB-26-BLK4',  status: 'STORED', balance: 71000, phpkg: 19.10, bd: 0.560, ash: 2.7, mc: 8.8 },
+  'B-19B': { batch: 'NOV-25-BLK1',  status: 'IN-USE', balance: 5800,  phpkg: 17.30, bd: 0.538, ash: 4.8, mc: 12.8 },
+
+  'C-3A':  { batch: 'JAN-26-BLK5',  status: 'STORED', balance: 48000, phpkg: 18.40, bd: 0.554, ash: 3.0, mc: 9.6 },
+  'C-9B':  { batch: 'FEB-26-BLK6',  status: 'IN-USE', balance: 19000, phpkg: 18.80, bd: 0.551, ash: 3.2, mc: 10.3 },
+  'C-15A': { batch: 'SEPT-25-BLK1', status: 'IN-USE', balance: 6500,  phpkg: 16.90, bd: 0.535, ash: 4.3, mc: 12.0 },
+  'C-20A': { batch: 'JAN-26-BLK6',  status: 'STORED', balance: 62000, phpkg: 18.60, bd: 0.559, ash: 2.6, mc: 8.5 },
+
+  'D-1A':  { batch: 'FEB-26-BLK8',  status: 'STORED', balance: 73000, phpkg: 19.30, bd: 0.565, ash: 2.4, mc: 8.3 },
+  'D-3C':  { batch: 'JAN-26-BLK7',  status: 'IN-USE', balance: 28000, phpkg: 18.20, bd: 0.547, ash: 3.6, mc: 10.8 },
+  'D-5D':  { batch: 'DEC-25-BLK1',  status: 'STORED', balance: 44000, phpkg: 17.90, bd: 0.544, ash: 3.9, mc: 11.1 },
+  'D-8A':  { batch: 'FEB-26-BLK9',  status: 'STORED', balance: 81000, phpkg: 19.50, bd: 0.568, ash: 2.2, mc: 8.0 },
+  'D-10B': { batch: 'NOV-25-BLK2',  status: 'IN-USE', balance: 9800,  phpkg: 17.40, bd: 0.539, ash: 4.6, mc: 12.5 },
+  'D-12D': { batch: 'JAN-26-BLK8',  status: 'STORED', balance: 56000, phpkg: 18.30, bd: 0.553, ash: 3.1, mc: 9.7 },
+  'D-15A': { batch: 'FEB-26-BLK10', status: 'STORED', balance: 69000, phpkg: 19.00, bd: 0.562, ash: 2.8, mc: 8.6 },
+  'D-17C': { batch: 'DEC-25-BLK3',  status: 'IN-USE', balance: 11000, phpkg: 17.70, bd: 0.541, ash: 4.2, mc: 11.8 },
+  'D-20A': { batch: 'JAN-26-BLK9',  status: 'STORED', balance: 47000, phpkg: 18.70, bd: 0.556, ash: 3.3, mc: 9.4 },
+  'D-20D': { batch: 'FEB-26-BLK11', status: 'STORED', balance: 35000, phpkg: 18.95, bd: 0.558, ash: 2.9, mc: 9.1 },
+};
+
+// ═══════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════
+
+function formatNumber(n) {
+  return n.toLocaleString('en-US');
+}
+
+function formatCurrency(n) {
+  return n.toFixed(2);
+}
+
+function getStatusClass(status) {
+  return status === 'STORED' ? 'stored' : 'in-use';
+}
+
+function getWarehouseData(whse) {
+  const data = {};
+  Object.entries(mockData).forEach(([key, val]) => {
+    if (key.startsWith(whse + '-')) {
+      data[key] = val;
+    }
+  });
+  return data;
+}
+
+function getWarehouseOccupied(whse) {
+  return Object.keys(getWarehouseData(whse)).length;
+}
+
+function getWarehouseSlots(whse) {
+  const cfg = warehouseConfig[whse];
+  return cfg.cols * cfg.rows.length;
+}
+
+// ═══════════════════════════════════════
+// RENDER STATS
+// ═══════════════════════════════════════
+
+function renderStats(whse) {
+  const data = whse === 'ALL' ? mockData : getWarehouseData(whse);
+  const entries = Object.values(data);
+  const totalOccupied = entries.length;
+  const totalSlots = whse === 'ALL'
+    ? Object.values(warehouseConfig).reduce((s, c) => s + c.cols * c.rows.length, 0)
+    : getWarehouseSlots(whse);
+  const totalBalance = entries.reduce((s, e) => s + e.balance, 0);
+  const avgPhpKg = entries.length > 0
+    ? (entries.reduce((s, e) => s + e.phpkg, 0) / entries.length)
+    : 0;
+  const storedCount = entries.filter(e => e.status === 'STORED').length;
+  const inUseCount = entries.filter(e => e.status === 'IN-USE').length;
+  const totalValue = entries.reduce((s, e) => s + (e.balance * e.phpkg), 0);
+
+  document.getElementById('stats-bar').innerHTML = `
+    <div class="stat-card" style="flex:1;">
+      <div class="stat-label">Occupied</div>
+      <div class="stat-value">${totalOccupied}<span class="stat-unit">/ ${totalSlots} slots</span></div>
+    </div>
+    <div class="stat-card" style="flex:1;">
+      <div class="stat-label">Total Balance</div>
+      <div class="stat-value">${formatNumber(totalBalance)}<span class="stat-unit">kg</span></div>
+    </div>
+    <div class="stat-card" style="flex:1;">
+      <div class="stat-label">Total Value</div>
+      <div class="stat-value" style="font-size:16px;">\u20B1 ${formatNumber(Math.round(totalValue))}</div>
+    </div>
+    <div class="stat-card" style="flex:1;">
+      <div class="stat-label">Avg PHP/KG</div>
+      <div class="stat-value">\u20B1 ${avgPhpKg.toFixed(2)}</div>
+    </div>
+    <div class="stat-card" style="flex:1;">
+      <div class="stat-label">Status</div>
+      <div style="display:flex;gap:12px;margin-top:2px;">
+        <span style="font-size:13px;color:#22c55e;font-weight:600;">${storedCount} <span style="font-size:10px;color:#71717a;font-weight:400;">STORED</span></span>
+        <span style="font-size:13px;color:#3b82f6;font-weight:600;">${inUseCount} <span style="font-size:10px;color:#71717a;font-weight:400;">IN-USE</span></span>
+      </div>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════
+// RENDER GRID
+// ═══════════════════════════════════════
+
+function renderGrid(whse) {
+  const cfg = warehouseConfig[whse];
+  const data = getWarehouseData(whse);
+  const container = document.getElementById('grid-container');
+
+  let html = '<table class="grid-table">';
+
+  // Header row
+  html += '<thead><tr>';
+  html += '<th class="corner-cell"></th>';
+  for (let c = 1; c <= cfg.cols; c++) {
+    html += `<th class="col-header">${c}</th>`;
+  }
+  html += '</tr></thead>';
+
+  // Body rows
+  html += '<tbody>';
+  cfg.rows.forEach(row => {
+    html += '<tr>';
+    html += `<td class="row-header">${row}</td>`;
+
+    for (let c = 1; c <= cfg.cols; c++) {
+      const key = `${whse}-${c}${row}`;
+      const cell = data[key];
+
+      if (cell) {
+        const statusCls = getStatusClass(cell.status);
+        html += `<td class="grid-cell">
+          <div class="cell-inner ${statusCls}">
+            <div class="cell-batch">${cell.batch}</div>
+            <div class="cell-metric">
+              <span class="label">BAL</span>
+              <span class="value balance">${formatNumber(cell.balance)}</span>
+            </div>
+            <div class="cell-metric">
+              <span class="label">\u20B1/KG</span>
+              <span class="value currency">${formatCurrency(cell.phpkg)}</span>
+            </div>
+            <div class="cell-metric">
+              <span class="label">BD</span>
+              <span class="value">${cell.bd.toFixed(3)}</span>
+            </div>
+            <div class="cell-metric">
+              <span class="label">ASH</span>
+              <span class="value">${cell.ash.toFixed(1)}%</span>
+            </div>
+            <div class="cell-metric">
+              <span class="label">MC</span>
+              <span class="value">${cell.mc.toFixed(1)}%</span>
+            </div>
+          </div>
+          <div class="cell-tooltip">
+            <strong>${key}</strong> &mdash; ${cell.batch}<br>
+            Status: <span class="status-dot ${statusCls}"></span>${cell.status}<br>
+            Balance: ${formatNumber(cell.balance)} kg &bull; Value: \u20B1${formatNumber(Math.round(cell.balance * cell.phpkg))}
+          </div>
+        </td>`;
+      } else {
+        html += `<td class="grid-cell empty">
+          <div class="empty-marker">&middot;</div>
+        </td>`;
+      }
+    }
+
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+
+  container.innerHTML = html;
+}
+
+// ═══════════════════════════════════════
+// TAB SWITCHING
+// ═══════════════════════════════════════
+
+let activeTab = 'A';
+
+function switchTab(whse) {
+  activeTab = whse;
+
+  // Update tab buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById('tab-' + whse).classList.add('active');
+
+  // Render
+  renderGrid(whse);
+  renderStats(whse);
+}
+
+// ═══════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════
+
+function init() {
+  // Set tab counts
+  ['A', 'B', 'C', 'D'].forEach(whse => {
+    const occupied = getWarehouseOccupied(whse);
+    const total = getWarehouseSlots(whse);
+    document.getElementById('count-' + whse).textContent = `${occupied}/${total}`;
+  });
+
+  // Render default tab
+  renderGrid('A');
+  renderStats('A');
+}
+
+init();
+</script>
+</body>
+</html>

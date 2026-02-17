@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       audit_comments: {
@@ -199,6 +224,13 @@ export type Database = {
             referencedRelation: "batches"
             referencedColumns: ["batch_code"]
           },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
         ]
       }
       notification_subscriptions: {
@@ -347,6 +379,13 @@ export type Database = {
             referencedRelation: "batches"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_id"]
+          },
         ]
       }
       user_invites: {
@@ -380,6 +419,20 @@ export type Database = {
       }
     }
     Views: {
+      view_blocking_grid: {
+        Row: {
+          ash: number | null
+          balance: number | null
+          batch_code: string | null
+          batch_id: string | null
+          bd: number | null
+          block_loc: string | null
+          mc: number | null
+          php_per_kg: number | null
+          status: string | null
+        }
+        Relationships: []
+      }
       view_rc_in_master: {
         Row: {
           batch_code: string | null
@@ -402,6 +455,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
         ]
@@ -572,6 +632,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       batch_status: [

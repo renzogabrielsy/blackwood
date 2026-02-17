@@ -12,7 +12,7 @@ interface InventoryTabContextType {
 const InventoryTabContext = createContext<InventoryTabContextType | null>(null);
 
 export function InventoryTabProvider({ children }: { children: ReactNode }) {
-    const [activeTab, setActiveTab] = useState<InventoryTab>('deliveries');
+    const [activeTab, setActiveTab] = useState<InventoryTab>('blocking');
     return (
         <InventoryTabContext.Provider value={{ activeTab, setActiveTab }}>
             {children}

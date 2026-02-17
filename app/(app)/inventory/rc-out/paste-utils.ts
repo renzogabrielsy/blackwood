@@ -9,8 +9,8 @@ export const COLUMN_MAP: (keyof InputRcOutRow | null)[] = [
     'batch_code',       // 3: BLOCK
     'weight_kg',        // 4: WT
     'destination',      // 5: PLANT/ETC
-    'block_loc',        // 6: BLOCK LOC
-    'remarks',          // 7: REMARKS
+    'remarks',          // 6: REMARKS
+    'block_loc',        // 7: BLOCK LOC
     null,               // 8: Remove button
 ];
 

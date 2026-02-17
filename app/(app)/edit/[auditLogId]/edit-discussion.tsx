@@ -4,7 +4,7 @@ import * as React from 'react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { Send, Loader2, CheckCircle2, ArrowUpDown, Clock } from 'lucide-react';
 import type { AuditLogRow, AuditComment, DeliveryHistoryRow } from '@/types/rc-in';
-import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from '../../components/audit-shared';
+import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from '@/app/(app)/inventory/rc-in/components/audit-shared';
 import {
   addAuditComment,
   getAuditComments,
@@ -12,7 +12,7 @@ import {
   requestResolveAuditLog,
   approveResolveRequest,
   denyResolveRequest,
-} from '../../actions';
+} from '@/app/(app)/inventory/rc-in/actions';
 import { useAuth } from '@/components/providers/auth-context';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';

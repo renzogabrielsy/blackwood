@@ -1,0 +1,70 @@
+export interface BlockData {
+  batch_code: string;
+  batch_id: string;
+  status: 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED';
+  balance: number;
+  total_in: number;
+  php: number | null;    // null when role-gated
+  bd_astm: number;
+  bd_jis: number;
+  ash: number;
+  mc: number;
+  grit: number;
+  vm: number;
+  fc: number;
+}
+
+export interface BlockingGridData {
+  blocks: Record<string, BlockData>;  // keyed by block_loc
+  canViewPrices: boolean;
+}
+
+export interface DeliveryHistoryRecord {
+  id: string;
+  transaction_date: string;
+  supplier: string;
+  sacks: number;
+  weight_kg: number;
+  cost_basis?: number;  // undefined when role-gated
+  mc?: number;          // from lab_results
+  bd_astm?: number;     // from lab_results
+  ash?: number;         // from lab_results
+}
+
+/** Full delivery record returned by fetchSingleDelivery for the edit dialog */
+export interface FullDeliveryRecord {
+  id: string;
+  transaction_date: string;
+  supplier: string;
+  batch_code: string;
+  block_loc: string | null;
+  truck_plate: string | null;
+  sacks: number;
+  weight_kg: number;
+  cost_basis: number;
+  remarks: string | null;
+  lab_results: {
+    mc: number;
+    ash: number;
+    bd_astm: number;
+    bd_jis: number;
+    grit: number;
+    vm: number;
+    fc: number;
+  };
+}
+
+export interface UsageHistoryRecord {
+  transaction_date: string;
+  destination: string;
+  weight_kg: number;
+  production_batch: string | null;
+  avg_price: number | null;  // null when role-gated
+}
+
+export interface BlockingDetailData {
+  deliveries: DeliveryHistoryRecord[];
+  usage: UsageHistoryRecord[];
+  notes: string | null;
+  avg_cost: number | null;  // batch avg_cost, role-gated
+}

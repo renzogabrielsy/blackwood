@@ -11,7 +11,7 @@ Persistent navigation bar (302 lines, `components/navbar.tsx`). Owns ALL page ti
 ## Registered Breadcrumbs (`getBreadcrumb()`)
 | Path | Back Label | Page Title | Description |
 |------|-----------|------------|-------------|
-| `/inventory/rc-in/edit/*` | Back to Inventory | Edit Remarks | — |
+| `/edit/*` | Back to Inventory | Edit Discussion | — |
 | `/inventory*` (catch-all) | Back to Dashboard | Inventory | Raw charcoal deliveries, usage & tracking |
 | `/notifications` | Back to Dashboard | Notifications | — |
 | `/settings` | Back to Dashboard | Settings | Manage user roles and permissions |

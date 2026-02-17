@@ -6,15 +6,30 @@ import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
 
 import { getUserRole } from '@/lib/auth';
 import { UserRole, PRIVILEGED_ROLES } from '@/types/auth';
+import { validateBlockLoc, normalizeBlockLoc } from '@/lib/validation';
 
 export type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
+
+/** Translates raw DB constraint violation messages into user-friendly strings */
+function translateDbError(message: string): string {
+    if (message.includes('chk_block_loc_format')) {
+        return 'Invalid block location format. Expected format: A-1A, D-20D, etc.';
+    }
+    if (message.includes('chk_location_ref_format')) {
+        return 'Invalid location reference format on batch.';
+    }
+    if (message.includes('idx_unique_active_batch_per_location')) {
+        return 'Another active batch already occupies this location.';
+    }
+    return message;
+}
 
 /** Deduplicates and upserts batches from delivery rows */
 async function upsertBatchesFromRows(rows: DeliveryRow[]) {
     const supabase = await createClient();
     const batchUpserts = rows.map(row => ({
         batch_code: row.batch_code,
-        location_ref: row.block_loc,
+        location_ref: row.block_loc ? normalizeBlockLoc(row.block_loc) : '',
     }));
 
     const uniqueBatches = Array.from(
@@ -35,6 +50,7 @@ function toDeliveryPayload(row: DeliveryRow) {
     const { state, ...deliveryData } = row;
     return {
         ...deliveryData,
+        block_loc: row.block_loc ? normalizeBlockLoc(row.block_loc) : null,
         weight_kg: Number(row.weight_kg),
         sacks: Number(row.sacks),
         cost_basis: row.cost_basis === undefined || row.cost_basis === null ? 0 : Number(row.cost_basis),
@@ -45,6 +61,80 @@ function toDeliveryPayload(row: DeliveryRow) {
 export async function submitBulkDeliveries(rows: DeliveryRow[]) {
     if (!rows || rows.length === 0) {
         return { success: false, message: 'No rows to submit' };
+    }
+
+    // --- Block location validation ---
+    const validationErrors: string[] = [];
+
+    // 1. Format validation for each row with a block_loc
+    for (let i = 0; i < rows.length; i++) {
+        const loc = rows[i].block_loc?.trim();
+        if (!loc) continue;
+
+        const result = validateBlockLoc(loc);
+        if (!result.valid) {
+            validationErrors.push(`Row ${i + 1}: ${result.error}`);
+        }
+    }
+
+    // 2. Duplicate location check — only for rows with valid block_loc values
+    const rowsWithValidLocs = rows
+        .map((row, i) => ({ row, index: i }))
+        .filter(({ row }) => {
+            const loc = row.block_loc?.trim();
+            if (!loc) return false;
+            return validateBlockLoc(loc).valid;
+        });
+
+    if (rowsWithValidLocs.length > 0) {
+        const supabaseCheck = await createClient();
+        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => row.block_loc.trim().toUpperCase()))];
+
+        // Query active batches at these locations
+        const { data: activeBatches, error: checkError } = await supabaseCheck
+            .from('deliveries')
+            .select('block_loc, batch_code, batches!inner(status)')
+            .in('block_loc', uniqueLocs)
+            .in('batches.status', ['STORED', 'IN-USE']);
+
+        if (checkError) {
+            console.error('Error checking block location conflicts:', checkError);
+            // Non-fatal: proceed without duplicate check rather than blocking submission
+        } else if (activeBatches && activeBatches.length > 0) {
+            // Build a map of location -> active batch codes (deduplicated)
+            const locToBatches = new Map<string, Set<string>>();
+            for (const record of activeBatches) {
+                const loc = record.block_loc.toUpperCase();
+                if (!locToBatches.has(loc)) {
+                    locToBatches.set(loc, new Set());
+                }
+                locToBatches.get(loc)!.add(record.batch_code);
+            }
+
+            // Check each submitted row against existing occupants
+            for (const { row, index } of rowsWithValidLocs) {
+                const loc = row.block_loc.trim().toUpperCase();
+                const existingBatches = locToBatches.get(loc);
+                if (!existingBatches) continue;
+
+                // Only flag if the existing batch is DIFFERENT from the one being submitted
+                for (const existingBatch of existingBatches) {
+                    if (existingBatch !== row.batch_code) {
+                        validationErrors.push(
+                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Return all validation errors at once
+    if (validationErrors.length > 0) {
+        return {
+            success: false,
+            message: `Block location validation failed:\n${validationErrors.join('\n')}`,
+        };
     }
 
     try {
@@ -67,24 +157,41 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
 
     } catch (error: unknown) {
         console.error('Submit Transaction Failed:', error);
-        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
     }
 }
 
 export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
-    const supabase = await createClient();
-    const { error } = await supabase
-        .from('deliveries')
-        .update(data)
-        .eq('id', id);
-
-    if (error) {
-        console.error('Error updating delivery:', error);
-        return { success: false, message: error.message };
+    // Bug fix: validate block_loc format on single-delivery updates
+    if (data.block_loc) {
+        const result = validateBlockLoc(data.block_loc);
+        if (!result.valid) {
+            return { success: false, message: result.error };
+        }
+        // Normalize to uppercase before persisting
+        data = { ...data, block_loc: normalizeBlockLoc(data.block_loc) };
     }
 
-    revalidatePath('/inventory');
-    return { success: true };
+    const supabase = await createClient();
+    try {
+        const { error } = await supabase
+            .from('deliveries')
+            .update(data)
+            .eq('id', id);
+
+        if (error) {
+            console.error('Error updating delivery:', error);
+            return { success: false, message: translateDbError(error.message) };
+        }
+
+        revalidatePath('/inventory');
+        return { success: true };
+    } catch (error: unknown) {
+        console.error('Update Delivery Failed:', error);
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
+    }
 }
 
 export async function bulkUpdateDeliveries(updates: { id: string; data: DeliveryRow; comment?: string }[]) {
@@ -92,8 +199,68 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         return { success: false, message: 'No rows to update' };
     }
 
+    // --- Block location validation (same rules as submitBulkDeliveries) ---
+    const validationErrors: string[] = [];
+    const rows = updates.map(u => u.data);
+
+    for (let i = 0; i < rows.length; i++) {
+        const loc = rows[i].block_loc?.trim();
+        if (!loc) continue;
+        const result = validateBlockLoc(loc);
+        if (!result.valid) {
+            validationErrors.push(`Row ${i + 1}: ${result.error}`);
+        }
+    }
+
+    const rowsWithValidLocs = rows
+        .map((row, i) => ({ row, index: i }))
+        .filter(({ row }) => {
+            const loc = row.block_loc?.trim();
+            if (!loc) return false;
+            return validateBlockLoc(loc).valid;
+        });
+
+    if (rowsWithValidLocs.length > 0) {
+        const supabaseCheck = await createClient();
+        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => normalizeBlockLoc(row.block_loc)))];
+
+        const { data: activeBatches, error: checkError } = await supabaseCheck
+            .from('deliveries')
+            .select('block_loc, batch_code, batches!inner(status)')
+            .in('block_loc', uniqueLocs)
+            .in('batches.status', ['STORED', 'IN-USE']);
+
+        if (!checkError && activeBatches && activeBatches.length > 0) {
+            const locToBatches = new Map<string, Set<string>>();
+            for (const record of activeBatches) {
+                const loc = record.block_loc.toUpperCase();
+                if (!locToBatches.has(loc)) locToBatches.set(loc, new Set());
+                locToBatches.get(loc)!.add(record.batch_code);
+            }
+
+            for (const { row, index } of rowsWithValidLocs) {
+                const loc = normalizeBlockLoc(row.block_loc);
+                const existingBatches = locToBatches.get(loc);
+                if (!existingBatches) continue;
+                for (const existingBatch of existingBatches) {
+                    if (existingBatch !== row.batch_code) {
+                        validationErrors.push(
+                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if (validationErrors.length > 0) {
+        return {
+            success: false,
+            message: `Block location validation failed:\n${validationErrors.join('\n')}`,
+        };
+    }
+
     try {
-        const rows = updates.map(u => u.data);
         await upsertBatchesFromRows(rows);
 
         const supabase = await createClient();
@@ -114,7 +281,7 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
                 .eq('id', id);
 
             if (error) {
-                throw new Error(`Update Error (${id}): ${error.message}`);
+                throw new Error(`Update Error (${id}): ${translateDbError(error.message)}`);
             }
 
             // Also post the edit remark as a discussion comment on the new audit log
@@ -143,7 +310,8 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         return { success: true };
     } catch (error: unknown) {
         console.error('Bulk Update Failed:', error);
-        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
     }
 }
 
@@ -397,7 +565,7 @@ export async function resolveAuditLog(auditLogId: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
 
@@ -436,7 +604,7 @@ export async function requestResolveAuditLog(auditLogId: string, type: 'resolve'
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true };
 }
 
@@ -497,7 +665,7 @@ export async function approveResolveRequest(auditLogId: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
 
@@ -554,7 +722,7 @@ export async function denyResolveRequest(auditLogId: string, reason: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true };
 }
 

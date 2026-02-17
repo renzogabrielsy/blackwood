@@ -19,12 +19,12 @@ Real-time notification bell (500 lines, `components/notification-bell.tsx`) with
 ## Notification Type -> URL Mapping
 | Type | Target URL |
 |------|-----------|
-| `resolve_request/approved/denied` | `/inventory/rc-in/edit/{audit_log_id}` |
+| `resolve_request/approved/denied` | `/edit/{audit_log_id}` |
 | `delivery_created` | `/inventory/rc-in?date={date}` |
-| `delivery_edited` | `/inventory/rc-in/edit/{audit_log_id}` |
+| `delivery_edited` | `/edit/{audit_log_id}` |
 | `delivery_deleted` | `/inventory/rc-in` |
-| `remarks_added` | `/inventory/rc-in/edit/{audit_log_id}` |
-| `audit_comment_reply` | `/inventory/rc-in/edit/{audit_log_id}` |
+| `remarks_added` | `/edit/{audit_log_id}` |
+| `audit_comment_reply` | `/edit/{audit_log_id}` |
 
 ## Key Behaviors
 

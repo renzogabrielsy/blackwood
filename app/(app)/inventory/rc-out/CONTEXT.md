@@ -35,7 +35,8 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 - **STATE column:** Displays batch status as a colored badge after the DATE column, with `getStateClasses()` for badge colors (IN-USE=blue, CLOSED=red, SUNDRYING=amber, SUNDRIED=muted-amber, default=muted) and `getRowStateClasses()` for subtle row tinting.
 - **BLOCK LOC column fallback:** Displays `rc_out.block_loc` with fallback to `batches.location_ref` when block_loc is empty. Same fallback applied in `getCellValue()` for clipboard copy and in `filteredData` for the Block Loc filter.
 - **Conditional TOTALS footer:** The table footer with TOTALS row only renders when `hasActiveFilters` is true (STATE exclusion active with partial selection, or any inclusion filter active). Uses `animate-slide-up` class for entrance. Totals are computed from `filteredData`, not `allData`.
-- **Remarks column (simplified):** Shows truncated inline text (`max-w-[120px] truncate`) with Tooltip on hover. Column width 120px.
+- **Remarks column (master table):** Shows truncated inline text (`max-w-[120px] truncate`) with Tooltip on hover. Column width 120px.
+- **Bulk input column order:** DATE | BATCH | BLOCK | WT | PLANT/ETC | REMARKS | BLOCK LOC. Remarks is a plain text input cell (not a popover/icon pattern) — same inline editing as all other columns. `paste-utils.ts` COLUMN_MAP reflects this order.
 - **Computed DB columns:** `avg_price` and `avg_wtd_value` are DB-computed — never calculated client-side. Permission-gated behind `view:prices`.
 - **Audit trail:** Updates use `set_audit_comment()` RPC + `audit_comments` posting, same pattern as RC IN.
 - **Auto-fill block_loc:** Selecting a batch auto-populates `block_loc` from `batch.location_ref`.
