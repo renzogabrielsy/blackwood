@@ -2,6 +2,16 @@
 
 ## Database Schema Insights
 
+### user_table_settings Table (Added 2026-02-18)
+
+**Migration:** `create_user_table_settings`
+
+- `id` uuid PK, `user_id` uuid FK→auth.users (CASCADE), `module` text DEFAULT 'rc_in', `settings` jsonb DEFAULT '{}', `updated_at` timestamptz
+- UNIQUE constraint: `uq_user_module (user_id, module)`
+- RLS enabled: SELECT/INSERT/UPDATE policies — all use `auth.uid() = user_id`
+- Index: `idx_uts_lookup ON (user_id, module)`
+- **Types file:** `types/table-settings.ts` — `RcInTableSettings`, `DensityMode`, `LabMetric`, `HeatLevel`, `RangeSpec`, `DEFAULT_RC_IN_SETTINGS`, utility fns (`getHeatLevel`, `getHeatTint`, `getHeatLabel`, `getStateDotClass`)
+
 ### Batch Status Management (Updated 2026-02-17)
 
 **Critical Discovery:** The `batch_status` enum drives the STATE column in RC IN. Status is now **fully derived from RC OUT data** via the `fn_process_blackwood_usage` trigger, with one exception: SUNDRIED is set by `fn_update_blackwood_state` on RC IN deliveries.
@@ -21,9 +31,9 @@
 
 **Note on FEED:** The `FEED` enum value still exists in `batch_status` but is no longer actively set by triggers (as of 2026-02-15). FEED location is indicated by the WHSE column in RC IN (derived from `block_loc` starting with 'F'), not by batch status. FEED batches follow the same status rules as other batches.
 
-### Trigger: fn_process_blackwood_usage (2026-02-17 CLOSED Priority Fix)
+### Trigger: fn_process_blackwood_usage (2026-02-18 Preserve-CLOSED Fix)
 
-**File:** Located in `supabase/migrations/` — full rewrite 2026-02-15, CLOSED priority fix 2026-02-17
+**File:** Located in `supabase/migrations/` — full rewrite 2026-02-15, CLOSED priority fix 2026-02-17, preserve-CLOSED guard 2026-02-18
 
 **Operations Supported:**
 1. **INSERT** — Optimized, checks only new row, depletes weight, sets status
@@ -36,6 +46,8 @@
 - UPDATE/DELETE operations query ALL rc_out records to determine correct state
 - If batch_id changes during UPDATE, BOTH old and new batches are recalculated
 
+**CLOSED-Preservation Guard (2026-02-18):** Migration `fix_preserve_closed_status_on_rc_out_edit`. The UPDATE section has a guard AFTER the `new_status := CASE ... END` block that prevents a CLOSED batch from being reopened if a replacement batch already occupies its location. Without this, editing an rc_out record on a CLOSED batch (e.g. clearing its remarks) would recompute status to SUNDRYING/IN-USE and violate `idx_unique_active_batch_per_location`. Guard fires when: batch is CLOSED + same batch_id + new_status != CLOSED + another active batch at the same location_ref. Same guard applied to OLD.batch_id in the batch_id-change sub-block.
+
 **Status Priority (CRITICAL):** CLOSED > SUNDRYING > IN-USE > SUNDRIED > STORED
 - **CLOSED remark ALWAYS takes highest priority** — regardless of destination
 - INSERT CASE statement checks `NEW.remarks ILIKE '%CLOSED%'` FIRST, before destination checks
@@ -45,14 +57,16 @@
 
 **Common Pitfall:** Previously, the RC IN batch upsert **overrode** trigger-managed status back to 'STORED'. This was fixed by removing the `status` field from `upsertBatchesFromRows()` in `app/(app)/inventory/rc-in/actions.ts` (line 17).
 
-### Trigger: fn_update_blackwood_state (2026-02-17 current_weight Fix)
+### Trigger: fn_update_blackwood_state (2026-02-18 DELETE + location_ref Fix)
 
-**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16, SUNDRIED status added 2026-02-17, current_weight recalculation added 2026-02-17
+**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16, SUNDRIED status added 2026-02-17, current_weight recalculation added 2026-02-17, DELETE trigger registration + location_ref clear added 2026-02-18
+
+**Trigger registration fix (2026-02-18):** `tr_blackwood_delivery` had `tgtype=23` (BEFORE INSERT OR UPDATE only) — DELETE handler code existed but never fired. Migration `fix_delivery_delete_trigger` dropped and recreated it as BEFORE INSERT OR UPDATE OR DELETE (`tgtype=31`).
 
 **Operations Supported:**
 1. **INSERT** — Incremental weighted average for `avg_cost`, `quality_stats`, `current_weight`; sets SUNDRIED for SUNDRY batches
 2. **UPDATE** — Recalculates `avg_cost` AND `current_weight` (delivery total − rc_out total) from scratch
-3. **DELETE** — Recalculates `avg_cost` AND `current_weight` (delivery total − rc_out total) from scratch
+3. **DELETE** — Recalculates `avg_cost` AND `current_weight`; clears `location_ref = ''` and resets `status = 'STORED'` if no deliveries remain for the batch
 
 **Critical INSERT Behavior (SUNDRIED Status):**
 - After updating avg_cost/quality_stats, checks if `batch_code ILIKE '%SUNDRY%'` AND batch status is STORED
@@ -70,11 +84,16 @@ current_weight = SUM(deliveries.weight_kg WHERE batch_code = X)
                - SUM(rc_out.weight_kg JOIN batches WHERE batch_code = X)
 ```
 
-**Why the Fix Was Needed:**
-- DELETE/UPDATE handlers only recalculated `avg_cost` — `current_weight` was never updated on edits/deletes
+**BEFORE trigger gotcha — always exclude OLD.id in DELETE existence checks:**
+In a BEFORE DELETE trigger, the row being deleted still exists in the table. An `EXISTS (SELECT 1 FROM deliveries WHERE batch_code = OLD.batch_code)` check will always find OLD row itself and return true. Always add `AND id != OLD.id` to exclude it when checking whether any deliveries remain.
+
+**Why the Fixes Were Needed:**
+- DELETE/UPDATE handlers only recalculated `avg_cost` — `current_weight` was never updated on edits/deletes → fixed 2026-02-17
 - Migration `fix_delivery_trigger_current_weight` (2026-02-17) added current_weight to DELETE/UPDATE handlers
 - Migration `recalculate_all_batch_weights` (2026-02-17) one-time fixed all stale current_weight values
 - INSERT handler was left untouched (it correctly does incremental += already)
+- `tr_blackwood_delivery` was BEFORE INSERT OR UPDATE only — DELETE handler was dead code → fixed 2026-02-18
+- DELETE handler did not clear `location_ref` on last-delivery removal → blocking grid showed ghost batches → fixed 2026-02-18
 - The original fix history: trigger added UPDATE support in `fix_delivery_trigger_handle_updates.sql` (2026-02-16)
 
 **Data Cleanup:** If batches have stale avg_cost, run:

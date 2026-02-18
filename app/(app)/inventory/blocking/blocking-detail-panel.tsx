@@ -207,9 +207,15 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
   function handleEditAll() {
     if (!blockData) return;
     onClose();
-    // Navigate to deliveries tab with batch code as search filter
     setActiveTab('deliveries');
-    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all`);
+    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
+  }
+
+  function handleEditAllUsage() {
+    if (!blockData) return;
+    onClose();
+    setActiveTab('usage');
+    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
   }
 
   if (!blockData || !locKey) {
@@ -590,8 +596,29 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
 
           {/* ── Usage History (RC OUT) ── */}
           <div className="mt-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
-              Usage History (RC OUT)
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Usage History (RC OUT)
+              </div>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={handleEditAllUsage}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px]
+                                 text-muted-foreground hover:text-foreground hover:bg-muted
+                                 border border-transparent hover:border-border
+                                 transition-all duration-150 cursor-pointer"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      <span>Edit All</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left" className="text-xs">
+                    Open all usage records for this batch in the Usage tab
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
             <div className="rounded-md overflow-hidden bg-muted border border-border">
               {detailLoading ? (
@@ -615,6 +642,9 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
                       <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-left px-1.5 py-1 border-b border-border">
                         Plant/Etc
                       </th>
+                      <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-right px-1.5 py-1 border-b border-border">
+                        Weight
+                      </th>
                       {canViewPrices && (
                         <th className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-right px-1.5 py-1 border-b border-border">
                           Avg Price
@@ -630,6 +660,9 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
                           {u.production_batch ?? '\u2014'}
                         </td>
                         <td className="text-[10px] text-muted-foreground px-1.5 py-1">{u.destination}</td>
+                        <td className="text-[10px] font-mono text-foreground text-right px-1.5 py-1">
+                          {u.weight_kg.toLocaleString()} kg
+                        </td>
                         {canViewPrices && (
                           <td className="text-[10px] font-mono text-foreground text-right px-1.5 py-1">
                             {u.avg_price !== null ? (
@@ -643,6 +676,17 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t border-border bg-muted/50">
+                      <td className="text-[9px] font-semibold text-muted-foreground uppercase px-1.5 py-1" colSpan={3}>
+                        Total
+                      </td>
+                      <td className="text-[10px] font-mono font-semibold text-foreground text-right px-1.5 py-1">
+                        {detailData.usage.reduce((s, u) => s + u.weight_kg, 0).toLocaleString()} kg
+                      </td>
+                      {canViewPrices && <td />}
+                    </tr>
+                  </tfoot>
                 </table>
               ) : (
                 <div className="flex items-center justify-center py-4">

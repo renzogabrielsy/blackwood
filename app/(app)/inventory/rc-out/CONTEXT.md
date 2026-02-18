@@ -43,6 +43,7 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 - **Data refresh mechanism:** After every add/edit/delete operation, the table automatically refetches all data via `onRefresh` prop (calls `fetchRcOutTabData()` again from `RcOutLazyTab`). A manual refresh button (`RefreshCw` icon) in the toolbar provides a fallback. The `refreshing` state drives a spinner on the button. The `onRefresh` prop is threaded through `RcOutLazyTab` -> `RcOutTableWrapper` -> `RcOutTable`. Server actions still call `revalidatePath` as before; the client-side refetch ensures the lazy-loaded tab picks up changes immediately.
 - **Cell selection + clipboard copy (master table):** `useCellSelection` and `useClipboardCopy` hooks enable Excel-like rectangular cell selection (click-drag, Shift+Arrow, Ctrl+A) and Ctrl+C copy as TSV. Mutually exclusive with row selection mode. Selection count and `useCellAggregation` aggregates are pushed to `StatusBarProvider` context via `useStatusBar()` and displayed in the unified `FloatingStatusBar` with a Google Sheets-like auto-calculate dropdown (SUM/AVERAGE/COUNT/MIN/MAX). Numeric columns for aggregation: weight_kg, avg_price, avg_wtd_value. Clears on data/sorting changes, clicking outside the scroll container, or pressing Escape.
 - **Cell selection + copy + delete (bulk input):** All 3 hooks (`useCellSelection`, `useClipboardCopy`, `useCellDelete`) plus `useCellAggregation` with two-mode system: single-cell edit (click without drag) vs range selection (click+drag, Shift+Arrow). Range mode: Ctrl+C copies as TSV, Backspace/Delete clears all cells. Non-shift nav exits range. Printable char exits range and edits anchor cell. Selection count and aggregates pushed to `StatusBarProvider` context (same as master table). Numeric column for aggregation: weight_kg.
+- **editBatch deep-link:** When URL contains `?editBatch=<batch_code>`, the table auto-selects all matching records (by `production_batch` or `batches.batch_code`) and opens the bulk edit dialog. Used by the Blocking detail panel's "Edit All" button on the Usage History section. The param is cleaned from the URL after triggering.
 - **Glass & Motion:** Table header/footer use frosted glass (`bg-muted/90 backdrop-blur-sm`). Row hover uses `transition-all duration-150`. Empty state uses `animate-fade-up`. Selection bar uses `animate-fade-up`. Bulk input headers use `bg-muted/90 backdrop-blur-sm`.
 
 ### Batch Status Trigger
@@ -68,5 +69,6 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 
 ## See Also
 - [RC IN](../rc-in/CONTEXT.md) — shares paste utilities
+- [Blocking](../blocking/CONTEXT.md) — warehouse grid visualization; usage data feeds balance calculations
 - [Auth Provider](../../../../components/providers/AUTH.md) — permission model for price visibility
 - [Navbar](../../../../components/NAVBAR.md) — breadcrumb registration

@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
+import type { RcInTableSettings } from '@/types/table-settings';
+import { DEFAULT_RC_IN_SETTINGS } from '@/types/table-settings';
 
 import { getUserRole } from '@/lib/auth';
 import { UserRole, PRIVILEGED_ROLES } from '@/types/auth';
@@ -781,4 +783,56 @@ export async function getAuditLogEntry(auditLogId: string) {
         } as AuditLogRow,
         delivery,
     };
+}
+
+export async function getTableSettings(module = 'rc_in'): Promise<RcInTableSettings> {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return DEFAULT_RC_IN_SETTINGS;
+
+    const { data } = await supabase
+        .from('user_table_settings')
+        .select('settings')
+        .eq('user_id', user.id)
+        .eq('module', module)
+        .single();
+
+    if (!data?.settings) return DEFAULT_RC_IN_SETTINGS;
+
+    // Merge stored settings with defaults (stored values override defaults)
+    return { ...DEFAULT_RC_IN_SETTINGS, ...(data.settings as Partial<RcInTableSettings>) };
+}
+
+export async function saveTableSettings(module: string, settings: Partial<RcInTableSettings>) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) return { success: false, message: 'Not authenticated' };
+
+    // Read existing settings first, merge, then upsert
+    const { data: existing } = await supabase
+        .from('user_table_settings')
+        .select('settings')
+        .eq('user_id', user.id)
+        .eq('module', module)
+        .single();
+
+    const merged = { ...(existing?.settings as Record<string, unknown> ?? {}), ...settings };
+
+    const { error } = await supabase
+        .from('user_table_settings')
+        .upsert({
+            user_id: user.id,
+            module,
+            settings: merged,
+            updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,module' });
+
+    if (error) {
+        console.error('Error saving table settings:', error);
+        return { success: false, message: error.message };
+    }
+
+    return { success: true };
 }

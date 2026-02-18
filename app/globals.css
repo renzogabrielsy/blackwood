@@ -420,3 +420,38 @@ input[type=number] {
 :is(.dark) .spotlight-empty {
   box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.5), 0 0 10px rgba(161, 161, 170, 0.2);
 }
+
+/* Single neutral card background for all occupied cells */
+.blocking-cell-occupied {
+  background: linear-gradient(135deg, #f0f0f3 0%, #fafafa 50%, #f0f0f3 100%);
+  border-color: rgba(161, 161, 170, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.dark .blocking-cell-occupied {
+  background: linear-gradient(135deg, #27272a 0%, #3f3f46 50%, #27272a 100%);
+  border-color: rgba(161, 161, 170, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 12px rgba(0, 0, 0, 0.25);
+}
+
+/* Critical balance pulse — standalone version for balance text color */
+.balance-critical {
+  animation: blocking-critical-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Lab Quality Spotlight System ─── */
+
+.spotlight-wet {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 0 12px rgba(59, 130, 246, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-wet {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.6), 0 0 16px rgba(59, 130, 246, 0.35);
+}
+
+.spotlight-ashy {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5), 0 0 12px rgba(245, 158, 11, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-ashy {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.6), 0 0 16px rgba(245, 158, 11, 0.35);
+}

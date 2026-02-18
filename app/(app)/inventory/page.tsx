@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import { format } from 'date-fns';
 import { InventoryView } from './components/inventory-view';
+import { getTableSettings } from './rc-in/actions';
 
 export default async function InventoryPage({
     searchParams
@@ -87,6 +88,8 @@ export default async function InventoryPage({
         location_ref: b.location_ref,
     }));
 
+    const initialSettings = await getTableSettings('rc_in');
+
     return (
         <InventoryView
             deliveries={deliveries}
@@ -94,6 +97,7 @@ export default async function InventoryPage({
             search={search}
             allSuppliers={allSuppliers}
             allLocations={allLocations}
+            initialSettings={initialSettings}
         />
     );
 }

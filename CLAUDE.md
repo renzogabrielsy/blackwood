@@ -8,7 +8,7 @@ The UX goal is an **Industrial Spreadsheet**: dense, keyboard-navigable tables t
 
 ## Skills
 
-This project uses the **`nextstack-design`** skill for UI and design guidance. When planning frontend features, designing UI components, or reviewing code quality, Claude will reference this skill for best practices on:
+This project uses the **`frontend-design`** skill for UI and design guidance. When planning frontend features, designing UI components, or reviewing code quality, Claude will reference this skill for best practices on:
 - Next.js App Router patterns and Server Components
 - shadcn/ui component composition and Tailwind CSS
 - Information-dense UI design (Notion/Raycast aesthetic)
@@ -73,7 +73,7 @@ supabase gen types typescript --linked > types/supabase.ts
 
 **Views:** `view_rc_in_master`
 **Functions:** `set_audit_comment(comment text)`
-**Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED`
+**Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED | SUNDRYING | SUNDRIED`
 
 Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
 
@@ -220,6 +220,7 @@ Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` 
 **Context file locations:**
 - `app/(app)/inventory/rc-in/CONTEXT.md` — RC IN (Delivery Master Log)
 - `app/(app)/inventory/rc-out/CONTEXT.md` — RC OUT (Inventory Usage)
+- `app/(app)/inventory/blocking/CONTEXT.md` — Blocking (Warehouse Grid Visualization)
 - `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
 - `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
 - `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
@@ -234,6 +235,10 @@ Create a new `CONTEXT.md` when a module reaches 3+ files AND 200+ total lines. U
 **Naming convention:**
 - Modules (directories): `CONTEXT.md`
 - Standalone components (single file in shared dir): `<NAME>.md` (e.g., `NAVBAR.md`)
+
+## Blocking Module
+
+The Blocking tab is the **primary tab** in the Inventory page — a warehouse grid visualization of 220 block locations across 4 warehouses (A/B/C/D). Uses `view_blocking_grid` SQL view for pre-computed data, CSS Grid heatmap cells, slide-over detail panel with delivery/usage history. See `app/(app)/inventory/blocking/CONTEXT.md` for full architecture. Key patterns: lazy-loaded via tab context (same as RC OUT), role-gated cost data, heatmap coloring by balance percentage, spotlight status filter with dim/glow effect.
 
 ## Git Workflow
 

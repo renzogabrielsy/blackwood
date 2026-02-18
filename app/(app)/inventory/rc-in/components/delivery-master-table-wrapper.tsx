@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
+import type { RcInTableSettings } from '@/types/table-settings';
 
 const DeliveryMasterTable = dynamic(
     () => import('../delivery-master-table').then(m => m.DeliveryMasterTable),
@@ -22,6 +23,7 @@ interface DeliveryMasterTableWrapperProps {
     search?: string;
     allSuppliers: string[];
     allLocations: string[];
+    initialSettings: RcInTableSettings;
 }
 
 export function DeliveryMasterTableWrapper(props: DeliveryMasterTableWrapperProps) {

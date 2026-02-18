@@ -212,6 +212,8 @@ export function useCellSelection(config: CellSelectionConfig) {
 
   const handleCellMouseDown = useCallback(
     (row: number, col: number, e: React.MouseEvent) => {
+      // Only respond to left-click (button 0) — ignore right-click / middle-click
+      if (e.button !== 0) return;
       if (!isColSelectable(col)) return;
 
       const coord = clamp({ row, col });

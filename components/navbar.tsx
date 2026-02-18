@@ -47,6 +47,15 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname === '/admin') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' };
     }
+    if (pathname === '/rcindraft1') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 1', pageDescription: 'Banded Zones' };
+    }
+    if (pathname === '/rcindraft2') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 2', pageDescription: 'Pinned Spine' };
+    }
+    if (pathname === '/rcindraft3') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 3', pageDescription: 'Density Tiers' };
+    }
     return null;
 }
 

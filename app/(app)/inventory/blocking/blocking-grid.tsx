@@ -5,10 +5,13 @@ import { cn } from '@/lib/utils';
 import { WAREHOUSES } from './constants';
 import type { BlockData } from './types';
 import { BlockingDetailPanel } from './blocking-detail-panel';
+import { useTableSettings } from '@/components/providers/table-settings';
+import { getLabHighlightText } from '@/types/table-settings';
+import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type StatusFilter = 'ALL' | 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED' | 'EMPTY';
+type StatusFilter = 'ALL' | 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED' | 'EMPTY' | 'WET' | 'ASHY';
 type SpotlightMatch = 'none' | 'match' | 'dimmed';
 type CellStatus = 'STORED' | 'IN-USE' | 'CLOSED' | 'FEED' | 'SUNDRYING' | 'SUNDRIED' | 'EMPTY';
 
@@ -34,16 +37,18 @@ interface GlobalStats {
   totalOccupied: number;
   totalSlots: number;
   utilization: string;
+  totalValue: number;
+  wtdAvgPhpKg: number | null;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function getHeatClass(balance: number, totalIn: number): string {
+function getBalanceTextClass(balance: number, totalIn: number): string {
   const pct = totalIn > 0 ? (balance / totalIn) * 100 : 0;
-  if (pct >= 50) return 'heat-full';
-  if (pct >= 20) return 'heat-healthy';
-  if (pct >= 10) return 'heat-depleting';
-  return 'heat-critical';
+  if (pct >= 50) return 'text-emerald-700 dark:text-emerald-400';
+  if (pct >= 20) return 'text-zinc-900 dark:text-white';
+  if (pct >= 10) return 'text-amber-600 dark:text-amber-400';
+  return 'text-red-600 dark:text-red-400';
 }
 
 function formatKg(val: number): string {
@@ -111,6 +116,8 @@ function getFilteredGlobalStats(activeWarehouses: Set<string>, data: Record<stri
   let totalBalance = 0;
   let totalOccupied = 0;
   let totalSlots = 0;
+  let totalValue = 0;
+  let priceWeightSum = 0;
 
   for (const [whseKey, whse] of Object.entries(WAREHOUSES)) {
     if (!activeWarehouses.has(whseKey)) continue;
@@ -122,6 +129,10 @@ function getFilteredGlobalStats(activeWarehouses: Set<string>, data: Record<stri
     if (!activeWarehouses.has(whseKey)) continue;
     totalOccupied++;
     totalBalance += block.balance;
+    if (block.php !== null && block.balance > 0) {
+      totalValue += block.php * block.balance;
+      priceWeightSum += block.balance;
+    }
   }
 
   return {
@@ -129,6 +140,8 @@ function getFilteredGlobalStats(activeWarehouses: Set<string>, data: Record<stri
     totalOccupied,
     totalSlots,
     utilization: totalSlots > 0 ? ((totalOccupied / totalSlots) * 100).toFixed(1) : '0.0',
+    totalValue,
+    wtdAvgPhpKg: priceWeightSum > 0 ? totalValue / priceWeightSum : null,
   };
 }
 
@@ -146,8 +159,32 @@ function getUtilizationGradient(pct: number): string {
 
 // ─── Spotlight Helpers ──────────────────────────────────────────────────────
 
-function computeSpotlight(statusFilter: StatusFilter, cellStatus: CellStatus): SpotlightMatch {
+function computeSpotlight(
+  statusFilter: StatusFilter,
+  cellStatus: CellStatus,
+  blockData?: BlockData,
+  labHighlights?: Record<LabMetric, LabHighlightSpec>,
+): SpotlightMatch {
   if (statusFilter === 'ALL') return 'none';
+
+  // Lab-based spotlights
+  if (statusFilter === 'WET' && blockData && labHighlights) {
+    const spec = labHighlights.mc;
+    if (spec.enabled && blockData.mc > spec.limit) return 'match';
+    return 'dimmed';
+  }
+  if (statusFilter === 'ASHY' && blockData && labHighlights) {
+    const spec = labHighlights.ash;
+    if (spec.enabled && blockData.ash > spec.limit) return 'match';
+    return 'dimmed';
+  }
+
+  // Lab filters on empty cells — always dimmed
+  if ((statusFilter === 'WET' || statusFilter === 'ASHY') && !blockData) {
+    return 'dimmed';
+  }
+
+  // Status-based (existing)
   if (statusFilter === cellStatus) return 'match';
   return 'dimmed';
 }
@@ -162,6 +199,8 @@ function getSpotlightClass(match: SpotlightMatch, statusFilter: StatusFilter): s
     case 'SUNDRYING': return 'spotlight-sundrying';
     case 'SUNDRIED': return 'spotlight-sundried';
     case 'EMPTY': return 'spotlight-empty';
+    case 'WET': return 'spotlight-wet';
+    case 'ASHY': return 'spotlight-ashy';
     default: return '';
   }
 }
@@ -177,6 +216,8 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
   const [selectedLocKey, setSelectedLocKey] = useState<string | null>(null);
   const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(new Set(['A', 'B', 'C', 'D']));
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+  const { settings } = useTableSettings();
+  const labHighlights = settings.labHighlights;
 
   const global = useMemo(
     () => getFilteredGlobalStats(activeWarehouses, data),
@@ -265,17 +306,6 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
         {/* Divider */}
         <div className="h-5 w-px bg-border" />
 
-        {/* Heatmap legend */}
-        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <LegendDot gradient="linear-gradient(135deg, #14532d, #16a34a)" label="> 50% Full" />
-          <LegendDot gradient="linear-gradient(135deg, #166534, #22c55e)" label="20-50% OK" />
-          <LegendDot gradient="linear-gradient(135deg, #92400e, #d97706)" label="10-20% Depleting" />
-          <LegendDot gradient="linear-gradient(135deg, #991b1b, #dc2626)" label="< 10% Critical" />
-        </div>
-
-        {/* Divider */}
-        <div className="h-5 w-px bg-border" />
-
         {/* Status filter toggles */}
         <div className="flex items-center gap-1.5 text-xs">
           <button
@@ -338,6 +368,35 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
             <span className="w-2.5 h-2.5 rounded-sm bg-muted border border-border inline-block" />
             Empty
           </button>
+
+          {/* Lab quality filter divider */}
+          <div className="h-5 w-px bg-border" />
+
+          {/* Lab quality filters */}
+          <button
+            onClick={() => handleToggleStatus('WET')}
+            className={cn(
+              'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border transition-all duration-150 cursor-pointer text-[10px]',
+              statusFilter === 'WET'
+                ? 'bg-blue-500/20 text-blue-400 border-blue-500/40'
+                : 'bg-blue-500/10 text-blue-400 border-blue-500/20 hover:bg-blue-500/15',
+            )}
+          >
+            <span className="w-[5px] h-[5px] rounded-full bg-blue-500 inline-block" />
+            Wet
+          </button>
+          <button
+            onClick={() => handleToggleStatus('ASHY')}
+            className={cn(
+              'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border transition-all duration-150 cursor-pointer text-[10px]',
+              statusFilter === 'ASHY'
+                ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                : 'bg-amber-500/10 text-amber-400 border-amber-500/20 hover:bg-amber-500/15',
+            )}
+          >
+            <span className="w-[5px] h-[5px] rounded-full bg-amber-500 inline-block" />
+            Ashy
+          </button>
         </div>
 
         {/* Divider */}
@@ -365,6 +424,30 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
               {global.utilization}%
             </div>
           </div>
+          {canViewPrices && global.totalValue > 0 && (
+            <>
+              <div className="h-8 w-px bg-border" />
+              <div className="text-right">
+                <div className="text-muted-foreground font-medium">Total Value</div>
+                <div className="text-foreground font-semibold font-mono flex justify-between gap-1">
+                  <span className="text-muted-foreground font-normal">&#8369;</span>
+                  <span>{Math.round(global.totalValue).toLocaleString()}</span>
+                </div>
+              </div>
+              {global.wtdAvgPhpKg !== null && (
+                <>
+                  <div className="h-8 w-px bg-border" />
+                  <div className="text-right">
+                    <div className="text-muted-foreground font-medium">Wtd Avg PHP/KG</div>
+                    <div className="text-foreground font-semibold font-mono flex justify-between gap-1">
+                      <span className="text-muted-foreground font-normal">&#8369;</span>
+                      <span>{global.wtdAvgPhpKg.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -379,6 +462,7 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
           onToggleStatus={handleToggleStatus}
           data={data}
           canViewPrices={canViewPrices}
+          labHighlights={labHighlights}
         />
       ))}
 
@@ -393,20 +477,6 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
   );
 }
 
-// ─── Legend Dot ──────────────────────────────────────────────────────────────
-
-function LegendDot({ gradient, label }: { gradient: string; label: string }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span
-        className="w-2.5 h-2.5 rounded-sm inline-block"
-        style={{ background: gradient }}
-      />
-      <span>{label}</span>
-    </div>
-  );
-}
-
 // ─── Warehouse Section ──────────────────────────────────────────────────────
 
 interface WarehouseSectionProps {
@@ -417,9 +487,10 @@ interface WarehouseSectionProps {
   onToggleStatus: (filter: StatusFilter) => void;
   data: Record<string, BlockData>;
   canViewPrices: boolean;
+  labHighlights: Record<LabMetric, LabHighlightSpec>;
 }
 
-function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices }: WarehouseSectionProps) {
+function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights }: WarehouseSectionProps) {
   const whse = WAREHOUSES[whseKey];
   const stats = getWarehouseStats(whseKey, data);
   const utilPct = parseFloat(stats.utilization);
@@ -584,6 +655,7 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               statusFilter={statusFilter}
               data={data}
               canViewPrices={canViewPrices}
+              labHighlights={labHighlights}
             />
           ))}
         </div>
@@ -620,9 +692,10 @@ interface WarehouseRowProps {
   statusFilter: StatusFilter;
   data: Record<string, BlockData>;
   canViewPrices: boolean;
+  labHighlights: Record<LabMetric, LabHighlightSpec>;
 }
 
-function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusFilter, data, canViewPrices }: WarehouseRowProps) {
+function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights }: WarehouseRowProps) {
   return (
     <>
       {/* Row label */}
@@ -641,7 +714,7 @@ function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusF
 
         if (blockData) {
           const cellStatus: CellStatus = blockData.status;
-          const spotlight = computeSpotlight(statusFilter, cellStatus);
+          const spotlight = computeSpotlight(statusFilter, cellStatus, blockData, labHighlights);
           const spotlightClass = getSpotlightClass(spotlight, statusFilter);
 
           return (
@@ -653,11 +726,12 @@ function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusF
               onClick={() => onCellClick(locKey)}
               spotlightClass={spotlightClass}
               canViewPrices={canViewPrices}
+              labHighlights={labHighlights}
             />
           );
         }
 
-        const spotlight = computeSpotlight(statusFilter, 'EMPTY');
+        const spotlight = computeSpotlight(statusFilter, 'EMPTY', undefined, labHighlights);
         const spotlightClass = getSpotlightClass(spotlight, statusFilter);
 
         return (
@@ -681,10 +755,13 @@ interface OccupiedCellProps {
   onClick: () => void;
   spotlightClass: string;
   canViewPrices: boolean;
+  labHighlights: Record<LabMetric, LabHighlightSpec>;
 }
 
-function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices }: OccupiedCellProps) {
-  const heatClass = getHeatClass(data.balance, data.total_in);
+function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights }: OccupiedCellProps) {
+  const balanceTextClass = getBalanceTextClass(data.balance, data.total_in);
+  const balancePct = data.total_in > 0 ? (data.balance / data.total_in) * 100 : 0;
+  const isCritical = balancePct < 10;
 
   // Split batch: "FEB-26-BLK3" -> "FEB 26" + "BLK3"
   const parts = data.batch_code.split('-');
@@ -693,7 +770,7 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
 
   return (
     <div
-      className={cn('blocking-cell', heatClass, isSelected && 'selected', spotlightClass)}
+      className={cn('blocking-cell blocking-cell-occupied', isSelected && 'selected', spotlightClass)}
       onClick={onClick}
     >
       <div className="h-full flex flex-col" style={{ gap: '2px', padding: '4px 5px' }}>
@@ -718,20 +795,24 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
 
         {/* Batch name (2 lines) */}
         <div
-          className="flex flex-col items-center bg-white/10 rounded-[3px] py-[1px]"
+          className="flex flex-col items-center bg-black/5 dark:bg-white/10 rounded-[3px] py-[1px]"
           style={{ margin: '0 -1px' }}
         >
-          <span className="font-bold text-white leading-[1.15] whitespace-nowrap" style={{ fontSize: '10px' }}>
+          <span className="font-bold text-zinc-900 dark:text-white leading-[1.15] whitespace-nowrap" style={{ fontSize: '10px' }}>
             {batchLine1}
           </span>
-          <span className="font-bold text-white leading-[1.15] whitespace-nowrap" style={{ fontSize: '10px' }}>
+          <span className="font-bold text-zinc-900 dark:text-white leading-[1.15] whitespace-nowrap" style={{ fontSize: '10px' }}>
             {batchLine2}
           </span>
         </div>
 
-        {/* Balance */}
+        {/* Balance — color coded by percentage */}
         <div
-          className="blocking-balance font-bold font-mono leading-none text-white flex justify-center items-baseline"
+          className={cn(
+            'blocking-balance font-bold font-mono leading-none flex justify-center items-baseline',
+            balanceTextClass,
+            isCritical && 'balance-critical',
+          )}
           style={{ fontSize: '10px', marginTop: '1px' }}
         >
           <span>{formatKg(data.balance)}</span>
@@ -741,7 +822,7 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
         <div className="mt-auto flex flex-col" style={{ paddingTop: '2px', gap: '1px' }}>
           {canViewPrices && (
             <div
-              className="font-mono font-bold leading-none text-white/95 flex justify-between"
+              className="font-mono font-bold leading-none text-zinc-800 dark:text-white/95 flex justify-between"
               style={{ fontSize: '10px' }}
             >
               <span>&#8369;</span>
@@ -749,17 +830,23 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
             </div>
           )}
           <div
-            className="font-mono font-bold leading-none text-white/95 flex justify-between"
+            className={cn(
+              'font-mono font-bold leading-none flex justify-between',
+              getLabHighlightText('ash', data.ash, labHighlights) || 'text-zinc-800 dark:text-white/95',
+            )}
             style={{ fontSize: '10px' }}
           >
-            <span>%</span>
+            <span>ASH</span>
             <span>{data.ash.toFixed(2)}</span>
           </div>
           <div
-            className="font-mono font-bold leading-none text-white/95 flex justify-between"
+            className={cn(
+              'font-mono font-bold leading-none flex justify-between',
+              getLabHighlightText('mc', data.mc, labHighlights) || 'text-zinc-800 dark:text-white/95',
+            )}
             style={{ fontSize: '10px' }}
           >
-            <span>%</span>
+            <span>MC</span>
             <span>{data.mc.toFixed(2)}</span>
           </div>
         </div>
@@ -779,7 +866,7 @@ function EmptyCell({ locKey, spotlightClass }: EmptyCellProps) {
   return (
     <div
       className={cn(
-        'bg-muted border border-border/50 rounded flex items-center justify-center',
+        'bg-zinc-300/70 dark:bg-zinc-800/80 border border-border/50 rounded flex items-center justify-center',
         spotlightClass,
       )}
     >

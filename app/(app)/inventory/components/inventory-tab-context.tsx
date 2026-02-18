@@ -1,8 +1,11 @@
 'use client';
 
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 export type InventoryTab = 'deliveries' | 'usage' | 'blocking';
+
+const VALID_TABS: InventoryTab[] = ['deliveries', 'usage', 'blocking'];
+const STORAGE_KEY = 'inventory_active_tab';
 
 interface InventoryTabContextType {
     activeTab: InventoryTab;
@@ -12,7 +15,21 @@ interface InventoryTabContextType {
 const InventoryTabContext = createContext<InventoryTabContextType | null>(null);
 
 export function InventoryTabProvider({ children }: { children: ReactNode }) {
-    const [activeTab, setActiveTab] = useState<InventoryTab>('blocking');
+    const [activeTab, setActiveTabState] = useState<InventoryTab>('deliveries');
+
+    // Sync from localStorage after hydration (avoids SSR mismatch)
+    useEffect(() => {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored && VALID_TABS.includes(stored as InventoryTab)) {
+            setActiveTabState(stored as InventoryTab);
+        }
+    }, []);
+
+    const setActiveTab = useCallback((tab: InventoryTab) => {
+        setActiveTabState(tab);
+        localStorage.setItem(STORAGE_KEY, tab);
+    }, []);
+
     return (
         <InventoryTabContext.Provider value={{ activeTab, setActiveTab }}>
             {children}

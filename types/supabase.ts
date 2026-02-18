@@ -145,6 +145,7 @@ export type Database = {
           current_weight: number | null
           id: string
           location_ref: string
+          notes: string | null
           quality_stats: Json | null
           status: Database["public"]["Enums"]["batch_status"] | null
           updated_at: string | null
@@ -156,6 +157,7 @@ export type Database = {
           current_weight?: number | null
           id?: string
           location_ref: string
+          notes?: string | null
           quality_stats?: Json | null
           status?: Database["public"]["Enums"]["batch_status"] | null
           updated_at?: string | null
@@ -167,6 +169,7 @@ export type Database = {
           current_weight?: number | null
           id?: string
           location_ref?: string
+          notes?: string | null
           quality_stats?: Json | null
           status?: Database["public"]["Enums"]["batch_status"] | null
           updated_at?: string | null
@@ -417,19 +420,48 @@ export type Database = {
           },
         ]
       }
+      user_table_settings: {
+        Row: {
+          id: string
+          module: string
+          settings: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          module?: string
+          settings?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          id?: string
+          module?: string
+          settings?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       view_blocking_grid: {
         Row: {
-          ash: number | null
+          avg_ash: number | null
+          avg_bd_astm: number | null
+          avg_bd_jis: number | null
+          avg_fc: number | null
+          avg_grit: number | null
+          avg_mc: number | null
+          avg_php_kg: number | null
+          avg_vm: number | null
           balance: number | null
           batch_code: string | null
           batch_id: string | null
-          bd: number | null
           block_loc: string | null
-          mc: number | null
-          php_per_kg: number | null
           status: string | null
+          total_in: number | null
         }
         Relationships: []
       }

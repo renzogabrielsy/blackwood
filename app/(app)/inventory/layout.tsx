@@ -1,3 +1,5 @@
+'use client';
+
 import { Card, CardContent } from '@/components/ui/card';
 import { InventorySheetTabs } from './components/sheet-tabs';
 import { InventoryTabProvider } from './components/inventory-tab-context';

@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
@@ -117,6 +118,7 @@ export function RcOutTable({
     blockLocs: string[];
     onRefresh?: () => Promise<void>;
 }) {
+    const searchParams = useSearchParams();
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
     const { hasPermission } = useAuth();
     const { setCellSelectionCount, setCellAggregates } = useStatusBar();
@@ -159,6 +161,31 @@ export function RcOutTable({
     // All data state — synced from props
     const [allData, setAllData] = React.useState<RcOutRow[]>(data);
     React.useEffect(() => { setAllData(data); }, [data]);
+
+    // ─── Auto-Edit from Blocking Panel ───────────────────────────────────
+    React.useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const editBatch = params.get('editBatch');
+        if (editBatch && allData.length > 0) {
+            // Match by production_batch or batches.batch_code
+            const matchingIds = allData
+                .filter(d => d.production_batch === editBatch || d.batches?.batch_code === editBatch)
+                .map(d => d.id);
+            if (matchingIds.length > 0) {
+                setSelectionMode(true);
+                setSelectedIds(new Set(matchingIds));
+                // Trigger bulk edit after a tick
+                setTimeout(() => {
+                    const matchingRows = allData.filter(d => matchingIds.includes(d.id));
+                    setEditRows(matchingRows);
+                }, 100);
+                // Clean up URL
+                params.delete('editBatch');
+                const qs = params.toString();
+                window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
+            }
+        }
+    }, [allData]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Client-side filtered data (order: STATE > YEAR > BATCH > PLANT/ETC > BLOCK LOC > search)
     const filteredData = React.useMemo(() => {

@@ -6,6 +6,7 @@ import { DeliveryMasterTableWrapper } from '../rc-in/components/delivery-master-
 import { RcOutLazyTab } from './rc-out-lazy-tab';
 import { BlockingLazyTab } from './blocking-lazy-tab';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
+import type { RcInTableSettings } from '@/types/table-settings';
 
 interface InventoryViewProps {
     deliveries: DeliveryHistoryRow[];
@@ -13,9 +14,10 @@ interface InventoryViewProps {
     search?: string;
     allSuppliers: string[];
     allLocations: string[];
+    initialSettings: RcInTableSettings;
 }
 
-export function InventoryView({ deliveries, batches, search, allSuppliers, allLocations }: InventoryViewProps) {
+export function InventoryView({ deliveries, batches, search, allSuppliers, allLocations, initialSettings }: InventoryViewProps) {
     const { activeTab } = useInventoryTab();
     const [displayTab, setDisplayTab] = useState<InventoryTab>(activeTab);
     const [transitioning, setTransitioning] = useState(false);
@@ -51,6 +53,7 @@ export function InventoryView({ deliveries, batches, search, allSuppliers, allLo
                     search={search}
                     allSuppliers={allSuppliers}
                     allLocations={allLocations}
+                    initialSettings={initialSettings}
                 />
             </div>
             <div className={getTabClass('usage')}>
