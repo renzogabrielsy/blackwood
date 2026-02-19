@@ -85,6 +85,14 @@ export interface ChartPreset {
   seriesKeys: string[]
 }
 
+export interface FiscalCalEntry {
+  x: number           // chronological index (0 = earliest data month)
+  calIdx: number      // 0-11 (Jan=0, Feb=1, ..., Dec=11)
+  fiscalYear: string  // plain calendar year string e.g. '2025', '2026'
+  fiscalMonth: number // 0-11 (Jan=0, Feb=1, ..., Dec=11) — same as calIdx
+  label: string       // e.g. 'Mar 2025'
+}
+
 export interface ChartConfig {
   xAxis: {
     labels: string[]              // all x-position labels e.g. 12 months
@@ -101,6 +109,8 @@ export interface ChartConfig {
   seriesGroups: ChartSeriesGroup[]
   presets: ChartPreset[]          // named quick-select groups
   defaultPreset: string
+  fiscalCalendar: FiscalCalEntry[]  // all months spanning the data range, chronological order
+  dataYears: string[]               // sorted calendar year strings, e.g. ['2023', '2024', '2025', '2026']
 }
 
 export type ChartType = 'line' | 'bar' | 'area' | 'scatter'

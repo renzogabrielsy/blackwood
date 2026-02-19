@@ -252,6 +252,25 @@ input[type=number] {
   transform-origin: right center;
 }
 
+/* KPI sticky bar — enter from top, exit to top */
+@keyframes bw-kpi-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bw-kpi-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-8px); }
+}
+
+.animate-kpi-enter {
+  animation: bw-kpi-enter 250ms ease-out both;
+}
+
+.animate-kpi-exit {
+  animation: bw-kpi-exit 200ms ease-in both;
+}
+
 /* Hover glow — card glow effect on hover */
 .hover-glow {
   transition: transform 200ms ease, box-shadow 200ms ease;

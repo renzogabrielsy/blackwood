@@ -22,14 +22,15 @@ import {
 } from './utils'
 import {
   CHARCOAL_UNIVERSAL_CONFIG,
-  PIVOT_MONTHS,
-  FISCAL_TO_CALENDAR,
-  CAL_MONTHS,
   SLICE_PALETTE,
   CHART_PALETTE,
-  DATA_YEARS,
-  CURRENT_YEAR,
 } from '@/lib/widgets/mock-data'
+
+/* Current calendar year (for "(Current)" label in dropdowns) */
+const CURRENT_YEAR = String(new Date().getFullYear())
+
+/* Calendar month labels (0=Jan … 11=Dec) used in range picker dropdowns */
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /* ===================================================
    Quarter Boundary SVG helper
@@ -139,13 +140,16 @@ function RechartsWidget({ config, settings, width, height, wTier, hTier, fs }: R
   let xDataKey: string
 
   if (isCompareMode) {
-    rows = CAL_MONTHS.map(calMonth => ({ calMonth } as Record<string, unknown>))
+    // Comparison mode: x-axis = calendar month abbreviation (Jan–Dec), one row per cal month
+    const CAL_MONTHS_ABBREV = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    rows = CAL_MONTHS_ABBREV.map(calMonth => ({ calMonth } as Record<string, unknown>))
     xDataKey = 'calMonth'
 
     for (const slice of settings.comparisonSlices!) {
-      const indices = getFilterIndices(slice.filter)
+      const indices = getFilterIndices(slice.filter, config.fiscalCalendar)
       for (const fiscalIdx of indices) {
-        const entry = FISCAL_TO_CALENDAR[fiscalIdx]
+        const entry = config.fiscalCalendar.find(e => e.x === fiscalIdx)
+        if (!entry) continue
         const rowIdx = entry.calIdx
         for (const s of config.series) {
           const pt = s.points.find(p => p.x === fiscalIdx)
@@ -156,10 +160,10 @@ function RechartsWidget({ config, settings, width, height, wTier, hTier, fs }: R
       }
     }
   } else {
-    const indices = getFilterIndices(settings.xFilter ?? { type: 'all' })
+    const indices = getFilterIndices(settings.xFilter ?? { type: 'all' }, config.fiscalCalendar)
     xDataKey = settings.xAxisKey
     rows = indices.map(i => {
-      const row: Record<string, unknown> = { month: PIVOT_MONTHS[i] }
+      const row: Record<string, unknown> = { month: config.xAxis.labels[i] }
       for (const s of config.series) {
         const pt = s.points.find(p => p.x === i)
         if (pt !== undefined) row[s.key] = pt.value
@@ -189,6 +193,7 @@ function RechartsWidget({ config, settings, width, height, wTier, hTier, fs }: R
     const sparkYS = ySeries[0]
     if (!sparkYS) return <div className="h-full w-full" />
     const field = allFields.find(f => f.key === sparkYS.key)
+    // rows is already built above — sparkline uses the same data
     return (
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={rows} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
@@ -256,11 +261,11 @@ function RechartsWidget({ config, settings, width, height, wTier, hTier, fs }: R
         return <Area key={dataKey} dataKey={dataKey} yAxisId={ys.axis}
           stroke={colorOverride} fill={colorOverride} fillOpacity={0.1}
           strokeWidth={1.5} strokeDasharray={strokeDash}
-          dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+          dot={{ r: 2 }} activeDot={{ r: 4 }} isAnimationActive={false} />
       default:
         return <Line key={dataKey} dataKey={dataKey} yAxisId={ys.axis}
           stroke={colorOverride} strokeWidth={1.5} strokeDasharray={strokeDash}
-          dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+          dot={{ r: 2 }} activeDot={{ r: 4 }} isAnimationActive={false} />
     }
   }
 
@@ -563,7 +568,7 @@ export function ChartWidget({
                             onChange={e => onSettingsChange({ xFilter: { type: 'range', range: { start: Number(e.target.value), end: settings.xFilter?.range?.end ?? 11 } } })}
                             className="flex-1 text-xs bg-muted/30 border border-border rounded px-2 py-1 text-foreground focus:outline-none cursor-pointer"
                           >
-                            {PIVOT_MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                            {MONTH_LABELS.map((m, i) => <option key={i} value={i}>{m}</option>)}
                           </select>
                           <span className="text-[10px] text-muted-foreground">to</span>
                           <select
@@ -571,7 +576,7 @@ export function ChartWidget({
                             onChange={e => onSettingsChange({ xFilter: { type: 'range', range: { start: settings.xFilter?.range?.start ?? 0, end: Number(e.target.value) } } })}
                             className="flex-1 text-xs bg-muted/30 border border-border rounded px-2 py-1 text-foreground focus:outline-none cursor-pointer"
                           >
-                            {PIVOT_MONTHS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+                            {MONTH_LABELS.map((m, i) => <option key={i} value={i}>{m}</option>)}
                           </select>
                           <button
                             type="button"
@@ -586,23 +591,20 @@ export function ChartWidget({
                         onChange={e => {
                           const v = e.target.value
                           if (v === 'all') onSettingsChange({ xFilter: { type: 'all' } })
-                          else if (DATA_YEARS.includes(v)) onSettingsChange({ xFilter: { type: 'year', year: v } })
-                          else if (v === 'Q1') onSettingsChange({ xFilter: { type: 'quarter', quarter: 'Q1' } })
-                          else if (v === 'Q2') onSettingsChange({ xFilter: { type: 'quarter', quarter: 'Q2' } })
-                          else if (v === 'Q3') onSettingsChange({ xFilter: { type: 'quarter', quarter: 'Q3' } })
-                          else if (v === 'Q4') onSettingsChange({ xFilter: { type: 'quarter', quarter: 'Q4' } })
+                          else if (v === 'Q1' || v === 'Q2' || v === 'Q3' || v === 'Q4') onSettingsChange({ xFilter: { type: 'quarter', quarter: v as 'Q1' | 'Q2' | 'Q3' | 'Q4' } })
                           else if (v === 'range') onSettingsChange({ xFilter: { type: 'range', range: { start: 0, end: 11 } } })
+                          else onSettingsChange({ xFilter: { type: 'year', year: v } })
                         }}
                         className="w-full text-xs bg-muted/30 border border-border rounded px-2 py-1 text-foreground focus:outline-none cursor-pointer"
                       >
-                        <option value="all">All (fiscal year)</option>
-                        {DATA_YEARS.map(yr => (
-                          <option key={yr} value={yr}>{yr === CURRENT_YEAR ? `${yr} (Current)` : yr}</option>
+                        <option value="all">All</option>
+                        {[...new Set([...config.dataYears, CURRENT_YEAR])].sort().map(yr => (
+                          <option key={yr} value={yr}>{yr}</option>
                         ))}
-                        <option value="Q1">Q1 (Mar--May)</option>
-                        <option value="Q2">Q2 (Jun--Aug)</option>
-                        <option value="Q3">Q3 (Sep--Nov)</option>
-                        <option value="Q4">Q4 (Dec--Feb)</option>
+                        <option value="Q1">Q1 (Jan–Mar)</option>
+                        <option value="Q2">Q2 (Apr–Jun)</option>
+                        <option value="Q3">Q3 (Jul–Sep)</option>
+                        <option value="Q4">Q4 (Oct–Dec)</option>
                         <option value="range">Custom range...</option>
                       </select>
                     )}
@@ -839,24 +841,37 @@ export function ChartWidget({
                           value={filterValue ?? 'all'}
                           onChange={e => {
                             const v = e.target.value
-                            let filter
+                            let filter: import('./types').TimeFilter
                             if (v === 'all') filter = { type: 'all' as const }
-                            else if (DATA_YEARS.includes(v)) filter = { type: 'year' as const, year: v }
                             else if (v === 'Q1') filter = { type: 'quarter' as const, quarter: 'Q1' as const }
                             else if (v === 'Q2') filter = { type: 'quarter' as const, quarter: 'Q2' as const }
                             else if (v === 'Q3') filter = { type: 'quarter' as const, quarter: 'Q3' as const }
                             else if (v === 'Q4') filter = { type: 'quarter' as const, quarter: 'Q4' as const }
-                            else filter = { type: 'all' as const }
+                            else filter = { type: 'year' as const, year: v }
+
+                            // Derive old auto-value for comparison
+                            const oldFilterValue = slice.filter.type === 'year' ? (slice.filter.year ?? '')
+                              : slice.filter.type === 'quarter' ? (slice.filter.quarter ?? '')
+                              : ''
+
+                            // Auto-update label if it's empty or matches the old auto-value
+                            const shouldAutoLabel = !slice.label || slice.label === oldFilterValue || slice.label === 'all'
+                            const newLabel = v === 'all' ? '' : v
+
                             const updated = (settings.comparisonSlices ?? []).map(s =>
-                              s.id === slice.id ? { ...s, filter } : s
+                              s.id === slice.id ? {
+                                ...s,
+                                filter,
+                                label: shouldAutoLabel ? newLabel : s.label,
+                              } : s
                             )
                             onSettingsChange({ comparisonSlices: updated })
                           }}
                           className="text-[9px] bg-muted/30 border border-border rounded px-1 py-0.5 text-foreground focus:outline-none cursor-pointer"
                         >
                           <option value="all">All</option>
-                          {DATA_YEARS.map(yr => (
-                            <option key={yr} value={yr}>{yr === CURRENT_YEAR ? `${yr} (Current)` : yr}</option>
+                          {[...new Set([...config.dataYears, CURRENT_YEAR])].sort().map(yr => (
+                            <option key={yr} value={yr}>{yr}</option>
                           ))}
                           <option value="Q1">Q1</option>
                           <option value="Q2">Q2</option>

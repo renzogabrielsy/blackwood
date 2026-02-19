@@ -2,26 +2,21 @@
 
 import { useState } from 'react'
 import { useWidgetSize } from '@/components/widgets/chart/utils'
-import { LEDGER } from '@/lib/widgets/mock-data'
+import type { ScatterPoint } from './types'
 
 /* ===================================================
    QualityScatterWidget — Quality vs Price scatter plot
    =================================================== */
 
-export function QualityScatterWidget() {
+interface QualityScatterWidgetProps {
+  data?: ScatterPoint[]
+}
+
+export function QualityScatterWidget({ data = [] }: QualityScatterWidgetProps) {
   const { wTier, hTier } = useWidgetSize()
   const [mode, setMode] = useState<'mc' | 'ash'>('mc')
 
   const effectiveMode = (wTier === 'sm' || wTier === 'xs') ? 'mc' : mode
-
-  const allMonths = LEDGER.flatMap(q => q.months)
-  const points = allMonths.map(m => ({
-    mc: m.mc,
-    ash: m.ash,
-    phpKg: m.phpKg,
-    label: m.label,
-    year: m.label.includes('2026') ? '2026' : '2025',
-  }))
 
   const W = 300, H = 180, PAD_L = 28, PAD_R = 12, PAD_T = 20, PAD_B = 24
   const chartW = W - PAD_L - PAD_R
@@ -136,7 +131,7 @@ export function QualityScatterWidget() {
 
         <rect x={PAD_L} y={PAD_T} width={chartW} height={chartH} fill="none" stroke="#71717a" strokeWidth="0.3" opacity="0.3" />
 
-        {points.map((p, i) => {
+        {data.map((p, i) => {
           const yVal = effectiveMode === 'mc' ? p.mc : p.ash
           const cx = xOf(Math.max(priceMin, Math.min(priceMax, p.phpKg)))
           const cy = yOf(Math.max(yMin, Math.min(yMax, yVal)))

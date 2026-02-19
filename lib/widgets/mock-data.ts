@@ -4,7 +4,11 @@ import type {
   UsageQuarter,
   UsageYear,
   ChartConfig,
+  FiscalCalEntry,
 } from '@/components/widgets/chart/types'
+import type { KPIData } from '@/components/widgets/kpi-strip/types'
+import type { WarehouseData } from '@/components/widgets/warehouse-occupancy/types'
+import type { ScatterPoint } from '@/components/widgets/quality-scatter/types'
 
 /* ===================================================
    Fiscal / Calendar Mapping
@@ -174,6 +178,20 @@ export const WAREHOUSE_LIST = [
   { label: 'D', occupied: 41, total: 80, phpKg: 45.90, mc: 11.5, ash: 3.8 },
 ]
 
+/** Typed static fallback for WarehouseOccupancyWidget adapter */
+export const CHARCOAL_WAREHOUSE_DATA: WarehouseData[] = WAREHOUSE_LIST
+
+/** Typed static fallback for QualityScatterWidget adapter */
+export const CHARCOAL_SCATTER_DATA: ScatterPoint[] = LEDGER.flatMap(q =>
+  q.months.map(m => ({
+    phpKg: m.phpKg,
+    mc: m.mc,
+    ash: m.ash,
+    label: m.label,
+    year: m.label.split(' ')[1] ?? '2025',
+  }))
+)
+
 /* ===================================================
    Pivot Matrix Data
    =================================================== */
@@ -200,11 +218,32 @@ export const PIVOT_DATA: PivotRow[] = [
    Charcoal Universal Chart Config
    =================================================== */
 
+/**
+ * Static calendar for the mock data (Mar 2025 – Feb 2026).
+ * x values 0–11 correspond to the 12 chronological months.
+ * fiscalYear = plain calendar year string ('2025' or '2026').
+ * fiscalMonth = calIdx = calendar month (Jan=0, Dec=11).
+ */
+const STATIC_FISCAL_CALENDAR: FiscalCalEntry[] = [
+  { x:  0, calIdx:  2, fiscalYear: '2025', fiscalMonth:  2, label: 'Mar 2025' },
+  { x:  1, calIdx:  3, fiscalYear: '2025', fiscalMonth:  3, label: 'Apr 2025' },
+  { x:  2, calIdx:  4, fiscalYear: '2025', fiscalMonth:  4, label: 'May 2025' },
+  { x:  3, calIdx:  5, fiscalYear: '2025', fiscalMonth:  5, label: 'Jun 2025' },
+  { x:  4, calIdx:  6, fiscalYear: '2025', fiscalMonth:  6, label: 'Jul 2025' },
+  { x:  5, calIdx:  7, fiscalYear: '2025', fiscalMonth:  7, label: 'Aug 2025' },
+  { x:  6, calIdx:  8, fiscalYear: '2025', fiscalMonth:  8, label: 'Sep 2025' },
+  { x:  7, calIdx:  9, fiscalYear: '2025', fiscalMonth:  9, label: 'Oct 2025' },
+  { x:  8, calIdx: 10, fiscalYear: '2025', fiscalMonth: 10, label: 'Nov 2025' },
+  { x:  9, calIdx: 11, fiscalYear: '2025', fiscalMonth: 11, label: 'Dec 2025' },
+  { x: 10, calIdx:  0, fiscalYear: '2026', fiscalMonth:  0, label: 'Jan 2026' },
+  { x: 11, calIdx:  1, fiscalYear: '2026', fiscalMonth:  1, label: 'Feb 2026' },
+]
+
 export const CHARCOAL_UNIVERSAL_CONFIG: ChartConfig = {
   xAxis: {
-    labels: ['Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb'],
-    showQuarterBoundaries: true,
-    quarterBoundaryPositions: [0.5, 3.5, 6.5, 9.5],
+    labels: STATIC_FISCAL_CALENDAR.map(e => e.label),
+    showQuarterBoundaries: false,
+    quarterBoundaryPositions: [],
   },
   yAxis: { unit: '\u20B1', unitPos: 'prefix' },
   seriesGroups: [
@@ -212,6 +251,7 @@ export const CHARCOAL_UNIVERSAL_CONFIG: ChartConfig = {
     { key: 'volume',  label: 'Volume',  unit: 'T', unitPos: 'suffix' },
     { key: 'quality', label: 'Quality', unit: '',  unitPos: 'suffix' },
     { key: 'ratio',   label: 'Ratio',   unit: '%', unitPos: 'suffix' },
+    { key: 'change',  label: 'Change',  unit: '%', unitPos: 'suffix' },
   ],
   series: [
     // Price group
@@ -256,13 +296,13 @@ export const CHARCOAL_UNIVERSAL_CONFIG: ChartConfig = {
         {x:8,value:869.7},{x:9,value:332.7},{x:10,value:633.3},{x:11,value:586.6},
       ],
     },
-    // Ratio group
+    // Change group
     {
-      key: 'mom_pct', label: 'MoM %', color: '#fbbf24', style: 'line', group: 'ratio',
+      key: 'mom_pct', label: 'MoM %', color: '#f472b6', style: 'line', group: 'change',
       points: [
-        {x:2,value:5.1},{x:3,value:9.4},{x:4,value:11.1},
-        {x:5,value:11.2},{x:6,value:1.3},{x:7,value:-0.4},{x:8,value:0.4},{x:9,value:3.2},
-        {x:10,value:2.8},{x:11,value:1.7},
+        {x:1,value:10.32},{x:2,value:5.09},{x:3,value:9.42},{x:4,value:11.09},
+        {x:5,value:11.21},{x:6,value:1.31},{x:7,value:-0.36},{x:8,value:0.38},{x:9,value:3.18},
+        {x:10,value:2.76},{x:11,value:1.72},
       ],
     },
     // Quality group
@@ -299,4 +339,53 @@ export const CHARCOAL_UNIVERSAL_CONFIG: ChartConfig = {
     { key: 'quality',    label: 'Quality',       seriesKeys: ['mc', 'ash', 'bd_astm'] },
   ],
   defaultPreset: 'trajectory',
+  fiscalCalendar: STATIC_FISCAL_CALENDAR,
+  dataYears: ['2025', '2026'],
 }
+
+/* ===================================================
+   Charcoal KPI Strip Data
+   =================================================== */
+
+export const CHARCOAL_KPI_DATA: KPIData[] = [
+  {
+    label: 'Total Inventory',
+    value: '9,100 T',
+    sub: '162 active batches',
+    pinned: true,
+  },
+  {
+    label: 'Warehouse',
+    value: '154/220 (70%)',
+    variant: 'progress',
+    thresholds: [
+      { value: 85, status: 'danger' },
+      { value: 70, status: 'warning' },
+      { value: 0, status: 'good' },
+    ],
+    drilldown: { href: '/inventory' },
+  },
+  {
+    label: 'Current PHP/KG',
+    value: '48.46',
+    prefix: '₱',
+    pinned: true,
+    sparkline: [44.2, 45.1, 44.8, 46.3, 46.72, 47.1, 47.64, 47.82, 48.46, 48.20, 47.90, 48.46],
+    comparison: {
+      value: '+₱1.74',
+      label: 'vs Jan',
+      trend: 'up',
+    },
+  },
+  {
+    label: 'Feb Flow',
+    value: '+587 T',
+    variant: 'flow',
+    flowData: {
+      inValue: '1,132 T',
+      outValue: '546 T',
+      netValue: '+587 T',
+    },
+    drilldown: { href: '/inventory' },
+  },
+]

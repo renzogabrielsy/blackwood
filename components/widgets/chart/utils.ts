@@ -1,6 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { SizeTier, WidgetSize, AvailableField, ChartConfig, TimeFilter } from './types'
-import { FISCAL_TO_CALENDAR, DATA_YEARS } from '@/lib/widgets/mock-data'
+import type { SizeTier, WidgetSize, AvailableField, ChartConfig, TimeFilter, FiscalCalEntry } from './types'
 
 /* ===================================================
    Widget Size Tier System
@@ -73,19 +72,35 @@ export function getAvailableFields(config: ChartConfig): AvailableField[] {
   ]
 }
 
-export function getFilterIndices(f: TimeFilter): number[] {
-  if (!f || f.type === 'all') return [0,1,2,3,4,5,6,7,8,9,10,11]
+function calMonthInQuarter(month: number, q: string): boolean {
+  // Plain calendar quarters: Q1 = Jan–Mar (0–2), Q2 = Apr–Jun (3–5), Q3 = Jul–Sep (6–8), Q4 = Oct–Dec (9–11)
+  const quarterMap: Record<string, number[]> = {
+    Q1: [0, 1, 2],   // Jan–Mar
+    Q2: [3, 4, 5],   // Apr–Jun
+    Q3: [6, 7, 8],   // Jul–Sep
+    Q4: [9, 10, 11], // Oct–Dec
+  }
+  return (quarterMap[q] ?? []).includes(month)
+}
+
+export function getFilterIndices(f: TimeFilter, fiscalCalendar: FiscalCalEntry[]): number[] {
+  if (!f || f.type === 'all') return fiscalCalendar.map(e => e.x)
+
   if (f.type === 'year') {
-    return FISCAL_TO_CALENDAR.filter(m => m.year === f.year).map(m => m.fiscalIdx)
+    // Plain calendar year string match: '2025', '2026', etc.
+    return fiscalCalendar.filter(e => e.fiscalYear === f.year).map(e => e.x)
   }
+
   if (f.type === 'quarter') {
-    const map: Record<string, number[]> = { Q1:[0,1,2], Q2:[3,4,5], Q3:[6,7,8], Q4:[9,10,11] }
-    return map[f.quarter!] ?? []
+    const q = f.quarter!
+    return fiscalCalendar.filter(e => calMonthInQuarter(e.fiscalMonth, q)).map(e => e.x)
   }
+
   if (f.type === 'range') {
-    const result: number[] = []
-    for (let i = f.range!.start; i <= f.range!.end; i++) result.push(i)
-    return result
+    return fiscalCalendar
+      .filter(e => e.fiscalMonth >= f.range!.start && e.fiscalMonth <= f.range!.end)
+      .map(e => e.x)
   }
-  return [0,1,2,3,4,5,6,7,8,9,10,11]
+
+  return fiscalCalendar.map(e => e.x)
 }

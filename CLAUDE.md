@@ -28,6 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | **Static adapter** | `lib/widgets/mock-data.ts` — a hardcoded adapter used for development, demos, and fallback. Not the charcoal data; a charcoal-shaped static implementation of the platform's widget interfaces. |
 | **Live adapter** | Future: `lib/widgets/adapters/charcoal-chart.ts`, etc. — fetches from Supabase and transforms to widget interfaces. |
 
+## Project Timeline (MANDATORY READ)
+
+**Before starting any work session, read `TIMELINE.md` at the project root.** It is the single source of truth for what phase the project is in, what's been completed, and what's next. Update it whenever you complete a task, start a new phase, or the scope changes.
+
+- **Current sprint** is always documented at the top of `TIMELINE.md`
+- **Phase doneness** is tracked via checkboxes (`[x]` done, `[/]` in progress, `[ ]` not started)
+- **Definition of Done** at the end of each phase defines completion criteria
+- **Changelog** at the bottom records all timeline updates with dates
+
 ## Skills
 
 This project uses the **`frontend-design`** skill for UI and design guidance. When planning frontend features, designing UI components, or reviewing code quality, Claude will reference this skill for best practices on:
@@ -342,6 +351,27 @@ The Blocking tab is the **primary tab** in the Inventory page — a warehouse gr
 ## Agent Model
 
 When spawning subagents via the `Task` tool, always use `model: 'sonnet'` (maps to `claude-sonnet-4-6`). Do not default to opus or haiku for implementation work in this project.
+
+## Agent Prompts
+
+All prompts written for Claude Code are saved as `.md` files in `.agents/prompts/`. This is canonical project behavior.
+
+**Why:** Pasting multi-step prompts directly into the terminal breaks formatting when they contain code fences, backticks, TypeScript, or SQL. A file sidesteps this entirely.
+
+**How to invoke a saved prompt in Claude Code:**
+```
+Read .agents/prompts/<filename>.md and follow the instructions.
+```
+
+**Naming convention:** Use kebab-case describing the task, e.g., `wire-supabase-adapters.md`, `kpi-strip-customization.md`.
+
+**When writing a prompt:**
+- No nested code fences — use indented prose to describe code shapes instead
+- Always start with: read TIMELINE.md, CLAUDE.md, and the relevant CONTEXT.md(s) before starting
+- Always include: enter plan mode first, get approval, then execute
+- Always end with: give me a summary of what was built, what files changed, and any decisions made
+
+**Prompt archive:** Every prompt lives permanently in `.agents/prompts/`. Do not delete old prompts — they serve as a history of intent and a reference for future agents.
 
 ## Git Workflow
 

@@ -70,7 +70,7 @@ DB triggers derive batch state (`status`, `avg_cost`, `current_weight`) automati
 
 ## Database
 
-**Tables:** `batches`, `deliveries`, `rc_out`, `profiles`, `audit_logs`, `audit_comments`, `notifications`, `notification_subscriptions`, `user_invites`
+**Tables:** `batches`, `deliveries`, `rc_out`, `profiles`, `audit_logs`, `audit_comments`, `notifications`, `notification_subscriptions`, `user_invites`, `user_dashboard_prefs` (per-user dashboard layout/settings, Supabase-primary persistence), `user_table_settings` (per-user per-module table display settings)
 
 **Views:** `view_rc_in_master`, `view_blocking_grid`
 
@@ -104,8 +104,9 @@ components/
   providers/                # Context providers (auth, theme)
 lib/
   widgets/
-    mock-data.ts            # Static adapter (charcoal-shaped, for dev/demo)
-    adapters/               # Future live adapters (charcoal-chart.ts, etc.)
+    mock-data.ts            # Static adapter (charcoal-shaped, fallback for dev/demo)
+    adapters/               # Live Supabase adapters: charcoal-kpi, charcoal-chart, charcoal-warehouse, charcoal-scatter
+  dashboard/                # Shared dashboard types (D6Prefs, LayoutItem) + profile-store (multi-profile localStorage)
   hooks/                    # Reusable hooks (cell selection, clipboard)
   supabase/                 # Client, server, admin Supabase clients
 types/                      # TypeScript type definitions

@@ -4,8 +4,12 @@ import { KPIStripWidget } from './kpi-strip/KPIStripWidget'
 import { QualityScatterWidget } from './quality-scatter/QualityScatterWidget'
 import { WarehouseOccupancyWidget } from './warehouse-occupancy/WarehouseOccupancyWidget'
 import type { ChartInstanceSettings } from './chart/types'
+import type { KPIStripSettings } from './kpi-strip/types'
+import type { WarehouseData } from './warehouse-occupancy/types'
+import type { ScatterPoint } from './quality-scatter/types'
 
 export { ChartWidget, KPIStripWidget, QualityScatterWidget, WarehouseOccupancyWidget }
+export type { WarehouseData, ScatterPoint }
 
 export interface WidgetDefinition {
   type: string
@@ -38,7 +42,7 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
     displayName: 'KPI Strip',
     description: 'Key performance indicators at a glance',
     defaultSize: { w: 12, h: 2, minW: 6, minH: 2 },
-    createDefaultSettings: () => ({}),
+    createDefaultSettings: (): KPIStripSettings => ({}),
     component: KPIStripWidget,
   },
   {
@@ -46,7 +50,7 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
     displayName: 'Quality Scatter',
     description: 'Quality metrics scatter plot',
     defaultSize: { w: 6, h: 5, minW: 4, minH: 4 },
-    createDefaultSettings: () => ({}),
+    createDefaultSettings: (): Record<string, never> => ({}),
     component: QualityScatterWidget,
   },
   {
@@ -54,7 +58,7 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
     displayName: 'Warehouse Occupancy',
     description: 'Block location occupancy overview',
     defaultSize: { w: 4, h: 4, minW: 3, minH: 3 },
-    createDefaultSettings: () => ({}),
+    createDefaultSettings: (): Record<string, never> => ({}),
     component: WarehouseOccupancyWidget,
   },
 ]
