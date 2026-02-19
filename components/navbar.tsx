@@ -56,6 +56,24 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname === '/rcindraft3') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 3', pageDescription: 'Density Tiers' };
     }
+    if (pathname === '/draft1') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 1', pageDescription: 'Ops Console — Industrial Control Room' };
+    }
+    if (pathname === '/draft2') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 2', pageDescription: "Director's Brief — Executive Overview" };
+    }
+    if (pathname === '/draft3') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 3', pageDescription: 'Pivot Matrix — Rotated Spreadsheet' };
+    }
+    if (pathname === '/draft4') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 4', pageDescription: 'Monthly Focus — Spotlight + Visual Inventory' };
+    }
+    if (pathname === '/draft5') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 5', pageDescription: 'Quarterly Ledger — Accordion Drilldown' };
+    }
+    if (pathname === '/draft6') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 6', pageDescription: 'Modular Dashboard — Drag & Drop Grid' };
+    }
     return null;
 }
 

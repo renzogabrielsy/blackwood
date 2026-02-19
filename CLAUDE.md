@@ -2,9 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Blackwood** is an industrial inventory management system for a charcoal processing plant. It follows a "Separate Inputs, Unified State" philosophy — each module (RC IN, RC OUT, PRODUCTION, etc.) captures data independently, while the database unifies state via triggers and views.
+## Platform Philosophy
 
-The UX goal is an **Industrial Spreadsheet**: dense, keyboard-navigable tables that feel like Excel but enforce data integrity underneath.
+**Blackwood is a general-purpose modular BI platform, not a charcoal plant tool.** Charcoal plant operations (RC IN, RC OUT, Blocking) are the first tenant on the platform — a real-world proof of concept. The platform itself must remain genuinely open to any inventory or operational domain without a rewrite.
+
+**Inspiration: Grafana's data source model.** Grafana itself does not store data. It acts as a visualization and interaction layer, pulling information from selected data sources. Every data source emits a normalized data frame. Visualizations consume frames, never raw queries. Blackwood follows the same model: widgets consume normalized, data-agnostic interfaces (`ChartConfig`, `KPIData`, etc.) — never raw Supabase queries.
+
+**Architecture: Hexagonal (Ports & Adapters).** The widget is the application core. The "port" is the typed interface it declares (`ChartConfig`, `KPIData`, `ScatterPoint[]`). The "adapter" is whoever fills it — today a static mock adapter, tomorrow a live Supabase adapter. The widget is permanently isolated from the adapter. This vocabulary is canonical throughout the codebase.
+
+**Layer separation rule:** If code lives in `components/widgets/` or `components/dashboard/`, it is **platform code** — zero tenant knowledge allowed. If it lives in `app/(app)/inventory/`, `lib/widgets/adapters/`, or `lib/widgets/mock-data.ts`, it is **tenant code** — domain-specific is expected and correct. Never add domain/tenant knowledge to platform-layer components.
+
+**Two coexisting UX paradigms:**
+- **Dashboard (`/`):** Composable widget grid — drag/resize/add, like a Bloomberg terminal. High information density, visual-first, no page reloads. **Platform layer.**
+- **Inventory pages (`/inventory/...`):** Industrial Spreadsheet — dense, keyboard-navigable tables that feel like Excel but enforce data integrity underneath. These stay as dedicated pages forever (too specialized for generic widgets). **Tenant/domain layer.**
+
+## Platform Vocabulary
+
+| Term | Meaning |
+|------|---------|
+| **Platform layer** | Widgets, dashboard shell, widget registry — source-agnostic by design, domain-neutral |
+| **Domain module** | RC IN, RC OUT, Blocking — charcoal-specific. The first tenant on the platform. |
+| **Tenant** | An organization/domain using the platform. Blackwood charcoal is Tenant #1. Adapters, domain modules, and business logic are always tenant-specific. |
+| **Data-agnostic interface** | The typed contract a widget accepts: `ChartConfig`, `KPIData`, `ScatterPoint[]`, etc. Equivalent to Grafana's "data frame." |
+| **Adapter** | Pure function — transforms any data source's raw output into the widget's data-agnostic interface. Lives in `lib/widgets/adapters/`. |
+| **Static adapter** | `lib/widgets/mock-data.ts` — a hardcoded adapter used for development, demos, and fallback. Not the charcoal data; a charcoal-shaped static implementation of the platform's widget interfaces. |
+| **Live adapter** | Future: `lib/widgets/adapters/charcoal-chart.ts`, etc. — fetches from Supabase and transforms to widget interfaces. |
 
 ## Skills
 
@@ -55,6 +77,10 @@ No test framework is configured.
 - **URL search params** drive filters, pagination, and navigation state (not React state)
 
 **Path alias:** `@/*` maps to project root.
+
+**Two-layer data flow:**
+- **Platform layer (widgets):** Widget → data-agnostic interface (`ChartConfig`, `KPIData`) → adapter fills interface → widget renders. Widget has zero knowledge of Supabase, charcoal, or any domain.
+- **Domain layer (inventory modules):** User Action → Client Component → Server Action → Supabase → `revalidatePath()` → Re-render. This is the tenant-specific CRUD layer.
 
 ## Database Schema (Supabase)
 
@@ -218,10 +244,12 @@ Each major module has a co-located `.md` context file documenting its files, dat
 Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` first. Check for `CONTEXT.md` in the working directory and parent directories.
 
 **Context file locations:**
+- `app/(app)/CONTEXT.md` — Dashboard (modular widget grid, localStorage prefs)
 - `app/(app)/inventory/rc-in/CONTEXT.md` — RC IN (Delivery Master Log)
 - `app/(app)/inventory/rc-out/CONTEXT.md` — RC OUT (Inventory Usage)
 - `app/(app)/inventory/blocking/CONTEXT.md` — Blocking (Warehouse Grid Visualization)
 - `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
+- `components/widgets/CONTEXT.md` — Widget System (registry, size tiers, how to add a widget)
 - `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
 - `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
 - `components/NOTIFICATIONS.md` — Notifications (realtime bell)
@@ -236,9 +264,84 @@ Create a new `CONTEXT.md` when a module reaches 3+ files AND 200+ total lines. U
 - Modules (directories): `CONTEXT.md`
 - Standalone components (single file in shared dir): `<NAME>.md` (e.g., `NAVBAR.md`)
 
+## Widget System
+
+Blackwood's dashboard at `/` is a composable grid of widgets. Each widget is a self-contained display component — it never imports from Supabase directly. Data flows in via a **static adapter** (`lib/widgets/mock-data.ts`) today — a charcoal-shaped static implementation of the platform's data-agnostic widget interfaces. Real **live adapters** (`lib/widgets/adapters/`) will drop in alongside without any changes to widgets.
+
+### Widget Interface Contract
+
+```typescript
+// Every widget component accepts these props at minimum:
+interface WidgetProps<TSettings> {
+  instanceId: string
+  settings: TSettings
+  onSettingsChange: (partial: Partial<TSettings>) => void
+}
+
+// Registry entry (components/widgets/index.ts):
+interface WidgetDefinition {
+  type: string
+  displayName: string
+  description: string
+  defaultSize: { w: number; h: number; minW?: number; minH?: number }
+  createDefaultSettings: () => unknown
+  component: React.ComponentType<any>
+}
+```
+
+### Current Widget Catalog
+
+| Widget | Component | Description |
+|--------|-----------|-------------|
+| `chart` | `ChartWidget` | Multi-series price/quality chart with comparison slices, X/Y builder, font scale |
+| `kpi-strip` | `KPIStripWidget` | Responsive KPI chips — adapts layout by size tier |
+| `quality-scatter` | `QualityScatterWidget` | SVG scatter (PHP/KG vs MC/ASH) |
+| `warehouse-occupancy` | `WarehouseOccupancyWidget` | WHSE A/B/C/D occupancy bars |
+
+### How to Add a New Widget Type
+
+1. Create `components/widgets/<name>/<Name>Widget.tsx` — export a named React component
+2. Call `useWidgetSize()` from `@/components/widgets/chart/utils` for responsive behavior
+3. Add an entry to `WIDGET_REGISTRY` in `components/widgets/index.ts`
+4. Widget receives no required props beyond what `WidgetShell` provides via `WidgetSizeContext`
+
+### Widget Size Tier System
+
+`WidgetShell` measures the content area via `ResizeObserver` and provides `WidgetSize` via `WidgetSizeContext`. Tiers: `xs` (<160px) | `sm` (160–280px) | `md` (280–440px) | `lg` (440–640px) | `xl` (>640px). Apply the same breakpoints to height for `heightTier`.
+
+### Dashboard Shell
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `DashboardGrid` | `components/dashboard/DashboardGrid.tsx` | Layout state, localStorage prefs, edit mode, ReactGridLayout |
+| `WidgetShell` | `components/dashboard/WidgetShell.tsx` | Generic frame: title bar, collapse, remove, ResizeObserver |
+| `WidgetPicker` | `components/dashboard/WidgetPicker.tsx` | "Add widget" modal — reads from WIDGET_REGISTRY |
+
+Layout and per-widget settings persist to localStorage key `bw_d6_prefs`. CSS imports for ReactGridLayout (`react-grid-layout/css/styles.css`, `react-resizable/css/styles.css`) live in `DashboardGrid.tsx`.
+
+## Adapter Layer
+
+Adapters translate any data source's raw output into the data-agnostic interface a widget declares. They are the only place where tenant/domain knowledge meets the platform layer.
+
+**Current adapter:**
+- `lib/widgets/mock-data.ts` — static adapter. Exports `CHARCOAL_UNIVERSAL_CONFIG`, `LEDGER`, `USAGE_LEDGER`, etc. These are charcoal-shaped implementations of platform interfaces — not the "real" data, but structurally identical to what a live adapter would produce.
+
+**Future adapters (to be built per user approval):**
+- `lib/widgets/adapters/charcoal-chart.ts` — queries Supabase views and transforms to `ChartConfig`
+- `lib/widgets/adapters/charcoal-kpi.ts` — queries KPI aggregates and transforms to `KPIData[]`
+
+**Rules:**
+- Widgets consume normalized interfaces — never raw data or Supabase queries
+- Adapters are pure functions — no React, no rendering logic, no knowledge of which widget will consume their output
+- When a live adapter replaces a static adapter, the widget requires zero changes
+
 ## Blocking Module
 
 The Blocking tab is the **primary tab** in the Inventory page — a warehouse grid visualization of 220 block locations across 4 warehouses (A/B/C/D). Uses `view_blocking_grid` SQL view for pre-computed data, CSS Grid heatmap cells, slide-over detail panel with delivery/usage history. See `app/(app)/inventory/blocking/CONTEXT.md` for full architecture. Key patterns: lazy-loaded via tab context (same as RC OUT), role-gated cost data, heatmap coloring by balance percentage, spotlight status filter with dim/glow effect.
+
+## Agent Model
+
+When spawning subagents via the `Task` tool, always use `model: 'sonnet'` (maps to `claude-sonnet-4-6`). Do not default to opus or haiku for implementation work in this project.
 
 ## Git Workflow
 

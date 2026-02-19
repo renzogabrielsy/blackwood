@@ -3,6 +3,8 @@
 ## Purpose
 Persistent navigation bar (302 lines, `components/navbar.tsx`). Owns ALL page titles/descriptions via `getBreadcrumb()`. Dark-themed in both modes.
 
+> **Platform Chrome:** The navbar is platform-level chrome — it must remain domain-neutral. Module links are tenant-registered navigation entries, not hardcoded to charcoal. Any future tenant module is registered in `getBreadcrumb()` and the `MODULES` constant the same way.
+
 ## Layout (3-column)
 - **Left:** Breadcrumb — `<- Back to {parent} / Page Title` + muted description
 - **Center:** "Blackwood" logo (always visible, links to `/`)

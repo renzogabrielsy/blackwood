@@ -3,6 +3,8 @@
 ## Purpose
 Global authentication and permission context (180 lines, `components/providers/auth-context.tsx`). Every module consumes `useAuth()` for role checks and permission gating.
 
+> **Platform Infrastructure:** Auth is platform infrastructure. Roles (`Owner`, `Admin`, `Dev`, `Production`, `Accounting`) and permissions are intentionally domain-neutral — they are general-purpose labels, not charcoal-specific. Any future tenant uses the same permission matrix unchanged.
+
 ## Exports
 - `AuthProvider` — wraps app in auth context
 - `useAuth()` — hook returning `{ user, role, dbRole, displayName, avatarUrl, setRole, hasPermission, signOut, isLoading }`

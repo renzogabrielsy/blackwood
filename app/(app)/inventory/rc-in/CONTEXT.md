@@ -3,6 +3,8 @@
 ## Purpose
 Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste support, keyboard navigation, audit trails, and role-based cost visibility.
 
+> **Domain Module (Charcoal Tenant):** This module is domain-specific — it belongs to the charcoal plant operations layer, not the platform layer. Business logic, schema references, and terminology here are intentionally charcoal-specific. When adapters are built for the dashboard widgets, they will extract data from these tables — but widgets themselves will never import from this module.
+
 ## Files
 | File | Lines | Role |
 |------|-------|------|

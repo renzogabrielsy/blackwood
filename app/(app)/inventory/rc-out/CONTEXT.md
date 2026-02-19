@@ -3,6 +3,8 @@
 ## Purpose
 Tracks raw charcoal consumption/depletion from batches. Excel-like grid input with virtual scroll table, computed pricing columns, and batch code resolution. All data loaded upfront with client-side filtering.
 
+> **Domain Module (Charcoal Tenant):** This module is domain-specific — it belongs to the charcoal plant operations layer, not the platform layer. Business logic, schema references, and terminology here are intentionally charcoal-specific. When adapters are built for the dashboard widgets, they will extract data from these tables — but widgets themselves will never import from this module.
+
 ## Files
 | File | Lines | Role |
 |------|-------|------|

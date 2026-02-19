@@ -3,6 +3,8 @@
 ## Purpose
 Whitelist-based user invitation, role assignment, and soft-delete access control. Only accessible to Owner/Admin/Dev roles.
 
+> **Platform Infrastructure:** Admin is platform-level infrastructure — it manages access control for all tenants and modules, not charcoal-specific logic. Auth, roles, and invitations are intentionally domain-neutral and will work identically for any future tenant on the platform.
+
 ## Files
 | File | Lines | Role |
 |------|-------|------|
