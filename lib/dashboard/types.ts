@@ -6,6 +6,7 @@
 
 import type { ChartInstanceSettings } from '@/components/widgets/chart/types'
 import type { KPIStripSettings } from '@/components/widgets/kpi-strip/types'
+import type { SpecialChartSettings } from '@/components/widgets/special-chart/types'
 
 export type LayoutItem = { i: string; x: number; y: number; w: number; h: number }
 
@@ -18,4 +19,6 @@ export interface D6Prefs {
   stickyKpi?: boolean
   /** Layout snapshot saved immediately before pinning, used to restore on unpin */
   prePinLayout?: LayoutItem[]
+  /** Persisted settings for the Special Chart widget */
+  specialChartSettings?: SpecialChartSettings
 }

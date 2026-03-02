@@ -8,7 +8,8 @@ import type {
 } from '@/components/widgets/chart/types'
 import type { KPIData } from '@/components/widgets/kpi-strip/types'
 import type { WarehouseData } from '@/components/widgets/warehouse-occupancy/types'
-import type { ScatterPoint } from '@/components/widgets/quality-scatter/types'
+import type { SpecialChartData } from '@/components/widgets/special-chart/types'
+import { CHARCOAL_FIELDS } from '@/lib/widgets/adapters/charcoal-special'
 
 /* ===================================================
    Fiscal / Calendar Mapping
@@ -181,16 +182,57 @@ export const WAREHOUSE_LIST = [
 /** Typed static fallback for WarehouseOccupancyWidget adapter */
 export const CHARCOAL_WAREHOUSE_DATA: WarehouseData[] = WAREHOUSE_LIST
 
-/** Typed static fallback for QualityScatterWidget adapter */
-export const CHARCOAL_SCATTER_DATA: ScatterPoint[] = LEDGER.flatMap(q =>
-  q.months.map(m => ({
-    phpKg: m.phpKg,
-    mc: m.mc,
-    ash: m.ash,
-    label: m.label,
-    year: m.label.split(' ')[1] ?? '2025',
-  }))
-)
+const MOCK_SCATTER_QUARTER_OF: Record<string, string> = {
+  Jan: 'Q1', Feb: 'Q1', Mar: 'Q1',
+  Apr: 'Q2', May: 'Q2', Jun: 'Q2',
+  Jul: 'Q3', Aug: 'Q3', Sep: 'Q3',
+  Oct: 'Q4', Nov: 'Q4', Dec: 'Q4',
+}
+
+/** Typed static fallback for SpecialChartWidget adapter */
+export const CHARCOAL_SPECIAL_DATA: SpecialChartData = {
+  fields: CHARCOAL_FIELDS,
+  rows: LEDGER.flatMap(q =>
+    q.months.map(m => {
+      const [mon, yr] = m.label.split(' ')
+      const year = yr ?? '2025'
+      const quarterLabel = MOCK_SCATTER_QUARTER_OF[mon] ?? 'Q1'
+      const quarter = `${year}-${quarterLabel}`
+      // Derive month string — parse month abbreviation to 0-based index
+      const MONTH_IDX: Record<string, string> = {
+        Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+        Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12',
+      }
+      const monthNum = MONTH_IDX[mon] ?? '01'
+      const monthStr = `${year}-${monthNum}`
+      const weightKg = m.weightT * 1000
+
+      return {
+        date: `${year}-${monthNum}-01`,
+        year,
+        month: monthStr,
+        monthLabel: m.label,
+        quarter,
+        supplier: null,
+        batchCode: null,
+        blockLoc: null,
+        warehouse: null,
+        truckPlate: null,
+        sacks: null,
+        weightKg,
+        phpKg: m.phpKg,
+        phpTotal: m.phpKg * weightKg,
+        mc: m.mc,
+        ash: m.ash,
+        bdAstm: m.bdAstm,
+        bdJis: m.bdJis ?? null,
+        grit: m.grit ?? null,
+        vm: m.vm ?? null,
+        fc: m.fc ?? null,
+      }
+    })
+  ),
+}
 
 /* ===================================================
    Pivot Matrix Data

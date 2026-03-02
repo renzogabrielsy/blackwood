@@ -4,7 +4,7 @@ import { DashboardShell } from '@/components/dashboard/DashboardShell'
 import { charcoalKpiAdapter } from '@/lib/widgets/adapters/charcoal-kpi'
 import { charcoalChartAdapter } from '@/lib/widgets/adapters/charcoal-chart'
 import { charcoalWarehouseAdapter } from '@/lib/widgets/adapters/charcoal-warehouse'
-import { charcoalScatterAdapter } from '@/lib/widgets/adapters/charcoal-scatter'
+import { charcoalSpecialAdapter } from '@/lib/widgets/adapters/charcoal-special'
 import { loadDashboardPrefs } from '@/app/(app)/actions'
 
 function formatAdapterError(adapterId: string, reason: unknown): string {
@@ -20,12 +20,12 @@ function formatAdapterError(adapterId: string, reason: unknown): string {
 export default async function DashboardPage() {
   const supabase = await createClient()
 
-  const [kpiResult, chartResult, warehouseResult, scatterResult, prefsResult] =
+  const [kpiResult, chartResult, warehouseResult, specialChartResult, prefsResult] =
     await Promise.allSettled([
       charcoalKpiAdapter.fetch(supabase),
       charcoalChartAdapter.fetch(supabase),
       charcoalWarehouseAdapter.fetch(supabase),
-      charcoalScatterAdapter.fetch(supabase),
+      charcoalSpecialAdapter.fetch(supabase),
       loadDashboardPrefs(),
     ])
 
@@ -49,10 +49,10 @@ export default async function DashboardPage() {
           ? formatAdapterError('charcoal-warehouse', warehouseResult.reason)
           : undefined
       }
-      scatterData={scatterResult.status === 'fulfilled' ? scatterResult.value : undefined}
-      scatterError={
-        scatterResult.status === 'rejected'
-          ? formatAdapterError('charcoal-scatter', scatterResult.reason)
+      specialChartData={specialChartResult.status === 'fulfilled' ? specialChartResult.value : undefined}
+      specialChartError={
+        specialChartResult.status === 'rejected'
+          ? formatAdapterError('charcoal-special', specialChartResult.reason)
           : undefined
       }
       serverPrefs={prefsResult.status === 'fulfilled' ? prefsResult.value ?? undefined : undefined}

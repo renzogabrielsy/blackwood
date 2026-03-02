@@ -66,7 +66,8 @@ export const charcoalChartAdapter: WidgetAdapter<ChartConfig> = {
   async fetch(client) {
     // Paginated fetch helper to bypass PostgREST max_rows (1000)
     const PAGE = 1000
-    async function fetchAll<T>(buildQuery: () => ReturnType<typeof client.from>): Promise<T[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
       let all: T[] = []
       let from = 0
       let hasMore = true

@@ -10,14 +10,14 @@ import { WIDGET_REGISTRY } from '@/components/widgets'
 import { ChartWidget } from '@/components/widgets/chart/ChartWidget'
 import { KPIStripWidget } from '@/components/widgets/kpi-strip/KPIStripWidget'
 import { KPIStripSettingsPopover } from '@/components/widgets/kpi-strip/settings-popover'
-import { QualityScatterWidget } from '@/components/widgets/quality-scatter/QualityScatterWidget'
+import { SpecialChartWidget } from '@/components/widgets/special-chart/SpecialChartWidget'
 import { WarehouseOccupancyWidget } from '@/components/widgets/warehouse-occupancy/WarehouseOccupancyWidget'
 import type { ChartInstanceSettings } from '@/components/widgets/chart/types'
 import type { ChartConfig, WidgetSize } from '@/components/widgets/chart/types'
 import { WidgetSizeContext } from '@/components/widgets/chart/utils'
 import type { KPIData, KPIStripSettings } from '@/components/widgets/kpi-strip/types'
 import type { WarehouseData } from '@/components/widgets/warehouse-occupancy/types'
-import type { ScatterPoint } from '@/components/widgets/quality-scatter/types'
+import type { SpecialChartData, SpecialChartSettings } from '@/components/widgets/special-chart/types'
 import { WidgetShell } from './WidgetShell'
 import { WidgetPicker } from './WidgetPicker'
 import { WidgetError } from './WidgetError'
@@ -44,8 +44,8 @@ export interface DashboardGridProps {
   chartError?: string
   warehouseData?: WarehouseData[]
   warehouseError?: string
-  scatterData?: ScatterPoint[]
-  scatterError?: string
+  specialChartData?: SpecialChartData
+  specialChartError?: string
   /** Server-fetched preferences used to seed the initial grid state, bypassing localStorage cold-start */
   serverPrefs?: D6Prefs
 }
@@ -57,13 +57,13 @@ export interface DashboardGridProps {
 const DEFAULT_LAYOUT: LayoutItem[] = [
   { i: 'kpi-strip',           x: 0, y: 0,  w: 12, h: 2 },
   { i: 'price-trajectory',    x: 0, y: 2,  w: 4,  h: 7 },
-  { i: 'quality-scatter',     x: 4, y: 2,  w: 4,  h: 7 },
+  { i: 'special-chart',       x: 4, y: 2,  w: 4,  h: 7 },
   { i: 'warehouse-occupancy', x: 8, y: 2,  w: 4,  h: 7 },
 ]
 
 export const DEFAULT_PREFS: D6Prefs = {
   layout: DEFAULT_LAYOUT,
-  visibleModules: ['kpi-strip', 'price-trajectory', 'quality-scatter', 'warehouse-occupancy'],
+  visibleModules: ['kpi-strip', 'price-trajectory', 'special-chart', 'warehouse-occupancy'],
   collapsed: [],
   widgetSettings: {
     'price-trajectory': {
@@ -76,6 +76,7 @@ export const DEFAULT_PREFS: D6Prefs = {
   kpiSettings: {},
   stickyKpi: false,
   prePinLayout: undefined,
+  specialChartSettings: { chartType: 'scatter', granularity: 'month', quarterFilter: [], showRefLines: true },
 }
 
 /* ===================================================
@@ -138,14 +139,37 @@ function loadPrefs(seed?: D6Prefs): D6Prefs {
       if (!s.comparisonSlices) s.comparisonSlices = []
     }
 
+    // Migrate: remap 'quality-scatter' → 'special-chart' in visibleModules and layout
+    const rawVisible: string[] = raw.visibleModules ?? DEFAULT_PREFS.visibleModules
+    const migratedVisible = rawVisible.map(m => m === 'quality-scatter' ? 'special-chart' : m)
+
+    const rawLayout: LayoutItem[] = raw.layout ?? DEFAULT_PREFS.layout
+    const migratedLayout = rawLayout.map(l =>
+      l.i === 'quality-scatter' ? { ...l, i: 'special-chart' } : l,
+    )
+
+    // Migrate: carry over scatterSettings → specialChartSettings (preserving granularity / quarterFilter / showRefLines)
+    const rawPrefs = raw as unknown as Record<string, unknown>
+    let specialChartSettings: SpecialChartSettings | undefined = raw.specialChartSettings
+    if (!specialChartSettings && rawPrefs.scatterSettings) {
+      const old = rawPrefs.scatterSettings as Record<string, unknown>
+      specialChartSettings = {
+        chartType: 'scatter',
+        granularity: (old.granularity as SpecialChartSettings['granularity']) ?? 'month',
+        quarterFilter: (old.quarterFilter as string[]) ?? [],
+        showRefLines: (old.showRefLines as boolean) ?? true,
+      }
+    }
+
     return {
-      layout: raw.layout ?? DEFAULT_PREFS.layout,
-      visibleModules: raw.visibleModules ?? DEFAULT_PREFS.visibleModules,
+      layout: migratedLayout,
+      visibleModules: migratedVisible,
       collapsed: raw.collapsed ?? DEFAULT_PREFS.collapsed,
       widgetSettings,
       kpiSettings: raw.kpiSettings ?? {},
       stickyKpi: raw.stickyKpi ?? false,
       prePinLayout: raw.prePinLayout,
+      specialChartSettings: specialChartSettings ?? {},
     }
   } catch {
     return DEFAULT_PREFS
@@ -281,6 +305,17 @@ export function DashboardGrid(props: DashboardGridProps) {
     if (partial.period !== undefined) {
       fetchKpiData(partial.period).then(setLiveKpiData).catch(() => {})
     }
+  }, [])
+
+  const handleSpecialChartSettingsChange = useCallback((partial: Partial<SpecialChartSettings>) => {
+    setPrefs(prev => {
+      const next: D6Prefs = {
+        ...prev,
+        specialChartSettings: { ...prev.specialChartSettings, ...partial },
+      }
+      savePrefs(next)
+      return next
+    })
   }, [])
 
   const handleLayoutChange = useCallback((newLayout: RGLLayout) => {
@@ -473,10 +508,16 @@ export function DashboardGrid(props: DashboardGridProps) {
         />
       )
     }
-    if (id === 'quality-scatter') {
-      if (props.scatterError) return <WidgetError message={props.scatterError} />
-      if (!props.scatterData) return <WidgetError message="[Blackwood] Adapter 'charcoal-scatter' returned no data." />
-      return <QualityScatterWidget data={props.scatterData} />
+    if (id === 'special-chart') {
+      if (props.specialChartError) return <WidgetError message={props.specialChartError} />
+      if (!props.specialChartData) return <WidgetError message="[Blackwood] Adapter 'charcoal-special' returned no data." />
+      return (
+        <SpecialChartWidget
+          data={props.specialChartData}
+          settings={prefs.specialChartSettings}
+          onSettingsChange={handleSpecialChartSettingsChange}
+        />
+      )
     }
     if (id === 'warehouse-occupancy') {
       if (props.warehouseError) return <WidgetError message={props.warehouseError} />

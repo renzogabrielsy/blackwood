@@ -1,15 +1,15 @@
 import type React from 'react'
 import { ChartWidget } from './chart/ChartWidget'
 import { KPIStripWidget } from './kpi-strip/KPIStripWidget'
-import { QualityScatterWidget } from './quality-scatter/QualityScatterWidget'
+import { SpecialChartWidget } from './special-chart/SpecialChartWidget'
 import { WarehouseOccupancyWidget } from './warehouse-occupancy/WarehouseOccupancyWidget'
 import type { ChartInstanceSettings } from './chart/types'
 import type { KPIStripSettings } from './kpi-strip/types'
 import type { WarehouseData } from './warehouse-occupancy/types'
-import type { ScatterPoint } from './quality-scatter/types'
+import type { SpecialChartSettings, SpecialChartData } from './special-chart/types'
 
-export { ChartWidget, KPIStripWidget, QualityScatterWidget, WarehouseOccupancyWidget }
-export type { WarehouseData, ScatterPoint }
+export { ChartWidget, KPIStripWidget, SpecialChartWidget, WarehouseOccupancyWidget }
+export type { WarehouseData, SpecialChartData, SpecialChartSettings }
 
 export interface WidgetDefinition {
   type: string
@@ -31,8 +31,8 @@ const defaultChartSettings: ChartInstanceSettings = {
 export const WIDGET_REGISTRY: WidgetDefinition[] = [
   {
     type: 'chart',
-    displayName: 'Price Chart',
-    description: 'Multi-series price and quality trends',
+    displayName: 'Regular Chart',
+    description: 'Line, bar, area charts with dual Y-axis and comparison',
     defaultSize: { w: 8, h: 6, minW: 4, minH: 4 },
     createDefaultSettings: (): ChartInstanceSettings => ({ ...defaultChartSettings }),
     component: ChartWidget,
@@ -46,12 +46,17 @@ export const WIDGET_REGISTRY: WidgetDefinition[] = [
     component: KPIStripWidget,
   },
   {
-    type: 'quality-scatter',
-    displayName: 'Quality Scatter',
-    description: 'Quality metrics scatter plot',
+    type: 'special-chart',
+    displayName: 'Special Chart',
+    description: 'Scatter, pie, donut — fully customizable',
     defaultSize: { w: 6, h: 5, minW: 4, minH: 4 },
-    createDefaultSettings: (): Record<string, never> => ({}),
-    component: QualityScatterWidget,
+    createDefaultSettings: (): SpecialChartSettings => ({
+      chartType: 'scatter',
+      granularity: 'month',
+      showRefLines: true,
+      quarterFilter: [],
+    }),
+    component: SpecialChartWidget,
   },
   {
     type: 'warehouse-occupancy',
