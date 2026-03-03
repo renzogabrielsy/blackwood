@@ -1,5 +1,21 @@
 # Supabase Backend Engineer Memory
 
+## RLS Policy Conventions (2026-03-02)
+
+### Core Tables: deliveries, batches, rc_out
+**Migration:** `fix_rls_require_authenticated`
+
+All three tables previously had `{public}` role policies (anonymous access). Fixed to `{authenticated}` only. Pattern used:
+- SELECT: `TO authenticated USING (true)`
+- INSERT: `TO authenticated WITH CHECK (true)`
+- UPDATE: `TO authenticated USING (true) WITH CHECK (true)`
+- DELETE: `TO authenticated USING (true)`
+
+The `USING (true)` / `WITH CHECK (true)` advisor warnings are intentional — app-layer role checks handle data scrubbing beyond authentication. Do NOT add row-level predicates to these policies.
+
+### Views: view_blocking_grid, view_rc_in_master
+Both are `SECURITY INVOKER` (Postgres default for views). They inherit RLS from underlying tables — no separate policy needed. Owner is `postgres`. Neither has SECURITY DEFINER.
+
 ## Database Schema Insights
 
 ### user_table_settings Table (Added 2026-02-18)

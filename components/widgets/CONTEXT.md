@@ -18,7 +18,7 @@ Reusable, self-contained visualization widgets for the modular dashboard at `/`.
 - `special-chart/pie-renderer.tsx` — SVG pie/donut renderer. Standard arc path math, `GENERIC_PALETTE` coloring, donut center total, `<title>` tooltips.
 - `special-chart/SpecialChartWidget.tsx` — widget shell. Dispatches to `ScatterRenderer` or `PieRenderer` based on `chartType`. Settings popover with chart type toggle, conditional field selectors, granularity picker, quarter filter tree (indeterminate checkboxes). Zero domain knowledge.
 - `warehouse-occupancy/types.ts` — `WarehouseData` interface (the warehouse occupancy port)
-- `warehouse-occupancy/WarehouseOccupancyWidget.tsx` — WHSE A/B/C/D occupancy progress bars with inline stats. Accepts `data: WarehouseData[]` prop. Computes total footer dynamically. Zero domain knowledge.
+- `warehouse-occupancy/WarehouseOccupancyWidget.tsx` — WHSE A/B/C/D occupancy progress bars with inline stats. Accepts `data: WarehouseData[]` prop. Computes total footer dynamically. Zero domain knowledge. Responsive via `useWidgetSize()`: xs/sm width shows minimal single-letter labels + compact bars; md shows partial stats (PHP/KG, MC); lg/xl shows full stats (PHP/KG, MC, ASH). Footer adapts label and format by width tier. Height tier controls vertical spacing and footer visibility.
 
 ## How to Add a New Widget Type
 1. Create `components/widgets/<name>/<Name>Widget.tsx` — export a named React component
@@ -220,6 +220,7 @@ Categorical fields are ordered so default `colorBy` is Year.
 - `components/ui/popover` — settings popover in `ChartWidget` and `SpecialChartWidget`
 - `lib/widgets/mock-data.ts` — static data fallbacks: `CHARCOAL_UNIVERSAL_CONFIG`, `CHARCOAL_KPI_DATA`, `CHARCOAL_WAREHOUSE_DATA`, `CHARCOAL_SPECIAL_DATA`, `LEDGER`, `USAGE_LEDGER`, `WAREHOUSE_LIST`, `PIVOT_MONTHS`, `FISCAL_TO_CALENDAR`, `SLICE_PALETTE`, `CHART_PALETTE`
 - `lib/widgets/adapters/` — live Supabase adapters: `charcoalKpiAdapter`, `charcoalChartAdapter`, `charcoalWarehouseAdapter`, `charcoalSpecialAdapter`
+- `lib/widgets/adapters/tenant-config.ts` — centralized tenant field/series/preset definitions. Both `charcoal-special.ts` and `charcoal-chart.ts` import from here instead of defining inline. Contains `CHARCOAL_FIELD_CONFIG`, `CHARCOAL_FIELDS`, `CHARCOAL_CHART_CONFIG`.
 
 ## See Also
 - `components/dashboard/DashboardGrid.tsx` — consumes `WIDGET_REGISTRY` and renders widgets inside `WidgetShell`. Now accepts `DashboardGridProps` with optional live data props including `specialChartData` / `specialChartError`.

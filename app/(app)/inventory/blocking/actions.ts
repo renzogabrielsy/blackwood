@@ -11,17 +11,32 @@ export async function fetchBlockingGridData(): Promise<BlockingGridData> {
   try {
     const supabase = await createClient();
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) return empty;
-
-    const role = await getUserRole(user.id);
-    const canViewPrices = role !== 'Production';
+    // Determine price visibility — default to hidden (safe) if auth unavailable.
+    // Don't hard-gate the grid query on getUser(): a stale/expired session token
+    // would silently return empty data. The view is readable by authenticated/anon.
+    let canViewPrices = false;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const role = await getUserRole(user.id);
+        canViewPrices = role !== 'Production';
+      }
+    } catch {
+      // Auth check failed — proceed with canViewPrices = false
+    }
 
     const { data: rows, error } = await supabase
       .from('view_blocking_grid')
       .select('*');
 
-    if (error || !rows) return { blocks: {}, canViewPrices };
+    if (error) {
+      console.error('[Blocking] view_blocking_grid query error:', error);
+      return { blocks: {}, canViewPrices };
+    }
+    if (!rows || rows.length === 0) {
+      console.warn('[Blocking] view_blocking_grid returned no rows');
+      return { blocks: {}, canViewPrices };
+    }
 
     const blocks: BlockingGridData['blocks'] = {};
 
@@ -44,7 +59,8 @@ export async function fetchBlockingGridData(): Promise<BlockingGridData> {
     }
 
     return { blocks, canViewPrices };
-  } catch {
+  } catch (err) {
+    console.error('[Blocking] fetchBlockingGridData failed:', err);
     return empty;
   }
 }

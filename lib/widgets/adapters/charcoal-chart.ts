@@ -1,14 +1,15 @@
 /* ===================================================
    Charcoal Chart Adapter — Live Supabase → ChartConfig
    Tenant: Charcoal Plant Operations
+
+   Series metadata (keys, labels, colors, styles, groups) and presets
+   imported from tenant-config.ts — the single source of truth for
+   charcoal chart configuration.
    =================================================== */
 
 import type { WidgetAdapter } from './types'
 import type { ChartConfig, ChartDataPoint, FiscalCalEntry } from '@/components/widgets/chart/types'
-import {
-  CHART_PALETTE,
-  SLICE_PALETTE,
-} from '@/lib/widgets/mock-data'
+import { CHARCOAL_CHART_CONFIG, SLICE_PALETTE } from './tenant-config'
 
 /* ---------- Calendar year / month helpers ---------- */
 
@@ -188,151 +189,84 @@ export const charcoalChartAdapter: WidgetAdapter<ChartConfig> = {
       return points
     }
 
-    const phpKgInPoints = makePoints(acc =>
-      acc.rcInKg > 0 ? acc.weightedPhpIn / acc.rcInKg : null,
-    )
-
-    const rcInVolumePoints = makePoints(acc =>
-      acc.rcInKg > 0 ? acc.rcInKg / 1000 : null, // convert kg → tonnes
-    )
-
-    const rcOutVolumePoints = makePoints(acc =>
-      acc.rcOutKg > 0 ? acc.rcOutKg / 1000 : null,
-    )
-
-    const netStockPoints = makePoints(acc => {
-      const netKg = acc.rcInKg - acc.rcOutKg
-      return acc.rcInKg > 0 || acc.rcOutKg > 0 ? netKg / 1000 : null
-    })
-
-    const mcPoints = makePoints(acc =>
-      acc.rcInKg > 0 ? acc.weightedMc / acc.rcInKg : null,
-    )
-
-    const ashPoints = makePoints(acc =>
-      acc.rcInKg > 0 ? acc.weightedAsh / acc.rcInKg : null,
-    )
-
-    const bdAstmPoints = makePoints(acc =>
-      acc.rcInKg > 0 ? acc.weightedBdAstm / acc.rcInKg : null,
-    )
-
-    const momPctPoints: ChartDataPoint[] = []
-    for (let i = 1; i < fiscalCalendar.length; i++) {
-      const curr = fiscalCalendar[i]
-      const prev = fiscalCalendar[i - 1]
-      const currAcc = yearAccs.get(curr.fiscalYear)![curr.fiscalMonth]
-      const prevAcc = yearAccs.get(prev.fiscalYear)![prev.fiscalMonth]
-      if (currAcc.rcInKg > 0 && prevAcc.rcInKg > 0 && prevAcc.weightedPhpIn > 0) {
-        const currPhp = currAcc.weightedPhpIn / currAcc.rcInKg
-        const prevPhp = prevAcc.weightedPhpIn / prevAcc.rcInKg
-        momPctPoints.push({ x: curr.x, value: parseFloat(((currPhp - prevPhp) / prevPhp * 100).toFixed(2)) })
-      }
+    /* ---- Map series keys to their computed data points ---- */
+    const seriesPointsMap: Record<string, ChartDataPoint[]> = {
+      php_kg_in: makePoints(acc =>
+        acc.rcInKg > 0 ? acc.weightedPhpIn / acc.rcInKg : null,
+      ),
+      php_kg_out: [], // rc_out has no price stored — zeroed per plan
+      rcin_volume: makePoints(acc =>
+        acc.rcInKg > 0 ? acc.rcInKg / 1000 : null, // convert kg → tonnes
+      ),
+      rcout_volume: makePoints(acc =>
+        acc.rcOutKg > 0 ? acc.rcOutKg / 1000 : null,
+      ),
+      net_stock: makePoints(acc => {
+        const netKg = acc.rcInKg - acc.rcOutKg
+        return acc.rcInKg > 0 || acc.rcOutKg > 0 ? netKg / 1000 : null
+      }),
+      mc: makePoints(acc =>
+        acc.rcInKg > 0 ? acc.weightedMc / acc.rcInKg : null,
+      ),
+      ash: makePoints(acc =>
+        acc.rcInKg > 0 ? acc.weightedAsh / acc.rcInKg : null,
+      ),
+      bd_astm: makePoints(acc =>
+        acc.rcInKg > 0 ? acc.weightedBdAstm / acc.rcInKg : null,
+      ),
+      mom_pct: (() => {
+        const points: ChartDataPoint[] = []
+        for (let i = 1; i < fiscalCalendar.length; i++) {
+          const curr = fiscalCalendar[i]
+          const prev = fiscalCalendar[i - 1]
+          const currAcc = yearAccs.get(curr.fiscalYear)![curr.fiscalMonth]
+          const prevAcc = yearAccs.get(prev.fiscalYear)![prev.fiscalMonth]
+          if (currAcc.rcInKg > 0 && prevAcc.rcInKg > 0 && prevAcc.weightedPhpIn > 0) {
+            const currPhp = currAcc.weightedPhpIn / currAcc.rcInKg
+            const prevPhp = prevAcc.weightedPhpIn / prevAcc.rcInKg
+            points.push({ x: curr.x, value: parseFloat(((currPhp - prevPhp) / prevPhp * 100).toFixed(2)) })
+          }
+        }
+        return points
+      })(),
     }
 
-    /* ---------- Assemble ChartConfig ---------- */
+    /* ---------- Assemble ChartConfig from tenant config ---------- */
+    const cfg = CHARCOAL_CHART_CONFIG
+
     const config: ChartConfig = {
       xAxis: {
         labels: fiscalCalendar.map(e => e.label),
         showQuarterBoundaries: false, // quarter boundaries less meaningful across multi-year span
         quarterBoundaryPositions: [],
       },
-      yAxis: { unit: '\u20B1', unitPos: 'prefix' },
-      seriesGroups: [
-        { key: 'price',   label: 'Price',   unit: '\u20B1', unitPos: 'prefix' },
-        { key: 'volume',  label: 'Volume',  unit: 'T',      unitPos: 'suffix' },
-        { key: 'quality', label: 'Quality', unit: '',       unitPos: 'suffix' },
-        { key: 'ratio',   label: 'Ratio',   unit: '%',      unitPos: 'suffix' },
-        { key: 'change',  label: 'Change',  unit: '%',      unitPos: 'suffix' },
-      ],
-      series: [
-        {
-          key: 'php_kg_in',
-          label: 'PHP/KG In',
-          color: CHART_PALETTE[0],  // blue
-          style: 'area',
-          group: 'price',
-          points: phpKgInPoints,
-        },
-        {
-          key: 'php_kg_out',
-          label: 'PHP/KG Out',
-          color: CHART_PALETTE[1],  // purple
-          style: 'dashed',
-          group: 'price',
-          points: [],  // rc_out has no price stored — zeroed per plan
-        },
-        {
-          key: 'rcin_volume',
-          label: 'RC IN (T)',
-          color: CHART_PALETTE[2],  // green
-          style: 'bar',
-          group: 'volume',
-          points: rcInVolumePoints,
-        },
-        {
-          key: 'rcout_volume',
-          label: 'RC OUT (T)',
-          color: CHART_PALETTE[3],  // red
-          style: 'bar',
-          group: 'volume',
-          points: rcOutVolumePoints,
-        },
-        {
-          key: 'net_stock',
-          label: 'Net Stock (T)',
-          color: CHART_PALETTE[9],  // emerald
-          style: 'line',
-          group: 'volume',
-          points: netStockPoints,
-        },
-        {
-          key: 'mc',
-          label: 'MC',
-          color: CHART_PALETTE[5],  // cyan
-          style: 'line',
-          group: 'quality',
-          points: mcPoints,
-        },
-        {
-          key: 'ash',
-          label: 'ASH',
-          color: CHART_PALETTE[6],  // orange
-          style: 'line',
-          group: 'quality',
-          points: ashPoints,
-        },
-        {
-          key: 'bd_astm',
-          label: 'BD ASTM',
-          color: CHART_PALETTE[7],  // violet
-          style: 'line',
-          group: 'quality',
-          points: bdAstmPoints,
-        },
-        {
-          key: 'mom_pct',
-          label: 'MoM %',
-          color: CHART_PALETTE[8],  // pink/amber
-          style: 'line',
-          group: 'change',
-          points: momPctPoints,
-        },
-      ],
-      presets: [
-        { key: 'trajectory', label: 'Trajectory',   seriesKeys: ['php_kg_in'] },
-        { key: 'spread',     label: 'Price Spread', seriesKeys: ['php_kg_in', 'php_kg_out'] },
-        { key: 'volume',     label: 'Volume',       seriesKeys: ['rcin_volume', 'rcout_volume'] },
-        { key: 'combo',      label: 'Vol + Price',  seriesKeys: ['rcin_volume', 'rcout_volume', 'php_kg_in'] },
-        { key: 'quality',    label: 'Quality',      seriesKeys: ['mc', 'ash', 'bd_astm'] },
-      ],
-      defaultPreset: 'trajectory',
+      yAxis: { unit: cfg.yAxisUnit, unitPos: cfg.yAxisUnitPos },
+      seriesGroups: cfg.seriesGroups.map(g => ({
+        key: g.key,
+        label: g.label,
+        unit: g.unit,
+        unitPos: g.unitPos,
+      })),
+      series: cfg.series.map(s => ({
+        key: s.key,
+        label: s.label,
+        color: s.color,
+        style: s.style,
+        group: s.group,
+        points: seriesPointsMap[s.key] ?? [],
+      })),
+      presets: cfg.presets.map(p => ({
+        key: p.key,
+        label: p.label,
+        seriesKeys: p.seriesKeys,
+      })),
+      defaultPreset: cfg.defaultPreset,
       fiscalCalendar,
       dataYears: sortedYears, // plain calendar year strings: ['2020', ..., '2026']
     }
 
     // If no data was loaded from Supabase, return empty config so fallback is triggered upstream
-    if (phpKgInPoints.length === 0 && rcInVolumePoints.length === 0) {
+    if ((seriesPointsMap.php_kg_in?.length ?? 0) === 0 && (seriesPointsMap.rcin_volume?.length ?? 0) === 0) {
       throw new Error('No chart data available — falling back to static adapter')
     }
 

@@ -129,7 +129,7 @@ export function ScatterRenderer({
         x={PAD_L + chartW / 2}
         y={H - 3}
         fontSize="7"
-        fill="#71717a"
+        fill="var(--foreground)"
         textAnchor="middle"
       >
         {xUnit ? `${xLabel} (${xUnit})` : xLabel}
@@ -140,7 +140,7 @@ export function ScatterRenderer({
         x="6"
         y={PAD_T + chartH / 2}
         fontSize="7"
-        fill="#71717a"
+        fill="var(--foreground)"
         textAnchor="middle"
         transform={`rotate(-90, 6, ${PAD_T + chartH / 2})`}
       >
@@ -153,24 +153,24 @@ export function ScatterRenderer({
           <line
             x1={xRefX} y1={PAD_T}
             x2={xRefX} y2={PAD_T + chartH}
-            stroke="#f59e0b" strokeWidth="0.6" strokeDasharray="3,3" opacity="0.5"
+            stroke="#f59e0b" strokeWidth="0.6" strokeDasharray="3,3" opacity="0.7"
           />
           <line
             x1={PAD_L} y1={yRefY}
             x2={PAD_L + chartW} y2={yRefY}
-            stroke="#f59e0b" strokeWidth="0.6" strokeDasharray="3,3" opacity="0.5"
+            stroke="#f59e0b" strokeWidth="0.6" strokeDasharray="3,3" opacity="0.7"
           />
           {showRefLineLabels && (
             <>
               <text
                 x={xRefX + 2} y={PAD_T + 8}
-                fontSize="5.5" fill="#f59e0b" opacity="0.6"
+                fontSize="5.5" fill="#f59e0b" opacity="0.8"
               >
                 {xUnit}{xRef.toFixed(1)}
               </text>
               <text
                 x={PAD_L + chartW - 2} y={yRefY - 2}
-                fontSize="5.5" fill="#f59e0b" opacity="0.6"
+                fontSize="5.5" fill="#f59e0b" opacity="0.8"
                 textAnchor="end"
               >
                 {formatRefLabel(yRef, yUnit)}
@@ -183,10 +183,10 @@ export function ScatterRenderer({
       {/* Quadrant labels */}
       {showQuadrantLabels && hasData && (
         <>
-          <text x={PAD_L + 6}          y={PAD_T + chartH - 6} fontSize="6" fill="#71717a" opacity="0.35">low {xLabel}</text>
-          <text x={PAD_L + chartW - 6} y={PAD_T + chartH - 6} fontSize="6" fill="#71717a" opacity="0.35" textAnchor="end">high {xLabel}</text>
-          <text x={PAD_L + 6}          y={PAD_T + 12}          fontSize="6" fill="#71717a" opacity="0.35">low {xLabel}</text>
-          <text x={PAD_L + chartW - 6} y={PAD_T + 12}          fontSize="6" fill="#71717a" opacity="0.35" textAnchor="end">high {xLabel}</text>
+          <text x={PAD_L + 6}          y={PAD_T + chartH - 6} fontSize="6" fill="var(--muted-foreground)" opacity="0.55">low {xLabel}</text>
+          <text x={PAD_L + chartW - 6} y={PAD_T + chartH - 6} fontSize="6" fill="var(--muted-foreground)" opacity="0.55" textAnchor="end">high {xLabel}</text>
+          <text x={PAD_L + 6}          y={PAD_T + 12}          fontSize="6" fill="var(--muted-foreground)" opacity="0.55">low {xLabel}</text>
+          <text x={PAD_L + chartW - 6} y={PAD_T + 12}          fontSize="6" fill="var(--muted-foreground)" opacity="0.55" textAnchor="end">high {xLabel}</text>
         </>
       )}
 
@@ -196,9 +196,9 @@ export function ScatterRenderer({
           <line
             x1={xOf(v)} y1={PAD_T + chartH}
             x2={xOf(v)} y2={PAD_T + chartH + 3}
-            stroke="#71717a" strokeWidth="0.5" opacity="0.5"
+            stroke="var(--border)" strokeWidth="0.5"
           />
-          <text x={xOf(v)} y={PAD_T + chartH + 11} fontSize="6.5" fill="#71717a" textAnchor="middle">
+          <text x={xOf(v)} y={PAD_T + chartH + 11} fontSize="6.5" fill="var(--foreground)" textAnchor="middle">
             {formatTick(v)}
           </text>
         </g>
@@ -210,9 +210,9 @@ export function ScatterRenderer({
           <line
             x1={PAD_L - 3} y1={yOf(v)}
             x2={PAD_L} y2={yOf(v)}
-            stroke="#71717a" strokeWidth="0.5" opacity="0.5"
+            stroke="var(--border)" strokeWidth="0.5"
           />
-          <text x={PAD_L - 5} y={yOf(v) + 2.5} fontSize="6.5" fill="#71717a" textAnchor="end">
+          <text x={PAD_L - 5} y={yOf(v) + 2.5} fontSize="6.5" fill="var(--foreground)" textAnchor="end">
             {formatTick(v)}
           </text>
         </g>
@@ -222,14 +222,14 @@ export function ScatterRenderer({
       <rect
         x={PAD_L} y={PAD_T}
         width={chartW} height={chartH}
-        fill="none" stroke="#71717a" strokeWidth="0.3" opacity="0.3"
+        fill="none" stroke="var(--border)" strokeWidth="0.3"
       />
 
       {/* Data points */}
       {displayPoints.map((p, i) => {
         const cx = xOf(Math.max(xScale.axisMin, Math.min(xScale.axisMax, p.x)))
         const cy = yOf(Math.max(yScaleData.axisMin, Math.min(yScaleData.axisMax, p.y)))
-        const color = colorMap.get(p.colorValue) ?? '#71717a'
+        const color = colorMap.get(p.colorValue) ?? '#94a3b8'
         return (
           <circle
             key={i}
@@ -254,10 +254,9 @@ export function ScatterRenderer({
           x={PAD_L + chartW / 2}
           y={PAD_T + chartH / 2}
           fontSize="8"
-          fill="#71717a"
+          fill="var(--muted-foreground)"
           textAnchor="middle"
           dominantBaseline="middle"
-          opacity="0.5"
         >
           No data
         </text>

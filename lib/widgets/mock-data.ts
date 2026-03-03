@@ -9,7 +9,7 @@ import type {
 import type { KPIData } from '@/components/widgets/kpi-strip/types'
 import type { WarehouseData } from '@/components/widgets/warehouse-occupancy/types'
 import type { SpecialChartData } from '@/components/widgets/special-chart/types'
-import { CHARCOAL_FIELDS } from '@/lib/widgets/adapters/charcoal-special'
+import { CHARCOAL_FIELDS, CHART_PALETTE, SLICE_PALETTE } from '@/lib/widgets/adapters/tenant-config'
 
 /* ===================================================
    Fiscal / Calendar Mapping
@@ -33,21 +33,8 @@ export const FISCAL_TO_CALENDAR = [
 ]
 
 export const CAL_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-export const SLICE_PALETTE = ['#60a5fa', '#f87171', '#34d399', '#fbbf24']
-export const CHART_PALETTE = [
-  '#60a5fa', // blue
-  '#a78bfa', // purple
-  '#34d399', // green
-  '#f87171', // red
-  '#fbbf24', // amber
-  '#22d3ee', // cyan
-  '#fb923c', // orange
-  '#c084fc', // violet
-  '#f472b6', // pink
-  '#10b981', // emerald
-  '#94a3b8', // slate
-  '#e2e8f0', // light
-]
+// Re-exported from tenant-config.ts (canonical source — avoids circular deps)
+export { CHART_PALETTE, SLICE_PALETTE }
 export const CURRENT_YEAR = new Date().getFullYear().toString()
 export const DATA_YEARS = [...new Set(FISCAL_TO_CALENDAR.map(m => m.year))].sort()
 

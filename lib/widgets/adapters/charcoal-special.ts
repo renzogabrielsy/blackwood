@@ -5,10 +5,17 @@
    Returns all deliveries flattened to a row-per-delivery format.
    All aggregation (scatter grouping, pie slicing) is done in the widget
    driven by the user's chosen settings.
+
+   Field definitions imported from tenant-config.ts — the single source
+   of truth for charcoal field metadata.
    =================================================== */
 
 import type { WidgetAdapter } from './types'
-import type { SpecialChartData, FieldDef } from '@/components/widgets/special-chart/types'
+import type { SpecialChartData } from '@/components/widgets/special-chart/types'
+import { CHARCOAL_FIELDS } from './tenant-config'
+
+// Re-export for backward compatibility (mock-data.ts imports CHARCOAL_FIELDS from here)
+export { CHARCOAL_FIELDS }
 
 /* ---- Quarter mapping ---- */
 const QUARTER_OF: Record<number, string> = {
@@ -19,33 +26,6 @@ const QUARTER_OF: Record<number, string> = {
 }
 
 const MONTH_ABBREVS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-/* ---- Field definitions
-   Numeric fields ordered so defaults produce PHP/KG (X) vs Weight (Y).
-   Categorical fields ordered so default colorBy is Year.
-   ---- */
-export const CHARCOAL_FIELDS: FieldDef[] = [
-  // Numeric — primary analytics fields first
-  { key: 'phpKg',    label: 'PHP/KG',    type: 'numeric',      unit: '₱' },
-  { key: 'weightKg', label: 'Weight',    type: 'numeric',      unit: 'kg' },
-  { key: 'phpTotal', label: 'PHP Total', type: 'numeric',      unit: '₱' },
-  { key: 'sacks',    label: 'Sacks',     type: 'numeric'                 },
-  { key: 'mc',       label: 'MC',        type: 'numeric',      unit: '%' },
-  { key: 'ash',      label: 'ASH',       type: 'numeric',      unit: '%' },
-  { key: 'bdAstm',   label: 'BD ASTM',   type: 'numeric'                 },
-  { key: 'bdJis',    label: 'BD JIS',    type: 'numeric'                 },
-  { key: 'grit',     label: 'Grit',      type: 'numeric',      unit: '%' },
-  { key: 'vm',       label: 'VM',        type: 'numeric',      unit: '%' },
-  { key: 'fc',       label: 'FC',        type: 'numeric',      unit: '%' },
-  // Categorical — year first so default colorBy is year
-  { key: 'year',      label: 'Year',      type: 'categorical' },
-  { key: 'quarter',   label: 'Quarter',   type: 'categorical' },
-  { key: 'month',     label: 'Month',     type: 'categorical' },
-  { key: 'supplier',  label: 'Supplier',  type: 'categorical' },
-  { key: 'batchCode', label: 'Batch',     type: 'categorical' },
-  { key: 'warehouse', label: 'Warehouse', type: 'categorical' },
-  { key: 'blockLoc',  label: 'Block Loc', type: 'categorical' },
-]
 
 /* ---- Raw delivery row from Supabase ---- */
 interface DeliveryRow {

@@ -196,7 +196,7 @@ export function SpecialChartWidget({
   }
 
   function getColorForYear(year: string): string {
-    return YEAR_COLORS[year] ?? '#71717a'
+    return YEAR_COLORS[year] ?? '#94a3b8'
   }
 
   return (
@@ -210,7 +210,7 @@ export function SpecialChartWidget({
               <div key={val} className="flex items-center gap-1 min-w-0">
                 <span
                   className="shrink-0 inline-block w-2 h-2 rounded-full"
-                  style={{ backgroundColor: colorMap.get(val) ?? '#71717a' }}
+                  style={{ backgroundColor: colorMap.get(val) ?? '#94a3b8' }}
                 />
                 {showLegendText && (
                   <span className="text-[10px] text-muted-foreground font-mono">

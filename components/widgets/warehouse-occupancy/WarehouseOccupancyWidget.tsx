@@ -5,6 +5,16 @@ import type { WarehouseData } from './types'
 
 /* ===================================================
    WarehouseOccupancyWidget — WHSE occupancy bars
+
+   Responsive behavior by size tier:
+   - xs/sm width (< 280px): Bars only with minimal label + percentage
+   - md width (280–440px): Bars + compact stats (PHP/KG, MC)
+   - lg/xl width (> 440px): Full display with all labels and stats
+
+   Height tiers control vertical spacing and footer visibility:
+   - xs height: Minimal spacing, no footer
+   - sm height: Tight spacing, compact footer
+   - md+ height: Standard spacing with full footer
    =================================================== */
 
 interface WarehouseOccupancyWidgetProps {
@@ -14,7 +24,15 @@ interface WarehouseOccupancyWidgetProps {
 export function WarehouseOccupancyWidget({ data = [] }: WarehouseOccupancyWidgetProps) {
   const { wTier, hTier } = useWidgetSize()
 
-  const spacingClass = hTier === 'lg' || hTier === 'xl' ? 'space-y-3' : hTier === 'md' || hTier === 'sm' ? 'space-y-1' : 'space-y-0'
+  const isCompactWidth = wTier === 'xs' || wTier === 'sm'
+  const isCompactHeight = hTier === 'xs'
+
+  const spacingClass =
+    hTier === 'lg' || hTier === 'xl'
+      ? 'space-y-3'
+      : hTier === 'md' || hTier === 'sm'
+        ? 'space-y-1.5'
+        : 'space-y-0.5'
 
   const totals = data.reduce(
     (acc, w) => ({ occupied: acc.occupied + w.occupied, total: acc.total + w.total }),
@@ -28,26 +46,43 @@ export function WarehouseOccupancyWidget({ data = [] }: WarehouseOccupancyWidget
         const pct = Math.round((w.occupied / w.total) * 100)
         const barColor = pct >= 85 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-emerald-500'
 
-        if (hTier === 'xs') {
+        /* ---- xs height: bare bars only, no labels ---- */
+        if (isCompactHeight && isCompactWidth) {
           return (
             <div key={w.label}>
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                 <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
               </div>
             </div>
           )
         }
 
+        /* ---- xs/sm width: minimal label row + bar ---- */
+        if (isCompactWidth) {
+          return (
+            <div key={w.label} className="space-y-0.5">
+              <div className="flex items-baseline justify-between">
+                <span className="font-medium text-foreground text-[10px]">{w.label}</span>
+                <span className="font-mono text-muted-foreground text-[10px]">{pct}%</span>
+              </div>
+              <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          )
+        }
+
+        /* ---- md+ width: full label + stats + bar ---- */
         let statsContent: React.ReactNode = null
         if (wTier === 'lg' || wTier === 'xl') {
           statsContent = (
-            <span className="text-[10px] text-muted-foreground font-mono ml-2">
+            <span className="text-[10px] text-foreground font-mono ml-2">
               &#8369;{w.phpKg.toFixed(2)} &middot; MC {w.mc.toFixed(1)} &middot; ASH {w.ash.toFixed(1)}
             </span>
           )
         } else if (wTier === 'md') {
           statsContent = (
-            <span className="text-[10px] text-muted-foreground font-mono ml-2">
+            <span className="text-[10px] text-foreground font-mono ml-2">
               &#8369;{w.phpKg.toFixed(2)} &middot; MC {w.mc.toFixed(1)}
             </span>
           )
@@ -66,10 +101,19 @@ export function WarehouseOccupancyWidget({ data = [] }: WarehouseOccupancyWidget
           </div>
         )
       })}
-      {hTier !== 'xs' && totals.total > 0 && (
+
+      {/* Footer — hidden at xs height, compact at sm height */}
+      {!isCompactHeight && totals.total > 0 && (
         <div className="flex justify-between text-xs pt-1 border-t border-border">
-          <span className="font-semibold text-foreground">Total</span>
-          <span className="font-mono font-semibold text-foreground">{totals.occupied}/{totals.total} ({totalPct}%)</span>
+          <span className="font-semibold text-foreground">
+            {isCompactWidth ? 'All' : 'Total'}
+          </span>
+          <span className="font-mono font-semibold text-foreground">
+            {isCompactWidth
+              ? `${totalPct}%`
+              : `${totals.occupied}/${totals.total} (${totalPct}%)`
+            }
+          </span>
         </div>
       )}
     </div>

@@ -11,6 +11,7 @@ The dashboard shell and all widget components are **tenant-agnostic**: they cont
 - `components/dashboard/DashboardShell.tsx` — SSR-safe client wrapper (`'use client'`, `dynamic(..., { ssr: false })`). Accepts `DashboardGridProps` and passes through to `DashboardGrid`.
 - `components/dashboard/DashboardGrid.tsx` — main grid shell: layout state, edit mode, add/remove/collapse, localStorage + Supabase persistence. Accepts `DashboardGridProps` (`kpiData`, `chartConfig`, `warehouseData`, `scatterData`, `serverPrefs`) — all optional with static fallbacks.
 - `lib/dashboard/types.ts` — shared TypeScript types (`D6Prefs`, `LayoutItem`) — extracted here to prevent circular imports between `DashboardGrid.tsx` and `profile-store.ts`.
+- `lib/dashboard/migrate-prefs.ts` — pure function `migrateLegacyPrefs(raw, defaults)` that normalizes raw stored prefs into a clean `D6Prefs` object. Handles widget settings format upgrades, `quality-scatter` → `special-chart` remap, `scatterSettings` → `specialChartSettings` carry-over, and missing-field defaults. Called by `DashboardGrid.tsx` on mount.
 - `lib/dashboard/profile-store.ts` — pure (no React, no Supabase) localStorage utility. Manages `bw_v1` multi-profile store. Exports: `loadProfileStore`, `saveProfileStore`, `getActiveProfile`, `updateActiveProfile`, `listProfiles`, `createProfile`, `switchProfile`, `deleteProfile`, `getActiveProfileName`.
 - `components/dashboard/WidgetShell.tsx` — generic widget frame (title bar, collapse toggle, remove button, ResizeObserver-backed `WidgetSizeContext`)
 - `components/dashboard/WidgetPicker.tsx` — "Add widget" modal showing all types from `WIDGET_REGISTRY`
@@ -31,10 +32,11 @@ The dashboard shell and all widget components are **tenant-agnostic**: they cont
 
 **Adapter files (in `lib/widgets/adapters/`):**
 - `types.ts` — `WidgetAdapter<TPort>` base interface
+- `tenant-config.ts` — centralized charcoal tenant configuration. Exports `CHARCOAL_FIELD_CONFIG` (field definitions for special chart), `CHARCOAL_FIELDS` (flat array alias), `CHARCOAL_CHART_CONFIG` (series/group/preset metadata for chart widget). Both `charcoal-special.ts` and `charcoal-chart.ts` import from here. Marked as the tenant override point.
 - `charcoal-kpi.ts` — fetches batches, view_blocking_grid, deliveries, rc_out → `KPIData[]`
-- `charcoal-chart.ts` — fetches deliveries + rc_out, aggregates by fiscal month → `ChartConfig`
+- `charcoal-chart.ts` — fetches deliveries + rc_out, aggregates by fiscal month → `ChartConfig`. Series metadata imported from `tenant-config.ts`.
 - `charcoal-warehouse.ts` — fetches view_blocking_grid, aggregates per warehouse letter → `WarehouseData[]`
-- `charcoal-scatter.ts` — fetches deliveries with lab_results, aggregates by YYYY-MM → `ScatterPoint[]`
+- `charcoal-special.ts` — fetches deliveries with lab_results, flattens to row-per-delivery → `SpecialChartData`. Field definitions imported from `tenant-config.ts`.
 
 **Static fallbacks (from `lib/widgets/mock-data.ts`):**
 - `CHARCOAL_KPI_DATA` — fallback KPI data

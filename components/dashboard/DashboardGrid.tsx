@@ -24,6 +24,7 @@ import { WidgetError } from './WidgetError'
 import { fetchKpiData, saveDashboardPrefs } from '@/app/(app)/actions'
 import { Pin, PinOff } from 'lucide-react'
 import type { D6Prefs, LayoutItem } from '@/lib/dashboard/types'
+import { migrateLegacyPrefs } from '@/lib/dashboard/migrate-prefs'
 import {
   loadProfileStore,
   getActiveProfile,
@@ -108,69 +109,29 @@ function loadPrefs(seed?: D6Prefs): D6Prefs {
   if (typeof window === 'undefined') return seed ?? DEFAULT_PREFS
   try {
     const raw = seed ?? getActiveProfile(DEFAULT_PREFS)
-    // Migrate/validate widgetSettings
-    let widgetSettings = raw.widgetSettings ?? {}
-    if (!widgetSettings['price-trajectory']) {
-      widgetSettings = {
-        ...widgetSettings,
-        'price-trajectory': {
-          title: 'Price Charts',
-          xAxisKey: 'month',
-          ySeries: [],
-          fontScale: 0,
-        },
-      }
-    }
-    for (const [key, val] of Object.entries(widgetSettings)) {
-      const s = val as unknown as Record<string, unknown>
-      const hasOldFormat = 'visualType' in s || 'chartType' in s || 'activeSeries' in s || 'seriesConfig' in s || 'preset' in s
-      if (hasOldFormat) {
-        widgetSettings[key] = { title: (s.title as string) ?? 'Chart', xAxisKey: 'month', ySeries: [], fontScale: (s.fontScale as number) ?? 0 }
-        continue
-      }
-      if (!s.xAxisKey) s.xAxisKey = 'month'
-      if (!s.ySeries) s.ySeries = []
-      if (Array.isArray(s.ySeries)) {
-        s.ySeries = (s.ySeries as Record<string, unknown>[]).map((ys: Record<string, unknown>) => ({
-          ...ys,
-          lineStyle: ys.lineStyle ?? 'solid',
-        }))
-      }
-      if (!s.comparisonSlices) s.comparisonSlices = []
-    }
+    const migrated = migrateLegacyPrefs(raw, DEFAULT_PREFS)
 
-    // Migrate: remap 'quality-scatter' → 'special-chart' in visibleModules and layout
-    const rawVisible: string[] = raw.visibleModules ?? DEFAULT_PREFS.visibleModules
-    const migratedVisible = rawVisible.map(m => m === 'quality-scatter' ? 'special-chart' : m)
-
-    const rawLayout: LayoutItem[] = raw.layout ?? DEFAULT_PREFS.layout
-    const migratedLayout = rawLayout.map(l =>
-      l.i === 'quality-scatter' ? { ...l, i: 'special-chart' } : l,
-    )
-
-    // Migrate: carry over scatterSettings → specialChartSettings (preserving granularity / quarterFilter / showRefLines)
-    const rawPrefs = raw as unknown as Record<string, unknown>
-    let specialChartSettings: SpecialChartSettings | undefined = raw.specialChartSettings
-    if (!specialChartSettings && rawPrefs.scatterSettings) {
-      const old = rawPrefs.scatterSettings as Record<string, unknown>
-      specialChartSettings = {
-        chartType: 'scatter',
-        granularity: (old.granularity as SpecialChartSettings['granularity']) ?? 'month',
-        quarterFilter: (old.quarterFilter as string[]) ?? [],
-        showRefLines: (old.showRefLines as boolean) ?? true,
+    // If loaded in pinned state, re-compact the grid and rebuild prePinLayout from scratch.
+    // Stored prePinLayout can have stale x/y positions from old sessions (e.g. quality-scatter
+    // era where the widget was at a different x), causing wrong positions on unpin.
+    // We reconstruct prePinLayout by shifting compacted items down by kpiH — guaranteed consistent.
+    if (migrated.stickyKpi) {
+      const kpiEntry = migrated.layout.find(l => l.i === 'kpi-strip')
+      const kpiH = kpiEntry?.h ?? 2
+      const nonKpi = migrated.layout.filter(l => l.i !== 'kpi-strip')
+      const compacted = compactVertically(nonKpi)
+      const rebuiltPrePin: LayoutItem[] = [
+        ...(kpiEntry ? [kpiEntry] : []),
+        ...compacted.map(l => ({ ...l, y: l.y + kpiH })),
+      ]
+      return {
+        ...migrated,
+        layout: [...(kpiEntry ? [kpiEntry] : []), ...compacted],
+        prePinLayout: rebuiltPrePin,
       }
     }
 
-    return {
-      layout: migratedLayout,
-      visibleModules: migratedVisible,
-      collapsed: raw.collapsed ?? DEFAULT_PREFS.collapsed,
-      widgetSettings,
-      kpiSettings: raw.kpiSettings ?? {},
-      stickyKpi: raw.stickyKpi ?? false,
-      prePinLayout: raw.prePinLayout,
-      specialChartSettings: specialChartSettings ?? {},
-    }
+    return migrated
   } catch {
     return DEFAULT_PREFS
   }

@@ -110,7 +110,7 @@ export function PieRenderer({
       <svg viewBox="0 0 200 200" className="w-full h-full">
         <text
           x={CX} y={CY}
-          fontSize="9" fill="#71717a" textAnchor="middle" dominantBaseline="middle" opacity="0.5"
+          fontSize="9" fill="var(--muted-foreground)" textAnchor="middle" dominantBaseline="middle"
         >
           No data
         </text>
@@ -147,7 +147,7 @@ export function PieRenderer({
                 x={labelPt.x}
                 y={labelPt.y}
                 fontSize="6"
-                fill="#71717a"
+                fill="var(--foreground)"
                 textAnchor="middle"
                 dominantBaseline="middle"
               >
@@ -175,7 +175,7 @@ export function PieRenderer({
           <text
             x={CX} y={CY + 10}
             fontSize="7"
-            fill="#71717a"
+            fill="var(--muted-foreground)"
             textAnchor="middle"
             dominantBaseline="middle"
           >
