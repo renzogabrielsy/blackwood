@@ -37,6 +37,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Definition of Done** at the end of each phase defines completion criteria
 - **Changelog** at the bottom records all timeline updates with dates
 
+## Handoff Files (MANDATORY READ AT SESSION START)
+
+**Session-handoff files live in `handoffs/` at the project root.** Each file captures what happened in one session — concrete deliverables, key learnings, the current state of the codebase, open decisions, and the next concrete action.
+
+**When the user says "view latest handoff file", "where did we leave off", or "what's the current state":**
+```bash
+ls handoffs/ | sort -r | head -1
+```
+The YYYY-MM-DD prefix on each filename makes alphabetical sort equivalent to chronological. The first result is the most recent handoff — read it before doing anything else.
+
+**Naming convention:** `handoffs/YYYY-MM-DD-<short-slug>.md` (e.g. `2026-05-26-rc-movement-backfill-jarvis-foundation.md`). One file per session. Never delete old handoffs — they form the project's session history.
+
+**When ending a session,** create a new handoff file capturing: TL;DR, what shipped (with file paths), critical learnings, current state, open decisions, and the next concrete action. Use the most recent handoff as a template — same section structure.
+
 ## Skills
 
 This project uses the **`frontend-design`** skill for UI and design guidance. When planning frontend features, designing UI components, or reviewing code quality, Claude will reference this skill for best practices on:
