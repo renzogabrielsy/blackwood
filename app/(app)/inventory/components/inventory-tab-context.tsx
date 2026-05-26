@@ -2,9 +2,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
-export type InventoryTab = 'deliveries' | 'usage' | 'blocking';
+export type InventoryTab = 'deliveries' | 'usage' | 'blocking' | 'movement';
 
-const VALID_TABS: InventoryTab[] = ['deliveries', 'usage', 'blocking'];
+const VALID_TABS: InventoryTab[] = ['deliveries', 'usage', 'blocking', 'movement'];
 const STORAGE_KEY = 'inventory_active_tab';
 
 interface InventoryTabContextType {

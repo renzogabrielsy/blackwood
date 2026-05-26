@@ -5,6 +5,7 @@ import { useInventoryTab, type InventoryTab } from './inventory-tab-context';
 import { DeliveryMasterTableWrapper } from '../rc-in/components/delivery-master-table-wrapper';
 import { RcOutLazyTab } from './rc-out-lazy-tab';
 import { BlockingLazyTab } from './blocking-lazy-tab';
+import { RcMovementLazyTab } from './rc-movement-lazy-tab';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import type { RcInTableSettings } from '@/types/table-settings';
 
@@ -58,6 +59,9 @@ export function InventoryView({ deliveries, batches, search, allSuppliers, allLo
             </div>
             <div className={getTabClass('usage')}>
                 <RcOutLazyTab />
+            </div>
+            <div className={getTabClass('movement')}>
+                <RcMovementLazyTab />
             </div>
         </>
     );

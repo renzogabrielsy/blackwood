@@ -8,6 +8,7 @@ const TABS: { name: string; id: InventoryTab }[] = [
     { name: 'Blocking', id: 'blocking' },
     { name: 'Deliveries', id: 'deliveries' },
     { name: 'Usage', id: 'usage' },
+    { name: 'Movement', id: 'movement' },
 ];
 
 export function InventorySheetTabs() {

@@ -1,5 +1,12 @@
 # Supabase Backend Engineer Memory
 
+## RC Movement Feature (2026-05-25) — [[project-rc-movement]]
+
+Migration + server action on disk, pending DB apply (project was paused during session).
+Migration: `supabase/migrations/20260525000000_create_view_rc_movement.sql`
+Action: `app/(app)/inventory/rc-movement/actions.ts`
+After DB unpauses: run `supabase db push --include-all` then `supabase gen types typescript --linked > types/supabase.ts`, then remove the `(supabase as any)` cast in actions.ts (~lines 91-115).
+
 ## RLS Policy Conventions (2026-03-02)
 
 ### Core Tables: deliveries, batches, rc_out
