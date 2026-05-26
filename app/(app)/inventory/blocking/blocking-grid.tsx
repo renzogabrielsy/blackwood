@@ -2,12 +2,19 @@
 
 import { useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { WAREHOUSES } from './constants';
+import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
 import type { BlockData } from './types';
 import { BlockingDetailPanel } from './blocking-detail-panel';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
+
+/** All warehouses in render order */
+const ALL_WAREHOUSE_KEYS = Object.keys(WAREHOUSES);
+/** Default set when "ALL" is active — only the standard 4. PCA/PCB stay opt-in. */
+function makeDefaultActive(): Set<string> {
+  return new Set<string>(STANDARD_WAREHOUSES);
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -214,7 +221,7 @@ interface BlockingGridProps {
 
 export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
   const [selectedLocKey, setSelectedLocKey] = useState<string | null>(null);
-  const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(new Set(['A', 'B', 'C', 'D']));
+  const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(() => makeDefaultActive());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const { settings } = useTableSettings();
   const labHighlights = settings.labHighlights;
@@ -224,9 +231,8 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
     [activeWarehouses, data],
   );
 
-  const visibleWarehouses = (['A', 'B', 'C', 'D'] as const).filter((w) =>
-    activeWarehouses.has(w),
-  );
+  // Render in WAREHOUSES declaration order (A, B, C, D, PCA, PCB)
+  const visibleWarehouses = ALL_WAREHOUSE_KEYS.filter((w) => activeWarehouses.has(w));
 
   const handleCellClick = (locKey: string) => {
     setSelectedLocKey((prev) => (prev === locKey ? null : locKey));
@@ -236,39 +242,42 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
     setSelectedLocKey(null);
   };
 
+  // "ALL" mode = exactly the standard 4 (A/B/C/D). PCA/PCB are opt-in extras.
+  const isAllMode =
+    activeWarehouses.size === STANDARD_WAREHOUSES.length &&
+    STANDARD_WAREHOUSES.every((w) => activeWarehouses.has(w));
+
   const handleWarehouseToggle = (whse: string) => {
     setActiveWarehouses((prev) => {
-      // If ALL mode, switch to just this warehouse
-      if (prev.size === 4) {
+      // If we're in the "ALL" mode (standard 4 exactly), clicking a chip switches
+      // to just that warehouse — this preserves the existing single-focus UX.
+      const isAll =
+        prev.size === STANDARD_WAREHOUSES.length &&
+        STANDARD_WAREHOUSES.every((w) => prev.has(w));
+      if (isAll) {
         return new Set([whse]);
       }
       const next = new Set(prev);
       if (next.has(whse)) {
         next.delete(whse);
-        // If none remain, revert to ALL
+        // If none remain, revert to default ALL (standard 4)
         if (next.size === 0) {
-          return new Set(['A', 'B', 'C', 'D']);
+          return makeDefaultActive();
         }
       } else {
         next.add(whse);
-        // If all 4 now selected, revert to ALL mode
-        if (next.size === 4) {
-          return new Set(['A', 'B', 'C', 'D']);
-        }
       }
       return next;
     });
   };
 
   const handleSelectAllWarehouses = () => {
-    setActiveWarehouses(new Set(['A', 'B', 'C', 'D']));
+    setActiveWarehouses(makeDefaultActive());
   };
 
   const handleToggleStatus = (filter: StatusFilter) => {
     setStatusFilter((prev) => (prev === filter ? 'ALL' : filter));
   };
-
-  const allSelected = activeWarehouses.size === 4;
 
   return (
     <div className="flex flex-col gap-3 px-4 py-3">
@@ -280,25 +289,42 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
             onClick={handleSelectAllWarehouses}
             className={cn(
               'px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all duration-150 cursor-pointer',
-              allSelected
+              isAllMode
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-muted text-muted-foreground hover:bg-accent',
             )}
           >
             ALL
           </button>
-          {(['A', 'B', 'C', 'D'] as const).map((w) => (
+          {STANDARD_WAREHOUSES.map((w) => (
             <button
               key={w}
               onClick={() => handleWarehouseToggle(w)}
               className={cn(
                 'px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all duration-150 cursor-pointer',
-                activeWarehouses.has(w) && !allSelected
+                activeWarehouses.has(w) && !isAllMode
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground hover:bg-accent',
               )}
             >
               WHSE {w}
+            </button>
+          ))}
+          {/* PCA/PCB are opt-in — they do not count against the 220-slot baseline */}
+          <div className="h-4 w-px bg-border mx-0.5" />
+          {(['PCA', 'PCB'] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => handleWarehouseToggle(w)}
+              className={cn(
+                'px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all duration-150 cursor-pointer',
+                activeWarehouses.has(w)
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-accent',
+              )}
+              title="Prepared charcoal sundrying — opt-in, not counted in the 220-slot baseline"
+            >
+              {w}
             </button>
           ))}
         </div>
@@ -495,6 +521,12 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
   const stats = getWarehouseStats(whseKey, data);
   const utilPct = parseFloat(stats.utilization);
   const emptyCount = stats.totalSlots - stats.occupied;
+  const colEnd = whse.colStart + whse.cols - 1;
+  // Show contiguous column range (e.g. "1-20" or "15-17") for non-trivial layouts
+  const colsLabel = whse.cols === 1 ? `${whse.colStart}` : `${whse.colStart}-${colEnd}`;
+  // Prepared-charcoal sections get a friendlier subtitle
+  const isPrepared = whseKey === 'PCA' || whseKey === 'PCB';
+  const headerLabel = isPrepared ? `${whseKey} · Prepared Charcoal` : `Warehouse ${whseKey}`;
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -504,7 +536,8 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
           {/* Warehouse badge */}
           <div
             className={cn(
-              'w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold',
+              'rounded-md flex items-center justify-center text-xs font-bold',
+              isPrepared ? 'h-7 px-1.5' : 'w-7 h-7',
               stats.occupied > 0
                 ? 'bg-linear-to-br from-muted to-muted-foreground/20 text-muted-foreground'
                 : 'bg-muted text-muted-foreground',
@@ -513,9 +546,9 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
             {whseKey}
           </div>
           <div>
-            <div className="text-xs font-semibold text-foreground">Warehouse {whseKey}</div>
+            <div className="text-xs font-semibold text-foreground">{headerLabel}</div>
             <div className="text-[9px] text-muted-foreground">
-              {whse.cols} cols &times; {whse.rows.length} rows &middot; {stats.totalSlots} slots
+              cols {colsLabel} &times; {whse.rows.length} rows &middot; {stats.totalSlots} slots
             </div>
           </div>
         </div>
@@ -625,13 +658,13 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
       {/* ── Grid ── */}
       <div className="p-2 overflow-x-auto">
         <div
-          className="grid"
+          className={cn('grid', isPrepared && 'max-w-[280px]')}
           style={{
             gridTemplateColumns: `20px repeat(${whse.cols}, minmax(0, 1fr))`,
             gap: '2px',
           }}
         >
-          {/* Column headers: corner + 1..20 */}
+          {/* Column headers: corner + colStart..colEnd */}
           <div className="flex items-center justify-center" />
           {Array.from({ length: whse.cols }, (_, i) => (
             <div
@@ -639,7 +672,7 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               className="text-center text-muted-foreground font-medium uppercase tracking-wider"
               style={{ fontSize: '9px', letterSpacing: '0.05em' }}
             >
-              {i + 1}
+              {whse.colStart + i}
             </div>
           ))}
 
@@ -650,6 +683,7 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               whseKey={whseKey}
               row={row}
               cols={whse.cols}
+              colStart={whse.colStart}
               selectedLocKey={selectedLocKey}
               onCellClick={onCellClick}
               statusFilter={statusFilter}
@@ -687,6 +721,7 @@ interface WarehouseRowProps {
   whseKey: string;
   row: string;
   cols: number;
+  colStart: number;
   selectedLocKey: string | null;
   onCellClick: (locKey: string) => void;
   statusFilter: StatusFilter;
@@ -695,7 +730,7 @@ interface WarehouseRowProps {
   labHighlights: Record<LabMetric, LabHighlightSpec>;
 }
 
-function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights }: WarehouseRowProps) {
+function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights }: WarehouseRowProps) {
   return (
     <>
       {/* Row label */}
@@ -708,7 +743,7 @@ function WarehouseRow({ whseKey, row, cols, selectedLocKey, onCellClick, statusF
 
       {/* Cells */}
       {Array.from({ length: cols }, (_, i) => {
-        const col = i + 1;
+        const col = colStart + i;
         const locKey = `${whseKey}-${col}${row}`;
         const blockData = data[locKey];
 

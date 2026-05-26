@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Physical warehouse grid visualization — the digital equivalent of the Excel blocking sheet. Renders a heatmap of 220 block locations across 4 warehouses (A, B, C, D), showing which batch occupies each slot and key metrics at a glance. Clicking an occupied cell opens a slide-over detail panel with balance, quality metrics, delivery history, and usage history.
+Physical warehouse grid visualization — the digital equivalent of the Excel blocking sheet. Renders a heatmap of 220 block locations across 4 standard warehouses (A, B, C, D), plus 18 opt-in slots in 2 prepared-charcoal sundrying zones (PCA, PCB), showing which batch occupies each slot and key metrics at a glance. Clicking an occupied cell opens a slide-over detail panel with balance, quality metrics, delivery history, and usage history.
 
 > **Domain Module (Charcoal Tenant):** This module is domain-specific — it belongs to the charcoal plant operations layer, not the platform layer. Business logic, schema references, and terminology here are intentionally charcoal-specific. When adapters are built for the dashboard widgets, they will extract data from these tables — but widgets themselves will never import from this module.
 
@@ -11,9 +11,9 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 | File | Description |
 |---|---|
 | `types.ts` | Shared interfaces: `BlockData` (single cell data), `BlockingGridData` (full grid payload with aggregates), `DeliveryHistoryRecord` (includes `id`, `mc`, `bd_astm`, `ash`, `cost_basis`), `UsageHistoryRecord`, `BlockingDetailData` (detail panel payload), `FullDeliveryRecord` (full delivery for edit dialog) |
-| `constants.ts` | `WarehouseConfig` interface and `WAREHOUSES` constant — warehouse layout config (name, columns, rows, total slots per warehouse) |
+| `constants.ts` | `WarehouseConfig` interface (`cols`, `colStart`, `rows`), `WAREHOUSES` constant (A/B/C/D + PCA/PCB), and `STANDARD_WAREHOUSES` (`['A','B','C','D']` — the 220-slot baseline). `colStart` lets PCA/PCB render columns 15-17 with correct labels and `locKey` math |
 | `actions.ts` | Server actions: `fetchBlockingGridData()` (queries `view_blocking_grid`, returns grid data with role-gated PHP/KG), `fetchBlockingDetail(batchCode, batchId)` (fetches delivery + usage history with delivery IDs + lab results (mc/bd_astm/ash), batch notes, and avg_cost for a specific batch), `fetchSingleDelivery(deliveryId)` (fetches full delivery record for edit dialog and info dialog), `updateBlockNotes(batchId, notes)` (updates `batches.notes`, calls `revalidatePath('/inventory')`) |
-| `blocking-grid.tsx` | Main client component — accepts `data: BlockingGridData` and `canViewPrices: boolean` props. Renders sticky global summary header with warehouse filter chips, balance text color legend, global stats. 4 warehouse grid sections with CSS Grid layout, neutral zinc-gradient occupied cells with balance-percentage text coloring and lab-highlight text colors on MC/ASH, empty cells, utilization bars. Manages `selectedLocKey`, `activeWarehouses`, and `statusFilter` state. Warehouse headers display all 7 weighted-average lab results. Status badges + lab quality filters (Wet/Ashy) are clickable with spotlight dim/glow effect. Reads `labHighlights` from `useTableSettings()` for MC/ASH text coloring and WET/ASHY spotlight filters |
+| `blocking-grid.tsx` | Main client component — accepts `data: BlockingGridData` and `canViewPrices: boolean` props. Renders sticky global summary header with warehouse filter chips (ALL + WHSE A/B/C/D + separator + PCA/PCB), balance text color legend, global stats. Up to 6 warehouse grid sections with CSS Grid layout — standard 20-col sections + narrow 3-col PCA/PCB sections (rendered with `max-w-[280px]`). Neutral zinc-gradient occupied cells with balance-percentage text coloring and lab-highlight text colors on MC/ASH, empty cells, utilization bars. Manages `selectedLocKey`, `activeWarehouses`, and `statusFilter` state. Warehouse headers display all 7 weighted-average lab results. Status badges + lab quality filters (Wet/Ashy) are clickable with spotlight dim/glow effect. Reads `labHighlights` from `useTableSettings()` for MC/ASH text coloring and WET/ASHY spotlight filters |
 | `blocking-detail-panel.tsx` | Slide-over panel component (w-[520px], h-dvh) — accepts `data` and `canViewPrices: boolean` props. Fetches detail data on-demand via `fetchBlockingDetail()` when a cell is selected. Fixed right panel with backdrop. **Delivery-card style layout** designed to fit iPad Mini 6 portrait (~1080px usable) without scrolling to see delivery history: (1) Compact header with loc badge, status badge, whse/col/row, batch code; (2) **Metrics grid** — 3-col grid with Balance cell (value + pct + thin progress bar), PHP/KG, Est. Value (role-gated, grid collapses to 1-col when prices hidden); (3) **Lab results row** — 7 flex cells matching delivery card pattern (`text-[8px]` labels, `text-xs font-mono font-bold` values); (4) **Inline notes** — single line when not editing (StickyNote icon + "Notes:" label + truncated text + pencil icon), expands to compact textarea when editing; (5) **Scrollable area** with delivery history table (tighter `px-1.5 py-1` cells, `text-[10px]`/`text-[9px]` sizing) + usage history below. No sticky footer. EditDeliveryDialog integration, and **DeliveryHistoryDialog** (from RC IN) for per-delivery info view. Escape key and backdrop click to close |
 | `edit-delivery-dialog.tsx` | Edit delivery dialog — opened from delivery row pencil icon. Fetches full delivery via `fetchSingleDelivery()`, form with all delivery fields + collapsible lab results section. Saves via `bulkUpdateDeliveries()` from RC IN actions for audit trail. Cost field role-gated behind `canViewPrices`. Glass effect DialogContent with `animate-modal-enter` |
 | `CONTEXT.md` | This file |
@@ -29,15 +29,23 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 
 **Warehouse layout:**
 
-| WHSE | Columns | Rows | Total Slots |
-|------|---------|------|-------------|
-| A | 1-20 | A-C | 60 |
-| B | 1-20 | A-B | 40 |
-| C | 1-20 | A-B | 40 |
-| D | 1-20 | A-D | 80 |
-| **Total** | | | **220** |
+| WHSE | Columns | Rows | Total Slots | Notes |
+|------|---------|------|-------------|-------|
+| A | 1-20 | A-C | 60 | Standard |
+| B | 1-20 | A-B | 40 | Standard |
+| C | 1-20 | A-B | 40 | Standard |
+| D | 1-20 | A-D | 80 | Standard |
+| **Standard total** | | | **220** | Operator's baseline mental model |
+| PCA | 15-17 | A-C | 9 | Prepared Charcoal sundrying — physical subdivision of A-15/16/17. Opt-in via filter chip |
+| PCB | 15-17 | A-C | 9 | Prepared Charcoal sundrying — physical subdivision of A-15/16/17. Opt-in via filter chip |
+| **PC total** | | | **18** | Not counted in the 220 baseline |
+| **Grand total** | | | **238** | When PCA + PCB chips are both active |
 
-**Block LOC format:** `{WHSE}-{COL}{ROW}` (e.g., `A-1A`, `C-15A`, `D-20D`)
+**"PC" = Prepared Charcoal.** PCA and PCB are physical subdivisions of the A-15/16/17 floor area used for prepared-charcoal sundrying. They are not counted against the 220-slot baseline by default — the operator's existing 220-slot mental model is preserved. PCA/PCB are surfaced via dedicated filter chips next to the WHSE chips (with a thin divider separating them).
+
+> **Future polish (not yet implemented):** Today PCA/PCB are strictly opt-in via the filter chips, so when occupied they will not appear in the default ALL view. Consider an auto-show-when-occupied behavior in a later iteration — if any PCA/PCB cell has a batch, automatically include that warehouse in the default active set on initial render. For now, the operator clicks the PCA or PCB chip to surface those zones.
+
+**Block LOC format:** `{WHSE}-{COL}{ROW}` (e.g., `A-1A`, `C-15A`, `D-20D`, `PCA-15A`, `PCB-17C`). The regex `^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$` is shared between client-side `validateBlockLoc()` in `lib/validation.ts` and DB CHECK constraints.
 
 **Balance text color thresholds (percent of `balance / total_in` — % remaining of total delivered):**
 - >= 50%: `text-emerald-400` (green)
