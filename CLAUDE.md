@@ -166,6 +166,16 @@ All data tables must feel like dense spreadsheets:
 - **Currency (Accounting format):** `flex justify-between` — ₱ symbol pinned left, number pinned right
 - **Remarks:** Truncate with `max-w-[200px] truncate`, show full text via Tooltip or Popover on hover
 
+## Error Toasts (HARD RULE)
+
+Every error toast — and every inline error UI — MUST persist until the user manually dismisses it and MUST include a Copy button that copies the full error text to the clipboard.
+
+- **Use `errorToast()` from `lib/toast.ts`** — never call sonner's `toast.error()` directly. The wrapper enforces `duration: Infinity`, a close button, and a Copy action.
+- For inline errors (e.g., a banner inside a panel rather than a toast), include a small "Copy" button next to the message.
+- Success/info/warning toasts can still auto-dismiss — this rule is for ERRORS only.
+
+**Why:** users paste errors into Claude chats for debugging. Auto-dismissing toasts force a screenshot, which wastes tokens on OCR.
+
 ## Motion & Glass Design System
 
 Blackwood uses selective animation and frosted glass effects for polish without sacrificing the Industrial Spreadsheet density.

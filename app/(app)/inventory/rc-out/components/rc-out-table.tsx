@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { useAuth } from '@/components/providers/auth-context';
@@ -257,7 +258,7 @@ export function RcOutTable({
                 setAllData(prev => prev.filter(row => row.id !== id));
                 await handleRefresh();
             } else {
-                toast.error('Delete failed: ' + res.message);
+                errorToast('Delete failed: ' + res.message);
             }
         }
     };
@@ -272,7 +273,7 @@ export function RcOutTable({
                 setSelectedIds(new Set());
                 await handleRefresh();
             } else {
-                toast.error('Bulk delete failed: ' + res.message);
+                errorToast('Bulk delete failed: ' + res.message);
             }
         }
     };

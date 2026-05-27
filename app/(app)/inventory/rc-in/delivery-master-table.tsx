@@ -4,6 +4,7 @@
 import * as React from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { useAuth } from '@/components/providers/auth-context';
@@ -654,7 +655,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
                 handleRefresh();
             } else {
-                toast.error('Delete failed: ' + res.message);
+                errorToast('Delete failed: ' + res.message);
             }
         }
     };
@@ -669,7 +670,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 setSelectedIds(new Set());
                 handleRefresh();
             } else {
-                toast.error('Bulk delete failed: ' + res.message);
+                errorToast('Bulk delete failed: ' + res.message);
             }
         }
     };
@@ -1997,7 +1998,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                     toast.success('Delivery deleted');
                                                     handleRefresh();
                                                 } else {
-                                                    toast.error('Delete failed: ' + res.message);
+                                                    errorToast('Delete failed: ' + res.message);
                                                 }
                                             }
                                         }}

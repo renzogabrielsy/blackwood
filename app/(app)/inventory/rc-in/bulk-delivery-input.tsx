@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import { Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
@@ -652,10 +653,10 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
                 toast.success(`${validRows.length} ${noun} ${isEdit ? 'updated' : 'logged'} successfully`);
                 onSuccess?.();
             } else {
-                toast.error(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
+                errorToast(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
             }
         } catch (error: unknown) {
-            toast.error('An unexpected error occurred: ' + (error instanceof Error ? error.message : 'Unknown'));
+            errorToast('An unexpected error occurred: ' + (error instanceof Error ? error.message : 'Unknown'));
         } finally {
             setIsSubmitting(false);
         }

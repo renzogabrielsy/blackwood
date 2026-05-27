@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 
 interface Profile {
   id: string;
@@ -32,7 +33,7 @@ export function RoleAssignmentTable({ profiles }: { profiles: Profile[] }) {
     if (result.success) {
       toast.success('Role updated');
     } else {
-      toast.error(result.message ?? 'Failed to update role');
+      errorToast(result.message ?? 'Failed to update role');
     }
     setUpdating(null);
   };
