@@ -211,6 +211,169 @@ export type Database = {
           },
         ]
       }
+      electricity_readings: {
+        Row: {
+          created_at: string
+          diff_kwh: number | null
+          end_kwh: number
+          id: string
+          meter: string
+          rate_php_per_kwh: number
+          reading_date: string
+          remarks: string | null
+          start_kwh: number
+        }
+        Insert: {
+          created_at?: string
+          diff_kwh?: number | null
+          end_kwh: number
+          id?: string
+          meter: string
+          rate_php_per_kwh?: number
+          reading_date: string
+          remarks?: string | null
+          start_kwh: number
+        }
+        Update: {
+          created_at?: string
+          diff_kwh?: number | null
+          end_kwh?: number
+          id?: string
+          meter?: string
+          rate_php_per_kwh?: number
+          reading_date?: string
+          remarks?: string | null
+          start_kwh?: number
+        }
+        Relationships: []
+      }
+      ingestion_watermarks: {
+        Row: {
+          last_email_id: string | null
+          last_email_received_at: string | null
+          last_run_at: string
+          report_type: string
+        }
+        Insert: {
+          last_email_id?: string | null
+          last_email_received_at?: string | null
+          last_run_at?: string
+          report_type: string
+        }
+        Update: {
+          last_email_id?: string | null
+          last_email_received_at?: string | null
+          last_run_at?: string
+          report_type?: string
+        }
+        Relationships: []
+      }
+      jarvis_conversations: {
+        Row: {
+          archived: boolean
+          created_at: string
+          id: string
+          last_message_at: string
+          title: string | null
+          user_id: string
+        }
+        Insert: {
+          archived?: boolean
+          created_at?: string
+          id?: string
+          last_message_at?: string
+          title?: string | null
+          user_id: string
+        }
+        Update: {
+          archived?: boolean
+          created_at?: string
+          id?: string
+          last_message_at?: string
+          title?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      jarvis_learnings: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          last_used_at: string | null
+          source_message_id: string | null
+          type: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          source_message_id?: string | null
+          type: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          last_used_at?: string | null
+          source_message_id?: string | null
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jarvis_learnings_source_message_id_fkey"
+            columns: ["source_message_id"]
+            isOneToOne: false
+            referencedRelation: "jarvis_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      jarvis_messages: {
+        Row: {
+          content: string
+          conversation_id: string
+          created_at: string
+          id: string
+          position: number
+          role: string
+          tool_calls: Json | null
+          tool_results: Json | null
+        }
+        Insert: {
+          content?: string
+          conversation_id: string
+          created_at?: string
+          id?: string
+          position?: number
+          role: string
+          tool_calls?: Json | null
+          tool_results?: Json | null
+        }
+        Update: {
+          content?: string
+          conversation_id?: string
+          created_at?: string
+          id?: string
+          position?: number
+          role?: string
+          tool_calls?: Json | null
+          tool_results?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jarvis_messages_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "jarvis_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notification_subscriptions: {
         Row: {
           audit_log_id: string
@@ -279,6 +442,222 @@ export type Database = {
           title?: string
           type?: Database["public"]["Enums"]["notification_type"]
           user_id?: string
+        }
+        Relationships: []
+      }
+      pending_review: {
+        Row: {
+          commit_audit_log_id: string | null
+          diagnostic_json: Json | null
+          extracted_at: string
+          final_rows_json: Json | null
+          id: string
+          overall_confidence: number | null
+          received_at: string | null
+          report_type: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          rows_json: Json
+          source_attachment_id: string | null
+          source_email_id: string
+          source_filename: string | null
+          status: string
+        }
+        Insert: {
+          commit_audit_log_id?: string | null
+          diagnostic_json?: Json | null
+          extracted_at?: string
+          final_rows_json?: Json | null
+          id?: string
+          overall_confidence?: number | null
+          received_at?: string | null
+          report_type: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          rows_json: Json
+          source_attachment_id?: string | null
+          source_email_id: string
+          source_filename?: string | null
+          status?: string
+        }
+        Update: {
+          commit_audit_log_id?: string | null
+          diagnostic_json?: Json | null
+          extracted_at?: string
+          final_rows_json?: Json | null
+          id?: string
+          overall_confidence?: number | null
+          received_at?: string | null
+          report_type?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          rows_json?: Json
+          source_attachment_id?: string | null
+          source_email_id?: string
+          source_filename?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pending_review_commit_audit_log_id_fkey"
+            columns: ["commit_audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "audit_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_review_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      production_downtime: {
+        Row: {
+          created_at: string
+          dt_hrs: number
+          dt_mins: number
+          dt_reason: string | null
+          id: string
+          production_batch: string
+          shift: string
+          shift_hrs: number
+          transaction_date: string
+        }
+        Insert: {
+          created_at?: string
+          dt_hrs?: number
+          dt_mins?: number
+          dt_reason?: string | null
+          id?: string
+          production_batch: string
+          shift: string
+          shift_hrs: number
+          transaction_date: string
+        }
+        Update: {
+          created_at?: string
+          dt_hrs?: number
+          dt_mins?: number
+          dt_reason?: string | null
+          id?: string
+          production_batch?: string
+          shift?: string
+          shift_hrs?: number
+          transaction_date?: string
+        }
+        Relationships: []
+      }
+      production_runs: {
+        Row: {
+          created_at: string
+          customer: string
+          grade: string
+          id: string
+          production_batch: string
+          remarks: string | null
+          sacks_bags: number | null
+          shift: string
+          transaction_date: string
+          ttl_kg: number
+        }
+        Insert: {
+          created_at?: string
+          customer?: string
+          grade: string
+          id?: string
+          production_batch: string
+          remarks?: string | null
+          sacks_bags?: number | null
+          shift: string
+          transaction_date: string
+          ttl_kg: number
+        }
+        Update: {
+          created_at?: string
+          customer?: string
+          grade?: string
+          id?: string
+          production_batch?: string
+          remarks?: string | null
+          sacks_bags?: number | null
+          shift?: string
+          transaction_date?: string
+          ttl_kg?: number
+        }
+        Relationships: []
+      }
+      production_waste: {
+        Row: {
+          bf_kg: number
+          bf_sacks: string | null
+          created_at: string
+          grit_kg: number
+          id: string
+          production_batch: string
+          remarks: string | null
+          rs1a_kg: number
+          rs1a_sacks: string | null
+          rs1b_kg: number
+          rs1b_sacks: string | null
+          rs23_kg: number
+          rs23_sacks: string | null
+          rs5_kg: number
+          rs5_sacks: string | null
+          shift: string
+          transaction_date: string
+          trml1_kg: number
+          trml1_sacks: string | null
+          trml2_kg: number
+          trml2_sacks: string | null
+        }
+        Insert: {
+          bf_kg?: number
+          bf_sacks?: string | null
+          created_at?: string
+          grit_kg?: number
+          id?: string
+          production_batch: string
+          remarks?: string | null
+          rs1a_kg?: number
+          rs1a_sacks?: string | null
+          rs1b_kg?: number
+          rs1b_sacks?: string | null
+          rs23_kg?: number
+          rs23_sacks?: string | null
+          rs5_kg?: number
+          rs5_sacks?: string | null
+          shift: string
+          transaction_date: string
+          trml1_kg?: number
+          trml1_sacks?: string | null
+          trml2_kg?: number
+          trml2_sacks?: string | null
+        }
+        Update: {
+          bf_kg?: number
+          bf_sacks?: string | null
+          created_at?: string
+          grit_kg?: number
+          id?: string
+          production_batch?: string
+          remarks?: string | null
+          rs1a_kg?: number
+          rs1a_sacks?: string | null
+          rs1b_kg?: number
+          rs1b_sacks?: string | null
+          rs23_kg?: number
+          rs23_sacks?: string | null
+          rs5_kg?: number
+          rs5_sacks?: string | null
+          shift?: string
+          transaction_date?: string
+          trml1_kg?: number
+          trml1_sacks?: string | null
+          trml2_kg?: number
+          trml2_sacks?: string | null
         }
         Relationships: []
       }
@@ -365,6 +744,42 @@ export type Database = {
             referencedColumns: ["batch_id"]
           },
         ]
+      }
+      truck_readings: {
+        Row: {
+          created_at: string
+          end_km: number
+          fuel_liters: number | null
+          id: string
+          plate_no: string
+          reading_date: string
+          remarks: string | null
+          start_km: number
+          ttl_km: number | null
+        }
+        Insert: {
+          created_at?: string
+          end_km: number
+          fuel_liters?: number | null
+          id?: string
+          plate_no: string
+          reading_date: string
+          remarks?: string | null
+          start_km: number
+          ttl_km?: number | null
+        }
+        Update: {
+          created_at?: string
+          end_km?: number
+          fuel_liters?: number | null
+          id?: string
+          plate_no?: string
+          reading_date?: string
+          remarks?: string | null
+          start_km?: number
+          ttl_km?: number | null
+        }
+        Relationships: []
       }
       user_dashboard_prefs: {
         Row: {
@@ -458,6 +873,56 @@ export type Database = {
         }
         Relationships: []
       }
+      view_electricity_monthly: {
+        Row: {
+          avg_rate_php: number | null
+          meter: string | null
+          month: string | null
+          month_diff_kwh: number | null
+          month_end_kwh: number | null
+          month_start_kwh: number | null
+          month_ttl_php: number | null
+          reading_count: number | null
+        }
+        Relationships: []
+      }
+      view_production_daily: {
+        Row: {
+          bf_kg: number | null
+          bf_sacks: string | null
+          dt_hrs: number | null
+          dt_mins: number | null
+          dt_reason: string | null
+          dt_total_hrs: number | null
+          grit_kg: number | null
+          kg_2x6: number | null
+          kg_3x50: number | null
+          kg_6x50: number | null
+          kg_8x50: number | null
+          prod_loss_pct: number | null
+          production_batch: string | null
+          productive_hrs: number | null
+          rs1a_kg: number | null
+          rs1a_sacks: string | null
+          rs1b_kg: number | null
+          rs1b_sacks: string | null
+          rs23_kg: number | null
+          rs23_sacks: string | null
+          rs5_kg: number | null
+          rs5_sacks: string | null
+          shift: string | null
+          shift_hrs: number | null
+          total_output_kg: number | null
+          total_waste_kg: number | null
+          transaction_date: string | null
+          trml1_kg: number | null
+          trml1_sacks: string | null
+          trml2_kg: number | null
+          trml2_sacks: string | null
+          waste_remarks: string | null
+        }
+        Relationships: []
+      }
       view_rc_in_master: {
         Row: {
           batch_code: string | null
@@ -526,6 +991,18 @@ export type Database = {
             referencedColumns: ["batch_id"]
           },
         ]
+      }
+      view_trucks_monthly: {
+        Row: {
+          month: string | null
+          month_end_km: number | null
+          month_fuel_liters: number | null
+          month_km: number | null
+          month_start_km: number | null
+          plate_no: string | null
+          reading_count: number | null
+        }
+        Relationships: []
       }
     }
     Functions: {

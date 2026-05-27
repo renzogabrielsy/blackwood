@@ -38,6 +38,9 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname.startsWith('/inventory')) {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' };
     }
+    if (pathname.startsWith('/production')) {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' };
+    }
     if (pathname === '/notifications') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
     }
@@ -46,6 +49,9 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     }
     if (pathname === '/admin') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' };
+    }
+    if (pathname === '/review-queue') {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' };
     }
     if (pathname === '/rcindraft1') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 1', pageDescription: 'Banded Zones' };
@@ -98,7 +104,7 @@ type Module = { name: string; href: string; disabled?: boolean };
 
 const MODULES: Module[] = [
     { name: 'Inventory', href: '/inventory' },
-    { name: 'Production', href: '/production', disabled: true },
+    { name: 'Production', href: '/production' },
     { name: 'Accounting', href: '/accounting', disabled: true },
 ];
 
@@ -189,6 +195,9 @@ export function Navbar() {
                             {PRIVILEGED_ROLES.includes(role) && (
                                 <>
                                     <DropdownMenuSeparator />
+                                    <DropdownMenuItem asChild>
+                                        <Link href="/review-queue">Review Queue</Link>
+                                    </DropdownMenuItem>
                                     <DropdownMenuItem asChild>
                                         <Link href="/admin">Admin Panel</Link>
                                     </DropdownMenuItem>
