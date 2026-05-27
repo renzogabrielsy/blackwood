@@ -1,5 +1,17 @@
 # Supabase Backend Engineer Memory
 
+## Production Module Schema (2026-05-27) — [[production-module-schema]]
+
+Migrations `20260527010000_create_production_tables` + `20260527010001_create_production_views` applied. 5 tables + 3 views. No RLS (follows existing pattern). types/supabase.ts regenerated via MCP (CLI gen requires SUPABASE_DB_PASSWORD env var which is not set in this machine). See production-module-schema.md.
+
+## Jarvis Ingestion Pipeline Phase A (2026-05-27) — [[jarvis-ingestion-pipeline]]
+
+`ingestion_watermarks` table applied. RC Deliveries extractor, classifier, diff engine, review queue actions shipped. `xlsx` v0.18.5. Key patterns: `Json as unknown as T[]` for JSONB casts; `(admin as any).from()` for generic table queries. See jarvis-ingestion-pipeline.md.
+
+## Jarvis Foundation (2026-05-26) — [[jarvis-foundation]]
+
+Migration `20260526020000_create_jarvis_tables` applied. 4 tables: jarvis_conversations, jarvis_messages, jarvis_learnings, pending_review. Server actions in `app/(app)/jarvis/actions.ts`. Anthropic SDK v0.98 requires TextBlockParam/ToolUseBlockParam (not TextBlock/ToolUseBlock) when building stored-message history. See jarvis-foundation.md for full details.
+
 ## RC Movement Feature (2026-05-25) — [[project-rc-movement]]
 
 Migration + server action on disk, pending DB apply (project was paused during session).
