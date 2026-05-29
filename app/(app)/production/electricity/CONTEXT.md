@@ -1,9 +1,11 @@
 # Production — Electricity Tab
 
 ## Purpose
-Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF and TTL PHP.
+Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF and CONSUMPTION (KWH).
 
-> **Note:** The monthly summary table (fed by `view_electricity_monthly`) was removed (May 2026) — the format was undesired. The `view_electricity_monthly` DB view still exists but is no longer fetched or rendered.
+> **Schema reworked 2026-05-29 (backend + frontend, shipped):** `electricity_readings.rate_php_per_kwh` was renamed to **`meter_multiplier`** (NOT NULL DEFAULT 120) and a generated stored column **`consumption_kwh` = (end_kwh − start_kwh) × meter_multiplier** was added. The `120` was never a peso rate — the source email labels it a "METER MULTIPLIER" and computes `CONSUMPTION (KWH) = diff × 120` (PRODUCTION_DESIGN.md §15.2 Section D). **There is no peso cost in this data.** The DB layer (`actions.ts`, `types/supabase.ts`) and the UI (`electricity-grid.tsx`) are both updated: the grid's two rightmost data columns are now **MULT** (editable `meter_multiplier`, default 120) and **TTL KWH** (computed `diff × multiplier`, plain right-aligned number — no ₱).
+>
+> **Note:** The monthly summary table (fed by `view_electricity_monthly`) was removed (May 2026) — the format was undesired. The `view_electricity_monthly` DB view was **DROPPED 2026-05-29** (it referenced the old column and computed bogus peso math; nothing queried it).
 
 ## Files
 | File | Role |
@@ -13,14 +15,16 @@ Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF an
 | `electricity-grid.tsx` | Inline-editable grid for `electricity_readings` |
 
 ## Column Order
-`#` / DATE / METER (Select + custom) / START KWH / END KWH / DIFF (computed, read-only) / RATE (price-gated) / TTL PHP (computed, price-gated) / REM / [delete]
+`#` / DATE / METER (Select + custom) / START KWH / END KWH / DIFF (computed, read-only) / MULT (`meter_multiplier`, editable, default 120) / TTL KWH (consumption — computed `diff × multiplier`, read-only) / REM / [delete]
+
+All columns always render (no price gating). DIFF and TTL KWH are read-only/computed; TTL KWH renders as a plain right-aligned `font-mono` number with no ₱ symbol. The DB regenerates the stored `consumption_kwh` column on save, so the UI computes TTL KWH client-side only for live preview and never sends it in the payload.
 
 ## Key Behaviors
 - **Meter select:** MAIN / BUNKHOUSE / PUMP dropdown; choosing "Other (type manually)" switches to free-text Input for that row
-- **Price gating:** RATE and TTL PHP columns hidden for Production role (`!hasPermission('view:prices')`)
-- **Computed DIFF:** `end_kwh - start_kwh`, shown as read-only muted cell
-- **Computed TTL PHP:** `diff × rate`, shown as read-only with ₱ accounting format
-- **Validation:** end_kwh ≥ start_kwh, rate ≥ 0 — enforced server-side in `saveBulkElectricity`
+- **No price gating:** MULT and TTL KWH are operational kWh data (not sensitive pricing) — always visible to all roles. The grid no longer imports `useAuth`/`hasPermission`.
+- **Computed DIFF:** `diff_kwh` is a generated DB column (`end_kwh - start_kwh`), shown as read-only muted cell
+- **Computed TTL KWH (consumption):** `consumption_kwh` is a generated DB column (`(end_kwh - start_kwh) × meter_multiplier`) — raw kWh, NOT pesos. The UI mirrors this client-side (`diff × meter_multiplier`) for live preview as the user edits MULT; the value is not written (DB regenerates it).
+- **Validation:** end_kwh ≥ start_kwh, meter_multiplier ≥ 0 — enforced server-side in `saveBulkElectricity` (note: DB CHECK requires meter_multiplier > 0; insert/update default falls back to 120, so an empty or `0` MULT cell saves as 120)
 - **Empty state:** `animate-fade-up` message "Awaiting Production Manager sync..."
 - **Error toasts:** `errorToast()` from `lib/toast.ts`
 

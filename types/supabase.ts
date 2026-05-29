@@ -213,34 +213,37 @@ export type Database = {
       }
       electricity_readings: {
         Row: {
+          consumption_kwh: number | null
           created_at: string
           diff_kwh: number | null
           end_kwh: number
           id: string
           meter: string
-          rate_php_per_kwh: number
+          meter_multiplier: number
           reading_date: string
           remarks: string | null
           start_kwh: number
         }
         Insert: {
+          consumption_kwh?: number | null
           created_at?: string
           diff_kwh?: number | null
           end_kwh: number
           id?: string
           meter: string
-          rate_php_per_kwh?: number
+          meter_multiplier?: number
           reading_date: string
           remarks?: string | null
           start_kwh: number
         }
         Update: {
+          consumption_kwh?: number | null
           created_at?: string
           diff_kwh?: number | null
           end_kwh?: number
           id?: string
           meter?: string
-          rate_php_per_kwh?: number
+          meter_multiplier?: number
           reading_date?: string
           remarks?: string | null
           start_kwh?: number
@@ -900,19 +903,6 @@ export type Database = {
           block_loc: string | null
           status: string | null
           total_in: number | null
-        }
-        Relationships: []
-      }
-      view_electricity_monthly: {
-        Row: {
-          avg_rate_php: number | null
-          meter: string | null
-          month: string | null
-          month_diff_kwh: number | null
-          month_end_kwh: number | null
-          month_start_kwh: number | null
-          month_ttl_php: number | null
-          reading_count: number | null
         }
         Relationships: []
       }

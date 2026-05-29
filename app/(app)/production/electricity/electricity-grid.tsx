@@ -29,7 +29,6 @@ import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
-import { useAuth } from '@/components/providers/auth-context';
 import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
 import { saveBulkElectricity } from './actions';
 import type { Tables } from '@/types/supabase';
@@ -53,26 +52,26 @@ interface GridRow {
     _meter_select: string; // '__custom__' if typed manually
     start_kwh: string;
     end_kwh: string;
-    rate_php_per_kwh: string;
+    meter_multiplier: string;
     remarks: string;
 }
 
-// col 0: row#, 1: date, 2: meter, 3: start_kwh, 4: end_kwh, 5: diff (computed), 6: rate, 7: ttl_php (computed), 8: remarks, 9: delete
+// col 0: row#, 1: date, 2: meter, 3: start_kwh, 4: end_kwh, 5: diff (computed), 6: meter_multiplier, 7: consumption kwh (computed), 8: remarks, 9: delete
 const COL_MAP: (keyof GridRow | null)[] = [
-    null,              // 0: row#
-    'reading_date',    // 1
-    'meter',           // 2
-    'start_kwh',       // 3
-    'end_kwh',         // 4
-    null,              // 5: DIFF (computed)
-    'rate_php_per_kwh', // 6
-    null,              // 7: TTL PHP (computed)
-    'remarks',         // 8
-    null,              // 9: delete
+    null,                // 0: row#
+    'reading_date',      // 1
+    'meter',             // 2
+    'start_kwh',         // 3
+    'end_kwh',           // 4
+    null,                // 5: DIFF (computed)
+    'meter_multiplier',  // 6
+    null,                // 7: TTL KWH (computed)
+    'remarks',           // 8
+    null,                // 9: delete
 ];
 const COL_COUNT = COL_MAP.length;
 
-const NUMERIC_COLS = new Set<keyof GridRow>(['start_kwh', 'end_kwh', 'rate_php_per_kwh']);
+const NUMERIC_COLS = new Set<keyof GridRow>(['start_kwh', 'end_kwh', 'meter_multiplier']);
 
 function createEmptyRow(): GridRow {
     return {
@@ -82,7 +81,7 @@ function createEmptyRow(): GridRow {
         _meter_select: 'MAIN',
         start_kwh: '',
         end_kwh: '',
-        rate_php_per_kwh: '',
+        meter_multiplier: '120',
         remarks: '',
     };
 }
@@ -97,7 +96,7 @@ function dbRowToGridRow(r: ElectricityReadingRow): GridRow {
         _meter_select: isKnown ? r.meter : '__custom__',
         start_kwh: r.start_kwh != null ? String(r.start_kwh) : '',
         end_kwh: r.end_kwh != null ? String(r.end_kwh) : '',
-        rate_php_per_kwh: r.rate_php_per_kwh != null ? String(r.rate_php_per_kwh) : '',
+        meter_multiplier: r.meter_multiplier != null ? String(r.meter_multiplier) : '',
         remarks: r.remarks ?? '',
     };
 }
@@ -119,8 +118,6 @@ interface ElectricityGridProps {
 
 export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridProps) {
     const { setCellSelectionCount, setCellAggregates } = useStatusBar();
-    const { hasPermission } = useAuth();
-    const canViewPrices = hasPermission('view:prices');
     const gridRef = React.useRef<HTMLDivElement>(null);
 
     const [rows, setRows] = React.useState<GridRow[]>(() => {
@@ -151,8 +148,8 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
             }
             if (colIdx === 7) {
                 const diff = (parseFloat(row.end_kwh) || 0) - (parseFloat(row.start_kwh) || 0);
-                const rate = parseFloat(row.rate_php_per_kwh) || 0;
-                return diff >= 0 ? (diff * rate).toFixed(2) : '';
+                const multiplier = parseFloat(row.meter_multiplier) || 0;
+                return diff >= 0 ? (diff * multiplier).toFixed(2) : '';
             }
             const field = COL_MAP[colIdx];
             if (!field) return '';
@@ -177,7 +174,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         (colIdx: number): AggregationType | null => {
             const field = COL_MAP[colIdx];
             if (field === 'start_kwh' || field === 'end_kwh') return 'SUM';
-            if (field === 'rate_php_per_kwh') return 'AVERAGE';
+            if (field === 'meter_multiplier') return 'AVERAGE';
             return null;
         },
         []
@@ -296,7 +293,6 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
     const moveActive = React.useCallback((key: string, shift: boolean) => {
         if (!activeCell) return;
         let { row, col } = activeCell;
-        const effectiveCOLCount = canViewPrices ? COL_COUNT : COL_COUNT - 2; // skip rate + ttl if hidden
         if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
         else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
         else if (key === 'ArrowLeft') { do { col--; } while (col > 0 && COL_MAP[col] === null); col = Math.max(0, col); }
@@ -307,8 +303,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         } else if (key === 'Home') col = 1;
         else if (key === 'End') col = COL_COUNT - 2;
         setActiveCell({ row, col });
-        void effectiveCOLCount; // used to avoid unused-var warning
-    }, [activeCell, rows.length, canViewPrices]);
+    }, [activeCell, rows.length]);
 
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
         if (!activeCell) return;
@@ -402,7 +397,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                         meter: row.meter,
                         start_kwh: parseFloat(row.start_kwh) || 0,
                         end_kwh: parseFloat(row.end_kwh) || 0,
-                        rate_php_per_kwh: parseFloat(row.rate_php_per_kwh) || 0,
+                        meter_multiplier: parseFloat(row.meter_multiplier) || 120,
                         remarks: row.remarks || null,
                     });
                 } else if (row._state === 'modified' && row._id) {
@@ -413,7 +408,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                             meter: row.meter,
                             start_kwh: parseFloat(row.start_kwh) || 0,
                             end_kwh: parseFloat(row.end_kwh) || 0,
-                            rate_php_per_kwh: parseFloat(row.rate_php_per_kwh) || 0,
+                            meter_multiplier: parseFloat(row.meter_multiplier) || 120,
                             remarks: row.remarks || null,
                         },
                     });
@@ -490,12 +485,8 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                 <TableHead className="w-[80px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">START KWH</TableHead>
                                 <TableHead className="w-[80px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">END KWH</TableHead>
                                 <TableHead className="w-[70px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10 bg-muted/50">DIFF</TableHead>
-                                {canViewPrices && (
-                                    <>
-                                        <TableHead className="w-[70px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">RATE</TableHead>
-                                        <TableHead className="w-[90px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10 bg-muted/50">TTL PHP</TableHead>
-                                    </>
-                                )}
+                                <TableHead className="w-[70px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">MULT</TableHead>
+                                <TableHead className="w-[90px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10 bg-muted/50">TTL KWH</TableHead>
                                 <TableHead className="w-[50px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">REM</TableHead>
                                 <TableHead className="w-[20px] h-7 p-0"></TableHead>
                             </TableRow>
@@ -503,7 +494,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                         <TableBody>
                             {rows.length === 1 && rows[0]._state === 'new' && (
                                 <TableRow className="hover:bg-transparent">
-                                    <TableCell colSpan={canViewPrices ? 10 : 8} className="py-8 text-center">
+                                    <TableCell colSpan={10} className="py-8 text-center">
                                         <p className="text-xs text-muted-foreground animate-fade-up">
                                             Awaiting Production Manager sync. Start typing in the empty row, or paste a range from Excel.
                                         </p>
@@ -512,8 +503,8 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                             )}
                             {rows.map((row, rowIdx) => {
                                 const diff = (parseFloat(row.end_kwh) || 0) - (parseFloat(row.start_kwh) || 0);
-                                const rate = parseFloat(row.rate_php_per_kwh) || 0;
-                                const ttlPhp = diff >= 0 ? diff * rate : 0;
+                                const multiplier = parseFloat(row.meter_multiplier) || 0;
+                                const consumption = diff >= 0 ? diff * multiplier : 0;
                                 const isDeleted = row._state === 'deleted';
                                 const isDirtyRow = row._state === 'modified';
 
@@ -578,22 +569,16 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                         <TableCell className="px-1 py-0 border-r border-border/30 bg-muted/20 font-mono text-right text-xs text-muted-foreground" style={{ height: '28px' }}>
                                             {diff >= 0 && diff !== 0 ? diff.toFixed(2) : ''}
                                         </TableCell>
-                                        {/* RATE + TTL PHP — price-gated */}
-                                        {canViewPrices && (
-                                            <>
-                                                <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                                    <GridCell col={6} row={rowIdx} value={row.rate_php_per_kwh} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 6)}>
-                                                        <Input autoFocus type="number" step="0.01" value={row.rate_php_per_kwh} onChange={e => updateRow(rowIdx, 'rate_php_per_kwh', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
-                                                    </GridCell>
-                                                </TableCell>
-                                                <TableCell className="px-1 py-0 border-r border-border/30 bg-muted/20 font-mono text-right text-xs" style={{ height: '28px' }}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{ttlPhp > 0 ? ttlPhp.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}</span>
-                                                    </div>
-                                                </TableCell>
-                                            </>
-                                        )}
+                                        {/* MULT — editable meter multiplier */}
+                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
+                                            <GridCell col={6} row={rowIdx} value={row.meter_multiplier} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 6)}>
+                                                <Input autoFocus type="number" step="0.01" value={row.meter_multiplier} onChange={e => updateRow(rowIdx, 'meter_multiplier', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
+                                            </GridCell>
+                                        </TableCell>
+                                        {/* TTL KWH — computed (diff × multiplier) */}
+                                        <TableCell className="px-1 py-0 border-r border-border/30 bg-muted/20 font-mono text-right text-xs" style={{ height: '28px' }}>
+                                            {consumption > 0 ? consumption.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ''}
+                                        </TableCell>
                                         {/* REMARKS */}
                                         <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                             <GridCell

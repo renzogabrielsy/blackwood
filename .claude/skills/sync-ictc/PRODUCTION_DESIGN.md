@@ -1,8 +1,8 @@
 # Production Domain — Ingestion Design Scaffold
 
-> **Status:** Pre-build scaffold. Not yet implemented. Use this to evaluate scope before committing.
+> **Status:** Phase 0.5 complete (live source emails deep-read + verified 2026-05-29). All structural decisions LOCKED. Schema + UI + MASTER backfill already built. **Ready to build the Production Manager agent + email extractors.** See **Section 15** for the canonical scrape maps and verified mappings — that is the build reference.
 >
-> **Source of truth examined:** `/Users/renzosy/Documents/1A WORK FILES/ICTC/MASTER - ICTC INPUT FILE V1.xlsx`, sheet **PROD** (638 rows × 36 cols, latest data 2026-05-23).
+> **Source of truth examined:** `/Users/renzosy/Documents/1A WORK FILES/ICTC/MASTER - ICTC INPUT FILE V1.xlsx` (sheet **PROD**, backfill source) **plus the two live daily emails** (deep-read 2026-05-29): MC's `Daily Production Report 2026 2Q.xlsx` (one sheet per day) and Ivy's `WASTE PRODUCTION REPORT 2026.xlsx` (one sheet per month).
 >
 > **Companion design docs:** `RC_OUT_DESIGN.md` (already implemented).
 
@@ -410,6 +410,8 @@ Structure (verified): per-truck column groups, side-by-side. Each truck:
 
 ### Proposed tables
 
+> ⚠️ **SUPERSEDED 2026-05-29 (see Section 15) — DONE, applied as `20260529000000_rework_electricity_to_meter_multiplier`:** the `rate_php_per_kwh` column below is a misnomer. The live MC email labels the `120` a **METER MULTIPLIER** and computes `CONSUMPTION (KWH) = diff × 120` — there is **no peso cost** in the source. The migration renamed `rate_php_per_kwh → meter_multiplier` and added a generated `consumption_kwh = (end_kwh − start_kwh) × meter_multiplier` (against BASE columns, NOT the generated `diff_kwh` — Postgres forbids generated-on-generated). `view_electricity_monthly` (with its `month_ttl_php` peso math) was DROPPED. The `CREATE TABLE electricity_readings` snippet below reflects the OLD shape — see Section 14 for the live schema.
+
 ```sql
 CREATE TABLE electricity_readings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -612,6 +614,14 @@ All previously-open questions have been answered by Phase 0 inspection — see S
 
 **No remaining blockers.** Phase 1 (migration) can begin whenever you give the go-ahead.
 
+### Decisions LOCKED — 2026-05-29 (from Renzo, after live email deep-read; full evidence in Section 15)
+
+- ✅ **2nd shift canonical code = `E`.** MC's email labels it "NIGHT SHIFT", Ivy's labels it "EVENING SHIFT" — they are the **same physical 2nd shift**. Both extractors must emit `E`. **No data migration needed** — the MASTER backfill already wrote M(140)/E(18), zero `N` rows. `N` stays reserved for a true future 3rd shift.
+- ✅ **Waste stream mapping = positional, names unchanged.** Keep schema columns `bf_kg/trml1_kg/trml2_kg`; Ivy's `FILTER/UNCOOKED-SHELL/STONES` map into them. **Verified 8/8 value-for-value** against MASTER on 2026-05-22 and 2026-05-23 (Renzo's MASTER literally is Ivy's email with renamed headers). Full mapping table in Section 15.
+- ✅ **Electricity rework (Phase 1 migration).** `rate_php_per_kwh → meter_multiplier`; add generated `consumption_kwh = diff_kwh × meter_multiplier`; rewrite `view_electricity_monthly` (drop `month_ttl_php` peso math). DB stores **raw** readings + the 120 factor, so MAIN auto-recomputes — no row rewrite. BUNKHOUSE/PUMP keep multiplier=120 (idle since 2025-12-12; confirm if direct-read later).
+- ✅ **Downtime → aggregate to M shift.** MC's email gives per-DAY downtime with multiple time-windowed events in single cells. Sum all event minutes, concatenate reasons into `dt_reason`, write ONE downtime row on the day's **M** shift. Renzo will ask MC to split downtime by shift in the future. `shift_hrs` defaulted (proposed 12) until the email provides it cleanly.
+- ✅ **transaction_date = the day-sheet name**, NOT the in-sheet `D4` date header. Verified: sheet `05-27-26` has `D4="MAY 28, 2026"` (the next-morning write date). Use the `MM-DD-YY` sheet title.
+
 ---
 
 ## 14. Schema Evolution Timeline
@@ -624,3 +634,135 @@ All previously-open questions have been answered by Phase 0 inspection — see S
 | `20260527030000_add_customer_to_production_runs` | 2026-05-27 | Added `customer` column (default `CEBU`) to production_runs and included in natural key. Triggered by MASTER's 2026-04-16 KURARAY event. Backfilled: 205 CEBU + 2 KURARAY rows. |
 | `20260527040000_restructure_production_to_shifts_model` | 2026-05-28 | **Major restructure.** Created `production_shifts` parent table. Backfilled 158 shift rows from child UNION. Added `shift_id` FK to all 3 child tables. Swapped natural keys to shift_id-based. Dropped `transaction_date`, `production_batch`, `shift` from child tables. Dropped 7 SKS columns from production_waste. Dropped old date-based indexes, added FK indexes. |
 | `20260527040001_rewrite_view_production_daily` | 2026-05-28 | Rewrote view_production_daily. Now drives from production_shifts (LEFT JOIN to children via shift_id). Exposes `shift_id` as row identifier. SKS columns removed. FULL OUTER JOIN replaced by LEFT JOIN from parent. |
+| `20260529000000_rework_electricity_to_meter_multiplier` | 2026-05-29 | **Electricity semantics fix.** Renamed `electricity_readings.rate_php_per_kwh → meter_multiplier` (kept NOT NULL DEFAULT 120 + values; renamed the dependent CHECK constraint to match). Added generated stored column `consumption_kwh = (end_kwh - start_kwh) × meter_multiplier` (defined against BASE columns — Postgres forbids referencing the generated `diff_kwh`). Dropped `view_electricity_monthly` (referenced the old column + computed bogus `month_ttl_php` peso math; UI removed May 2026, unqueried). DB stores raw readings + the 120 factor, so MAIN's 331 rows recompute automatically — no row rewrite. Row counts unchanged (MAIN 331 / BUNKHOUSE 205 / PUMP 205). MAIN 2026-05-23 verified: 7.0 × 120 = 840 kWh. Data layer (`electricity/actions.ts`, `types/supabase.ts`) updated; `electricity-grid.tsx` UI refs left for the frontend engineer. `view_trucks_monthly` left intact (different table, unused but out of electricity scope). |
+
+---
+
+## 15. Phase 0.5 — Live source-email deep-read + verification (2026-05-29)
+
+> **This section is the canonical build reference for the email extractors.** Everything below was read from the *actual* daily emails (not MASTER) and cross-checked against the live DB. Coordinates verified on the `05-27-26` and `05-28-26` MC sheets and the `MAY 2026` Ivy sheet.
+
+### 15.1 The two source emails
+
+| Email | Sender | Subject (exact) | Attachment | Workbook structure |
+|---|---|---|---|---|
+| Daily Production Report | `mccontinedo.ictc@gmail.com` | `Daily Production Report` | `Daily Production Report 2026 2Q.xlsx` (~744 KB) | **One sheet per production DAY**, title `MM-DD-YY` (often with trailing whitespace — strip it). 44 sheets for Q2. |
+| WASTE PRODUCTION REPORT | `edilloivymae306ictc@gmail.com` | `WASTE PRODUCTION REPORT` | `WASTE PRODUCTION REPORT 2026.xlsx` (~38 KB) | **One sheet per MONTH**, title `MONTHNAME YYYY` (note leading space on some, e.g. `" APRIL 2026"`). Rows = days within the month. |
+
+Fetch queries (Gmail X-GM-RAW, via `fetch_gmail.py`):
+- MC: `from:mccontinedo.ictc@gmail.com subject:"Daily Production Report" after:{since} -label:"Blackwood-Processed"`
+- Ivy: `from:edilloivymae306ictc@gmail.com subject:"WASTE PRODUCTION REPORT" after:{since} -label:"Blackwood-Processed"`
+
+Both files are **consolidated/cumulative** (the latest email carries the whole 2026 file), so — like RC OUT — pick the LATEST attachment and process sheets/rows newer than the watermark.
+
+### 15.2 MC email — scrape map (per day-sheet)
+
+`transaction_date` = the **sheet title** (`MM-DD-YY`). Do NOT use cell `D4` (that's the next-morning write date).
+
+**Section A — Production output → `production_runs`** (header row 7; data rows ~8–12):
+
+| Cell | Meaning |
+|---|---|
+| `D{r}` | Grade with customer prefix, e.g. `CEBU 3X50` |
+| `E{r}` | #sacks/bags |
+| `F{r}` | #kilos per sack |
+| `G{r}` | **TOTAL kg** (= E×F) → `ttl_kg` |
+| `H{r}` | Shift label: `MORNING SHIFT` / `NIGHT SHIFT` |
+| `C13`,`G13` | `TOTAL` row, day total (CEBU only) — reconciliation check |
+
+Routing: strip `CEBU ` → `grade`, `customer='CEBU'`. Bare grade (no prefix) → as-is. **DROP** `KOREA POWDER`, `LOCAL POWDER`, `ZAMBOANGA …` and any non-allowlist grade (out of v1 scope). Shift `NIGHT SHIFT → E`.
+
+**Section B — Downtime → `production_downtime`** (left block ~rows 24–27):
+
+| Cell | Meaning |
+|---|---|
+| `C24` | Category, e.g. `REPAIR` |
+| `F25` | `DURATION` header |
+| `C27` | Time-range(s), newline-separated (e.g. `8:00 AM-8:09 AM\n8:25 AM-…`) |
+| `E27` | Duration value(s) in **MINUTES**, newline-separated (e.g. `9 MINUTES\n19 MINUTES`) |
+| `F27` | Reason text (e.g. `CLEANED SCREENS RS 2A, RS 2B`) |
+
+Aggregate: `dt_mins = sum(all event minutes)`, `dt_reason = category + " | " + joined reasons`. Write ONE row on the day's **M** shift. `shift_hrs` not cleanly present (`C26` holds an ambiguous integer like `7`) → **default `shift_hrs=12`**. Only create a row when downtime actually occurred.
+
+**Section C — Trucks → `truck_readings`** (header row 46; data rows 47, 49, 51):
+
+| Cell | Meaning |
+|---|---|
+| `C{r}` | Plate: `AAV 6111` (47), `KCA 378` (49), 3rd vehicle/FORKLIFT (51, plate may be blank) |
+| `D{r}` | Departure meter reading → `start_km` |
+| `E{r}` | Arrival meter reading → `end_km` |
+| `F{r}` | Total distance traveled (`ttl_km`; generated = end−start) |
+| `H{r}` | Liters issued → `fuel_liters` (when numeric) |
+| `J{r}`,`K{r}` | Starting/arriving fuel **gauge** (qualitative, e.g. `more than 1/2`) → `remarks` |
+| `L{r}` | Weekly Fuel Issued (liters) — weekly cumulative, decide use during build |
+
+Sample days showed `F=0` (idle). Skip a truck row when no movement AND no fuel.
+
+**Section D — Electricity MAIN → `electricity_readings` (meter `MAIN`)** (rows 53–60):
+
+| Cell | Meaning |
+|---|---|
+| `D54` | PREVIOUS READING → `start_kwh` (raw) |
+| `E54` | PRESENT READING → `end_kwh` (raw) |
+| `F54` | KWH DIFFERENCE (raw, = E54−D54) |
+| `E59`/`E60` | `METER MULTIPLIER` / value `120` → `meter_multiplier` |
+| `F59`/`F60` | `CONSUMPTION (KWH)` = diff × 120 → equals generated `consumption_kwh` |
+
+**Section E — Electricity BUNKHOUSE/PUMP** (rows 63–69): `A65=BUNKHOUSE`, `A67=PUMP`; `D=`prev, `E=`current, `F=`consumption. **Idle since 2025-12-12** (0/blank in 2026) — skip blank rows.
+
+Deferred sections present in the email (NOT v1): charcoal fed (R21–26), PC stockpile (R30–34), RC tank level (R37–38), dump-truck refuse (R41), sundry (R71–74), magnet/ayag (R78–115), re-classify/blending/re-bagging/weight-adjust (R118–136).
+
+### 15.3 Ivy email — scrape map (per month-sheet)
+
+Header spans rows 2–4. `A{r}` = the day's date. Data rows start ~row 5.
+
+| Stream | SACKS col (dropped) | **KLS col → schema** |
+|---|---|---|
+| R.S. #1 DUST (RS 1A) | B | **C → `rs1a_kg`** |
+| RS 1B | D | **E → `rs1b_kg`** |
+| FILTER | F | **G → `bf_kg`** |
+| RS 2&3 | H | **I → `rs23_kg`** |
+| R.S. 5 | J | **K → `rs5_kg`** |
+| UNCOOKED/SHELL | L | **M → `trml1_kg`** |
+| STONES | N | **O → `trml2_kg`** |
+| GRIT | P | **Q → `grit_kg`** |
+| TOTAL WASTE | — | R (reconciliation check) |
+| buyer note | — | S (e.g. `PCG/BUNAWAN`) — informational |
+| shift | — | V (`MORNING SHIFT`/`EVENING SHIFT`, only on dual-shift days) |
+
+Per (date, shift) → one `production_waste` row. Shift: `V` MORNING→M, EVENING→**E**; **absent V** (pre-2026-05-25 single daily totals)→**M**. **Skip**: the first row if it's a prior-month carryover date (e.g. `2026-04-30` in the MAY sheet), the trailing `0` stub rows, and the bottom **column-sum footer** row (all KLS columns summed, large `R` grand total).
+
+### 15.4 Verification — waste positional mapping is correct (8/8, two dates)
+
+`extract_master_prod.py` (MASTER, schema names) vs Ivy email (KLS cols), exact values:
+
+| Date | rs1a | rs1b | bf | rs23 | rs5 | trml1 | trml2 | grit | result |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-05-22 | 2159 | 1915 | 165 | 579 | 160 | 125 | 0.5 | 30 | **8/8 ✓** |
+| 2026-05-23 | 2507 | 1814 | 175 | 526 | 95 | 125 | 0.5 | 27 | **8/8 ✓** |
+
+Conclusion: MASTER's WASTE SUMMARY IS Ivy's email with renamed headers (FILTER=BF, UNCOOKED/SHELL=TRML1, STONES=TRML2). Positional mapping preserves both per-stream values and totals.
+
+### 15.5 Live DB reality (queried 2026-05-29)
+
+- **`production_shifts`:** `M=140`, `E=18`, `N=0`. → 2nd-shift `E` decision needs **no migration**.
+- **`electricity_readings`:** `MAIN` 331 rows (2025-03-01 → 2026-05-23, **daily**); `BUNKHOUSE` 205 & `PUMP` 205 (both end 2025-12-12, idle since). MAIN 5/23 sample: `start=391.7 end=398.7 diff=7.0 rate=120` → 840 kWh. **Raw readings stored** → electricity rework is a clean rename + generated column, MAIN recomputes automatically.
+- DB latest production date ≈ 2026-05-23; first email catch-up window = **5/24 → 5/28**.
+
+### 15.6 Shift normalization (canonical)
+
+| Source label | Operator | Canonical code |
+|---|---|---|
+| `MORNING SHIFT` | MC + Ivy | `M` |
+| `NIGHT SHIFT` | MC | `E` |
+| `EVENING SHIFT` | Ivy | `E` |
+| (absent, single daily waste row) | Ivy pre-5/25 | `M` |
+| (future 3rd shift) | — | `N` (reserved, unused) |
+
+### 15.7 Remaining minor open items (non-blocking; sensible defaults chosen)
+
+1. **`shift_hrs` for downtime** — email lacks a clean value; default `12`. Refine if MC starts reporting shift length.
+2. **BUNKHOUSE/PUMP multiplier** — assumed `120` like MAIN (idle in 2026). Confirm if direct-read (multiplier 1) when they resume.
+3. **Truck `fuel_liters`** — use `H` (Liters issued); `L` (Weekly Fuel Issued) is weekly-cumulative — decide whether to record. Gauge `J/K` → remarks.
+4. **Truck 3rd vehicle (row 51)** — plate often blank (FORKLIFT?). Enumerate full plate list during build.
+5. **Pre-5/25 Ivy single-row days** — waste attached to `M` (consistent with the downtime→M rule).

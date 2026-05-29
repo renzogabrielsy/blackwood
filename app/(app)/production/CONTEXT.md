@@ -26,8 +26,8 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | Tab | Submodule | Data | UI |
 |-----|-----------|------|----|
 | Daily | `daily/` | `production_shifts`, `production_runs`, `production_downtime`, `production_waste` | ONE unified inline-editable ledger (replaces 3 side-by-side grids as of 2026-05-28) |
-| Electricity | `electricity/` | `electricity_readings`, `view_electricity_monthly` | Single inline-editable grid + monthly summary |
-| Trucks | `trucks/` | `truck_readings`, `view_trucks_monthly` | Single inline-editable grid + monthly summary |
+| Electricity | `electricity/` | `electricity_readings` | Single inline-editable grid (monthly summary removed May 2026; `view_electricity_monthly` dropped 2026-05-29) |
+| Trucks | `trucks/` | `truck_readings` | Single inline-editable grid (monthly summary removed; `view_trucks_monthly` still exists but unused) |
 
 ## Grid Architecture (Excel-Style)
 All 5 grids share the same pattern (modelled after `bulk-delivery-input.tsx`):
@@ -91,13 +91,13 @@ The Year + Batch picker is a **module-level, shared period control** — NOT per
 - `production_waste` — `shift_id` (FK), 8 waste stream kg columns (rs1a/rs1b/bf/rs23/rs5/trml1/trml2/grit). Natural key: `(shift_id)` — exactly 1 per shift. **SKS columns dropped 2026-05-28** — mixed-type text blobs with no aggregation value.
 
 **Other tables (unaffected by restructure):**
-- `electricity_readings` — date, meter (MAIN/BUNKHOUSE/PUMP), start_kwh, end_kwh, rate_php_per_kwh
+- `electricity_readings` — date, meter (MAIN/BUNKHOUSE/PUMP), start_kwh (raw reading), end_kwh (raw reading), diff_kwh (generated = end−start), **meter_multiplier** (NOT NULL DEFAULT 120), **consumption_kwh** (generated = (end−start) × meter_multiplier). The `120` is a METER MULTIPLIER, NOT a peso rate — source email computes `CONSUMPTION (KWH) = diff × 120`. Renamed from `rate_php_per_kwh` 2026-05-29 (see PRODUCTION_DESIGN.md §15.2 Section D).
 - `truck_readings` — date, plate_no, start_km, end_km, fuel_liters
 
 **Views:**
 - `view_production_daily` — one row per `production_shifts` entry. Joins runs (LEFT, aggregated by grade), downtime (LEFT, 1:1), waste (LEFT, 1:1) via shift_id. Exposes `shift_id` as row identifier. Computes dt_total_hrs, productive_hrs, total_waste_kg, prod_loss_pct.
-- `view_electricity_monthly` — monthly aggregates per meter
-- `view_trucks_monthly` — monthly aggregates per plate
+- ~~`view_electricity_monthly`~~ — **DROPPED 2026-05-29** (referenced the old `rate_php_per_kwh` column + computed a bogus `month_ttl_php` peso total; the monthly-summary UI was removed May 2026 and nothing queried it).
+- `view_trucks_monthly` — monthly aggregates per plate (note: also unused by the UI — monthly summary card was removed; harmless but a candidate for future cleanup)
 
 **Note (2026-05-27):** `production_runs.customer` was added during the MASTER backfill. Default `CEBU` covers ~99% of rows. The `production-runs-grid.tsx` UI does not yet expose a customer column — new rows entered via the grid will silently default to `CEBU` via the DB default. Follow-up UI work: add a customer dropdown to the grid for non-CEBU rows.
 

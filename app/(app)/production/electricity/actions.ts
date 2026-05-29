@@ -87,8 +87,8 @@ export async function saveBulkElectricity(
         if (Number(r.end_kwh) < Number(r.start_kwh)) {
             return { ok: false, error: `Insert row ${i + 1}: End KWH must be ≥ Start KWH.` };
         }
-        if (Number(r.rate_php_per_kwh ?? 0) < 0) {
-            return { ok: false, error: `Insert row ${i + 1}: Rate must be 0 or greater.` };
+        if (Number(r.meter_multiplier ?? 0) < 0) {
+            return { ok: false, error: `Insert row ${i + 1}: Meter multiplier must be 0 or greater.` };
         }
     }
 
@@ -102,7 +102,7 @@ export async function saveBulkElectricity(
                 ...r,
                 start_kwh: Number(r.start_kwh),
                 end_kwh: Number(r.end_kwh),
-                rate_php_per_kwh: Number(r.rate_php_per_kwh ?? 0),
+                meter_multiplier: Number(r.meter_multiplier ?? 120),
             }))
         );
         if (error) return { ok: false, error: translateDbError(error.message) };
