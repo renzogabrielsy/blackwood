@@ -47,6 +47,11 @@ Usage:
     python3 extract_waste_production.py --file path/to/WASTE.xlsx
     python3 extract_waste_production.py --file path/to/WASTE.xlsx --sheet "MAY 2026"
     python3 extract_waste_production.py --file path/to/WASTE.xlsx --all-sheets
+    python3 extract_waste_production.py --file path/to/WASTE.xlsx --all-sheets --since 2026-05-23
+        # ^ keep ONLY waste rows dated STRICTLY AFTER the watermark (exclusive). The
+        #   watermark is the latest already-ingested date, which we do NOT re-ingest.
+        #   Filtering is per-ROW (sheets are monthly, rows can be carryovers), and the
+        #   summary is recomputed over kept rows only. Omit --since for full backfill.
 
 Output: JSON to stdout — { filename, sheets_processed, waste[], summary }
 """
@@ -168,6 +173,17 @@ def normalize_shift(value: Any) -> str:
     return "M"
 
 
+def parse_since(value: str | None) -> date | None:
+    """
+    Parse the optional --since watermark ('YYYY-MM-DD') into a date. Returns None when
+    --since is omitted (no filtering). Raises ValueError on a malformed value so main()
+    can surface a clean error instead of silently extracting everything.
+    """
+    if value is None:
+        return None
+    return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+
+
 def sheet_name_to_month(sheet_name: str) -> tuple[int | None, str | None]:
     """Return (month_num, normalized_title) parsed from the sheet title, or (None, None)."""
     m = SHEET_NAME_RE.match(sheet_name)
@@ -181,8 +197,14 @@ def sheet_name_to_month(sheet_name: str) -> tuple[int | None, str | None]:
 # ---------------------------------------------------------------------------
 # Sheet extractor
 # ---------------------------------------------------------------------------
-def extract_sheet(ws, warnings: list[str]) -> list[dict[str, Any]]:
-    """Extract all (date, shift) waste rows from one month-sheet."""
+def extract_sheet(ws, warnings: list[str], since: date | None = None) -> list[dict[str, Any]]:
+    """Extract all (date, shift) waste rows from one month-sheet.
+
+    When `since` is given, rows dated <= since (the watermark) are dropped at the row
+    level — sheets are monthly but rows can be carryovers from an adjacent month, so a
+    per-row date filter is the only correct granularity here. Dropping is silent
+    (mirrors the blank-date skip) so already-ingested history doesn't pollute warnings.
+    """
     sheet_month, sheet_title = sheet_name_to_month(ws.title)
     if sheet_month is None:
         warnings.append(f"Sheet '{ws.title}': cannot parse month from sheet title — sheet skipped")
@@ -196,6 +218,11 @@ def extract_sheet(ws, warnings: list[str]) -> list[dict[str, Any]]:
         # CRITICAL filter: a row without a valid date is either the bottom column-SUM
         # footer (blank A, all KLS cols summed) or a trailing 0-stub row. Skip cleanly.
         if txn_date is None:
+            continue
+
+        # --since watermark (exclusive): keep ONLY rows dated STRICTLY AFTER the
+        # watermark. Skip silently — these are already-ingested days we won't re-emit.
+        if since is not None and txn_date <= since:
             continue
 
         row_warnings: list[str] = []
@@ -262,7 +289,20 @@ def main() -> int:
     parser.add_argument("--sheet", help="Specific month sheet (e.g. 'MAY 2026'). Default: latest sheet.")
     parser.add_argument("--all-sheets", action="store_true",
                         help="Process every month sheet (for catch-up/backfill).")
+    parser.add_argument("--since", default=None,
+                        help="Watermark date 'YYYY-MM-DD'. Keep ONLY waste rows dated "
+                             "STRICTLY AFTER this date (exclusive — the watermark is the "
+                             "latest already-ingested date, which is NOT re-emitted). "
+                             "Omit for full-history backfill (no filtering).")
     args = parser.parse_args()
+
+    try:
+        since = parse_since(args.since)
+    except ValueError:
+        print(json.dumps({
+            "error": f"Invalid --since '{args.since}'. Expected format YYYY-MM-DD."
+        }), file=sys.stderr)
+        return 2
 
     path = Path(args.file)
     if not path.exists():
@@ -307,7 +347,7 @@ def main() -> int:
 
     for name in sheet_names:
         ws = wb[name]
-        rows = extract_sheet(ws, all_warnings)
+        rows = extract_sheet(ws, all_warnings, since)
         all_rows.extend(rows)
         sheets_processed.append(name)
 

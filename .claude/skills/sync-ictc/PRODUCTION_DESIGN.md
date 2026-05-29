@@ -1,6 +1,6 @@
 # Production Domain — Ingestion Design Scaffold
 
-> **Status:** Phase 0.5 complete (live source emails deep-read + verified 2026-05-29). All structural decisions LOCKED. Schema + UI + MASTER backfill already built. **Ready to build the Production Manager agent + email extractors.** See **Section 15** for the canonical scrape maps and verified mappings — that is the build reference.
+> **Status:** Production Manager agent BUILT (2026-05-29) — `.claude/agents/production-manager.md`. Phase 0.5 complete (live source emails deep-read + verified 2026-05-29), all structural decisions LOCKED, schema + UI + MASTER backfill + all 8 Python tools (2 extractors, 5 classifiers, 1 reconciler) + the orchestration agent all built. **Ready for first end-to-end email-driven sync.** See **Section 15** for the canonical scrape maps and verified mappings (the extractor build reference) and **Section 16** for the agent pointer.
 >
 > **Source of truth examined:** `/Users/renzosy/Documents/1A WORK FILES/ICTC/MASTER - ICTC INPUT FILE V1.xlsx` (sheet **PROD**, backfill source) **plus the two live daily emails** (deep-read 2026-05-29): MC's `Daily Production Report 2026 2Q.xlsx` (one sheet per day) and Ivy's `WASTE PRODUCTION REPORT 2026.xlsx` (one sheet per month).
 >
@@ -766,3 +766,23 @@ Conclusion: MASTER's WASTE SUMMARY IS Ivy's email with renamed headers (FILTER=B
 3. **Truck `fuel_liters`** — use `H` (Liters issued); `L` (Weekly Fuel Issued) is weekly-cumulative — decide whether to record. Gauge `J/K` → remarks.
 4. **Truck 3rd vehicle (row 51)** — plate often blank (FORKLIFT?). Enumerate full plate list during build.
 5. **Pre-5/25 Ivy single-row days** — waste attached to `M` (consistent with the downtime→M rule).
+6. **`--since YYYY-MM-DD` watermark filter (added 2026-05-29)** — both extractors (`extract_daily_production.py`, `extract_waste_production.py`) gained an optional `--since` flag that keeps only records dated *strictly after* the watermark (exclusive — the watermark is the latest already-ingested date, not re-ingested). The agent now passes `--since {watermark}` alongside `--all-sheets`, so the cumulative workbooks (MC's quarter, Ivy's year) are filtered deterministically Python-side instead of in agent prose. Fixes the cumulative-workbook window bug found in the 2026-05-29 e2e test: without it the classifier's DB comparison window ballooned to ~5 months and 74 historical null-shift rows surfaced as MALFORMED noise. Omitting `--since` preserves the full-history backfill behavior unchanged.
+
+---
+
+## 16. Production Manager agent (built 2026-05-29)
+
+The orchestration "brain" now exists: **`.claude/agents/production-manager.md`** — the third ICTC ingestion employee, alongside `deliveries-manager.md` and `rc-out-manager.md`. It coordinates the 8 Python tools in §5 + Supabase MCP into the email→DB pipeline. Built mirroring the `rc-out-manager.md` template (frontmatter, PROPOSE/EXECUTE split, pre-flight, error table, operating principles).
+
+**Scope:** six tables from two emails — `production_shifts` (parent) + `production_runs` / `production_downtime` / `production_waste` (children) + `electricity_readings` / `truck_readings` (independent). Sources: MC `Daily Production Report` (runs/downtime/electricity/trucks) + Ivy `WASTE PRODUCTION REPORT` (waste).
+
+**Modes:** PROPOSE (default — fetch + extract + classify 5 types + informational reconcile + summary, no writes) / EXECUTE (upsert shifts → insert children + electricity + trucks → audit logs → Gmail label).
+
+**Five rules baked into the agent:**
+1. Reconciliation is INFORMATIONAL — NEVER halts on drift (opposite of rc-out-manager; §8 feed-tank reason).
+2. `production_shifts` upserted before any child (children FK to `shift_id`; §6).
+3. Null-shift / MALFORMED rows are surfaced, NEVER auto-written.
+4. `customer` is real — CEBU default, KURARAY legitimate (§12); KOREA/LOCAL/ZAMBOANGA powder already dropped by the extractor.
+5. Electricity `meter_multiplier` (120) is a meter factor, not a peso rate; `consumption_kwh` is a generated column — never written (§13/§14).
+
+Idempotency = DB watermark (`MAX(transaction_date) FROM production_shifts`) + Gmail `Blackwood-Processed` label. New agent files don't load mid-session — Renzo must restart Claude Code to register `production-manager` as a named subagent (test via `general-purpose` proxy until then). Next: §11 Phase 8 — first end-to-end test against the 5/24→present catch-up window.

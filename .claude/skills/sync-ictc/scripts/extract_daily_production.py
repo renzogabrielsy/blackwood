@@ -43,6 +43,10 @@ Usage:
     python3 extract_daily_production.py --file "..." --sheet "05-27-26"
     python3 extract_daily_production.py --file "..." --all-sheets
     python3 extract_daily_production.py --file "..." --year 2026   # optional century override
+    python3 extract_daily_production.py --file "..." --all-sheets --since 2026-05-23
+        # ^ keep ONLY day-sheets dated STRICTLY AFTER the watermark (exclusive). The
+        #   watermark is the latest already-ingested date, which we do NOT re-ingest.
+        #   Omit --since for full-history backfill (identical to today's behavior).
 
 Output: JSON to stdout — see the module-level docstring of main() for the full shape.
 """
@@ -219,6 +223,17 @@ def parse_sheet_date(sheet_name: str, year_override: int | None) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
+
+
+def parse_since(value: str | None) -> date | None:
+    """
+    Parse the optional --since watermark ('YYYY-MM-DD') into a date. Returns None when
+    --since is omitted (no filtering). Raises ValueError on a malformed value so main()
+    can surface a clean error instead of silently extracting everything.
+    """
+    if value is None:
+        return None
+    return datetime.strptime(value.strip(), "%Y-%m-%d").date()
 
 
 def production_batch_for(d: date) -> str:
@@ -598,15 +613,22 @@ def extract_sheet(
 # ---------------------------------------------------------------------------
 # Sheet selection
 # ---------------------------------------------------------------------------
-def resolve_sheets(wb, args) -> tuple[list[str], str | None]:
+def resolve_sheets(wb, args, since: date | None) -> tuple[list[str], str | None]:
     """
     Return (sheet_names_to_process, error). Matching tolerates trailing whitespace in
     workbook sheet titles.
+
+    A day-sheet's date applies to ALL of its record types (runs/downtime/electricity/
+    trucks share the sheet's MM-DD-YY title date), so the --since watermark is applied
+    at the sheet level: whole sheets dated <= since are dropped here. This is the
+    cleanest place to filter — every emitted record from a kept sheet is guaranteed
+    newer than the watermark, and the summary stays internally consistent because it
+    only ever sees kept sheets. Sheets whose title date cannot be parsed are KEPT (so
+    extract_sheet can surface the parse warning) — they emit no dated records anyway.
     """
     if args.all_sheets:
-        return list(wb.sheetnames), None
-
-    if args.sheet:
+        selected = list(wb.sheetnames)
+    elif args.sheet:
         target = args.sheet.strip()
         matches = [n for n in wb.sheetnames if n.strip() == target]
         if not matches:
@@ -614,19 +636,32 @@ def resolve_sheets(wb, args) -> tuple[list[str], str | None]:
                 f"Sheet '{target}' not found. Available (stripped): "
                 f"{[n.strip() for n in wb.sheetnames]}"
             )
-        return matches, None
+        selected = matches
+    else:
+        # Default: the LATEST day-sheet (max parseable MM-DD-YY date). Falls back to the
+        # last sheet in the workbook if none parse.
+        dated = []
+        for n in wb.sheetnames:
+            d = parse_sheet_date(n, args.year)
+            if d is not None:
+                dated.append((d, n))
+        if dated:
+            dated.sort(key=lambda t: t[0])
+            selected = [dated[-1][1]]
+        else:
+            selected = [wb.sheetnames[-1]]
 
-    # Default: the LATEST day-sheet (max parseable MM-DD-YY date). Falls back to the
-    # last sheet in the workbook if none parse.
-    dated = []
-    for n in wb.sheetnames:
-        d = parse_sheet_date(n, args.year)
-        if d is not None:
-            dated.append((d, n))
-    if dated:
-        dated.sort(key=lambda t: t[0])
-        return [dated[-1][1]], None
-    return [wb.sheetnames[-1]], None
+    # Apply the --since watermark (exclusive): keep sheets dated STRICTLY AFTER since.
+    # Unparseable-title sheets are kept (they emit no dated records and carry a warning).
+    if since is not None:
+        kept = []
+        for n in selected:
+            d = parse_sheet_date(n, args.year)
+            if d is None or d > since:
+                kept.append(n)
+        selected = kept
+
+    return selected, None
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +679,20 @@ def main() -> int:
                                         "Default: latest sheet.")
     parser.add_argument("--all-sheets", action="store_true",
                         help="Process every sheet (catch-up/backfill).")
+    parser.add_argument("--since", default=None,
+                        help="Watermark date 'YYYY-MM-DD'. Keep ONLY day-sheets dated "
+                             "STRICTLY AFTER this date (exclusive — the watermark is the "
+                             "latest already-ingested date, which is NOT re-emitted). "
+                             "Omit for full-history backfill (no filtering).")
     args = parser.parse_args()
+
+    try:
+        since = parse_since(args.since)
+    except ValueError:
+        print(json.dumps({
+            "error": f"Invalid --since '{args.since}'. Expected format YYYY-MM-DD."
+        }), file=sys.stderr)
+        return 2
 
     path = Path(args.file)
     if not path.exists():
@@ -657,7 +705,7 @@ def main() -> int:
         print(json.dumps({"error": f"Failed to open XLSX: {e}"}), file=sys.stderr)
         return 3
 
-    sheet_names, err = resolve_sheets(wb, args)
+    sheet_names, err = resolve_sheets(wb, args, since)
     if err:
         print(json.dumps({"error": err}), file=sys.stderr)
         return 2
