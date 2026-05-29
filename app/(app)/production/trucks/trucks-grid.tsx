@@ -2,18 +2,12 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
+import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import { errorToast } from '@/lib/toast';
-import { Save, RotateCcw, X, MessageSquareText } from 'lucide-react';
+import { Save, RotateCcw, Calendar } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select';
 import {
     TableBody,
     TableCell,
@@ -21,9 +15,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { TooltipProvider } from '@/components/ui/tooltip';
 import { GridCell } from '@/components/shared/grid/GridCell';
-import { RemarksCellAdaptor } from '@/components/shared/grid/RemarksCellAdaptor';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
@@ -31,98 +23,267 @@ import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-a
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
 import { saveBulkTrucks } from './actions';
-import type { Tables } from '@/types/supabase';
+import type { Tables, TablesInsert, TablesUpdate } from '@/types/supabase';
 
 type TruckReadingRow = Tables<'truck_readings'>;
-type TruckMonthlyRow = Tables<'view_trucks_monthly'>;
 
+// Canonical plate set — always present, in this fixed order. Any extra plate
+// found in the data is appended after these (alphabetically) so columns stay
+// stable on sparse data but new trucks still surface.
 const KNOWN_PLATES = ['AAV 6111', 'KCA 378', 'FORKLIFT'] as const;
-const PLATE_OPTIONS: { value: string; label: string }[] = [
-    ...KNOWN_PLATES.map(p => ({ value: p, label: p })),
-    { value: '__custom__', label: 'Other (type manually)' },
-];
 
-type RowState = 'existing' | 'new' | 'modified' | 'deleted';
+// Per-plate metric fields (editable). TTL is computed (end − start) and never written.
+type MetricField = 'start_km' | 'end_km' | 'fuel_liters';
 
-interface GridRow {
-    _state: RowState;
-    _id?: string;
-    reading_date: string;
-    plate_no: string;
-    _plate_select: string;
+// ─── Column geometry ───────────────────────────────────────────────────────────
+// Col 0 = DATE (frozen). Then each plate contributes 4 columns:
+//   [start_km, end_km, ttl_km (computed/null), fuel_liters]
+// SUBCOLS_PER_PLATE = 4. The TTL column (offset 2) is computed → null in COL_MAP.
+const SUBCOLS_PER_PLATE = 4;
+const DATE_COL_WIDTH = 96;
+const SUBCOL_WIDTH = 72;
+
+interface PlateColumn {
+    plate: string;
+    /** First column index for this plate group (the START KM subcolumn). */
+    startCol: number;
+    /** Left offset (px) of the group — used only for the (frozen) DATE measure. */
+}
+
+/** A single editable cell address inside a plate group. */
+interface CellAddr {
+    plate: string;
+    field: MetricField;
+}
+
+// ─── Row model ───────────────────────────────────────────────────────────────
+// One grid row per reading_date. Each row holds, per plate, the editable values
+// plus the originating DB row id (if any) so saves can update-by-id.
+type RowDirtyState = 'existing' | 'new' | 'modified' | 'deleted';
+
+interface PlateCell {
+    _id?: string;        // truck_reading id (undefined → insert)
     start_km: string;
     end_km: string;
     fuel_liters: string;
-    remarks: string;
+    remarks: string;     // preserved across edits (not shown as a column)
+    _dirty: boolean;     // this plate-cell was touched
 }
 
-// col 0: row#, 1: date, 2: plate, 3: start_km, 4: end_km, 5: ttl_km (computed), 6: fuel, 7: remarks, 8: delete
-const COL_MAP: (keyof GridRow | null)[] = [
-    null,          // 0: row#
-    'reading_date', // 1
-    'plate_no',    // 2
-    'start_km',    // 3
-    'end_km',      // 4
-    null,          // 5: TTL KM (computed)
-    'fuel_liters', // 6
-    'remarks',     // 7
-    null,          // 8: delete
-];
-const COL_COUNT = COL_MAP.length;
-
-const NUMERIC_COLS = new Set<keyof GridRow>(['start_km', 'end_km', 'fuel_liters']);
-
-function createEmptyRow(): GridRow {
-    return {
-        _state: 'new',
-        reading_date: new Date().toISOString().split('T')[0],
-        plate_no: 'AAV 6111',
-        _plate_select: 'AAV 6111',
-        start_km: '',
-        end_km: '',
-        fuel_liters: '',
-        remarks: '',
-    };
+interface GridRow {
+    _state: RowDirtyState;
+    reading_date: string;
+    /** plate_no → values for that truck on this date */
+    cells: Record<string, PlateCell>;
 }
 
-function dbRowToGridRow(r: TruckReadingRow): GridRow {
-    const isKnown = (KNOWN_PLATES as readonly string[]).includes(r.plate_no);
+function emptyPlateCell(): PlateCell {
+    return { start_km: '', end_km: '', fuel_liters: '', remarks: '', _dirty: false };
+}
+
+function dbRowToPlateCell(r: TruckReadingRow): PlateCell {
     return {
-        _state: 'existing',
         _id: r.id,
-        reading_date: r.reading_date ?? '',
-        plate_no: r.plate_no ?? '',
-        _plate_select: isKnown ? r.plate_no : '__custom__',
         start_km: r.start_km != null ? String(r.start_km) : '',
         end_km: r.end_km != null ? String(r.end_km) : '',
         fuel_liters: r.fuel_liters != null ? String(r.fuel_liters) : '',
         remarks: r.remarks ?? '',
+        _dirty: false,
     };
 }
 
-function cleanPasteValue(raw: string, field: keyof GridRow): string {
+function createEmptyRow(plates: string[]): GridRow {
+    const cells: Record<string, PlateCell> = {};
+    for (const p of plates) cells[p] = emptyPlateCell();
+    return {
+        _state: 'new',
+        reading_date: new Date().toISOString().split('T')[0],
+        cells,
+    };
+}
+
+// ─── Derive the stable plate column set ────────────────────────────────────────
+function derivePlates(data: TruckReadingRow[]): string[] {
+    const known = new Set<string>(KNOWN_PLATES);
+    const extras = new Set<string>();
+    for (const r of data) {
+        const p = r.plate_no?.trim();
+        if (!p) continue;
+        if (!known.has(p)) extras.add(p);
+    }
+    return [...KNOWN_PLATES, ...[...extras].sort((a, b) => a.localeCompare(b))];
+}
+
+// ─── DB rows → pivoted grid rows ───────────────────────────────────────────────
+function buildGridRows(data: TruckReadingRow[], plates: string[]): GridRow[] {
+    // Group by reading_date
+    const byDate = new Map<string, GridRow>();
+    const order: string[] = [];
+
+    for (const r of data) {
+        const date = r.reading_date ?? '';
+        if (!date) continue;
+        let row = byDate.get(date);
+        if (!row) {
+            const cells: Record<string, PlateCell> = {};
+            for (const p of plates) cells[p] = emptyPlateCell();
+            row = { _state: 'existing', reading_date: date, cells };
+            byDate.set(date, row);
+            order.push(date);
+        }
+        const plate = r.plate_no?.trim();
+        if (plate && row.cells[plate]) {
+            // If two readings share (date, plate), last write wins — shouldn't
+            // happen given the natural key, but stay defensive.
+            row.cells[plate] = dbRowToPlateCell(r);
+        }
+    }
+
+    // Server already orders by reading_date DESC; preserve insertion order.
+    return order.map(d => byDate.get(d)!);
+}
+
+// ─── Paste cleaning ────────────────────────────────────────────────────────────
+function cleanPasteValue(raw: string, isDate: boolean): string {
     const val = trimCellValue(raw);
-    if (field === 'reading_date') return parseExcelDate(val);
-    if (NUMERIC_COLS.has(field)) return val.replace(/[₱,"']/g, '');
-    return val;
+    if (isDate) return parseExcelDate(val);
+    return val.replace(/[₱,"']/g, '');
+}
+
+// ─── Numeric formatter (thousand separators, no decimals unless fractional) ─────
+function formatNum(value: number | string | null | undefined): string {
+    if (value === null || value === undefined || value === '') return '';
+    const n = typeof value === 'string' ? parseFloat(value) : value;
+    if (isNaN(n)) return '';
+    const hasFraction = Math.abs(n % 1) > 1e-9;
+    return n.toLocaleString('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: hasFraction ? 2 : 0,
+    });
+}
+
+// ─── Date display helper ──────────────────────────────────────────────────────
+function formatDateShort(iso: string): string {
+    if (!iso) return '';
+    const parsed = parseISO(iso);
+    if (!isValidDate(parsed)) return iso;
+    return formatDate(parsed, 'MMM d');
 }
 
 const inputClass =
     'h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none';
 
+// ─── DatePickerCell (mirrors daily ledger) ─────────────────────────────────────
+interface DatePickerCellProps {
+    value: string;
+    onChange: (val: string) => void;
+    onPaste: (e: React.ClipboardEvent) => void;
+    isActive: boolean;
+    isRangeSelected: boolean;
+    isRangeAnchor: boolean;
+    onCellMouseDown: (e: React.MouseEvent) => void;
+    onCellMouseUp: () => void;
+    onCellMouseEnter: () => void;
+}
+
+function DatePickerCell({
+    value,
+    onChange,
+    onPaste,
+    isActive,
+    isRangeSelected,
+    isRangeAnchor,
+    onCellMouseDown,
+    onCellMouseUp,
+    onCellMouseEnter,
+}: DatePickerCellProps) {
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    return (
+        <div
+            data-date-cell
+            className={cn(
+                'group/date relative h-full w-full flex items-center justify-between gap-1 px-1 cursor-pointer select-none',
+                'border border-dashed border-border/40 hover:border-blue-500/60 hover:bg-blue-500/5 transition-colors',
+                isActive && !isRangeSelected && 'ring-2 ring-primary ring-inset z-10 border-transparent',
+                isRangeSelected && 'bg-primary/10 dark:bg-primary/20',
+                isRangeAnchor && 'ring-2 ring-primary ring-inset z-10 border-transparent'
+            )}
+            style={{ minHeight: '100%' }}
+            onMouseDown={onCellMouseDown}
+            onMouseUp={onCellMouseUp}
+            onMouseEnter={onCellMouseEnter}
+            onClick={(e) => {
+                e.stopPropagation();
+                if (inputRef.current) {
+                    if (typeof inputRef.current.showPicker === 'function') {
+                        try { inputRef.current.showPicker(); } catch { inputRef.current.focus(); }
+                    } else {
+                        inputRef.current.focus();
+                    }
+                }
+            }}
+        >
+            <span className="font-mono font-semibold text-[11px] tabular-nums text-foreground truncate">
+                {formatDateShort(value)}
+            </span>
+            <Calendar className="w-3 h-3 text-muted-foreground/70 group-hover/date:text-blue-500 transition-colors flex-none" />
+            <input
+                ref={inputRef}
+                type="date"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                onPaste={onPaste}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                tabIndex={-1}
+                aria-label="Select date"
+            />
+        </div>
+    );
+}
+
 interface TrucksGridProps {
     initialData: TruckReadingRow[];
-    monthly: TruckMonthlyRow[];
     onSaveSuccess: () => void;
 }
 
-export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridProps) {
+export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
     const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const gridRef = React.useRef<HTMLDivElement>(null);
 
+    // Plate columns are derived once from the initial data — stable for the
+    // lifetime of this grid instance (the parent remounts on refetch).
+    const plates = React.useMemo(() => derivePlates(initialData), [initialData]);
+
+    // Build the COL_MAP: index 0 = DATE, then [start, end, ttl(null), fuel] per plate.
+    // Returns the editable cell address (or null for DATE/computed cols).
+    const colCount = 1 + plates.length * SUBCOLS_PER_PLATE;
+
+    const colAddr = React.useCallback(
+        (col: number): { kind: 'date' } | { kind: 'ttl'; plate: string } | { kind: 'cell'; addr: CellAddr } | null => {
+            if (col === 0) return { kind: 'date' };
+            const rel = col - 1;
+            const plateIdx = Math.floor(rel / SUBCOLS_PER_PLATE);
+            const sub = rel % SUBCOLS_PER_PLATE;
+            const plate = plates[plateIdx];
+            if (!plate) return null;
+            if (sub === 0) return { kind: 'cell', addr: { plate, field: 'start_km' } };
+            if (sub === 1) return { kind: 'cell', addr: { plate, field: 'end_km' } };
+            if (sub === 2) return { kind: 'ttl', plate };
+            return { kind: 'cell', addr: { plate, field: 'fuel_liters' } };
+        },
+        [plates]
+    );
+
+    const plateColumns = React.useMemo<PlateColumn[]>(
+        () => plates.map((plate, i) => ({ plate, startCol: 1 + i * SUBCOLS_PER_PLATE })),
+        [plates]
+    );
+
     const [rows, setRows] = React.useState<GridRow[]>(() => {
-        const base = initialData.map(dbRowToGridRow);
-        return [...base, createEmptyRow()];
+        const base = buildGridRows(initialData, plates);
+        return [...base, createEmptyRow(plates)];
     });
 
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
@@ -130,178 +291,241 @@ export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridPr
     const [isSaving, setIsSaving] = React.useState(false);
     const preEditValue = React.useRef<string>('');
 
-    const cellSelection = useCellSelection({
-        rowCount: rows.length,
-        colCount: COL_COUNT,
-        isSelectableColumn: (c) => COL_MAP[c] !== null && c !== 0,
-        scrollContainerRef: gridRef,
-        enabled: true,
-    });
-
-    const getCellValue = React.useCallback(
-        (rowIdx: number, colIdx: number): string => {
-            const row = rows[rowIdx];
-            if (!row) return '';
-            if (colIdx === 5) {
-                const km = (parseFloat(row.end_km) || 0) - (parseFloat(row.start_km) || 0);
-                return km >= 0 ? String(km) : '';
-            }
-            const field = COL_MAP[colIdx];
-            if (!field) return '';
-            return String(row[field] ?? '');
-        },
-        [rows]
-    );
-
-    const getNumericCellValue = React.useCallback(
-        (rowIdx: number, colIdx: number): number | null => {
-            const row = rows[rowIdx];
-            if (!row) return null;
-            const field = COL_MAP[colIdx];
-            if (!field || !NUMERIC_COLS.has(field)) return null;
-            const v = parseFloat(String(row[field]));
-            return isNaN(v) ? null : v;
-        },
-        [rows]
-    );
-
-    const getColumnDefaultCalcType = React.useCallback(
-        (colIdx: number): AggregationType | null => {
-            const field = COL_MAP[colIdx];
-            if (field === 'start_km' || field === 'end_km' || field === 'fuel_liters') return 'SUM';
-            return null;
+    // ─── Cell selection ───────────────────────────────────────────────────────
+    const isSelectableColumn = React.useCallback(
+        (c: number) => {
+            if (c === 0) return false; // DATE — not part of numeric selection
+            // TTL columns (computed) remain draggable for COUNT/SUM aggregation.
+            return true;
         },
         []
     );
 
-    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
-
-    React.useEffect(() => {
-        const count = cellSelection.range ? cellSelection.getSelectionSize() : 0;
-        const timer = setTimeout(() => { setCellSelectionCount(count); setCellAggregates(count > 1 ? aggregates : null); }, 50);
-        return () => { clearTimeout(timer); setCellSelectionCount(0); setCellAggregates(null); };
-    }, [cellSelection.range, cellSelection.getSelectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
-
-    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
-        getSelectedRange: cellSelection.getSelectedRange, getCellValue, getSelectionSize: cellSelection.getSelectionSize,
+    const cellSelection = useCellSelection({
+        rowCount: rows.length,
+        colCount,
+        isSelectableColumn,
+        scrollContainerRef: gridRef,
+        enabled: true,
     });
 
+    // ─── Cell value accessors ───────────────────────────────────────────────────
+    const getCellValue = React.useCallback(
+        (rowIdx: number, colIdx: number): string => {
+            const row = rows[rowIdx];
+            if (!row) return '';
+            const a = colAddr(colIdx);
+            if (!a) return '';
+            if (a.kind === 'date') return row.reading_date;
+            if (a.kind === 'ttl') {
+                const cell = row.cells[a.plate];
+                if (!cell) return '';
+                const km = (parseFloat(cell.end_km) || 0) - (parseFloat(cell.start_km) || 0);
+                return km > 0 ? String(km) : '';
+            }
+            const cell = row.cells[a.addr.plate];
+            return cell ? String(cell[a.addr.field] ?? '') : '';
+        },
+        [rows, colAddr]
+    );
+
+    const getNumericCellValue = React.useCallback(
+        (rowIdx: number, colIdx: number): number | null => {
+            const a = colAddr(colIdx);
+            if (!a || a.kind === 'date') return null;
+            const v = parseFloat(getCellValue(rowIdx, colIdx));
+            return isNaN(v) ? null : v;
+        },
+        [colAddr, getCellValue]
+    );
+
+    const getColumnDefaultCalcType = React.useCallback(
+        (colIdx: number): AggregationType | null => {
+            const a = colAddr(colIdx);
+            if (!a || a.kind === 'date') return null;
+            return 'SUM';
+        },
+        [colAddr]
+    );
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    const selectionSize = cellSelection.range ? cellSelection.getSelectionSize() : 0;
+
+    React.useEffect(() => {
+        const timer = setTimeout(() => {
+            setCellSelectionCount(selectionSize);
+            setCellAggregates(selectionSize > 1 ? aggregates : null);
+        }, 50);
+        return () => clearTimeout(timer);
+    }, [selectionSize, aggregates, setCellSelectionCount, setCellAggregates]);
+
+    React.useEffect(() => {
+        return () => {
+            setCellSelectionCount(0);
+            setCellAggregates(null);
+        };
+    }, [setCellSelectionCount, setCellAggregates]);
+
+    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
+        getSelectedRange: cellSelection.getSelectedRange,
+        getCellValue,
+        getSelectionSize: cellSelection.getSelectionSize,
+    });
+
+    // ─── Mouse handlers ───────────────────────────────────────────────────────
     const mouseDownCellRef = React.useRef<{ row: number; col: number } | null>(null);
     const dragMovedRef = React.useRef(false);
 
     const handleCellMouseDown = React.useCallback((rowIdx: number, colIdx: number, e: React.MouseEvent) => {
-        mouseDownCellRef.current = { row: rowIdx, col: colIdx }; dragMovedRef.current = false;
+        mouseDownCellRef.current = { row: rowIdx, col: colIdx };
+        dragMovedRef.current = false;
         cellSelection.handleCellMouseDown(rowIdx, colIdx, e);
     }, [cellSelection]);
 
     const handleCellMouseUp = React.useCallback((rowIdx: number, colIdx: number) => {
-        const down = mouseDownCellRef.current; mouseDownCellRef.current = null;
+        const down = mouseDownCellRef.current;
+        mouseDownCellRef.current = null;
         if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
-            cellSelection.clearSelection(); setActiveCell({ row: rowIdx, col: colIdx }); setIsEditing(false); gridRef.current?.focus();
+            cellSelection.clearSelection();
+            setActiveCell({ row: rowIdx, col: colIdx });
+            setIsEditing(false);
+            gridRef.current?.focus();
         }
         dragMovedRef.current = false;
     }, [cellSelection]);
 
     const handleCellMouseEnter = React.useCallback((rowIdx: number, colIdx: number) => {
-        if (mouseDownCellRef.current) { dragMovedRef.current = true; cellSelection.handleCellMouseEnter(rowIdx, colIdx); }
+        if (mouseDownCellRef.current) {
+            dragMovedRef.current = true;
+            cellSelection.handleCellMouseEnter(rowIdx, colIdx);
+        }
     }, [cellSelection]);
 
-    const updateRow = React.useCallback((idx: number, field: keyof GridRow, value: string) => {
+    // ─── Row mutation helpers ───────────────────────────────────────────────────
+    const ensureTrailingRow = (next: GridRow[]) => {
+        const last = next[next.length - 1];
+        if (!last || last._state !== 'new') next.push(createEmptyRow(plates));
+        return next;
+    };
+
+    const updateDate = React.useCallback((idx: number, value: string) => {
         setRows(prev => {
             const next = [...prev];
-            const row = { ...next[idx], [field]: value };
+            const row = { ...next[idx], reading_date: value };
             if (row._state === 'existing') row._state = 'modified';
             next[idx] = row;
-            const last = next[next.length - 1];
-            if (last._state !== 'new') next.push(createEmptyRow());
-            return next;
+            return ensureTrailingRow(next);
         });
-    }, []);
+    // ensureTrailingRow closes over `plates` which is stable per instance
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [plates]);
 
-    const updatePlate = React.useCallback((idx: number, selectValue: string) => {
+    const updateCell = React.useCallback((idx: number, addr: CellAddr, value: string) => {
         setRows(prev => {
             const next = [...prev];
             const row = { ...next[idx] };
-            row._plate_select = selectValue;
-            if (selectValue !== '__custom__') {
-                row.plate_no = selectValue;
-                if (row._state === 'existing') row._state = 'modified';
-            }
+            const cells = { ...row.cells };
+            const cell = { ...(cells[addr.plate] ?? emptyPlateCell()), [addr.field]: value, _dirty: true };
+            cells[addr.plate] = cell;
+            row.cells = cells;
+            if (row._state === 'existing') row._state = 'modified';
             next[idx] = row;
-            const last = next[next.length - 1];
-            if (last._state !== 'new') next.push(createEmptyRow());
-            return next;
+            return ensureTrailingRow(next);
         });
-    }, []);
-
-    const markDeleted = React.useCallback((idx: number) => {
-        setRows(prev => {
-            const next = [...prev]; const row = { ...next[idx] };
-            if (row._state === 'new') { if (next.length > 1) { next.splice(idx, 1); return next; } return next; }
-            row._state = 'deleted'; next[idx] = row; return next;
-        });
-    }, []);
-
-    const restoreRow = React.useCallback((idx: number) => {
-        setRows(prev => {
-            const next = [...prev]; const row = { ...next[idx] };
-            row._state = row._id ? 'existing' : 'new'; next[idx] = row; return next;
-        });
-    }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [plates]);
 
     const clearCell = React.useCallback((rowIdx: number, colIdx: number) => {
-        const field = COL_MAP[colIdx];
-        if (field && field !== '_state' && field !== '_id' && field !== '_plate_select') updateRow(rowIdx, field, '');
-    }, [updateRow]);
+        const a = colAddr(colIdx);
+        if (!a) return;
+        if (a.kind === 'cell') updateCell(rowIdx, a.addr, '');
+        // DATE/TTL are not clearable via cell-delete
+    }, [colAddr, updateCell]);
 
     const { handleKeyDown: handleDeleteKeyDown } = useCellDelete({
-        getSelectedRange: cellSelection.getSelectedRange, getSelectionSize: cellSelection.getSelectionSize, clearCell,
+        getSelectedRange: cellSelection.getSelectedRange,
+        getSelectionSize: cellSelection.getSelectionSize,
+        clearCell,
     });
 
+    // ─── Editing ────────────────────────────────────────────────────────────────
     const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
-        const field = COL_MAP[colIdx];
-        if (!field || field === '_state' || field === '_id' || field === '_plate_select') return;
+        const a = colAddr(colIdx);
+        if (!a || a.kind === 'ttl') return; // TTL is read-only (computed)
+        if (a.kind === 'date') {
+            // DATE has its own always-on native picker — selecting the cell is
+            // enough; never enter text-edit mode (a stray keystroke would have
+            // nowhere to go and would strand isEditing=true).
+            setActiveCell({ row: rowIdx, col: colIdx });
+            setIsEditing(false);
+            return;
+        }
         const row = rows[rowIdx];
-        preEditValue.current = row ? String(row[field] ?? '') : '';
-        setActiveCell({ row: rowIdx, col: colIdx }); setIsEditing(true);
-        if (initialChar !== undefined) updateRow(rowIdx, field, initialChar);
-    }, [rows, updateRow]);
+        const cell = row?.cells[a.addr.plate];
+        preEditValue.current = cell ? String(cell[a.addr.field] ?? '') : '';
+        setActiveCell({ row: rowIdx, col: colIdx });
+        setIsEditing(true);
+        if (initialChar !== undefined) updateCell(rowIdx, a.addr, initialChar);
+    }, [rows, colAddr, updateCell]);
 
     const revertChanges = React.useCallback(() => {
         if (!activeCell) return;
-        const field = COL_MAP[activeCell.col];
-        if (field && field !== '_state' && field !== '_id' && field !== '_plate_select') {
+        const a = colAddr(activeCell.col);
+        if (a && a.kind === 'cell') {
+            const addr = a.addr;
+            const restore = preEditValue.current;
             setRows(prev => {
-                const next = [...prev]; const row = { ...next[activeCell.row] };
-                (row as Record<string, unknown>)[field] = preEditValue.current;
-                if (row._state === 'modified' && row._id) row._state = 'existing';
-                next[activeCell.row] = row; return next;
+                const next = [...prev];
+                const row = { ...next[activeCell.row] };
+                const cells = { ...row.cells };
+                const prevCell = cells[addr.plate] ?? emptyPlateCell();
+                // Restore the field to its pre-edit value. We intentionally keep
+                // the row's `modified` state and the cell's `_dirty` flag as-is:
+                // reverting a single keystroke shouldn't un-dirty a row that the
+                // user may have edited elsewhere. Discard is the full reset path.
+                cells[addr.plate] = { ...prevCell, [addr.field]: restore };
+                row.cells = cells;
+                next[activeCell.row] = row;
+                return next;
             });
         }
-        setIsEditing(false); gridRef.current?.focus();
-    }, [activeCell]);
+        setIsEditing(false);
+        gridRef.current?.focus();
+    }, [activeCell, colAddr]);
 
     const moveActive = React.useCallback((key: string, shift: boolean) => {
         if (!activeCell) return;
         let { row, col } = activeCell;
         if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
         else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
-        else if (key === 'ArrowLeft') { do { col--; } while (col > 0 && COL_MAP[col] === null); col = Math.max(0, col); }
-        else if (key === 'ArrowRight') { do { col++; } while (col < COL_COUNT - 1 && COL_MAP[col] === null); col = Math.min(COL_COUNT - 1, col); }
+        else if (key === 'ArrowLeft') { col = Math.max(0, col - 1); }
+        else if (key === 'ArrowRight') { col = Math.min(colCount - 1, col + 1); }
         else if (key === 'Tab') {
-            if (shift) { do { col--; if (col < 0) { row--; col = COL_COUNT - 1; } } while (row >= 0 && COL_MAP[col] === null); if (row < 0) { row = 0; col = activeCell.col; } }
-            else { do { col++; if (col >= COL_COUNT) { row++; col = 0; } } while (row < rows.length && COL_MAP[col] === null); if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; } }
-        } else if (key === 'Home') col = 1;
-        else if (key === 'End') col = COL_COUNT - 2;
+            if (shift) {
+                col--;
+                if (col < 0) { row = Math.max(0, row - 1); col = colCount - 1; }
+            } else {
+                col++;
+                if (col >= colCount) { row = Math.min(rows.length - 1, row + 1); col = 0; }
+            }
+        } else if (key === 'Home') col = 0;
+        else if (key === 'End') col = colCount - 1;
+        // Every column is navigable: DATE (picker), the editable metric cells,
+        // and the read-only computed TTL columns. No columns are skipped.
         setActiveCell({ row, col });
-    }, [activeCell, rows.length]);
+    }, [activeCell, rows.length, colCount]);
 
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
         if (!activeCell) return;
         const isRangeSelected = cellSelection.getSelectionSize() > 1;
         if (isEditing) {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); revertChanges(); }
-            else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); setIsEditing(false); moveActive(e.key, e.shiftKey); gridRef.current?.focus(); }
+            if (e.key === 'Escape') {
+                e.preventDefault(); e.stopPropagation(); e.nativeEvent.stopImmediatePropagation();
+                revertChanges();
+            } else if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault(); setIsEditing(false); moveActive(e.key, e.shiftKey); gridRef.current?.focus();
+            }
             return;
         }
         if (isRangeSelected) {
@@ -328,6 +552,7 @@ export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridPr
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); startEditing(activeCell.row, activeCell.col, e.key); }
     }, [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing]);
 
+    // ─── Smart paste ──────────────────────────────────────────────────────────
     const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRow: number, startCol: number) => {
         e.preventDefault();
         const text = e.clipboardData.getData('text');
@@ -338,85 +563,118 @@ export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridPr
             const next = [...prev];
             pastedRows.forEach((pastedRow, rOffset) => {
                 const targetRow = startRow + rOffset;
-                if (targetRow >= next.length) next.push(createEmptyRow());
+                if (targetRow >= next.length) next.push(createEmptyRow(plates));
                 const cols = pastedRow.split('\t');
+                const row = { ...next[targetRow] };
+                const cells = { ...row.cells };
                 cols.forEach((cellVal, cOffset) => {
                     const targetCol = startCol + cOffset;
-                    if (targetCol >= COL_COUNT) return;
-                    const field = COL_MAP[targetCol];
-                    if (!field || field === '_state' || field === '_id' || field === '_plate_select') return;
-                    const row = { ...next[targetRow] };
-                    (row as Record<string, unknown>)[field] = cleanPasteValue(cellVal, field);
-                    if (row._state === 'existing') row._state = 'modified';
-                    next[targetRow] = row;
+                    if (targetCol >= colCount) return;
+                    const a = colAddr(targetCol);
+                    if (!a) return;
+                    if (a.kind === 'date') {
+                        row.reading_date = cleanPasteValue(cellVal, true);
+                    } else if (a.kind === 'cell') {
+                        const cur = { ...(cells[a.addr.plate] ?? emptyPlateCell()) };
+                        (cur as Record<string, unknown>)[a.addr.field] = cleanPasteValue(cellVal, false);
+                        cur._dirty = true;
+                        cells[a.addr.plate] = cur;
+                    }
+                    // TTL columns are skipped (computed)
                 });
+                row.cells = cells;
+                if (row._state === 'existing') row._state = 'modified';
+                next[targetRow] = row;
             });
-            const last = next[next.length - 1];
-            if (last._state !== 'new') next.push(createEmptyRow());
-            return next;
+            return ensureTrailingRow(next);
         });
-        toast.success(`Pasted ${pastedRows.length} rows`);
-    }, []);
+        toast.success(`Pasted ${pastedRows.length} row${pastedRows.length !== 1 ? 's' : ''}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [plates, colCount, colAddr]);
 
     const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
         if (!isEditing && activeCell) { handleSmartPaste(e, activeCell.row, activeCell.col); cellSelection.clearSelection(); }
     }, [isEditing, activeCell, handleSmartPaste, cellSelection]);
 
-    const isDirty = rows.some(r =>
-        (r._state === 'new' && (r.plate_no || r.start_km || r.end_km)) ||
-        r._state === 'modified' || r._state === 'deleted'
-    );
+    // ─── Dirty tracking ─────────────────────────────────────────────────────────
+    const isDirty = rows.some(r => {
+        if (r._state === 'deleted' || r._state === 'modified') return true;
+        if (r._state === 'new') {
+            return Object.values(r.cells).some(c => c.start_km || c.end_km || c.fuel_liters);
+        }
+        return false;
+    });
 
     const handleDiscard = React.useCallback(() => {
-        const base = initialData.map(dbRowToGridRow);
-        setRows([...base, createEmptyRow()]); setActiveCell(null); setIsEditing(false);
-    }, [initialData]);
+        const base = buildGridRows(initialData, plates);
+        setRows([...base, createEmptyRow(plates)]);
+        setActiveCell(null);
+        setIsEditing(false);
+    }, [initialData, plates]);
 
+    // ─── Save: group dirty (date, plate) cells → upsert per (date, plate) ────────
     const handleSave = async () => {
         setIsSaving(true);
         try {
-            const inserts: Parameters<typeof saveBulkTrucks>[0]['inserts'] = [];
-            const updates: Parameters<typeof saveBulkTrucks>[0]['updates'] = [];
-            const deletes: string[] = [];
+            const inserts: TablesInsert<'truck_readings'>[] = [];
+            const updates: { id: string; data: TablesUpdate<'truck_readings'> }[] = [];
 
             for (const row of rows) {
-                if (row._state === 'deleted' && row._id) {
-                    deletes.push(row._id);
-                } else if (row._state === 'new' && (row.plate_no || row.start_km)) {
-                    inserts.push({
-                        reading_date: row.reading_date,
-                        plate_no: row.plate_no,
-                        start_km: parseFloat(row.start_km) || 0,
-                        end_km: parseFloat(row.end_km) || 0,
-                        fuel_liters: row.fuel_liters ? parseFloat(row.fuel_liters) : null,
-                        remarks: row.remarks || null,
-                    });
-                } else if (row._state === 'modified' && row._id) {
-                    updates.push({
-                        id: row._id,
-                        data: {
+                if (row._state === 'deleted' || row._state === 'existing') continue;
+                if (!row.reading_date) continue;
+
+                for (const plate of plates) {
+                    const cell = row.cells[plate];
+                    if (!cell) continue;
+
+                    // A (date, plate) is persisted only if it has at least one
+                    // non-empty value. Existing cells with an id always re-save
+                    // when their row is dirty (so cleared values reach the DB).
+                    const hasValue = !!(cell.start_km || cell.end_km || cell.fuel_liters);
+                    const wasTouched = cell._dirty;
+
+                    if (cell._id) {
+                        // Existing reading — update only if this cell was touched.
+                        if (!wasTouched) continue;
+                        updates.push({
+                            id: cell._id,
+                            data: {
+                                reading_date: row.reading_date,
+                                plate_no: plate,
+                                start_km: parseFloat(cell.start_km) || 0,
+                                end_km: parseFloat(cell.end_km) || 0,
+                                fuel_liters: cell.fuel_liters ? parseFloat(cell.fuel_liters) : null,
+                                remarks: cell.remarks || null,
+                            },
+                        });
+                    } else if (hasValue) {
+                        // No existing row — insert a new reading for this (date, plate).
+                        inserts.push({
                             reading_date: row.reading_date,
-                            plate_no: row.plate_no,
-                            start_km: parseFloat(row.start_km) || 0,
-                            end_km: parseFloat(row.end_km) || 0,
-                            fuel_liters: row.fuel_liters ? parseFloat(row.fuel_liters) : null,
-                            remarks: row.remarks || null,
-                        },
-                    });
+                            plate_no: plate,
+                            start_km: parseFloat(cell.start_km) || 0,
+                            end_km: parseFloat(cell.end_km) || 0,
+                            fuel_liters: cell.fuel_liters ? parseFloat(cell.fuel_liters) : null,
+                            remarks: cell.remarks || null,
+                        });
+                    }
                 }
             }
 
-            if (!inserts.length && !updates.length && !deletes.length) { toast.info('No changes to save.'); setIsSaving(false); return; }
+            if (!inserts.length && !updates.length) {
+                toast.info('No changes to save.');
+                setIsSaving(false);
+                return;
+            }
 
-            const res = await saveBulkTrucks({ inserts, updates, deletes });
+            const res = await saveBulkTrucks({ inserts, updates, deletes: [] });
             if (!res.ok) {
                 errorToast(res.error);
             } else {
                 const parts: string[] = [];
                 if (res.insertedCount) parts.push(`${res.insertedCount} added`);
                 if (res.updatedCount) parts.push(`${res.updatedCount} updated`);
-                if (res.deletedCount) parts.push(`${res.deletedCount} deleted`);
-                toast.success(`Saved — ${parts.join(', ')}`);
+                toast.success(parts.length ? `Saved — ${parts.join(', ')}` : 'Saved');
                 onSaveSuccess();
             }
         } catch (err) {
@@ -426,6 +684,7 @@ export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridPr
         }
     };
 
+    // ─── Render helpers ──────────────────────────────────────────────────────────
     const selProps = (rowIdx: number, colIdx: number) => ({
         onCellMouseDown: (e: React.MouseEvent) => handleCellMouseDown(rowIdx, colIdx, e),
         onCellMouseUp: () => handleCellMouseUp(rowIdx, colIdx),
@@ -437,198 +696,186 @@ export function TrucksGrid({ initialData, monthly, onSaveSuccess }: TrucksGridPr
 
     const commonCellProps = { activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing: startEditing, onRevert: revertChanges, gridRef };
 
+    const dataRowCount = rows.filter(r => r._state !== 'new').length;
+    // Total table width: DATE + all plate subcolumns.
+    const tableMinWidth = DATE_COL_WIDTH + plates.length * SUBCOLS_PER_PLATE * SUBCOL_WIDTH;
+
     return (
-        <TooltipProvider>
-            <div className="flex flex-col gap-0">
-                {/* Grid toolbar */}
-                <div className="flex items-center justify-between px-2 py-1 border-b bg-muted/20">
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                        {rows.filter(r => r._state !== 'new').length} readings this period
-                    </span>
-                    <div className="flex items-center gap-1">
-                        {isDirty && (
-                            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1" onClick={handleDiscard} disabled={isSaving}>
-                                <RotateCcw className="h-3 w-3" />
-                                Discard
-                            </Button>
-                        )}
-                        <Button size="sm" className="h-6 px-2 text-xs gap-1" onClick={handleSave} disabled={isSaving || !isDirty}>
-                            <Save className="h-3 w-3" />
-                            {isSaving ? 'Saving…' : 'Save'}
+        <div className="flex flex-col gap-0">
+            {/* Toolbar */}
+            <div className="flex items-center justify-between px-2 py-1 border-b bg-muted/20">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                    {dataRowCount} day{dataRowCount !== 1 ? 's' : ''} · {plates.length} truck{plates.length !== 1 ? 's' : ''}
+                </span>
+                <div className="flex items-center gap-1">
+                    {isDirty && (
+                        <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1" onClick={handleDiscard} disabled={isSaving}>
+                            <RotateCcw className="h-3 w-3" />
+                            Discard
                         </Button>
-                    </div>
+                    )}
+                    <Button size="sm" className="h-6 px-2 text-xs gap-1" onClick={handleSave} disabled={isSaving || !isDirty}>
+                        <Save className="h-3 w-3" />
+                        {isSaving ? 'Saving…' : 'Save'}
+                    </Button>
                 </div>
+            </div>
 
-                <div
-                    ref={gridRef}
-                    className="outline-none select-none overflow-auto relative max-h-[60vh]"
-                    tabIndex={-1}
-                    onKeyDown={handleGridKeyDown}
-                    onPaste={handleGridPaste}
-                    onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setActiveCell(null); setIsEditing(false); } }}
-                >
-                    <table className="w-full table-fixed text-xs border-collapse relative">
-                        <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm">
-                            <TableRow className="hover:bg-transparent border-b border-foreground/20" style={{ height: '28px' }}>
-                                <TableHead className="w-[28px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">#</TableHead>
-                                <TableHead className="w-[80px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">DATE</TableHead>
-                                <TableHead className="w-[110px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">PLATE NO</TableHead>
-                                <TableHead className="w-[75px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">START KM</TableHead>
-                                <TableHead className="w-[75px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">END KM</TableHead>
-                                <TableHead className="w-[65px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10 bg-muted/50">TTL KM</TableHead>
-                                <TableHead className="w-[65px] h-7 px-1 py-0 font-mono font-bold text-right text-[10px] border-r border-foreground/10">FUEL (L)</TableHead>
-                                <TableHead className="w-[50px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">REM</TableHead>
-                                <TableHead className="w-[20px] h-7 p-0"></TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {rows.length === 1 && rows[0]._state === 'new' && (
-                                <TableRow className="hover:bg-transparent">
-                                    <TableCell colSpan={9} className="py-8 text-center">
-                                        <p className="text-xs text-muted-foreground animate-fade-up">
-                                            Awaiting Production Manager sync. Start typing in the empty row, or paste a range from Excel.
-                                        </p>
-                                    </TableCell>
-                                </TableRow>
-                            )}
-                            {rows.map((row, rowIdx) => {
-                                const ttlKm = (parseFloat(row.end_km) || 0) - (parseFloat(row.start_km) || 0);
-                                const isDeleted = row._state === 'deleted';
-                                const isDirtyRow = row._state === 'modified';
+            <div
+                ref={gridRef}
+                className="outline-none select-none overflow-auto relative max-h-[60vh]"
+                tabIndex={-1}
+                onKeyDown={handleGridKeyDown}
+                onPaste={handleGridPaste}
+                onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setActiveCell(null); setIsEditing(false); } }}
+            >
+                <table className="table-fixed text-xs relative" style={{ width: '100%', minWidth: `${tableMinWidth}px`, borderCollapse: 'separate', borderSpacing: 0 }}>
+                    {/* Explicit column widths — pins layout for the sticky DATE column. */}
+                    <colgroup>
+                        <col style={{ width: `${DATE_COL_WIDTH}px` }} />
+                        {plates.map(p => (
+                            <React.Fragment key={p}>
+                                <col style={{ width: `${SUBCOL_WIDTH}px` }} />
+                                <col style={{ width: `${SUBCOL_WIDTH}px` }} />
+                                <col style={{ width: `${SUBCOL_WIDTH}px` }} />
+                                <col style={{ width: `${SUBCOL_WIDTH}px` }} />
+                            </React.Fragment>
+                        ))}
+                    </colgroup>
 
+                    <TableHeader className="bg-muted backdrop-blur-sm sticky top-0 z-50 shadow-sm">
+                        {/* Header row 1 — group labels. DATE spans both header rows. */}
+                        <TableRow className="hover:bg-transparent border-b border-foreground/10" style={{ height: '22px' }}>
+                            <TableHead
+                                rowSpan={2}
+                                className="h-auto px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/20 bg-muted sticky z-40 shadow-[2px_0_4px_rgba(0,0,0,0.12)] align-middle"
+                                style={{ left: 0 }}
+                            >
+                                DATE
+                            </TableHead>
+                            {plateColumns.map(({ plate }, i) => (
+                                <TableHead
+                                    key={plate}
+                                    colSpan={SUBCOLS_PER_PLATE}
+                                    className={cn(
+                                        'h-5 px-1 py-0 font-mono font-bold text-center text-[10px] bg-muted uppercase tracking-widest text-blue-600 dark:text-blue-400',
+                                        i < plateColumns.length - 1 && 'border-r border-foreground/20'
+                                    )}
+                                >
+                                    {plate}
+                                </TableHead>
+                            ))}
+                        </TableRow>
+                        {/* Header row 2 — subcolumn labels per plate group. */}
+                        <TableRow className="hover:bg-transparent border-b border-foreground/20" style={{ height: '24px' }}>
+                            {plateColumns.map(({ plate }, i) => {
+                                const lastGroup = i === plateColumns.length - 1;
                                 return (
-                                    <TableRow
-                                        key={rowIdx}
-                                        className={cn(
-                                            'transition-all duration-150 border-b border-border/30',
-                                            isDeleted && 'opacity-40 line-through',
-                                            isDirtyRow && 'border-l-2 border-l-amber-400'
-                                        )}
-                                        style={{ height: '28px' }}
-                                    >
-                                        <TableCell className="px-1 py-0 text-center font-mono text-[10px] text-muted-foreground border-r border-border/30" style={{ height: '28px' }}>
-                                            {rowIdx + 1}
-                                        </TableCell>
-                                        {/* DATE */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell col={1} row={rowIdx} value={row.reading_date} className="font-mono text-center" {...commonCellProps} {...selProps(rowIdx, 1)}>
-                                                <Input autoFocus value={row.reading_date} onChange={e => updateRow(rowIdx, 'reading_date', e.target.value)} className={cn(inputClass, 'font-mono text-center text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 1); }} />
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* PLATE NO */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell col={2} row={rowIdx} value={row.plate_no} className="font-mono text-center" {...commonCellProps} {...selProps(rowIdx, 2)}>
-                                                {row._plate_select === '__custom__' ? (
-                                                    <Input
-                                                        autoFocus
-                                                        value={row.plate_no}
-                                                        onChange={e => updateRow(rowIdx, 'plate_no', e.target.value)}
-                                                        className={cn(inputClass, 'font-mono text-center text-xs')}
-                                                        placeholder="Plate no..."
-                                                        onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 2); }}
-                                                    />
-                                                ) : (
-                                                    <Select value={row._plate_select} onValueChange={v => updatePlate(rowIdx, v)}>
-                                                        <SelectTrigger className="h-8 w-full border-transparent bg-transparent rounded-none text-xs font-mono focus:ring-1 focus:ring-inset focus:ring-primary shadow-none px-1">
-                                                            <SelectValue />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            {PLATE_OPTIONS.map(opt => (
-                                                                <SelectItem key={opt.value} value={opt.value} className="text-xs font-mono">{opt.label}</SelectItem>
-                                                            ))}
-                                                        </SelectContent>
-                                                    </Select>
-                                                )}
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* START KM */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell col={3} row={rowIdx} value={row.start_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 3)}>
-                                                <Input autoFocus type="number" step="1" value={row.start_km} onChange={e => updateRow(rowIdx, 'start_km', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 3); }} />
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* END KM */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell col={4} row={rowIdx} value={row.end_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 4)}>
-                                                <Input autoFocus type="number" step="1" value={row.end_km} onChange={e => updateRow(rowIdx, 'end_km', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 4); }} />
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* TTL KM — computed */}
-                                        <TableCell className="px-1 py-0 border-r border-border/30 bg-muted/20 font-mono text-right text-xs text-muted-foreground" style={{ height: '28px' }}>
-                                            {ttlKm > 0 ? ttlKm : ''}
-                                        </TableCell>
-                                        {/* FUEL */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell col={6} row={rowIdx} value={row.fuel_liters} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 6)}>
-                                                <Input autoFocus type="number" step="0.01" min="0" value={row.fuel_liters} onChange={e => updateRow(rowIdx, 'fuel_liters', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* REMARKS */}
-                                        <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
-                                            <GridCell
-                                                col={7} row={rowIdx} value={row.remarks} className="text-center"
-                                                {...commonCellProps} {...selProps(rowIdx, 7)}
-                                                displayValue={
-                                                    <div className={cn('h-6 w-6 flex items-center justify-center rounded-sm', row.remarks ? 'text-primary' : 'text-muted-foreground/30')}>
-                                                        <MessageSquareText className="w-3 h-3" />
-                                                    </div>
-                                                }
-                                            >
-                                                <RemarksCellAdaptor value={row.remarks} onChange={v => updateRow(rowIdx, 'remarks', v)} onClose={() => setIsEditing(false)} onRevert={revertChanges} fontSize={11} />
-                                            </GridCell>
-                                        </TableCell>
-                                        {/* Delete */}
-                                        <TableCell className="p-0 w-[20px]" style={{ height: '28px' }}>
-                                            <button
-                                                className={cn('h-full w-full flex items-center justify-center transition-colors', isDeleted ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/40 hover:text-destructive')}
-                                                onClick={() => isDeleted ? restoreRow(rowIdx) : markDeleted(rowIdx)}
-                                                tabIndex={-1} type="button"
-                                            >
-                                                {isDeleted ? <RotateCcw className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                                            </button>
-                                        </TableCell>
-                                    </TableRow>
+                                    <React.Fragment key={plate}>
+                                        <TableHead className="h-6 px-1 py-0 font-mono font-bold text-right text-[9px] border-r border-foreground/10 bg-muted text-muted-foreground">START</TableHead>
+                                        <TableHead className="h-6 px-1 py-0 font-mono font-bold text-right text-[9px] border-r border-foreground/10 bg-muted text-muted-foreground">END</TableHead>
+                                        <TableHead className="h-6 px-1 py-0 font-mono font-bold text-right text-[9px] border-r border-foreground/10 bg-muted text-muted-foreground/80">TTL</TableHead>
+                                        <TableHead className={cn('h-6 px-1 py-0 font-mono font-bold text-right text-[9px] bg-muted text-muted-foreground', !lastGroup && 'border-r border-foreground/20')}>FUEL</TableHead>
+                                    </React.Fragment>
                                 );
                             })}
-                        </TableBody>
-                    </table>
-                </div>
+                        </TableRow>
+                    </TableHeader>
 
-                {/* Monthly summary */}
-                {monthly.length > 0 && (
-                    <div className="border-t bg-muted/10 p-2">
-                        <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground mb-1">Monthly Summary</p>
-                        <div className="overflow-x-auto">
-                            <table className="text-xs table-fixed border-collapse w-full">
-                                <thead>
-                                    <tr className="border-b border-foreground/10">
-                                        <th className="px-2 py-0.5 text-left font-mono text-[10px] w-[90px]">MONTH</th>
-                                        <th className="px-2 py-0.5 text-left font-mono text-[10px] w-[90px]">PLATE</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">START KM</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">END KM</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">TTL KM</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">FUEL (L)</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[50px]">RDGS</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {monthly.map((m, i) => (
-                                        <tr key={i} className="border-b border-border/20 hover:bg-muted/20">
-                                            <td className="px-2 py-0.5 font-mono text-[11px]">{m.month}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px]">{m.plate_no}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_start_km?.toLocaleString()}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_end_km?.toLocaleString()}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_km?.toLocaleString()}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_fuel_liters?.toFixed(2)}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.reading_count}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
+                    <TableBody>
+                        {rows.length === 1 && rows[0]._state === 'new' && (
+                            <TableRow className="hover:bg-transparent">
+                                <TableCell colSpan={colCount} className="py-8 text-center">
+                                    <p className="text-xs text-muted-foreground animate-fade-up">
+                                        Awaiting Production Manager sync. Start typing in the empty row, or paste a range from Excel.
+                                    </p>
+                                </TableCell>
+                            </TableRow>
+                        )}
+                        {rows.map((row, rowIdx) => {
+                            const isDirtyRow = row._state === 'modified';
+                            const dateCol = 0;
+
+                            return (
+                                <TableRow
+                                    key={rowIdx}
+                                    className={cn(
+                                        'group transition-colors duration-150 border-b border-border/30 hover:bg-muted/50',
+                                        isDirtyRow && 'border-l-2 border-l-amber-400'
+                                    )}
+                                    style={{ height: '28px' }}
+                                >
+                                    {/* ── DATE — frozen sticky col 0, last (only) frozen col → separator shadow ── */}
+                                    <TableCell
+                                        className="px-0 py-0 border-r border-border/30 bg-background group-hover:bg-muted/50 transition-colors duration-150 sticky z-30 shadow-[2px_0_4px_rgba(0,0,0,0.12)]"
+                                        style={{ height: '28px', left: 0 }}
+                                    >
+                                        <DatePickerCell
+                                            value={row.reading_date}
+                                            onChange={(v) => updateDate(rowIdx, v)}
+                                            onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, dateCol); }}
+                                            isActive={activeCell?.row === rowIdx && activeCell?.col === dateCol}
+                                            isRangeSelected={cellSelection.isSelected(rowIdx, dateCol)}
+                                            isRangeAnchor={cellSelection.isAnchor(rowIdx, dateCol)}
+                                            onCellMouseDown={(e) => handleCellMouseDown(rowIdx, dateCol, e)}
+                                            onCellMouseUp={() => handleCellMouseUp(rowIdx, dateCol)}
+                                            onCellMouseEnter={() => handleCellMouseEnter(rowIdx, dateCol)}
+                                        />
+                                    </TableCell>
+
+                                    {/* ── Per-plate column groups ── */}
+                                    {plateColumns.map(({ plate, startCol }, groupIdx) => {
+                                        const cell = row.cells[plate] ?? emptyPlateCell();
+                                        const startColIdx = startCol;
+                                        const endColIdx = startCol + 1;
+                                        const ttlColIdx = startCol + 2;
+                                        const fuelColIdx = startCol + 3;
+                                        const ttlKm = (parseFloat(cell.end_km) || 0) - (parseFloat(cell.start_km) || 0);
+                                        const lastGroup = groupIdx === plateColumns.length - 1;
+
+                                        return (
+                                            <React.Fragment key={plate}>
+                                                {/* START KM */}
+                                                <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
+                                                    <GridCell col={startColIdx} row={rowIdx} value={cell.start_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, startColIdx)}>
+                                                        <Input autoFocus type="number" step="1" value={cell.start_km} onChange={e => updateCell(rowIdx, { plate, field: 'start_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, startColIdx); }} />
+                                                    </GridCell>
+                                                </TableCell>
+                                                {/* END KM */}
+                                                <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
+                                                    <GridCell col={endColIdx} row={rowIdx} value={cell.end_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, endColIdx)}>
+                                                        <Input autoFocus type="number" step="1" value={cell.end_km} onChange={e => updateCell(rowIdx, { plate, field: 'end_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, endColIdx); }} />
+                                                    </GridCell>
+                                                </TableCell>
+                                                {/* TTL KM — computed, read-only, tinted, selectable for aggregation */}
+                                                <TableCell
+                                                    className={cn(
+                                                        'px-1 py-0 border-r border-border/30 bg-muted/40 font-mono font-semibold text-right text-xs text-foreground/70 select-none cursor-default',
+                                                        cellSelection.isSelected(rowIdx, ttlColIdx) && 'bg-primary/10 dark:bg-primary/20',
+                                                        cellSelection.isAnchor(rowIdx, ttlColIdx) && 'ring-2 ring-primary ring-inset z-10',
+                                                    )}
+                                                    style={{ height: '28px' }}
+                                                    onMouseDown={(e) => handleCellMouseDown(rowIdx, ttlColIdx, e)}
+                                                    onMouseUp={() => handleCellMouseUp(rowIdx, ttlColIdx)}
+                                                    onMouseEnter={() => handleCellMouseEnter(rowIdx, ttlColIdx)}
+                                                >
+                                                    {ttlKm > 0 ? formatNum(ttlKm) : ''}
+                                                </TableCell>
+                                                {/* FUEL */}
+                                                <TableCell className={cn('px-0 py-0', !lastGroup && 'border-r border-foreground/20')} style={{ height: '28px' }}>
+                                                    <GridCell col={fuelColIdx} row={rowIdx} value={cell.fuel_liters} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, fuelColIdx)}>
+                                                        <Input autoFocus type="number" step="0.01" min="0" value={cell.fuel_liters} onChange={e => updateCell(rowIdx, { plate, field: 'fuel_liters' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, fuelColIdx); }} />
+                                                    </GridCell>
+                                                </TableCell>
+                                            </React.Fragment>
+                                        );
+                                    })}
+                                </TableRow>
+                            );
+                        })}
+                    </TableBody>
+                </table>
             </div>
-        </TooltipProvider>
+        </div>
     );
 }

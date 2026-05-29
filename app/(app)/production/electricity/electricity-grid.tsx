@@ -35,7 +35,6 @@ import { saveBulkElectricity } from './actions';
 import type { Tables } from '@/types/supabase';
 
 type ElectricityReadingRow = Tables<'electricity_readings'>;
-type ElectricityMonthlyRow = Tables<'view_electricity_monthly'>;
 
 const KNOWN_METERS = ['MAIN', 'BUNKHOUSE', 'PUMP'] as const;
 type KnownMeter = (typeof KNOWN_METERS)[number];
@@ -115,11 +114,10 @@ const inputClass =
 
 interface ElectricityGridProps {
     initialData: ElectricityReadingRow[];
-    monthly: ElectricityMonthlyRow[];
     onSaveSuccess: () => void;
 }
 
-export function ElectricityGrid({ initialData, monthly, onSaveSuccess }: ElectricityGridProps) {
+export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridProps) {
     const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const { hasPermission } = useAuth();
     const canViewPrices = hasPermission('view:prices');
@@ -626,55 +624,6 @@ export function ElectricityGrid({ initialData, monthly, onSaveSuccess }: Electri
                         </TableBody>
                     </table>
                 </div>
-
-                {/* Monthly summary — price-gated */}
-                {monthly.length > 0 && (
-                    <div className="border-t bg-muted/10 p-2">
-                        <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground mb-1">Monthly Summary</p>
-                        <div className="overflow-x-auto">
-                            <table className="text-xs table-fixed border-collapse w-full">
-                                <thead>
-                                    <tr className="border-b border-foreground/10">
-                                        <th className="px-2 py-0.5 text-left font-mono text-[10px] w-[90px]">MONTH</th>
-                                        <th className="px-2 py-0.5 text-left font-mono text-[10px] w-[80px]">METER</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">START</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">END</th>
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">DIFF KWH</th>
-                                        {canViewPrices && (
-                                            <>
-                                                <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[70px]">AVG RATE</th>
-                                                <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[90px]">TTL PHP</th>
-                                            </>
-                                        )}
-                                        <th className="px-2 py-0.5 text-right font-mono text-[10px] w-[50px]">RDGS</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {monthly.map((m, i) => (
-                                        <tr key={i} className="border-b border-border/20 hover:bg-muted/20">
-                                            <td className="px-2 py-0.5 font-mono text-[11px]">{m.month}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px]">{m.meter}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_start_kwh?.toFixed(2)}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_end_kwh?.toFixed(2)}</td>
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.month_diff_kwh?.toFixed(2)}</td>
-                                            {canViewPrices && (
-                                                <>
-                                                    <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.avg_rate_php?.toFixed(4)}</td>
-                                                    <td className="px-2 py-0.5 font-mono text-[11px] text-right">
-                                                        {m.month_ttl_php != null ? (
-                                                            <div className="flex justify-between"><span className="text-muted-foreground">₱</span><span>{m.month_ttl_php.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>
-                                                        ) : null}
-                                                    </td>
-                                                </>
-                                            )}
-                                            <td className="px-2 py-0.5 font-mono text-[11px] text-right">{m.reading_count}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                )}
             </div>
         </TooltipProvider>
     );

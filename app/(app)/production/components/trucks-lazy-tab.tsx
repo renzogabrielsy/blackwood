@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useProductionTab } from './production-tab-context';
+import { useProductionPeriod } from './production-period-context';
+import { batchToMonth } from '../lib/batch-month';
 import { fetchTrucksTabData } from '../trucks/actions';
 import { TrucksView } from '../trucks/trucks-view';
 import type { Tables } from '@/types/supabase';
@@ -9,47 +11,59 @@ import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 
 export type TruckReadingRow = Tables<'truck_readings'>;
-export type TruckMonthlyRow = Tables<'view_trucks_monthly'>;
 
 interface TrucksTabData {
     readings: TruckReadingRow[];
-    monthly: TruckMonthlyRow[];
-    year: number;
-    month: number;
+    year: number | null;
+    month: number | null;
+}
+
+function periodKey(year: number | null, batch: string | null): string {
+    return `${year ?? 'all'}|${batch ?? 'all'}`;
 }
 
 export function TrucksLazyTab() {
     const { activeTab } = useProductionTab();
+    const { year, batch, periodsLoading } = useProductionPeriod();
+
     const [data, setData] = useState<TrucksTabData | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const hasLoadedRef = useRef(false);
+    const fetchedPeriodRef = useRef<string | null>(null);
 
-    const load = async () => {
+    // Trucks store calendar dates, so the shared batch must be translated to a
+    // 0-indexed month. Unrecognized / null batch → null month → whole year.
+    const load = useCallback(async (y: number | null, b: string | null) => {
         setLoading(true);
         setError(null);
         try {
-            const result = await fetchTrucksTabData();
+            const month = batchToMonth(b);
+            const result = await fetchTrucksTabData(y, month);
             if (result.error) {
                 setError(result.error);
             } else if (result.data) {
                 setData(result.data);
-                hasLoadedRef.current = true;
+                fetchedPeriodRef.current = periodKey(y, b);
             }
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Failed to load trucks data');
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
     useEffect(() => {
-        if (activeTab === 'trucks' && !hasLoadedRef.current) {
-            void load();
+        if (activeTab !== 'trucks') return;
+        if (periodsLoading) return;
+        const current = periodKey(year, batch);
+        if (fetchedPeriodRef.current !== current) {
+            void load(year, batch);
         }
-    }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [activeTab, year, batch, periodsLoading, load]);
 
-    if (loading) {
+    // Show the spinner while fetching OR while the shared period (default batch)
+    // is still resolving — a fetch is imminent, so avoid a blank content flash.
+    if ((loading || periodsLoading) && !data) {
         return (
             <div className="flex items-center justify-center flex-1 gap-2 text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -62,7 +76,7 @@ export function TrucksLazyTab() {
         return (
             <div className="flex flex-col items-center justify-center flex-1 gap-3">
                 <p className="text-sm text-destructive">{error}</p>
-                <Button variant="outline" size="sm" onClick={() => void load()}>
+                <Button variant="outline" size="sm" onClick={() => void load(year, batch)}>
                     Retry
                 </Button>
             </div>
@@ -74,10 +88,9 @@ export function TrucksLazyTab() {
     return (
         <TrucksView
             readings={data.readings}
-            monthly={data.monthly}
             year={data.year}
             month={data.month}
-            onRefresh={load}
+            onRefresh={() => load(year, batch)}
         />
     );
 }

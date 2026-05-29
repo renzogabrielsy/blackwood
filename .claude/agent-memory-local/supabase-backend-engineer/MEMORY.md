@@ -1,8 +1,8 @@
 # Supabase Backend Engineer Memory
 
-## Production Module Schema (2026-05-27) — [[production-module-schema]]
+## Production Module Schema (2026-05-28 parent-child restructure) — [[production-module-schema]]
 
-Migrations `20260527010000_create_production_tables` + `20260527010001_create_production_views` applied. 5 tables + 3 views. No RLS (follows existing pattern). types/supabase.ts regenerated via MCP (CLI gen requires SUPABASE_DB_PASSWORD env var which is not set in this machine). See production-module-schema.md.
+4 tables + 3 views. `production_shifts` is parent; production_runs/downtime/waste are FK-children via `shift_id`. SKS columns dropped from production_waste. view_production_daily rewritten to join via shift_id. Migrations: 040000 + 040001. Row counts: 158 shifts / 207 runs / 158 downtime / 158 waste — all data preserved. Daily tab UI still uses old schema — pending frontend rebuild. types/supabase.ts regenerated via MCP. See production-module-schema.md.
 
 ## Jarvis Ingestion Pipeline Phase A (2026-05-27) — [[jarvis-ingestion-pipeline]]
 

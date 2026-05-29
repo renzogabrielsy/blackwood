@@ -9,20 +9,23 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | File | Role |
 |------|------|
 | `page.tsx` | Server entry point — renders `<ProductionView />` |
-| `layout.tsx` | Client layout — wraps in `ProductionTabProvider` + Card shell + `<ProductionSheetTabs />` |
+| `layout.tsx` | Client layout — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
 | `error.tsx` | Error boundary |
 | `loading.tsx` | Loading skeleton |
 | `components/production-tab-context.tsx` | React context — `activeTab` / `setActiveTab`, localStorage key `production_active_tab` |
+| `components/production-period-context.tsx` | **Shared period context** — `year` / `batch` / `availablePeriods` / `periodsLoading` / `setPeriod`. Owns the universal period state for ALL 3 tabs, syncs URL `?y=&b=`, fetches `fetchAvailablePeriods()` once + resolves default. |
+| `components/period-picker.tsx` | The universal Year + Batch `<Select>` UI. Reads/writes the period context. **Never disabled** by any tab's loading state. |
 | `components/sheet-tabs.tsx` | Bottom tab bar with sliding indicator (Daily · Electricity · Trucks) |
 | `components/production-view.tsx` | Crossfade wrapper for 3 tabs (150ms opacity transition) |
-| `components/daily-lazy-tab.tsx` | Lazy loader for Daily tab — fetches on first activation |
-| `components/electricity-lazy-tab.tsx` | Lazy loader for Electricity tab |
-| `components/trucks-lazy-tab.tsx` | Lazy loader for Trucks tab |
+| `components/daily-lazy-tab.tsx` | Lazy loader for Daily tab — consumes period context, refetches on activation-if-stale |
+| `components/electricity-lazy-tab.tsx` | Lazy loader for Electricity tab — consumes period context, derives month via `batchToMonth()` |
+| `components/trucks-lazy-tab.tsx` | Lazy loader for Trucks tab — consumes period context, derives month via `batchToMonth()` |
+| `lib/batch-month.ts` | `batchToMonth(batch)` — maps month-name batches (abbreviated + full forms) → 0-indexed month. Returns null for null/unrecognized. Used by Electricity/Trucks tabs to translate the shared batch into a date filter. |
 
 ## Tab Catalog
 | Tab | Submodule | Data | UI |
 |-----|-----------|------|----|
-| Daily | `daily/` | `production_runs`, `production_downtime`, `production_waste` | 3 inline-editable grids side-by-side |
+| Daily | `daily/` | `production_shifts`, `production_runs`, `production_downtime`, `production_waste` | ONE unified inline-editable ledger (replaces 3 side-by-side grids as of 2026-05-28) |
 | Electricity | `electricity/` | `electricity_readings`, `view_electricity_monthly` | Single inline-editable grid + monthly summary |
 | Trucks | `trucks/` | `truck_readings`, `view_trucks_monthly` | Single inline-editable grid + monthly summary |
 
@@ -38,14 +41,11 @@ All 5 grids share the same pattern (modelled after `bulk-delivery-input.tsx`):
 - **Status bar:** pushes selection count + aggregates to `StatusBarProvider`
 - **Error toasts:** `errorToast()` from `lib/toast.ts` — HARD RULE
 
-## Daily Tab Layout
-```
-[ PRODUCTION OUTPUT (~620px) ] | [ DOWNTIME (~700px) ] | [ WASTE SUMMARY (~1200px) ]
-```
-Outer `overflow-x-auto` horizontal scroll. Each grid has independent vertical scroll.
+## Daily Tab Layout (as of 2026-05-28)
+ONE unified ledger inside `overflow-x-auto`. `table minWidth: 1800px`. Columns grouped into sections: Identity (blue) · Production (green) · Downtime (amber) · Waste (red). Each ledger row = one `production_runs` entry. Downtime/Waste columns appear only on the primary grade row per shift; secondary rows have muted gray cells. See `daily/CONTEXT.md` for full column order and multi-grade rendering rules.
 
 ## Shared Types
-`BulkSavePayload<TInsert, TUpdate>` — exported from `daily/actions.ts`:
+`BulkSavePayload<TInsert, TUpdate>` — now defined locally in `electricity/actions.ts` and `trucks/actions.ts` (no longer shared from `daily/actions.ts` — the daily module was rewritten with a different atomic save pattern).
 ```ts
 type BulkSavePayload<TInsert, TUpdate> = {
   inserts: TInsert[];
@@ -54,23 +54,54 @@ type BulkSavePayload<TInsert, TUpdate> = {
 };
 ```
 
+## Universal Period Control (as of 2026-05-29)
+
+The Year + Batch picker is a **module-level, shared period control** — NOT per-tab state. It lives in `layout.tsx` (in a header bar above the tab content), stays mounted across tab switches, and is **never disabled** by any tab's loading state.
+
+**Architecture:**
+- `ProductionPeriodProvider` (in `components/production-period-context.tsx`) holds `year: number | null` (null = All Years) and `batch: string | null` (null = All Batches). Provided in `layout.tsx`, wrapping everything alongside `ProductionTabProvider`.
+- It fetches `fetchAvailablePeriods()` (from `daily/actions.ts`) ONCE on mount to populate options, then resolves a sensible default: current year + current month's batch (if present), else falls back to the last available batch, else All. URL params (`?y=&b=`) override the default and are honored on mount.
+- `setPeriod(year, batch)` updates state + replaces URL params via `history.replaceState`.
+- `<PeriodPicker />` (in `components/period-picker.tsx`) renders the two `<Select>`s and reads/writes the context. Year: "All Years" pinned + divider + descending years. Batch: "All Batches" pinned + divider + batches for the selected year (union across years when year=All).
+
+**Per-tab consumption + stale-refetch:**
+- Each lazy tab reads `{ year, batch, periodsLoading }` from the context (no local picker state).
+- Each tab tracks the period it last fetched via a `fetchedPeriodRef` (serialized `"year|batch"` string).
+- A single `useEffect` (deps: `activeTab`, `year`, `batch`, `periodsLoading`, `load`) fires a fetch when: the tab is active AND `!periodsLoading` AND `fetchedPeriodRef.current !== periodKey(year, batch)`. This covers BOTH cases: (a) tab becomes active with a stale period, (b) period changes while the tab is active.
+- Inactive tabs never fetch — they pick up the latest period lazily on next activation.
+- The `periodsLoading` guard prevents a wasted initial "All Batches" fetch before the default batch resolves.
+- Daily filters by `production_batch` directly. Electricity/Trucks call `batchToMonth(batch)` and pass `(year, month)` to their fetch actions (batch → calendar month, since they store dates not batch names).
+
 ## Key Behaviors
-- **Lazy loading:** All 3 tabs load on first activation. `hasLoadedRef` prevents re-fetch on tab switch.
+- **Lazy loading:** All 3 tabs load on first activation AND refetch when the shared period changes (see Universal Period Control). `fetchedPeriodRef` per tab prevents redundant fetches for an unchanged period.
 - **Crossfade:** 150ms opacity transition (same pattern as Inventory).
 - **Tab persistence:** localStorage key `production_active_tab`, default `'daily'`.
-- **Error handling:** Each lazy tab has Retry button on fetch failure.
+- **Period persistence:** URL params `?y=` (year or `all`) and `?b=` (batch name or `all`), owned by `ProductionPeriodProvider`.
+- **Error handling:** Each lazy tab has Retry button on fetch failure. The shared picker stays interactive even when a tab is in its error/loading state.
 - **Navbar:** Registered in `getBreadcrumb()` at `startsWith('/production')`. Production enabled in `MODULES` array.
 
 ## Schema References
-- `production_runs` — date, production_batch, **customer** (CEBU/KURARAY/..., default 'CEBU'), grade (3X50/6X50/8X50/2X6), shift (M/E/N), ttl_kg, sacks_bags. Natural key: `(date, production_batch, customer, grade, shift)`.
-- `production_downtime` — date, batch, shift, shift_hrs, dt_hrs, dt_mins, dt_reason. Natural key: `(date, production_batch, shift)`.
-- `production_waste` — date, batch, shift, 8 waste streams (kg + sacks text each). Natural key: `(date, production_batch, shift)`.
+
+**Parent table (2026-05-28):**
+- `production_shifts` — `id`, `transaction_date`, `production_batch`, `shift` (M/E/N). Natural key: `(transaction_date, production_batch, shift)`. One row per unique shift. All 3 child tables FK to this via `shift_id`.
+
+**Child tables (restructured 2026-05-28 — `transaction_date`, `production_batch`, `shift` columns dropped; now live in parent):**
+- `production_runs` — `shift_id` (FK), `customer` (CEBU/KURARAY/..., default 'CEBU'), `grade` (3X50/6X50/8X50/2X6), `ttl_kg`, `sacks_bags`. Natural key: `(shift_id, customer, grade)`. N:1 with production_shifts.
+- `production_downtime` — `shift_id` (FK), `shift_hrs`, `dt_hrs`, `dt_mins`, `dt_reason`. Natural key: `(shift_id)` — exactly 1 per shift.
+- `production_waste` — `shift_id` (FK), 8 waste stream kg columns (rs1a/rs1b/bf/rs23/rs5/trml1/trml2/grit). Natural key: `(shift_id)` — exactly 1 per shift. **SKS columns dropped 2026-05-28** — mixed-type text blobs with no aggregation value.
+
+**Other tables (unaffected by restructure):**
 - `electricity_readings` — date, meter (MAIN/BUNKHOUSE/PUMP), start_kwh, end_kwh, rate_php_per_kwh
 - `truck_readings` — date, plate_no, start_km, end_km, fuel_liters
+
+**Views:**
+- `view_production_daily` — one row per `production_shifts` entry. Joins runs (LEFT, aggregated by grade), downtime (LEFT, 1:1), waste (LEFT, 1:1) via shift_id. Exposes `shift_id` as row identifier. Computes dt_total_hrs, productive_hrs, total_waste_kg, prod_loss_pct.
 - `view_electricity_monthly` — monthly aggregates per meter
 - `view_trucks_monthly` — monthly aggregates per plate
 
 **Note (2026-05-27):** `production_runs.customer` was added during the MASTER backfill. Default `CEBU` covers ~99% of rows. The `production-runs-grid.tsx` UI does not yet expose a customer column — new rows entered via the grid will silently default to `CEBU` via the DB default. Follow-up UI work: add a customer dropdown to the grid for non-CEBU rows.
+
+**Note (2026-05-28):** The Daily tab UI (`daily/`) was built against the flat 3-table schema. After the shift model restructure its server actions (`fetchDailyTabData`, `saveBulk*`) and grid components need to be rewritten to work with `production_shifts` as the entry point. **This is a pending frontend task — the UI currently reads stale type signatures.** See `daily/CONTEXT.md` for the full picture.
 
 ## Dependencies
 - `@/components/providers/auth-context` — `useAuth()`, `hasPermission('view:prices')` for cost gating

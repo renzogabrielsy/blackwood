@@ -521,10 +521,8 @@ export type Database = {
           dt_mins: number
           dt_reason: string | null
           id: string
-          production_batch: string
-          shift: string
           shift_hrs: number
-          transaction_date: string
+          shift_id: string
         }
         Insert: {
           created_at?: string
@@ -532,10 +530,8 @@ export type Database = {
           dt_mins?: number
           dt_reason?: string | null
           id?: string
-          production_batch: string
-          shift: string
           shift_hrs: number
-          transaction_date: string
+          shift_id: string
         }
         Update: {
           created_at?: string
@@ -543,12 +539,25 @@ export type Database = {
           dt_mins?: number
           dt_reason?: string | null
           id?: string
-          production_batch?: string
-          shift?: string
           shift_hrs?: number
-          transaction_date?: string
+          shift_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "production_downtime_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
+            referencedRelation: "production_shifts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_downtime_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
+            referencedRelation: "view_production_daily"
+            referencedColumns: ["shift_id"]
+          },
+        ]
       }
       production_runs: {
         Row: {
@@ -556,11 +565,9 @@ export type Database = {
           customer: string
           grade: string
           id: string
-          production_batch: string
           remarks: string | null
           sacks_bags: number | null
-          shift: string
-          transaction_date: string
+          shift_id: string
           ttl_kg: number
         }
         Insert: {
@@ -568,11 +575,9 @@ export type Database = {
           customer?: string
           grade: string
           id?: string
-          production_batch: string
           remarks?: string | null
           sacks_bags?: number | null
-          shift: string
-          transaction_date: string
+          shift_id: string
           ttl_kg: number
         }
         Update: {
@@ -580,86 +585,111 @@ export type Database = {
           customer?: string
           grade?: string
           id?: string
-          production_batch?: string
           remarks?: string | null
           sacks_bags?: number | null
+          shift_id?: string
+          ttl_kg?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_runs_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: false
+            referencedRelation: "production_shifts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_runs_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: false
+            referencedRelation: "view_production_daily"
+            referencedColumns: ["shift_id"]
+          },
+        ]
+      }
+      production_shifts: {
+        Row: {
+          created_at: string
+          id: string
+          production_batch: string
+          shift: string
+          transaction_date: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          production_batch: string
+          shift: string
+          transaction_date: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          production_batch?: string
           shift?: string
           transaction_date?: string
-          ttl_kg?: number
         }
         Relationships: []
       }
       production_waste: {
         Row: {
           bf_kg: number
-          bf_sacks: string | null
           created_at: string
           grit_kg: number
           id: string
-          production_batch: string
           remarks: string | null
           rs1a_kg: number
-          rs1a_sacks: string | null
           rs1b_kg: number
-          rs1b_sacks: string | null
           rs23_kg: number
-          rs23_sacks: string | null
           rs5_kg: number
-          rs5_sacks: string | null
-          shift: string
-          transaction_date: string
+          shift_id: string
           trml1_kg: number
-          trml1_sacks: string | null
           trml2_kg: number
-          trml2_sacks: string | null
         }
         Insert: {
           bf_kg?: number
-          bf_sacks?: string | null
           created_at?: string
           grit_kg?: number
           id?: string
-          production_batch: string
           remarks?: string | null
           rs1a_kg?: number
-          rs1a_sacks?: string | null
           rs1b_kg?: number
-          rs1b_sacks?: string | null
           rs23_kg?: number
-          rs23_sacks?: string | null
           rs5_kg?: number
-          rs5_sacks?: string | null
-          shift: string
-          transaction_date: string
+          shift_id: string
           trml1_kg?: number
-          trml1_sacks?: string | null
           trml2_kg?: number
-          trml2_sacks?: string | null
         }
         Update: {
           bf_kg?: number
-          bf_sacks?: string | null
           created_at?: string
           grit_kg?: number
           id?: string
-          production_batch?: string
           remarks?: string | null
           rs1a_kg?: number
-          rs1a_sacks?: string | null
           rs1b_kg?: number
-          rs1b_sacks?: string | null
           rs23_kg?: number
-          rs23_sacks?: string | null
           rs5_kg?: number
-          rs5_sacks?: string | null
-          shift?: string
-          transaction_date?: string
+          shift_id?: string
           trml1_kg?: number
-          trml1_sacks?: string | null
           trml2_kg?: number
-          trml2_sacks?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "production_waste_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
+            referencedRelation: "production_shifts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_waste_shift_id_fkey"
+            columns: ["shift_id"]
+            isOneToOne: true
+            referencedRelation: "view_production_daily"
+            referencedColumns: ["shift_id"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -889,7 +919,6 @@ export type Database = {
       view_production_daily: {
         Row: {
           bf_kg: number | null
-          bf_sacks: string | null
           dt_hrs: number | null
           dt_mins: number | null
           dt_reason: string | null
@@ -903,22 +932,17 @@ export type Database = {
           production_batch: string | null
           productive_hrs: number | null
           rs1a_kg: number | null
-          rs1a_sacks: string | null
           rs1b_kg: number | null
-          rs1b_sacks: string | null
           rs23_kg: number | null
-          rs23_sacks: string | null
           rs5_kg: number | null
-          rs5_sacks: string | null
           shift: string | null
           shift_hrs: number | null
+          shift_id: string | null
           total_output_kg: number | null
           total_waste_kg: number | null
           transaction_date: string | null
           trml1_kg: number | null
-          trml1_sacks: string | null
           trml2_kg: number | null
-          trml2_sacks: string | null
           waste_remarks: string | null
         }
         Relationships: []

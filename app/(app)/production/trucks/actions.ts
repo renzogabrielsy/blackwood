@@ -4,10 +4,14 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { Tables, TablesInsert, TablesUpdate } from '@/types/supabase';
 import { format } from 'date-fns';
-import type { BulkSavePayload } from '../daily/actions';
+// Shared generic for bulk save operations across all production modules
+export type BulkSavePayload<TInsert, TUpdate> = {
+    inserts: TInsert[];
+    updates: { id: string; data: TUpdate }[];
+    deletes: string[];
+};
 
 export type TruckReadingRow = Tables<'truck_readings'>;
-export type TruckMonthlyRow = Tables<'view_trucks_monthly'>;
 
 function translateDbError(message: string): string {
     if (message.includes('chk_truck_readings_end_km')) {
@@ -20,37 +24,49 @@ function translateDbError(message: string): string {
 }
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
+// Filtered by the shared production period (year + month derived from the batch):
+// - year=null              → all readings (no date filter)
+// - year=<num>, month=null → all readings in that calendar year
+// - year=<num>, month=<n>  → readings in that month of that year
+// month is the 0-indexed month (the lazy tab derives it from the batch name).
 
-export async function fetchTrucksTabData(year?: number, month?: number) {
+export async function fetchTrucksTabData(
+    year?: number | null,
+    month?: number | null,
+) {
     const supabase = await createClient();
+    // Treat `undefined` as "not provided" → fall back to current period for
+    // backwards compatibility; explicit `null` means "all".
     const now = new Date();
-    const targetYear = year ?? now.getFullYear();
-    const targetMonth = month ?? now.getMonth();
+    const targetYear = year !== undefined ? year : now.getFullYear();
+    const targetMonth = month !== undefined ? month : now.getMonth();
 
-    const startDate = format(new Date(targetYear, targetMonth, 1), 'yyyy-MM-dd');
-    const endDate = format(new Date(targetYear, targetMonth + 1, 0), 'yyyy-MM-dd');
+    let query = supabase.from('truck_readings').select('*');
 
-    const [readingsRes, monthlyRes] = await Promise.all([
-        supabase
-            .from('truck_readings')
-            .select('*')
-            .gte('reading_date', startDate)
-            .lte('reading_date', endDate)
-            .order('reading_date', { ascending: false })
-            .order('plate_no', { ascending: true }),
-        supabase
-            .from('view_trucks_monthly')
-            .select('*')
-            .order('month', { ascending: false }),
-    ]);
+    if (targetYear != null) {
+        if (targetMonth != null) {
+            // Specific month within the year
+            const startDate = format(new Date(targetYear, targetMonth, 1), 'yyyy-MM-dd');
+            const endDate = format(new Date(targetYear, targetMonth + 1, 0), 'yyyy-MM-dd');
+            query = query.gte('reading_date', startDate).lte('reading_date', endDate);
+        } else {
+            // Whole year
+            const startDate = format(new Date(targetYear, 0, 1), 'yyyy-MM-dd');
+            const endDate = format(new Date(targetYear, 11, 31), 'yyyy-MM-dd');
+            query = query.gte('reading_date', startDate).lte('reading_date', endDate);
+        }
+    }
+    // targetYear == null → no date filter (all readings)
+
+    const readingsRes = await query
+        .order('reading_date', { ascending: false })
+        .order('plate_no', { ascending: true });
 
     if (readingsRes.error) return { error: `Failed to load truck readings: ${readingsRes.error.message}` };
-    if (monthlyRes.error) return { error: `Failed to load monthly summary: ${monthlyRes.error.message}` };
 
     return {
         data: {
             readings: readingsRes.data ?? [],
-            monthly: monthlyRes.data ?? [],
             year: targetYear,
             month: targetMonth,
         },

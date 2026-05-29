@@ -91,37 +91,48 @@ Need to verify by examining actual emails — formats may differ from MASTER's c
 
 ---
 
-## 3. Proposed schema (new Supabase tables)
+## 3. Current schema (as of 2026-05-28 parent-child restructure)
 
-Three new tables, mirroring the three sub-tables. All require migrations.
+Four tables. `production_shifts` is the parent; the three sub-tables are FK-children. All applied via migrations — see §12 for the full migration timeline.
 
-### `production_runs`
+### `production_shifts` (NEW — parent table, 2026-05-28)
+
+```sql
+CREATE TABLE production_shifts (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  transaction_date date NOT NULL,
+  production_batch text NOT NULL,       -- 'MAY', 'JUNE', etc.
+  shift            text NOT NULL,       -- 'M' | 'E' | 'N'
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (transaction_date, production_batch, shift),
+  CHECK (shift IN ('M', 'E', 'N'))
+);
+CREATE INDEX idx_production_shifts_date ON production_shifts(transaction_date DESC);
+```
+
+### `production_runs` (restructured 2026-05-28)
 
 ```sql
 CREATE TABLE production_runs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  transaction_date date NOT NULL,
-  production_batch text NOT NULL,                    -- 'MAY', 'JUNE', etc.
-  customer text NOT NULL DEFAULT 'CEBU',              -- 'CEBU' | 'KURARAY' | ...
-  grade text NOT NULL,                                -- '3X50' | '6X50' | '8X50' | '2X6'
-  shift text NOT NULL,                                -- 'M' | 'E' | 'N'
-  ttl_kg numeric NOT NULL CHECK (ttl_kg >= 0),
-  sacks_bags integer,                                 -- #SACKS/BAGS from MC email
-  remarks text,
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id   uuid NOT NULL REFERENCES production_shifts(id),
+  customer   text NOT NULL DEFAULT 'CEBU',   -- 'CEBU' | 'KURARAY' | ...
+  grade      text NOT NULL,                  -- '3X50' | '6X50' | '8X50' | '2X6'
+  ttl_kg     numeric NOT NULL CHECK (ttl_kg >= 0),
+  sacks_bags integer,
+  remarks    text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (transaction_date, production_batch, customer, grade, shift),
-  CHECK (grade IN ('3X50', '6X50', '8X50', '2X6')),
-  CHECK (shift IN ('M', 'E', 'N'))
+  UNIQUE (shift_id, customer, grade),
+  CHECK (grade IN ('3X50', '6X50', '8X50', '2X6'))
 );
-CREATE INDEX idx_production_runs_date ON production_runs(transaction_date DESC);
+CREATE INDEX idx_production_runs_shift_id ON production_runs(shift_id);
 CREATE INDEX idx_production_runs_customer ON production_runs(customer);
 ```
 
-**Key design notes** (revised 2026-05-27 during MASTER backfill — see migration `20260527030000_add_customer_to_production_runs.sql`):
-- **`customer` column added (default CEBU)** — the original "CEBU is implicit" assumption broke when MASTER's 2026-04-16 row revealed a KURARAY → CEBU intra-shift crossover. Customer is now an explicit field. Default `CEBU` covers the 99% case.
-- Natural key is `(date, production_batch, customer, grade, shift)` — accommodates same-day batch/customer crossover events without losing fidelity.
-- Migration history: original key was `(date, grade, shift)`. On 2026-05-27 first migration added `production_batch` (file `20260527020000_*`); same day second migration added `customer` (file `20260527030000_*`) after KURARAY surfaced in MASTER backfill.
-- `sacks_bags` field captured from MC's email (operator tracks count alongside kg).
+**Key design notes:**
+- `transaction_date`, `production_batch`, `shift` columns dropped — these now live exclusively in `production_shifts`.
+- Natural key is `(shift_id, customer, grade)` — accommodates same-day batch/customer crossover events without losing fidelity.
+- `customer` column added 2026-05-27 (default `CEBU`) after KURARAY event surfaced in MASTER backfill (2026-04-16 row).
 
 ### Extractor logic for MC's email "PREFIX GRADE" cells
 
@@ -134,64 +145,60 @@ MC writes the grade column with a prefix. The extractor uses a strict allowlist 
 | `KOREA POWDER` / `LOCAL POWDER` / `ZAMBOANGA <anything>` | **IGNORED** | Out of Production Manager scope per Renzo (2026-05-27). Future Bagging / Waste Sales Manager owns these. |
 | Anything else not matching the allowlist | **IGNORED** with a warning in the extractor summary | Surface for manual review; do NOT auto-write |
 
-**Why "ignore" instead of "route to waste":** The waste table (`production_waste`) is stream-classified (RS1A, RS1B, BF, etc.) — its data comes from Ivy's WASTE PRODUCTION REPORT and from MASTER's WASTE SUMMARY section. MC's "KOREA POWDER" entries are a different abstraction (post-production by-product sales) and don't map cleanly to either. So Production Manager simply skips them.
-
 **Backfill from MASTER:** all PROD rows go straight to `production_runs` with bare grade — MASTER doesn't have a prefix to strip.
 
-### `production_downtime`
+### `production_downtime` (restructured 2026-05-28)
 
 ```sql
 CREATE TABLE production_downtime (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  transaction_date date NOT NULL,
-  production_batch text NOT NULL,
-  shift text NOT NULL,
+  id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id  uuid NOT NULL REFERENCES production_shifts(id),
   shift_hrs numeric NOT NULL CHECK (shift_hrs > 0),
-  dt_hrs numeric NOT NULL DEFAULT 0,
-  dt_mins numeric NOT NULL DEFAULT 0,
-  dt_reason text,                                     -- not in MASTER but useful to capture
+  dt_hrs    numeric NOT NULL DEFAULT 0 CHECK (dt_hrs >= 0),
+  dt_mins   numeric NOT NULL DEFAULT 0 CHECK (dt_mins >= 0 AND dt_mins < 60),
+  dt_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (transaction_date, shift),
-  CHECK (shift IN ('M', 'E', 'N')),
-  CHECK (dt_hrs >= 0 AND dt_mins >= 0 AND dt_mins < 60)
+  UNIQUE (shift_id)   -- exactly 1 downtime row per shift
 );
--- dt_ttl_hrs and ttl_hrs are computed via a view, NOT stored.
+CREATE INDEX idx_production_downtime_shift_id ON production_downtime(shift_id);
 ```
 
-### `production_waste`
+`transaction_date`, `production_batch`, `shift` columns dropped — now in parent.
+`dt_ttl_hrs` and `productive_hrs` are computed in `view_production_daily`, NOT stored.
 
-**Source confirmed (2026-05-27):** Ivy's WASTE PRODUCTION REPORT email contains the same waste data that gets pasted directly into MASTER's WASTE SUMMARY section. So **the schema mirrors MASTER's WASTE SUMMARY columns one-to-one** — no buyer-classification layer needed.
+### `production_waste` (restructured 2026-05-28; SKS columns dropped)
 
-Stream classification (8 streams + sacks): RS1A, RS1B, BF, RS2/3, RS5, TRML1, TRML2, GRIT.
+**Source confirmed (2026-05-27):** Ivy's WASTE PRODUCTION REPORT email contains the same waste data pasted into MASTER's WASTE SUMMARY section.
+
+**SKS columns decision (2026-05-28):** The 7 `*_sacks` columns (`rs1a_sacks` through `trml2_sacks`) were originally captured for completeness but were mixed-type text blobs (integers, strings like "3 bags") not used in any aggregation or view. Dropped in the 2026-05-28 restructure. Raw values were preserved during the MASTER backfill but are not recoverable from the DB going forward.
 
 ```sql
 CREATE TABLE production_waste (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  transaction_date date NOT NULL,
-  production_batch text NOT NULL,
-  shift text NOT NULL,
-  -- Stream classification (matches MASTER WASTE SUMMARY and Ivy's WASTE PRODUCTION REPORT)
-  rs1a_kg numeric DEFAULT 0,  rs1a_sacks text,
-  rs1b_kg numeric DEFAULT 0,  rs1b_sacks text,
-  bf_kg   numeric DEFAULT 0,  bf_sacks   text,
-  rs23_kg numeric DEFAULT 0,  rs23_sacks text,
-  rs5_kg  numeric DEFAULT 0,  rs5_sacks  text,
-  trml1_kg numeric DEFAULT 0, trml1_sacks text,
-  trml2_kg numeric DEFAULT 0, trml2_sacks text,
-  grit_kg numeric DEFAULT 0,
-  remarks text,
+  id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  shift_id  uuid NOT NULL REFERENCES production_shifts(id),
+  -- 8 waste streams (kg only — sacks columns dropped 2026-05-28)
+  rs1a_kg   numeric NOT NULL DEFAULT 0 CHECK (rs1a_kg >= 0),
+  rs1b_kg   numeric NOT NULL DEFAULT 0 CHECK (rs1b_kg >= 0),
+  bf_kg     numeric NOT NULL DEFAULT 0 CHECK (bf_kg >= 0),
+  rs23_kg   numeric NOT NULL DEFAULT 0 CHECK (rs23_kg >= 0),
+  rs5_kg    numeric NOT NULL DEFAULT 0 CHECK (rs5_kg >= 0),
+  trml1_kg  numeric NOT NULL DEFAULT 0 CHECK (trml1_kg >= 0),
+  trml2_kg  numeric NOT NULL DEFAULT 0 CHECK (trml2_kg >= 0),
+  grit_kg   numeric NOT NULL DEFAULT 0 CHECK (grit_kg >= 0),
+  remarks   text,
   created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (transaction_date, shift),
-  CHECK (shift IN ('M', 'E', 'N'))
+  UNIQUE (shift_id)   -- exactly 1 waste row per shift
 );
--- ttl_waste_kg and prod_loss are computed via the view_production_daily view, NOT stored.
+CREATE INDEX idx_production_waste_shift_id ON production_waste(shift_id);
 ```
+
+`ttl_waste_kg` and `prod_loss_pct` are computed in `view_production_daily`, NOT stored.
 
 **Source emails for `production_waste`:**
 - Backfill: MASTER's PROD sheet, WASTE SUMMARY section (cols Q-AK)
 - Going forward: Ivy's WASTE PRODUCTION REPORT email (`edilloivymae306ictc@gmail.com`)
 
-**Out of scope (intentionally dropped):** KOREA POWDER / LOCAL POWDER rows in MC's email. These reference post-production waste sales/disposition that Renzo doesn't want tracked in the Production Manager scope. Future Bagging Manager or a dedicated Waste Sales Manager can pick them up if/when needed.
+**Out of scope (intentionally dropped):** KOREA POWDER / LOCAL POWDER rows in MC's email. Future Bagging Manager or a dedicated Waste Sales Manager can pick them up if/when needed.
 
 ### Suggested view: `view_production_daily`
 
@@ -290,19 +297,23 @@ Same Python-tools-as-deterministic-muscle pattern as deliveries-manager / rc-out
 
 ## 6. Natural keys
 
-Updated 2026-05-27 during MASTER backfill — original keys were too narrow.
+Updated 2026-05-28 — parent-child restructure moved date/batch/shift to `production_shifts`.
 
 | Table | Natural key | Notes |
 |---|---|---|
-| `production_runs` | (transaction_date, production_batch, customer, grade, shift) | Allows same-day batch crossover AND customer crossover (e.g., 2026-04-16 KURARAY → CEBU intra-shift switch). |
-| `production_downtime` | (transaction_date, production_batch, shift) | Allows same-day batch crossover (e.g., 2026-02-02 JANUARY → FEBRUARY morning shift). |
-| `production_waste` | (transaction_date, production_batch, shift) | Same crossover support as downtime. |
+| `production_shifts` | `(transaction_date, production_batch, shift)` | The normalized triplet. One row per unique (date, batch, shift) combination. |
+| `production_runs` | `(shift_id, customer, grade)` | N:1 with shifts. Allows same-day customer crossover (e.g., 2026-04-16 KURARAY → CEBU intra-shift switch). |
+| `production_downtime` | `(shift_id)` | Exactly 1 downtime row per shift — enforced via UNIQUE(shift_id). |
+| `production_waste` | `(shift_id)` | Exactly 1 waste row per shift — enforced via UNIQUE(shift_id). |
 
-**Migrations applied 2026-05-27:**
-- `20260527020000_add_batch_to_production_natural_keys.sql` — added `production_batch` to all three keys.
-- `20260527030000_add_customer_to_production_runs.sql` — added `customer` column (default `CEBU`) and included it in `production_runs` natural key.
+**Ingestion pattern (after restructure):** Before inserting child rows, upsert `production_shifts` by `(transaction_date, production_batch, shift)` to obtain the `shift_id`. Then insert child rows with that `shift_id`.
 
-These are still simpler than rc_out's `(date, batch_id, destination)` because there's no FK batch_id lookup needed — the natural keys are all direct text attributes.
+**Migration history:**
+- `20260527010000` — created production_runs/downtime/waste with date/grade/shift keys
+- `20260527020000` — added `production_batch` to all three keys
+- `20260527030000` — added `customer` to production_runs; updated its key
+- `20260527040000` — created `production_shifts`; backfilled shift_id on all children; dropped redundant columns; dropped SKS columns from waste
+- `20260527040001` — rewrote `view_production_daily` to join via shift_id
 
 ---
 
@@ -586,6 +597,8 @@ The base 12-hour estimate from Section 11 still holds — adding `rc_tank_level`
 - ✅ **Daily granularity confirmed for electricity + trucks** (per Phase 0 inspection of MC's email)
 - ✅ **NO `production_waste_sales` table.** KOREA / LOCAL / ZAMBOANGA waste-buyer rows in MC's email are SILENTLY DROPPED — out of Production Manager scope entirely. Future Bagging Manager or dedicated Waste Sales Manager can pick them up later.
 - ✅ **`production_waste` matches MASTER's WASTE SUMMARY structure** (8 streams: RS1A/RS1B/BF/RS2_3/RS5/TRML1/TRML2/GRIT). Source: Ivy's WASTE PRODUCTION REPORT email — confirmed by Renzo to be the canonical waste source (her email content is directly pasted into MASTER's WASTE SUMMARY).
+- ✅ **Parent-child shift model applied (2026-05-28).** `production_shifts` introduced as parent table. All three child tables joined via `shift_id` FK. `transaction_date`, `production_batch`, `shift` columns dropped from child tables. SKS columns (`rs*_sacks`) dropped from `production_waste` — mixed-type text blobs with no aggregation value. 158 production_shifts rows inferred from 207 runs + 158 downtime + 158 waste backfilled rows. All data preserved. Migrations: `20260527040000` + `20260527040001`.
+- ✅ **Ingestion agents must upsert `production_shifts` first** (by natural key `(transaction_date, production_batch, shift)`) to obtain `shift_id`, then insert child rows with that FK. Never write transaction_date/production_batch/shift directly to child tables — those columns no longer exist.
 
 ### Phase 0 resolved (2026-05-27)
 
@@ -598,3 +611,16 @@ All previously-open questions have been answered by Phase 0 inspection — see S
 - ✅ Trucks **AAV 6111 + KCA 378** confirmed daily-active (verify full list during build)
 
 **No remaining blockers.** Phase 1 (migration) can begin whenever you give the go-ahead.
+
+---
+
+## 14. Schema Evolution Timeline
+
+| Migration | Date | Description |
+|---|---|---|
+| `20260527010000_create_production_tables` | 2026-05-27 | Created 5 tables: production_runs, production_downtime, production_waste, electricity_readings, truck_readings. Initial natural keys: `(date, grade, shift)` / `(date, shift)`. |
+| `20260527010001_create_production_views` | 2026-05-27 | Created view_production_daily (joining on transaction_date+shift), view_electricity_monthly, view_trucks_monthly. Grants to authenticated. |
+| `20260527020000_add_batch_to_production_natural_keys` | 2026-05-27 | Added `production_batch` to all 3 child table natural keys after MASTER backfill revealed same-day batch crossover events (e.g., JANUARY→FEBRUARY morning on 2026-02-02). |
+| `20260527030000_add_customer_to_production_runs` | 2026-05-27 | Added `customer` column (default `CEBU`) to production_runs and included in natural key. Triggered by MASTER's 2026-04-16 KURARAY event. Backfilled: 205 CEBU + 2 KURARAY rows. |
+| `20260527040000_restructure_production_to_shifts_model` | 2026-05-28 | **Major restructure.** Created `production_shifts` parent table. Backfilled 158 shift rows from child UNION. Added `shift_id` FK to all 3 child tables. Swapped natural keys to shift_id-based. Dropped `transaction_date`, `production_batch`, `shift` from child tables. Dropped 7 SKS columns from production_waste. Dropped old date-based indexes, added FK indexes. |
+| `20260527040001_rewrite_view_production_daily` | 2026-05-28 | Rewrote view_production_daily. Now drives from production_shifts (LEFT JOIN to children via shift_id). Exposes `shift_id` as row identifier. SKS columns removed. FULL OUTER JOIN replaced by LEFT JOIN from parent. |
