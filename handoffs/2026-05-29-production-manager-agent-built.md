@@ -107,11 +107,12 @@ If the user wants it **this session before restarting**, production-manager can 
 ---
 
 ## Git state at handoff
-- Branch `dev`, working tree **clean**. This session's 3 commits (NOT yet pushed — `origin/dev` is behind; fast-forward `git push origin dev` when ready):
+- Branch `dev`, working tree **clean**. This session's 4 commits are **PUSHED** — `dev` is in sync with `origin/dev` at `5cc94a6` (pushed range `bc2de87..5cc94a6`):
   - `e80f6f6` `feat(production): rework electricity schema from rate to meter multiplier`
   - `d244be3` `feat(production): add deterministic extract/classify/reconcile pipeline for email ingestion`
   - `2539181` `feat(production): add Production Manager email-ingestion employee + watermark-filtering fix`
-- Prior session commits: `f74fc60`, `c36d688`, `e906312`, `dd1bd5f`, `bc2de87`.
+  - `5cc94a6` `docs: add Production Manager agent handoff + timeline entry`
+- Prior session commits (already on origin): `f74fc60`, `c36d688`, `e906312`, `dd1bd5f`, `bc2de87`.
 
 ---
 
