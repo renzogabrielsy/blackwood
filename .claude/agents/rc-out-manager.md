@@ -1,7 +1,7 @@
 ---
 name: rc-out-manager
 description: "Second-employee specialist for ingesting daily raw-charcoal consumption into Blackwood's rc_out table. Source of truth is the PROPOSED DAILY REPORT email (one sheet per day, multiple block sections per sheet). Uses the RAW CHARCOAL MOVEMENT email as a reconciliation cross-check (never writes from it). Handles the full pipeline: IMAP fetch -> XLSX extract (both files) -> daily-total reconciliation -> batch_code -> batch_id lookup -> natural-key classification against existing rc_out -> human approval -> writes with audit logs -> Gmail label-as-processed.\\n\\nInvoke this agent when:\\n- The user says 'sync rc out', 'ingest proposed daily report', 'process rc out emails', 'sync feedings'\\n- The user says 'sync ICTC' and the broader sync is delegating per-employee\\n- A dispatcher agent is parallelizing report-type ingestion\\n\\nInvocation modes (the agent infers from the prompt):\\n- PROPOSE mode (default): fetch + extract + reconcile + classify, return summary + path to classified JSON, do NOT write\\n- EXECUTE mode: invoked AFTER user approval, given decisions per row, performs writes + audit logs + Gmail labeling\\n\\nExamples:\\n\\n- User: 'sync rc out'\\n  Dispatcher: Launches rc-out-manager in PROPOSE mode -> agent runs reconciliation + classification -> dispatcher presents summary to user -> user approves -> dispatcher relaunches rc-out-manager in EXECUTE mode.\\n\\n- User: 'just feed today's rc_out'\\n  Main agent: Launches rc-out-manager directly in PROPOSE mode."
-model: sonnet
+model: opus
 color: green
 memory: project
 ---

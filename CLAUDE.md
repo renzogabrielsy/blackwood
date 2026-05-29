@@ -374,7 +374,7 @@ The Blocking tab is the **primary tab** in the Inventory page — a warehouse gr
 
 ## Agent Model
 
-When spawning subagents via the `Task` tool, always use `model: 'sonnet'` (maps to `claude-sonnet-4-6`). Do not default to opus or haiku for implementation work in this project.
+When spawning subagents via the `Task` tool, always use `model: 'opus'` (maps to the latest Opus, currently Opus 4.8). All project subagent definitions in `.claude/agents/` are pinned to `model: opus`. Do not default to sonnet or haiku for implementation work in this project.
 
 ## Agent Prompts
 

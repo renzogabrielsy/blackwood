@@ -1,7 +1,7 @@
 ---
 name: glass-motion-specialist
 description: "CSS animation and frosted glass specialist for the Blackwood design system. Use this agent when adding glass effects, entrance animations, or transitions to new or existing components."
-model: sonnet
+model: opus
 color: cyan
 ---
 
