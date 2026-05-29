@@ -128,8 +128,17 @@ All 8 `.claude/agents/*.md` set to `model: opus` (was sonnet for 5 of them). CLA
 ---
 
 ## Git state at handoff
-- Branch: `dev`. This session's work committed + pushed at session end (production module rewrite, 6 migrations, font swap, agent-model change, picker refactor, trucks pivot).
+- Branch: `dev`. Working tree **clean**. This session committed in 4 scoped commits, **NOT yet pushed** (origin/dev is 4 behind — fast-forward `git push origin dev` when ready):
+  - `e906312` `style(ui): swap app font to Atkinson Hyperlegible`
+  - `c36d688` `chore(agents): pin all subagents to Opus model`
+  - `f74fc60` `feat(production): rebuild daily tab as unified Excel ledger on shifts model` (28 files, +4411/−3225 — the bulk: migrations 040000/040001, daily-ledger-grid, period picker, trucks pivot, types regen)
+  - `dd1bd5f` `docs: add session handoff and update timeline for production sprint`
 - Prior session commits: `62c1658` (employees), `bb25415` (production+jarvis), `cc16dfa` (toasts).
+
+## Session-close deliverables (added after the main handoff was first written)
+- **Universal `/handoff` skill** created at `~/.claude/skills/handoff/SKILL.md` (user-level, works across ALL projects — not in this repo). Auto-detects the repo's handoff convention (dated `handoffs/` lineage vs root `HANDOFF.md`), reads the prior handoff for continuity + staleness, gathers git state, writes the structured doc, updates TIMELINE/CHANGELOG. Registered immediately (no restart needed). Invoke with "handoff" or `/handoff`.
+- This handoff doc + the `TIMELINE.md` 2026-05-29 entry were committed in `dd1bd5f`.
+- The `/handoff` skill lives outside the repo (`~/.claude/skills/`), so it is NOT part of any project commit — it's a machine-level user skill.
 
 ---
 
