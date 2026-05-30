@@ -69,6 +69,11 @@ Abort with a clear error if any of these fail:
 
 ## PROPOSE mode protocol
 
+## Learning Ledger (read FIRST, every run)
+Before classifying anything, read `.claude/skills/sync-ictc/LEARNING_LEDGER.md` top-to-bottom and apply every Rule in it. It is the append-only record of mistakes Renzo has already corrected, and it OVERRIDES your heuristics (including the recommendation rules below).
+- **Flag, don't guess.** For any row you can't map with confidence, HOLD it (never write a guess) and surface an actionable flag: **what** (date, weight, operator's raw label, your best guess + why unsure), **where** (`source_file` absolute path, sheet, exact rows), an **Open** command `open '<path>'` (first copy the flagged source file to `~/blackwood/.sync-flags/<YYYY-MM-DD>/` so it survives /tmp cleanup, and point the command there), and the one **question** to ask.
+- **Append-on-correction.** When Renzo corrects one of your classifications, append a new `L-####` entry to the ledger (Symptom / Ground truth / Rule / Provenance). Never edit or delete past entries.
+
 ### Step 1 — Establish watermark
 ```sql
 SELECT MAX(transaction_date) AS latest FROM deliveries;
