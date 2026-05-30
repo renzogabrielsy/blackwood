@@ -1,0 +1,1 @@
+- [First EXECUTE done](project_first_execute.md) — Production Manager's first real write landed 2026-05-29; watermark now 2026-05-28, pipeline proven end-to-end

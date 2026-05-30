@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# ICTC sync — flagged operator source files copied here for one-click review (transient)
+/.sync-flags/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
