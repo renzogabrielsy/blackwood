@@ -1,5 +1,9 @@
 # Supabase Backend Engineer Memory
 
+## Blocking phantom-inventory fix (2026-05-31) — [[blocking-current-weight-drift]]
+
+`view_blocking_grid.balance` now computes `SUM(deliveries)−SUM(rc_out)` (migration 20260531041520), NOT `batches.current_weight`. Root cause of ~54t phantom: the **deliveries-manager ingestion path** did an imperative `current_weight += weight` ON TOP of the trigger (L-001 family) — triggers were CORRECT, not changed. 3 active batches re-synced (20260531041615). Key lesson: when debugging cache drift, prove trigger vs imperative by checking if rows from the *same trigger* on a *different ingestion run* are also wrong — if only one run's rows drift by exactly their own value, it's an external `+= delta`. See blocking-current-weight-drift.md.
+
 ## Production Module Schema (2026-05-28 parent-child restructure) — [[production-module-schema]]
 
 4 tables + 3 views. `production_shifts` is parent; production_runs/downtime/waste are FK-children via `shift_id`. SKS columns dropped from production_waste. view_production_daily rewritten to join via shift_id. Migrations: 040000 + 040001. Row counts: 158 shifts / 207 runs / 158 downtime / 158 waste — all data preserved. Daily tab UI still uses old schema — pending frontend rebuild. types/supabase.ts regenerated via MCP. See production-module-schema.md.
