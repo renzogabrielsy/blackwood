@@ -249,6 +249,8 @@ Track which batches were newly created (mention in the audit_logs comment).
 ### Step 4 — Insert NEW rows
 Build a single INSERT statement for all NEW rows. Use `lab_results::jsonb` for JSONB columns. Return the new IDs.
 
+> ⚠️ **NEVER `UPDATE batches SET current_weight = ...` after inserting a delivery.** The `fn_update_blackwood_state` trigger already maintains `current_weight` (a single `+= NEW.weight_kg`) on every delivery insert — issuing a manual `+= delta` on top **double-counts** it (this is exactly what caused the ~54 t phantom-inventory bug — see LEARNING_LEDGER **L-006** / AUDIT_FINDINGS **AF-001**). The *only* legitimate `current_weight` write is the `VALUES (..., 0) ON CONFLICT DO NOTHING` for a brand-new batch in Step 3. If a reconciliation ever genuinely must correct `current_weight`, use the idempotent **absolute** form `SET current_weight = SUM(in) − SUM(out)`, never `+= delta`.
+
 ### Step 5 — Apply VALUE_CHANGED decisions
 - `email_wins` -> `UPDATE deliveries SET <changed fields> WHERE id = ?`
 - `db_wins` -> no write
