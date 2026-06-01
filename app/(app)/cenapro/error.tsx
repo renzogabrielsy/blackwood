@@ -20,8 +20,7 @@ export default function CenaproError({
                 <h2 className="text-xl font-semibold">Something went wrong</h2>
                 <p className="text-sm text-muted-foreground break-words">{message}</p>
                 <p className="text-xs text-muted-foreground/70">
-                    If this persists, the <code className="font-mono">cenapro</code> schema may not yet be
-                    exposed to the API. Data will appear once exposure is enabled.
+                    Try again in a moment. If it keeps happening, copy the details below and send them over.
                 </p>
             </div>
             <div className="flex items-center gap-2">

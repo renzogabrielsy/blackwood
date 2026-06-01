@@ -48,7 +48,7 @@ function ErrorBanner({ message }: { message: string }) {
                 <p className="font-medium text-destructive">Couldn&apos;t load flec inventory</p>
                 <p className="mt-1 break-words text-destructive/90">{message}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                    This is expected until the <code className="font-mono">cenapro</code> schema is exposed to the API.
+                    Try again in a moment, or copy the message above if it persists.
                 </p>
             </div>
             <Button

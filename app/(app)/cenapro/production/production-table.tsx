@@ -119,7 +119,7 @@ function ErrorBanner({ message }: { message: string }) {
                 <p className="font-medium text-destructive">Couldn&apos;t load production data</p>
                 <p className="mt-1 break-words text-destructive/90">{message}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                    This is expected until the <code className="font-mono">cenapro</code> schema is exposed to the API.
+                    Try again in a moment, or copy the message above if it persists.
                 </p>
             </div>
             <Button
@@ -204,11 +204,13 @@ export function ProductionTable({ rows, loadError }: ProductionTableProps) {
         });
 
         // Stable sort by recv_date per the toggle (id as deterministic tiebreaker).
+        // recv_date/id are non-null at runtime but typed nullable (VIEW columns),
+        // so coalesce to '' to keep the comparator type-safe.
         return [...filtered].sort((a, b) => {
-            const cmp = a.recv_date.localeCompare(b.recv_date);
+            const cmp = (a.recv_date ?? '').localeCompare(b.recv_date ?? '');
             const primary = dateSortDir === 'asc' ? cmp : -cmp;
             if (primary !== 0) return primary;
-            return a.id.localeCompare(b.id);
+            return (a.id ?? '').localeCompare(b.id ?? '');
         });
     }, [rows, shiftFilter, gradeFilter, dispositionFilter, warehouseFilter, dateSortDir]);
 
