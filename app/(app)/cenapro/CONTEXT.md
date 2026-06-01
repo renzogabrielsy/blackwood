@@ -1,9 +1,11 @@
 # Cenapro Module (Tenant #2 — CI / Cebu)
 
 ## Purpose
-Top-level route `/cenapro` for the **second tenant** on the Blackwood platform: the CI / Cebu charcoal company ("Cenapro"). Two **read-only** screens visualize production data already ingested into the dedicated `cenapro` Postgres schema. Fully decoupled from the ICTC / Davao tenant — shares zero tables, types, or code.
+Top-level route `/cenapro` for the **second tenant** on the Blackwood platform: the CI / Cebu charcoal company ("Cenapro"). Two screens over the dedicated `cenapro` Postgres schema: an **editable** Production ledger (the app is now the maintaining file — operators add/edit/delete production rows here instead of in Excel) and a Flec Inventory view whose **STARTING (opening) balances are now editable + append-only + backtrackable** (the rest of the inventory view — closing balances + movement ledger — stays computed/read-only). Fully decoupled from the ICTC / Davao tenant — shares zero tables, types, or code.
 
-> **Tenant/Domain Module (Cenapro):** Cebu-specific. Read-only views; the source of truth is an operator-uploaded `.xlsb` (the upload feature is a SEPARATE, not-yet-built follow-up). These screens never mutate — no inline editing, no server-action writes.
+> **Tenant/Domain Module (Cenapro):** Cebu-specific.
+> - **Production (`/cenapro/production`)** is an **editable Industrial-Spreadsheet ledger** — inline cell editing, dropdowns for categorical columns, add/delete rows, paste-from-Excel, dirty tracking + single Save/Discard. It writes through the auto-updatable `public.cenapro_production_events` VIEW (see "Production write path" below).
+> - **Flec Inventory (`/cenapro/inventory`)** mirrors the Excel "PC WHSE" sheet: an **editable STARTING block** (opening flec count per grade × side, append-only, with full history) on top of computed read-only closing balances + the show-your-math movement ledger. Only the opening balances are written; everything below them is re-derived in SQL (see "Opening-balance write path" below).
 
 ## Files
 | File | Role |
@@ -12,13 +14,14 @@ Top-level route `/cenapro` for the **second tenant** on the Blackwood platform: 
 | `page.tsx` | Landing hub — two `hover-lift` card-links (Production / Flec Inventory) + a "Tenant #2 · Cebu" note. |
 | `loading.tsx` | Table skeleton (toolbar + header + 14 row stripes). |
 | `error.tsx` | Error boundary — persistent message + **Copy button** (error HARD RULE) + a note that empty data is expected pre-exposure. |
-| `types.ts` | Row types **derived from the generated `types/supabase.ts`** (`cenapro_production_events` view + `cenapro_flec_balance`/`cenapro_flec_ledger` function Returns) + warehouse constants + `formatDisposition()`. See "Data path" below. |
-| `production/page.tsx` | Server — `fetchProductionEvents()` → `<ProductionTable />`. |
-| `production/actions.ts` | `'use server'` — `fetchProductionEvents()`: reads full `public.cenapro_production_events` view newest-first. |
-| `production/production-table.tsx` | Client — dense Excel-style read-only table; header column-filters (Shift/Grade/Disposition/Warehouse); date sort toggle; inline error banner. Local `ColumnFilterMenu` + `DispositionBadge`. |
-| `inventory/page.tsx` | Server — reads `?whse=&date=` URL params (defaults WHSE 7 / 2026-03-10), `fetchFlecInventory()` → `<FlecInventoryClient />`. |
-| `inventory/actions.ts` | `'use server'` — `fetchFlecInventory(warehouse, startDate)`: calls `cenapro_flec_balance` + `cenapro_flec_ledger` RPCs in parallel. |
-| `inventory/flec-inventory-client.tsx` | Client — warehouse `<Select>` + native start-date input (both push to URL params via `router.replace` in a transition); balance cards per grade×side; show-your-math movement ledger. Local `BalanceCard` + `LedgerDirection`. |
+| `types.ts` | Row types **derived from the generated `types/supabase.ts`** (`cenapro_production_events` view + `cenapro_flec_balance`/`cenapro_flec_ledger` function Returns) + flec-warehouse constants + `formatDisposition()` + the **editable-ledger lookup constants** (`SHIFT_CODES`/`GRADE_CODES`/`PLANT_CODES`/`WAREHOUSE_CODES`/`SOURCE_LOCATION_CODES`/`DISPOSITION_KINDS`/`WHSE_SIDES` + `CRUSHER_CODES`/`KILN_CODES`) and the equipment-dependency helpers `partnerEquipmentOptions()` / `dispositionRequiresEquipment()`. See "Editable-ledger lookups" + "Data path" below. |
+| `production/page.tsx` | Server — `fetchProductionEvents()` → `<ProductionView />`. |
+| `production/actions.ts` | `'use server'` — `fetchProductionEvents()` (reads full `public.cenapro_production_events` view newest-first) **and `saveProductionEvents(dirtyRows, deletedIds)`** (upsert + delete through the auto-updatable view; coerces strings→number/date, strips empties→null, NEVER sends `unique_tag`/`batch_year`; `revalidatePath('/cenapro/production')`). Exports `ProductionEventDirtyRow`. |
+| `production/production-view.tsx` | Client — thin wrapper: `router.refresh()` on save success, and keys `<ProductionLedgerGrid>` by a server-data fingerprint so a successful save remounts against the saved truth (fresh ids + computed `unique_tag`/`batch_year`). |
+| `production/production-ledger-grid.tsx` | Client — the **editable** dense Excel-style ledger (one VIEW row = one grid row, keyed by stable `id`). Inline editing via shared `GridCell` + cell hooks (`useCellSelection`/`useClipboardCopy`/`useCellDelete`); `DatePickerCell` for recv/prod dates; **`SelectCell`** (a DropdownMenu cell) for the 8 categorical columns; numeric `<Input>` for weight/flec. Dirty tracking (`existing`/`new`/`modified`/`deleted` with amber/blue left borders), trailing always-empty new row, paste-from-Excel (TSV), right-click context menu (Insert Above/Below, Duplicate, Delete/Restore), single Save/Discard. Keeps the read-only version's 4 header filters (Shift/Grade/Disposition/Warehouse) + date-sort toggle. Equipment column options depend on the row's disposition; partner dispositions are validated before save (persistent `errorToast`). Local `SelectCell` + `DatePickerCell` + `ColumnFilterMenu`. |
+| `inventory/page.tsx` | Server — reads `?whse=&date=` URL params (defaults WHSE 7 / 2026-03-10), fetches `fetchFlecInventory()` + `fetchOpeningBalances()` + `fetchOpeningBalanceHistory()` in parallel → `<FlecInventoryClient />`. The START date is the "as of" for both the openings seed and the ledger seed; history is warehouse-scoped (date-independent). |
+| `inventory/actions.ts` | `'use server'` — `fetchFlecInventory(warehouse, startDate)` (`cenapro_flec_balance` + `cenapro_flec_ledger` in parallel); `fetchOpeningBalances(warehouse, asOf)` (`cenapro_opening_balances` — the effective opening per grade×side, seeds the editable STARTING block); `fetchOpeningBalanceHistory(warehouse)` (`cenapro_opening_balance_history` — the full append-only trail, newest-first); **`saveOpeningBalances(changes[])`** loops `cenapro_set_opening_balance` once per CHANGED cell (append-only INSERT, effective date = page START date), stops + reports the first failing cell, `revalidatePath('/cenapro/inventory')` on success. See "Opening-balance write path". |
+| `inventory/flec-inventory-client.tsx` | Client — warehouse `<Select>` + native start-date input (both push to URL params via `router.replace` in a transition). **Editable STARTING block** (`StartingBlock`): a `table-fixed` grid, rows = `GRADE_CODES`, columns = `RS`/`LS` each split into **Starting** (editable digit-only `<input>`, seeded from `cenapro_opening_balances`) + **Now** (read-only closing from `cenapro_flec_balance`, "—" when absent per the empty-period caveat). Local edit buffer with amber dirty-border per cell, "N unsaved" badge, Discard + "Save starting balances" (writes only changed cells → `saveOpeningBalances` → success toast / `errorToast`; `router.refresh()` re-seeds). Per-cell `CellHistoryPopover` (History icon) + a collapsible whole-warehouse `OpeningHistoryPanel` grouped by grade×side (newest-first, "current" badge on the top entry) — the backtracking surface. Then the existing balance cards + show-your-math movement ledger. Local `StartingBlock`/`StartingCell`/`CellHistoryPopover`/`OpeningHistoryPanel`/`BalanceCard`/`LedgerDirection`. |
 
 ## Data
 All reached through **read-only accessors in the already-served `public` schema** — the standard Supabase client hits them directly (no `.schema('cenapro')`, no cast). See "Data path" below for why. These accessors are thin wrappers over the underlying `cenapro` schema objects.
@@ -29,44 +32,89 @@ All reached through **read-only accessors in the already-served `public` schema*
   - Verified distinct values: shift `M`; grades `2X6/3.5/3X50`; warehouses `WHSE 1/5/7`; equipment `C1/C2/RK1/RK2/RK3/RK4`. (Filter options are derived from data at runtime, not hardcoded.)
 - **`public.cenapro_flec_balance(p_warehouse_code text, p_start_date date)`** → `(warehouse_code, grade_code, side, current_flec, opening_seed, as_of)`. Closing count per (grade, side). NOTE: a (grade,side) with an opening but no events ≥ start date does NOT appear (empty-period caveat, schema §6.2).
 - **`public.cenapro_flec_ledger(p_warehouse_code text, p_start_date date)`** → `(…, recv_date, grade_code, side, disposition_kind, partner_equipment_code, kg_moved, flec_in, flec_out, opening_seed, flec_in_to_date, flec_out_to_date, running_balance)`. The show-your-math movement detail (function Returns are non-null).
+- **`public.cenapro_opening_balances(p_warehouse_code text, p_as_of_date date)`** → `(warehouse_code, grade_code, side, period_start_date, opening_flec_count, created_at)`. The **current effective** opening per (grade, side) as of the date = greatest `period_start_date ≤ as_of`, tie-broken by greatest `created_at`. Seeds the editable STARTING block. Unlike `cenapro_flec_balance`, it returns a (grade, side) even with no events forward.
+- **`public.cenapro_opening_balance_history(p_warehouse_code text)`** → `(id, warehouse_code, grade_code, side, period_start_date, opening_flec_count, created_at)`. **ALL** append-only opening entries, newest-first per (grade, side) — the backtracking data.
+- **`public.cenapro_set_opening_balance(p_warehouse_code, p_grade_code, p_side, p_effective_date date, p_count int)`** → INSERTS a new append-only entry (never overwrites), RETURNS the row. SECURITY INVOKER, granted to `authenticated` + `service_role` (NOT `anon`) — written only by `saveOpeningBalances` (server action, runs as the logged-in user). See "Opening-balance write path".
 - Flec warehouses = `WHSE 1/2/5/7` (flec-count). **WHSE 3 is kg/DVO — DEFERRED, never surfaced.**
-- Opening balances seeded for **WHSE 7** (3X50 RS=53, 2X6 LS=26 @ 2026-03-10) → that is the inventory page's default.
+- Opening balances seeded for **WHSE 7** (3X50 RS=53, 2X6 LS=26 @ 2026-03-10) → that is the inventory page's default. With the seeded ledger, WHSE 7 closing as of 2026-03-10 is 3X50/RS = 56, 2X6/LS = 0; the other 6 grade×side cells have no opening AND no movement, so they appear in neither `cenapro_opening_balances` nor `cenapro_flec_balance` (the STARTING grid renders them blank → "—", ready to type into).
 
 ## Key Behaviors
-- **READ-ONLY.** No editing, no mutations, no `revalidatePath`. Source of truth is the uploaded file.
-- **Production table:** fetches all 752 rows once; filters + date-sort happen client-side (small dataset, no virtualization). Header filters HIDE rows (not sort); date toggle defaults **newest-first**. Sticky glass header (`bg-muted/90 backdrop-blur-sm`).
-- **Flec Inventory:** warehouse + start-date drive state via **URL search params** (`?whse=&date=`); changing either `router.replace`s in a `useTransition` → server re-fetch. Start-date semantics made explicit ("Balances as of `<date>` forward"). Balance cards + per-row running-balance ledger ("opening + ins − outs = balance").
+- **Production = EDITABLE ledger; Flec Inventory = read-only.** The app is now the maintaining file for production rows.
+- **Production ledger:** fetches all rows once; filters + date-sort happen client-side (small dataset, no virtualization). Header filters HIDE rows (not sort); date toggle defaults **newest-first**. Sticky glass header (`bg-muted/90 backdrop-blur-sm`). One VIEW row = one grid row keyed by stable `id`. Inline edit (click-to-activate, F2/type-over, keyboard nav, paste-from-Excel), `SelectCell` dropdowns for the 8 categorical columns, `DatePickerCell` for recv/prod, numeric `<Input>` for weight/flec. Dirty tracking (new=blue / modified=amber left border; deleted=strikethrough) + single Save/Discard; trailing always-empty new row. No row animations (`transition-all duration-150` hover only).
+  - **Partner-equipment dependency:** the Equip column's options come from the row's disposition (`flec_bagging`→none/disabled; `partner_crusher`→C1–C4; `partner_kiln`→RK1–RK4). Changing disposition clears a now-invalid equipment value. Before save, partner rows missing an equipment code are rejected with a persistent `errorToast` (mirrors the DB CHECK `production_event_partner_equipment_presence`).
+  - **Unplaced-warehouse fix:** `warehouse_code` is nullable; a null row reads "unplaced" (subtle amber tint). Setting the Whse dropdown is how an operator places the unplaced bagging rows.
+- **Flec Inventory:** warehouse + start-date drive state via **URL search params** (`?whse=&date=`); changing either `router.replace`s in a `useTransition` → server re-fetch. Start-date semantics made explicit ("Balances as of `<date>` forward"). Layout top→bottom mirrors the Excel PC WHSE sheet: **editable STARTING block** → current-balance cards → collapsible opening-balance history → show-your-math movement ledger ("opening + ins − outs = balance").
+  - **Editable STARTING block:** rows = the 4 flec grades, columns = `RS`/`LS`, each cell = an editable **Starting** input (seeded from `cenapro_opening_balances(warehouse, startDate)`) + a read-only **Now** closing (from `cenapro_flec_balance`). Edits are local (amber dirty-border, "N unsaved" badge) until **Save starting balances** writes only the changed cells. The **START date is the effective date** of every saved opening — the modular part: change the date and/or values to set a fresh starting point for a period, and old values are kept (append-only). After save → success toast + `router.refresh()` re-seeds the grid and re-derives the ledger.
+  - **Backtracking:** every saved opening is preserved. Surfaced two ways — a per-cell `CellHistoryPopover` (History icon next to each input) and a collapsible whole-warehouse `OpeningHistoryPanel` (grouped by grade×side, newest-first, top entry tagged "current"), both reading `cenapro_opening_balance_history(warehouse)`.
 - **Error handling (HARD RULE):** every inline error banner is persistent + has a **Copy** button. `error.tsx` boundary likewise. Banners show generic retry/copy guidance (the old "schema not exposed" copy was removed once the public `cenapro_*` accessors went live).
 - **Excel Standard:** `table-fixed`, explicit px widths, `px-2 py-1`, `h-8` rows, `text-xs`, `font-mono` right-aligned numerics, `tabular-nums`.
 - **Navbar:** registered in `getBreadcrumb()` (`/cenapro`, `/cenapro/production`, `/cenapro/inventory`) + a **separate "Cenapro · Cebu" section** in the Modules dropdown (distinct from "ICTC · Davao").
 
+## Editable-ledger lookups (hardcoded, FK-safe)
+The categorical production-event columns are FK-constrained to the seeded `cenapro` lookup tables, which are **not exposed** over PostgREST. So the canonical option lists are **hardcoded constants in `types.ts`** — each string MUST match a seeded `code` value EXACTLY or the FK insert fails. Keep them in lockstep with the cenapro seed migration.
+
+| Column | Options (constant) | Nullable |
+|---|---|---|
+| `shift_code` | `M` `E` `N` (`SHIFT_CODES`) | no |
+| `grade_code` | `3X50` `2X6` `3.5` `4X8` (`GRADE_CODES`) | no |
+| `plant_code` | `W6` `W7` `W6/W7` `DVO` (`PLANT_CODES`) | **yes** |
+| `warehouse_code` | `WHSE 1/2/3/5/7` (`WAREHOUSE_CODES`) | **yes** (null = unplaced) |
+| `source_location_code` | `TNK 1–4` `W6` `W7` `FLEC` `DVO` (`SOURCE_LOCATION_CODES`) | no |
+| `disposition_kind` | `flec_bagging` `partner_crusher` `partner_kiln` (`DISPOSITION_KINDS`) | no |
+| `partner_equipment_code` | crushers `C1–C4` / kilns `RK1–RK4` / none — **depends on disposition** (`partnerEquipmentOptions()`) | depends |
+| `whse_side` | `LS` `RS` or blank (`WHSE_SIDES`) | **yes** |
+
+## Production write path (`saveProductionEvents` → auto-updatable VIEW)
+`public.cenapro_production_events` is an **auto-updatable VIEW** with INSERT/UPDATE/DELETE granted to **`authenticated`** (SELECT also to `anon`; `service_role` gets SELECT only — so service-role/anon writes are correctly denied). The server action runs as the logged-in user (`authenticated`), so:
+- **Upsert:** `supabase.from('cenapro_production_events').upsert(rows)` — rows WITH `id` UPDATE, rows WITHOUT INSERT.
+- **Delete:** `supabase.from('cenapro_production_events').delete().in('id', ids)`.
+- The base trigger computes `unique_tag` + `batch_year` — both are **READ-ONLY, never sent**. (`saveProductionEvents` deletes first, then upserts; coerces strings→number/date and strips empties→null via the view's generated `Insert` type; surfaces DB errors as a single string → `errorToast`.)
+- The DB enforces CHECK `production_event_partner_equipment_presence` (bagging ⇒ equipment NULL; non-bagging ⇒ equipment NOT NULL); the grid guards both halves client-side.
+- **Write path proven (2026-06-01)** by running INSERT/UPDATE/DELETE as the `authenticated` role directly in Postgres: an INSERT with no `id`/`unique_tag`/`batch_year` returned `batch_year=2026` and a computed `unique_tag`; UPDATE + DELETE through the view both succeeded; CHECK confirmed. Throwaway proof cleaned up (0 leftover rows). `npx tsc --noEmit` = 0 errors.
+
+## Opening-balance write path (`saveOpeningBalances` → append-only RPC)
+The Flec Inventory STARTING block is written through a **dedicated append-only RPC**, NOT view DML (the `warehouse_opening_balance` table intentionally has no UNIQUE — every "set" is a new row so history is preserved):
+- **`public.cenapro_set_opening_balance(p_warehouse_code, p_grade_code, p_side, p_effective_date date, p_count int)`** — SECURITY INVOKER; **INSERTS** a new entry (never UPDATE/DELETE) and RETURNS it. Granted to `authenticated` + `service_role` only (NOT `anon`).
+- **`saveOpeningBalances(changes[])`** loops the RPC **once per CHANGED cell** (the grid diffs draft vs seed and sends only edited cells). `effectiveDate` = the page's START date for all cells. Stops at the first failing cell and returns `"Failed to save <grade>/<side> (= <count>, as of <date>): <msg>"` → `errorToast` (persistent + Copy); earlier cells already committed (each RPC is its own INSERT). On success: `revalidatePath('/cenapro/inventory')`, the client toasts + `router.refresh()` so the grid re-seeds and the ledger re-derives from the new opening.
+- **Effective semantics:** the opening effective as of date D = greatest `period_start_date ≤ D`, tie-broken by greatest `created_at`. So saving the same (grade, side) at the same START date again simply supersedes (a new later-`created_at` row wins) while the prior value stays in history. Changing the START date sets a fresh opening for a new period.
+- **Write path proven (2026-06-01)** from Node via the SDK: `cenapro_set_opening_balance` as the **`anon`** key → `permission denied for table warehouse_opening_balance` (correct — the server action runs as `authenticated`); as **`service_role`** → INSERT returned the row, `cenapro_opening_balances` read it back as the effective opening, and `cenapro_opening_balance_history` listed it. Throwaway sentinel row (WHSE 2 / 4X8 / LS @ 2000-01-01) hard-deleted afterward (0 leftover). `npx tsc --noEmit` = 0 errors; `npm run build` clean.
+
 ## Data path (public `cenapro_*` accessors — NOT `.schema('cenapro')`)
-The cenapro data is served through **read-only accessors that live in the `public` schema**, which PostgREST already exposes:
-- a VIEW `public.cenapro_production_events` (the 16 UI columns)
-- two set-returning functions `public.cenapro_flec_balance(...)` / `public.cenapro_flec_ledger(...)`
+The cenapro data is reached through **accessors that live in the `public` schema**, which PostgREST already exposes:
+- a VIEW `public.cenapro_production_events` (16 columns) — read by `fetchProductionEvents`, **written** by `saveProductionEvents` (auto-updatable; see "Production write path").
+- two set-returning functions `public.cenapro_flec_balance(...)` / `public.cenapro_flec_ledger(...)` (read-only).
+- three opening-balance accessors `public.cenapro_opening_balances(...)` / `public.cenapro_opening_balance_history(...)` (read-only) + **`public.cenapro_set_opening_balance(...)`** (append-only write RPC, `authenticated`/`service_role` only) — see "Opening-balance write path".
 
-All three are granted to `authenticated` + `anon`, so the **standard Supabase client reaches them directly** — `supabase.from('cenapro_production_events')` and `supabase.rpc('cenapro_flec_balance'|'cenapro_flec_ledger', …)`. No `.schema('cenapro')`, no structural casts.
+Reads are granted to `authenticated` + `anon` (writes to `authenticated`), so the **standard Supabase client reaches them directly** — `supabase.from('cenapro_production_events')` and `supabase.rpc('cenapro_flec_balance'|'cenapro_flec_ledger'|'cenapro_opening_balances'|'cenapro_opening_balance_history'|'cenapro_set_opening_balance', …)`. No `.schema('cenapro')`, no structural casts.
 
-**Why this path (and not exposing the `cenapro` schema):** flipping PostgREST's "Exposed schemas" toggle to add `cenapro` would surface the *entire* schema's API surface and is a project-wide setting. Wrapping just the three objects the UI needs as `public.cenapro_*` accessors keeps the blast radius minimal while still giving fully-typed, first-class client access.
+**Why this path (and not exposing the `cenapro` schema):** flipping PostgREST's "Exposed schemas" toggle to add `cenapro` would surface the *entire* schema's API surface and is a project-wide setting. Wrapping just the objects the UI needs as `public.cenapro_*` accessors keeps the blast radius minimal while still giving fully-typed, first-class client access.
 
-**Types:** `types.ts` derives all three row shapes from the generated `types/supabase.ts` (no hand-written interfaces), so they auto-update on every `supabase gen types typescript --linked`:
+**Types:** `types.ts` derives all row shapes from the generated `types/supabase.ts` (no hand-written interfaces), so they auto-update on every `supabase gen types typescript --linked`:
 - `ProductionEventRow = Database['public']['Views']['cenapro_production_events']['Row']`
 - `FlecBalanceRow = Database['public']['Functions']['cenapro_flec_balance']['Returns'][number]`
 - `FlecLedgerRow = Database['public']['Functions']['cenapro_flec_ledger']['Returns'][number]`
+- `OpeningBalanceRow = Database['public']['Functions']['cenapro_opening_balances']['Returns'][number]`
+- `OpeningBalanceHistoryRow = Database['public']['Functions']['cenapro_opening_balance_history']['Returns'][number]`
+- `OpeningBalanceCellChange` — hand-authored payload interface (one changed STARTING cell: `warehouse`/`grade`/`side`/`effectiveDate`/`count`) for `saveOpeningBalances`; the only non-derived type, since it's a UI→action contract, not a DB row.
 
 Notes:
 - The production `.select(...)` column list MUST be a **single string literal** (not `+`-concatenated) — the typed PostgREST client parses it at the type level to infer the row shape; concatenation defeats inference and falls back to an error type.
+- The upsert payload is typed against `Database['public']['Views']['cenapro_production_events']['Insert']` (the auto-updatable view's generated Insert block; identical to Update). New rows omit `id` entirely so the base default generates it.
 - `formatDisposition(disposition: string | null, …)` is typed loosely (string) to consume the generated row types directly; at runtime it's always one of the three known kinds, unknown values render as-is.
 - The old `ProductionDailyRow` stopgap interface (for `view_production_daily`) was **removed** — it had no consumer and no matching `public.cenapro_*` accessor in the generated types. Re-derive it from generated types if/when that view is surfaced and exposed.
-- **Live data confirmed from Node** via the anon key (2026-06-01): `cenapro_production_events` count = 752; `cenapro_flec_balance(WHSE 7, 2026-03-10)` 3X50/RS `current_flec` = 56; `cenapro_flec_ledger(WHSE 7, 2026-03-10)` = 100 rows, all 16 columns. The browser pages are auth-gated (a `GET /cenapro` returns 307 → login when unauthenticated), so this Node check is the runtime proof short of a logged-in session.
+- **Live data confirmed from Node** via the anon key (2026-06-01): `cenapro_production_events` count = 752; `cenapro_flec_balance(WHSE 7, 2026-03-10)` 3X50/RS `current_flec` = 56; `cenapro_flec_ledger(WHSE 7, 2026-03-10)` = 100 rows, all 16 columns; `cenapro_opening_balances(WHSE 7, 2026-03-10)` = 3X50/RS 53 + 2X6/LS 26 (the seeds). The browser pages are auth-gated (a `GET /cenapro` returns 307 → login when unauthenticated), so this Node check is the runtime proof short of a logged-in session.
 
 ## Dependencies
-- `@/lib/supabase/server` — `createClient()` (server Supabase client; reads the public `cenapro_*` view/RPCs directly via `.from()` / `.rpc()`).
-- `@/types/supabase` — generated `Database` type; `types.ts` derives the cenapro row shapes from it.
-- `@/components/ui/{table,select,card,dropdown-menu,button}` — Shadcn primitives.
+- `@/lib/supabase/server` — `createClient()` (server Supabase client; reads the public `cenapro_*` view/RPCs via `.from()` / `.rpc()`, **writes** the auto-updatable production view via `.upsert()` / `.delete()`, and writes opening balances via the append-only `cenapro_set_opening_balance` RPC).
+- `@/types/supabase` — generated `Database` type; `types.ts` derives the cenapro row shapes from it; the production upsert payload uses the view's `Insert` block; the five flec/opening RPC row shapes derive from the function `Returns`.
+- `@/components/shared/grid/GridCell` — the shared Excel-style cell (display/edit modes, selection feedback) reused by the production ledger.
+- `@/lib/hooks/{use-cell-selection,use-clipboard-copy,use-cell-delete}` — cell range selection, Ctrl+C TSV copy, Backspace/Delete clear (shared with RC IN / RC OUT / ICTC daily ledger).
+- `@/lib/paste-utils` — `parseExcelDate`, `trimCellValue` for paste-from-Excel cleaning.
+- `@/lib/toast` — `errorToast()` (persistent + Copy; HARD RULE) for all save/validation errors.
+- `@/components/ui/{table,select,card,dropdown-menu,button,input,popover,collapsible,badge}` — Shadcn primitives (`dropdown-menu` powers the production `SelectCell` + header filters; the Flec Inventory page uses `select` for the warehouse picker, `popover` for the per-cell STARTING history, and `collapsible` for the whole-warehouse history panel).
 - `@/lib/utils` — `cn()`.
-- `date-fns` — `format`, `parseISO`, `isValid` (date display only — `yyyy-MM-dd`).
-- `sonner` — success toast on error-copy (errors themselves are inline banners per HARD RULE).
+- `date-fns` — `format`, `parseISO`, `isValid` (date display — `yyyy-MM-dd`).
+- `sonner` — success/info toasts (paste, save, copy); errors go through `errorToast` per HARD RULE.
 - `lucide-react` — icons.
 
 ## See Also
