@@ -1120,6 +1120,47 @@ export type Database = {
           warehouse_code: string
         }[]
       }
+      cenapro_opening_balance_history: {
+        Args: { p_warehouse_code: string }
+        Returns: {
+          created_at: string
+          grade_code: string
+          id: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_opening_balances: {
+        Args: { p_as_of_date: string; p_warehouse_code: string }
+        Returns: {
+          created_at: string
+          grade_code: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_set_opening_balance: {
+        Args: {
+          p_count: number
+          p_effective_date: string
+          p_grade_code: string
+          p_side: string
+          p_warehouse_code: string
+        }
+        Returns: {
+          created_at: string
+          grade_code: string
+          id: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
+      }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       rc_out_avg_price: {
         Args: { rc_out_row: Database["public"]["Tables"]["rc_out"]["Row"] }

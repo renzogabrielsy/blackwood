@@ -77,6 +77,8 @@ A non-`public` schema is **not exposed by PostgREST / supabase-js by default**. 
 
 > **Divergence from codo #0:** codo ships SQLite/libSQL with no schema/PostgREST concept; placement there is trivial. On Supabase, schema exposure + grants + types-regen is real work — hence this section. This is purely a platform-boundary translation, not a model change.
 
+> **SHIPPED — read accessors then WRITE path (migrations `..341` read, `..342` write).** The exposure problem was solved WITHOUT the dashboard toggle: thin READ-ONLY `public.cenapro_*` look-through accessors (a view + RPC passthroughs, all SECURITY INVOKER) surface the handful of shapes the UI needs in the served `public` schema; the `cenapro` schema stays unexposed and remains the sole home of data + logic. When Cenapro became the **maintaining app** (editable screens replacing the `.xlsb`), writes were added the same way: **`public.cenapro_production_events` is an auto-updatable view** (simple single-table projection — Postgres reports `is_insertable_into`/`is_updatable` = YES, `is_trigger_*` = NO), so a plain `GRANT INSERT, UPDATE, DELETE ... TO authenticated` lets `supabase.from('cenapro_production_events').insert()/.update()/.delete()/.upsert()` rewrite to base-table DML — the base BEFORE trigger still fires (computes `unique_tag` + `batch_year`), defaults fill, FK + CHECK validate. **No INSTEAD OF trigger and no write-RPC were needed** (the RPC fallback the v1 plan allowed for was unnecessary). `unique_tag`/`batch_year` are trigger-computed — a client-supplied value is overwritten. Opening-balance writes go through the dedicated `public.cenapro_set_opening_balance` RPC (§4.3) because that table needs append-only INSERT semantics, not arbitrary view DML.
+
 ### 2.3 Hexagonal placement (platform vs tenant)
 
 Cenapro plugs into the platform **exactly** like ICTC — through the data-agnostic widget interfaces, never by touching platform code:
@@ -271,8 +273,10 @@ CREATE INDEX IF NOT EXISTS idx_cenapro_pe_unique_tag       ON cenapro.production
 
 Replaces the workbook's hand-typed `STARTING` block (PC sheet rows 3–11). Seeds the flec ledger function (`cenapro.flec_ledger`, §6.1). The operator never sees a "period" abstraction — they write "as of today, WHSE 7 RS for 3X50 has 53 flec on hand" and a new row dated today is inserted; the ledger seeds from the most-recent opening dated `≤` the user-chosen start date (codo rule 9), and counts events forward from that same start date.
 
+> **SHIPPED + EVOLVED — APPEND-ONLY (migration `20260601113342_cenapro_write_path_and_opening_balance_history`, 2026-06-01).** When Cenapro became the *maintaining* app, this table was made **append-only**: the `UNIQUE (warehouse_code, grade_code, side, period_start_date)` constraint (`cenapro_wob_natural_key`) was **DROPPED** and replaced with a **plain** index `idx_cenapro_wob_cell`, so re-setting the same (warehouse, grade, side, date) cell keeps a full audit trail instead of overwriting. Every "set" is a NEW row; nothing is ever UPDATEd or DELETEd. The **effective** opening as of date D is now `greatest period_start_date ≤ D`, **tie-broken by greatest `created_at`** (a later same-date set supersedes the earlier one). The seed-lookup index `idx_cenapro_wob_seed_lookup (warehouse_code, grade_code, side, period_start_date DESC)` remains and is what the ledger/accessors actually scan. The DDL block below shows the ORIGINAL shape; the live table no longer has the UNIQUE.
+
 ```sql
--- ILLUSTRATIVE SKETCH — NOT YET APPLIED
+-- ORIGINAL shape — the UNIQUE was later DROPPED for append-only history (see SHIPPED note above).
 CREATE TABLE IF NOT EXISTS cenapro.warehouse_opening_balance (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   warehouse_code     text NOT NULL REFERENCES cenapro.warehouse(code),
@@ -282,12 +286,17 @@ CREATE TABLE IF NOT EXISTS cenapro.warehouse_opening_balance (
   opening_flec_count integer NOT NULL DEFAULT 0 CHECK (opening_flec_count >= 0),
   notes              text,
   created_at         timestamptz NOT NULL DEFAULT now(),
-  updated_at         timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT cenapro_wob_natural_key UNIQUE (warehouse_code, grade_code, side, period_start_date)
+  updated_at         timestamptz NOT NULL DEFAULT now()
+  -- cenapro_wob_natural_key UNIQUE (...) DROPPED 2026-06-01 → append-only; replaced by plain idx_cenapro_wob_cell
 );
 ```
 
 > WHSE 3 does **not** use this table (it would use per-batch DVO ledgers — deferred).
+
+**Public write/read accessors (migration `..342`, all `public.*`, SECURITY INVOKER):**
+- `public.cenapro_set_opening_balance(p_warehouse_code, p_grade_code, p_side, p_effective_date date, p_count int)` — INSERTS a new append-only entry (never updates/deletes), RETURNS the row. `GRANT EXECUTE` → authenticated, service_role.
+- `public.cenapro_opening_balances(p_warehouse_code, p_as_of_date date)` — the CURRENT effective opening per (grade, side) for the warehouse as of the date (drives the editable STARTING block; matches the ledger seed rule). → authenticated, anon, service_role.
+- `public.cenapro_opening_balance_history(p_warehouse_code)` — ALL entries (grade, side, period_start_date, opening_flec_count, created_at), newest-first per (grade, side), for the backtracking view. → authenticated, anon, service_role.
 
 ### 4.4 Drift log — `cenapro.drift_log`
 
@@ -356,6 +365,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA cenapro GRANT SELECT ON TABLES TO authenticat
 ### 6.1 The flec ledger — `cenapro.flec_ledger(p_warehouse_code, p_start_date)` (the central translation)
 
 **This is the single most important Blackwood divergence from codo.** codo computes the WHSE 1/2/5/7 ledger in **Rust** (`warehouse_ledger_flec(warehouse_id, start_date)`). Blackwood's **hard rule forbids balance math in TypeScript** — and the existing `view_blocking_grid` proves the platform pattern: **running balances live in SQL, computed with window functions.** So the flec ledger becomes **Postgres SQL with a windowed running balance per `(grade, side)`**, seeded from `cenapro.warehouse_opening_balance`.
+
+> **SHIPPED UPDATE — latest-effective seed tiebreak (migration `..342`, 2026-06-01).** Once `warehouse_opening_balance` became append-only (§4.3), the opening SEED subquery's `ORDER BY period_start_date DESC` gained a `, ob.created_at DESC` tiebreak, so when two opening rows share the same `period_start_date`, the most-recently-inserted one wins. This is the ONLY change to the live `flec_ledger` body (the `SET search_path = ''` hardening is preserved); `flec_balance` and the `public.cenapro_flec_*` passthroughs inherit it unchanged. The verified WHSE 7 3X50/RS `53 → 56` invariant still holds.
 
 **The ledger is ALWAYS scoped to a user-chosen START DATE — by design.** This is the intended foundation, confirmed by Renzo (2026-06-01): the opening/starting count is the baseline **as of a start date the user picks**, and the running balance counts **forward from that start date**. codo encodes exactly this — `warehouse_ledger_flec` takes `start_date` as a *required* parameter (its `RunBalComponents { opening, flec_in_to_date, flec_out_to_date }` is the per-row "show your math"). A start date is therefore not an optional filter bolted on later; it is the ledger's defining parameter and the deliberate hook for upcoming period-picker / period-filter features.
 
