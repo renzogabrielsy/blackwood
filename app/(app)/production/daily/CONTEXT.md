@@ -28,8 +28,8 @@ Excel-parity view for daily production output, downtime, and waste. ONE unified 
 | Section | Columns |
 |---|---|
 | Identity (from shift) | `#` / DATE / BATCH / SHIFT |
-| Production | CUSTOMER / GRADE / TTL KG / REM (inline 200px) |
-| Downtime | DT HRS / DT MIN / DT TTL (computed) / PROD HRS (computed) / DT REASON |
+| Production | CUSTOMER / GRADE / TTL KG / REM (200px, message-icon → Popover textarea) |
+| Downtime | DT HRS / DT MIN / DT TTL (computed) / PROD HRS (computed) / DT REASON (120px, message-icon → Popover textarea) |
 | Waste | PROD LOSS (computed) / TTL WASTE (computed) / RS1A / RS1B / BF / RS2/3 / RS5 / TRML1 / TRML2 / GRIT |
 
 Total visible columns: 23. Table `minWidth: 1604px` — horizontal scroll on `overflow-x-auto` container.
@@ -80,6 +80,7 @@ A sticky `<TableFooter>` row is pinned at the bottom of the scroll container (in
 - Pill click cycles SUM ↔ AVG per-column; state is local to `DailyLedgerGrid`.
 - AVG = sum / count of non-null values (not total row count).
 - Empty placeholder (`—`) when count = 0.
+- **Compact display + full-value tooltip:** Values render condensed via `formatCompact()` (defined near `formatKg`) so they fit the cell — `≥1e6` → `M` (e.g. `1.2M`, `2M`), `≥1e3` → k-notation (1 decimal under 10k like `1.5k`, whole above like `13k`/`600k`), else `Math.round` (no decimals); handles negatives/0. On hover, a `<Tooltip>` (wrapping the value span inside `FooterAggCell`) shows the FULL value via `formatKg(value, decimals)` prefixed with the mode (e.g. `Sum: 600,000`, `Avg: 8.83`). Footer already sits inside `<TooltipProvider>`.
 - Frozen-pane cells in the footer carry both `sticky bottom-0` + `left-Xpx` at `z-50` (corner intersection). Non-frozen footer cells carry `sticky bottom-0 z-40`. Matches the header's z-index stacking.
 - Helper component: `FooterAggCell` (defined inline, before `DailyLedgerGrid`).
 - Aggregate memo: `footerAgg` (React.useMemo, depends on `rows`).
@@ -99,7 +100,7 @@ A sticky `<TableFooter>` row is pinned at the bottom of the scroll container (in
 - **Grade typeahead:** 3X50, 6X50, 8X50, 2X6 (free-form `<Input list="grade-suggestions">`)
 - **Shift typeahead:** M, E, N (free-form `<Input list="shift-suggestions">`)
 - **Customer typeahead:** CEBU, KURARAY (free-form `<Input list="customer-suggestions">`)
-- **Run remarks:** Inline 200px text cell with `truncate` + `Tooltip` for full text on hover. Click to enter edit mode (plain `<Input>`).
+- **Run remarks (col 7) & DT REASON (col 12) — message-icon pattern:** Both free-text cells display ONLY a centered, clickable `MessageSquare` icon (`NoteCell`, defined inline before `DailyLedgerGrid`). The icon is tinted (`text-primary`) when the field has content and faint (`text-muted-foreground/30`) when empty. Clicking the icon opens a Radix `<Popover>` (`bg-popover/95 backdrop-blur-lg`, `w-72`) with an editable `<Textarea>` (autoFocus, 4 rows, font-mono). This replaced the old `truncate` + `Tooltip` span and fixes the DT REASON overflow (display mode no longer renders raw text). Edits route through `updateRow('run_remarks')` / `updateShiftData('dt_reason')` — backend field names unchanged. The inline `<Input>` (GridCell `children`) is retained as the F2 / double-click / type-over / paste-in-edit path. **Why the icon button stops propagation (onMouseDown + onPointerDown):** the parent GridCell display `<div>` calls `preventDefault()` + starts drag-selection on mousedown, which previously swallowed the click and blocked editing — stopping propagation on the button lets the click reach the Popover trigger cleanly. PopoverContent only mounts when open (no per-row portal cost, no animation on cells).
 - **Right-click row menu:** ContextMenu pattern — Insert Above/Below, Duplicate, Add Grade Row (primary-only), Delete/Restore.
 - **All headers:** center-aligned (`text-center`). Body numeric cells remain right-aligned.
 - **Empty state:** `animate-fade-up` message "Awaiting Production Manager sync..."
@@ -138,6 +139,8 @@ saveBulkDailyLedger(rows: LedgerRowPayload[])
 - `@/lib/hooks/use-cell-aggregation` — SUM in status bar
 - `@/lib/paste-utils` — `parseExcelDate`, `trimCellValue`
 - `@/components/shared/grid/GridCell` — unified cell display/edit component
-- `@/components/ui/tooltip` — Tooltip on truncated inline remarks
+- `@/components/ui/tooltip` — Tooltip on footer compact-value cells (full value on hover)
+- `@/components/ui/popover` — `NoteCell` Popover for REM / DT REASON editing
+- `@/components/ui/textarea` — `NoteCell` editable text field
 - `@/lib/toast` — `errorToast()` for all error toasts (HARD RULE)
 - `@/types/supabase` — `Tables<>`, `TablesInsert<>`, `TablesUpdate<>` for all type inference

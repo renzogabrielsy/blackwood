@@ -4,10 +4,12 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import { errorToast } from '@/lib/toast';
-import { Save, RotateCcw, Calendar, ChevronsUpDown, Copy, ArrowUpFromLine, ArrowDownFromLine, Trash2, ChevronUp, ChevronDown } from 'lucide-react';
+import { Save, RotateCcw, Calendar, ChevronsUpDown, Copy, ArrowUpFromLine, ArrowDownFromLine, Trash2, ChevronUp, ChevronDown, MessageSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
     TableBody,
     TableCell,
@@ -320,6 +322,28 @@ function formatKg(value: number | string | null | undefined, decimals: number = 
     return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
+// ─── Compact number formatter ──────────────────────────────────────────────────
+// Condenses large totals so they fit in a footer cell. Full precision lives in a
+// hover tooltip (see FooterAggCell). Examples:
+//   1_200_000 → "1.2M"   2_000_000 → "2M"   600_000 → "600k"
+//   13_000 → "13k"   1_500 → "1.5k"   842.7 → "843"   0 → "0"   -13_000 → "-13k"
+function formatCompact(n: number): string {
+    if (n === 0) return '0';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    // Strip a trailing ".0" so "2.0M" renders as "2M".
+    const strip = (s: string) => s.replace(/\.0$/, '');
+    if (abs >= 1e6) {
+        return sign + strip((abs / 1e6).toFixed(1)) + 'M';
+    }
+    if (abs >= 1e3) {
+        // 1 decimal under 10k (e.g. "1.5k"), whole thousands at/above (e.g. "13k", "600k").
+        const k = abs / 1e3;
+        return sign + strip(abs < 10_000 ? k.toFixed(1) : Math.round(k).toString()) + 'k';
+    }
+    return sign + Math.round(abs).toString();
+}
+
 // ─── DatePickerCell ────────────────────────────────────────────────────────────
 // Always-visible date input with calendar icon, formatted display, and hover affordance.
 // The native <input type="date"> sits on top (opacity:0) so clicks anywhere in the cell
@@ -416,7 +440,10 @@ interface FooterAggCellProps {
 }
 
 function FooterAggCell({ mode, onToggle, value, decimals, count }: FooterAggCellProps) {
-    const displayValue = count > 0 ? formatKg(value, decimals) : '—';
+    const hasValue = count > 0;
+    // Compact in the cell (e.g. "600k"); full precision in the hover tooltip.
+    const compact = hasValue ? formatCompact(value) : '—';
+    const full = formatKg(value, decimals);
     return (
         <div className="flex items-center justify-between gap-1 h-full w-full">
             <button
@@ -434,10 +461,89 @@ function FooterAggCell({ mode, onToggle, value, decimals, count }: FooterAggCell
             >
                 {mode === 'SUM' ? 'Σ' : 'x̄'}
             </button>
-            <span className="font-mono font-semibold text-xs text-right tabular-nums leading-none">
-                {displayValue}
-            </span>
+            {hasValue ? (
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <span className="font-mono font-semibold text-xs text-right tabular-nums leading-none cursor-default">
+                            {compact}
+                        </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" align="end" className="text-xs font-mono">
+                        {mode === 'SUM' ? 'Sum: ' : 'Avg: '}{full}
+                    </TooltipContent>
+                </Tooltip>
+            ) : (
+                <span className="font-mono font-semibold text-xs text-right tabular-nums leading-none">
+                    {compact}
+                </span>
+            )}
         </div>
+    );
+}
+
+// ─── NoteCell ──────────────────────────────────────────────────────────────────
+// Houses a free-text field (run remarks, downtime reason) behind a clickable
+// message icon. Display mode shows only the icon (no overflow); clicking it opens
+// a Popover with an editable Textarea. This is the GridCell `displayValue` — the
+// inline <Input> (GridCell children) remains the F2 / type-over / paste-in-edit path.
+//
+// CRITICAL: the parent GridCell display <div> has an onMouseDown that calls
+// preventDefault() + stopPropagation() and starts drag-selection. That is what
+// previously swallowed the click and blocked editing. The trigger button stops
+// propagation on BOTH onMouseDown and onPointerDown so the click reaches the
+// Popover trigger cleanly and never starts a cell drag.
+interface NoteCellProps {
+    value: string;
+    onChange: (v: string) => void;
+    placeholder?: string;
+    /** Optional muted header label above the textarea. */
+    label?: string;
+}
+
+function NoteCell({ value, onChange, placeholder, label }: NoteCellProps) {
+    const hasContent = value.trim().length > 0;
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    aria-label={hasContent ? `Edit note: ${value}` : 'Add note'}
+                    title={hasContent ? value : placeholder}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className={cn(
+                        'flex items-center justify-center w-full h-full outline-none transition-colors duration-150',
+                        'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary',
+                        hasContent
+                            ? 'text-primary hover:text-primary/80'
+                            : 'text-muted-foreground/30 hover:text-muted-foreground/70',
+                    )}
+                >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                </button>
+            </PopoverTrigger>
+            <PopoverContent
+                align="start"
+                side="bottom"
+                className="w-72 p-2 bg-popover/95 backdrop-blur-lg"
+                onOpenAutoFocus={(e) => e.preventDefault()}
+            >
+                {label && (
+                    <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground select-none">
+                        {label}
+                    </p>
+                )}
+                <Textarea
+                    autoFocus
+                    rows={4}
+                    value={value}
+                    placeholder={placeholder}
+                    onChange={(e) => onChange(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    className="resize-none font-mono text-xs"
+                />
+            </PopoverContent>
+        </Popover>
     );
 }
 
@@ -1652,22 +1758,12 @@ export function DailyLedgerGrid({
                                                 className="font-mono text-xs text-left"
                                                 {...commonCellProps} {...selProps(rowIdx, 7)}
                                                 displayValue={
-                                                    row.run_remarks ? (
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <span className="block w-full px-2 text-left text-xs font-mono truncate text-foreground">
-                                                                    {row.run_remarks}
-                                                                </span>
-                                                            </TooltipTrigger>
-                                                            <TooltipContent side="top" align="start" className="max-w-[400px] break-words text-xs font-mono">
-                                                                {row.run_remarks}
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    ) : (
-                                                        <span className="block w-full px-2 text-left text-xs font-mono text-muted-foreground/40 italic truncate">
-                                                            —
-                                                        </span>
-                                                    )
+                                                    <NoteCell
+                                                        value={row.run_remarks}
+                                                        onChange={v => updateRow(rowIdx, 'run_remarks', v)}
+                                                        placeholder="Add remarks…"
+                                                        label="Remarks"
+                                                    />
                                                 }
                                             >
                                                 <Input
@@ -1735,7 +1831,19 @@ export function DailyLedgerGrid({
                                         {/* ── DT REASON (col 12) ── */}
                                         <TableCell className="px-0 py-0 border-r border-foreground/20 bg-amber-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
-                                                <GridCell col={12} row={rowIdx} value={row.dt_reason} className="text-xs px-1" {...commonCellProps} {...selProps(rowIdx, 12)}>
+                                                <GridCell
+                                                    col={12} row={rowIdx} value={row.dt_reason}
+                                                    className="text-xs px-1"
+                                                    {...commonCellProps} {...selProps(rowIdx, 12)}
+                                                    displayValue={
+                                                        <NoteCell
+                                                            value={row.dt_reason}
+                                                            onChange={v => updateShiftData(rowIdx, 'dt_reason', v)}
+                                                            placeholder="Add downtime reason…"
+                                                            label="Downtime reason"
+                                                        />
+                                                    }
+                                                >
                                                     <Input autoFocus value={row.dt_reason} onChange={e => updateShiftData(rowIdx, 'dt_reason', e.target.value)} className={cn(inputClass, 'text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }} />
                                                 </GridCell>
                                             ) : (
