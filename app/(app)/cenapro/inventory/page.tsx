@@ -1,4 +1,8 @@
-import { fetchFlecInventory } from './actions';
+import {
+    fetchFlecInventory,
+    fetchOpeningBalances,
+    fetchOpeningBalanceHistory,
+} from './actions';
 import { FlecInventoryClient } from './flec-inventory-client';
 import {
     FLEC_WAREHOUSES,
@@ -13,9 +17,11 @@ function isIsoDate(v: string | undefined): v is string {
 }
 
 // Server component — reads warehouse + start-date from URL search params
-// (URL params drive state per project convention), fetches balances + ledger,
-// and hands them to the client. Defaults to WHSE 7 @ 2026-03-10, where the seeded
-// opening balances live, so the page opens on meaningful data.
+// (URL params drive state per project convention), fetches the editable opening
+// balances (STARTING block seed), the current closing balances + movement ledger,
+// and the full append-only opening history (for backtracking), then hands them to
+// the client. Defaults to WHSE 7 @ 2026-03-10, where the seeded opening balances
+// live, so the page opens on meaningful data.
 export default async function CenaproInventoryPage({
     searchParams,
 }: {
@@ -30,15 +36,25 @@ export default async function CenaproInventoryPage({
 
     const startDate = isIsoDate(params.date) ? params.date : DEFAULT_FLEC_START_DATE;
 
-    const result = await fetchFlecInventory(warehouse, startDate);
+    // All four reads are independent — fetch in parallel. The START date is the
+    // "as of" date for both the openings seed and the ledger seed (Renzo's rule:
+    // the starting count is always relative to the chosen start date). History is
+    // warehouse-scoped (date-independent) — it's the full backtracking trail.
+    const [inventory, openings, history] = await Promise.all([
+        fetchFlecInventory(warehouse, startDate),
+        fetchOpeningBalances(warehouse, startDate),
+        fetchOpeningBalanceHistory(warehouse),
+    ]);
 
     return (
         <FlecInventoryClient
             warehouse={warehouse}
             startDate={startDate}
-            balances={result.balances ?? []}
-            ledger={result.ledger ?? []}
-            loadError={result.error ?? null}
+            balances={inventory.balances ?? []}
+            ledger={inventory.ledger ?? []}
+            openings={openings.openings ?? []}
+            history={history.history ?? []}
+            loadError={inventory.error ?? openings.error ?? history.error ?? null}
         />
     );
 }
