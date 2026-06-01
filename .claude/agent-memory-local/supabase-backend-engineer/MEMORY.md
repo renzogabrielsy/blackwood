@@ -1,5 +1,9 @@
 # Supabase Backend Engineer Memory
 
+## Cenapro = Tenant #2, isolated `cenapro` schema (2026-06-01) — [[cenapro-schema]]
+
+v1 DB foundation built on branch `feat/cenapro-integration`: dedicated `cenapro` Postgres schema, fully walled from ICTC (verified `public` md5 unchanged). 8 tables + 1 view + 4 functions + unique_tag trigger. Migrations `20260601113339_create_cenapro_schema` + `..40_harden_cenapro_function_search_path`. Flec ledger = SQL set-returning fns `flec_ledger`/`flec_balance(warehouse, start_date)` (no balance math in TS). DIVERGENCE: added `batch_year int` (effective identity = (batch, batch_year)) per Renzo. **PENDING MANUAL STEP: Renzo must expose `cenapro` via Dashboard → Settings → API → Exposed schemas — until then supabase-js + `gen types` can't see it (verified both emit zero cenapro).** No data loaded (backfill is a separate phase). See cenapro-schema.md.
+
 ## Blocking phantom-inventory fix (2026-05-31) — [[blocking-current-weight-drift]]
 
 `view_blocking_grid.balance` now computes `SUM(deliveries)−SUM(rc_out)` (migration 20260531041520), NOT `batches.current_weight`. Root cause of ~54t phantom: the **deliveries-manager ingestion path** did an imperative `current_weight += weight` ON TOP of the trigger (L-001 family) — triggers were CORRECT, not changed. 3 active batches re-synced (20260531041615). Key lesson: when debugging cache drift, prove trigger vs imperative by checking if rows from the *same trigger* on a *different ingestion run* are also wrong — if only one run's rows drift by exactly their own value, it's an external `+= delta`. See blocking-current-weight-drift.md.
