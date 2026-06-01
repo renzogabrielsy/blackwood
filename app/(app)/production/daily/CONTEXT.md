@@ -8,7 +8,7 @@ Excel-parity view for daily production output, downtime, and waste. ONE unified 
 |------|------|
 | `actions.ts` | Server actions: `fetchAvailablePeriods`, `fetchDailyTabData`, `saveBulkDailyLedger`. Exports row types and `LedgerRowPayload`. `fetchAvailablePeriods` is consumed by the **module-level** `ProductionPeriodProvider`, not just this tab. |
 | `daily-view.tsx` | Thin wrapper — passes `{shifts, runs, downtime, waste}` + `dataYear`/`dataBatch` (grid remount key) to `<DailyLedgerGrid>`. **No longer passes period-picker props** (the picker lives in the production layout now). No DeliverySheetFooter. |
-| `daily-ledger-grid.tsx` | The single unified inline-editable ledger (~2100 lines). All production/downtime/waste columns in one wide table. Toolbar keeps only the shift/run count + Save/Discard — the Year+Batch picker was moved to the module-level layout. |
+| `daily-ledger-grid.tsx` | The single unified inline-editable ledger (~2200 lines). All production/downtime/waste columns in one wide table. Toolbar keeps only the shift/run count + Save/Discard — the Year+Batch picker was moved to the module-level layout. SHIFT/CUSTOMER/GRADE headers carry single-select filter menus (`ColumnFilterMenu`). |
 
 **Deleted (2026-05-28 rebuild):** `production-runs-grid.tsx`, `downtime-grid.tsx`, `waste-grid.tsx` — replaced by `daily-ledger-grid.tsx`.
 
@@ -72,10 +72,12 @@ A sticky `<TableFooter>` row is pinned at the bottom of the scroll container (in
 
 | Column | Index | Eligible rows |
 |--------|-------|---------------|
-| TTL KG | 6 | All non-deleted, non-new rows with a ttl_kg value |
-| DT TTL | 10 | Primary rows only |
-| PROD HRS | 11 | Primary rows only |
-| TTL WASTE | 14 | Primary rows only |
+| TTL KG | 6 | All non-deleted, non-new rows with a ttl_kg value that pass the active SHIFT/CUSTOMER/GRADE filters |
+| DT TTL | 10 | Primary rows only (within the active-filter visible set) |
+| PROD HRS | 11 | Primary rows only (within the active-filter visible set) |
+| TTL WASTE | 14 | Primary rows only (within the active-filter visible set) |
+
+All four aggregates respect the active column-header filters (see "Column header filters" under Key Behaviors). The GRADE column header is the single filter control — there is no longer a `<Select>` pill in the footer GRADE cell (it is now a plain sticky spacer).
 
 - Pill click cycles SUM ↔ AVG per-column; state is local to `DailyLedgerGrid`.
 - AVG = sum / count of non-null values (not total row count).
@@ -83,12 +85,17 @@ A sticky `<TableFooter>` row is pinned at the bottom of the scroll container (in
 - **Compact display + full-value tooltip:** Values render condensed via `formatCompact()` (defined near `formatKg`) so they fit the cell — `≥1e6` → `M` (e.g. `1.2M`, `2M`), `≥1e3` → k-notation (1 decimal under 10k like `1.5k`, whole above like `13k`/`600k`), else `Math.round` (no decimals); handles negatives/0. On hover, a `<Tooltip>` (wrapping the value span inside `FooterAggCell`) shows the FULL value via `formatKg(value, decimals)` prefixed with the mode (e.g. `Sum: 600,000`, `Avg: 8.83`). Footer already sits inside `<TooltipProvider>`.
 - Frozen-pane cells in the footer carry both `sticky bottom-0` + `left-Xpx` at `z-50` (corner intersection). Non-frozen footer cells carry `sticky bottom-0 z-40`. Matches the header's z-index stacking.
 - Helper component: `FooterAggCell` (defined inline, before `DailyLedgerGrid`).
-- Aggregate memo: `footerAgg` (React.useMemo, depends on `rows`).
+- Aggregate memo: `footerAgg` (React.useMemo, deps `[rows, shiftFilter, customerFilter, gradeFilter]`).
 
 ## Key Behaviors
-- **Sort order:** Default ASC (oldest at top). DATE header is clickable to toggle ASC ↔ DESC. Sort applies in-memory to the loaded rows — no re-fetch. Shift grouping is preserved (primary row always first within a shift group). ChevronUp (ASC, muted) / ChevronDown (DESC, primary color) icon indicates direction.
+- **Sort order:** DATE is the ONLY sortable column. Default ASC (oldest at top); the DATE header is clickable to toggle ASC ↔ DESC (ChevronUp = ASC muted / ChevronDown = DESC primary color). Sort applies in-memory to the loaded rows — no re-fetch. Shift grouping is preserved (primary row always first within a shift group). **SHIFT sub-order is a permanent secondary sort: within any given date, shift rows always render M → E → N regardless of the DATE asc/desc toggle.** Implemented via module-level `SHIFT_RANK` (`{M:0,E:1,N:2}`) + `shiftRank()` (unknown shifts → 99, sort last). Applied in BOTH ordering sites: `buildGridRows` (comparator: date per `sortDir`, then `shiftRank` asc) and the `dateSortDir` effect (sorts `groupOrder` by date portion per direction, then `shiftRank` of the key's shift segment). SHIFT/CUSTOMER/GRADE headers are **NOT** sortable — they carry filter controls instead (see below).
 - **Period filter (MODULE-LEVEL as of 2026-05-29):** The Year + Batch picker is NO LONGER in this grid's toolbar — it was promoted to a universal, shared control in the production layout (`components/period-picker.tsx` + `production-period-context.tsx`). All 3 tabs read the same period. The Daily tab consumes `{ year, batch }` from `useProductionPeriod()`, refetches when active+stale, and filters `production_shifts` by `production_batch` (year derived from `transaction_date`). See `production/CONTEXT.md` → "Universal Period Control". The grid receives only its already-filtered data; `daily-view` passes `dataYear`/`dataBatch` solely as the grid remount `key`.
-- **Grade filter (footer):** A `<Select>` pill in the GRADE footer cell (col 5) filters the TTL KG aggregate in the footer. Default "ALL". Shows only grades present in the current loaded rows. DT TTL / PROD HRS / TTL WASTE aggregates are NOT affected by the grade filter (they are per-shift / per-primary-row metrics).
+- **Column header filters (SHIFT / CUSTOMER / GRADE):** Each of these three headers carries a compact, single-select filter — a `ListFilter` (lucide) icon-button (`ColumnFilterMenu`, defined inline before `DailyLedgerGrid`) that opens a `DropdownMenu` listing "All" + each distinct value as `DropdownMenuRadioItem`s (glass: `bg-popover/95 backdrop-blur-lg`). The icon tints `text-primary` when that column's filter is active (≠ 'ALL'), muted otherwise; the header label stays visible beside it and the header remains compact (`h-7`). The trigger stops propagation on mousedown/pointerdown so it never starts a cell drag. State: `shiftFilter` / `customerFilter` / `gradeFilter` (each `useState('ALL')`). Distinct-value memos over current rows (excluding deleted + trailing new): `distinctShifts` (sorted by `shiftRank` → M,E,N), `distinctCustomers` (alpha), `distinctGrades` (alpha).
+  - **Row hiding is index-preserving:** a data row is hidden (via the `hidden` attribute + `hidden` Tailwind class → `display:none`) when it fails any active filter (`isRowHidden`). The `rows` array and all indices are untouched, so cell selection / paste / context-menu keying stays aligned. The trailing `_state==='new'` row is ALWAYS visible.
+  - **Footer scoping:** `footerAgg` now computes ALL four aggregates (TTL KG, DT TTL, PROD HRS, TTL WASTE) over the rows currently visible under the active filters (still excluding deleted/new; DT TTL / PROD HRS / TTL WASTE remain primary-row metrics). Memo deps: `[rows, shiftFilter, customerFilter, gradeFilter]`.
+  - **Grade control moved to header:** the former `<Select>` pill in the GRADE footer cell was removed — the GRADE **header** filter is now the single control for `gradeFilter`; the footer GRADE cell is a plain sticky spacer.
+  - **Known limitation (downtime/waste on hidden primary):** SHIFT filtering hides whole shift groups cleanly (downtime/waste ride along on the primary row). But CUSTOMER/GRADE are per-run: if a filter hides a shift's PRIMARY row (the one that owns the downtime/waste cells) while leaving a secondary run row visible, that shift's downtime/waste is not shown (secondary rows never render those cells). This is acceptable for a focus filter — downtime is NOT re-homed onto a surviving secondary row.
+  - Filters are not auto-reset when their matching rows all disappear after edits — the grid simply shows only the trailing new row.
 - **Footer decimal precision:** DT TTL and PROD HRS show 2 decimal places (e.g., `8.83`). TTL KG shows 0 decimals. TTL WASTE shows 2 decimals.
 - **Date cell UX:** Each primary row's DATE cell is a `DatePickerCell` (defined inside `daily-ledger-grid.tsx`) — always-visible calendar icon + formatted date (`MMM d`, e.g. "May 23"). Clicking anywhere in the cell opens the native browser date picker via `input.showPicker()`. Hover shows a blue border + tinted background to signal interactivity. Secondary rows show `↑` arrow (date inherited from the shift, not editable).
 - **Inline editing:** Click to select, double-click or type-over to edit. F2 enters edit mode. Escape reverts. Enter/Tab commits and moves.
@@ -141,6 +148,7 @@ saveBulkDailyLedger(rows: LedgerRowPayload[])
 - `@/components/shared/grid/GridCell` — unified cell display/edit component
 - `@/components/ui/tooltip` — Tooltip on footer compact-value cells (full value on hover)
 - `@/components/ui/popover` — `NoteCell` Popover for REM / DT REASON editing
+- `@/components/ui/dropdown-menu` — `ColumnFilterMenu` single-select filter on SHIFT / CUSTOMER / GRADE headers
 - `@/components/ui/textarea` — `NoteCell` editable text field
 - `@/lib/toast` — `errorToast()` for all error toasts (HARD RULE)
 - `@/types/supabase` — `Tables<>`, `TablesInsert<>`, `TablesUpdate<>` for all type inference

@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import { errorToast } from '@/lib/toast';
-import { Save, RotateCcw, Calendar, ChevronsUpDown, Copy, ArrowUpFromLine, ArrowDownFromLine, Trash2, ChevronUp, ChevronDown, MessageSquare } from 'lucide-react';
+import { Save, RotateCcw, Calendar, ChevronsUpDown, Copy, ArrowUpFromLine, ArrowDownFromLine, Trash2, ChevronUp, ChevronDown, MessageSquare, ListFilter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,13 +19,14 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-    SelectSeparator,
-} from '@/components/ui/select';
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuTrigger,
+    DropdownMenuRadioGroup,
+    DropdownMenuRadioItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { GridCell } from '@/components/shared/grid/GridCell';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
@@ -144,6 +145,14 @@ function makeShiftKey(date: string, batch: string, shift: string): ShiftKey {
     return `${date}${SHIFT_KEY_SEPARATOR}${batch}${SHIFT_KEY_SEPARATOR}${shift}`;
 }
 
+// ─── Shift ordering ────────────────────────────────────────────────────────────
+// Within any given date, shift rows always render Morning → Evening → Night,
+// regardless of the DATE asc/desc toggle. Unknown shifts sort last (stable).
+const SHIFT_RANK: Record<string, number> = { M: 0, E: 1, N: 2 };
+function shiftRank(s: string): number {
+    return SHIFT_RANK[(s ?? '').trim().toUpperCase()] ?? 99;
+}
+
 // ─── DB → Grid conversion ──────────────────────────────────────────────────────
 function buildGridRows(
     shifts: ProductionShiftRow[],
@@ -162,10 +171,16 @@ function buildGridRows(
     const downtimeByShift = new Map(downtime.map(d => [d.shift_id, d]));
     const wasteByShift = new Map(waste.map(w => [w.shift_id, w]));
 
-    // Sort shifts by transaction_date per the requested direction.
-    // The shifts array from the server is always ASC (to match journal ordering).
-    // For DESC we reverse without mutating the original.
-    const orderedShifts = sortDir === 'asc' ? shifts : [...shifts].reverse();
+    // Sort shifts by transaction_date per the requested direction, then by
+    // shift rank (M → E → N) ascending as a permanent tiebreaker. The server
+    // returns shifts ASC by date but with arbitrary intra-date order, so the
+    // shiftRank secondary key is what guarantees a stable M/E/N sequence.
+    const orderedShifts = [...shifts].sort((a, b) => {
+        const dateCmp = a.transaction_date.localeCompare(b.transaction_date);
+        const primary = sortDir === 'asc' ? dateCmp : -dateCmp;
+        if (primary !== 0) return primary;
+        return shiftRank(a.shift) - shiftRank(b.shift);
+    });
 
     const result: GridRow[] = [];
 
@@ -547,6 +562,69 @@ function NoteCell({ value, onChange, placeholder, label }: NoteCellProps) {
     );
 }
 
+// ─── ColumnFilterMenu ───────────────────────────────────────────────────────────
+// Compact header filter: a label + a ListFilter icon-button that opens a single-
+// select DropdownMenu ("All" + each distinct value). Used on the SHIFT / CUSTOMER /
+// GRADE headers. Filtering HIDES rows (it is NOT a sort). The icon tints to the
+// primary color when a filter is active so the column reads as "filtered" at a glance.
+//
+// The trigger stops propagation on mousedown/pointerdown so opening the menu never
+// starts a cell drag-selection in the grid underneath (same pattern as NoteCell).
+interface ColumnFilterMenuProps {
+    /** Visible header label (e.g. "SHIFT"). */
+    label: string;
+    /** Current selection — 'ALL' means no filter. */
+    value: string;
+    /** Distinct values to offer below the "All" option. */
+    options: string[];
+    onChange: (value: string) => void;
+}
+
+function ColumnFilterMenu({ label, value, options, onChange }: ColumnFilterMenuProps) {
+    const isActive = value !== 'ALL';
+    return (
+        <span className="inline-flex items-center justify-center gap-0.5">
+            {label}
+            <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                    <button
+                        type="button"
+                        aria-label={`Filter ${label}${isActive ? `: ${value}` : ''}`}
+                        title={isActive ? `${label}: ${value}` : `Filter ${label}`}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className={cn(
+                            'flex items-center justify-center rounded p-0.5 outline-none transition-colors duration-150',
+                            'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary',
+                            isActive
+                                ? 'text-primary hover:text-primary/80'
+                                : 'text-muted-foreground/50 hover:text-muted-foreground'
+                        )}
+                    >
+                        <ListFilter className="h-3 w-3" />
+                    </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-[100px] bg-popover/95 backdrop-blur-lg">
+                    <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {label}
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+                        <DropdownMenuRadioItem value="ALL" className="text-[11px] font-mono py-1">
+                            All
+                        </DropdownMenuRadioItem>
+                        {options.map((opt) => (
+                            <DropdownMenuRadioItem key={opt} value={opt} className="text-[11px] font-mono py-1">
+                                {opt}
+                            </DropdownMenuRadioItem>
+                        ))}
+                    </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+            </DropdownMenu>
+        </span>
+    );
+}
+
 // ─── Component props ───────────────────────────────────────────────────────────
 // Period selection is owned by the production layout's universal picker — the grid
 // receives only its already-filtered data + a save callback. The lazy tab remounts
@@ -590,7 +668,11 @@ export function DailyLedgerGrid({
     // ─── Date sort direction ──────────────────────────────────────────────────
     const [dateSortDir, setDateSortDir] = React.useState<'asc' | 'desc'>('asc');
 
-    // ─── Grade filter (footer pill) ───────────────────────────────────────────
+    // ─── Column header filters (single-select; 'ALL' = no filter) ─────────────
+    // Each hides non-matching rows (index-preserving) and scopes the footer
+    // aggregates. SHIFT/CUSTOMER/GRADE are filter-only — they are NOT sortable.
+    const [shiftFilter, setShiftFilter] = React.useState<string>('ALL');
+    const [customerFilter, setCustomerFilter] = React.useState<string>('ALL');
     const [gradeFilter, setGradeFilter] = React.useState<string>('ALL');
 
     // ─── Apply date sort when dateSortDir changes ─────────────────────────────
@@ -615,12 +697,15 @@ export function DailyLedgerGrid({
             }
 
             // Sort shift keys by the date portion of the key ("date|batch|shift")
+            // per the toggle, then by shift rank (M → E → N) ascending — the shift
+            // sub-order is always M/E/N regardless of date direction.
             const sorted = [...groupOrder].sort((a, b) => {
                 const dateA = a.split('|')[0] ?? '';
                 const dateB = b.split('|')[0] ?? '';
-                return dateSortDir === 'asc'
-                    ? dateA.localeCompare(dateB)
-                    : dateB.localeCompare(dateA);
+                const dateCmp = dateA.localeCompare(dateB);
+                const primary = dateSortDir === 'asc' ? dateCmp : -dateCmp;
+                if (primary !== 0) return primary;
+                return shiftRank(a.split('|')[2] ?? '') - shiftRank(b.split('|')[2] ?? '');
             });
 
             const reordered: GridRow[] = [];
@@ -630,8 +715,9 @@ export function DailyLedgerGrid({
 
             return [...reordered, ...trailing];
         });
-    // Only re-sort when the direction changes — not on every row mutation
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Only re-sort when the direction changes — not on every row mutation.
+    // setRows is a stable setter and shiftRank is a module constant, so dateSortDir
+    // is the only reactive dependency.
     }, [dateSortDir]);
 
     // ─── Context menu state ───────────────────────────────────────────────────
@@ -1352,7 +1438,29 @@ export function DailyLedgerGrid({
         gridRef,
     };
 
-    // ─── Distinct grades present in current rows (for grade filter pill) ──────
+    // ─── Distinct values present in current rows (for header filter menus) ────
+    // Excludes deleted + trailing 'new' rows. Shifts are sorted M → E → N so the
+    // menu lists them in canonical order; customers/grades are sorted alpha.
+    const distinctShifts = React.useMemo(() => {
+        const shifts = new Set<string>();
+        for (const r of rows) {
+            if (r._state !== 'deleted' && r._state !== 'new' && r.shift_code) {
+                shifts.add(r.shift_code);
+            }
+        }
+        return [...shifts].sort((a, b) => shiftRank(a) - shiftRank(b) || a.localeCompare(b));
+    }, [rows]);
+
+    const distinctCustomers = React.useMemo(() => {
+        const customers = new Set<string>();
+        for (const r of rows) {
+            if (r._state !== 'deleted' && r._state !== 'new' && r.customer) {
+                customers.add(r.customer);
+            }
+        }
+        return [...customers].sort();
+    }, [rows]);
+
     const distinctGrades = React.useMemo(() => {
         const grades = new Set<string>();
         for (const r of rows) {
@@ -1363,22 +1471,42 @@ export function DailyLedgerGrid({
         return [...grades].sort();
     }, [rows]);
 
-    // ─── Footer aggregates ─────────────────────────────────────────────────────
-    // Eligible rows: skip 'deleted' and trailing 'new' (no meaningful data).
-    // TTL KG — filtered by gradeFilter when not 'ALL'.
-    // DT TTL / PROD HRS / TTL WASTE — primary rows only (_isPrimary), unaffected by grade filter.
-    const footerAgg = React.useMemo(() => {
-        const eligible = rows.filter(r => r._state !== 'deleted' && r._state !== 'new');
+    // ─── Per-row visibility under the active column filters ───────────────────
+    // Index-preserving: rows are HIDDEN (display:none), never spliced — so cell
+    // selection / paste / context-menu indices stay aligned with the full array.
+    // The trailing 'new' row is ALWAYS visible so the operator can keep typing.
+    const isRowHidden = React.useCallback(
+        (row: GridRow): boolean => {
+            if (row._state === 'new') return false;
+            if (shiftFilter !== 'ALL' && row.shift_code !== shiftFilter) return true;
+            if (customerFilter !== 'ALL' && row.customer !== customerFilter) return true;
+            if (gradeFilter !== 'ALL' && row.grade !== gradeFilter) return true;
+            return false;
+        },
+        [shiftFilter, customerFilter, gradeFilter]
+    );
 
-        // TTL KG: respect grade filter
-        const ttlKgRows = gradeFilter === 'ALL' ? eligible : eligible.filter(r => r.grade === gradeFilter);
+    // ─── Footer aggregates ─────────────────────────────────────────────────────
+    // Eligible rows: skip 'deleted' and trailing 'new', AND respect every active
+    // column filter (SHIFT/CUSTOMER/GRADE) so the footer reflects exactly what is
+    // visible. TTL KG sums all visible run rows; DT TTL / PROD HRS / TTL WASTE stay
+    // primary-row metrics (downtime/waste ride on the shift's primary row).
+    const footerAgg = React.useMemo(() => {
+        const visible = (r: GridRow): boolean => {
+            if (shiftFilter !== 'ALL' && r.shift_code !== shiftFilter) return false;
+            if (customerFilter !== 'ALL' && r.customer !== customerFilter) return false;
+            if (gradeFilter !== 'ALL' && r.grade !== gradeFilter) return false;
+            return true;
+        };
+        const eligible = rows.filter(r => r._state !== 'deleted' && r._state !== 'new' && visible(r));
+
         const ttlKgVals: number[] = [];
-        for (const r of ttlKgRows) {
+        for (const r of eligible) {
             const v = parseFloat(r.ttl_kg);
             if (!isNaN(v)) ttlKgVals.push(v);
         }
 
-        // Primary-only rows
+        // Primary-only rows (already constrained to the visible set above)
         const primaryEligible = eligible.filter(r => r._isPrimary);
 
         const dtTtlVals: number[] = [];
@@ -1413,7 +1541,7 @@ export function DailyLedgerGrid({
             prodHrs: { sum: sumOf(prodHrsVals), avg: avgOf(prodHrsVals), count: prodHrsVals.length },
             ttlWaste: { sum: sumOf(ttlWasteVals), avg: avgOf(ttlWasteVals), count: ttlWasteVals.length },
         };
-    }, [rows, gradeFilter]);
+    }, [rows, shiftFilter, customerFilter, gradeFilter]);
 
     // ─── Counts ───────────────────────────────────────────────────────────────
     const shiftCount = new Set(rows.filter(r => r._state !== 'new').map(r => r._shiftKey)).size;
@@ -1563,10 +1691,16 @@ export function DailyLedgerGrid({
                                     </span>
                                 </TableHead>
                                 <TableHead className="w-[64px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 124 }}>BATCH</TableHead>
-                                <TableHead className="w-[52px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/20 bg-muted sticky z-40" style={{ left: 188 }}>SHIFT</TableHead>
+                                <TableHead className="w-[52px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/20 bg-muted sticky z-40" style={{ left: 188 }}>
+                                    <ColumnFilterMenu label="SHIFT" value={shiftFilter} options={distinctShifts} onChange={setShiftFilter} />
+                                </TableHead>
                                 {/* Production — sticky cols 4-8 */}
-                                <TableHead className="w-[72px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 240 }}>CUSTOMER</TableHead>
-                                <TableHead className="w-[60px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 312 }}>GRADE</TableHead>
+                                <TableHead className="w-[72px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 240 }}>
+                                    <ColumnFilterMenu label="CUSTOMER" value={customerFilter} options={distinctCustomers} onChange={setCustomerFilter} />
+                                </TableHead>
+                                <TableHead className="w-[60px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 312 }}>
+                                    <ColumnFilterMenu label="GRADE" value={gradeFilter} options={distinctGrades} onChange={setGradeFilter} />
+                                </TableHead>
                                 <TableHead className="w-[80px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 bg-muted sticky z-40" style={{ left: 372 }}>TTL KG</TableHead>
                                 {/* REM — last frozen col, inline text, gets separator shadow */}
                                 <TableHead className="w-[200px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] bg-muted sticky z-40 shadow-[2px_0_4px_rgba(0,0,0,0.12)]" style={{ left: 452 }}>REM</TableHead>
@@ -1606,6 +1740,10 @@ export function DailyLedgerGrid({
                                 const isDirtyRow = row._state === 'modified';
                                 const isNewRow = row._state === 'new';
                                 const isSecondary = !row._isPrimary;
+                                // Index-preserving filter: hidden rows render with display:none
+                                // (via the `hidden` attribute) so array indices — and therefore
+                                // cell selection, paste, and the context menu — stay aligned.
+                                const rowHidden = isRowHidden(row);
 
                                 // Computed downtime values (shift default = 8h)
                                 const dtHrs = parseFloat(row.dt_hrs) || 0;
@@ -1634,8 +1772,10 @@ export function DailyLedgerGrid({
                                 return (
                                     <TableRow
                                         key={rowIdx}
+                                        hidden={rowHidden}
                                         className={cn(
                                             'group transition-all duration-150 border-b border-border/30',
+                                            rowHidden && 'hidden',
                                             isDeleted && 'opacity-40 line-through',
                                             isDirtyRow && !isSecondary && 'border-l-2 border-l-amber-400',
                                             isNewRow && 'border-l-2 border-l-blue-400/50',
@@ -2001,25 +2141,10 @@ export function DailyLedgerGrid({
                                 {/* CUSTOMER — frozen corner: sticky bottom-0 + left-240 at z-50 */}
                                 <TableCell className="h-8 px-1 py-0 bg-muted sticky bottom-0 z-50 border-r border-foreground/10" style={{ left: 240 }} />
 
-                                {/* GRADE — frozen corner: sticky bottom-0 + left-312 at z-50
-                                    Grade filter pill: filters TTL KG aggregate in the footer. */}
-                                <TableCell className="h-8 px-1 py-0 bg-muted sticky bottom-0 z-50 border-r border-foreground/10" style={{ left: 312 }}>
-                                    <Select
-                                        value={gradeFilter}
-                                        onValueChange={(val) => setGradeFilter(val)}
-                                    >
-                                        <SelectTrigger className="h-5 px-1.5 text-[10px] font-mono rounded-md border border-foreground/20 bg-background hover:bg-muted/50 gap-0.5 shadow-none focus:ring-0 focus-visible:ring-0">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent className="text-[11px] font-mono min-w-[80px]">
-                                            <SelectItem value="ALL" className="text-[11px]">ALL</SelectItem>
-                                            {distinctGrades.length > 0 && <SelectSeparator />}
-                                            {distinctGrades.map(g => (
-                                                <SelectItem key={g} value={g} className="text-[11px]">{g}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </TableCell>
+                                {/* GRADE — frozen corner: sticky bottom-0 + left-312 at z-50.
+                                    Plain spacer — the grade filter now lives in the GRADE header
+                                    (single control for `gradeFilter`). */}
+                                <TableCell className="h-8 px-1 py-0 bg-muted sticky bottom-0 z-50 border-r border-foreground/10" style={{ left: 312 }} />
 
                                 {/* TTL KG — frozen corner: sticky bottom-0 + left-372 at z-50, aggregate cell */}
                                 <TableCell className="h-8 px-1 py-0 bg-muted sticky bottom-0 z-50 border-r border-foreground/10" style={{ left: 372 }}>
