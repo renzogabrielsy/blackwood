@@ -3,6 +3,8 @@
 > **For the next session.** If the user says **"view latest handoff file"**, "where did we leave off", or "what's the current state", read this first.
 >
 > **Lineage:** continues `2026-05-31-gsheet-source-of-truth-pivot-self-learning-blocking-fix.md`. That handoff's "next action" (gsheet-sync lean refactor / flip email agents to audit mode / pricing) was **NOT done** — this session pivoted entirely to onboarding the **Cenapro** second tenant (Renzo introduced it 2026-06-01). Those ICTC-sync items remain deferred.
+>
+> **UPDATE (2026-06-02, just after this handoff was filed):** `feat/cenapro-integration` was **merged into `dev`** (`--no-ff` merge commit `3de140c`, pushed to `origin/dev`). The Cenapro code now lives on `dev`; the live Supabase DB already has the `cenapro` schema + 752 rows (applied via MCP during the build). The "NOT merged to dev" notes further down are SUPERSEDED — only `main` (production) remains un-updated.
 
 ---
 
