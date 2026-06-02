@@ -1421,16 +1421,19 @@ export function ProductionLedgerGrid({
     // Clicking the active date key toggles asc/desc; clicking the other date header
     // switches the sort key to it (defaulting to descending — newest-first — like the
     // original recv default). The re-sort effect above reacts to key/dir changes.
+    // NOTE: keep these setState calls flat — do NOT nest setDateSortDir inside a
+    // setDateSortKey updater. React Strict Mode (dev) double-invokes updater fns, and a
+    // nested flip would run twice → cancel out (the "clicking doesn't flip" bug).
     const handleDateSort = React.useCallback((key: DateSortKey) => {
-        setDateSortKey((prevKey) => {
-            if (prevKey === key) {
-                setDateSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-                return prevKey;
-            }
+        if (key === dateSortKey) {
+            // Same column → flip direction (pure updater is double-invoke-safe).
+            setDateSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+        } else {
+            // New column → switch key, default to descending (newest-first).
+            setDateSortKey(key);
             setDateSortDir('desc');
-            return key;
-        });
-    }, []);
+        }
+    }, [dateSortKey]);
 
     // ─── Counts ────────────────────────────────────────────────────────────────────
     const savedRowCount = rows.filter((r) => r._state !== 'new' && r._state !== 'deleted').length;
