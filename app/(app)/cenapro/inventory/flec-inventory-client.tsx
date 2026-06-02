@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import {
     Calendar,
@@ -77,6 +77,52 @@ function cellKey(grade: string, side: string): string {
     return `${grade}|${side}`;
 }
 
+// ─── Preference persistence (localStorage) ───────────────────────────────────────
+// The chosen warehouse + start date are a critical operator detail that must
+// "permeate" — survive refresh, navigation, AND sessions. URL params already cover a
+// raw refresh, but arriving fresh (nav menu, landing card → clean /cenapro/inventory)
+// drops to the hardcoded default. So we mirror the active selection to localStorage
+// and restore it on mount whenever the URL carries no param (an explicit URL param
+// always wins — shared links keep working). SSR-guarded throughout.
+const PREFS_KEY = 'cenapro_flec_prefs';
+
+interface FlecPrefs {
+    whse: string;
+    date: string;
+}
+
+function readFlecPrefs(): FlecPrefs | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const raw = window.localStorage.getItem(PREFS_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<FlecPrefs>;
+        // Validate: the warehouse must be a real flec warehouse + the date a valid ISO
+        // string. A malformed/partial/stale blob is ignored (falls through to the
+        // URL/default path) — so we never push a value the server would just reject.
+        if (
+            typeof parsed.whse === 'string' &&
+            (FLEC_WAREHOUSES as readonly string[]).includes(parsed.whse) &&
+            typeof parsed.date === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)
+        ) {
+            return { whse: parsed.whse, date: parsed.date };
+        }
+    } catch {
+        // Corrupt JSON / blocked storage → treat as no saved prefs.
+    }
+    return null;
+}
+
+function writeFlecPrefs(prefs: FlecPrefs): void {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+    } catch {
+        // Private mode / quota — non-fatal; the URL still carries the selection.
+    }
+}
+
 // ─── Inline error banner (HARD RULE: persistent + Copy) ──────────────────────────
 function ErrorBanner({ message }: { message: string }) {
     return (
@@ -128,20 +174,51 @@ export function FlecInventoryClient({
 }: FlecInventoryClientProps) {
     const router = useRouter();
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const [isPending, startTransition] = React.useTransition();
 
-    // Navigating updates URL search params → the server page re-fetches.
+    // Navigating updates URL search params → the server page re-fetches. We ALSO
+    // persist the resulting selection to localStorage so it permeates a fresh visit
+    // (see PREFS_KEY note above).
     const applyParams = React.useCallback(
         (next: { whse?: string; date?: string }) => {
+            const whse = next.whse ?? warehouse;
+            const date = next.date ?? startDate;
+            writeFlecPrefs({ whse, date });
             const sp = new URLSearchParams();
-            sp.set('whse', next.whse ?? warehouse);
-            sp.set('date', next.date ?? startDate);
+            sp.set('whse', whse);
+            sp.set('date', date);
             startTransition(() => {
                 router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
             });
         },
         [router, pathname, warehouse, startDate],
     );
+
+    // ─── Restore saved prefs on a fresh visit ────────────────────────────────────
+    // Runs once on mount. When the URL carries NEITHER whse nor date (a clean
+    // /cenapro/inventory — nav menu or landing card), fall back to the last-used
+    // warehouse + start date from localStorage. An explicit URL param always wins, so
+    // this only fires when both are absent. The guard ref ensures it runs a single
+    // time (the subsequent router.replace re-renders with params present → no loop).
+    const restoredRef = React.useRef(false);
+    React.useEffect(() => {
+        if (restoredRef.current) return;
+        restoredRef.current = true;
+
+        const urlHasWhse = searchParams.get('whse') != null;
+        const urlHasDate = searchParams.get('date') != null;
+        if (urlHasWhse || urlHasDate) return; // an explicit param wins — keep it
+
+        const prefs = readFlecPrefs();
+        if (!prefs) return; // nothing saved → keep the server default
+
+        // Avoid a needless replace if the saved prefs already match what's showing.
+        if (prefs.whse === warehouse && prefs.date === startDate) return;
+
+        applyParams({ whse: prefs.whse, date: prefs.date });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // ─── Lookup maps from the server data ────────────────────────────────────────
     // Effective opening per (grade, side) as of the start date (seeds the editable
