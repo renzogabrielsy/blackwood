@@ -234,13 +234,21 @@ const inputClass =
 // ─── Direction tint (IN vs OUT, by disposition) ──────────────────────────────────
 // Each production row reads as an IN (into inventory) or OUT (out into partner gear),
 // keyed off the disposition the CCC/FLEC cell resolves to:
-//   • flec_bagging                  → IN  → subtle emerald row tint
-//   • partner_crusher / partner_kiln → OUT → subtle rose row tint
+//   • flec_bagging                  → IN  → emerald row tint
+//   • partner_crusher / partner_kiln → OUT → rose row tint
 //   • empty / unrecognized          → no tint
-// The tint is deliberately faint (/5) so it never fights cell-selection, row-hover, or
-// the dirty-state left borders that sit on top of it. We derive direction from the raw
+// The tints are bold enough to read clearly in BOTH modes (light: a solid -50/-ish
+// translucent green/red; dark: a deep -950 wash), yet still let cell-selection, row
+// hover, and the dirty-state left borders sit on top. We derive direction from the raw
 // `ccc_flec` cell via the shared `parseCccFlec` (same source of truth as save), so an
 // unsaved edit re-tints live as the operator types a recognized code.
+//
+// Two tint flavours are returned per direction:
+//   • TRANSLUCENT (`rowDirectionTint`)   → the scrolling `<tr>` background; lets row
+//     hover/selection blend through.
+//   • OPAQUE      (`rowDirectionFrozenTint`) → the sticky frozen identity cells, which
+//     MUST be opaque so scrolling content doesn't bleed through them. Built on the
+//     `bg-background`/`bg-card` base so the row still reads as one continuous strip.
 type RowDirection = 'in' | 'out' | null;
 
 function rowDirection(cccFlec: string): RowDirection {
@@ -249,9 +257,21 @@ function rowDirection(cccFlec: string): RowDirection {
     return res.disposition_kind === 'flec_bagging' ? 'in' : 'out';
 }
 
+// Scrolling-cell tint — translucent so hover/selection still blend through.
 function rowDirectionTint(dir: RowDirection): string {
-    if (dir === 'in') return 'bg-emerald-500/5';
-    if (dir === 'out') return 'bg-rose-500/5';
+    if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/40';
+    if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/40';
+    return '';
+}
+
+// Frozen-cell tint — OPAQUE (layered over an opaque `bg-background` base in the cell)
+// so the scrolling body can't show through the pinned identity columns, while still
+// matching the row's IN/OUT color so there's no seam between frozen and scrolling parts.
+// Light mode uses the same -50 wash over the opaque base; dark uses a denser -950/60 so
+// it reads against the dark surface and isn't see-through.
+function rowDirectionFrozenTint(dir: RowDirection): string {
+    if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/60';
+    if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/60';
     return '';
 }
 
@@ -265,23 +285,27 @@ const BADGE_BASE =
 
 // CCC/FLEC: FLEC (the bagging "in") → emerald; crushers C1–C4 → amber; kilns RK1–RK4 →
 // rose. So bagging clearly reads as the IN, and crushers vs kilns are distinguishable.
+// Punchier than before: /20–/25 fill + /40 border + a confident -700/-300 bold text so
+// each color is distinct and obvious in BOTH modes.
 function cccFlecBadgeClass(raw: string): string {
     const v = raw.trim().toUpperCase();
-    if (v === 'FLEC') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
-    if (/^C[1-4]$/.test(v)) return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
-    if (/^RK[1-4]$/.test(v)) return 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300';
+    if (v === 'FLEC') return 'border-emerald-500/40 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300';
+    if (/^C[1-4]$/.test(v)) return 'border-amber-500/40 bg-amber-500/25 text-amber-700 dark:text-amber-300';
+    if (/^RK[1-4]$/.test(v)) return 'border-rose-500/40 bg-rose-500/20 text-rose-700 dark:text-rose-300';
     // Unrecognized value — neutral badge so it's still visible (and obviously not a real code).
     return 'border-border bg-muted text-muted-foreground';
 }
 
 // PLANT: one distinct, accessible color per plant. W6 → blue, W7 → teal, W6/W7 →
 // indigo (the union), DVO → slate. Empty/null plant → no badge (handled by the caller).
+// Stronger fill (/20) + border (/40) + bold -700/-300 text so each plant reads punchy
+// in both modes.
 function plantBadgeClass(raw: string): string {
     switch (raw.trim().toUpperCase()) {
-        case 'W6': return 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300';
-        case 'W7': return 'border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300';
-        case 'W6/W7': return 'border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300';
-        case 'DVO': return 'border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300';
+        case 'W6': return 'border-blue-500/40 bg-blue-500/20 text-blue-700 dark:text-blue-300';
+        case 'W7': return 'border-teal-500/40 bg-teal-500/20 text-teal-700 dark:text-teal-300';
+        case 'W6/W7': return 'border-indigo-500/40 bg-indigo-500/20 text-indigo-700 dark:text-indigo-300';
+        case 'DVO': return 'border-slate-500/40 bg-slate-500/20 text-slate-700 dark:text-slate-300';
         default: return 'border-border bg-muted text-muted-foreground';
     }
 }
@@ -647,13 +671,23 @@ const ProductionRow = React.memo(function ProductionRow({
     const isDeleted = row._state === 'deleted';
     const isModified = row._state === 'modified';
     const isNew = row._state === 'new';
-    const isEmptyNew = isNew && !isMeaningfulNewRow(row);
 
-    // Direction tint (IN=emerald / OUT=rose), derived from the CCC/FLEC cell. Skipped on
-    // the empty trailing row so it stays visually neutral until the operator commits to a
-    // disposition. Sits UNDER the dirty-state left border + the selection highlight.
-    const direction = isEmptyNew ? null : rowDirection(row.ccc_flec);
+    // Direction tint (IN=emerald / OUT=rose), derived from the CCC/FLEC cell. Sits UNDER
+    // the dirty-state left border + the selection highlight. Two flavours: the
+    // translucent one tints the scrolling `<tr>`; the opaque one tints the sticky frozen
+    // identity cells (which must be opaque so scrolling content doesn't bleed through).
+    const direction = rowDirection(row.ccc_flec);
     const directionTint = rowDirectionTint(direction);
+    const frozenTint = rowDirectionFrozenTint(direction);
+
+    // Shared frozen-cell base: an OPAQUE surface (so the scrolling body can't show
+    // through) + the row's opaque IN/OUT tint over it + hover, layered to match the
+    // scrolling part of the same row. The per-cell `left`/`z`/border come from the call
+    // site. `bg-background` first guarantees opacity even when there's no direction tint.
+    const frozenCellBase = cn(
+        'sticky z-[15] bg-background group-hover:bg-muted/50 transition-colors duration-150',
+        frozenTint,
+    );
 
     // Rebuild the active-cell object GridCell needs — null unless the active cell is in
     // this row. Memoized on (rowIdx, activeColInRow) so it's stable while other rows edit.
@@ -711,20 +745,28 @@ const ProductionRow = React.memo(function ProductionRow({
                 directionTint,
                 rowHidden && 'hidden',
                 isDeleted && 'line-through opacity-40',
-                isModified && 'border-l-2 border-l-amber-400',
-                isNew && !isEmptyNew && 'border-l-2 border-l-blue-400/50',
                 contextMenuActive && 'bg-accent/30',
             )}
             style={{ height: '32px' }}
             onContextMenu={(e) => onRowContextMenu(rowIdx, e)}
         >
-            {/* Row number */}
-            <td className="border-r border-border/30 px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ height: '32px' }}>
-                {isEmptyNew ? <span className="text-muted-foreground/30">—</span> : rowIdx + 1}
+            {/* Row number — FROZEN col 0 (left: 0). The dirty-state left border lives on
+                THIS cell (not the <tr>) — the opaque sticky bg would otherwise paint over
+                a <tr>-level left border once it scrolls under nothing / on collapse:separate. */}
+            <td
+                className={cn(
+                    frozenCellBase,
+                    'border-r border-border/30 px-1 text-center font-mono text-[10px] font-bold text-muted-foreground',
+                    isModified && 'border-l-2 border-l-amber-400',
+                    isNew && 'border-l-2 border-l-blue-400/50',
+                )}
+                style={{ height: '32px', left: 0 }}
+            >
+                {rowIdx + 1}
             </td>
 
-            {/* Recv date (col 1) */}
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+            {/* Recv date (col 1) — frozen (left: 36) */}
+            <td className={cn(frozenCellBase, 'border-r border-border/30 p-0')} style={{ height: '32px', left: 36 }}>
                 <DatePickerCell
                     value={row.recv_date}
                     onChange={(v) => updateRow(rowIdx, 'recv_date', v)}
@@ -738,8 +780,8 @@ const ProductionRow = React.memo(function ProductionRow({
                 />
             </td>
 
-            {/* Prod date (col 2) — muted (often blank) */}
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+            {/* Prod date (col 2) — frozen (left: 132), muted (often blank) */}
+            <td className={cn(frozenCellBase, 'border-r border-border/30 p-0')} style={{ height: '32px', left: 132 }}>
                 <DatePickerCell
                     value={row.prod_date}
                     onChange={(v) => updateRow(rowIdx, 'prod_date', v)}
@@ -754,8 +796,9 @@ const ProductionRow = React.memo(function ProductionRow({
                 />
             </td>
 
-            {/* Batch (col 3) — text + muted batch_year tag */}
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+            {/* Batch (col 3) — frozen (left: 228), LAST frozen col → right-edge separator
+                shadow. Text + muted batch_year tag. */}
+            <td className={cn(frozenCellBase, 'border-r border-border/30 p-0 shadow-[2px_0_4px_rgba(0,0,0,0.12)]')} style={{ height: '32px', left: 228 }}>
                 <GridCell
                     col={3}
                     row={rowIdx}
@@ -813,7 +856,7 @@ const ProductionRow = React.memo(function ProductionRow({
 
             {/* Whse (col 7) — dropdown, nullable (null = unplaced) */}
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                <div className={cn(interactiveCellClass(7), row.warehouse_code === '' && !isEmptyNew && 'bg-amber-500/[0.04]')}>
+                <div className={cn(interactiveCellClass(7), row.warehouse_code === '' && 'bg-amber-500/[0.04]')}>
                     <SelectCell value={row.warehouse_code} options={WAREHOUSE_CODES} onChange={(v) => updateRow(rowIdx, 'warehouse_code', v)} nullable placeholder="unplaced" />
                 </div>
             </td>
@@ -935,10 +978,12 @@ export function ProductionLedgerGrid({
     const [dateSortKey, setDateSortKey] = React.useState<DateSortKey>('recv_date');
     const [dateSortDir, setDateSortDir] = React.useState<'asc' | 'desc'>('desc');
 
-    const [rows, setRows] = React.useState<GridRow[]>(() => [
-        ...buildGridRows(initialRows, 'recv_date', 'desc'),
-        createEmptyRow(),
-    ]);
+    // Only the actual (period-scoped) data rows — adds happen via the Bulk Add modal or
+    // the right-click Insert Above/Below context menu, so there is NO persistent trailing
+    // empty input row.
+    const [rows, setRows] = React.useState<GridRow[]>(() =>
+        buildGridRows(initialRows, 'recv_date', 'desc'),
+    );
 
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
@@ -963,15 +1008,9 @@ export function ProductionLedgerGrid({
     const [warehouseFilter, setWarehouseFilter] = React.useState('ALL');
     const [sourceFilter, setSourceFilter] = React.useState('ALL');
 
-    // ─── Re-sort the data rows when the date key/direction changes (keep trailing) ──
+    // ─── Re-sort the data rows when the date key/direction changes ──────────────────
     React.useEffect(() => {
-        setRows((prev) => {
-            const trailing = prev[prev.length - 1]?._state === 'new' && !isMeaningfulNewRow(prev[prev.length - 1])
-                ? [prev[prev.length - 1]]
-                : [];
-            const dataRows = trailing.length > 0 ? prev.slice(0, -1) : prev;
-            return [...sortGridRows(dataRows, dateSortKey, dateSortDir), ...trailing];
-        });
+        setRows((prev) => sortGridRows(prev, dateSortKey, dateSortDir));
     }, [dateSortKey, dateSortDir]);
 
     // ─── Context menu state ────────────────────────────────────────────────────────
@@ -1069,14 +1108,10 @@ export function ProductionLedgerGrid({
     );
 
     // ─── Row mutation helpers ──────────────────────────────────────────────────────
-    // Ensures a trailing empty 'new' row always exists so the operator can keep adding.
-    const ensureTrailingEmptyRow = (next: GridRow[]): GridRow[] => {
-        const last = next[next.length - 1];
-        if (!last || last._state !== 'new' || isMeaningfulNewRow(last)) {
-            next.push(createEmptyRow());
-        }
-        return next;
-    };
+    // NOTE: there is intentionally no trailing always-empty "new" row anymore — adds
+    // happen via the Bulk Add modal (primary) or the right-click Insert Above/Below
+    // context menu (occasional one-off). Paste-into-the-grid may still auto-extend rows
+    // (see handleSmartPaste), but nothing maintains a permanent blank input row.
 
     const updateRow = React.useCallback((idx: number, field: GridField, value: string) => {
         setRows((prev) => {
@@ -1086,7 +1121,7 @@ export function ProductionLedgerGrid({
             const row = { ...next[idx], [field]: value };
             if (row._state === 'existing') row._state = 'modified';
             next[idx] = row;
-            return ensureTrailingEmptyRow(next);
+            return next;
         });
     }, []);
 
@@ -1095,7 +1130,9 @@ export function ProductionLedgerGrid({
             const next = [...prev];
             const row = { ...next[idx] };
             if (row._state === 'new') {
-                if (next.length > 1) next.splice(idx, 1);
+                // A brand-new (unsaved) row is simply removed — no need to keep a
+                // placeholder; there's no trailing input row to preserve.
+                next.splice(idx, 1);
                 return next;
             }
             row._state = 'deleted';
@@ -1121,7 +1158,7 @@ export function ProductionLedgerGrid({
             // Inherit dates from the reference row so a burst of same-day entries is fast.
             const newRow = createEmptyRow({ recv_date: ref?.recv_date ?? new Date().toISOString().split('T')[0] });
             next.splice(idx + offset, 0, newRow);
-            return ensureTrailingEmptyRow(next);
+            return next;
         });
     }, []);
 
@@ -1133,7 +1170,7 @@ export function ProductionLedgerGrid({
             // A duplicate is a brand-new row (no id) — never an UPDATE of the source.
             const dup: GridRow = { ...src, _state: 'new', id: '', batch_year: '' };
             next.splice(idx + 1, 0, dup);
-            return ensureTrailingEmptyRow(next);
+            return next;
         });
     }, []);
 
@@ -1297,7 +1334,7 @@ export function ProductionLedgerGrid({
                         next[targetRow] = row;
                     });
                 });
-                return ensureTrailingEmptyRow(next);
+                return next;
             });
             toast.success(`Pasted ${pastedRows.length} row${pastedRows.length !== 1 ? 's' : ''}`);
         },
@@ -1322,7 +1359,7 @@ export function ProductionLedgerGrid({
     });
 
     const handleDiscard = React.useCallback(() => {
-        setRows([...buildGridRows(initialRows, dateSortKey, dateSortDir), createEmptyRow()]);
+        setRows(buildGridRows(initialRows, dateSortKey, dateSortDir));
         setActiveCell(null);
         setIsEditing(false);
         cellSelection.clearSelection();
@@ -1628,16 +1665,21 @@ export function ProductionLedgerGrid({
                         <col style={{ width: '72px' }} />
                         <col style={{ width: '72px' }} />
                     </colgroup>
+                    {/* Header is sticky-top (z-20). The 4 frozen identity headers are ALSO
+                        sticky-left → they're top-left corners that must sit above both the
+                        scrolling header cells AND the frozen body cells, so they get the
+                        highest z (z-30) + an OPAQUE bg-muted (the translucent thead bg would
+                        let body cells show through on horizontal scroll). */}
                     <thead className="sticky top-0 z-20 bg-muted/90 backdrop-blur-sm">
                         <tr className="border-b">
-                            <th className="h-8 border-r border-border/40 px-1 text-center font-mono text-[10px] font-bold text-muted-foreground">#</th>
-                            <th className="h-8 px-2 text-left text-muted-foreground">
+                            <th className="sticky left-0 z-30 h-8 border-r border-border/40 bg-muted px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ left: 0 }}>#</th>
+                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 36 }}>
                                 <DateSortHeader label="Recv" sortKey="recv_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
                             </th>
-                            <th className="h-8 px-2 text-left text-muted-foreground">
+                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 132 }}>
                                 <DateSortHeader label="Prod" sortKey="prod_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Batch</th>
+                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground shadow-[2px_0_4px_rgba(0,0,0,0.12)]" style={{ left: 228 }}>Batch</th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
                             </th>
@@ -1660,15 +1702,25 @@ export function ProductionLedgerGrid({
                         </tr>
                     </thead>
                     <tbody>
-                        {/* Empty state — only the trailing new row, nothing saved yet */}
-                        {rows.length === 1 && rows[0]._state === 'new' && !isMeaningfulNewRow(rows[0]) && (
+                        {/* Empty state — the selected period has zero data rows. Adds now
+                            happen via Bulk Add or right-click Insert (no trailing input row). */}
+                        {rows.length === 0 && (
                             <tr>
                                 <td colSpan={COL_COUNT} className="py-10 text-center">
                                     <div className="flex flex-col items-center justify-center gap-2 text-center">
                                         <Inbox className="h-8 w-8 text-muted-foreground/30" />
                                         <p className="text-sm text-muted-foreground">
-                                            No production events yet. Start typing in the empty row, or paste a range from Excel.
+                                            No production events in this period. Use <span className="font-medium">Bulk Add</span> to enter rows, or right-click a row to insert.
                                         </p>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-6 gap-1 px-2 text-[11px]"
+                                            onClick={() => setBulkAddOpen(true)}
+                                        >
+                                            <Sparkles className="h-3 w-3" />
+                                            Bulk Add
+                                        </Button>
                                     </div>
                                 </td>
                             </tr>
