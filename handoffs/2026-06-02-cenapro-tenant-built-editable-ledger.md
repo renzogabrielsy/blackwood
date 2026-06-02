@@ -2,15 +2,13 @@
 
 > **For the next session.** If the user says **"view latest handoff file"**, "where did we leave off", or "what's the current state", read this first.
 >
-> **Lineage:** continues `2026-05-31-gsheet-source-of-truth-pivot-self-learning-blocking-fix.md`. That handoff's "next action" (gsheet-sync lean refactor / flip email agents to audit mode / pricing) was **NOT done** — this session pivoted entirely to onboarding the **Cenapro** second tenant (Renzo introduced it 2026-06-01). Those ICTC-sync items remain deferred.
->
-> **UPDATE (2026-06-02, just after this handoff was filed):** `feat/cenapro-integration` was **merged into `dev`** (`--no-ff` merge commit `3de140c`, pushed to `origin/dev`). The Cenapro code now lives on `dev`; the live Supabase DB already has the `cenapro` schema + 752 rows (applied via MCP during the build). The "NOT merged to dev" notes further down are SUPERSEDED — only `main` (production) remains un-updated.
+> **Lineage:** continues `2026-05-31-gsheet-source-of-truth-pivot-self-learning-blocking-fix.md`. That handoff's "next action" (gsheet-sync lean refactor / flip email agents to audit mode / pricing) was **NOT done** — this session pivoted entirely to onboarding the **Cenapro** second tenant (Renzo introduced it 2026-06-01). Those ICTC-sync items remain deferred — **and are the focus for next session (see "Next concrete action").**
 
 ---
 
 ## TL;DR
 
-Built the **entire Cenapro second tenant (CI / Cebu charcoal company) end-to-end** — a brand-new, fully-isolated tenant on the Blackwood platform, all on branch **`feat/cenapro-integration`** (16 commits, pushed to origin, **NOT yet merged to `dev`**). It's an isolated `cenapro` Postgres schema, a 752-row backfill from Renzo's `2025 CI PRODUCTION V2.xlsb`, and two **editable** screens (Production ledger + Excel-style Flec Inventory) — **the app is now the maintaining file, replacing the Excel.** Earlier in the session, ICTC production-table visual fixes also shipped to `dev`.
+Built the **entire Cenapro second tenant (CI / Cebu charcoal company) end-to-end** — a brand-new, fully-isolated tenant on the Blackwood platform, all on branch **`feat/cenapro-integration`** (16 commits) and **merged into `dev`** (2026-06-02, `--no-ff` merge `3de140c`, pushed) — the app runs Cenapro on `dev` now; only `main` (production) is not yet updated. It's an isolated `cenapro` Postgres schema, a 752-row backfill from Renzo's `2025 CI PRODUCTION V2.xlsb`, and two **editable** screens (Production ledger + Excel-style Flec Inventory) — **the app is now the maintaining file, replacing the Excel.** Earlier in the session, ICTC production-table visual fixes also shipped to `dev`.
 
 **Next concrete action: TEST-RUN the ICTC Gmail/email scraping sync** — the `sync-ictc` employee agents ingesting ICTC daily ledgers from Gmail (IMAP). This is the headline next step; everything Cenapro is parked-but-working.
 
@@ -72,7 +70,7 @@ Built the **entire Cenapro second tenant (CI / Cebu charcoal company) end-to-end
 - The Cenapro screens are auth-gated; verified via DB queries + Node SDK calls, but the final in-browser eyeball (esp. dark mode, frozen-column scroll, badge contrast) is Renzo's. He's been refining these live (period picker, freeze panes, colors, CCC/FLEC merge, sort, filters all done in response to his feedback).
 
 ### ⚠️ Deferred / known minor
-- `feat/cenapro-integration` is **NOT merged to `dev`** — open a PR into `dev` when Renzo signs off (link: https://github.com/renzogabrielsy/blackwood/pull/new/feat/cenapro-integration).
+- ✅ **Merged to `dev`** (2026-06-02, `--no-ff` merge `3de140c`, pushed). `main` (production) NOT yet updated — promote `dev → main` when ready.
 - Unused `Badge` import lint **warning** in `production-ledger-grid.tsx` (pre-existing, non-blocking).
 - Production default period = newest (June 2026, ~2 rows) → opens near-empty (see open decisions).
 - DVO sub-system deferred; future `cenapro-sync` subagent for re-loads not built.
@@ -81,7 +79,7 @@ Built the **entire Cenapro second tenant (CI / Cebu charcoal company) end-to-end
 ---
 
 ## Open decisions
-- **Merge `feat/cenapro-integration` → `dev`?** (Renzo's call once he's happy with the screens.)
+- **Promote `dev` → `main`** (production) when ready — the Cenapro merge into `dev` is done (`3de140c`).
 - **Production default period:** newest batch (June, near-empty) vs most-populated-recent batch. One-line change to the sort/default in `production/page.tsx` + `actions.ts` `fetchCenaproPeriods`.
 - **Cenapro re-load mechanism:** confirm a `cenapro-sync` Claude Code subagent wrapping `backfill_from_xlsb.py` is the path (vs anything else) when Renzo wants to refresh from a new `.xlsb`.
 
@@ -103,10 +101,11 @@ Suggested first move: ask Renzo which report(s) to test (deliveries / rc-out / p
 ---
 
 ## Git state
-- **Branch:** `feat/cenapro-integration` — clean working tree, in sync with `origin/feat/cenapro-integration` at **`fc163a1`**. **16 commits ahead of `dev`** (the whole Cenapro build, `e6cc194`…`fc163a1`).
-- **`dev`** tip ≈ `1041f32` and carries the ICTC visual fixes (`dc63a16`, `3b241ad`) + the Cenapro analysis doc. The Cenapro feature branch was cut from `dev` at `1041f32`.
-- Nothing to commit; everything pushed.
+- **Current branch: `dev`** (tip `1f0e846`), clean working tree, in sync with `origin/dev`. Cenapro was merged in via the `--no-ff` merge commit **`3de140c`** (16 commits `e6cc194`…`fc163a1`, 47 files / ~11k insertions). `dev` also carries the ICTC visual fixes (`dc63a16`, `3b241ad`).
+- **`feat/cenapro-integration`** (tip `fc163a1`) is preserved + pushed (kept for reference; can be deleted post-merge if desired).
+- **`main`** (production) does NOT yet have Cenapro — promote `dev → main` when ready.
+- Nothing to commit; everything pushed. **The next session starts here on `dev`.**
 
 ---
 
-*End of handoff — 2026-06-02 — Cenapro second tenant built end-to-end (isolated schema + 752-row backfill + editable production ledger + Excel-style flec inventory), all on `feat/cenapro-integration` (unmerged). Next: test the ICTC Gmail/email scraping sync.*
+*End of handoff — 2026-06-02 — Cenapro second tenant built end-to-end (isolated schema + 752-row backfill + editable production ledger + Excel-style flec inventory), now merged to `dev` (`3de140c`). Next: test the ICTC Gmail/email scraping sync.*
