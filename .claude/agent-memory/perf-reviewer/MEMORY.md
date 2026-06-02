@@ -27,3 +27,6 @@
 - Inline `style={{}}` objects in render paths (creates new refs every render)
 - `useEffect` without dep array used for ref sync -- runs every render, usually benign but unclear intent
 - Context value objects not memoized -- causes unnecessary consumer re-renders on parent re-render
+
+## Component Profiles
+- [Cenapro Production Ledger](cenapro_production_ledger.md) -- /cenapro/production renders all ~752 rows, no virtualization, no memoized row; every edit/drag re-renders all 10.5k cells. Fix = period picker first, then memoized Row, virtualization as escape hatch. Diagnosed 2026-06-02.

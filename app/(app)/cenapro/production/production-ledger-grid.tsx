@@ -48,8 +48,9 @@ import {
     partnerEquipmentOptions,
     dispositionRequiresEquipment,
 } from '../types';
-import { saveProductionEvents, type ProductionEventDirtyRow } from './actions';
+import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod } from './actions';
 import { BulkAddModal } from './bulk-add-modal';
+import { CenaproPeriodPicker } from './period-picker';
 
 // ─── Editable fields ─────────────────────────────────────────────────────────────
 // The 13 writable columns (id/unique_tag/batch_year are read-only/computed). Order
@@ -445,9 +446,319 @@ function ColumnFilterMenu({ label, value, options, onChange, align = 'start' }: 
     );
 }
 
+// ─── ProductionRow (memoized) ────────────────────────────────────────────────────
+// One ledger row, extracted + wrapped in React.memo so editing/selecting a cell only
+// re-renders the rows whose props actually changed — not the whole grid. The parent
+// passes PRIMITIVE slices of the global active/selection state (the active col within
+// THIS row, the selection col-span when this row is in range, etc.) plus stable
+// callbacks, so memo's shallow compare skips untouched rows. The `activeCell` object
+// GridCell expects is rebuilt locally (memoized on rowIdx+activeColInRow) so it stays
+// referentially stable across other rows' renders.
+interface ProductionRowProps {
+    row: GridRow;
+    rowIdx: number;
+    rowHidden: boolean;
+    contextMenuActive: boolean;
+    // Active/edit state, sliced to this row.
+    activeColInRow: number; // -1 when the active cell is in another row
+    isEditing: boolean;
+    // Selection state, sliced to this row (derived from the selection range).
+    rowInRange: boolean;
+    selStartCol: number;
+    selEndCol: number;
+    anchorColInRow: number; // -1 when the anchor is in another row
+    isDragActive: boolean;
+    selectionSize: number;
+    // Stable callbacks from the parent.
+    updateRow: (idx: number, field: GridField, value: string) => void;
+    handleSmartPaste: (e: React.ClipboardEvent, startRow: number, startCol: number) => void;
+    handleCellMouseDown: (rowIdx: number, colIdx: number, e: React.MouseEvent) => void;
+    handleCellMouseUp: (rowIdx: number, colIdx: number) => void;
+    handleCellMouseEnter: (rowIdx: number, colIdx: number) => void;
+    startEditing: (rowIdx: number, colIdx: number, initialChar?: string) => void;
+    revertChanges: () => void;
+    setActiveCell: (cell: { row: number; col: number }) => void;
+    setIsEditing: (editing: boolean) => void;
+    onRowContextMenu: (rowIdx: number, e: React.MouseEvent) => void;
+    gridRef: React.RefObject<HTMLDivElement | null>;
+}
+
+const ProductionRow = React.memo(function ProductionRow({
+    row,
+    rowIdx,
+    rowHidden,
+    contextMenuActive,
+    activeColInRow,
+    isEditing,
+    rowInRange,
+    selStartCol,
+    selEndCol,
+    anchorColInRow,
+    isDragActive,
+    selectionSize,
+    updateRow,
+    handleSmartPaste,
+    handleCellMouseDown,
+    handleCellMouseUp,
+    handleCellMouseEnter,
+    startEditing,
+    revertChanges,
+    setActiveCell,
+    setIsEditing,
+    onRowContextMenu,
+    gridRef,
+}: ProductionRowProps) {
+    const isDeleted = row._state === 'deleted';
+    const isModified = row._state === 'modified';
+    const isNew = row._state === 'new';
+    const isEmptyNew = isNew && !isMeaningfulNewRow(row);
+    const equipOptions = partnerEquipmentOptions(row.disposition_kind);
+    const equipDisabled = !dispositionRequiresEquipment(row.disposition_kind);
+
+    // Rebuild the active-cell object GridCell needs — null unless the active cell is in
+    // this row. Memoized on (rowIdx, activeColInRow) so it's stable while other rows edit.
+    const activeCell = React.useMemo(
+        () => (activeColInRow >= 0 ? { row: rowIdx, col: activeColInRow } : null),
+        [rowIdx, activeColInRow],
+    );
+
+    // Per-cell selection feedback, derived from this row's range slice (all primitives).
+    const isSel = React.useCallback(
+        (col: number) => rowInRange && col >= selStartCol && col <= selEndCol,
+        [rowInRange, selStartCol, selEndCol],
+    );
+    const isAnch = React.useCallback((col: number) => anchorColInRow === col, [anchorColInRow]);
+
+    // selProps / commonCellProps — rebuilt once per row render (not per parent render),
+    // and only when this row's sliced state changes (memo gate above).
+    const selProps = React.useCallback(
+        (colIdx: number) => ({
+            onCellMouseDown: (e: React.MouseEvent) => handleCellMouseDown(rowIdx, colIdx, e),
+            onCellMouseUp: () => handleCellMouseUp(rowIdx, colIdx),
+            onCellMouseEnter: () => handleCellMouseEnter(rowIdx, colIdx),
+            isCellRangeSelected: isSel(colIdx),
+            isCellRangeAnchor: isAnch(colIdx),
+            isDragActive,
+        }),
+        [rowIdx, handleCellMouseDown, handleCellMouseUp, handleCellMouseEnter, isSel, isAnch, isDragActive],
+    );
+
+    const commonCellProps = {
+        activeCell,
+        isEditing,
+        setActiveCell,
+        setIsEditing,
+        onStartEditing: startEditing,
+        onRevert: revertChanges,
+        gridRef,
+    };
+
+    // Selection/active visuals for the interactive (dropdown/date) cell wrappers.
+    const interactiveCellClass = (colIdx: number) =>
+        cn(
+            'relative h-full w-full',
+            isSel(colIdx) && 'bg-primary/10 dark:bg-primary/20',
+            activeColInRow === colIdx && selectionSize <= 1 && 'z-10 ring-2 ring-primary ring-inset',
+            isAnch(colIdx) && 'z-10 ring-2 ring-primary ring-inset',
+        );
+
+    return (
+        <tr
+            hidden={rowHidden}
+            className={cn(
+                'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted/50',
+                rowHidden && 'hidden',
+                isDeleted && 'line-through opacity-40',
+                isModified && 'border-l-2 border-l-amber-400',
+                isNew && !isEmptyNew && 'border-l-2 border-l-blue-400/50',
+                contextMenuActive && 'bg-accent/30',
+            )}
+            style={{ height: '32px' }}
+            onContextMenu={(e) => onRowContextMenu(rowIdx, e)}
+        >
+            {/* Row number */}
+            <td className="border-r border-border/30 px-1 text-center font-mono text-[10px] text-muted-foreground" style={{ height: '32px' }}>
+                {isEmptyNew ? <span className="text-muted-foreground/30">—</span> : rowIdx + 1}
+            </td>
+
+            {/* Recv date (col 1) */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <DatePickerCell
+                    value={row.recv_date}
+                    onChange={(v) => updateRow(rowIdx, 'recv_date', v)}
+                    onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 1); }}
+                    isActive={activeColInRow === 1}
+                    isRangeSelected={isSel(1)}
+                    isRangeAnchor={isAnch(1)}
+                    onCellMouseDown={(e) => handleCellMouseDown(rowIdx, 1, e)}
+                    onCellMouseUp={() => handleCellMouseUp(rowIdx, 1)}
+                    onCellMouseEnter={() => handleCellMouseEnter(rowIdx, 1)}
+                />
+            </td>
+
+            {/* Prod date (col 2) — muted (often blank) */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <DatePickerCell
+                    value={row.prod_date}
+                    onChange={(v) => updateRow(rowIdx, 'prod_date', v)}
+                    onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 2); }}
+                    isActive={activeColInRow === 2}
+                    isRangeSelected={isSel(2)}
+                    isRangeAnchor={isAnch(2)}
+                    onCellMouseDown={(e) => handleCellMouseDown(rowIdx, 2, e)}
+                    onCellMouseUp={() => handleCellMouseUp(rowIdx, 2)}
+                    onCellMouseEnter={() => handleCellMouseEnter(rowIdx, 2)}
+                    muted
+                />
+            </td>
+
+            {/* Batch (col 3) — text + muted batch_year tag */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <GridCell
+                    col={3}
+                    row={rowIdx}
+                    value={row.batch}
+                    className="justify-start px-1 font-mono text-xs"
+                    displayValue={
+                        <span className="flex w-full items-center gap-1 truncate px-1">
+                            <span className="truncate font-medium">{row.batch}</span>
+                            {row.batch_year && <span className="font-mono text-[10px] text-muted-foreground/60">{row.batch_year}</span>}
+                        </span>
+                    }
+                    {...commonCellProps}
+                    {...selProps(3)}
+                >
+                    <Input
+                        autoFocus
+                        value={row.batch}
+                        onChange={(e) => updateRow(rowIdx, 'batch', e.target.value.toUpperCase())}
+                        className={cn(inputClass, 'font-mono text-xs uppercase')}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 3); }}
+                    />
+                </GridCell>
+            </td>
+
+            {/* Shift (col 4) — dropdown */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(4)}>
+                    <SelectCell value={row.shift_code} options={SHIFT_CODES} onChange={(v) => updateRow(rowIdx, 'shift_code', v)} placeholder="—" />
+                </div>
+            </td>
+
+            {/* Grade (col 5) — dropdown */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(5)}>
+                    <SelectCell value={row.grade_code} options={GRADE_CODES} onChange={(v) => updateRow(rowIdx, 'grade_code', v)} placeholder="—" />
+                </div>
+            </td>
+
+            {/* Plant (col 6) — dropdown, nullable */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(6)}>
+                    <SelectCell value={row.plant_code} options={PLANT_CODES} onChange={(v) => updateRow(rowIdx, 'plant_code', v)} nullable placeholder="—" />
+                </div>
+            </td>
+
+            {/* Whse (col 7) — dropdown, nullable (null = unplaced) */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={cn(interactiveCellClass(7), row.warehouse_code === '' && !isEmptyNew && 'bg-amber-500/[0.04]')}>
+                    <SelectCell value={row.warehouse_code} options={WAREHOUSE_CODES} onChange={(v) => updateRow(rowIdx, 'warehouse_code', v)} nullable placeholder="unplaced" />
+                </div>
+            </td>
+
+            {/* Source (col 8) — dropdown */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(8)}>
+                    <SelectCell value={row.source_location_code} options={SOURCE_LOCATION_CODES} onChange={(v) => updateRow(rowIdx, 'source_location_code', v)} placeholder="—" />
+                </div>
+            </td>
+
+            {/* Disposition (col 9) — dropdown (drives equipment) */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(9)}>
+                    <SelectCell
+                        value={row.disposition_kind}
+                        options={DISPOSITION_KINDS}
+                        onChange={(v) => updateRow(rowIdx, 'disposition_kind', v)}
+                        renderLabel={(opt) => DISPOSITION_LABELS[opt] ?? opt}
+                        placeholder="—"
+                    />
+                </div>
+            </td>
+
+            {/* Equipment (col 10) — dropdown, disabled for bagging */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(10)}>
+                    <SelectCell
+                        value={row.partner_equipment_code}
+                        options={equipOptions}
+                        onChange={(v) => updateRow(rowIdx, 'partner_equipment_code', v)}
+                        disabled={equipDisabled}
+                        disabledHint="Bagging has no partner equipment"
+                        placeholder="—"
+                    />
+                </div>
+            </td>
+
+            {/* Weight (col 11) — numeric, right-aligned */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <GridCell
+                    col={11}
+                    row={rowIdx}
+                    value={formatKg(row.weight_kg)}
+                    className="justify-end pr-1 font-mono tabular-nums"
+                    {...commonCellProps}
+                    {...selProps(11)}
+                >
+                    <Input
+                        autoFocus
+                        type="number"
+                        step="1"
+                        value={row.weight_kg}
+                        onChange={(e) => updateRow(rowIdx, 'weight_kg', e.target.value)}
+                        className={cn(inputClass, 'text-right font-mono text-xs')}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 11); }}
+                    />
+                </GridCell>
+            </td>
+
+            {/* Flec (col 12) — numeric int, right-aligned */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <GridCell
+                    col={12}
+                    row={rowIdx}
+                    value={row.flec_count}
+                    className="justify-end pr-1 font-mono tabular-nums text-muted-foreground"
+                    {...commonCellProps}
+                    {...selProps(12)}
+                >
+                    <Input
+                        autoFocus
+                        type="number"
+                        step="1"
+                        value={row.flec_count}
+                        onChange={(e) => updateRow(rowIdx, 'flec_count', e.target.value)}
+                        className={cn(inputClass, 'text-right font-mono text-xs')}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }}
+                    />
+                </GridCell>
+            </td>
+
+            {/* Side (col 13) — dropdown, nullable */}
+            <td className="p-0" style={{ height: '32px' }}>
+                <div className={interactiveCellClass(13)}>
+                    <SelectCell value={row.whse_side} options={WHSE_SIDES} onChange={(v) => updateRow(rowIdx, 'whse_side', v)} nullable placeholder="—" align="end" />
+                </div>
+            </td>
+        </tr>
+    );
+});
+
 // ─── Component props ─────────────────────────────────────────────────────────────
 interface ProductionLedgerGridProps {
     initialRows: ProductionEventRow[];
+    periods: CenaproPeriod[];
+    selectedPeriod: CenaproPeriod | null;
     loadError: string | null;
     onSaveSuccess: () => void;
 }
@@ -455,6 +766,8 @@ interface ProductionLedgerGridProps {
 // ─── Main component ──────────────────────────────────────────────────────────────
 export function ProductionLedgerGrid({
     initialRows,
+    periods,
+    selectedPeriod,
     loadError,
     onSaveSuccess,
 }: ProductionLedgerGridProps) {
@@ -473,6 +786,15 @@ export function ProductionLedgerGrid({
     const [isSaving, setIsSaving] = React.useState(false);
     const [bulkAddOpen, setBulkAddOpen] = React.useState(false);
     const preEditValue = React.useRef<string>('');
+
+    // Live refs to `rows` + `activeCell`, synced during render. These let the cell
+    // callbacks (`startEditing`, `revertChanges`) read current values WITHOUT listing
+    // `rows`/`activeCell` in their deps — keeping their identity STABLE so the memoized
+    // ProductionRow isn't re-rendered on every keystroke just because a handler changed.
+    const rowsRef = React.useRef(rows);
+    rowsRef.current = rows;
+    const activeCellRef = React.useRef(activeCell);
+    activeCellRef.current = activeCell;
 
     // Header filters — single-select; 'ALL' = no filter.
     const [shiftFilter, setShiftFilter] = React.useState('ALL');
@@ -544,13 +866,20 @@ export function ProductionLedgerGrid({
     const mouseDownCellRef = React.useRef<{ row: number; col: number } | null>(null);
     const dragMovedRef = React.useRef(false);
 
+    // Depend on the INDIVIDUAL stable hook methods (each is a useCallback inside
+    // useCellSelection), NOT the `cellSelection` object — that object is a fresh literal
+    // every render, which would make these handlers (and thus every memoized row) churn.
+    const selMouseDown = cellSelection.handleCellMouseDown;
+    const selMouseEnter = cellSelection.handleCellMouseEnter;
+    const selClear = cellSelection.clearSelection;
+
     const handleCellMouseDown = React.useCallback(
         (rowIdx: number, colIdx: number, e: React.MouseEvent) => {
             mouseDownCellRef.current = { row: rowIdx, col: colIdx };
             dragMovedRef.current = false;
-            cellSelection.handleCellMouseDown(rowIdx, colIdx, e);
+            selMouseDown(rowIdx, colIdx, e);
         },
-        [cellSelection],
+        [selMouseDown],
     );
 
     const handleCellMouseUp = React.useCallback(
@@ -558,24 +887,24 @@ export function ProductionLedgerGrid({
             const down = mouseDownCellRef.current;
             mouseDownCellRef.current = null;
             if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
-                cellSelection.clearSelection();
+                selClear();
                 setActiveCell({ row: rowIdx, col: colIdx });
                 setIsEditing(false);
                 gridRef.current?.focus();
             }
             dragMovedRef.current = false;
         },
-        [cellSelection],
+        [selClear],
     );
 
     const handleCellMouseEnter = React.useCallback(
         (rowIdx: number, colIdx: number) => {
             if (mouseDownCellRef.current) {
                 dragMovedRef.current = true;
-                cellSelection.handleCellMouseEnter(rowIdx, colIdx);
+                selMouseEnter(rowIdx, colIdx);
             }
         },
-        [cellSelection],
+        [selMouseEnter],
     );
 
     // ─── Row mutation helpers ──────────────────────────────────────────────────────
@@ -673,38 +1002,43 @@ export function ProductionLedgerGrid({
     });
 
     // ─── Editing (text/numeric cells only; dropdowns/dates self-manage) ────────────
+    // Reads `rowsRef.current` (not `rows`) so its identity stays stable across edits
+    // (`updateRow` is already stable) — the memoized rows don't churn on every keystroke.
     const startEditing = React.useCallback(
         (rowIdx: number, colIdx: number, initialChar?: string) => {
             const field = COL_MAP[colIdx];
             if (!field) return;
             // Dropdown + date columns aren't keyboard-typed — they open their own UI.
             if (DROPDOWN_FIELDS.has(field) || field === 'recv_date' || field === 'prod_date') return;
-            const row = rows[rowIdx];
+            const row = rowsRef.current[rowIdx];
             if (!row) return;
             preEditValue.current = String(row[field] ?? '');
             setActiveCell({ row: rowIdx, col: colIdx });
             setIsEditing(true);
             if (initialChar !== undefined) updateRow(rowIdx, field, initialChar);
         },
-        [rows, updateRow],
+        [updateRow],
     );
 
+    // Reads `activeCellRef.current` so its identity is STABLE (empty deps) — otherwise
+    // it would change on every cell move and re-render all memoized rows.
     const revertChanges = React.useCallback(() => {
-        if (!activeCell) return;
-        const field = COL_MAP[activeCell.col];
+        const cell = activeCellRef.current;
+        if (!cell) return;
+        const field = COL_MAP[cell.col];
         if (field) {
             setRows((prev) => {
                 const next = [...prev];
-                const row = { ...next[activeCell.row] };
+                const row = { ...next[cell.row] };
                 (row as Record<string, unknown>)[field] = preEditValue.current;
                 if (row._state === 'modified' && row.id) row._state = 'existing';
-                next[activeCell.row] = row;
+                next[cell.row] = row;
                 return next;
             });
         }
         setIsEditing(false);
         gridRef.current?.focus();
-    }, [activeCell]);
+    }, []);
 
     const moveActive = React.useCallback(
         (key: string, shift: boolean) => {
@@ -927,38 +1261,28 @@ export function ProductionLedgerGrid({
         }
     };
 
-    // ─── Cell helper props ─────────────────────────────────────────────────────────
-    const selProps = (rowIdx: number, colIdx: number) => ({
-        onCellMouseDown: (e: React.MouseEvent) => handleCellMouseDown(rowIdx, colIdx, e),
-        onCellMouseUp: () => handleCellMouseUp(rowIdx, colIdx),
-        onCellMouseEnter: () => handleCellMouseEnter(rowIdx, colIdx),
-        isCellRangeSelected: cellSelection.isSelected(rowIdx, colIdx),
-        isCellRangeAnchor: cellSelection.isAnchor(rowIdx, colIdx),
-        isDragActive: cellSelection.isDragging,
-    });
+    // ─── Row context menu (stable — passed to the memoized row) ────────────────────
+    // Lifted out of the inline row JSX so each ProductionRow gets a referentially
+    // stable handler (memo-friendly). Positions the menu, clamping to the viewport.
+    const onRowContextMenu = React.useCallback((rowIdx: number, e: React.MouseEvent) => {
+        e.preventDefault();
+        const MENU_W = 188;
+        const MENU_H = 164;
+        let x = e.clientX;
+        let y = e.clientY;
+        if (x + MENU_W > window.innerWidth) x -= MENU_W;
+        if (y + MENU_H > window.innerHeight) y -= MENU_H;
+        setContextMenu({ rowIdx, x, y });
+        setActiveCell({ row: rowIdx, col: 1 });
+        setIsEditing(false);
+    }, []);
 
-    const commonCellProps = {
-        activeCell,
-        isEditing,
-        setActiveCell,
-        setIsEditing,
-        onStartEditing: startEditing,
-        onRevert: revertChanges,
-        gridRef,
-    };
-
-    // A wrapper cell for dropdown/date columns — handles selection visuals + the
-    // active ring, but renders custom interactive children (Select/DatePicker) that
-    // manage their own open/edit state. Mirrors the selection feedback of GridCell's
-    // display mode without its F2/type-over edit path.
-    const interactiveCellClass = (rowIdx: number, colIdx: number) =>
-        cn(
-            'relative h-full w-full',
-            cellSelection.isSelected(rowIdx, colIdx) && 'bg-primary/10 dark:bg-primary/20',
-            (activeCell?.row === rowIdx && activeCell?.col === colIdx && cellSelection.getSelectionSize() <= 1) &&
-                'z-10 ring-2 ring-primary ring-inset',
-            cellSelection.isAnchor(rowIdx, colIdx) && 'z-10 ring-2 ring-primary ring-inset',
-        );
+    // ─── Selection range slice (drives per-row memo props) ─────────────────────────
+    // The whole grid shares one selection rectangle; we pass each row only the columns
+    // of that rectangle (so a row outside the selection sees stable primitives and the
+    // memo skips it). `range` is null when nothing is selected.
+    const selRange = cellSelection.range;
+    const selectionSize = cellSelection.getSelectionSize();
 
     // ─── Distinct filter options (derived from data; only present values appear) ────
     const { shiftOptions, gradeOptions, dispositionOptions, warehouseOptions } = React.useMemo(() => {
@@ -1027,9 +1351,13 @@ export function ProductionLedgerGrid({
         <div className="flex h-full flex-col">
             {/* Toolbar */}
             <div className="flex flex-none items-center gap-2 border-b bg-muted/30 px-2 py-1.5 md:px-3">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Production Events
-                </span>
+                <CenaproPeriodPicker
+                    periods={periods}
+                    selected={selectedPeriod}
+                    disabled={isDirty}
+                    disabledHint="Save or discard your edits before switching period"
+                />
+                <span className="h-4 w-px bg-border/60" />
                 <span className="font-mono text-[11px] text-muted-foreground/70">
                     {savedRowCount.toLocaleString('en-US')} row{savedRowCount !== 1 ? 's' : ''}
                     {dirtyCount > 0 && <span className="ml-1 text-amber-600 dark:text-amber-400">· {dirtyCount} unsaved</span>}
@@ -1182,215 +1510,58 @@ export function ProductionLedgerGrid({
                         )}
 
                         {rows.map((row, rowIdx) => {
-                            const isDeleted = row._state === 'deleted';
-                            const isModified = row._state === 'modified';
-                            const isNew = row._state === 'new';
-                            const isEmptyNew = isNew && !isMeaningfulNewRow(row);
-                            const rowHidden = isRowHidden(row);
-                            const equipOptions = partnerEquipmentOptions(row.disposition_kind);
-                            const equipDisabled = !dispositionRequiresEquipment(row.disposition_kind);
+                            // Slice the global active/selection state down to THIS row so
+                            // the memoized ProductionRow only re-renders when its own cells
+                            // change. All props below are primitives (or stable callbacks).
+                            const activeColInRow =
+                                activeCell?.row === rowIdx ? activeCell.col : -1;
+                            const rowInRange =
+                                !!selRange && rowIdx >= selRange.startRow && rowIdx <= selRange.endRow;
+                            // Anchor col within this row (−1 if the anchor is elsewhere). The
+                            // hook exposes isAnchor(r,c); scan the row's selectable cols for it
+                            // (cheap — ≤13 cols), only when a selection exists.
+                            let anchorCol = -1;
+                            if (selRange) {
+                                for (let c = 1; c < COL_COUNT; c++) {
+                                    if (cellSelection.isAnchor(rowIdx, c)) {
+                                        anchorCol = c;
+                                        break;
+                                    }
+                                }
+                            }
 
                             return (
-                                <tr
+                                <ProductionRow
                                     key={row.id || `new-${rowIdx}`}
-                                    hidden={rowHidden}
-                                    className={cn(
-                                        'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted/50',
-                                        rowHidden && 'hidden',
-                                        isDeleted && 'line-through opacity-40',
-                                        isModified && 'border-l-2 border-l-amber-400',
-                                        isNew && !isEmptyNew && 'border-l-2 border-l-blue-400/50',
-                                        contextMenu?.rowIdx === rowIdx && 'bg-accent/30',
-                                    )}
-                                    style={{ height: '32px' }}
-                                    onContextMenu={(e) => {
-                                        e.preventDefault();
-                                        const MENU_W = 188;
-                                        const MENU_H = 164;
-                                        let x = e.clientX;
-                                        let y = e.clientY;
-                                        if (x + MENU_W > window.innerWidth) x -= MENU_W;
-                                        if (y + MENU_H > window.innerHeight) y -= MENU_H;
-                                        setContextMenu({ rowIdx, x, y });
-                                        setActiveCell({ row: rowIdx, col: 1 });
-                                        setIsEditing(false);
-                                    }}
-                                >
-                                    {/* Row number */}
-                                    <td className="border-r border-border/30 px-1 text-center font-mono text-[10px] text-muted-foreground" style={{ height: '32px' }}>
-                                        {isEmptyNew ? <span className="text-muted-foreground/30">—</span> : rowIdx + 1}
-                                    </td>
-
-                                    {/* Recv date (col 1) */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <DatePickerCell
-                                            value={row.recv_date}
-                                            onChange={(v) => updateRow(rowIdx, 'recv_date', v)}
-                                            onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 1); }}
-                                            isActive={activeCell?.row === rowIdx && activeCell?.col === 1}
-                                            isRangeSelected={cellSelection.isSelected(rowIdx, 1)}
-                                            isRangeAnchor={cellSelection.isAnchor(rowIdx, 1)}
-                                            onCellMouseDown={(e) => handleCellMouseDown(rowIdx, 1, e)}
-                                            onCellMouseUp={() => handleCellMouseUp(rowIdx, 1)}
-                                            onCellMouseEnter={() => handleCellMouseEnter(rowIdx, 1)}
-                                        />
-                                    </td>
-
-                                    {/* Prod date (col 2) — muted (often blank) */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <DatePickerCell
-                                            value={row.prod_date}
-                                            onChange={(v) => updateRow(rowIdx, 'prod_date', v)}
-                                            onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 2); }}
-                                            isActive={activeCell?.row === rowIdx && activeCell?.col === 2}
-                                            isRangeSelected={cellSelection.isSelected(rowIdx, 2)}
-                                            isRangeAnchor={cellSelection.isAnchor(rowIdx, 2)}
-                                            onCellMouseDown={(e) => handleCellMouseDown(rowIdx, 2, e)}
-                                            onCellMouseUp={() => handleCellMouseUp(rowIdx, 2)}
-                                            onCellMouseEnter={() => handleCellMouseEnter(rowIdx, 2)}
-                                            muted
-                                        />
-                                    </td>
-
-                                    {/* Batch (col 3) — text + muted batch_year tag */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <GridCell
-                                            col={3}
-                                            row={rowIdx}
-                                            value={row.batch}
-                                            className="justify-start px-1 font-mono text-xs"
-                                            displayValue={
-                                                <span className="flex w-full items-center gap-1 truncate px-1">
-                                                    <span className="truncate font-medium">{row.batch}</span>
-                                                    {row.batch_year && <span className="font-mono text-[10px] text-muted-foreground/60">{row.batch_year}</span>}
-                                                </span>
-                                            }
-                                            {...commonCellProps}
-                                            {...selProps(rowIdx, 3)}
-                                        >
-                                            <Input
-                                                autoFocus
-                                                value={row.batch}
-                                                onChange={(e) => updateRow(rowIdx, 'batch', e.target.value.toUpperCase())}
-                                                className={cn(inputClass, 'font-mono text-xs uppercase')}
-                                                onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 3); }}
-                                            />
-                                        </GridCell>
-                                    </td>
-
-                                    {/* Shift (col 4) — dropdown */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 4)}>
-                                            <SelectCell value={row.shift_code} options={SHIFT_CODES} onChange={(v) => updateRow(rowIdx, 'shift_code', v)} placeholder="—" />
-                                        </div>
-                                    </td>
-
-                                    {/* Grade (col 5) — dropdown */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 5)}>
-                                            <SelectCell value={row.grade_code} options={GRADE_CODES} onChange={(v) => updateRow(rowIdx, 'grade_code', v)} placeholder="—" />
-                                        </div>
-                                    </td>
-
-                                    {/* Plant (col 6) — dropdown, nullable */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 6)}>
-                                            <SelectCell value={row.plant_code} options={PLANT_CODES} onChange={(v) => updateRow(rowIdx, 'plant_code', v)} nullable placeholder="—" />
-                                        </div>
-                                    </td>
-
-                                    {/* Whse (col 7) — dropdown, nullable (null = unplaced) */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={cn(interactiveCellClass(rowIdx, 7), row.warehouse_code === '' && !isEmptyNew && 'bg-amber-500/[0.04]')}>
-                                            <SelectCell value={row.warehouse_code} options={WAREHOUSE_CODES} onChange={(v) => updateRow(rowIdx, 'warehouse_code', v)} nullable placeholder="unplaced" />
-                                        </div>
-                                    </td>
-
-                                    {/* Source (col 8) — dropdown */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 8)}>
-                                            <SelectCell value={row.source_location_code} options={SOURCE_LOCATION_CODES} onChange={(v) => updateRow(rowIdx, 'source_location_code', v)} placeholder="—" />
-                                        </div>
-                                    </td>
-
-                                    {/* Disposition (col 9) — dropdown (drives equipment) */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 9)}>
-                                            <SelectCell
-                                                value={row.disposition_kind}
-                                                options={DISPOSITION_KINDS}
-                                                onChange={(v) => updateRow(rowIdx, 'disposition_kind', v)}
-                                                renderLabel={(opt) => DISPOSITION_LABELS[opt] ?? opt}
-                                                placeholder="—"
-                                            />
-                                        </div>
-                                    </td>
-
-                                    {/* Equipment (col 10) — dropdown, disabled for bagging */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 10)}>
-                                            <SelectCell
-                                                value={row.partner_equipment_code}
-                                                options={equipOptions}
-                                                onChange={(v) => updateRow(rowIdx, 'partner_equipment_code', v)}
-                                                disabled={equipDisabled}
-                                                disabledHint="Bagging has no partner equipment"
-                                                placeholder="—"
-                                            />
-                                        </div>
-                                    </td>
-
-                                    {/* Weight (col 11) — numeric, right-aligned */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <GridCell
-                                            col={11}
-                                            row={rowIdx}
-                                            value={formatKg(row.weight_kg)}
-                                            className="justify-end pr-1 font-mono tabular-nums"
-                                            {...commonCellProps}
-                                            {...selProps(rowIdx, 11)}
-                                        >
-                                            <Input
-                                                autoFocus
-                                                type="number"
-                                                step="1"
-                                                value={row.weight_kg}
-                                                onChange={(e) => updateRow(rowIdx, 'weight_kg', e.target.value)}
-                                                className={cn(inputClass, 'text-right font-mono text-xs')}
-                                                onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 11); }}
-                                            />
-                                        </GridCell>
-                                    </td>
-
-                                    {/* Flec (col 12) — numeric int, right-aligned */}
-                                    <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                                        <GridCell
-                                            col={12}
-                                            row={rowIdx}
-                                            value={row.flec_count}
-                                            className="justify-end pr-1 font-mono tabular-nums text-muted-foreground"
-                                            {...commonCellProps}
-                                            {...selProps(rowIdx, 12)}
-                                        >
-                                            <Input
-                                                autoFocus
-                                                type="number"
-                                                step="1"
-                                                value={row.flec_count}
-                                                onChange={(e) => updateRow(rowIdx, 'flec_count', e.target.value)}
-                                                className={cn(inputClass, 'text-right font-mono text-xs')}
-                                                onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }}
-                                            />
-                                        </GridCell>
-                                    </td>
-
-                                    {/* Side (col 13) — dropdown, nullable */}
-                                    <td className="p-0" style={{ height: '32px' }}>
-                                        <div className={interactiveCellClass(rowIdx, 13)}>
-                                            <SelectCell value={row.whse_side} options={WHSE_SIDES} onChange={(v) => updateRow(rowIdx, 'whse_side', v)} nullable placeholder="—" align="end" />
-                                        </div>
-                                    </td>
-                                </tr>
+                                    row={row}
+                                    rowIdx={rowIdx}
+                                    rowHidden={isRowHidden(row)}
+                                    contextMenuActive={contextMenu?.rowIdx === rowIdx}
+                                    activeColInRow={activeColInRow}
+                                    isEditing={isEditing && activeColInRow >= 0}
+                                    rowInRange={rowInRange}
+                                    // Pass the range's col-span only for in-range rows so a
+                                    // row OUTSIDE the selection keeps stable (−1) props as the
+                                    // selection grows → memo skips it. selectionSize is global
+                                    // but only affects the active-ring branch (size ≤ 1), so a
+                                    // row not in range and not active won't visibly change.
+                                    selStartCol={rowInRange && selRange ? selRange.startCol : -1}
+                                    selEndCol={rowInRange && selRange ? selRange.endCol : -1}
+                                    anchorColInRow={anchorCol}
+                                    isDragActive={cellSelection.isDragging}
+                                    selectionSize={activeColInRow >= 0 ? selectionSize : 0}
+                                    updateRow={updateRow}
+                                    handleSmartPaste={handleSmartPaste}
+                                    handleCellMouseDown={handleCellMouseDown}
+                                    handleCellMouseUp={handleCellMouseUp}
+                                    handleCellMouseEnter={handleCellMouseEnter}
+                                    startEditing={startEditing}
+                                    revertChanges={revertChanges}
+                                    setActiveCell={setActiveCell}
+                                    setIsEditing={setIsEditing}
+                                    onRowContextMenu={onRowContextMenu}
+                                    gridRef={gridRef}
+                                />
                             );
                         })}
                     </tbody>

@@ -10,19 +10,97 @@ import type { ProductionEventRow } from '../types';
 type ProductionEventInsert =
     Database['public']['Views']['cenapro_production_events']['Insert'];
 
-// ─── Fetch all production events ─────────────────────────────────────────────────
-// Read path. Returns the full cenapro production-event spine ordered newest-first by
-// recv_date. Filtering/sorting beyond this is done client-side (the dataset is small
-// enough that one fetch + browser-side filtering is snappier than per-filter trips).
+// ─── Period (batch_year + batch) ─────────────────────────────────────────────────
+// A cenapro "period" is one production batch: a month name (JANUARY…DECEMBER) within
+// a batch_year. The production ledger loads ONE period at a time (752+ rows rendered
+// at once with no virtualization was the perf bottleneck), so we need both the list
+// of available periods (picker options) and a way to scope the row fetch to one.
+export interface CenaproPeriod {
+    batch_year: number;
+    batch: string;
+}
+
+// Month name → calendar index (1-12) for deterministic newest-first ordering. Unknown
+// batch names sort last (index 99) so a stray value never wins "latest".
+const MONTH_INDEX: Record<string, number> = {
+    JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, MAY: 5, JUNE: 6,
+    JULY: 7, AUGUST: 8, SEPTEMBER: 9, OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12,
+};
+
+function monthIndex(batch: string): number {
+    return MONTH_INDEX[batch?.toUpperCase?.() ?? ''] ?? 99;
+}
+
+// ─── Fetch available periods ─────────────────────────────────────────────────────
+// Returns the DISTINCT (batch_year, batch) pairs present in the production-event view,
+// sorted NEWEST-FIRST (year desc, then calendar month desc). The picker renders these
+// as options; the page treats `periods[0]` as the default selection when the URL
+// carries no `?year=&batch=`. Lightweight — only the two key columns are selected and
+// the distinct set is tiny.
+export async function fetchCenaproPeriods(): Promise<{
+    periods?: CenaproPeriod[];
+    error?: string;
+}> {
+    const supabase = await createClient();
+
+    // PostgREST has no DISTINCT, so select just the two key columns and dedupe in JS.
+    // The column count keeps the payload small even before dedupe.
+    const { data, error } = await supabase
+        .from('cenapro_production_events')
+        .select('batch_year, batch');
+
+    if (error) {
+        return { error: `Failed to load Cenapro periods: ${error.message}` };
+    }
+
+    const seen = new Set<string>();
+    const periods: CenaproPeriod[] = [];
+    for (const row of data ?? []) {
+        // Skip rows missing either key — they can't form a selectable period.
+        if (row.batch_year == null || !row.batch) continue;
+        const key = `${row.batch_year}|${row.batch}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        periods.push({ batch_year: row.batch_year, batch: row.batch });
+    }
+
+    // Newest-first: most recent year on top; within a year, latest calendar month on top.
+    periods.sort((a, b) => {
+        if (a.batch_year !== b.batch_year) return b.batch_year - a.batch_year;
+        return monthIndex(b.batch) - monthIndex(a.batch);
+    });
+
+    return { periods };
+}
+
+// ─── Fetch production events for ONE period ──────────────────────────────────────
+// Read path. Returns the cenapro production-event rows for a single (batch_year, batch)
+// period, ordered newest-first by recv_date. Scoping to one period server-side is the
+// primary perf fix — the grid renders ~30-160 rows instead of all 750+, and editing a
+// cell no longer re-renders the whole sheet. Filtering/sorting WITHIN the period is
+// still done client-side (the per-period dataset is small).
+//
+// `batch_year`/`batch` are optional so a first paint with no resolved period yet (or a
+// malformed URL) returns an empty set rather than every row. The page resolves the
+// default period (newest, from `fetchCenaproPeriods`) before calling this.
 //
 // Data path: the `public.cenapro_production_events` VIEW — an auto-updatable accessor
 // in the already-served `public` schema. The normal Supabase client reaches it
 // directly (no `.schema('cenapro')`, no cast).
-export async function fetchProductionEvents(): Promise<{
+export async function fetchProductionEvents(period?: {
+    batch_year?: number | null;
+    batch?: string | null;
+}): Promise<{
     data?: ProductionEventRow[];
     error?: string;
 }> {
     const supabase = await createClient();
+
+    // No valid period → nothing to load (avoid the old 750-row firehose). The page
+    // only reaches here without a period when there are no periods at all.
+    if (period?.batch_year == null || !period.batch) {
+        return { data: [] };
+    }
 
     // The column list MUST be a single string literal (not `+`-concatenated): the
     // typed PostgREST client parses it at the type level to infer the row shape,
@@ -32,6 +110,8 @@ export async function fetchProductionEvents(): Promise<{
         .select(
             'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
         )
+        .eq('batch_year', period.batch_year)
+        .eq('batch', period.batch)
         .order('recv_date', { ascending: false });
 
     if (error) {
