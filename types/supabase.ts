@@ -887,6 +887,63 @@ export type Database = {
       }
     }
     Views: {
+      cenapro_production_events: {
+        Row: {
+          batch: string | null
+          batch_year: number | null
+          disposition_kind: string | null
+          flec_count: number | null
+          grade_code: string | null
+          id: string | null
+          partner_equipment_code: string | null
+          plant_code: string | null
+          prod_date: string | null
+          recv_date: string | null
+          shift_code: string | null
+          source_location_code: string | null
+          unique_tag: string | null
+          warehouse_code: string | null
+          weight_kg: number | null
+          whse_side: string | null
+        }
+        Insert: {
+          batch?: string | null
+          batch_year?: number | null
+          disposition_kind?: string | null
+          flec_count?: number | null
+          grade_code?: string | null
+          id?: string | null
+          partner_equipment_code?: string | null
+          plant_code?: string | null
+          prod_date?: string | null
+          recv_date?: string | null
+          shift_code?: string | null
+          source_location_code?: string | null
+          unique_tag?: string | null
+          warehouse_code?: string | null
+          weight_kg?: number | null
+          whse_side?: string | null
+        }
+        Update: {
+          batch?: string | null
+          batch_year?: number | null
+          disposition_kind?: string | null
+          flec_count?: number | null
+          grade_code?: string | null
+          id?: string | null
+          partner_equipment_code?: string | null
+          plant_code?: string | null
+          prod_date?: string | null
+          recv_date?: string | null
+          shift_code?: string | null
+          source_location_code?: string | null
+          unique_tag?: string | null
+          warehouse_code?: string | null
+          weight_kg?: number | null
+          whse_side?: string | null
+        }
+        Relationships: []
+      }
       view_blocking_grid: {
         Row: {
           avg_ash: number | null
@@ -1030,6 +1087,79 @@ export type Database = {
           p_user_id: string
         }
         Returns: undefined
+      }
+      cenapro_flec_balance: {
+        Args: { p_start_date: string; p_warehouse_code: string }
+        Returns: {
+          as_of: string
+          current_flec: number
+          grade_code: string
+          opening_seed: number
+          side: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_flec_ledger: {
+        Args: { p_start_date: string; p_warehouse_code: string }
+        Returns: {
+          disposition_kind: string
+          flec_in: number
+          flec_in_to_date: number
+          flec_out: number
+          flec_out_to_date: number
+          grade_code: string
+          id: string
+          kg_moved: number
+          opening_seed: number
+          partner_equipment_code: string
+          prod_date: string
+          recv_date: string
+          running_balance: number
+          side: string
+          source_location_code: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_opening_balance_history: {
+        Args: { p_warehouse_code: string }
+        Returns: {
+          created_at: string
+          grade_code: string
+          id: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_opening_balances: {
+        Args: { p_as_of_date: string; p_warehouse_code: string }
+        Returns: {
+          created_at: string
+          grade_code: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
+      }
+      cenapro_set_opening_balance: {
+        Args: {
+          p_count: number
+          p_effective_date: string
+          p_grade_code: string
+          p_side: string
+          p_warehouse_code: string
+        }
+        Returns: {
+          created_at: string
+          grade_code: string
+          id: string
+          opening_flec_count: number
+          period_start_date: string
+          side: string
+          warehouse_code: string
+        }[]
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       rc_out_avg_price: {

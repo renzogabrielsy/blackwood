@@ -41,6 +41,15 @@ function getBreadcrumb(pathname: string): Breadcrumb | null {
     if (pathname.startsWith('/production')) {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' };
     }
+    if (pathname.startsWith('/cenapro/production')) {
+        return { backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' };
+    }
+    if (pathname.startsWith('/cenapro/inventory')) {
+        return { backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' };
+    }
+    if (pathname.startsWith('/cenapro')) {
+        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' };
+    }
     if (pathname === '/notifications') {
         return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
     }
@@ -102,10 +111,17 @@ const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
 type Module = { name: string; href: string; disabled?: boolean };
 
+// ICTC / Davao tenant modules (the platform's first tenant).
 const MODULES: Module[] = [
     { name: 'Inventory', href: '/inventory' },
     { name: 'Production', href: '/production' },
     { name: 'Accounting', href: '/accounting', disabled: true },
+];
+
+// Cenapro / Cebu tenant modules — kept in a separate section from ICTC.
+const CENAPRO_MODULES: Module[] = [
+    { name: 'Production', href: '/cenapro/production' },
+    { name: 'Flec Inventory', href: '/cenapro/inventory' },
 ];
 
 export function Navbar() {
@@ -181,6 +197,9 @@ export function Navbar() {
                             <TooltipContent>Modules</TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
+                            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                ICTC · Davao
+                            </DropdownMenuLabel>
                             {MODULES.map((mod) =>
                                 mod.disabled ? (
                                     <DropdownMenuItem key={mod.name} disabled>
@@ -192,6 +211,15 @@ export function Navbar() {
                                     </DropdownMenuItem>
                                 )
                             )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Cenapro · Cebu
+                            </DropdownMenuLabel>
+                            {CENAPRO_MODULES.map((mod) => (
+                                <DropdownMenuItem key={`cenapro-${mod.name}`} asChild>
+                                    <Link href={mod.href}>{mod.name}</Link>
+                                </DropdownMenuItem>
+                            ))}
                             {PRIVILEGED_ROLES.includes(role) && (
                                 <>
                                     <DropdownMenuSeparator />

@@ -7,6 +7,9 @@
 - **Recent Merge:** `feat/UI/NavigationBar-extraDropdown` into `feat/UI/NavigationBar` (Commit 78104ed)
 - **Routing:** Next.js App Router with route groups: `app/(app)/` pattern
 
+## Workflow Conventions
+- [Commit splitting under `git add .`](feedback_commit_splitting.md) — how to split one staged changeset into multiple logical commits without per-file/hunk staging (stage whole tree, then `git commit -- <pathspec>` per group). Includes the exact Co-Authored-By trailer requirement.
+
 ## Recent Issue Investigation (2026-02-13)
 **Issue:** Route `/inventory/rc-in` broken after merge from `feat/UI/NavigationBar-extraDropdown`
 
