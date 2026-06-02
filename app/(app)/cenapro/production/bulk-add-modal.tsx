@@ -25,8 +25,7 @@ import {
     PLANT_CODES,
     WAREHOUSE_CODES,
     SOURCE_LOCATION_CODES,
-    CRUSHER_CODES,
-    KILN_CODES,
+    CCC_FLEC_OPTIONS,
     WHSE_SIDES,
 } from '../types';
 import {
@@ -44,11 +43,6 @@ import {
 // Number of empty rows the grid opens with — a fresh Excel-sheet feel. Paste taller
 // than this auto-extends; the operator can also click "Add Row" for more.
 const INITIAL_ROW_COUNT = 8;
-
-// Disposition typeahead suggestions — friendly labels the canonicalizer understands.
-// (The cell stores whatever's typed; `mapBulkRowToDirty` maps it to the code on save.)
-const DISPOSITION_SUGGESTIONS = ['Bag', 'Crusher', 'Kiln', 'C1', 'C2', 'C3', 'C4', 'RK1', 'RK2', 'RK3', 'RK4'] as const;
-const EQUIPMENT_SUGGESTIONS = [...CRUSHER_CODES, ...KILN_CODES] as const;
 
 // Shared dense input styling — identical to the RC IN bulk grid + the inline ledger.
 const inputClass =
@@ -429,7 +423,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                     </DialogTitle>
                     <DialogDescription>
                         Paste straight from Excel or Google Sheets — the grid fills from the active cell and grows to fit.
-                        Columns: Recv · Prod · Batch · Shift · Grade · Plant · Whse · Source · Weight · Disp. · Equip · Flec · Side.
+                        Columns: Recv · Prod · Batch · Shift · Grade · Plant · Whse · Source · Weight · CCC/FLEC · Flec · Side.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -449,9 +443,9 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                 >
                     <table
                         className="relative table-fixed text-xs"
-                        style={{ width: '100%', minWidth: '1080px', borderCollapse: 'separate', borderSpacing: 0 }}
+                        style={{ width: '100%', minWidth: '1000px', borderCollapse: 'separate', borderSpacing: 0 }}
                     >
-                        {/* col order: # / recv / prod / batch / shift / grade / plant / whse / source / weight / disp / equip / flec / side */}
+                        {/* col order: # / recv / prod / batch / shift / grade / plant / whse / source / weight / CCC/FLEC / flec / side */}
                         <colgroup>
                             <col style={{ width: '32px' }} />
                             <col style={{ width: '104px' }} />
@@ -464,7 +458,6 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                             <col style={{ width: '84px' }} />
                             <col style={{ width: '92px' }} />
                             <col style={{ width: '92px' }} />
-                            <col style={{ width: '80px' }} />
                             <col style={{ width: '64px' }} />
                             <col style={{ width: '60px' }} />
                         </colgroup>
@@ -480,8 +473,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                                 <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Whse</th>
                                 <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Source</th>
                                 <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Weight</th>
-                                <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Disp.</th>
-                                <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Equip</th>
+                                <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">CCC/FLEC</th>
                                 <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flec</th>
                                 <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Side</th>
                             </tr>
@@ -540,11 +532,8 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                 <datalist id="bulk-source-suggestions">
                     {SOURCE_LOCATION_CODES.map((s) => <option key={s} value={s} />)}
                 </datalist>
-                <datalist id="bulk-disposition-suggestions">
-                    {DISPOSITION_SUGGESTIONS.map((d) => <option key={d} value={d} />)}
-                </datalist>
-                <datalist id="bulk-equipment-suggestions">
-                    {EQUIPMENT_SUGGESTIONS.map((eq) => <option key={eq} value={eq} />)}
+                <datalist id="bulk-ccc-flec-suggestions">
+                    {CCC_FLEC_OPTIONS.map((d) => <option key={d} value={d} />)}
                 </datalist>
                 <datalist id="bulk-side-suggestions">
                     {WHSE_SIDES.map((s) => <option key={s} value={s} />)}
@@ -692,10 +681,9 @@ const BulkAddRow = React.memo(function BulkAddRow({
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{textCell(7, 'warehouse_code', { list: 'bulk-warehouse-suggestions', upper: true })}</td>
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{textCell(8, 'source_location_code', { list: 'bulk-source-suggestions', upper: true })}</td>
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{numCell(9, 'weight_kg')}</td>
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{textCell(10, 'disposition_kind', { list: 'bulk-disposition-suggestions', align: 'left', placeholder: 'Bag…' })}</td>
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{textCell(11, 'partner_equipment_code', { list: 'bulk-equipment-suggestions', upper: true })}</td>
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{numCell(12, 'flec_count')}</td>
-            <td className="p-0" style={{ height: '32px' }}>{textCell(13, 'whse_side', { list: 'bulk-side-suggestions', upper: true })}</td>
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{textCell(10, 'ccc_flec', { list: 'bulk-ccc-flec-suggestions', upper: true, placeholder: 'FLEC…' })}</td>
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>{numCell(11, 'flec_count')}</td>
+            <td className="p-0" style={{ height: '32px' }}>{textCell(12, 'whse_side', { list: 'bulk-side-suggestions', upper: true })}</td>
         </tr>
     );
 });

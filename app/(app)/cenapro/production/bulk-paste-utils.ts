@@ -17,18 +17,16 @@ import {
     PLANT_CODES,
     WAREHOUSE_CODES,
     SOURCE_LOCATION_CODES,
-    DISPOSITION_KINDS,
-    CRUSHER_CODES,
-    KILN_CODES,
     WHSE_SIDES,
-    partnerEquipmentOptions,
-    dispositionRequiresEquipment,
+    parseCccFlec,
 } from '../types';
 import type { ProductionEventDirtyRow } from './actions';
 
 // ─── Grid row shape (all strings — grid cells are text) ──────────────────────────
-// The 13 editable production-event fields, in the column order the Bulk Add grid
-// renders left→right. `id`/`unique_tag`/`batch_year` are intentionally absent — the
+// The 12 editable production-event fields, in the column order the Bulk Add grid
+// renders left→right. `disposition_kind` + `partner_equipment_code` are COLLAPSED into
+// a single `ccc_flec` cell (Excel parity — one "CCC / FLEC" column), derived to the two
+// DB fields on save via `parseCccFlec`. `id`/`unique_tag`/`batch_year` are absent — the
 // modal only ever INSERTs, and the DB trigger computes the latter two.
 export interface BulkRow {
     recv_date: string;
@@ -40,8 +38,8 @@ export interface BulkRow {
     warehouse_code: string;
     source_location_code: string;
     weight_kg: string;
-    disposition_kind: string;
-    partner_equipment_code: string;
+    /** Single CCC/FLEC cell — "FLEC" | "C1".."C4" | "RK1".."RK4". */
+    ccc_flec: string;
     flec_count: string;
     whse_side: string;
 }
@@ -50,8 +48,9 @@ export type BulkField = keyof BulkRow;
 
 // ─── Column geometry ─────────────────────────────────────────────────────────────
 // Visual column index → data key. col 0 = row#/trash (null, skipped on paste). The
-// order matches the prompt's spec: recv · prod · batch · shift · grade · plant ·
-// warehouse · source · weight · disposition · equipment · flec · side.
+// order matches Renzo's Excel: recv · prod · batch · shift · grade · plant ·
+// warehouse · source · weight · CCC/FLEC · flec · side — so a pasted Excel block lines
+// up positionally (12 data columns, was 13 before the disposition+equipment merge).
 export const BULK_COLUMN_MAP: (BulkField | null)[] = [
     null,                       // 0: row# / remove button
     'recv_date',                // 1
@@ -63,10 +62,9 @@ export const BULK_COLUMN_MAP: (BulkField | null)[] = [
     'warehouse_code',           // 7
     'source_location_code',     // 8
     'weight_kg',                // 9
-    'disposition_kind',         // 10
-    'partner_equipment_code',   // 11
-    'flec_count',               // 12
-    'whse_side',                // 13
+    'ccc_flec',                 // 10  (merged disposition + equipment)
+    'flec_count',               // 11
+    'whse_side',                // 12
 ];
 export const BULK_COL_COUNT = BULK_COLUMN_MAP.length;
 
@@ -87,8 +85,7 @@ export function createEmptyRow(): BulkRow {
         warehouse_code: '',
         source_location_code: '',
         weight_kg: '',
-        disposition_kind: '',
-        partner_equipment_code: '',
+        ccc_flec: '',
         flec_count: '',
         whse_side: '',
     };
@@ -105,8 +102,7 @@ export function isBlankRow(r: BulkRow): boolean {
         !r.warehouse_code.trim() &&
         !r.source_location_code.trim() &&
         !r.weight_kg.trim() &&
-        !r.disposition_kind.trim() &&
-        !r.partner_equipment_code.trim() &&
+        !r.ccc_flec.trim() &&
         !r.flec_count.trim() &&
         !r.whse_side.trim() &&
         !r.prod_date.trim()
@@ -200,55 +196,6 @@ export function canonicalizeSide(raw: string): string | null {
     return null;
 }
 
-export function canonicalizeEquipment(raw: string): string | null {
-    return matchCode(raw, [...CRUSHER_CODES, ...KILN_CODES]);
-}
-
-// ─── Disposition (the clever bit) ────────────────────────────────────────────────
-// Resolves a disposition cell into BOTH the disposition kind AND an inferred partner
-// equipment code when the operator pasted an equipment shorthand. So:
-//   "Bag" / "FLEC" / "BAGGING"        → { disposition: 'flec_bagging' }
-//   "Crusher" / "C1".."C4"            → { disposition: 'partner_crusher', equipment? }
-//   "Kiln" / "RK1".."RK4"             → { disposition: 'partner_kiln',    equipment? }
-//   raw codes (flec_bagging, …)       → passthrough
-// `equipment` is only set when the input itself implies a specific machine (e.g. "C1");
-// a generic "Crusher" leaves it undefined so the operator fills the Equip column.
-export interface DispositionResolution {
-    disposition: string;
-    /** Inferred equipment code when the disposition input named a machine. */
-    equipment?: string;
-}
-
-export function canonicalizeDisposition(raw: string): DispositionResolution | null {
-    const n = norm(raw);
-    if (!n) return null;
-
-    // Raw canonical codes pass straight through.
-    if (DISPOSITION_KINDS.includes(n.toLowerCase() as (typeof DISPOSITION_KINDS)[number])) {
-        return { disposition: n.toLowerCase() };
-    }
-
-    // Equipment shorthand implies BOTH the kind and the machine.
-    const equip = canonicalizeEquipment(n);
-    if (equip) {
-        if ((CRUSHER_CODES as readonly string[]).includes(equip)) {
-            return { disposition: 'partner_crusher', equipment: equip };
-        }
-        if ((KILN_CODES as readonly string[]).includes(equip)) {
-            return { disposition: 'partner_kiln', equipment: equip };
-        }
-    }
-
-    // Friendly aliases.
-    if (n === 'BAG' || n === 'BAGGING' || n === 'FLEC' || n === 'FLEC BAGGING') {
-        return { disposition: 'flec_bagging' };
-    }
-    if (n === 'CRUSHER' || n === 'PARTNER CRUSHER') return { disposition: 'partner_crusher' };
-    if (n === 'KILN' || n === 'PARTNER KILN') return { disposition: 'partner_kiln' };
-
-    return null;
-}
-
 // ─── Row → canonical dirty-row (the save mapping) ────────────────────────────────
 // Validates + canonicalizes a single grid row into the `ProductionEventDirtyRow` the
 // existing `saveProductionEvents` action consumes (INSERT — no `id`). Returns either
@@ -306,43 +253,22 @@ export function mapBulkRowToDirty(r: BulkRow): RowMapResult {
         else errors.push(`side "${r.whse_side.trim()}" is not LS/RS`);
     }
 
-    // — Disposition + equipment (co-derived) —
+    // — CCC/FLEC (single column → disposition + equipment, Excel parity) —
+    // The merged cell resolves to BOTH DB fields via the shared `parseCccFlec` helper:
+    // "FLEC" → flec_bagging / no equipment; "C1".."C4" → partner_crusher + that machine;
+    // "RK1".."RK4" → partner_kiln + that machine. A single typed cell can't produce an
+    // inconsistent (disposition, equipment) pair, so the old cross-field CHECK dance is
+    // gone — `parseCccFlec` returns null only for genuinely unrecognized input.
     let disposition = '';
     let equipment = '';
-    if (r.disposition_kind.trim()) {
-        const res = canonicalizeDisposition(r.disposition_kind);
+    if (r.ccc_flec.trim()) {
+        const res = parseCccFlec(r.ccc_flec);
         if (res) {
-            disposition = res.disposition;
-            // A disposition that named a machine pre-fills equipment.
-            if (res.equipment) equipment = res.equipment;
+            disposition = res.disposition_kind;
+            equipment = res.partner_equipment_code ?? '';
         } else {
-            errors.push(`disposition "${r.disposition_kind.trim()}" is not Bag/Crusher/Kiln`);
+            errors.push(`CCC/FLEC "${r.ccc_flec.trim()}" is not FLEC / C1–C4 / RK1–RK4`);
         }
-    }
-    // An explicit equipment cell (canonicalized) overrides/sets the machine.
-    if (r.partner_equipment_code.trim()) {
-        const c = canonicalizeEquipment(r.partner_equipment_code);
-        if (c) equipment = c;
-        else errors.push(`equipment "${r.partner_equipment_code.trim()}" is not C1–C4 / RK1–RK4`);
-    }
-
-    // — Disposition ⇄ equipment consistency (mirror the DB CHECK) —
-    if (disposition) {
-        if (dispositionRequiresEquipment(disposition)) {
-            if (!equipment) {
-                errors.push(`${disposition === 'partner_crusher' ? 'Crusher' : 'Kiln'} disposition needs an equipment code`);
-            } else {
-                const allowed = partnerEquipmentOptions(disposition);
-                if (!allowed.includes(equipment)) {
-                    errors.push(`equipment ${equipment} doesn't match ${disposition === 'partner_crusher' ? 'Crusher (C1–C4)' : 'Kiln (RK1–RK4)'}`);
-                }
-            }
-        } else if (equipment) {
-            // flec_bagging must carry NO equipment.
-            errors.push('Bag disposition can\'t have partner equipment');
-        }
-    } else if (equipment) {
-        errors.push('equipment is set but disposition is empty');
     }
 
     // — Weight (required, > 0) —

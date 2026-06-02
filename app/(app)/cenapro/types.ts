@@ -161,3 +161,79 @@ export function formatDisposition(
   if (disposition === 'partner_kiln') return equipment ? `Kiln ${equipment}` : 'Kiln';
   return disposition ?? '';
 }
+
+// ─── CCC/FLEC single-column model (Excel parity) ─────────────────────────────────
+// Renzo's Excel has ONE `CCC / FLEC` column; the normalized DB splits it into
+// `disposition_kind` + `partner_equipment_code`. The grid + bulk modal render a SINGLE
+// column whose raw value matches the Excel cell exactly:
+//   • flec_bagging                 → "FLEC"
+//   • partner_crusher  + Cn        → the crusher code (C1–C4)
+//   • partner_kiln     + RKn       → the kiln code  (RK1–RK4)
+// These two pure helpers convert between that single string and the two DB fields, and
+// are the canonical source of truth shared by BOTH the inline ledger's save path and
+// the bulk-add modal's canonicalization (`bulk-paste-utils.ts`).
+
+// Typeahead/datalist options for the single CCC/FLEC cell, in Excel order.
+export const CCC_FLEC_OPTIONS = [
+  'FLEC',
+  ...CRUSHER_CODES,
+  ...KILN_CODES,
+] as const;
+export type CccFlecOption = (typeof CCC_FLEC_OPTIONS)[number];
+
+// The two DB fields the single cell resolves to.
+export interface CccFlecResolution {
+  disposition_kind: DispositionKind;
+  /** null for FLEC/bagging; the equipment code (Cn/RKn) for partner rows. */
+  partner_equipment_code: string | null;
+}
+
+/**
+ * Forward derive: parse the single CCC/FLEC cell value → the two DB fields.
+ * Forgiving about case/whitespace + a few friendly aliases (so a pasted "flec",
+ * "bag", "c1", or "rk3" all map). Returns null when the input can't be resolved to a
+ * known disposition/equipment (the caller surfaces a clear, copyable error — never a
+ * raw Postgres FK/CHECK violation). Empty input also returns null (the cell is blank).
+ *
+ * Examples:
+ *   "FLEC" / "Bag" / "flec_bagging"  → { disposition_kind: 'flec_bagging',  partner_equipment_code: null }
+ *   "C1"                             → { disposition_kind: 'partner_crusher', partner_equipment_code: 'C1' }
+ *   "RK3"                            → { disposition_kind: 'partner_kiln',    partner_equipment_code: 'RK3' }
+ */
+export function parseCccFlec(raw: string | null | undefined): CccFlecResolution | null {
+  const n = (raw ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+  if (!n) return null;
+
+  // FLEC / bagging (+ raw canonical code) → no equipment.
+  if (n === 'FLEC' || n === 'BAG' || n === 'BAGGING' || n === 'FLEC BAGGING' || n === 'FLEC_BAGGING') {
+    return { disposition_kind: 'flec_bagging', partner_equipment_code: null };
+  }
+
+  // Crusher equipment shorthand (C1–C4) → partner_crusher + that machine.
+  for (const c of CRUSHER_CODES) {
+    if (c === n) return { disposition_kind: 'partner_crusher', partner_equipment_code: c };
+  }
+  // Kiln equipment shorthand (RK1–RK4) → partner_kiln + that machine.
+  for (const k of KILN_CODES) {
+    if (k === n) return { disposition_kind: 'partner_kiln', partner_equipment_code: k };
+  }
+
+  return null;
+}
+
+/**
+ * Inverse derive: the two DB fields → the single CCC/FLEC display string (Excel
+ * parity). flec_bagging → "FLEC"; partner rows → the equipment code (Cn/RKn). An
+ * unknown/empty disposition renders blank; a partner disposition with no equipment
+ * falls back to its raw kind so nothing is silently dropped.
+ */
+export function formatCccFlec(
+  disposition: string | null,
+  equipment: string | null,
+): string {
+  if (disposition === 'flec_bagging') return 'FLEC';
+  if (disposition === 'partner_crusher' || disposition === 'partner_kiln') {
+    return equipment ?? disposition;
+  }
+  return '';
+}

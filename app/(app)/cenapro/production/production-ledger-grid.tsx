@@ -14,6 +14,7 @@ import {
     ArrowUp,
     ArrowDown,
     ChevronDown,
+    ChevronsUpDown,
     Inbox,
     Sparkles,
 } from 'lucide-react';
@@ -42,19 +43,24 @@ import {
     PLANT_CODES,
     WAREHOUSE_CODES,
     SOURCE_LOCATION_CODES,
-    DISPOSITION_KINDS,
-    DISPOSITION_LABELS,
     WHSE_SIDES,
-    partnerEquipmentOptions,
-    dispositionRequiresEquipment,
+    CCC_FLEC_OPTIONS,
+    parseCccFlec,
+    formatCccFlec,
 } from '../types';
 import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod } from './actions';
 import { BulkAddModal } from './bulk-add-modal';
 import { CenaproPeriodPicker } from './period-picker';
 
 // ─── Editable fields ─────────────────────────────────────────────────────────────
-// The 13 writable columns (id/unique_tag/batch_year are read-only/computed). Order
-// here is informational; COL_MAP below pins the on-screen left→right geometry.
+// The writable columns (id/unique_tag/batch_year are read-only/computed). Order here
+// is informational; COL_MAP below pins the on-screen left→right geometry.
+//
+// `ccc_flec` is a SINGLE on-screen column (Excel parity — Renzo's "CCC / FLEC") that
+// stands in for the two normalized DB fields disposition_kind + partner_equipment_code.
+// It's NOT a key of GridRow — it's a derived editing surface: display via
+// formatCccFlec(), edit via parseCccFlec() writing BOTH underlying fields. Everywhere a
+// cell value is read/written (copy, paste, save) it's special-cased.
 type GridField =
     | 'recv_date'
     | 'prod_date'
@@ -64,16 +70,17 @@ type GridField =
     | 'plant_code'
     | 'warehouse_code'
     | 'source_location_code'
-    | 'disposition_kind'
-    | 'partner_equipment_code'
     | 'weight_kg'
+    | 'ccc_flec'
     | 'flec_count'
     | 'whse_side';
 
 // ─── Column layout ───────────────────────────────────────────────────────────────
 // col 0 = row#, not selectable/editable. All other columns are editable. Dropdown
 // columns edit via a Select popover (not GridCell's F2/type-over). Date columns use
-// DatePickerCell. Numeric/text columns use GridCell + <Input>.
+// DatePickerCell. Numeric/text/CCC-FLEC columns use GridCell + <Input>. The order
+// matches Renzo's Excel (… WHSE · SRC · WT · CCC/FLEC · FLEC AMT · WHSE SIDE) so a
+// pasted Excel block lines up positionally.
 const COL_MAP: (GridField | null)[] = [
     null,                       // 0: row#
     'recv_date',                // 1
@@ -84,11 +91,10 @@ const COL_MAP: (GridField | null)[] = [
     'plant_code',               // 6  (dropdown, nullable)
     'warehouse_code',           // 7  (dropdown, nullable — null = unplaced)
     'source_location_code',     // 8  (dropdown)
-    'disposition_kind',         // 9  (dropdown)
-    'partner_equipment_code',   // 10 (dropdown, depends on disposition)
-    'weight_kg',                // 11 (numeric)
-    'flec_count',               // 12 (numeric int)
-    'whse_side',                // 13 (dropdown, nullable)
+    'weight_kg',                // 9  (numeric)
+    'ccc_flec',                 // 10 (typeahead — merged disposition + equipment)
+    'flec_count',               // 11 (numeric int)
+    'whse_side',                // 12 (dropdown, nullable)
 ];
 const COL_COUNT = COL_MAP.length;
 
@@ -99,8 +105,6 @@ const DROPDOWN_FIELDS = new Set<GridField>([
     'plant_code',
     'warehouse_code',
     'source_location_code',
-    'disposition_kind',
-    'partner_equipment_code',
     'whse_side',
 ]);
 
@@ -119,8 +123,11 @@ interface GridRow {
     plant_code: string;
     warehouse_code: string;
     source_location_code: string;
-    disposition_kind: string;
-    partner_equipment_code: string;
+    // The single CCC/FLEC cell, stored as RAW typed text ("FLEC" | "C1".."C4" |
+    // "RK1".."RK4"). Seeded from the two DB fields via formatCccFlec() on load, edited
+    // directly (so typing isn't fought by a derive), and parsed back into
+    // disposition_kind + partner_equipment_code at SAVE time (mirrors the bulk modal).
+    ccc_flec: string;
     weight_kg: string;
     flec_count: string;
     whse_side: string;
@@ -130,7 +137,8 @@ interface GridRow {
 
 // ─── DB → Grid conversion ────────────────────────────────────────────────────────
 // PostgREST types all VIEW columns nullable; coalesce to '' for the string grid. The
-// `id` is non-null at runtime (the upsert key) but typed nullable, so coalesce too.
+// `id` is non-null at runtime (the upsert key) but typed nullable, so coalesce too. The
+// CCC/FLEC cell is seeded from the two normalized DB fields (disposition + equipment).
 function toGridRow(r: ProductionEventRow): GridRow {
     return {
         _state: 'existing',
@@ -143,8 +151,7 @@ function toGridRow(r: ProductionEventRow): GridRow {
         plant_code: r.plant_code ?? '',
         warehouse_code: r.warehouse_code ?? '',
         source_location_code: r.source_location_code ?? '',
-        disposition_kind: r.disposition_kind ?? '',
-        partner_equipment_code: r.partner_equipment_code ?? '',
+        ccc_flec: formatCccFlec(r.disposition_kind, r.partner_equipment_code),
         weight_kg: r.weight_kg != null ? String(r.weight_kg) : '',
         flec_count: r.flec_count != null ? String(r.flec_count) : '',
         whse_side: r.whse_side ?? '',
@@ -152,15 +159,31 @@ function toGridRow(r: ProductionEventRow): GridRow {
     };
 }
 
-function buildGridRows(rows: ProductionEventRow[], sortDir: 'asc' | 'desc'): GridRow[] {
+// Which date column drives the sort. Both the Recv and Prod headers are clickable;
+// clicking one selects it as the sort key (and toggles asc/desc on repeat clicks).
+type DateSortKey = 'recv_date' | 'prod_date';
+
+function buildGridRows(
+    rows: ProductionEventRow[],
+    sortKey: DateSortKey,
+    sortDir: 'asc' | 'desc',
+): GridRow[] {
     const mapped = rows.map(toGridRow);
-    return sortGridRows(mapped, sortDir);
+    return sortGridRows(mapped, sortKey, sortDir);
 }
 
-// Stable sort by recv_date per the toggle, id as a deterministic tiebreaker.
-function sortGridRows(rows: GridRow[], sortDir: 'asc' | 'desc'): GridRow[] {
+// Stable sort by the chosen date column per the toggle, id as a deterministic
+// tiebreaker. Empty dates (common for prod_date) sort to the bottom regardless of
+// direction so blank rows don't jump to the top when sorting descending.
+function sortGridRows(rows: GridRow[], sortKey: DateSortKey, sortDir: 'asc' | 'desc'): GridRow[] {
     return [...rows].sort((a, b) => {
-        const cmp = a.recv_date.localeCompare(b.recv_date);
+        const av = a[sortKey];
+        const bv = b[sortKey];
+        // Push empty values to the end in both directions.
+        if (!av && !bv) return a.id.localeCompare(b.id);
+        if (!av) return 1;
+        if (!bv) return -1;
+        const cmp = av.localeCompare(bv);
         const primary = sortDir === 'asc' ? cmp : -cmp;
         if (primary !== 0) return primary;
         return a.id.localeCompare(b.id);
@@ -181,8 +204,7 @@ function createEmptyRow(overrides: Partial<GridRow> = {}): GridRow {
         plant_code: '',
         warehouse_code: '',
         source_location_code: '',
-        disposition_kind: '',
-        partner_equipment_code: '',
+        ccc_flec: '',
         weight_kg: '',
         flec_count: '',
         whse_side: '',
@@ -193,7 +215,7 @@ function createEmptyRow(overrides: Partial<GridRow> = {}): GridRow {
 
 // A new row counts as "real" (savable, dirty) once it carries any identifying data.
 function isMeaningfulNewRow(r: GridRow): boolean {
-    return Boolean(r.batch || r.weight_kg || r.grade_code || r.disposition_kind);
+    return Boolean(r.batch || r.weight_kg || r.grade_code || r.ccc_flec);
 }
 
 // ─── Paste cleaning ──────────────────────────────────────────────────────────────
@@ -446,6 +468,51 @@ function ColumnFilterMenu({ label, value, options, onChange, align = 'start' }: 
     );
 }
 
+// ─── DateSortHeader (clickable date column header — sorts by THIS date) ───────────
+// Both the Recv and Prod headers use this. The whole header is a button: clicking the
+// currently-active date key toggles asc/desc; clicking the inactive one switches the
+// sort key to it. The up/down chevron shows ONLY on the active key (matching the
+// other sortable header's affordance); inactive headers show a faint idle indicator.
+interface DateSortHeaderProps {
+    label: string;
+    sortKey: DateSortKey;
+    activeKey: DateSortKey;
+    dir: 'asc' | 'desc';
+    onSort: (key: DateSortKey) => void;
+}
+
+function DateSortHeader({ label, sortKey, activeKey, dir, onSort }: DateSortHeaderProps) {
+    const isActive = activeKey === sortKey;
+    return (
+        <button
+            type="button"
+            onClick={() => onSort(sortKey)}
+            aria-label={`Sort by ${label}${isActive ? ` (${dir === 'asc' ? 'ascending' : 'descending'})` : ''}`}
+            title={
+                isActive
+                    ? `${label}: ${dir === 'desc' ? 'newest first' : 'oldest first'} — click to flip`
+                    : `Sort by ${label}`
+            }
+            className={cn(
+                'group/sort -ml-0.5 flex items-center gap-0.5 rounded px-0.5 outline-none transition-colors duration-150',
+                'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary',
+                isActive ? 'text-primary hover:text-primary/80' : 'text-muted-foreground hover:text-foreground',
+            )}
+        >
+            <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+            {isActive ? (
+                dir === 'desc' ? (
+                    <ArrowDown className="h-3 w-3 flex-none" />
+                ) : (
+                    <ArrowUp className="h-3 w-3 flex-none" />
+                )
+            ) : (
+                <ChevronsUpDown className="h-3 w-3 flex-none text-muted-foreground/40 transition-colors group-hover/sort:text-muted-foreground" />
+            )}
+        </button>
+    );
+}
+
 // ─── ProductionRow (memoized) ────────────────────────────────────────────────────
 // One ledger row, extracted + wrapped in React.memo so editing/selecting a cell only
 // re-renders the rows whose props actually changed — not the whole grid. The parent
@@ -512,8 +579,6 @@ const ProductionRow = React.memo(function ProductionRow({
     const isModified = row._state === 'modified';
     const isNew = row._state === 'new';
     const isEmptyNew = isNew && !isMeaningfulNewRow(row);
-    const equipOptions = partnerEquipmentOptions(row.disposition_kind);
-    const equipDisabled = !dispositionRequiresEquipment(row.disposition_kind);
 
     // Rebuild the active-cell object GridCell needs — null unless the active cell is in
     // this row. Memoized on (rowIdx, activeColInRow) so it's stable while other rows edit.
@@ -673,42 +738,15 @@ const ProductionRow = React.memo(function ProductionRow({
                 </div>
             </td>
 
-            {/* Disposition (col 9) — dropdown (drives equipment) */}
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                <div className={interactiveCellClass(9)}>
-                    <SelectCell
-                        value={row.disposition_kind}
-                        options={DISPOSITION_KINDS}
-                        onChange={(v) => updateRow(rowIdx, 'disposition_kind', v)}
-                        renderLabel={(opt) => DISPOSITION_LABELS[opt] ?? opt}
-                        placeholder="—"
-                    />
-                </div>
-            </td>
-
-            {/* Equipment (col 10) — dropdown, disabled for bagging */}
-            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
-                <div className={interactiveCellClass(10)}>
-                    <SelectCell
-                        value={row.partner_equipment_code}
-                        options={equipOptions}
-                        onChange={(v) => updateRow(rowIdx, 'partner_equipment_code', v)}
-                        disabled={equipDisabled}
-                        disabledHint="Bagging has no partner equipment"
-                        placeholder="—"
-                    />
-                </div>
-            </td>
-
-            {/* Weight (col 11) — numeric, right-aligned */}
+            {/* Weight (col 9) — numeric, right-aligned */}
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
                 <GridCell
-                    col={11}
+                    col={9}
                     row={rowIdx}
                     value={formatKg(row.weight_kg)}
                     className="justify-end pr-1 font-mono tabular-nums"
                     {...commonCellProps}
-                    {...selProps(11)}
+                    {...selProps(9)}
                 >
                     <Input
                         autoFocus
@@ -717,20 +755,49 @@ const ProductionRow = React.memo(function ProductionRow({
                         value={row.weight_kg}
                         onChange={(e) => updateRow(rowIdx, 'weight_kg', e.target.value)}
                         className={cn(inputClass, 'text-right font-mono text-xs')}
-                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 11); }}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 9); }}
                     />
                 </GridCell>
             </td>
 
-            {/* Flec (col 12) — numeric int, right-aligned */}
+            {/* CCC/FLEC (col 10) — single typeahead cell, Excel parity. The raw text
+                stands in for disposition_kind + partner_equipment_code (parsed back into
+                both DB fields at save). Paste-friendly <Input list> (datalist), not a
+                strict dropdown — so a pasted FLEC/C1/RK3 lands directly. */}
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
                 <GridCell
-                    col={12}
+                    col={10}
+                    row={rowIdx}
+                    value={row.ccc_flec}
+                    className="justify-start px-1 font-mono text-xs"
+                    displayValue={
+                        row.ccc_flec
+                            ? <span className="truncate px-1 font-medium">{row.ccc_flec}</span>
+                            : <span className="px-1 text-muted-foreground/40">—</span>
+                    }
+                    {...commonCellProps}
+                    {...selProps(10)}
+                >
+                    <Input
+                        autoFocus
+                        value={row.ccc_flec}
+                        list="ledger-ccc-flec-suggestions"
+                        onChange={(e) => updateRow(rowIdx, 'ccc_flec', e.target.value.toUpperCase())}
+                        className={cn(inputClass, 'font-mono text-xs uppercase')}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 10); }}
+                    />
+                </GridCell>
+            </td>
+
+            {/* Flec (col 11) — numeric int, right-aligned */}
+            <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
+                <GridCell
+                    col={11}
                     row={rowIdx}
                     value={row.flec_count}
                     className="justify-end pr-1 font-mono tabular-nums text-muted-foreground"
                     {...commonCellProps}
-                    {...selProps(12)}
+                    {...selProps(11)}
                 >
                     <Input
                         autoFocus
@@ -739,14 +806,14 @@ const ProductionRow = React.memo(function ProductionRow({
                         value={row.flec_count}
                         onChange={(e) => updateRow(rowIdx, 'flec_count', e.target.value)}
                         className={cn(inputClass, 'text-right font-mono text-xs')}
-                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }}
+                        onPaste={(e) => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 11); }}
                     />
                 </GridCell>
             </td>
 
-            {/* Side (col 13) — dropdown, nullable */}
+            {/* Side (col 12) — dropdown, nullable */}
             <td className="p-0" style={{ height: '32px' }}>
-                <div className={interactiveCellClass(13)}>
+                <div className={interactiveCellClass(12)}>
                     <SelectCell value={row.whse_side} options={WHSE_SIDES} onChange={(v) => updateRow(rowIdx, 'whse_side', v)} nullable placeholder="—" align="end" />
                 </div>
             </td>
@@ -773,11 +840,14 @@ export function ProductionLedgerGrid({
 }: ProductionLedgerGridProps) {
     const gridRef = React.useRef<HTMLDivElement>(null);
 
-    // Date sort — default newest-first (operators care about recent activity most).
+    // Date sort — clickable on EITHER date header. Default: newest-first by recv_date
+    // (operators care about recent activity most); clicking the Prod header switches the
+    // sort key to prod_date. Each header toggles asc/desc on repeat clicks.
+    const [dateSortKey, setDateSortKey] = React.useState<DateSortKey>('recv_date');
     const [dateSortDir, setDateSortDir] = React.useState<'asc' | 'desc'>('desc');
 
     const [rows, setRows] = React.useState<GridRow[]>(() => [
-        ...buildGridRows(initialRows, 'desc'),
+        ...buildGridRows(initialRows, 'recv_date', 'desc'),
         createEmptyRow(),
     ]);
 
@@ -796,22 +866,24 @@ export function ProductionLedgerGrid({
     const activeCellRef = React.useRef(activeCell);
     activeCellRef.current = activeCell;
 
-    // Header filters — single-select; 'ALL' = no filter.
+    // Header filters — single-select; 'ALL' = no filter. Set = Shift / Grade / Plant /
+    // Warehouse / Source (Disposition is gone — it's no longer a standalone column).
     const [shiftFilter, setShiftFilter] = React.useState('ALL');
     const [gradeFilter, setGradeFilter] = React.useState('ALL');
-    const [dispositionFilter, setDispositionFilter] = React.useState('ALL');
+    const [plantFilter, setPlantFilter] = React.useState('ALL');
     const [warehouseFilter, setWarehouseFilter] = React.useState('ALL');
+    const [sourceFilter, setSourceFilter] = React.useState('ALL');
 
-    // ─── Re-sort the data rows when the date toggle changes (keep trailing empty) ──
+    // ─── Re-sort the data rows when the date key/direction changes (keep trailing) ──
     React.useEffect(() => {
         setRows((prev) => {
             const trailing = prev[prev.length - 1]?._state === 'new' && !isMeaningfulNewRow(prev[prev.length - 1])
                 ? [prev[prev.length - 1]]
                 : [];
             const dataRows = trailing.length > 0 ? prev.slice(0, -1) : prev;
-            return [...sortGridRows(dataRows, dateSortDir), ...trailing];
+            return [...sortGridRows(dataRows, dateSortKey, dateSortDir), ...trailing];
         });
-    }, [dateSortDir]);
+    }, [dateSortKey, dateSortDir]);
 
     // ─── Context menu state ────────────────────────────────────────────────────────
     const [contextMenu, setContextMenu] = React.useState<{ rowIdx: number; x: number; y: number } | null>(null);
@@ -849,8 +921,8 @@ export function ProductionLedgerGrid({
             if (!row) return '';
             const field = COL_MAP[colIdx];
             if (!field) return '';
-            // Disposition copies as its human label so a copied range reads cleanly.
-            if (field === 'disposition_kind') return DISPOSITION_LABELS[row.disposition_kind] ?? row.disposition_kind;
+            // CCC/FLEC copies as its raw Excel value ("FLEC"/"C1"/"RK3") so a copied
+            // range round-trips straight back into the same single column on paste.
             return String(row[field] ?? '');
         },
         [rows],
@@ -920,20 +992,10 @@ export function ProductionLedgerGrid({
     const updateRow = React.useCallback((idx: number, field: GridField, value: string) => {
         setRows((prev) => {
             const next = [...prev];
+            // `ccc_flec` is a real raw-text field now (parsed to the two DB fields at
+            // save), so the generic spread handles every column — no special-casing.
             const row = { ...next[idx], [field]: value };
             if (row._state === 'existing') row._state = 'modified';
-
-            // Disposition drives the equipment column: bagging clears equipment;
-            // switching partner kind clears an equipment value no longer in range.
-            if (field === 'disposition_kind') {
-                const allowed = partnerEquipmentOptions(value);
-                if (allowed.length === 0) {
-                    row.partner_equipment_code = '';
-                } else if (row.partner_equipment_code && !allowed.includes(row.partner_equipment_code)) {
-                    row.partner_equipment_code = '';
-                }
-            }
-
             next[idx] = row;
             return ensureTrailingEmptyRow(next);
         });
@@ -1139,14 +1201,9 @@ export function ProductionLedgerGrid({
                         const field = COL_MAP[targetCol];
                         if (!field) return;
                         const row = { ...next[targetRow] };
+                        // CCC/FLEC pastes as raw text (parsed to the two DB fields at
+                        // save) — no cross-field re-derive needed on paste anymore.
                         (row as Record<string, unknown>)[field] = cleanPasteValue(cellVal, field);
-                        // Re-derive equipment validity if disposition was pasted.
-                        if (field === 'disposition_kind') {
-                            const allowed = partnerEquipmentOptions(row.disposition_kind);
-                            if (allowed.length === 0 || (row.partner_equipment_code && !allowed.includes(row.partner_equipment_code))) {
-                                row.partner_equipment_code = '';
-                            }
-                        }
                         if (row._state === 'existing') row._state = 'modified';
                         next[targetRow] = row;
                     });
@@ -1176,40 +1233,22 @@ export function ProductionLedgerGrid({
     });
 
     const handleDiscard = React.useCallback(() => {
-        setRows([...buildGridRows(initialRows, dateSortDir), createEmptyRow()]);
+        setRows([...buildGridRows(initialRows, dateSortKey, dateSortDir), createEmptyRow()]);
         setActiveCell(null);
         setIsEditing(false);
         cellSelection.clearSelection();
-    }, [initialRows, dateSortDir, cellSelection]);
+    }, [initialRows, dateSortKey, dateSortDir, cellSelection]);
 
     // ─── Save ──────────────────────────────────────────────────────────────────────
     const handleSave = async () => {
-        // Client-side validation: surface the partner-equipment CHECK BEFORE the
-        // round-trip so the operator gets a clear, persistent, copyable message
-        // instead of a cryptic Postgres constraint error.
-        const invalid: string[] = [];
-        for (const r of rows) {
-            if (r._state === 'deleted') continue;
-            if (r._state === 'new' && !isMeaningfulNewRow(r)) continue;
-            if (dispositionRequiresEquipment(r.disposition_kind) && !r.partner_equipment_code.trim()) {
-                const which = r.batch ? `batch ${r.batch}` : `${r.recv_date || 'undated'} row`;
-                invalid.push(`${which} (${DISPOSITION_LABELS[r.disposition_kind] ?? r.disposition_kind})`);
-            }
-        }
-        if (invalid.length > 0) {
-            errorToast(
-                `${invalid.length} row${invalid.length !== 1 ? 's' : ''} need a partner equipment before saving.`,
-                {
-                    description:
-                        'Crusher and Kiln dispositions require an equipment code (C1–C4 / RK1–RK4). Set it, or change the disposition to Bag.\n\n' +
-                        invalid.join('\n'),
-                },
-            );
-            return;
-        }
-
+        // Parse the single CCC/FLEC cell into the two normalized DB fields up front. A
+        // single typed cell can't produce an inconsistent (disposition, equipment) pair,
+        // so the only failure mode is an UNRECOGNIZED value — surface that BEFORE the
+        // round-trip as a clear, persistent, copyable message (HARD RULE) instead of a
+        // cryptic Postgres FK/CHECK error. Empty CCC/FLEC passes through (same as before).
         const dirtyRows: ProductionEventDirtyRow[] = [];
         const deletedIds: string[] = [];
+        const invalid: string[] = [];
 
         for (const r of rows) {
             if (r._state === 'deleted') {
@@ -1218,6 +1257,22 @@ export function ProductionLedgerGrid({
             }
             if (r._state === 'new' && !isMeaningfulNewRow(r)) continue;
             if (r._state === 'existing') continue; // untouched
+
+            // Derive disposition + equipment from the merged CCC/FLEC cell.
+            let disposition = '';
+            let equipment = '';
+            const raw = r.ccc_flec.trim();
+            if (raw) {
+                const res = parseCccFlec(raw);
+                if (res) {
+                    disposition = res.disposition_kind;
+                    equipment = res.partner_equipment_code ?? '';
+                } else {
+                    const which = r.batch ? `batch ${r.batch}` : `${r.recv_date || 'undated'} row`;
+                    invalid.push(`${which}: CCC/FLEC "${raw}"`);
+                    continue;
+                }
+            }
 
             dirtyRows.push({
                 id: r.id || undefined,
@@ -1230,11 +1285,23 @@ export function ProductionLedgerGrid({
                 warehouse_code: r.warehouse_code,
                 source_location_code: r.source_location_code,
                 weight_kg: r.weight_kg,
-                disposition_kind: r.disposition_kind,
-                partner_equipment_code: r.partner_equipment_code,
+                disposition_kind: disposition,
+                partner_equipment_code: equipment,
                 flec_count: r.flec_count,
                 whse_side: r.whse_side,
             });
+        }
+
+        if (invalid.length > 0) {
+            errorToast(
+                `${invalid.length} row${invalid.length !== 1 ? 's' : ''} have an unrecognized CCC/FLEC value.`,
+                {
+                    description:
+                        'The CCC/FLEC column must be FLEC (for bagging) or an equipment code — C1–C4 (crusher) or RK1–RK4 (kiln). Fix these, then Save again:\n\n' +
+                        invalid.join('\n'),
+                },
+            );
+            return;
         }
 
         if (dirtyRows.length === 0 && deletedIds.length === 0) {
@@ -1285,17 +1352,22 @@ export function ProductionLedgerGrid({
     const selectionSize = cellSelection.getSelectionSize();
 
     // ─── Distinct filter options (derived from data; only present values appear) ────
-    const { shiftOptions, gradeOptions, dispositionOptions, warehouseOptions } = React.useMemo(() => {
+    // Filter set = Shift / Grade / Plant / Warehouse / Source (Disposition is gone — no
+    // longer a standalone column). Options come from the loaded period's data, matching
+    // how Shift/Grade/Warehouse already sourced theirs.
+    const { shiftOptions, gradeOptions, plantOptions, warehouseOptions, sourceOptions } = React.useMemo(() => {
         const shifts = new Set<string>();
         const grades = new Set<string>();
-        const dispositions = new Set<string>();
+        const plants = new Set<string>();
         const warehouses = new Set<string>();
+        const sources = new Set<string>();
         let hasUnplaced = false;
         for (const r of rows) {
             if (r._state === 'deleted' || (r._state === 'new' && !isMeaningfulNewRow(r))) continue;
             if (r.shift_code) shifts.add(r.shift_code);
             if (r.grade_code) grades.add(r.grade_code);
-            if (r.disposition_kind) dispositions.add(r.disposition_kind);
+            if (r.plant_code) plants.add(r.plant_code);
+            if (r.source_location_code) sources.add(r.source_location_code);
             if (r.warehouse_code) warehouses.add(r.warehouse_code);
             else hasUnplaced = true;
         }
@@ -1304,8 +1376,9 @@ export function ProductionLedgerGrid({
         return {
             shiftOptions: [...shifts].sort().map((s) => ({ value: s, label: s })),
             gradeOptions: [...grades].sort().map((g) => ({ value: g, label: g })),
-            dispositionOptions: [...dispositions].sort().map((d) => ({ value: d, label: DISPOSITION_LABELS[d] ?? d })),
+            plantOptions: [...plants].sort().map((p) => ({ value: p, label: p })),
             warehouseOptions: warehouseOpts,
+            sourceOptions: [...sources].sort().map((s) => ({ value: s, label: s })),
         };
     }, [rows]);
 
@@ -1315,7 +1388,8 @@ export function ProductionLedgerGrid({
             if (row._state === 'new' && !isMeaningfulNewRow(row)) return false; // keep the typing row
             if (shiftFilter !== 'ALL' && row.shift_code !== shiftFilter) return true;
             if (gradeFilter !== 'ALL' && row.grade_code !== gradeFilter) return true;
-            if (dispositionFilter !== 'ALL' && row.disposition_kind !== dispositionFilter) return true;
+            if (plantFilter !== 'ALL' && row.plant_code !== plantFilter) return true;
+            if (sourceFilter !== 'ALL' && row.source_location_code !== sourceFilter) return true;
             if (warehouseFilter !== 'ALL') {
                 if (warehouseFilter === '__NULL__') {
                     if (row.warehouse_code !== '') return true;
@@ -1325,18 +1399,38 @@ export function ProductionLedgerGrid({
             }
             return false;
         },
-        [shiftFilter, gradeFilter, dispositionFilter, warehouseFilter],
+        [shiftFilter, gradeFilter, plantFilter, sourceFilter, warehouseFilter],
     );
 
     const anyFilterActive =
-        shiftFilter !== 'ALL' || gradeFilter !== 'ALL' || dispositionFilter !== 'ALL' || warehouseFilter !== 'ALL';
+        shiftFilter !== 'ALL' ||
+        gradeFilter !== 'ALL' ||
+        plantFilter !== 'ALL' ||
+        sourceFilter !== 'ALL' ||
+        warehouseFilter !== 'ALL';
 
     const clearFilters = () => {
         setShiftFilter('ALL');
         setGradeFilter('ALL');
-        setDispositionFilter('ALL');
+        setPlantFilter('ALL');
+        setSourceFilter('ALL');
         setWarehouseFilter('ALL');
     };
+
+    // ─── Date sort header click (CHANGE 2: sort by EITHER recv or prod date) ────────
+    // Clicking the active date key toggles asc/desc; clicking the other date header
+    // switches the sort key to it (defaulting to descending — newest-first — like the
+    // original recv default). The re-sort effect above reacts to key/dir changes.
+    const handleDateSort = React.useCallback((key: DateSortKey) => {
+        setDateSortKey((prevKey) => {
+            if (prevKey === key) {
+                setDateSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+                return prevKey;
+            }
+            setDateSortDir('desc');
+            return key;
+        });
+    }, []);
 
     // ─── Counts ────────────────────────────────────────────────────────────────────
     const savedRowCount = rows.filter((r) => r._state !== 'new' && r._state !== 'deleted').length;
@@ -1377,16 +1471,6 @@ export function ProductionLedgerGrid({
                 >
                     <Sparkles className="h-3 w-3" />
                     Bulk Add
-                </Button>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 gap-1 px-2 text-[11px]"
-                    onClick={() => setDateSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-                    title={dateSortDir === 'desc' ? 'Newest first — click for oldest first' : 'Oldest first — click for newest first'}
-                >
-                    {dateSortDir === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />}
-                    Date
                 </Button>
                 {isDirty && (
                     <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleDiscard} disabled={isSaving}>
@@ -1435,8 +1519,8 @@ export function ProductionLedgerGrid({
                     }
                 }}
             >
-                <table className="relative table-fixed text-xs" style={{ width: '100%', minWidth: '1280px', borderCollapse: 'separate', borderSpacing: 0 }}>
-                    {/* col order: # / recv / prod / batch / shift / grade / plant / whse / source / disposition / equipment / weight / flec / side */}
+                <table className="relative table-fixed text-xs" style={{ width: '100%', minWidth: '1228px', borderCollapse: 'separate', borderSpacing: 0 }}>
+                    {/* col order: # / recv / prod / batch / shift / grade / plant / whse / source / weight / CCC/FLEC / flec / side */}
                     <colgroup>
                         <col style={{ width: '36px' }} />
                         <col style={{ width: '96px' }} />
@@ -1447,17 +1531,20 @@ export function ProductionLedgerGrid({
                         <col style={{ width: '84px' }} />
                         <col style={{ width: '108px' }} />
                         <col style={{ width: '84px' }} />
-                        <col style={{ width: '120px' }} />
-                        <col style={{ width: '96px' }} />
                         <col style={{ width: '104px' }} />
+                        <col style={{ width: '112px' }} />
                         <col style={{ width: '72px' }} />
                         <col style={{ width: '72px' }} />
                     </colgroup>
                     <thead className="sticky top-0 z-20 bg-muted/90 backdrop-blur-sm">
                         <tr className="border-b">
                             <th className="h-8 border-r border-border/40 px-1 text-center font-mono text-[10px] font-bold text-muted-foreground">#</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Recv</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Prod</th>
+                            <th className="h-8 px-2 text-left text-muted-foreground">
+                                <DateSortHeader label="Recv" sortKey="recv_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
+                            </th>
+                            <th className="h-8 px-2 text-left text-muted-foreground">
+                                <DateSortHeader label="Prod" sortKey="prod_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
+                            </th>
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Batch</th>
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
@@ -1465,16 +1552,17 @@ export function ProductionLedgerGrid({
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Grade" value={gradeFilter} options={gradeOptions} onChange={setGradeFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Plant</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                <ColumnFilterMenu label="Plant" value={plantFilter} options={plantOptions} onChange={setPlantFilter} />
+                            </th>
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Whse" value={warehouseFilter} options={warehouseOptions} onChange={setWarehouseFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Source</th>
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Disp." value={dispositionFilter} options={dispositionOptions} onChange={setDispositionFilter} />
+                                <ColumnFilterMenu label="Source" value={sourceFilter} options={sourceOptions} onChange={setSourceFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Equip</th>
                             <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Weight</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">CCC/FLEC</th>
                             <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flec</th>
                             <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Side</th>
                         </tr>
@@ -1617,6 +1705,12 @@ export function ProductionLedgerGrid({
                     </div>
                 );
             })()}
+
+            {/* CCC/FLEC typeahead — the single merged cell references this via `list=` so
+                the operator can paste FLEC/C1/RK3 freely OR pick a suggestion. */}
+            <datalist id="ledger-ccc-flec-suggestions">
+                {CCC_FLEC_OPTIONS.map((o) => <option key={o} value={o} />)}
+            </datalist>
 
             {/* Bulk Add modal — the fast multi-row entry path. Opens with a fresh 8-row
                 sheet that takes Excel/Sheets paste; on success it refreshes the page data
