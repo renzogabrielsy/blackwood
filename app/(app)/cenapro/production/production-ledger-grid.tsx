@@ -22,6 +22,7 @@ import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -228,7 +229,62 @@ function cleanPasteValue(raw: string, field: GridField): string {
 
 // ─── Input class ─────────────────────────────────────────────────────────────────
 const inputClass =
-    'h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none';
+    'h-8 w-full px-1 border-transparent bg-transparent rounded-none font-bold focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none';
+
+// ─── Direction tint (IN vs OUT, by disposition) ──────────────────────────────────
+// Each production row reads as an IN (into inventory) or OUT (out into partner gear),
+// keyed off the disposition the CCC/FLEC cell resolves to:
+//   • flec_bagging                  → IN  → subtle emerald row tint
+//   • partner_crusher / partner_kiln → OUT → subtle rose row tint
+//   • empty / unrecognized          → no tint
+// The tint is deliberately faint (/5) so it never fights cell-selection, row-hover, or
+// the dirty-state left borders that sit on top of it. We derive direction from the raw
+// `ccc_flec` cell via the shared `parseCccFlec` (same source of truth as save), so an
+// unsaved edit re-tints live as the operator types a recognized code.
+type RowDirection = 'in' | 'out' | null;
+
+function rowDirection(cccFlec: string): RowDirection {
+    const res = parseCccFlec(cccFlec);
+    if (!res) return null;
+    return res.disposition_kind === 'flec_bagging' ? 'in' : 'out';
+}
+
+function rowDirectionTint(dir: RowDirection): string {
+    if (dir === 'in') return 'bg-emerald-500/5';
+    if (dir === 'out') return 'bg-rose-500/5';
+    return '';
+}
+
+// ─── Badge class maps (display mode only — inputs stay plain) ─────────────────────
+// Compact, bold, rounded badges sized to the dense h-8 row. Each uses the project idiom
+// (Tailwind color util + /10–/15 fill + a `dark:` text variant) so it reads in BOTH
+// themes. These render in the GridCell/SelectCell DISPLAY state — the edit <Input> is
+// never wrapped, so typing/paste is unaffected.
+const BADGE_BASE =
+    'inline-flex items-center justify-center rounded px-1.5 py-0 h-5 font-mono text-[11px] font-bold leading-none border';
+
+// CCC/FLEC: FLEC (the bagging "in") → emerald; crushers C1–C4 → amber; kilns RK1–RK4 →
+// rose. So bagging clearly reads as the IN, and crushers vs kilns are distinguishable.
+function cccFlecBadgeClass(raw: string): string {
+    const v = raw.trim().toUpperCase();
+    if (v === 'FLEC') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+    if (/^C[1-4]$/.test(v)) return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+    if (/^RK[1-4]$/.test(v)) return 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300';
+    // Unrecognized value — neutral badge so it's still visible (and obviously not a real code).
+    return 'border-border bg-muted text-muted-foreground';
+}
+
+// PLANT: one distinct, accessible color per plant. W6 → blue, W7 → teal, W6/W7 →
+// indigo (the union), DVO → slate. Empty/null plant → no badge (handled by the caller).
+function plantBadgeClass(raw: string): string {
+    switch (raw.trim().toUpperCase()) {
+        case 'W6': return 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300';
+        case 'W7': return 'border-teal-500/30 bg-teal-500/10 text-teal-700 dark:text-teal-300';
+        case 'W6/W7': return 'border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300';
+        case 'DVO': return 'border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300';
+        default: return 'border-border bg-muted text-muted-foreground';
+    }
+}
 
 // ─── Date display helper ─────────────────────────────────────────────────────────
 function formatDateShort(iso: string): string {
@@ -306,7 +362,7 @@ function DatePickerCell({
         >
             <span
                 className={cn(
-                    'truncate font-mono text-[11px] font-semibold tabular-nums',
+                    'truncate font-mono text-[11px] font-bold tabular-nums',
                     muted ? 'text-muted-foreground/60' : 'text-foreground',
                 )}
             >
@@ -341,6 +397,13 @@ interface SelectCellProps {
     onChange: (val: string) => void;
     /** Render an option's label (defaults to the raw value). */
     renderLabel?: (opt: string) => string;
+    /**
+     * Render the CURRENT value in the trigger (display state) as a custom node —
+     * e.g. a colored badge. Only affects the closed trigger; the dropdown menu items
+     * still use `renderLabel`/raw text, and the edit path is untouched. Returns null to
+     * fall back to the plain text label.
+     */
+    renderTrigger?: (value: string) => React.ReactNode;
     /** When true, prepend a "— None" item that clears the value. */
     nullable?: boolean;
     /** Placeholder shown when value is '' (defaults to a muted dash). */
@@ -356,6 +419,7 @@ function SelectCell({
     options,
     onChange,
     renderLabel,
+    renderTrigger,
     nullable,
     placeholder,
     disabled,
@@ -363,6 +427,7 @@ function SelectCell({
     align = 'start',
 }: SelectCellProps) {
     const label = value ? (renderLabel ? renderLabel(value) : value) : '';
+    const triggerNode = value && renderTrigger ? renderTrigger(value) : null;
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild disabled={disabled}>
@@ -380,14 +445,18 @@ function SelectCell({
                             : 'hover:bg-accent/40',
                     )}
                 >
-                    <span
-                        className={cn(
-                            'truncate font-mono text-xs',
-                            value ? 'text-foreground' : 'text-muted-foreground/40',
-                        )}
-                    >
-                        {label || (disabled ? '—' : placeholder ?? '—')}
-                    </span>
+                    {triggerNode ? (
+                        <span className="flex min-w-0 items-center truncate">{triggerNode}</span>
+                    ) : (
+                        <span
+                            className={cn(
+                                'truncate font-mono text-xs font-bold',
+                                value ? 'text-foreground' : 'text-muted-foreground/40',
+                            )}
+                        >
+                            {label || (disabled ? '—' : placeholder ?? '—')}
+                        </span>
+                    )}
                     {!disabled && (
                         <ChevronDown className="h-3 w-3 flex-none text-muted-foreground/40" />
                     )}
@@ -499,7 +568,7 @@ function DateSortHeader({ label, sortKey, activeKey, dir, onSort }: DateSortHead
                 isActive ? 'text-primary hover:text-primary/80' : 'text-muted-foreground hover:text-foreground',
             )}
         >
-            <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+            <span className="text-[11px] font-bold uppercase tracking-wide">{label}</span>
             {isActive ? (
                 dir === 'desc' ? (
                     <ArrowDown className="h-3 w-3 flex-none" />
@@ -580,6 +649,12 @@ const ProductionRow = React.memo(function ProductionRow({
     const isNew = row._state === 'new';
     const isEmptyNew = isNew && !isMeaningfulNewRow(row);
 
+    // Direction tint (IN=emerald / OUT=rose), derived from the CCC/FLEC cell. Skipped on
+    // the empty trailing row so it stays visually neutral until the operator commits to a
+    // disposition. Sits UNDER the dirty-state left border + the selection highlight.
+    const direction = isEmptyNew ? null : rowDirection(row.ccc_flec);
+    const directionTint = rowDirectionTint(direction);
+
     // Rebuild the active-cell object GridCell needs — null unless the active cell is in
     // this row. Memoized on (rowIdx, activeColInRow) so it's stable while other rows edit.
     const activeCell = React.useMemo(
@@ -632,6 +707,8 @@ const ProductionRow = React.memo(function ProductionRow({
             hidden={rowHidden}
             className={cn(
                 'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted/50',
+                // Direction tint first so the dirty borders + hover/selection read on top.
+                directionTint,
                 rowHidden && 'hidden',
                 isDeleted && 'line-through opacity-40',
                 isModified && 'border-l-2 border-l-amber-400',
@@ -642,7 +719,7 @@ const ProductionRow = React.memo(function ProductionRow({
             onContextMenu={(e) => onRowContextMenu(rowIdx, e)}
         >
             {/* Row number */}
-            <td className="border-r border-border/30 px-1 text-center font-mono text-[10px] text-muted-foreground" style={{ height: '32px' }}>
+            <td className="border-r border-border/30 px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ height: '32px' }}>
                 {isEmptyNew ? <span className="text-muted-foreground/30">—</span> : rowIdx + 1}
             </td>
 
@@ -683,11 +760,11 @@ const ProductionRow = React.memo(function ProductionRow({
                     col={3}
                     row={rowIdx}
                     value={row.batch}
-                    className="justify-start px-1 font-mono text-xs"
+                    className="justify-start px-1 font-mono text-xs font-bold"
                     displayValue={
                         <span className="flex w-full items-center gap-1 truncate px-1">
-                            <span className="truncate font-medium">{row.batch}</span>
-                            {row.batch_year && <span className="font-mono text-[10px] text-muted-foreground/60">{row.batch_year}</span>}
+                            <span className="truncate font-bold">{row.batch}</span>
+                            {row.batch_year && <span className="font-mono text-[10px] font-bold text-muted-foreground/60">{row.batch_year}</span>}
                         </span>
                     }
                     {...commonCellProps}
@@ -717,10 +794,20 @@ const ProductionRow = React.memo(function ProductionRow({
                 </div>
             </td>
 
-            {/* Plant (col 6) — dropdown, nullable */}
+            {/* Plant (col 6) — dropdown, nullable. Display value renders as a per-plant
+                colored badge (W6 blue / W7 teal / W6/W7 indigo / DVO slate); empty = plain. */}
             <td className="border-r border-border/30 p-0" style={{ height: '32px' }}>
                 <div className={interactiveCellClass(6)}>
-                    <SelectCell value={row.plant_code} options={PLANT_CODES} onChange={(v) => updateRow(rowIdx, 'plant_code', v)} nullable placeholder="—" />
+                    <SelectCell
+                        value={row.plant_code}
+                        options={PLANT_CODES}
+                        onChange={(v) => updateRow(rowIdx, 'plant_code', v)}
+                        nullable
+                        placeholder="—"
+                        renderTrigger={(v) => (
+                            <span className={cn(BADGE_BASE, plantBadgeClass(v))}>{v}</span>
+                        )}
+                    />
                 </div>
             </td>
 
@@ -744,7 +831,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     col={9}
                     row={rowIdx}
                     value={formatKg(row.weight_kg)}
-                    className="justify-end pr-1 font-mono tabular-nums"
+                    className="justify-end pr-1 font-mono font-bold tabular-nums"
                     {...commonCellProps}
                     {...selProps(9)}
                 >
@@ -769,10 +856,12 @@ const ProductionRow = React.memo(function ProductionRow({
                     col={10}
                     row={rowIdx}
                     value={row.ccc_flec}
-                    className="justify-start px-1 font-mono text-xs"
+                    className="justify-start px-1 font-mono text-xs font-bold"
                     displayValue={
                         row.ccc_flec
-                            ? <span className="truncate px-1 font-medium">{row.ccc_flec}</span>
+                            ? <span className="flex w-full items-center px-1">
+                                  <span className={cn(BADGE_BASE, cccFlecBadgeClass(row.ccc_flec))}>{row.ccc_flec}</span>
+                              </span>
                             : <span className="px-1 text-muted-foreground/40">—</span>
                     }
                     {...commonCellProps}
@@ -795,7 +884,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     col={11}
                     row={rowIdx}
                     value={row.flec_count}
-                    className="justify-end pr-1 font-mono tabular-nums text-muted-foreground"
+                    className="justify-end pr-1 font-mono font-bold tabular-nums text-muted-foreground"
                     {...commonCellProps}
                     {...selProps(11)}
                 >
@@ -1548,26 +1637,26 @@ export function ProductionLedgerGrid({
                             <th className="h-8 px-2 text-left text-muted-foreground">
                                 <DateSortHeader label="Prod" sortKey="prod_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Batch</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Batch</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Grade" value={gradeFilter} options={gradeOptions} onChange={setGradeFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Plant" value={plantFilter} options={plantOptions} onChange={setPlantFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Whse" value={warehouseFilter} options={warehouseOptions} onChange={setWarehouseFilter} />
                             </th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Source" value={sourceFilter} options={sourceOptions} onChange={setSourceFilter} />
                             </th>
-                            <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Weight</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">CCC/FLEC</th>
-                            <th className="h-8 px-2 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flec</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Side</th>
+                            <th className="h-8 px-2 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Weight</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">CCC/FLEC</th>
+                            <th className="h-8 px-2 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Flec</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Side</th>
                         </tr>
                     </thead>
                     <tbody>
