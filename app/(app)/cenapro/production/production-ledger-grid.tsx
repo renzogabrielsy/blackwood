@@ -15,6 +15,7 @@ import {
     ArrowDown,
     ChevronDown,
     Inbox,
+    Sparkles,
 } from 'lucide-react';
 import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -48,6 +49,7 @@ import {
     dispositionRequiresEquipment,
 } from '../types';
 import { saveProductionEvents, type ProductionEventDirtyRow } from './actions';
+import { BulkAddModal } from './bulk-add-modal';
 
 // ─── Editable fields ─────────────────────────────────────────────────────────────
 // The 13 writable columns (id/unique_tag/batch_year are read-only/computed). Order
@@ -469,6 +471,7 @@ export function ProductionLedgerGrid({
     const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
     const [isEditing, setIsEditing] = React.useState(false);
     const [isSaving, setIsSaving] = React.useState(false);
+    const [bulkAddOpen, setBulkAddOpen] = React.useState(false);
     const preEditValue = React.useRef<string>('');
 
     // Header filters — single-select; 'ALL' = no filter.
@@ -1041,6 +1044,16 @@ export function ProductionLedgerGrid({
                     variant="outline"
                     size="sm"
                     className="h-6 gap-1 px-2 text-[11px]"
+                    onClick={() => setBulkAddOpen(true)}
+                    title="Open a fresh grid for fast multi-row entry — paste from Excel/Sheets"
+                >
+                    <Sparkles className="h-3 w-3" />
+                    Bulk Add
+                </Button>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-6 gap-1 px-2 text-[11px]"
                     onClick={() => setDateSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
                     title={dateSortDir === 'desc' ? 'Newest first — click for oldest first' : 'Oldest first — click for newest first'}
                 >
@@ -1095,21 +1108,22 @@ export function ProductionLedgerGrid({
                 }}
             >
                 <table className="relative table-fixed text-xs" style={{ width: '100%', minWidth: '1280px', borderCollapse: 'separate', borderSpacing: 0 }}>
+                    {/* col order: # / recv / prod / batch / shift / grade / plant / whse / source / disposition / equipment / weight / flec / side */}
                     <colgroup>
-                        <col style={{ width: '36px' }} />  {/* # */}
-                        <col style={{ width: '96px' }} />  {/* recv */}
-                        <col style={{ width: '96px' }} />  {/* prod */}
-                        <col style={{ width: '120px' }} /> {/* batch */}
-                        <col style={{ width: '64px' }} />  {/* shift */}
-                        <col style={{ width: '80px' }} />  {/* grade */}
-                        <col style={{ width: '84px' }} />  {/* plant */}
-                        <col style={{ width: '108px' }} /> {/* whse */}
-                        <col style={{ width: '84px' }} />  {/* source */}
-                        <col style={{ width: '120px' }} /> {/* disposition */}
-                        <col style={{ width: '96px' }} />  {/* equipment */}
-                        <col style={{ width: '104px' }} /> {/* weight */}
-                        <col style={{ width: '72px' }} />  {/* flec */}
-                        <col style={{ width: '72px' }} />  {/* side */}
+                        <col style={{ width: '36px' }} />
+                        <col style={{ width: '96px' }} />
+                        <col style={{ width: '96px' }} />
+                        <col style={{ width: '120px' }} />
+                        <col style={{ width: '64px' }} />
+                        <col style={{ width: '80px' }} />
+                        <col style={{ width: '84px' }} />
+                        <col style={{ width: '108px' }} />
+                        <col style={{ width: '84px' }} />
+                        <col style={{ width: '120px' }} />
+                        <col style={{ width: '96px' }} />
+                        <col style={{ width: '104px' }} />
+                        <col style={{ width: '72px' }} />
+                        <col style={{ width: '72px' }} />
                     </colgroup>
                     <thead className="sticky top-0 z-20 bg-muted/90 backdrop-blur-sm">
                         <tr className="border-b">
@@ -1432,6 +1446,11 @@ export function ProductionLedgerGrid({
                     </div>
                 );
             })()}
+
+            {/* Bulk Add modal — the fast multi-row entry path. Opens with a fresh 8-row
+                sheet that takes Excel/Sheets paste; on success it refreshes the page data
+                (via onSaveSuccess → router.refresh) so the new rows land in this grid. */}
+            <BulkAddModal open={bulkAddOpen} onOpenChange={setBulkAddOpen} onInserted={onSaveSuccess} />
         </div>
     );
 }
