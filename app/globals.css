@@ -485,10 +485,21 @@ input[type=number] {
 
    Strict z-scale (low → high), applied consistently across every frozen table:
      • normal scrolling body cell ......... auto / base (no class)
-     • sticky LEFT column body cell ....... .frozen-col   (z-index 10)
-     • sticky HEADER row cell ............. .frozen-row   (z-index 20)
-     • sticky TOP-LEFT CORNER cell ........ .frozen-corner (z-index 30)
-   A frozen corner is BOTH sticky-left and sticky-top, so it must out-rank both.
+     • sticky LEFT column body cell ....... .frozen-col          (z-index 10)
+     • sticky HEADER row cell ............. .frozen-row          (z-index 20)
+     • sticky FOOTER row cell ............. .frozen-row-bottom   (z-index 20)
+     • sticky TOP-LEFT CORNER cell ........ .frozen-corner       (z-index 30)
+     • sticky BOTTOM-LEFT CORNER cell ..... .frozen-corner-bottom (z-index 30)
+   A frozen corner is BOTH sticky-left and sticky-(top|bottom), so it must out-rank
+   both the scrolling header/footer row AND the frozen body column.
+
+   The footer mirrors the header, just pinned to the OPPOSITE edge: a sticky
+   <tfoot> uses `bottom: 0` instead of `top: 0`. Same opaque-only discipline —
+   footer cells use a SOLID `bg-muted`, the bottom-left corner cells (under the
+   frozen left columns) are BOTH sticky-left and sticky-bottom with the highest z.
+   The footer's TOP seam (the boundary with the scrolling body above it) is killed
+   with `.frozen-edge-top` (inset top border + upward shadow), the bottom-edge
+   analogue of `.frozen-edge`.
 
    Backgrounds: use a SOLID theme token matched to the surface —
      body row  → `bg-background` / `bg-card`
@@ -522,6 +533,23 @@ input[type=number] {
   z-index: 30;
 }
 
+/* Footer mirror of .frozen-row — pinned to the BOTTOM edge of the scroll
+   container instead of the top. Same z-rank as the header row (20): it out-ranks
+   frozen body columns (10) so the summary row paints over them while scrolling. */
+.frozen-row-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+}
+
+/* Bottom-left corner — sticky on BOTH axes (left column + footer row), so it
+   must out-rank both, matching .frozen-corner's z-rank (30). */
+.frozen-corner-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+}
+
 /* Right edge of the last frozen column — solid 1px divider (no transparency)
    plus a soft outward shadow. Kills the sub-pixel seam and separates the pinned
    block from the scrolling region. */
@@ -534,4 +562,19 @@ input[type=number] {
   box-shadow:
     inset -1px 0 0 0 var(--border),
     2px 0 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Top edge of a sticky FOOTER row — the bottom-edge analogue of .frozen-edge.
+   Solid 1px divider (no transparency) plus a soft UPWARD shadow that kills the
+   sub-pixel seam where the scrolling body meets the pinned footer and separates
+   the summary band from the scrolling region. */
+.frozen-edge-top {
+  box-shadow:
+    inset 0 1px 0 0 var(--border),
+    0 -2px 4px rgba(0, 0, 0, 0.12);
+}
+:is(.dark) .frozen-edge-top {
+  box-shadow:
+    inset 0 1px 0 0 var(--border),
+    0 -2px 6px rgba(0, 0, 0, 0.4);
 }

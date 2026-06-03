@@ -49,6 +49,49 @@ function fmtKg(n: number | undefined): string {
     return Math.round(n).toLocaleString('en-US');
 }
 
+/** 2-decimal percent for a lab metric; em-dash when absent/zero. */
+function fmtPct2(n: number | undefined): string {
+    if (n === undefined || n === null || n === 0) return '—';
+    return `${n.toFixed(2)}%`;
+}
+
+/** Signed 2-decimal percent for block loss; em-dash when the ratio is null (in = 0). */
+function fmtSignedPct(ratio: number | null): string {
+    if (ratio === null || ratio === undefined) return '—';
+    const pct = ratio * 100;
+    const sign = pct > 0 ? '+' : '';
+    return `${sign}${pct.toFixed(2)}%`;
+}
+
+/**
+ * Maps a batch status to the per-column footer cell's WHOLE-CELL tint. The state is
+ * now communicated by coloring the entire footer cell (the dot/badge was removed).
+ *
+ * CRITICAL — these tints MUST be OPAQUE. The footer is a frozen/sticky surface that
+ * overlaps scrolling content, so any alpha (/opacity, glass) reopens the bleed-through
+ * bug. Use SOLID color tokens only. The tint REPLACES the `bg-muted` base on these
+ * per-column cells (one bg per element — never layer a translucent tint over bg-muted).
+ *
+ * Convention (feed-completion, distinct from the Blocking heatmap palette):
+ *   IN-USE (active)                          → blue
+ *   CLOSED / depleted / non-active           → red
+ *   STORED / SUNDRYING / SUNDRIED / other    → neutral muted
+ */
+function statusTint(status: string): string {
+    switch (status) {
+        case 'IN-USE':
+            // Blue cell. Foreground stays readable in both modes.
+            return 'bg-blue-100 dark:bg-blue-950 text-blue-950 dark:text-blue-50';
+        case 'CLOSED':
+        case 'FEED':
+            // Red cell. Foreground stays readable in both modes.
+            return 'bg-red-100 dark:bg-red-950 text-red-950 dark:text-red-50';
+        default:
+            // STORED / SUNDRYING / SUNDRIED / anything else → neutral.
+            return 'bg-muted text-foreground';
+    }
+}
+
 interface RcMovementMatrixProps {
     data: RcMovementMatrixData;
     /** Called when the user picks a different cycle-month from the toolbar Select. */
@@ -56,7 +99,7 @@ interface RcMovementMatrixProps {
 }
 
 export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps) {
-    const { month, columns, rows, monthOptions } = data;
+    const { month, columns, rows, monthOptions, grandTotalFed } = data;
 
     const handleMonthChange = (value: string) => {
         onMonthChange?.(value);
@@ -315,6 +358,180 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                     );
                                 })}
                             </tbody>
+
+                            {/* ---- Frozen summary footer ----
+                                Pinned to the BOTTOM of the scroll container (sticky
+                                bottom:0), the mirror of the frozen header. Footer cells are
+                                OPAQUE bg-muted (solid — never glass) so scrolling rows can't
+                                bleed through. The 5 cells under the frozen LEFT columns are
+                                BOTH sticky-left and sticky-bottom (.frozen-corner-bottom, z30),
+                                the per-column cells are sticky-bottom only (.frozen-row-bottom,
+                                z20). frozen-edge-top kills the top seam against the scrolling
+                                body; the last frozen-left footer cell also carries .frozen-edge
+                                for the vertical seam, matching the header. */}
+                            <tfoot>
+                                <tr>
+                                    <FrozenFooterCell left={LEFT_ROWNUM} width={W_ROWNUM} />
+                                    <FrozenFooterCell
+                                        left={LEFT_DATE}
+                                        width={W_DATE}
+                                        className="text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                                    >
+                                        Totals
+                                    </FrozenFooterCell>
+                                    <FrozenFooterCell left={LEFT_DAY} width={W_DAY} />
+                                    <FrozenFooterCell left={LEFT_BATCH} width={W_BATCH} />
+                                    <FrozenFooterCell
+                                        left={LEFT_TOTAL}
+                                        width={W_TOTAL}
+                                        className="text-right font-mono font-semibold tabular-nums frozen-edge"
+                                    >
+                                        {fmtKg(grandTotalFed)}
+                                    </FrozenFooterCell>
+
+                                    {/* Per-column 2-line summary — scrolling footer cells
+                                        (sticky-bottom only). STATE is shown by coloring the
+                                        WHOLE cell via statusTint() (the dot/badge was removed):
+                                        IN-USE = blue, CLOSED/FEED = red, else neutral. The tint
+                                        is OPAQUE and REPLACES bg-muted (no /opacity, no glass —
+                                        this is a frozen surface; alpha would bleed through).
+                                          Line 1: total fed kg (bold mono, right-aligned).
+                                          Line 2: tiny "loss" label + signed % (em-dash if null).
+                                        MC & Ash moved OUT of the cell into a hover tooltip to
+                                        de-clutter the cramped grid. On the red (CLOSED) tint the
+                                        loss red/green could clash, so loss inherits the cell
+                                        foreground there; on the blue and neutral tints it keeps
+                                        the red(neg)/emerald(pos) sign coloring. */}
+                                    {columns.map((c) => {
+                                        const isClosedTint = c.status === 'CLOSED' || c.status === 'FEED';
+                                        const lossClass = c.blockLoss === null
+                                            ? 'text-muted-foreground'
+                                            : isClosedTint
+                                              ? '' // inherit the red-cell foreground (legible)
+                                              : c.blockLoss < 0
+                                                ? 'text-red-600 dark:text-red-400'
+                                                : 'text-emerald-600 dark:text-emerald-400';
+                                        return (
+                                        <td
+                                            key={c.batchId}
+                                            className={cn(
+                                                'frozen-row-bottom frozen-edge-top border-r border-border/50 p-0 align-middle',
+                                                statusTint(c.status),
+                                            )}
+                                        >
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <div className="flex cursor-default flex-col gap-0 px-2 py-0.5 leading-tight">
+                                                        {/* Line 1 — headline: "fed" label + total fed kg */}
+                                                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                                                            <span className="text-[10px] uppercase tracking-wide opacity-70">fed</span>
+                                                            <span className="font-mono text-xs font-semibold">
+                                                                {fmtKg(c.totalOut) || '0'}
+                                                            </span>
+                                                        </div>
+                                                        {/* Line 2 — "loss" label + signed % */}
+                                                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                                                            <span className="text-[10px] uppercase tracking-wide opacity-70">loss</span>
+                                                            <span className={cn('font-mono text-[10px]', lossClass)}>
+                                                                {fmtSignedPct(c.blockLoss)}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </TooltipTrigger>
+                                                <TooltipContent
+                                                    side="top"
+                                                    className="w-[180px] bg-popover/95 p-0 backdrop-blur-lg"
+                                                >
+                                                    {/* Info card — glass surface (floats over empty space, so
+                                                        glass is correct here, unlike the opaque frozen cells). */}
+                                                    <div className="text-[11px]">
+                                                        {/* Header: batch code + block_loc + state pill */}
+                                                        <div className="flex items-start justify-between gap-2 px-2.5 py-2">
+                                                            <div className="min-w-0">
+                                                                <div className="truncate font-mono text-xs font-semibold leading-tight">
+                                                                    {c.batchCode}
+                                                                </div>
+                                                                <div className="truncate text-[10px] text-muted-foreground leading-tight">
+                                                                    {c.blockLoc ?? '—'}
+                                                                </div>
+                                                            </div>
+                                                            <span
+                                                                className={cn(
+                                                                    'mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide',
+                                                                    isClosedTint
+                                                                        ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
+                                                                        : c.status === 'IN-USE'
+                                                                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                                                                          : 'bg-muted text-muted-foreground',
+                                                                )}
+                                                            >
+                                                                <span
+                                                                    className={cn(
+                                                                        'h-1.5 w-1.5 rounded-full',
+                                                                        isClosedTint
+                                                                            ? 'bg-red-500'
+                                                                            : c.status === 'IN-USE'
+                                                                              ? 'bg-blue-500'
+                                                                              : 'bg-muted-foreground/50',
+                                                                    )}
+                                                                />
+                                                                {c.status}
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Divider */}
+                                                        <div className="border-t border-border" />
+
+                                                        {/* Label / value list */}
+                                                        <dl className="space-y-1 px-2.5 py-2">
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">Fed</dt>
+                                                                <dd className="font-mono tabular-nums">
+                                                                    {fmtKg(c.totalOut) || '0'} kg
+                                                                </dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">In</dt>
+                                                                <dd className="font-mono tabular-nums">
+                                                                    {fmtKg(c.totalIn) || '0'} kg
+                                                                </dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">MC</dt>
+                                                                <dd className="font-mono tabular-nums">{fmtPct2(c.mc)}</dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">Ash</dt>
+                                                                <dd className="font-mono tabular-nums">{fmtPct2(c.ash)}</dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">Loss</dt>
+                                                                <dd
+                                                                    className={cn(
+                                                                        'font-mono tabular-nums',
+                                                                        c.blockLoss === null
+                                                                            ? 'text-muted-foreground'
+                                                                            : c.blockLoss < 0
+                                                                              ? 'text-red-600 dark:text-red-400'
+                                                                              : 'text-emerald-600 dark:text-emerald-400',
+                                                                    )}
+                                                                >
+                                                                    {fmtSignedPct(c.blockLoss)}
+                                                                </dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">Opened</dt>
+                                                                <dd className="font-mono tabular-nums">{c.firstFedDate}</dd>
+                                                            </div>
+                                                        </dl>
+                                                    </div>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </td>
+                                        );
+                                    })}
+                                </tr>
+                            </tfoot>
                         </table>
                     </div>
                 </TooltipProvider>
@@ -394,6 +611,35 @@ function FrozenBodyCell({
         <td
             className={cn(
                 'frozen-col bg-background group-hover:bg-accent border-b border-border/50 px-2 py-1',
+                className,
+            )}
+            style={{ left, width }}
+        >
+            {children}
+        </td>
+    );
+}
+
+function FrozenFooterCell({
+    left,
+    width,
+    className,
+    children,
+}: {
+    left: number;
+    width: number;
+    className?: string;
+    children?: React.ReactNode;
+}) {
+    // Bottom-left CORNER cell — sticky on BOTH axes (frozen left column + footer
+    // row), so it must out-rank the scrolling footer cells AND the frozen body
+    // column (.frozen-corner-bottom, z30). OPAQUE bg-muted (matches the footer
+    // band, never glass) so scrolling cells can't bleed through in either
+    // direction. frozen-edge-top kills the top seam against the scrolling body.
+    return (
+        <td
+            className={cn(
+                'frozen-corner-bottom frozen-edge-top bg-muted px-2 py-0.5 align-middle',
                 className,
             )}
             style={{ left, width }}

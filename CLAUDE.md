@@ -235,11 +235,14 @@ For Excel-style tables that freeze left columns and/or the header row while the 
   | Normal scrolling body cell | _(none)_ | base / auto |
   | Sticky LEFT column body cell | `.frozen-col` | 10 |
   | Sticky HEADER row cell | `.frozen-row` | 20 |
+  | Sticky FOOTER row cell | `.frozen-row-bottom` | 20 |
   | Top-left CORNER (sticky-left **and** sticky-top) | `.frozen-corner` | 30 |
+  | Bottom-left CORNER (sticky-left **and** sticky-bottom) | `.frozen-corner-bottom` | 30 |
 
-- **Offsets:** sticky left columns use cumulative `left` offsets from each frozen column's explicit pixel width (a column's `left` = sum of widths to its left). The header row is `top: 0`. Corner cells are BOTH sticky-left and sticky-top (highest z).
+- **Offsets:** sticky left columns use cumulative `left` offsets from each frozen column's explicit pixel width (a column's `left` = sum of widths to its left). The header row is `top: 0`; a sticky footer row is the mirror, `bottom: 0`. Top corner cells are BOTH sticky-left and sticky-top; bottom corner cells are BOTH sticky-left and sticky-bottom (highest z, 30).
+- **Frozen FOOTER (bottom-pinned summary).** A sticky `<tfoot>` pinned to the container bottom is the exact mirror of the frozen header — same opaque-only discipline (solid `bg-muted`, never glass), same cumulative `left` offsets for the cells under the frozen left columns. Use `.frozen-row-bottom` for the scrolling footer cells and `.frozen-corner-bottom` for the bottom-left corner cells. Footer rows may be taller than data rows when they stack multiple values — keep them compact (`text-[10px]`/`text-[11px]`, tight leading).
 - **Row state repaints opaquely.** Hover tint, zebra striping, and any row-status tint must be applied to the frozen cells too (e.g. `group-hover:bg-muted/50` layered over the opaque base) — otherwise the pinned cells diverge from the scrolling cells. The opaque base under the tint is what prevents bleed-through.
-- **Kill the seam.** A 1px sliver can bleed at the frozen↔scroll boundary. Put `.frozen-edge` on the LAST frozen column — it paints a solid inset right border + soft shadow that hides the seam and visually separates the pinned region.
+- **Kill the seam.** A 1px sliver can bleed at the frozen↔scroll boundary. Put `.frozen-edge` on the LAST frozen column (solid inset right border + soft shadow) and `.frozen-edge-top` on a sticky footer row (solid inset top border + upward shadow) — both hide the seam and visually separate the pinned region.
 
 This is platform-level presentational guidance, tenant-neutral. Reference implementations: RC Movement matrix (`app/(app)/inventory/rc-movement/rc-movement-matrix.tsx`) and the Cenapro production ledger (`app/(app)/cenapro/production/production-ledger-grid.tsx`).
 

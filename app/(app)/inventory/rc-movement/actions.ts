@@ -21,6 +21,15 @@ export type RcMovementMatrixColumn = {
   batchCode: string;
   blockLoc: string | null;
   firstFedDate: string; // YYYY-MM-DD — drives chronological column order
+  // ── Summary fields (footer) — computed in one batched pass over the month's
+  //    batches. mc/ash are weighted averages from RC IN deliveries (same approach
+  //    as Blocking's fetchBlockDataForBatch). totalOut/totalIn are SUMs from SQL.
+  totalOut: number;      // total kg fed out of this block (all-time, SUM rc_out.weight_kg)
+  totalIn: number;       // total kg delivered into this block (all-time, SUM deliveries.weight_kg)
+  status: string;        // batches.status — drives IN-USE / CLOSED badge in the footer
+  mc: number;            // weighted-avg moisture % (0 when no metric-bearing deliveries)
+  ash: number;           // weighted-avg ash % (0 when no metric-bearing deliveries)
+  blockLoss: number | null; // (totalOut - totalIn) / totalIn, signed ratio; null when totalIn = 0
 };
 
 /** One calendar day — a matrix row. */
@@ -47,6 +56,8 @@ export type RcMovementMatrix = {
   columns: RcMovementMatrixColumn[];
   rows: RcMovementMatrixRow[];
   monthOptions: RcMovementMonthOption[];
+  /** Sum of fed_today across the whole visible month (footer grand total, kg). */
+  grandTotalFed: number;
 };
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -69,7 +80,7 @@ function fmtDate(dt: Date): string {
  *              month with more than 2 feeding days.
  */
 export async function fetchRcMovementMatrix(month?: string): Promise<RcMovementMatrix> {
-  const empty: RcMovementMatrix = { month: '', columns: [], rows: [], monthOptions: [] };
+  const empty: RcMovementMatrix = { month: '', columns: [], rows: [], monthOptions: [], grandTotalFed: 0 };
 
   try {
     const supabase = await createClient();
@@ -126,7 +137,7 @@ export async function fetchRcMovementMatrix(month?: string): Promise<RcMovementM
         ?? monthOptions[0]?.value
         ?? '';
     }
-    if (!target) return { ...empty, monthOptions };
+    if (!target) return { ...empty, monthOptions, grandTotalFed: 0 };
 
     const firstOfMonth = `${target}-01`;
     const nextMonth = (() => {
@@ -156,7 +167,7 @@ export async function fetchRcMovementMatrix(month?: string): Promise<RcMovementM
     );
 
     if (rows.length === 0) {
-      return { month: target, columns: [], rows: [], monthOptions };
+      return { month: target, columns: [], rows: [], monthOptions, grandTotalFed: 0 };
     }
 
     // --- Build columns: one per block, ordered by first fed date ---
@@ -170,6 +181,13 @@ export async function fetchRcMovementMatrix(month?: string): Promise<RcMovementM
           batchCode: r.batch_code ?? r.batch_id,
           blockLoc: r.block_loc && r.block_loc.trim() !== '' ? r.block_loc : null,
           firstFedDate: r.date,
+          // Summary fields filled in the batched pass below (see "Footer summary").
+          totalOut: 0,
+          totalIn: 0,
+          status: 'CLOSED',
+          mc: 0,
+          ash: 0,
+          blockLoss: null,
         });
       } else if (r.date < existing.firstFedDate) {
         existing.firstFedDate = r.date;
@@ -243,7 +261,92 @@ export async function fetchRcMovementMatrix(month?: string): Promise<RcMovementM
       cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
     }
 
-    return { month: target, columns, rows: out, monthOptions };
+    // --- Footer summary: one batched pass over the month's block-batches -------
+    // Per column we surface: status (badge), totalIn (RC IN SUM), totalOut (RC OUT
+    // SUM), weighted-avg mc/ash, and a derived blockLoss = (out - in) / in.
+    // Computed via THREE batched queries keyed on the column batch_ids/codes —
+    // NEVER one per-column action. mc/ash weighting mirrors fetchBlockDataForBatch
+    // (SUM(metric * weight) / SUM(weight_with_metric)); the SUMs themselves are the
+    // already-stored transaction weights, not a re-derivation of inventory state.
+    const batchIds = columns.map((c) => c.batchId);
+    const batchCodes = Array.from(new Set(columns.map((c) => c.batchCode)));
+
+    type BatchRow = { id: string; status: string | null };
+    type DeliveryRow = { batch_code: string | null; weight_kg: number | null; lab_results: unknown };
+    type RcOutSumRow = { batch_id: string | null; weight_kg: number | null };
+
+    const [batchRows, deliveryRows, rcOutSumRows] = await Promise.all([
+      fetchAll<BatchRow>(() =>
+        supabase.from('batches').select('id, status').in('id', batchIds),
+      ),
+      fetchAll<DeliveryRow>(() =>
+        supabase
+          .from('deliveries')
+          .select('batch_code, weight_kg, lab_results')
+          .in('batch_code', batchCodes),
+      ),
+      fetchAll<RcOutSumRow>(() =>
+        supabase.from('rc_out').select('batch_id, weight_kg').in('batch_id', batchIds),
+      ),
+    ]);
+
+    // status by batch_id
+    const statusById = new Map<string, string>();
+    for (const b of batchRows) {
+      if (b.id) statusById.set(b.id, b.status ?? 'CLOSED');
+    }
+
+    // totalIn + weighted mc/ash accumulators, keyed by batch_code (deliveries link
+    // by code). Each metric tracks its own weight so null/blank labs don't dilute.
+    type LabAcc = { totalIn: number; wMc: number; mcW: number; wAsh: number; ashW: number };
+    const accByCode = new Map<string, LabAcc>();
+    for (const d of deliveryRows) {
+      const code = d.batch_code;
+      if (!code) continue;
+      let acc = accByCode.get(code);
+      if (!acc) {
+        acc = { totalIn: 0, wMc: 0, mcW: 0, wAsh: 0, ashW: 0 };
+        accByCode.set(code, acc);
+      }
+      const w = Number(d.weight_kg ?? 0);
+      acc.totalIn += w;
+      const lab = (d.lab_results as Record<string, unknown> | null) ?? {};
+      const mcRaw = lab.mc;
+      if (mcRaw !== null && mcRaw !== undefined && mcRaw !== '') {
+        acc.wMc += Number(mcRaw) * w;
+        acc.mcW += w;
+      }
+      const ashRaw = lab.ash;
+      if (ashRaw !== null && ashRaw !== undefined && ashRaw !== '') {
+        acc.wAsh += Number(ashRaw) * w;
+        acc.ashW += w;
+      }
+    }
+
+    // totalOut by batch_id (all-time SUM of RC OUT weight)
+    const outById = new Map<string, number>();
+    for (const r of rcOutSumRows) {
+      if (!r.batch_id) continue;
+      outById.set(r.batch_id, (outById.get(r.batch_id) ?? 0) + Number(r.weight_kg ?? 0));
+    }
+
+    for (const col of columns) {
+      const acc = accByCode.get(col.batchCode);
+      const totalIn = acc?.totalIn ?? 0;
+      const totalOut = outById.get(col.batchId) ?? 0;
+      col.totalIn = totalIn;
+      col.totalOut = totalOut;
+      col.status = statusById.get(col.batchId) ?? 'CLOSED';
+      col.mc = acc && acc.mcW > 0 ? acc.wMc / acc.mcW : 0;
+      col.ash = acc && acc.ashW > 0 ? acc.wAsh / acc.ashW : 0;
+      // Block loss — formula PER SPEC: (out - in) / in. Sign/direction PENDING
+      // user confirmation. Guard divide-by-zero: in = 0 -> null (rendered "—").
+      col.blockLoss = totalIn > 0 ? (totalOut - totalIn) / totalIn : null;
+    }
+
+    const grandTotalFed = out.reduce((s, r) => s + r.totalFed, 0);
+
+    return { month: target, columns, rows: out, monthOptions, grandTotalFed };
   } catch (err) {
     console.error('[RcMovement] fetchRcMovementMatrix failed:', err);
     return empty;
