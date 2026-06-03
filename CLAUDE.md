@@ -221,6 +221,28 @@ Blackwood uses selective animation and frosted glass effects for polish without 
 - Bulk input grid cells
 - Any element that renders 100+ instances
 
+## Frozen Panes (sticky rows/columns)
+
+For Excel-style tables that freeze left columns and/or the header row while the rest scrolls. **This is the OPPOSITE of the glass rule above.** Glass (`/<opacity>` + `backdrop-blur`) is for surfaces floating over EMPTY space. A frozen column, frozen header row, and especially the top-left corner sit ON TOP of scrolling content — so **any alpha lets the moving cells bleed THROUGH them.** Frozen surfaces that overlap scrolling content are **ALWAYS fully OPAQUE — never glass.**
+
+**The rules (canonical — shared utilities live in `globals.css`):**
+
+- **Opaque backgrounds only.** Use a SOLID theme token matched to the surface — body cells `bg-background`/`bg-card`, header cells `bg-muted` (solid, NOT `bg-muted/90`). No `/opacity`, no `backdrop-blur` on any sticky cell.
+- **Strict z-scale**, applied consistently in every frozen table via the shared classes:
+
+  | Surface | Utility class | z-index |
+  |---|---|---|
+  | Normal scrolling body cell | _(none)_ | base / auto |
+  | Sticky LEFT column body cell | `.frozen-col` | 10 |
+  | Sticky HEADER row cell | `.frozen-row` | 20 |
+  | Top-left CORNER (sticky-left **and** sticky-top) | `.frozen-corner` | 30 |
+
+- **Offsets:** sticky left columns use cumulative `left` offsets from each frozen column's explicit pixel width (a column's `left` = sum of widths to its left). The header row is `top: 0`. Corner cells are BOTH sticky-left and sticky-top (highest z).
+- **Row state repaints opaquely.** Hover tint, zebra striping, and any row-status tint must be applied to the frozen cells too (e.g. `group-hover:bg-muted/50` layered over the opaque base) — otherwise the pinned cells diverge from the scrolling cells. The opaque base under the tint is what prevents bleed-through.
+- **Kill the seam.** A 1px sliver can bleed at the frozen↔scroll boundary. Put `.frozen-edge` on the LAST frozen column — it paints a solid inset right border + soft shadow that hides the seam and visually separates the pinned region.
+
+This is platform-level presentational guidance, tenant-neutral. Reference implementations: RC Movement matrix (`app/(app)/inventory/rc-movement/rc-movement-matrix.tsx`) and the Cenapro production ledger (`app/(app)/cenapro/production/production-ledger-grid.tsx`).
+
 ## RC IN Column Config
 
 Strict left-to-right order for the delivery input/table:

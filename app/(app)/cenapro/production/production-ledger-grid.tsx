@@ -680,12 +680,13 @@ const ProductionRow = React.memo(function ProductionRow({
     const directionTint = rowDirectionTint(direction);
     const frozenTint = rowDirectionFrozenTint(direction);
 
-    // Shared frozen-cell base: an OPAQUE surface (so the scrolling body can't show
-    // through) + the row's opaque IN/OUT tint over it + hover, layered to match the
-    // scrolling part of the same row. The per-cell `left`/`z`/border come from the call
-    // site. `bg-background` first guarantees opacity even when there's no direction tint.
+    // Shared frozen-cell base: the canonical OPAQUE frozen LEFT-column surface
+    // (.frozen-col, z-10 — see globals.css "Frozen Panes"). `bg-background` guarantees
+    // opacity so the scrolling body can't bleed through the pinned identity columns;
+    // the row's OPAQUE IN/OUT tint layers over it, and group-hover repaints the hover
+    // tint opaquely so the frozen cells track the scrolling part of the same row.
     const frozenCellBase = cn(
-        'sticky z-[15] bg-background group-hover:bg-muted/50 transition-colors duration-150',
+        'frozen-col bg-background group-hover:bg-muted transition-colors duration-150',
         frozenTint,
     );
 
@@ -740,7 +741,7 @@ const ProductionRow = React.memo(function ProductionRow({
         <tr
             hidden={rowHidden}
             className={cn(
-                'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted/50',
+                'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted',
                 // Direction tint first so the dirty borders + hover/selection read on top.
                 directionTint,
                 rowHidden && 'hidden',
@@ -798,7 +799,7 @@ const ProductionRow = React.memo(function ProductionRow({
 
             {/* Batch (col 3) — frozen (left: 228), LAST frozen col → right-edge separator
                 shadow. Text + muted batch_year tag. */}
-            <td className={cn(frozenCellBase, 'border-r border-border/30 p-0 shadow-[2px_0_4px_rgba(0,0,0,0.12)]')} style={{ height: '32px', left: 228 }}>
+            <td className={cn(frozenCellBase, 'frozen-edge border-r border-border/30 p-0')} style={{ height: '32px', left: 228 }}>
                 <GridCell
                     col={3}
                     row={rowIdx}
@@ -1665,21 +1666,25 @@ export function ProductionLedgerGrid({
                         <col style={{ width: '72px' }} />
                         <col style={{ width: '72px' }} />
                     </colgroup>
-                    {/* Header is sticky-top (z-20). The 4 frozen identity headers are ALSO
-                        sticky-left → they're top-left corners that must sit above both the
-                        scrolling header cells AND the frozen body cells, so they get the
-                        highest z (z-30) + an OPAQUE bg-muted (the translucent thead bg would
-                        let body cells show through on horizontal scroll). */}
-                    <thead className="sticky top-0 z-20 bg-muted/90 backdrop-blur-sm">
+                    {/* CANONICAL frozen-pane header — see globals.css "Frozen Panes".
+                        The header row is sticky-top + OPAQUE bg-muted (NO glass/alpha, so
+                        body rows can't bleed through the non-frozen header cells on
+                        vertical scroll). The 4 frozen identity headers are ALSO sticky-left
+                        → top-left CORNERS (.frozen-corner, z-30) that out-rank both the
+                        scrolling header row AND the frozen body column; each carries its own
+                        solid bg-muted. The last frozen corner (Batch) gets .frozen-edge for
+                        the anti-seam right divider. Z-scale: corner 30 > header row 20 >
+                        frozen body col 10 > normal scrolling cells. */}
+                    <thead className="frozen-row bg-muted">
                         <tr className="border-b">
-                            <th className="sticky left-0 z-30 h-8 border-r border-border/40 bg-muted px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ left: 0 }}>#</th>
-                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 36 }}>
+                            <th className="frozen-corner h-8 border-r border-border/40 bg-muted px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ left: 0 }}>#</th>
+                            <th className="frozen-corner h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 36 }}>
                                 <DateSortHeader label="Recv" sortKey="recv_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
                             </th>
-                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 132 }}>
+                            <th className="frozen-corner h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 132 }}>
                                 <DateSortHeader label="Prod" sortKey="prod_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />
                             </th>
-                            <th className="sticky z-30 h-8 bg-muted px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground shadow-[2px_0_4px_rgba(0,0,0,0.12)]" style={{ left: 228 }}>Batch</th>
+                            <th className="frozen-corner frozen-edge h-8 bg-muted px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground" style={{ left: 228 }}>Batch</th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                                 <ColumnFilterMenu label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
                             </th>

@@ -474,3 +474,64 @@ input[type=number] {
 :is(.dark) .spotlight-ashy {
   box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.6), 0 0 16px rgba(245, 158, 11, 0.35);
 }
+
+/* ─── Frozen Panes (sticky rows/columns) ─────────────────────────────────────
+   CANONICAL technique for tables that freeze left columns and/or the header row
+   while the rest scrolls. A frozen surface sits ON TOP of scrolling content, so
+   it MUST be fully OPAQUE — never the glass pattern (no `/<opacity>` alpha, no
+   backdrop-blur). Glass is for surfaces floating over EMPTY space; a frozen
+   column/header/corner overlaps moving cells and any alpha lets them bleed
+   through. This is the opposite rule from the Motion & Glass system above.
+
+   Strict z-scale (low → high), applied consistently across every frozen table:
+     • normal scrolling body cell ......... auto / base (no class)
+     • sticky LEFT column body cell ....... .frozen-col   (z-index 10)
+     • sticky HEADER row cell ............. .frozen-row   (z-index 20)
+     • sticky TOP-LEFT CORNER cell ........ .frozen-corner (z-index 30)
+   A frozen corner is BOTH sticky-left and sticky-top, so it must out-rank both.
+
+   Backgrounds: use a SOLID theme token matched to the surface —
+     body row  → `bg-background` / `bg-card`
+     header    → `bg-muted` (solid, NOT bg-muted/90)
+   Apply the token in the markup; these utilities only own position + z + the
+   anti-seam right edge. Row state (hover/zebra/status tint) must be repainted
+   onto the frozen cells too — and the repaint MUST be a SOLID token, never an
+   `/<opacity>` value. A single element cannot layer two background-colors, so a
+   translucent `group-hover:bg-accent/40` REPLACES the opaque base and reopens
+   the bleed-through on hover. Use a solid `group-hover:bg-accent` (or bg-muted)
+   so pinned and scrolling cells track each other AND stay opaque.
+
+   Seam: a 1px sliver can bleed at the frozen↔scroll boundary. `.frozen-edge` on
+   the LAST frozen column paints a solid inset right border + soft shadow that
+   both hides the seam and visually separates the pinned region. */
+
+.frozen-col {
+  position: sticky;
+  z-index: 10;
+}
+
+.frozen-row {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.frozen-corner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+/* Right edge of the last frozen column — solid 1px divider (no transparency)
+   plus a soft outward shadow. Kills the sub-pixel seam and separates the pinned
+   block from the scrolling region. */
+.frozen-edge {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    2px 0 4px rgba(0, 0, 0, 0.12);
+}
+:is(.dark) .frozen-edge {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    2px 0 6px rgba(0, 0, 0, 0.4);
+}
