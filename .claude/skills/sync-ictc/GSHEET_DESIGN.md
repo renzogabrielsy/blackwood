@@ -207,10 +207,23 @@ deletes a DB row** — it goes to Renzo with the colliding DB row(s) and a yes/n
 
 | File | Role |
 |---|---|
-| `scripts/extract_gsheet.py` | Sheet XLSX → normalized RC IN + RC OUT JSON (primary+fallback batch_codes). |
-| `scripts/classify_gsheet.py` | `--mode rc_in\|rc_out --since YYYY-MM-DD` — classify vs DB → buckets (NOOP/NEW/changed/flagged/unmapped/out_of_scope). PROPOSE only. |
-| `../../agents/gsheet-sync.md` | the employee agent — PROPOSE + EXECUTE modes, encodes the locked policy. |
+| `scripts/sync_gsheet.py` | **Lean two-phase orchestrator (2026-06-02).** `--phase classify --mode rc_in\|rc_out` pulls Sheet + fetches DB rows ITSELF via `lib/db.py` + reuses the classify logic, then writes the full classified JSON (audit) AND a compact `decisions_<mode>.json` (the only thing the agent reads) + prints summary counts only. `--phase apply --decisions <file>` does deterministic writes + audit logs from the approved compact file. |
+| `scripts/lib/db.py` | Shared PostgREST helper (reads `.env.local`, service-role key): `read_rows()` (paged), `insert`/`update`, + audit-log helpers (`update_trigger_audit_provenance` for deliveries L-001, `insert_manual_audit` for rc_out). Reusable across ALL sync employees. |
+| `scripts/extract_gsheet.py` | Sheet XLSX → normalized RC IN + RC OUT JSON (primary+fallback batch_codes). Reused by the orchestrator. |
+| `scripts/classify_gsheet.py` | `--mode rc_in\|rc_out --since YYYY-MM-DD` — classify vs DB → buckets (NOOP/NEW/changed/flagged/unmapped/out_of_scope). Diff logic reused by the orchestrator; still standalone-runnable with `--db-rows-json`. |
+| `../../agents/gsheet-sync.md` | the employee agent — PROPOSE + EXECUTE modes (lean), encodes the locked policy. |
+| `LEAN_SYNC_REFACTOR.md` | the token-lean refactor design for ALL sync employees. |
 | `GSHEET_DESIGN.md` | this doc |
+
+### Token-lean refactor (2026-06-02)
+
+The agent used to pull the FULL DB dump (~218k tokens) AND the full classified JSON
+(~131k tokens) into its context, re-reading them on every step. The lean orchestrator
+moves the DB fetch + bucketing + write-back entirely into Python; the agent now reads
+only the compact `decisions_<mode>.json` (~1k tokens combined). Measured on the
+2026-06-02 idempotency re-run: agent-context payload dropped from ~349k tokens to ~1k
+(**>99% reduction**). The old standalone `classify_gsheet.py --db-rows-json` path still
+works for manual debugging. See `LEAN_SYNC_REFACTOR.md`.
 
 **Run order (PROPOSE):**
 ```

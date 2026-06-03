@@ -58,11 +58,13 @@ Default to PROPOSE when ambiguous, and say so explicitly in the response.
 
 Abort with a clear error if any fail:
 
-1. **Supabase reachable** — `SELECT 1 AS ok` via `mcp__supabase__execute_sql`.
+1. **Supabase reachable** — run `python3 .claude/skills/sync-ictc/scripts/lib/db.py`. It prints a tiny JSON count (no rows) over PostgREST using the service-role key in `.env.local`. If it errors, the DB is unreachable or the key is wrong — HALT.
 2. **Working directory** — `pwd` should end in `/blackwood`.
 3. **Python scripts present:**
-   - `.claude/skills/sync-ictc/scripts/extract_gsheet.py`
-   - `.claude/skills/sync-ictc/scripts/classify_gsheet.py`
+   - `.claude/skills/sync-ictc/scripts/sync_gsheet.py` (the lean orchestrator — your primary tool)
+   - `.claude/skills/sync-ictc/scripts/lib/db.py` (shared PostgREST helper — fetches DB rows + writes, so they never enter your context)
+   - `.claude/skills/sync-ictc/scripts/extract_gsheet.py` (reused by the orchestrator)
+   - `.claude/skills/sync-ictc/scripts/classify_gsheet.py` (reused by the orchestrator)
 4. **Sheet reachable** — the curl in Step 2 returns a non-empty XLSX (first bytes are the `PK` zip magic). If it returns an HTML login page, the Sheet went "restricted" — tell Renzo to re-share as "anyone with link", or fall back to authenticated Chrome (Claude-in-Chrome MCP). Do not proceed.
 
 ---
@@ -82,79 +84,44 @@ Before classifying anything, read `.claude/skills/sync-ictc/LEARNING_LEDGER.md` 
 
 ## PROPOSE mode protocol
 
-### Step 1 — Create work directory
+> **CONTEXT DISCIPLINE (HARD RULE — this is the whole point of the refactor).**
+> You NEVER `cat`, `Read`, or otherwise pull into your context: the full DB dump,
+> the full classified JSON (`*_classified.json`), or the raw Sheet rows. Python
+> fetches the DB itself (via `lib/db.py` over PostgREST) and bucketizes everything;
+> you read **only** the tiny `decisions_<mode>.json` and the STDOUT summary line. The
+> full classified JSON exists on disk for audit only — leave it there. If you ever
+> find yourself about to read a multi-thousand-line file, STOP — that defeats the lean design.
+
+### Step 1 — One shared work directory
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 WORK_DIR=/tmp/gsheet-sync/$TS
 mkdir -p "$WORK_DIR"
 ```
 
-### Step 2 — Pull the workbook fresh (no auth)
+### Step 2 — Classify each tab with the lean orchestrator
+The orchestrator downloads the Sheet (once per work-dir, with the `PK` magic check), reuses `extract_gsheet.py` + `classify_gsheet.py`, fetches the in-scope DB rows ITSELF via `lib/db.py`, writes the full classified JSON to disk (audit only), and writes the compact `decisions_<mode>.json`. It prints ONLY the summary counts + the compact-file path.
+
 ```bash
-curl -sL "https://docs.google.com/spreadsheets/d/1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM/export?format=xlsx" \
-  -o "$WORK_DIR/rc_gsheet.xlsx"
-# sanity: confirm it's an XLSX (zip magic "PK"), not an HTML login page
-head -c 2 "$WORK_DIR/rc_gsheet.xlsx" | grep -q 'PK' || { echo "Sheet not reachable as XLSX (went restricted?)"; exit 1; }
-```
+python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \
+  --phase classify --mode rc_in --since 2025-01-01 --work-dir "$WORK_DIR"
 
-### Step 3 — Extract RC IN + RC OUT
+python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \
+  --phase classify --mode rc_out --since 2025-01-01 --work-dir "$WORK_DIR"
+```
+Capture from each STDOUT block: `summary` (counts) + `decisions_file` path. (RC IN header is row 7; RC OUT header is row 4, batch_code in column C — the extractor handles this. Cols R–X on RC IN are weighted-avg helpers, ignored. The orchestrator builds the `batches` lookup for RC OUT itself.)
+
+### Step 3 — Read ONLY the compact decisions files
 ```bash
-python3 .claude/skills/sync-ictc/scripts/extract_gsheet.py \
-  --file "$WORK_DIR/rc_gsheet.xlsx" \
-  --out-rc-in "$WORK_DIR/rc_in_extract.json" \
-  --out-rc-out "$WORK_DIR/rc_out_extract.json"
+cat "$WORK_DIR/decisions_rc_in.json"
+cat "$WORK_DIR/decisions_rc_out.json"
 ```
-Capture: per-tab `total_rows`, `overall_confidence`, warnings. (RC IN header is row 7; RC OUT header is **row 4** and its `batch_code` lives in **column C "BLOCK"**, not B — the extractor handles this. Cols R–X on RC IN are weighted-avg helpers and are ignored.)
+Each is a few KB: a `summary` counts block + an `actionable` object with `new`, `changed` (each diff as `{field, db, sheet}`), `flagged`, `unmapped`, `malformed`. This is everything you need to build the write plan and exercise judgment. **Do NOT read the `*_classified.json` files** — they are the full audit dump.
 
-### Step 4 — Build the batch lookup
-Collect every `batch_code_primary` + `batch_code_fallbacks` from both extracts, dedupe, and fetch their ids. (For a daily run the set is small; for a full run just pull all batches.)
-```sql
-SELECT json_agg(json_build_object('batch_code', batch_code, 'id', id)) AS data FROM batches;
-```
-Write the result to `$WORK_DIR/batch_lookup.json` in shape `{batch_code: id, ...}`.
+### Step 4 — Apply Learning Ledger judgment to the actionable items
+For each `flagged`/`unmapped` item, apply the ledger rules (L-002 PCA/PCB overflow=SUNDRY, L-003 bare-number continuation, L-004 block_loc correction not new row, etc.) and decide: leave `decision: "skip"` (default), or set `insert` / `reassign:<db_id>` (flagged) / a real `batch_code` (unmapped). Edit those `decision` fields directly in the compact file if Renzo gives a call. This is the genuine-LLM-judgment step — everything else is deterministic.
 
-### Step 5 — Pull DB rows for the comparison window
-Scope the DB pull to `>= 2025-01-01` (matching the locked cutoff; pre-2025 rows are never matched anyway). These JSON aggregates can be large — write them to files; do **not** read them into your own context, the Python classifier reads the files.
-
-```sql
--- deliveries (RC IN)
-SELECT json_agg(json_build_object(
-  'id', id, 'transaction_date', transaction_date::text, 'supplier', supplier,
-  'batch_code', batch_code, 'block_loc', block_loc, 'truck_plate', truck_plate,
-  'sacks', sacks, 'weight_kg', weight_kg::float, 'cost_basis', cost_basis,
-  'remarks', remarks, 'lab_results', lab_results
-)) AS data
-FROM deliveries WHERE transaction_date >= '2025-01-01';
-```
-```sql
--- rc_out
-SELECT json_agg(json_build_object(
-  'id', id, 'transaction_date', transaction_date::text, 'batch_id', batch_id,
-  'production_batch', production_batch, 'destination', destination,
-  'weight_kg', weight_kg::float, 'block_loc', block_loc, 'remarks', remarks
-)) AS data
-FROM rc_out WHERE transaction_date >= '2025-01-01';
-```
-Write to `$WORK_DIR/db_deliveries.json` and `$WORK_DIR/db_rc_out.json`. (The supabase MCP saves oversized results to a file path — convert that file's inner `{"data":[...]}` to a plain array before handing it to the classifier.)
-
-### Step 6 — Classify both tabs (scoped 2025+)
-```bash
-python3 .claude/skills/sync-ictc/scripts/classify_gsheet.py \
-  --mode rc_in --since 2025-01-01 \
-  --extract-json "$WORK_DIR/rc_in_extract.json" \
-  --db-rows-json "$WORK_DIR/db_deliveries.json" \
-  --output "$WORK_DIR/rc_in_classified.json" --verbose
-
-python3 .claude/skills/sync-ictc/scripts/classify_gsheet.py \
-  --mode rc_out --since 2025-01-01 \
-  --extract-json "$WORK_DIR/rc_out_extract.json" \
-  --db-rows-json "$WORK_DIR/db_rc_out.json" \
-  --batch-lookup-json "$WORK_DIR/batch_lookup.json" \
-  --output "$WORK_DIR/rc_out_classified.json" --verbose
-```
-Capture per tab: `out_of_scope_count`, `in_scope_total`, `noop_count`, `new_count`, `changed_count`, `flagged_count`, `unmapped_count`, `malformed_count`.
-
-### Step 7 — Return the exact write plan
+### Step 5 — Return the exact write plan
 
 Be terse. Numbers over prose. Lead with the write plan, then the flagged conflicts.
 
@@ -187,11 +154,12 @@ Pulled workbook (RC IN + RC OUT). Blocking tab NOT read (cross-check only).
 <list: row, primary batch_code attempted, fallbacks attempted>
 
 ### To execute
-Re-invoke me with: "EXECUTE — apply the write plan" (and explicit per-row decisions for any FLAGGED / UNMAPPED rows).
+Re-invoke me with: "EXECUTE — apply the write plan" (and explicit per-row decisions for any FLAGGED / UNMAPPED rows, set in the `decision` fields of the compact files).
 
 ---
 { "mode": "PROPOSE", "scope_since": "2025-01-01", "work_dir": "...",
-  "rc_in_classified": "...", "rc_out_classified": "...",
+  "decisions_rc_in": ".../decisions_rc_in.json",
+  "decisions_rc_out": ".../decisions_rc_out.json",
   "summary": { "rc_in": {...}, "rc_out": {...} } }
 ```
 
@@ -202,65 +170,32 @@ Re-invoke me with: "EXECUTE — apply the write plan" (and explicit per-row deci
 Triggered by prompts containing "EXECUTE" + decisions / "apply the write plan".
 
 Required input from the dispatcher prompt:
-- `work_dir` (where PROPOSE left files)
-- `flagged_decisions` — per flagged index: `'skip'` (leave as-is), `'insert'` (it really is a separate feed → insert), or `'reassign:<existing_db_id>'` (UPDATE that DB row's batch to the Sheet's). Default for an unspecified flag is **skip**.
-- `unmapped_decisions` — per unmapped index: a real batch_code to use, or `'skip'`.
+- `work_dir` (where PROPOSE left the compact `decisions_<mode>.json` files).
+- Per-row decisions for any FLAGGED / UNMAPPED items — set them in the `decision` field of the compact file before applying. Default for an unspecified flag is **skip**.
 
-### Step 1 — Validate input
-Read `$WORK_DIR/rc_in_classified.json` + `$WORK_DIR/rc_out_classified.json`. NEW + material VALUE_CHANGED rows are pre-approved by "apply the write plan". FLAGGED + UNMAPPED rows require an explicit decision; absent one, **skip and report**.
+### Step 1 — Set decisions in the compact files (judgment only)
+The compact `decisions_<mode>.json` files already hold the full write plan. NEW + material VALUE_CHANGED rows are pre-approved by "apply the write plan". For each FLAGGED item, set its `decision` to `skip` (default), `insert`, or `reassign:<db_id>`; for each UNMAPPED item, set a real `batch_code` or leave `skip`. To suppress a NEW/CHANGED row, add `"skip": true` to it. Edit ONLY these small files — never the audit dumps.
 
-### Step 2 — Safety gates (refuse with a clear error if tripped)
-- RC IN `new_count > 50` OR RC OUT `new_count > 50` → "Too many NEW rows for auto-write. Route to manual triage." (Daily runs are tiny; a large count means the scope/window is wrong.)
-- Any NEW row with `confidence < 0.7` → route those to manual review, do not write.
-- Any `flagged` row without an explicit `flagged_decisions` entry → **skip** it (never auto-write a suspected reassignment).
-- **Never** issue a `DELETE` against `deliveries` or `rc_out`. There is no decision value that deletes a DB row.
+### Step 2 — Run the deterministic apply phase
+The orchestrator performs all writes + audit logs via `lib/db.py`. It replicates the DB-trigger contract exactly: RC IN inserts set `cost_basis=0` (L-008 placeholder), never touch `current_weight` (the BEFORE-INSERT trigger owns it — L-005/L-006), and UPDATE the trigger-written audit row for provenance (L-001); RC OUT inserts write a manual audit row (no audit trigger). It enforces the safety gates (NEW>50 → halt; confidence<0.7 → halt) and NEVER deletes a row or auto-writes a flagged/unmapped row.
 
-### Step 3 — Ensure NEW-row batches exist (RC IN only; RC OUT NEW must already resolve to a batch_id)
-Every RC IN NEW row's `batch_code` should already be resolved (UNMAPPED rows are excluded). For safety, upsert defensively:
-```sql
-INSERT INTO batches (batch_code, location_ref, status, current_weight, avg_cost)
-VALUES (<batch_code>, COALESCE(<block_loc>, ''), 'STORED', 0, 0)
-ON CONFLICT (batch_code) DO NOTHING
-RETURNING batch_code;
+```bash
+python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \
+  --phase apply --decisions "$WORK_DIR/decisions_rc_in.json"
+
+python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \
+  --phase apply --decisions "$WORK_DIR/decisions_rc_out.json"
 ```
-Track any newly created batch and mention it in that row's audit comment. RC OUT NEW rows already carry a resolved `batch_id`; if one somehow doesn't, skip + report (never invent a batch).
+The script prints a compact result: `inserted` / `updated` counts + ids, `new_batches_created`, `flagged_resolved`, and `skipped` with reasons. Read that — nothing else.
 
-### Step 4 — Insert NEW rows
-- RC IN → `INSERT INTO deliveries (transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg, remarks, lab_results) VALUES (...)` (cast lab_results `::jsonb`; **do not set cost_basis** — out of scope, leave NULL). Build one multi-row INSERT. `RETURNING id`.
-- RC OUT → `INSERT INTO rc_out (transaction_date, batch_id, destination, weight_kg, remarks, block_loc, production_batch) VALUES (...) RETURNING id`.
+> Note: a `reassign:<db_id>` flagged decision and an `unmapped` batch_code reassignment are intentionally NOT auto-executed by the apply phase — they require a reviewed single `UPDATE` (per L-006, to avoid leaving the old batch's `current_weight` stale). The apply phase reports them in `flagged_resolved`/`skipped` with the target; you then issue that one reviewed `mcp__supabase__execute_sql` UPDATE and reconcile `current_weight` with the absolute form if needed.
 
-### Step 5 — Apply Sheet-wins UPDATEs (material VALUE_CHANGED)
-For each changed row, UPDATE only the differing fields to the Sheet value:
+### Step 3 — Verify (one tiny query each)
 ```sql
-UPDATE deliveries SET supplier=?, truck_plate=?, sacks=?, remarks=?, lab_results=?::jsonb WHERE id=?;
--- or, for rc_out:
-UPDATE rc_out SET weight_kg=?, remarks=?, production_batch=? WHERE id=?;
-```
-Never touch `cost_basis`. Use the `diff` array from the classified JSON to build the minimal SET clause.
-
-### Step 6 — Resolve FLAGGED rows ONLY per explicit decision
-- `'skip'` (or no decision) → do nothing, report it stayed flagged.
-- `'insert'` → treat as a NEW row (Step 4) — Renzo confirmed it's a separate feed.
-- `'reassign:<db_id>'` → `UPDATE <table> SET batch_id=<sheet batch_id> [, batch_code=<sheet code>] WHERE id=<db_id>` (the reassignment), and do NOT insert the Sheet row separately. Never delete.
-
-### Step 7 — Write audit provenance (tag origin = gsheet)
-`audit_logs` is **trigger-written on INSERT** (ledger L-001) — so after a delivery/rc_out INSERT, the trigger already created an audit row. **UPDATE** that row's comment for provenance; do not INSERT a duplicate:
-```sql
-UPDATE audit_logs
-SET comment = 'provenance=gsheet | Ingested by gsheet-sync from Google Sheet (file 1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM, tab <RC IN|RC OUT>, row <n>) on <run_ts>. Sheet = source of truth (2025+ scope).',
-    snapshot = COALESCE(snapshot, <full_row_jsonb>)
-WHERE table_name = '<deliveries|rc_out>' AND record_id = <new_id> AND operation = 'INSERT';
-```
-For an **UPDATE** write (Sheet-wins or reassignment), if no trigger fires on UPDATE, INSERT an audit row explicitly with the `diff` jsonb and the same `provenance=gsheet | ...` comment. (Verify the table's UPDATE-trigger behavior first; mirror whatever `deliveries-manager` learned in its agent-memory.)
-
-### Step 8 — Verify
-```sql
-SELECT MAX(transaction_date)::text AS new_latest,
-       COUNT(*) FILTER (WHERE id = ANY(<new_ids>)) AS inserts_visible
-FROM deliveries;   -- and the same for rc_out
+SELECT MAX(transaction_date)::text AS new_latest FROM deliveries;  -- and rc_out
 ```
 
-### Step 9 — Final report
+### Step 4 — Final report
 ```
 ## gsheet-sync — Execute complete
 
@@ -308,7 +243,7 @@ deliveries latest: <date>   rc_out latest: <date>
 
 - **Sheet is truth, but never blindly.** For 2025+, the Sheet wins on material edits — but a "Sheet-wins" that would double-count (reassignment) is a FLAG, not a write. When in doubt, flag.
 - **Forward-only, scope-bounded.** 2025-01-01+. The DB's pre-2025 legacy is sacred — never matched, updated, or deleted.
-- **Determinism via Python.** You orchestrate + judge; `extract_gsheet.py` / `classify_gsheet.py` do the parsing and bucketing. If you find yourself reading XLSX cells via Bash awk/sed, fix the Python script instead.
+- **Determinism via Python; lean context.** You orchestrate + judge; `sync_gsheet.py` (wrapping `extract_gsheet.py` / `classify_gsheet.py` / `lib/db.py`) does the parsing, DB fetch, bucketing, and write-back. You read ONLY the compact `decisions_<mode>.json` + STDOUT summaries — NEVER the full DB dump or the `*_classified.json` audit files. If you find yourself reading XLSX cells via Bash awk/sed, or catting a multi-thousand-line JSON, STOP and fix the Python instead.
 - **Idempotent via natural keys.** Re-running on the same Sheet produces zero duplicate writes — the classifier NOOPs everything already in the DB. You need no Gmail label.
 - **Loud about uncertainty.** UNMAPPED batch, suspected reassignment, off-format block_loc, low confidence → surface it in the summary with an actionable flag. A wrong batch_id / a double-counted feed is worse than a held row.
 - **Provenance is sacred.** Every write carries `provenance=gsheet` in its audit trail so future Renzo can trace Sheet-sourced rows vs email-sourced rows.
