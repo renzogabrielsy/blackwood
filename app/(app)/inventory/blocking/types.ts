@@ -1,7 +1,14 @@
+/**
+ * Block statuses the grid actively styles. A batch opened via the RC Movement matrix
+ * may carry a historical status (CLOSED/FEED) — represented as the catch-all string so
+ * the panel can still render it (unmatched statuses just get no status color).
+ */
+export type BlockStatus = 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED' | (string & {});
+
 export interface BlockData {
   batch_code: string;
   batch_id: string;
-  status: 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED';
+  status: BlockStatus;
   balance: number;
   total_in: number;
   php: number | null;    // null when role-gated
@@ -16,6 +23,19 @@ export interface BlockData {
 
 export interface BlockingGridData {
   blocks: Record<string, BlockData>;  // keyed by block_loc
+  canViewPrices: boolean;
+}
+
+/**
+ * Batch-accurate header summary for a single batch_id, returned by
+ * `fetchBlockDataForBatch`. Unlike `view_blocking_grid` (which only surfaces the
+ * batch CURRENTLY occupying a block_loc and filters out CLOSED/FEED), this is keyed
+ * directly on batch_id with NO status filter — so the RC Movement matrix can open the
+ * detail panel for a historical block whose slot has since been reused or closed.
+ */
+export interface BlockDataForBatch {
+  /** null when the batch_id was not found. */
+  blockData: BlockData | null;
   canViewPrices: boolean;
 }
 

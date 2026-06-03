@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import { getUserRole } from '@/lib/auth';
-import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord } from './types';
+import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord, BlockDataForBatch, BlockData } from './types';
 
 export async function fetchBlockingGridData(): Promise<BlockingGridData> {
   const empty: BlockingGridData = { blocks: {}, canViewPrices: false };
@@ -61,6 +61,110 @@ export async function fetchBlockingGridData(): Promise<BlockingGridData> {
     return { blocks, canViewPrices };
   } catch (err) {
     console.error('[Blocking] fetchBlockingGridData failed:', err);
+    return empty;
+  }
+}
+
+/**
+ * Batch-accurate header summary for ONE batch_id — used by the RC Movement matrix to
+ * open the shared BlockingDetailPanel for a specific column's batch.
+ *
+ * Why not reuse `view_blocking_grid`? That view only exposes the batch CURRENTLY
+ * occupying each block_loc (status STORED/IN-USE/SUNDRYING/SUNDRIED, non-empty loc).
+ * A matrix column for a past cycle-month may point at a batch that is now CLOSED or
+ * whose slot was reused — it would be absent from the view. This computes the same
+ * weighted-average metrics straight from `batches` + `deliveries` + `rc_out`, keyed on
+ * batch_id with NO status filter, so any historical column resolves correctly.
+ *
+ * Aggregation note: weighted averages (php/kg + lab) and balance are derived here in TS
+ * from already-stored transaction rows — NOT recomputing inventory state, just shaping
+ * the same numbers `view_blocking_grid` produces for a single batch the view omits.
+ */
+export async function fetchBlockDataForBatch(batchId: string): Promise<BlockDataForBatch> {
+  const empty: BlockDataForBatch = { blockData: null, canViewPrices: false };
+
+  try {
+    const supabase = await createClient();
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) return empty;
+
+    const role = await getUserRole(user.id);
+    const canViewPrices = role !== 'Production';
+
+    const { data: batch, error: batchError } = await supabase
+      .from('batches')
+      .select('id, batch_code, location_ref, status')
+      .eq('id', batchId)
+      .single();
+
+    if (batchError || !batch) return { blockData: null, canViewPrices };
+
+    const [deliveriesResult, rcOutResult] = await Promise.all([
+      supabase
+        .from('deliveries')
+        .select('weight_kg, cost_basis, lab_results')
+        .eq('batch_code', batch.batch_code),
+      supabase
+        .from('rc_out')
+        .select('weight_kg')
+        .eq('batch_id', batchId),
+    ]);
+
+    const deliveries = deliveriesResult.data ?? [];
+    const rcOut = rcOutResult.data ?? [];
+
+    // Weighted-average accumulators (SUM(metric * weight) / SUM(weight_with_metric)).
+    let totalIn = 0;
+    let wCost = 0;
+    let costWeight = 0;
+    const labKeys = ['bd_astm', 'bd_jis', 'ash', 'mc', 'grit', 'vm', 'fc'] as const;
+    const wLab: Record<string, number> = {};
+    const labWeight: Record<string, number> = {};
+    for (const k of labKeys) {
+      wLab[k] = 0;
+      labWeight[k] = 0;
+    }
+
+    for (const d of deliveries) {
+      const w = Number(d.weight_kg ?? 0);
+      totalIn += w;
+      if (d.cost_basis !== null && d.cost_basis !== undefined) {
+        wCost += Number(d.cost_basis) * w;
+        costWeight += w;
+      }
+      const lab = (d.lab_results as Record<string, unknown> | null) ?? {};
+      for (const k of labKeys) {
+        const raw = lab[k];
+        if (raw !== null && raw !== undefined && raw !== '') {
+          wLab[k] += Number(raw) * w;
+          labWeight[k] += w;
+        }
+      }
+    }
+
+    const totalOut = rcOut.reduce((s, r) => s + Number(r.weight_kg ?? 0), 0);
+    const wavg = (k: string): number => (labWeight[k] > 0 ? wLab[k] / labWeight[k] : 0);
+
+    const blockData: BlockData = {
+      batch_code: batch.batch_code,
+      batch_id:   batch.id,
+      status:     (batch.status as string) ?? 'CLOSED',
+      balance:    totalIn - totalOut,
+      total_in:   totalIn,
+      php:        canViewPrices ? (costWeight > 0 ? wCost / costWeight : null) : null,
+      bd_astm:    wavg('bd_astm'),
+      bd_jis:     wavg('bd_jis'),
+      ash:        wavg('ash'),
+      mc:         wavg('mc'),
+      grit:       wavg('grit'),
+      vm:         wavg('vm'),
+      fc:         wavg('fc'),
+    };
+
+    return { blockData, canViewPrices };
+  } catch (err) {
+    console.error('[Blocking] fetchBlockDataForBatch failed:', err);
     return empty;
   }
 }

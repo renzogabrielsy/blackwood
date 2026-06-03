@@ -71,6 +71,7 @@ Tracks raw charcoal consumption/depletion from batches. Excel-like grid input wi
 
 ## See Also
 - [RC IN](../rc-in/CONTEXT.md) — shares paste utilities
+- [RC Movement](../rc-movement/CONTEXT.md) — consumes `rc_out` (weight + transaction_date → `view_rc_movement`; production_batch → matrix "Batch" column)
 - [Blocking](../blocking/CONTEXT.md) — warehouse grid visualization; usage data feeds balance calculations
 - [Auth Provider](../../../../components/providers/AUTH.md) — permission model for price visibility
 - [Navbar](../../../../components/NAVBAR.md) — breadcrumb registration

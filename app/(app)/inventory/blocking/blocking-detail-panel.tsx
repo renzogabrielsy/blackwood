@@ -33,12 +33,22 @@ function getBalancePctClass(pct: number): string {
   return 'text-red-400';
 }
 
-function parseLocKey(locKey: string): { whse: string; col: string; row: string } {
+/**
+ * Parse a warehouse block_loc (`A-1A`) into whse/col/row. Returns null when the key is
+ * not a real loc (e.g. the RC Movement matrix may open a FEED column whose display key
+ * is the batch code, not a `WHSE-COLROW` loc) so the caller can skip the loc subline.
+ */
+function parseLocKey(locKey: string): { whse: string; col: string; row: string } | null {
   const parts = locKey.split('-');
+  if (parts.length < 2 || !parts[0] || !parts[1] || parts[1].length < 2) return null;
   const whse = parts[0];
   const colRow = parts[1];
   const row = colRow[colRow.length - 1];
   const col = colRow.slice(0, -1);
+  // A real loc has a numeric column (A-1A). Batch codes (MAY-26-…) have a numeric
+  // first segment but a non-WHSE letter prefix is the discriminator we rely on:
+  // warehouse keys are single letters / PCA / PCB. Treat anything else as not-a-loc.
+  if (!/^[A-D]$|^PC[AB]$/.test(whse)) return null;
   return { whse, col, row };
 }
 
@@ -65,15 +75,33 @@ function toDeliveryHistoryRow(
 // ─── Component ──────────────────────────────────────────────────────────────
 
 interface BlockingDetailPanelProps {
+  /**
+   * Display key for the header badge. From the Blocking grid this is the block_loc
+   * (`A-1A`); from the RC Movement matrix it's the column's block_loc (or batch code
+   * fallback for FEED columns). `null` = panel closed.
+   */
   locKey: string | null;
   onClose: () => void;
-  data: Record<string, BlockData>;
+  /**
+   * Block map keyed by block_loc — used by the Blocking grid (cell click derives the
+   * BlockData via `data[locKey]`). Optional: callers that already have the exact batch
+   * (e.g. the RC Movement matrix) pass `blockData` directly and omit this.
+   */
+  data?: Record<string, BlockData>;
+  /**
+   * Directly-supplied, batch-accurate summary. When present it takes precedence over
+   * `data[locKey]` — required for historical matrix columns whose batch is no longer
+   * the one occupying `locKey` (or is CLOSED and absent from the grid map).
+   */
+  blockData?: BlockData | null;
   canViewPrices: boolean;
 }
 
-export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: BlockingDetailPanelProps) {
+export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices }: BlockingDetailPanelProps) {
   const isOpen = locKey !== null;
-  const blockData: BlockData | undefined = locKey ? data[locKey] : undefined;
+  // Explicit blockData prop wins; otherwise fall back to the grid map lookup.
+  const blockData: BlockData | undefined =
+    blockDataProp ?? (locKey && data ? data[locKey] : undefined) ?? undefined;
   const router = useRouter();
   const { setActiveTab } = useInventoryTab();
 
@@ -133,9 +161,14 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
     });
   }, [locKey, blockData]);
 
+  // Key the detail fetch on the BATCH identity, not just locKey. The Blocking grid
+  // supplies blockData synchronously (so batch_id changes the moment a cell is clicked),
+  // while the RC Movement matrix supplies it asynchronously (blockData arrives after the
+  // header-click fetch resolves) — depending on batch_id covers both: the history loads
+  // as soon as the batch is known, and clears when the panel closes (batch_id undefined).
   useEffect(() => {
     fetchDetail();
-  }, [locKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [blockData?.batch_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset notes editing when detail data changes
   useEffect(() => {
@@ -321,10 +354,14 @@ export function BlockingDetailPanel({ locKey, onClose, data, canViewPrices }: Bl
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              WHSE {loc.whse}, Col {loc.col}, Row {loc.row}
-            </span>
-            <span className="text-xs text-muted-foreground">--</span>
+            {loc && (
+              <>
+                <span className="text-xs text-muted-foreground">
+                  WHSE {loc.whse}, Col {loc.col}, Row {loc.row}
+                </span>
+                <span className="text-xs text-muted-foreground">--</span>
+              </>
+            )}
             <span className="text-sm font-semibold text-foreground">{blockData.batch_code}</span>
           </div>
         </div>

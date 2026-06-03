@@ -15,14 +15,14 @@ The `/inventory` route is the single-page container for all inventory operations
 | `components/inventory-view.tsx` | ~70 | Crossfade wrapper. Renders all four tab containers; only the active one is visible (opacity transition over 150ms). |
 | `components/rc-out-lazy-tab.tsx` | ~70 | Lazy fetch + render for the Usage tab. |
 | `components/blocking-lazy-tab.tsx` | ~75 | Lazy fetch + render for the Blocking tab. Fetches on first activation, retry button on failure. |
-| `components/rc-movement-lazy-tab.tsx` | ~105 | Lazy fetch + render for the Movement tab. Manages year/month state, syncs to URL params (`?y=&m=`), refetches on picker change. |
-| `components/DeliverySheetFooter.tsx` | ~230 | Full year+12-month picker — used by RC IN (Deliveries tab). RC Movement uses a simpler inline picker. |
+| `components/rc-movement-matrix-lazy-tab.tsx` | ~55 | Lazy fetch + render for the Movement tab (the **matrix**). Owns `month` state (empty string ⇒ server resolves the default), calls `fetchRcMovementMatrix(month)` on first render + on month change, shows a spinner, renders `<RcMovementMatrix onMonthChange={setMonth}>`. Replaced the retired flat-list `rc-movement-lazy-tab.tsx`. |
+| `components/DeliverySheetFooter.tsx` | ~230 | Full year+12-month picker — used by RC IN (Deliveries tab). The Movement matrix uses its own inline `Select` month picker. |
 
 ## Data
 - **Deliveries:** fetched in `page.tsx`, passed to `<DeliveryMasterTableWrapper>` (server-rendered + hydrated)
 - **Usage:** lazy via `RcOutLazyTab` → `fetchRcOutTabData()` in `rc-out/actions.ts`
 - **Blocking:** lazy via `BlockingLazyTab` → `fetchBlockingGridData()` in `blocking/actions.ts`
-- **Movement:** lazy via `RcMovementLazyTab` → `fetchRcMovementData(year, month)` in `rc-movement/actions.ts`
+- **Movement:** lazy via `RcMovementMatrixLazyTab` → `fetchRcMovementMatrix(month?)` in `rc-movement/actions.ts` — renders the day×block feed **matrix** (the flat-list view was retired). Month switching re-fetches the action with no page reload.
 
 ## Key Behaviors
 
@@ -43,7 +43,7 @@ The `/inventory` route is the single-page container for all inventory operations
 | Blocking | `blocking/` | [Blocking](./blocking/CONTEXT.md) — warehouse grid heatmap |
 | Deliveries | `rc-in/` | [RC IN](./rc-in/CONTEXT.md) — Delivery Master Log |
 | Usage | `rc-out/` | [RC OUT](./rc-out/CONTEXT.md) — Inventory Usage |
-| Movement | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Batch Feed Movement Log |
+| Movement | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix (day×block pivot) |
 
 ## Dependencies
 - All four submodules share `@/components/providers/auth-context` for permission gating

@@ -748,7 +748,10 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
         const blockData = data[locKey];
 
         if (blockData) {
-          const cellStatus: CellStatus = blockData.status;
+          // view_blocking_grid only emits STORED/IN-USE/SUNDRYING/SUNDRIED batches, so the
+          // widened BlockData.status (which also allows historical CLOSED/FEED for the RC
+          // Movement panel) narrows safely to CellStatus here.
+          const cellStatus = blockData.status as CellStatus;
           const spotlight = computeSpotlight(statusFilter, cellStatus, blockData, labHighlights);
           const spotlightClass = getSpotlightClass(spotlight, statusFilter);
 
