@@ -239,7 +239,9 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                 // Stays OPAQUE bg-muted (frozen-row) so body rows can't bleed
                                                 // through on vertical scroll. Hover/selected tints layer on top
                                                 // of the opaque base — no /opacity on the sticky surface.
-                                                'frozen-row bg-muted border-b border-border align-bottom text-left font-medium p-0',
+                                                // border-r adds the vertical column separator (matches the
+                                                // horizontal border-border/50 gridline weight).
+                                                'frozen-row bg-muted border-b border-r border-border/50 align-bottom text-left font-medium p-0',
                                             )}
                                         >
                                             <Tooltip>
@@ -344,7 +346,7 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                     <td
                                                         key={c.batchId}
                                                         className={cn(
-                                                            'px-2 py-1 text-right font-mono tabular-nums border-b border-border/50',
+                                                            'px-2 py-1 text-right font-mono tabular-nums border-b border-r border-border/50',
                                                             active
                                                                 ? 'bg-emerald-500/10 text-foreground'
                                                                 : 'text-transparent',
@@ -579,10 +581,15 @@ function FrozenHeaderCell({
     // Frozen identity HEADER cell = top-left corner: sticky on BOTH axes, so it must
     // out-rank the scrolling header row AND the frozen body column. OPAQUE bg-muted
     // (never glass) so scrolling cells can't bleed through in either direction.
+    // The LAST frozen-left column (Total fed) passes `.frozen-edge` as its right
+    // divider — don't also add border-r there or the two would fight; every OTHER
+    // frozen-left column gets border-r for the vertical column separator.
+    const hasEdge = className?.includes('frozen-edge');
     return (
         <th
             className={cn(
                 'frozen-corner bg-muted border-b border-border px-2 py-1 font-medium align-bottom',
+                !hasEdge && 'border-r border-border/50',
                 align === 'right' ? 'text-right' : 'text-left',
                 className,
             )}
@@ -607,10 +614,15 @@ function FrozenBodyCell({
     // Frozen LEFT-column body cell (.frozen-col, z-10). OPAQUE bg-background so the
     // scrolling block cells can't bleed through; group-hover repaints the row hover
     // tint OPAQUELY onto the pinned columns so they match the scrolling part.
+    // The LAST frozen-left column (Total fed) passes `.frozen-edge` as its right
+    // divider — skip border-r there to avoid a competing line; every OTHER frozen-left
+    // column gets border-r for the vertical column separator.
+    const hasEdge = className?.includes('frozen-edge');
     return (
         <td
             className={cn(
                 'frozen-col bg-background group-hover:bg-accent border-b border-border/50 px-2 py-1',
+                !hasEdge && 'border-r border-border/50',
                 className,
             )}
             style={{ left, width }}
@@ -636,10 +648,15 @@ function FrozenFooterCell({
     // column (.frozen-corner-bottom, z30). OPAQUE bg-muted (matches the footer
     // band, never glass) so scrolling cells can't bleed through in either
     // direction. frozen-edge-top kills the top seam against the scrolling body.
+    // The LAST frozen-left column (Total fed) passes `.frozen-edge` as its right
+    // divider — skip border-r there; every OTHER frozen-left footer cell gets
+    // border-r for the vertical column separator.
+    const hasEdge = className?.includes('frozen-edge');
     return (
         <td
             className={cn(
                 'frozen-corner-bottom frozen-edge-top bg-muted px-2 py-0.5 align-middle',
+                !hasEdge && 'border-r border-border/50',
                 className,
             )}
             style={{ left, width }}
