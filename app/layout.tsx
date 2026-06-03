@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
-import { Atkinson_Hyperlegible } from "next/font/google";
+import { Geist } from "next/font/google";
 import { Toaster } from "sonner";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-const atkinsonSans = Atkinson_Hyperlegible({
-  variable: "--font-atkinson-sans",
+const geistSans = Geist({
+  variable: "--font-geist-sans",
   subsets: ["latin"],
-  weight: ["400", "700"],
   display: "swap",
 });
 
@@ -24,7 +23,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${atkinsonSans.variable} antialiased`}
+        className={`${geistSans.variable} antialiased`}
       >
         <Providers>
           {children}
