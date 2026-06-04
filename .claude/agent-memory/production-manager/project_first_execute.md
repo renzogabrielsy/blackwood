@@ -22,3 +22,10 @@ Catch-up window 5/29 + 6/01 (no 5/30–5/31 sheets — weekend). MC UID 118914 +
 3. `production_waste` has `UNIQUE (shift_id)` = one waste row per shift. A 05-29 carryover row (323.5 kg, sat in JUNE sheet) collided with the base 05-29 MAY/M waste row → **HELD, not auto-merged** (awaiting Renzo: sum into the per-shift row, or different shift?).
 
 Next sync starts from watermark **2026-06-01** (since_date = 5/29 in Gmail). One open item: the held 05-29 carryover waste row.
+
+## Third EXECUTE — 2026-06-03 (watermark 6/01 → 6/02)
+Single new day **06-02**. MC UID 119046 + Ivy UID 119047 (latest cumulative workbooks; older UIDs 118818/118783 also labeled). Wrote **1 shift + 1 run + 1 downtime + 1 waste + 1 electricity = 5 rows + 5 audit_logs**; all 4 threads labeled. shift_id `75d6e914-d451-4fb5-8ba8-797e0295ab62`. Output: run 26,520 kg / 1,020 sacks (CEBU 3X50), waste 3,372.5 kg, downtime 0h6m, electricity 448→453.6 ×120 (consumption 672 kWh). Trucks: MC sent none (truck watermark still stuck at 5/26). Reconcile all-green (G13 26520 = run; waste sum = reported).
+
+**L-007 applied cleanly:** run R8 had a BLANK shift cell (not STARTING/ENDING — single-batch JUNE day, verified in raw sheet). Inferred M from the day's downtime+electricity per L-007 rule 2; Renzo confirmed M. No batch-boundary, no dt_mins split (6<60), no waste collision. Zero VALUE_CHANGED, zero MALFORMED. Textbook.
+
+Next sync starts from watermark **2026-06-02** (since_date = 5/30 in Gmail).
