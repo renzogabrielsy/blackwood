@@ -80,6 +80,56 @@ type EquipmentCode = (typeof EQUIPMENT_CODES)[number];
 const SHIFT_ORDER = SHIFT_CODES; // ['M', 'E', 'N']
 const EDIT_COLUMNS: readonly EditColumn[] = [...EQUIPMENT_CODES, 'BAGGING'];
 
+// ─── Keyboard-navigation column model ────────────────────────────────────────────────
+// Every NAVIGABLE cell is addressed by a colKey. Identity cols are editable on FILLER rows
+// only; weight cols (equip + BAGGING) on real (unless collision-locked) AND filler rows.
+// The left→right order here is the Tab order within a row (identity first, then weights).
+type NavColKey = 'shift' | 'grade' | 'source' | 'recv' | EditColumn;
+const NAV_COL_ORDER: readonly NavColKey[] = ['shift', 'grade', 'source', 'recv', ...EQUIPMENT_CODES, 'BAGGING'];
+const navColIndex = (c: NavColKey): number => NAV_COL_ORDER.indexOf(c);
+
+// Build the cell `data-navid` (rowKey | colKey). Inputs carry it so the grid-level keydown
+// can read the ordered cell list straight from the DOM (document order == render order),
+// which is far more robust than re-deriving order from the merged/pivot data model.
+function navId(rowKey: string, colKey: NavColKey): string { return `${rowKey}|${colKey}`; }
+function parseNavId(id: string): { rowKey: string; colKey: NavColKey } {
+    const i = id.lastIndexOf('|');
+    return { rowKey: id.slice(0, i), colKey: id.slice(i + 1) as NavColKey };
+}
+
+// Given the ordered nav cells and the current index, find the target cell in the NEXT
+// (dir=+1) / PREVIOUS (dir=-1) editable row: prefer the same `colKey`; if that row lacks it
+// (e.g. a real row has no editable identity column), fall back to the closest column in that
+// row — the cell with the nearest colKey index. Returns null when there's no such row.
+function findColInAdjacentRow(
+    cells: { el: HTMLInputElement; rowKey: string; colKey: NavColKey }[],
+    idx: number,
+    colKey: NavColKey,
+    dir: 1 | -1,
+): { el: HTMLInputElement; rowKey: string; colKey: NavColKey } | null {
+    const curRow = cells[idx]?.rowKey;
+    if (curRow == null) return null;
+    // Walk to the first cell whose rowKey differs from the current row.
+    let i = idx + dir;
+    while (i >= 0 && i < cells.length && cells[i].rowKey === curRow) i += dir;
+    if (i < 0 || i >= cells.length) return null;
+    const targetRow = cells[i].rowKey;
+    // Gather all cells of that target row.
+    const rowCells = cells.filter((c) => c.rowKey === targetRow);
+    // Exact column match?
+    const exact = rowCells.find((c) => c.colKey === colKey);
+    if (exact) return exact;
+    // Else nearest column by NAV_COL_ORDER index.
+    const want = navColIndex(colKey);
+    let best = rowCells[0];
+    let bestDist = Math.abs(navColIndex(best.colKey) - want);
+    for (const c of rowCells) {
+        const d = Math.abs(navColIndex(c.colKey) - want);
+        if (d < bestDist) { best = c; bestDist = d; }
+    }
+    return best ?? null;
+}
+
 // An editable column = one equipment code or the Bagging (FLEC) bucket.
 const BAGGING = 'BAGGING' as const;
 type EditColumn = EquipmentCode | typeof BAGGING;
@@ -343,6 +393,16 @@ const GRID = 'border-b border-r border-border';
 const GROUP = 'border-l-2 border-l-border';
 const BOX = 'border-border';
 
+// Active-cell highlight — MATCHES the production ledger's selected-cell look
+// (`ring-2 ring-primary ring-inset`). An INSET ring takes NO layout space (it's a
+// box-shadow), so the focused cell stays the same height as every other cell (no expansion).
+// `z-20` lifts the active cell ABOVE the z-10 frozen/sticky columns (`.frozen-col` /
+// `.frozen-edge`) so its ring is never clipped or hidden behind an adjacent sticky cell when
+// horizontally scrolled. Static — NO transition on the cell-selection highlight (CLAUDE.md).
+// Sits ON TOP of any dirty (blue/amber/destructive) cell tint (later `ring-*` wins the ring
+// color/width; the dirty `bg-*` tint remains), so both read together.
+const ACTIVE_RING = 'z-20 ring-2 ring-primary ring-inset';
+
 // ─── Uniform row height ──────────────────────────────────────────────────────────────
 // EVERY row — real data, filler/input, AND the daily-total footer — is exactly this tall.
 // Applied to the <tr> (`ROW_H`) so no row is taller than another. Cells use vertical
@@ -465,6 +525,12 @@ interface EditContext {
     onUnstageInsert: (cellKey: string) => void;
     upsertDraft: (key: string, patch: Partial<FillerDraft>, dayDate: string) => void;
     notifyIncomplete: () => void;
+    /** The currently keyboard-active cell's navId (drives autofocus on programmatic nav). */
+    activeNavId: string | null;
+    /** Set the active cell (a cell calls this on focus, so click + keyboard share one model). */
+    onActivate: (navId: string | null) => void;
+    /** Clear the Enter-anchor (called on a fresh mouse click — ends any Tab run). */
+    clearAnchor: () => void;
 }
 
 export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSuccess }: ProductionDailyBlockProps) {
@@ -480,6 +546,94 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
 
     const [isSaving, setIsSaving] = React.useState(false);
     const [confirmDelete, setConfirmDelete] = React.useState<{ eventId: string; label: string } | null>(null);
+
+    // ─── Keyboard navigation (Tab / Shift+Tab / Enter-anchor / arrows) ──────────────
+    const gridScrollRef = React.useRef<HTMLDivElement>(null);
+    const [activeNavId, setActiveNavId] = React.useState<string | null>(null);
+    // The colKey a Tab RUN started from — a later Enter returns to it on the next row
+    // (mirrors the bulk-add modal's enterAnchorColRef). Held in a ref (no re-render).
+    const enterAnchorColRef = React.useRef<NavColKey | null>(null);
+
+    const onActivate = React.useCallback((id: string | null) => setActiveNavId(id), []);
+    const clearAnchor = React.useCallback(() => { enterAnchorColRef.current = null; }, []);
+
+    // Ordered list of focusable nav inputs, straight from the DOM (document order == render
+    // order). Returns the input elements + their parsed (rowKey, colKey).
+    const navCells = React.useCallback((): { el: HTMLInputElement; rowKey: string; colKey: NavColKey }[] => {
+        const root = gridScrollRef.current;
+        if (!root) return [];
+        return Array.from(root.querySelectorAll<HTMLInputElement>('input[data-navid]')).map((el) => {
+            const { rowKey, colKey } = parseNavId(el.dataset.navid as string);
+            return { el, rowKey, colKey };
+        });
+    }, []);
+
+    const focusNav = React.useCallback((el: HTMLInputElement | null) => {
+        if (!el) return;
+        el.focus();
+        el.select?.();
+        // Keep the focused cell visible without a jarring jump.
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, []);
+
+    // The grid-level keydown: when an editable cell is focused, Tab/Enter/arrows move the
+    // active cell (commit happens via the moved-FROM input's blur). Skips read-only/locked
+    // cells automatically — they simply aren't in the DOM nav list.
+    const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
+        const target = e.target as HTMLElement;
+        const id = target?.dataset?.navid;
+        if (!id) return; // not an editable cell — let native behavior run
+        const cells = navCells();
+        const idx = cells.findIndex((c) => c.el === target);
+        if (idx < 0) return;
+        const cur = cells[idx];
+
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            // Remember the anchor at the START of a Tab run.
+            if (enterAnchorColRef.current === null) enterAnchorColRef.current = cur.colKey;
+            const next = e.shiftKey ? cells[idx - 1] : cells[idx + 1];
+            focusNav(next?.el ?? null); // at the ends, stay put (commit already ran on blur)
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            if (e.shiftKey) {
+                // Shift+Enter → up one editable row (same column if present, else nearest).
+                enterAnchorColRef.current = null;
+                const prevRowCell = findColInAdjacentRow(cells, idx, cur.colKey, -1);
+                focusNav(prevRowCell?.el ?? null);
+                return;
+            }
+            // Enter → down one editable row, returning to the ANCHOR column (or current),
+            // then consume the anchor (so a following plain Enter goes straight down).
+            const anchorCol = enterAnchorColRef.current ?? cur.colKey;
+            const downCell = findColInAdjacentRow(cells, idx, anchorCol, +1);
+            enterAnchorColRef.current = null;
+            focusNav(downCell?.el ?? null);
+            return;
+        }
+
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            // Move within editable cells horizontally; ends a Tab run.
+            e.preventDefault();
+            enterAnchorColRef.current = null;
+            const next = e.key === 'ArrowRight' ? cells[idx + 1] : cells[idx - 1];
+            focusNav(next?.el ?? null);
+            return;
+        }
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            // Move within a column to the nearest editable row that has that column; ends a run.
+            e.preventDefault();
+            enterAnchorColRef.current = null;
+            const dir = e.key === 'ArrowDown' ? +1 : -1;
+            const cell = findColInAdjacentRow(cells, idx, cur.colKey, dir);
+            focusNav(cell?.el ?? null);
+            return;
+        }
+    }, [navCells, focusNav]);
 
     const resetAll = React.useCallback(() => {
         setModified(new Map());
@@ -531,8 +685,9 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
         () => ({
             period: selectedPeriod, plantView, modified, staged, deleted, drafts,
             onEditWeight, onClearEdit, onDeleteEvent, onStageInsert, onUnstageInsert, upsertDraft, notifyIncomplete,
+            activeNavId, onActivate, clearAnchor,
         }),
-        [selectedPeriod, plantView, modified, staged, deleted, drafts, onEditWeight, onClearEdit, onDeleteEvent, onStageInsert, onUnstageInsert, upsertDraft, notifyIncomplete],
+        [selectedPeriod, plantView, modified, staged, deleted, drafts, onEditWeight, onClearEdit, onDeleteEvent, onStageInsert, onUnstageInsert, upsertDraft, notifyIncomplete, activeNavId, onActivate, clearAnchor],
     );
 
     // Draft-derived INSERT count (one event per filled column on a complete draft).
@@ -640,7 +795,14 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
         <div className="flex min-h-0 flex-1 flex-col">
             {toolbar}
 
-            <div className="relative min-h-0 flex-1 overflow-auto animate-fade-in">
+            <div
+                ref={gridScrollRef}
+                onKeyDown={handleGridKeyDown}
+                // A direct mouse click on a cell ends any Tab run (clears the Enter-anchor),
+                // matching the ledger/bulk-add nav rules.
+                onMouseDownCapture={(e) => { if ((e.target as HTMLElement)?.dataset?.navid) clearAnchor(); }}
+                className="relative min-h-0 flex-1 overflow-auto animate-fade-in"
+            >
                 <table
                     className="relative table-fixed border border-border text-[11px]"
                     style={{ width: 'max-content', minWidth: `${minWidth}px`, borderCollapse: 'separate', borderSpacing: 0 }}
@@ -917,6 +1079,8 @@ function EditInput({
     inputMode,
     valueClass,
     autoFocus,
+    navId: navIdProp,
+    onActivate,
 }: {
     value: string;
     onChange: (v: string) => void;
@@ -928,6 +1092,10 @@ function EditInput({
     inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
     valueClass?: string;
     autoFocus?: boolean;
+    /** Stable `rowKey|colKey` id for keyboard nav (the grid reads these from the DOM). */
+    navId?: string;
+    /** Called on focus so click + keyboard share one active-cell model. */
+    onActivate?: (navId: string | null) => void;
 }) {
     const [focused, setFocused] = React.useState(false);
     // Escape must NOT also fire the blur-commit (it would re-commit the reverted value —
@@ -941,14 +1109,17 @@ function EditInput({
             value={value}
             list={list}
             inputMode={inputMode}
+            data-navid={navIdProp}
             // Placeholder vanishes on focus (Excel-like), restores on empty blur.
             placeholder={focused ? '' : placeholder}
             onChange={(e) => onChange(e.target.value)}
-            onFocus={() => setFocused(true)}
+            onFocus={() => { setFocused(true); onActivate?.(navIdProp ?? null); }}
             onBlur={() => { setFocused(false); if (escapedRef.current) { escapedRef.current = false; return; } onCommit(); }}
+            // Tab / Enter / arrows are owned by the grid-level keydown (it commits via this
+            // input's blur, then focuses the next cell). EditInput keeps ONLY Escape (cancel
+            // + stay put). Esc suppresses the blur-commit via escapedRef.
             onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); onCommit(); (e.target as HTMLInputElement).blur(); }
-                else if (e.key === 'Escape') { e.preventDefault(); escapedRef.current = true; onEscape?.(); (e.target as HTMLInputElement).blur(); }
+                if (e.key === 'Escape') { e.preventDefault(); escapedRef.current = true; onEscape?.(); (e.target as HTMLInputElement).blur(); }
             }}
             className={cn(EDIT_INPUT, 'font-mono tabular-nums placeholder:text-muted-foreground/40', textAlign, valueClass)}
         />
@@ -994,12 +1165,14 @@ function FillerRow({
     const identityComplete = !!(shift && grade && source && recv);
 
     const cellBase = cn('frozen-col bg-background p-0 align-middle', GRID, boxTop);
+    // Active-cell highlight per identity column (matches the ledger; inset ring, no shift).
+    const isAct = (c: NavColKey) => editCtx.activeNavId === navId(slotKey, c);
 
     return (
         <tr className={cn(ROW_H, 'bg-blue-500/[0.03] transition-colors duration-150 hover:bg-muted/30')}>
             {dateCell}
             {/* Shift — input + datalist typeahead, normalized on commit */}
-            <td className={cellBase} style={{ left: LEFT_SHIFT }}>
+            <td className={cn(cellBase, isAct('shift') && ACTIVE_RING)} style={{ left: LEFT_SHIFT }}>
                 <EditInput
                     value={shift}
                     onChange={setShift}
@@ -1008,10 +1181,12 @@ function FillerRow({
                     placeholder="Sh"
                     list={DL_SHIFT}
                     align="center"
+                    navId={navId(slotKey, 'shift')}
+                    onActivate={editCtx.onActivate}
                 />
             </td>
             {/* Grade */}
-            <td className={cellBase} style={{ left: LEFT_GRADE }}>
+            <td className={cn(cellBase, isAct('grade') && ACTIVE_RING)} style={{ left: LEFT_GRADE }}>
                 <EditInput
                     value={grade}
                     onChange={setGrade}
@@ -1019,10 +1194,12 @@ function FillerRow({
                     onEscape={() => { setGrade(draft?.grade ?? ''); }}
                     placeholder="Grade"
                     list={DL_GRADE}
+                    navId={navId(slotKey, 'grade')}
+                    onActivate={editCtx.onActivate}
                 />
             </td>
             {/* Source */}
-            <td className={cellBase} style={{ left: LEFT_SOURCE }}>
+            <td className={cn(cellBase, isAct('source') && ACTIVE_RING)} style={{ left: LEFT_SOURCE }}>
                 <EditInput
                     value={source}
                     onChange={setSource}
@@ -1030,16 +1207,20 @@ function FillerRow({
                     onEscape={() => { setSource(draft?.source ?? ''); }}
                     placeholder="Source"
                     list={sourceDatalistId(editCtx.plantView)}
+                    navId={navId(slotKey, 'source')}
+                    onActivate={editCtx.onActivate}
                 />
             </td>
             {/* Recv date — typed; normalized on commit; starts EMPTY (placeholder only) */}
-            <td className={cn('frozen-col frozen-edge bg-background p-0 align-middle', GRID, boxTop)} style={{ left: LEFT_RECV }}>
+            <td className={cn('frozen-col frozen-edge bg-background p-0 align-middle', GRID, boxTop, isAct('recv') && ACTIVE_RING)} style={{ left: LEFT_RECV }}>
                 <EditInput
                     value={recv}
                     onChange={setRecv}
                     onCommit={() => { const n = normalizeTypedDate(recv, recvYear); if (n !== recv) setRecv(n); pushIdentity({ recvDate: n }); }}
                     onEscape={() => { setRecv(draft?.recvDate ?? ''); }}
                     placeholder="recv"
+                    navId={navId(slotKey, 'recv')}
+                    onActivate={editCtx.onActivate}
                 />
             </td>
             {/* Equipment + bagging weight inputs */}
@@ -1103,8 +1284,11 @@ function FillerWeightCell({
         editCtx.upsertDraft(slotKey, { weights: { [col]: String(parsed) } }, dayDate);
     };
 
+    const thisNavId = navId(slotKey, col);
+    const isActive = editCtx.activeNavId === thisNavId;
+
     return (
-        <td className={cn(baseClass, identityComplete ? 'cursor-text' : 'cursor-text bg-muted/20')}>
+        <td className={cn(baseClass, identityComplete ? 'cursor-text' : 'cursor-text bg-muted/20', isActive && ACTIVE_RING)}>
             <EditInput
                 value={val}
                 onChange={setVal}
@@ -1113,6 +1297,8 @@ function FillerWeightCell({
                 align="right"
                 inputMode="decimal"
                 valueClass={valueClass}
+                navId={thisNavId}
+                onActivate={editCtx.onActivate}
             />
             {isBag && showBagPopover && (
                 <BaggingMetaPopover
@@ -1214,29 +1400,42 @@ function EditableCell({
     const stagedInsert = editCtx.staged.get(cellKey);
     const modifiedWeight = eventId != null ? editCtx.modified.get(eventId) : undefined;
 
-    const [editing, setEditing] = React.useState(false);
-    const [draft, setDraft] = React.useState('');
     const [pendingInsert, setPendingInsert] = React.useState<string | null>(null);
 
     const baseClass = cn('relative p-0 align-middle text-right font-mono text-[11px] tabular-nums', GRID, extraClass);
-    // Static-display span metrics — identical to EDIT_INPUT so editing never changes height.
     const displayClass = 'block w-full px-1.5 py-0.5 text-[11px] leading-none';
 
-    let display: string;
-    let stateTint = '';
-    if (stagedInsert) {
-        display = fmt(Number(stagedInsert.row.weight_kg) || 0);
-        stateTint = 'bg-blue-500/10 ring-1 ring-inset ring-blue-500/40';
-    } else if (isDeleted) {
-        display = '';
-        stateTint = 'bg-destructive/10 ring-1 ring-inset ring-destructive/40';
-    } else if (modifiedWeight !== undefined) {
-        display = fmt(Number(modifiedWeight) || 0);
-        stateTint = 'bg-amber-500/10 ring-1 ring-inset ring-amber-500/40';
-    } else {
-        display = fmt(slot.weight);
-    }
+    // The effective raw value (modified > staged > base weight). The cell is ALWAYS an
+    // input (so it's keyboard-focusable for nav). Local `val` seeded from the effective
+    // value + re-synced when the underlying state changes externally (discard/save).
+    const effective = stagedInsert
+        ? stagedInsert.row.weight_kg
+        : modifiedWeight !== undefined
+            ? modifiedWeight
+            : isDeleted
+                ? ''
+                : slot.weight ? String(slot.weight) : '';
+    const [val, setVal] = React.useState(effective);
+    // Re-sync the local input when the underlying state changes externally (discard/save).
+    // Recompute the effective value INSIDE the effect from its source deps (so `effective`
+    // isn't a dep that would re-run every render, and we don't touch a ref during render).
+    React.useEffect(() => {
+        const next = stagedInsert
+            ? stagedInsert.row.weight_kg
+            : modifiedWeight !== undefined
+                ? modifiedWeight
+                : isDeleted
+                    ? ''
+                    : slot.weight ? String(slot.weight) : '';
+        setVal(next);
+    }, [stagedInsert, modifiedWeight, isDeleted, slot.weight]);
 
+    let stateTint = '';
+    if (stagedInsert) stateTint = 'bg-blue-500/10 ring-1 ring-inset ring-blue-500/40';
+    else if (isDeleted) stateTint = 'bg-destructive/10 ring-1 ring-inset ring-destructive/40';
+    else if (modifiedWeight !== undefined) stateTint = 'bg-amber-500/10 ring-1 ring-inset ring-amber-500/40';
+
+    // LOCKED cell — read-only (no input → not focusable → SKIPPED by keyboard nav).
     if (locked) {
         return (
             <td className={cn(baseClass, 'bg-muted/40 text-muted-foreground')} title="Multiple entries — edit in Ledger">
@@ -1245,16 +1444,8 @@ function EditableCell({
         );
     }
 
-    const startEdit = () => {
-        if (editing) return;
-        const seed = stagedInsert ? stagedInsert.row.weight_kg : modifiedWeight !== undefined ? modifiedWeight : slot.weight ? String(slot.weight) : '';
-        setDraft(seed);
-        setEditing(true);
-    };
-
     const commit = () => {
-        setEditing(false);
-        const parsed = parseWeight(draft);
+        const parsed = parseWeight(val);
         if (stagedInsert) {
             if (parsed == null || parsed <= 0) { editCtx.onUnstageInsert(cellKey); return; }
             editCtx.onStageInsert(cellKey, { ...stagedInsert.row, weight_kg: String(parsed) });
@@ -1272,24 +1463,22 @@ function EditableCell({
         if (parsed != null && parsed > 0) setPendingInsert(String(parsed));
     };
 
-    const cancel = () => { setEditing(false); setDraft(''); };
-    const editable = !isDeleted;
+    const thisNavId = navId(leafKey, col);
+    const isActive = editCtx.activeNavId === thisNavId;
 
     return (
-        <td className={cn(baseClass, stateTint, !locked && 'cursor-text')} onClick={() => { if (editable && !editing && !pendingInsert) startEdit(); }}>
-            {editing ? (
-                <EditInput
-                    autoFocus
-                    value={draft}
-                    onChange={setDraft}
-                    onCommit={commit}
-                    onEscape={cancel}
-                    align="right"
-                    inputMode="decimal"
-                />
-            ) : (
-                <span className={cn(displayClass, isDeleted && 'text-destructive line-through', valueClass)}>{display}</span>
-            )}
+        <td className={cn(baseClass, stateTint, isActive && ACTIVE_RING)}>
+            <EditInput
+                value={val}
+                onChange={setVal}
+                onCommit={commit}
+                onEscape={() => setVal(effective)}
+                align="right"
+                inputMode="decimal"
+                valueClass={cn(isDeleted && 'text-destructive line-through', valueClass)}
+                navId={thisNavId}
+                onActivate={editCtx.onActivate}
+            />
             {pendingInsert != null && (
                 <InsertPopover
                     weight={pendingInsert}
