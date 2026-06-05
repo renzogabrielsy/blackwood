@@ -93,9 +93,9 @@ gsheet-first, **parallel named agents** (gsheet-sync + deliveries-manager + rc-o
 No work is mid-flight. Highest-value next steps, in order: (1) **fix the extractor wrong-batch derivation** (`extract_proposed_daily.py` — prefer active slot occupant over block-date code) to stop the per-sync remaps; (2) **enable RLS** on the 7 production tables; (3) commit the 3 uncommitted agent-memory/ledger files. Lower priority: reusable current_weight resync RPC, Daily-Block staged-ring polish.
 
 ## Git state
-- **Branch `dev`** — pushed, in sync with `origin/dev`. This session's commits: `4b9f6e7` (digest) · `543ced5` (ledger UX) · `57b0e50` (daily block) · `b37a681` (chore + june-sack-projection.pdf) · `60663a3` (keyboard nav + active-cell highlight).
-- **Uncommitted** (agent learnings from the sync — should be committed with this handoff): `.claude/skills/sync-ictc/LEARNING_LEDGER.md` (L-010/011/012), `.claude/agent-memory/production-manager/project_first_execute.md` (watermark→06-04), `.claude/agent-memory-local/supabase-backend-engineer/blocking-current-weight-drift.md`.
-- The ICTC sync was **database-only** (Supabase writes) — no app-code changes, nothing to commit there beyond the agent-memory files.
+- **Branch `dev`** — pushed, in sync with `origin/dev`, **working tree CLEAN (all committed)**.
+- This session's commits: `4b9f6e7` (digest) · `543ced5` (ledger UX) · `57b0e50` (daily block) · `b37a681` (chore + june-sack-projection.pdf) · `60663a3` (keyboard nav + active-cell highlight) · `81aa530` (docs: this handoff + TIMELINE + sync ledger learnings L-010/011/012 + agent-memory).
+- The ICTC sync was **database-only** (Supabase writes) — no app-code changes; the agent learnings it produced are committed in `81aa530`.
 
 ---
 
