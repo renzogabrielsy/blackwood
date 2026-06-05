@@ -46,3 +46,4 @@ next-env.d.ts
 # python (ingestion skill scripts)
 __pycache__/
 *.pyc
+.gstack/
