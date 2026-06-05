@@ -29,3 +29,12 @@ Single new day **06-02**. MC UID 119046 + Ivy UID 119047 (latest cumulative work
 **L-007 applied cleanly:** run R8 had a BLANK shift cell (not STARTING/ENDING — single-batch JUNE day, verified in raw sheet). Inferred M from the day's downtime+electricity per L-007 rule 2; Renzo confirmed M. No batch-boundary, no dt_mins split (6<60), no waste collision. Zero VALUE_CHANGED, zero MALFORMED. Textbook.
 
 Next sync starts from watermark **2026-06-02** (since_date = 5/30 in Gmail).
+
+## Fourth EXECUTE — 2026-06-05 (watermark 6/02 → 6/04)
+MC UID **119148** (1 thread) + Ivy UID **119257** (latest of 2; 119147 superseded). MC carried one new day **06-03**; Ivy waste led a day ahead with **06-03 + 06-04**. Wrote **2 shifts + 1 run + 1 downtime + 2 waste + 1 electricity + 2 trucks = 7 rows + 2 shifts + 9 audit_logs**; both threads labeled. Shift ids: 06-03 `2862666d-5b44-4725-aba4-7682d723dd6d`, 06-04 `41174092-e120-4913-925e-74e02e2be43e`. Output: run 31,200 kg / 1,200 sacks (CEBU 3X50, batch JUNE), electricity 453.6→459.7 ×120, downtime 0h6m. Waste 06-03 = 3,745.5 kg, 06-04 = 3,971.5 kg. Reconcile all-green.
+
+**Truck watermark stall CLEARED:** MC finally sent 2 truck rows for 06-03 (AAV 6111, KCA 378) — truck_readings advanced **2026-05-26 → 2026-06-03** after being stuck operator-side for ~8 days. electricity → 06-03; production_shifts → **06-04** (Ivy waste leads MC by a day, so the shifts watermark runs ahead of runs/downtime/electricity which sit at 06-03).
+
+**L-007 applied cleanly again (same blank-shift sub-case as 3rd EXECUTE):** run R8 blank shift cell → inferred M from same-day downtime+electricity+Ivy-waste, single-batch JUNE, no STARTING/ENDING boundary. No dt_mins split (6<60), no waste collision (06-03 and 06-04 are distinct shift parents). Zero VALUE_CHANGED, zero MALFORMED.
+
+Next sync starts from watermark **2026-06-04** (since_date = 6/01 in Gmail). Note the split watermark: runs/downtime/electricity at 06-03, shifts/waste at 06-04 — MC's 06-04 sheet will arrive in a later email.

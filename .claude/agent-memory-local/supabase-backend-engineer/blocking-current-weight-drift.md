@@ -57,6 +57,21 @@ Full sweep also found 2 legacy CLOSED batches with drift: MAY-26-FEED5 (+13,330)
 non-empty location_ref). JAN-26-SUNDRY7 also retains `location_ref='A-4C'` despite CLOSED (separate
 location-not-cleared-on-close artifact, harmless to the grid).
 
+## Follow-up resync (2026-06-05) — same drift family recurred
+
+A later rc_out reassignment/delete on CLOSED batches re-stale'd 3 batches. Triggers do NOT re-fire
+on DELETE/reassign of CLOSED batches → cache lags. Fixed via migration
+`resync_current_weight_post_rc_out_reassign_jun` (same canonical allow-list UPDATE pattern as
+20260531041615): MARCH-26-BLK3 10,037→3,540 (in 57,430−out 53,890), MAY-26-FEED5 13,330→0,
+MAY-26-FEED6 13,330→0. All verified `current_weight == SUM(in)−SUM(out)`. C-10A (MARCH-26-BLK3)
+correctly stays EMPTY in the grid because the batch is CLOSED (view shows only STORED/IN-USE).
+
+Full sweep this run: 5 batches drifted total (the 3 fixed + 2 left for review):
+FEB-26-BLK23 (CLOSED, +37,146) and JAN-26-SUNDRY7 (CLOSED, −2,533, the same one from 05-31 —
+still un-fixed). These 2 are CLOSED ⇒ invisible in the grid, low urgency, flagged not fixed.
+There is still NO reusable resync RPC/function — the established method is the scoped direct
+UPDATE migration. Worth building a `fn_resync_batch_weight(batch_code)` RPC if this recurs again.
+
 ## Env gotcha hit this session
 
 `supabase gen types typescript --linked` failed with a `cli_login_postgres` "permission denied to alter role"
