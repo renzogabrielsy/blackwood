@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import {
@@ -17,6 +18,7 @@ import {
     ChevronsUpDown,
     Inbox,
     Sparkles,
+    Loader2,
 } from 'lucide-react';
 import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -52,6 +54,84 @@ import {
 import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod } from './actions';
 import { BulkAddModal } from './bulk-add-modal';
 import { CenaproPeriodPicker } from './period-picker';
+import { ProductionDailyBlock } from './production-daily-block';
+
+// ─── View modes ───────────────────────────────────────────────────────────────────
+// The production screen has multiple ways to look at one period's rows. 'ledger' is the
+// editable Industrial-Spreadsheet grid (default); 'daily-w6' / 'daily-w7' are the two
+// read-only Daily Block variants (boss "PROD 2026" layout, split by production plant —
+// W6 = the tank+W6 sources, W7 = the W7 source). More modes will be added later — a
+// typed union + a switch in the render keeps that extensible.
+const VIEW_MODES = ['ledger', 'daily-w6', 'daily-w7'] as const;
+type ViewMode = (typeof VIEW_MODES)[number];
+
+function parseViewMode(raw: string | null): ViewMode {
+    // Backward-compat: the legacy single Daily Block (`?view=daily`) maps to W6.
+    if (raw === 'daily') return 'daily-w6';
+    return raw && (VIEW_MODES as readonly string[]).includes(raw) ? (raw as ViewMode) : 'ledger';
+}
+
+const VIEW_MODE_LABELS: Record<ViewMode, string> = {
+    ledger: 'Ledger',
+    'daily-w6': 'Daily W6',
+    'daily-w7': 'Daily W7',
+};
+
+// Map a daily view mode → the plant variant the Daily Block renders.
+function plantViewOf(mode: ViewMode): 'W6' | 'W7' | null {
+    if (mode === 'daily-w6') return 'W6';
+    if (mode === 'daily-w7') return 'W7';
+    return null;
+}
+
+// ─── View-mode switcher (segmented control in the toolbar) ──────────────────────────
+// Drives the `?view=` URL param, preserving the existing year/batch params (the module's
+// URL-state convention). useTransition surfaces a pending state during the navigation.
+// The data doesn't re-fetch on a view change — the same period rows feed every mode —
+// so this is a client-side display toggle written to the URL for shareability/back-button.
+function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const [isPending, startTransition] = React.useTransition();
+
+    const select = React.useCallback(
+        (next: ViewMode) => {
+            if (next === mode) return;
+            const sp = new URLSearchParams(searchParams.toString());
+            if (next === 'ledger') sp.delete('view'); // default → keep the URL clean
+            else sp.set('view', next);
+            const qs = sp.toString();
+            startTransition(() => {
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [mode, searchParams, router, pathname],
+    );
+
+    return (
+        <div className="inline-flex h-6 items-center rounded-md border border-border/60 bg-background p-0.5" role="tablist" aria-label="Production view mode">
+            {VIEW_MODES.map((m) => (
+                <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === m}
+                    onClick={() => select(m)}
+                    className={cn(
+                        'h-5 rounded px-2 text-[11px] font-medium transition-colors duration-150',
+                        mode === m
+                            ? 'bg-zinc-800 text-zinc-50 dark:bg-zinc-200 dark:text-zinc-900'
+                            : 'text-muted-foreground hover:text-foreground',
+                    )}
+                >
+                    {VIEW_MODE_LABELS[m]}
+                </button>
+            ))}
+            {isPending && <Loader2 className="ml-1 mr-0.5 h-3 w-3 animate-spin text-muted-foreground" />}
+        </div>
+    );
+}
 
 // ─── Editable fields ─────────────────────────────────────────────────────────────
 // The writable columns (id/unique_tag/batch_year are read-only/computed). Order here
@@ -249,10 +329,24 @@ const inputClass =
 //   • OPAQUE      (`rowDirectionFrozenTint`) → the sticky frozen identity cells, which
 //     MUST be opaque so scrolling content doesn't bleed through them. Built on the
 //     `bg-background`/`bg-card` base so the row still reads as one continuous strip.
-type RowDirection = 'in' | 'out' | null;
+type RowDirection = 'in' | 'out' | 'dvo' | null;
 
-function rowDirection(cccFlec: string): RowDirection {
-    const res = parseCccFlec(cccFlec);
+// Row tint logic keys on the WAREHOUSE first, then the CCC/FLEC disposition.
+// Priority (top wins): UNPLACED > WHSE 3 (DVO) > disposition.
+//   • UNPLACED (warehouse blank) → NO tint (an unplaced bagging row isn't highlighted
+//     until it's placed — setting the Whse dropdown is what places it).
+//   • WHSE 3 is the DVO warehouse → BLUE, regardless of disposition (a DVO row is never
+//     counted as "taken out of a real warehouse").
+//   • A real placed warehouse (WHSE 1/2/5/7) → disposition decides: bagged-IN = GREEN,
+//     any withdrawal (crusher/kiln) = RED.
+function rowDirection(row: GridRow): RowDirection {
+    const wh = (row.warehouse_code ?? '').toString().trim().toUpperCase();
+    // 1. Unplaced ALWAYS wins → no tint
+    if (wh === '') return null;
+    // 2. WHSE 3 is the DVO warehouse → blue, never counts as "taken out"
+    if (wh === 'WHSE 3') return 'dvo';
+    // 3. A real placed warehouse (WHSE 1/2/5/7): disposition decides
+    const res = parseCccFlec(row.ccc_flec);
     if (!res) return null;
     return res.disposition_kind === 'flec_bagging' ? 'in' : 'out';
 }
@@ -261,6 +355,7 @@ function rowDirection(cccFlec: string): RowDirection {
 function rowDirectionTint(dir: RowDirection): string {
     if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/40';
     if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/40';
+    if (dir === 'dvo') return 'bg-blue-50 dark:bg-blue-950/40';
     return '';
 }
 
@@ -272,6 +367,7 @@ function rowDirectionTint(dir: RowDirection): string {
 function rowDirectionFrozenTint(dir: RowDirection): string {
     if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/60';
     if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/60';
+    if (dir === 'dvo') return 'bg-blue-50 dark:bg-blue-950/60';
     return '';
 }
 
@@ -672,11 +768,13 @@ const ProductionRow = React.memo(function ProductionRow({
     const isModified = row._state === 'modified';
     const isNew = row._state === 'new';
 
-    // Direction tint (IN=emerald / OUT=rose), derived from the CCC/FLEC cell. Sits UNDER
-    // the dirty-state left border + the selection highlight. Two flavours: the
-    // translucent one tints the scrolling `<tr>`; the opaque one tints the sticky frozen
-    // identity cells (which must be opaque so scrolling content doesn't bleed through).
-    const direction = rowDirection(row.ccc_flec);
+    // Row tint — keyed on warehouse first, then CCC/FLEC disposition (priority:
+    // unplaced > WHSE 3/DVO > disposition): GREEN bagged into a real warehouse, RED a
+    // withdrawal from one, BLUE a WHSE 3 (DVO) row, none when unplaced. Sits UNDER the
+    // dirty-state left border + the selection highlight. Two flavours: the translucent
+    // one tints the scrolling `<tr>`; the opaque one tints the sticky frozen identity
+    // cells (which must be opaque so scrolling content doesn't bleed through).
+    const direction = rowDirection(row);
     const directionTint = rowDirectionTint(direction);
     const frozenTint = rowDirectionFrozenTint(direction);
 
@@ -972,6 +1070,13 @@ export function ProductionLedgerGrid({
     onSaveSuccess,
 }: ProductionLedgerGridProps) {
     const gridRef = React.useRef<HTMLDivElement>(null);
+
+    // Active view mode from `?view=` (ledger | daily). Default 'ledger'. Drives whether
+    // the editable grid or the read-only Daily Block pivot renders below the toolbar.
+    const viewSearchParams = useSearchParams();
+    const viewMode = parseViewMode(viewSearchParams.get('view'));
+    const plantView = plantViewOf(viewMode); // 'W6' | 'W7' | null
+    const isDailyView = plantView !== null;
 
     // Date sort — clickable on EITHER date header. Default: newest-first by recv_date
     // (operators care about recent activity most); clicking the Prod header switches the
@@ -1582,36 +1687,48 @@ export function ProductionLedgerGrid({
                     disabledHint="Save or discard your edits before switching period"
                 />
                 <span className="h-4 w-px bg-border/60" />
-                <span className="font-mono text-[11px] text-muted-foreground/70">
-                    {savedRowCount.toLocaleString('en-US')} row{savedRowCount !== 1 ? 's' : ''}
-                    {dirtyCount > 0 && <span className="ml-1 text-amber-600 dark:text-amber-400">· {dirtyCount} unsaved</span>}
-                </span>
+                {/* View-mode switcher — stays visible in every mode. */}
+                <ViewModeSwitcher mode={viewMode} />
+                {!isDailyView && (
+                    <>
+                        <span className="h-4 w-px bg-border/60" />
+                        <span className="font-mono text-[11px] text-muted-foreground/70">
+                            {savedRowCount.toLocaleString('en-US')} row{savedRowCount !== 1 ? 's' : ''}
+                            {dirtyCount > 0 && <span className="ml-1 text-amber-600 dark:text-amber-400">· {dirtyCount} unsaved</span>}
+                        </span>
+                    </>
+                )}
                 <div className="flex-1" />
-                {anyFilterActive && (
-                    <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={clearFilters}>
-                        Clear filters
-                    </Button>
+                {/* Editable-only controls — hidden in the read-only Daily Block view. */}
+                {!isDailyView && (
+                    <>
+                        {anyFilterActive && (
+                            <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={clearFilters}>
+                                Clear filters
+                            </Button>
+                        )}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 gap-1 px-2 text-[11px]"
+                            onClick={() => setBulkAddOpen(true)}
+                            title="Open a fresh grid for fast multi-row entry — paste from Excel/Sheets"
+                        >
+                            <Sparkles className="h-3 w-3" />
+                            Bulk Add
+                        </Button>
+                        {isDirty && (
+                            <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleDiscard} disabled={isSaving}>
+                                <RotateCcw className="h-3 w-3" />
+                                Discard
+                            </Button>
+                        )}
+                        <Button size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleSave} disabled={isSaving || !isDirty}>
+                            <Save className="h-3 w-3" />
+                            {isSaving ? 'Saving…' : 'Save'}
+                        </Button>
+                    </>
                 )}
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 gap-1 px-2 text-[11px]"
-                    onClick={() => setBulkAddOpen(true)}
-                    title="Open a fresh grid for fast multi-row entry — paste from Excel/Sheets"
-                >
-                    <Sparkles className="h-3 w-3" />
-                    Bulk Add
-                </Button>
-                {isDirty && (
-                    <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleDiscard} disabled={isSaving}>
-                        <RotateCcw className="h-3 w-3" />
-                        Discard
-                    </Button>
-                )}
-                <Button size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleSave} disabled={isSaving || !isDirty}>
-                    <Save className="h-3 w-3" />
-                    {isSaving ? 'Saving…' : 'Save'}
-                </Button>
             </div>
 
             {loadError && (
@@ -1635,6 +1752,24 @@ export function ProductionLedgerGrid({
                 </div>
             )}
 
+            {/* Daily Block — the PROD-2026 pivot. Consumes the SAME period rows (typed
+                event fields) the editable grid holds. Phase 1: equipment/bagging cells are
+                editable and round-trip via saveProductionEvents (same write path); on save
+                success `onSaveSuccess` → router.refresh remount (the production-view dataKey
+                folds in the period + row ids). selectedPeriod supplies batch/batch_year for
+                INSERTs. */}
+            {plantView && (
+                <ProductionDailyBlock
+                    rows={initialRows}
+                    plantView={plantView}
+                    selectedPeriod={selectedPeriod}
+                    onSaveSuccess={onSaveSuccess}
+                />
+            )}
+
+            {/* Editable Ledger grid + its modals/menus — ledger view only. */}
+            {!isDailyView && (
+            <>
             {/* Grid */}
             <div
                 ref={gridRef}
@@ -1864,7 +1999,9 @@ export function ProductionLedgerGrid({
             {/* Bulk Add modal — the fast multi-row entry path. Opens with a fresh 8-row
                 sheet that takes Excel/Sheets paste; on success it refreshes the page data
                 (via onSaveSuccess → router.refresh) so the new rows land in this grid. */}
-            <BulkAddModal open={bulkAddOpen} onOpenChange={setBulkAddOpen} onInserted={onSaveSuccess} />
+            <BulkAddModal open={bulkAddOpen} onOpenChange={setBulkAddOpen} onInserted={onSaveSuccess} defaultYear={selectedPeriod?.batch_year} />
+            </>
+            )}
         </div>
     );
 }

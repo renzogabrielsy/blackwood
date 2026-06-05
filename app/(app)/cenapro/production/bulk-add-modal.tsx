@@ -14,6 +14,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { normalizeTypedDate } from '@/lib/paste-utils';
 import { GridCell } from '@/components/shared/grid/GridCell';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
@@ -54,11 +55,21 @@ interface BulkAddModalProps {
     onOpenChange: (open: boolean) => void;
     /** Called after a successful insert so the parent can refresh the inline grid. */
     onInserted: () => void;
+    /**
+     * Year to inject when a typed date omits one (Excel-style "6/2" → "{year}-06-02").
+     * Threaded from the selected ledger period; falls back to the current year.
+     */
+    defaultYear?: number;
 }
 
+// The two date fields — typed shorthand in these cells auto-transcribes to yyyy-MM-dd
+// on commit (Tab/Enter or blur). Used by both commit paths below.
+const DATE_BULK_FIELDS = new Set<BulkField>(['recv_date', 'prod_date']);
+
 // ─── Component ───────────────────────────────────────────────────────────────────
-export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalProps) {
+export function BulkAddModal({ open, onOpenChange, onInserted, defaultYear }: BulkAddModalProps) {
     const gridRef = React.useRef<HTMLDivElement>(null);
+    const yr = defaultYear ?? new Date().getFullYear();
 
     // Preset with INITIAL_ROW_COUNT blank rows so the grid feels like a fresh sheet.
     const [rows, setRows] = React.useState<BulkRow[]>(() =>
@@ -70,12 +81,19 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
     const [isEditing, setIsEditing] = React.useState(false);
     const preEditValue = React.useRef<string>('');
 
+    // Excel-style "Enter after Tab" anchor. When a Tab RUN begins we remember the column
+    // it started from; a later Enter drops DOWN a row and returns to that anchor column
+    // (not the last cell tabbed to). Held in a ref so resets (mouse click, arrows, Escape)
+    // don't cause re-renders. Null = no active Tab run → Enter uses the current column.
+    const enterAnchorColRef = React.useRef<number | null>(null);
+
     // Reset the grid to a fresh 8-row sheet whenever the modal re-opens.
     React.useEffect(() => {
         if (open) {
             setRows(Array.from({ length: INITIAL_ROW_COUNT }, createEmptyRow));
             setActiveCell(null);
             setIsEditing(false);
+            enterAnchorColRef.current = null;
         }
     }, [open]);
 
@@ -127,6 +145,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                 cellSelection.clearSelection();
                 setActiveCell({ row: rowIdx, col: colIdx });
                 setIsEditing(false);
+                enterAnchorColRef.current = null; // a fresh click ends any Tab run
                 gridRef.current?.focus();
             }
             dragMovedRef.current = false;
@@ -169,6 +188,33 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
         [updateRow],
     );
 
+    // ─── Typed-date auto-transcription (Excel-style commit normalization) ──────────
+    // On cell COMMIT (Tab/Enter via the grid, or blur via the input), normalize a typed
+    // shorthand date like "6/2" → "2026-06-02". Reads the row via functional setState so
+    // it always sees the latest typed value, and only writes when it actually changes
+    // (no-op for already-canonical values → no flicker / re-render storm).
+    const commitDateCell = React.useCallback(
+        (rowIdx: number, field: BulkField) => {
+            setRows((prev) => {
+                const raw = prev[rowIdx]?.[field];
+                if (raw == null) return prev;
+                const norm = normalizeTypedDate(raw, yr);
+                if (norm === raw) return prev;
+                const next = [...prev];
+                next[rowIdx] = { ...next[rowIdx], [field]: norm };
+                return next;
+            });
+        },
+        [yr],
+    );
+
+    // Normalize the active cell if it's a date column — called on Tab/Enter commit.
+    const commitActiveDateCell = React.useCallback(() => {
+        if (!activeCell) return;
+        const field = BULK_COLUMN_MAP[activeCell.col];
+        if (field && DATE_BULK_FIELDS.has(field)) commitDateCell(activeCell.row, field);
+    }, [activeCell, commitDateCell]);
+
     const { handleKeyDown: handleDeleteKeyDown } = useCellDelete({
         getSelectedRange: cellSelection.getSelectedRange,
         getSelectionSize: cellSelection.getSelectionSize,
@@ -195,23 +241,46 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
         const field = BULK_COLUMN_MAP[activeCell.col];
         if (field) updateRow(activeCell.row, field, preEditValue.current);
         setIsEditing(false);
+        enterAnchorColRef.current = null; // Escape ends any Tab run
         gridRef.current?.focus();
     }, [activeCell, updateRow]);
 
     // ─── Keyboard navigation (mirrors RC IN's grid) ────────────────────────────────
+    // Excel-style "Enter after Tab": the column a Tab RUN starts from is remembered as
+    // the anchor; a later Enter drops a row and returns to that anchor column. The anchor
+    // is set on the FIRST Tab of a run (kept through subsequent Tabs/Shift+Tabs), consumed
+    // + cleared on Enter, and cleared by any arrow/Home/End move (those end the run).
     const moveActive = React.useCallback(
         (key: string, shift: boolean) => {
             if (!activeCell) return;
             let { row, col } = activeCell;
-            if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
-            else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
+            if (key === 'ArrowUp') { row = Math.max(0, row - 1); enterAnchorColRef.current = null; }
+            else if (key === 'ArrowDown') { row = Math.min(rows.length - 1, row + 1); enterAnchorColRef.current = null; }
             else if (key === 'ArrowLeft') {
                 do { col--; } while (col > 0 && BULK_COLUMN_MAP[col] === null);
                 col = Math.max(1, col);
+                enterAnchorColRef.current = null;
             } else if (key === 'ArrowRight') {
                 do { col++; } while (col < BULK_COL_COUNT - 1 && BULK_COLUMN_MAP[col] === null);
                 col = Math.min(BULK_COL_COUNT - 1, col);
+                enterAnchorColRef.current = null;
+            } else if (key === 'Enter') {
+                if (shift) {
+                    // Shift+Enter moves UP (existing behavior); ends the Tab run.
+                    row = Math.max(0, row - 1);
+                    enterAnchorColRef.current = null;
+                } else {
+                    // Drop down a row and return to the anchor column (or current col if no
+                    // run was in progress), then consume the anchor so the next Enter goes
+                    // straight down at this same column.
+                    const targetCol = enterAnchorColRef.current ?? col;
+                    row = Math.min(rows.length - 1, row + 1);
+                    col = targetCol;
+                    enterAnchorColRef.current = null;
+                }
             } else if (key === 'Tab') {
+                // Starting (or continuing) a Tab run — remember the column it began at.
+                if (enterAnchorColRef.current === null) enterAnchorColRef.current = activeCell.col;
                 if (shift) {
                     do { col--; if (col < 1) { row--; col = BULK_COL_COUNT - 1; } } while (row >= 0 && BULK_COLUMN_MAP[col] === null);
                     if (row < 0) { row = 0; col = activeCell.col; }
@@ -219,8 +288,8 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                     do { col++; if (col >= BULK_COL_COUNT) { row++; col = 1; } } while (row < rows.length && BULK_COLUMN_MAP[col] === null);
                     if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; }
                 }
-            } else if (key === 'Home') col = 1;
-            else if (key === 'End') col = BULK_COL_COUNT - 1;
+            } else if (key === 'Home') { col = 1; enterAnchorColRef.current = null; }
+            else if (key === 'End') { col = BULK_COL_COUNT - 1; enterAnchorColRef.current = null; }
             setActiveCell({ row, col });
         },
         [activeCell, rows.length],
@@ -241,6 +310,11 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                     revertChanges();
                 } else if (e.key === 'Enter' || e.key === 'Tab') {
                     e.preventDefault();
+                    // Excel-style: auto-transcribe a typed shorthand date (e.g. "6/2")
+                    // to yyyy-MM-dd the instant the cell is committed. Done BEFORE leaving
+                    // edit state because the grid intercepts Tab/Enter (the input's own
+                    // onBlur may not fire on Tab).
+                    commitActiveDateCell();
                     setIsEditing(false);
                     moveActive(e.key, e.shiftKey);
                     gridRef.current?.focus();
@@ -256,7 +330,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                 }
                 if ((e.metaKey || e.ctrlKey) && e.key === 'c') { handleCopyKeyDown(e); return; }
                 if (e.key === 'Backspace' || e.key === 'Delete') { handleDeleteKeyDown(e); cellSelection.clearSelection(); return; }
-                if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); return; }
+                if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); enterAnchorColRef.current = null; return; }
                 if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) cellSelection.clearSelection();
             }
 
@@ -279,7 +353,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                 startEditing(activeCell.row, activeCell.col, e.key);
             }
         },
-        [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing],
+        [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing, commitActiveDateCell],
     );
 
     // ─── Paste engine (Excel/Sheets TSV → grid, auto-extends rows) ─────────────────
@@ -347,7 +421,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
         // Index against the original array so error labels match the on-screen row#.
         rows.forEach((r, idx) => {
             if (isBlankRow(r)) return;
-            const { row, errors } = mapBulkRowToDirty(r);
+            const { row, errors } = mapBulkRowToDirty(r, yr);
             if (errors.length > 0) {
                 rowErrors.push(`${rowLabel(r, idx)}: ${errors.join('; ')}`);
             } else if (row) {
@@ -487,6 +561,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted }: BulkAddModalPro
                                     updateRow={updateRow}
                                     removeRow={removeRow}
                                     onPaste={handleSmartPaste}
+                                    onCommitDate={commitDateCell}
                                     commonCellProps={commonCellProps}
                                     selProps={selProps}
                                 />
@@ -554,6 +629,8 @@ interface BulkAddRowProps {
     updateRow: (index: number, field: BulkField, value: string) => void;
     removeRow: (index: number) => void;
     onPaste: (e: React.ClipboardEvent, rowIdx: number, colIdx: number) => void;
+    /** Normalize a typed date cell to yyyy-MM-dd on blur (click-away commit). */
+    onCommitDate: (rowIdx: number, field: BulkField) => void;
     commonCellProps: {
         activeCell: { row: number; col: number } | null;
         isEditing: boolean;
@@ -579,6 +656,7 @@ const BulkAddRow = React.memo(function BulkAddRow({
     updateRow,
     removeRow,
     onPaste,
+    onCommitDate,
     commonCellProps,
     selProps,
 }: BulkAddRowProps) {
@@ -652,6 +730,9 @@ const BulkAddRow = React.memo(function BulkAddRow({
                 className={cn(inputClass, 'text-center font-mono text-[11px]')}
                 placeholder={placeholder}
                 onPaste={(e) => { e.stopPropagation(); onPaste(e, rowIdx, col); }}
+                // Excel-style click-away commit: normalize "6/2" → yyyy-MM-dd. Only touches
+                // the value — active/editing state is owned by the grid-container onBlur.
+                onBlur={() => onCommitDate(rowIdx, field)}
             />
         </GridCell>
     );

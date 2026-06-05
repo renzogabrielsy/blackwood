@@ -10,7 +10,7 @@
 // Keeping this here (not in the component) keeps `bulk-add-modal.tsx` lean and makes
 // the mapping logic unit-reviewable in isolation.
 
-import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
+import { parseExcelDate, trimCellValue, normalizeTypedDate } from '@/lib/paste-utils';
 import {
     SHIFT_CODES,
     GRADE_CODES,
@@ -207,8 +207,13 @@ export interface RowMapResult {
     errors: string[];
 }
 
-export function mapBulkRowToDirty(r: BulkRow): RowMapResult {
+export function mapBulkRowToDirty(r: BulkRow, defaultYear?: number): RowMapResult {
     const errors: string[] = [];
+    // Safety net: a typed shorthand date that somehow escaped commit-time normalization
+    // (Tab/Enter or blur in the modal) still lands canonical (yyyy-MM-dd). Uses the
+    // ledger period year when provided, else the current year. Already-canonical values
+    // are a no-op; unparseable text is left untouched for the user to fix.
+    const yr = defaultYear ?? new Date().getFullYear();
 
     // — Categoricals (only validate non-empty cells; empties become null downstream) —
     let shift = '';
@@ -294,8 +299,8 @@ export function mapBulkRowToDirty(r: BulkRow): RowMapResult {
     return {
         errors: [],
         row: {
-            recv_date: r.recv_date.trim(),
-            prod_date: r.prod_date.trim(),
+            recv_date: normalizeTypedDate(r.recv_date, yr),
+            prod_date: normalizeTypedDate(r.prod_date, yr),
             batch: r.batch.trim(),
             shift_code: shift,
             grade_code: grade,
