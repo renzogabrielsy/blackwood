@@ -1,61 +1,49 @@
-// No 'use client' — this is an async Server Component
-import { createClient } from '@/lib/supabase/server'
-import { DashboardShell } from '@/components/dashboard/DashboardShell'
-import { charcoalKpiAdapter } from '@/lib/widgets/adapters/charcoal-kpi'
-import { charcoalChartAdapter } from '@/lib/widgets/adapters/charcoal-chart'
-import { charcoalWarehouseAdapter } from '@/lib/widgets/adapters/charcoal-warehouse'
-import { charcoalSpecialAdapter } from '@/lib/widgets/adapters/charcoal-special'
-import { loadDashboardPrefs } from '@/app/(app)/actions'
+// No 'use client' — async Server Component (Daily Sync Digest).
+// Replaces the archived modular widget dashboard (see _archived/dashboard-v1).
+import { getDigestData } from "@/lib/digest/queries";
+import { DigestHeader } from "@/components/digest/digest-header";
+import { KpiHero } from "@/components/digest/kpi-hero";
+import { DigestCharts } from "@/components/digest/digest-charts";
+import { SyncSummary } from "@/components/digest/sync-summary";
+import { ActivityFeed } from "@/components/digest/activity-feed";
+import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 
-function formatAdapterError(adapterId: string, reason: unknown): string {
-  const timestamp = new Date().toISOString()
-  const message = reason instanceof Error ? reason.message : String(reason)
-  const stack =
-    reason instanceof Error && reason.stack
-      ? `\nStack: ${reason.stack.split('\n').slice(0, 4).join('\n')}`
-      : ''
-  return `[Blackwood] Adapter "${adapterId}" failed at ${timestamp}\nError: ${message}${stack}`
-}
-
-export default async function DashboardPage() {
-  const supabase = await createClient()
-
-  const [kpiResult, chartResult, warehouseResult, specialChartResult, prefsResult] =
-    await Promise.allSettled([
-      charcoalKpiAdapter.fetch(supabase),
-      charcoalChartAdapter.fetch(supabase),
-      charcoalWarehouseAdapter.fetch(supabase),
-      charcoalSpecialAdapter.fetch(supabase),
-      loadDashboardPrefs(),
-    ])
+export default async function DigestPage() {
+  const data = await getDigestData();
 
   return (
-    <DashboardShell
-      kpiData={kpiResult.status === 'fulfilled' ? kpiResult.value : undefined}
-      kpiError={
-        kpiResult.status === 'rejected'
-          ? formatAdapterError('charcoal-kpi', kpiResult.reason)
-          : undefined
-      }
-      chartConfig={chartResult.status === 'fulfilled' ? chartResult.value : undefined}
-      chartError={
-        chartResult.status === 'rejected'
-          ? formatAdapterError('charcoal-chart', chartResult.reason)
-          : undefined
-      }
-      warehouseData={warehouseResult.status === 'fulfilled' ? warehouseResult.value : undefined}
-      warehouseError={
-        warehouseResult.status === 'rejected'
-          ? formatAdapterError('charcoal-warehouse', warehouseResult.reason)
-          : undefined
-      }
-      specialChartData={specialChartResult.status === 'fulfilled' ? specialChartResult.value : undefined}
-      specialChartError={
-        specialChartResult.status === 'rejected'
-          ? formatAdapterError('charcoal-special', specialChartResult.reason)
-          : undefined
-      }
-      serverPrefs={prefsResult.status === 'fulfilled' ? prefsResult.value ?? undefined : undefined}
-    />
-  )
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6">
+      {/* A. Header strip (sub-band — navbar owns the page title) */}
+      <DigestHeader
+        operationalDate={data.meta.operationalDate}
+        lastSyncAt={data.meta.lastSyncAt}
+        freshness={data.meta.freshness}
+      />
+
+      {/* B. Hero — today's operations */}
+      <section>
+        <KpiHero kpis={data.kpis} />
+      </section>
+
+      {/* C. Rich charts */}
+      <section>
+        <DigestCharts flow={data.flow} price={data.price} grades={data.grades} />
+      </section>
+
+      {/* D. Sync band — what the last sync brought in */}
+      <section className="flex flex-col gap-3">
+        <SyncSummary latestSync={data.latestSync} />
+        <ActivityFeed activity={data.activity} />
+      </section>
+
+      {/* E. Flags + freshness + month-to-date */}
+      <section>
+        <DigestFooterBand
+          flags={data.flags}
+          streams={data.meta.streams}
+          monthToDate={data.monthToDate}
+        />
+      </section>
+    </div>
+  );
 }

@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       audit_comments: {
@@ -51,6 +76,13 @@ export type Database = {
             columns: ["audit_log_id"]
             isOneToOne: false
             referencedRelation: "audit_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_comments_audit_log_id_fkey"
+            columns: ["audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "view_digest_audit_enriched"
             referencedColumns: ["id"]
           },
         ]
@@ -404,6 +436,13 @@ export type Database = {
             referencedRelation: "audit_logs"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "notification_subscriptions_audit_log_id_fkey"
+            columns: ["audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "view_digest_audit_enriched"
+            referencedColumns: ["id"]
+          },
         ]
       }
       notifications: {
@@ -506,6 +545,13 @@ export type Database = {
             columns: ["commit_audit_log_id"]
             isOneToOne: false
             referencedRelation: "audit_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_review_commit_audit_log_id_fkey"
+            columns: ["commit_audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "view_digest_audit_enriched"
             referencedColumns: ["id"]
           },
           {
@@ -963,6 +1009,136 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_audit_enriched: {
+        Row: {
+          comment: string | null
+          diff: Json | null
+          employee: string | null
+          id: string | null
+          operation: string | null
+          performed_at: string | null
+          performed_day: string | null
+          provenance: string | null
+          table_name: string | null
+        }
+        Insert: {
+          comment?: string | null
+          diff?: Json | null
+          employee?: never
+          id?: string | null
+          operation?: string | null
+          performed_at?: string | null
+          performed_day?: never
+          provenance?: never
+          table_name?: string | null
+        }
+        Update: {
+          comment?: string | null
+          diff?: Json | null
+          employee?: never
+          id?: string | null
+          operation?: string | null
+          performed_at?: string | null
+          performed_day?: never
+          provenance?: never
+          table_name?: string | null
+        }
+        Relationships: []
+      }
+      view_digest_daily_flow: {
+        Row: {
+          date: string | null
+          in_kg: number | null
+          out_kg: number | null
+        }
+        Relationships: []
+      }
+      view_digest_daily_power: {
+        Row: {
+          date: string | null
+          kwh: number | null
+        }
+        Relationships: []
+      }
+      view_digest_daily_price: {
+        Row: {
+          date: string | null
+          php_per_kg: number | null
+        }
+        Relationships: []
+      }
+      view_digest_daily_production: {
+        Row: {
+          date: string | null
+          kg: number | null
+        }
+        Relationships: []
+      }
+      view_digest_grades: {
+        Row: {
+          date: string | null
+          grade: string | null
+          kg: number | null
+        }
+        Relationships: []
+      }
+      view_digest_latest_sync: {
+        Row: {
+          date: string | null
+          delete_count: number | null
+          insert_count: number | null
+          update_count: number | null
+        }
+        Relationships: []
+      }
+      view_digest_latest_sync_by_employee: {
+        Row: {
+          count: number | null
+          date: string | null
+          employee: string | null
+        }
+        Relationships: []
+      }
+      view_digest_mtd: {
+        Row: {
+          label: string | null
+          month_end: string | null
+          month_start: string | null
+          production_kg: number | null
+          rc_in_kg: number | null
+          rc_out_kg: number | null
+        }
+        Relationships: []
+      }
+      view_digest_operational_days: {
+        Row: {
+          operational_date: string | null
+          prev_operational_date: string | null
+        }
+        Relationships: []
+      }
+      view_digest_rcin_daystats: {
+        Row: {
+          date: string | null
+          sacks: number | null
+          suppliers: number | null
+        }
+        Relationships: []
+      }
+      view_digest_stream_freshness: {
+        Row: {
+          label: string | null
+          stream: string | null
+          through_date: string | null
+        }
+        Relationships: []
+      }
+      view_digest_unpriced_recent: {
+        Row: {
+          cnt: number | null
+        }
+        Relationships: []
+      }
       view_production_daily: {
         Row: {
           bf_kg: number | null
@@ -1060,6 +1236,66 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      view_supplier_deliveries: {
+        Row: {
+          batch_code: string | null
+          block_loc: string | null
+          cost_basis: number | null
+          created_at: string | null
+          id: string | null
+          lab_results: Json | null
+          remarks: string | null
+          sacks: number | null
+          supplier: string | null
+          transaction_date: string | null
+          truck_plate: string | null
+          weight_kg: number | null
+        }
+        Insert: {
+          batch_code?: string | null
+          block_loc?: string | null
+          cost_basis?: number | null
+          created_at?: string | null
+          id?: string | null
+          lab_results?: Json | null
+          remarks?: string | null
+          sacks?: number | null
+          supplier?: string | null
+          transaction_date?: string | null
+          truck_plate?: string | null
+          weight_kg?: number | null
+        }
+        Update: {
+          batch_code?: string | null
+          block_loc?: string | null
+          cost_basis?: number | null
+          created_at?: string | null
+          id?: string | null
+          lab_results?: Json | null
+          remarks?: string | null
+          sacks?: number | null
+          supplier?: string | null
+          transaction_date?: string | null
+          truck_plate?: string | null
+          weight_kg?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
           },
         ]
       }
@@ -1314,6 +1550,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       batch_status: [

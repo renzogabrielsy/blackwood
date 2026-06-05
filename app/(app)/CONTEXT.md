@@ -1,77 +1,99 @@
-# Dashboard Module Context
+# Daily Sync Digest — Module Context
 
 ## Purpose
-The dashboard at `/` is the **platform-layer entry point** for Blackwood — intentionally source-agnostic and domain-neutral. It renders a composable grid of widgets using ReactGridLayout. Widget layout and per-widget settings persist to localStorage under the key `bw_v1` (multi-profile store; migrates from the legacy `bw_d6_prefs` key on first load).
+The page at `/` (`app/(app)/page.tsx`) is the **Daily Sync Digest** — a modern,
+server-rendered operational + ingestion-health summary. It replaced the old
+modular widget dashboard (drag/resize ReactGridLayout grid), which is now
+**archived** at `_archived/dashboard-v1/` (restorable via git history).
 
-The dashboard shell and all widget components are **tenant-agnostic**: they contain zero charcoal-specific knowledge. What changes between tenants is only the adapter (and domain modules). The dashboard shell, widget registry, and widget components stay exactly the same.
+The digest marries two views, stacked top→bottom (decision: "both, stacked"):
+1. **Today's operations** — the latest business day's numbers (RC In/Out,
+   production, power, net flow), with trailing sparklines and deltas.
+2. **Sync health** — what the ingestion "employees" (gsheet-sync,
+   deliveries-manager, rc-out-manager, production-manager) pulled in, sourced
+   from `audit_logs` provenance + diffs.
+
+It is **tenant/domain code** (charcoal-shaped), unlike the archived platform-layer
+widget grid. The backend contract is fixed; the UI only shapes already-computed
+values into views.
 
 ## Files
-- `page.tsx` — **async Server Component** (no `'use client'`). Runs all 4 charcoal adapters + `loadDashboardPrefs()` in `Promise.allSettled` (5 items), falls back to static mock data on adapter failure, passes results to `DashboardShell`.
-- `actions.ts` — Server actions: `fetchKpiData` (KPI period refetch), `loadDashboardPrefs` (read `user_dashboard_prefs` → `D6Prefs | null`), `saveDashboardPrefs` (upsert `user_dashboard_prefs` on `user_id` conflict, no `revalidatePath`).
-- `components/dashboard/DashboardShell.tsx` — SSR-safe client wrapper (`'use client'`, `dynamic(..., { ssr: false })`). Accepts `DashboardGridProps` and passes through to `DashboardGrid`.
-- `components/dashboard/DashboardGrid.tsx` — main grid shell: layout state, edit mode, add/remove/collapse, localStorage + Supabase persistence. Accepts `DashboardGridProps` (`kpiData`, `chartConfig`, `warehouseData`, `scatterData`, `serverPrefs`) — all optional with static fallbacks.
-- `lib/dashboard/types.ts` — shared TypeScript types (`D6Prefs`, `LayoutItem`) — extracted here to prevent circular imports between `DashboardGrid.tsx` and `profile-store.ts`.
-- `lib/dashboard/migrate-prefs.ts` — pure function `migrateLegacyPrefs(raw, defaults)` that normalizes raw stored prefs into a clean `D6Prefs` object. Handles widget settings format upgrades, `quality-scatter` → `special-chart` remap, `scatterSettings` → `specialChartSettings` carry-over, and missing-field defaults. Called by `DashboardGrid.tsx` on mount.
-- `lib/dashboard/profile-store.ts` — pure (no React, no Supabase) localStorage utility. Manages `bw_v1` multi-profile store. Exports: `loadProfileStore`, `saveProfileStore`, `getActiveProfile`, `updateActiveProfile`, `listProfiles`, `createProfile`, `switchProfile`, `deleteProfile`, `getActiveProfileName`.
-- `components/dashboard/WidgetShell.tsx` — generic widget frame (title bar, collapse toggle, remove button, ResizeObserver-backed `WidgetSizeContext`)
-- `components/dashboard/WidgetPicker.tsx` — "Add widget" modal showing all types from `WIDGET_REGISTRY`
+- `page.tsx` — **async Server Component**. Calls `getDigestData()` once and
+  composes the six bands. Thin: fetch + layout only. No `'use client'`.
+- `components/digest/format.ts` — pure display formatters (`fmtKg`, `fmtKwh`,
+  `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`).
+  No aggregation (HARD RULE — that lives in SQL views).
+- `components/digest/digest-header.tsx` — `'use client'`. Sub-band header
+  ("As of {operationalDate}") + glass freshness pill colored by `meta.freshness`
+  (fresh=green pulsing dot / recent=amber / stale=muted). Relative sync time
+  recomputes on the client and ticks every 60 s.
+- `components/digest/kpi-hero.tsx` — `'use client'`. Responsive stat-card grid
+  from `data.kpis` (rc_in, rc_out, production, power, net_flow). Each card: label,
+  big mono value + unit, delta badge (▲/▼), optional `sub` line, recharts area
+  sparkline (`isAnimationActive={false}`). `net_flow` is visually distinct
+  (dashed/muted, neutral delta coloring, "expected drift" tooltip — never red).
+  Uses `stagger-children` + `hover-lift`.
+- `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
+  **Feed In vs Out** (dual area, `connectNulls` keeps zero days flat),
+  **RC In price ₱/kg** (line), **Production by grade** (stacked bar — pivots
+  long `GradePoint[]` to wide rows; single-grade case hides the legend and
+  renders one bar series gracefully). All colors are `var(--chart-1..5)` tokens
+  (dark-mode safe). Glass tooltip via theme tokens.
+- `components/digest/sync-summary.tsx` — Server component. Compact header from
+  `data.latestSync`: "{date} · {n} new · {n} updated (· {n} removed)" + per-
+  employee count chips (`byEmployee`).
+- `components/digest/activity-feed.tsx` — `'use client'`. The changelog: up to
+  ~40 most-recent `ActivityItem`s. Each row = op pill (INSERT green / UPDATE
+  amber / DELETE red) + relative time + employee badge + provenance tag + table +
+  note (truncated at 120 chars, click to expand) + diff chips ("field: old → new"
+  mono). **Not animated per-row** (single container fade only — follows the
+  "never animate 100+ instances" rule). `ActivityItem.id` is used ONLY as a
+  React key (opaque hashed int, not a DB id).
+- `components/digest/digest-footer-band.tsx` — Server component. 3-col final band:
+  **Flags** (alert chips by severity info/warn/critical, lucide icons),
+  **Stream freshness** (Excel-standard dense table: label · through-date · status
+  dot ok-green/warn-amber), **Month-to-date** card (rcInKg / rcOutKg /
+  productionKg / netKg in kg format; net row muted).
 
-## Data Flow & Adapter Layer
-
-**Live data (current):**
-1. `page.tsx` (Server Component) calls `createClient()` and runs `Promise.allSettled([kpiAdapter, chartAdapter, warehouseAdapter, scatterAdapter, loadDashboardPrefs()])`
-2. Fulfilled results are passed as props to `DashboardShell` → `DashboardGrid`
-3. Rejected/failed adapters fall back to their static counterparts from `lib/widgets/mock-data.ts`
-4. `DashboardGrid` passes data to widgets via `renderWidgetContent()`
-
-**Dashboard preferences persistence (dual-layer):**
-- **Primary store:** Supabase `user_dashboard_prefs` table — server-side, persists across devices and browsers. Loaded at page render and seeded into `DashboardGrid` via `serverPrefs` prop. Written back on every prefs mutation via a 1500ms debounce (`saveDashboardPrefs` from `actions.ts`).
-- **Cache layer:** `localStorage` via `profile-store.ts` (`bw_v1` key) — instant read on hydration, no network round-trip for subsequent visits in the same browser. Updated synchronously alongside the debounced Supabase write.
-- **Seed priority:** On mount, `loadPrefs(props.serverPrefs)` uses `serverPrefs` as `raw` when present, falling back to `getActiveProfile(DEFAULT_PREFS)` from localStorage. This means a fresh browser gets the correct layout on first load without waiting for a client-side read.
-- **Failure isolation:** If `loadDashboardPrefs()` throws (auth error, network, etc.), `Promise.allSettled` absorbs it and `serverPrefs` is `undefined` — the grid falls back to localStorage as before. If `saveDashboardPrefs` throws, the `.catch(() => {})` swallows it silently.
-
-**Adapter files (in `lib/widgets/adapters/`):**
-- `types.ts` — `WidgetAdapter<TPort>` base interface
-- `tenant-config.ts` — centralized charcoal tenant configuration. Exports `CHARCOAL_FIELD_CONFIG` (field definitions for special chart), `CHARCOAL_FIELDS` (flat array alias), `CHARCOAL_CHART_CONFIG` (series/group/preset metadata for chart widget). Both `charcoal-special.ts` and `charcoal-chart.ts` import from here. Marked as the tenant override point.
-- `charcoal-kpi.ts` — fetches batches, view_blocking_grid, deliveries, rc_out → `KPIData[]`
-- `charcoal-chart.ts` — fetches deliveries + rc_out, aggregates by fiscal month → `ChartConfig`. Series metadata imported from `tenant-config.ts`.
-- `charcoal-warehouse.ts` — fetches view_blocking_grid, aggregates per warehouse letter → `WarehouseData[]`
-- `charcoal-special.ts` — fetches deliveries with lab_results, flattens to row-per-delivery → `SpecialChartData`. Field definitions imported from `tenant-config.ts`.
-
-**Static fallbacks (from `lib/widgets/mock-data.ts`):**
-- `CHARCOAL_KPI_DATA` — fallback KPI data
-- `CHARCOAL_UNIVERSAL_CONFIG` — fallback chart config
-- `CHARCOAL_WAREHOUSE_DATA` — fallback warehouse occupancy data (typed `WarehouseData[]`)
-- `CHARCOAL_SCATTER_DATA` — fallback scatter data (typed `ScatterPoint[]`, derived from `LEDGER`)
-
-Layout and per-widget settings persist to **both** Supabase (`user_dashboard_prefs` table, keyed by `user_id`) and localStorage key `bw_v1` (multi-profile store, migrates from legacy `bw_d6_prefs` on first load). Supabase is the primary source of truth; localStorage is the cache.
-
-`D6Prefs` fields (defined in `lib/dashboard/types.ts`):
-- `layout` — grid item positions/sizes
-- `visibleModules` — ordered list of widget IDs to render
-- `collapsed` — IDs of collapsed widgets
-- `widgetSettings` — per-chart-instance settings keyed by widget ID
-- `kpiSettings` — KPI strip visibility/order/density/chipOverrides settings
-- `stickyKpi` — `boolean` (default `false`). When `true`, the KPI strip is removed from the grid and rendered in a second row inside the sticky header, providing always-visible KPIs while scrolling.
-- `prePinLayout` — `LayoutItem[] | undefined`. Snapshot of the full grid layout saved just before the KPI strip is pinned. Restored verbatim when the strip is unpinned. `undefined` when not pinned.
+## Data
+- **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
+  (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`.
+  **Do not edit** `lib/digest/types.ts` or `lib/digest/queries.ts` — fixed contract.
+- **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
+  price, grades, latestSync, activity, flags, monthToDate }`.
+  - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
+    `streams[]` (per-stream `throughDate` + `ok|warn`).
+  - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
+  - `flow[]` — `{ date, in, out }` (kg, ~30 d).  `price[]` — `{ date, phpPerKg }`.
+  - `grades[]` — `{ date, grade, kg }` (long form; UI pivots to wide for stacking).
+  - `latestSync` — `{ date, insertCount, updateCount, deleteCount, byEmployee[] }`.
+  - `activity[]` — `{ id, at, table, operation, note, employee, provenance, diff[] }`.
+  - `flags[]` — `{ kind, severity, message, date? }`.
+  - `monthToDate` — `{ label, rcInKg, rcOutKg, productionKg, netKg }`.
 
 ## Key Behaviors
-- **Edit mode** — toggle via "Edit Layout" button in sticky header. Enables drag (via `.drag-handle` class), resize (southeast handle), and per-widget remove buttons.
-- **Collapse** — stores original height in component state, sets grid `h: 2`, restores on expand.
-- **Widget picker** — shows `WIDGET_REGISTRY` singletons (one per dashboard) and a "Add Chart Widget" button for unlimited chart instances.
-- **Chart instances** — `price-trajectory` is the seed instance; `uchart-{timestamp}` IDs for user-created charts. Settings stored per-instance in `prefs.widgetSettings`.
-- **Reset layout** — available in edit mode, resets to `DEFAULT_PREFS`.
-- **Adapter fallback** — `Promise.allSettled` ensures a single failing adapter never breaks the whole dashboard. Each widget independently falls back to its static data.
-- **Sticky KPI Bar** — clicking the Pin icon in the KPI strip's header action sets `stickyKpi: true`. The strip is removed from the ReactGridLayout grid and re-rendered in a second row inside the sticky dashboard header via `WidgetSizeContext.Provider` with a fixed `xl/sm` tier. An `IntersectionObserver` on a sentinel `<div>` adds `shadow-lg` to the header when it scrolls past the viewport top. An Unpin button (PinOff icon) restores the strip to the grid with a 200ms `animate-kpi-exit` animation. On screens ≤640px (`isMobile`), sticky mode is disabled — strip always stays in the grid.
+- **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
+  muted otherwise; relative time recomputed client-side.
+- **Net-flow neutrality** — `net_flow` KPI never moralizes drift: neutral delta
+  color + dashed surface + "continuous-flow drift is expected" tooltip. The
+  feed tank balances month-end, not daily (project rule).
+- **Zero/empty handling** — every band has a tasteful empty state ("No data",
+  "—", "No recent sync activity") and never crashes on missing streams.
+- **Single-grade production** — the stacked-bar chart detects ≤1 grade and
+  renders one bar series with no legend.
+- **Motion** — `animate-fade-up` on header/feed container, `stagger-children`
+  on the KPI grid, `hover-lift` on cards/charts. Activity rows use only a
+  `transition-colors` hover, no per-row entrance.
+- **Navbar** — `/` returns `null` from `getBreadcrumb()`, so the left side stays
+  empty (no redundant title). The digest renders its own sub-band header only.
 
 ## Dependencies
-- `components/widgets/` — widget registry and all widget components
-- `react-grid-layout` — drag/resize grid (`GridLayout` + `verticalCompactor`)
-- `lib/widgets/mock-data.ts` — static adapter fallbacks
-- `lib/widgets/adapters/` — live Supabase adapters
-- `lib/supabase/server.ts` — `createClient()` for server-side Supabase access
-- `components/widgets/chart/utils.ts` — `WidgetSizeContext` for responsive tier system
+- `lib/digest/queries.ts` / `lib/digest/types.ts` — data contract (do not edit).
+- `recharts` — sparklines + the three charts (also used by the archived widgets).
+- `lib/utils` (`cn`), `components/ui/tooltip` (shadcn), `lucide-react` (flag icons).
+- `app/globals.css` — `--chart-1..5`, `--popover`, motion utilities, glass classes.
 
 ## See Also
-- `components/widgets/CONTEXT.md` — widget system architecture, port types, adapter contract
-- `components/NAVBAR.md` — dashboard has no title registered (left side empty per convention)
+- `_archived/dashboard-v1/README.md` — the previous widget dashboard (archived).
+- `components/NAVBAR.md` — `/` has no breadcrumb entry (left side empty).
+- `CLAUDE.md` — Motion & Glass, Excel Standard, Error Toasts hard rule.

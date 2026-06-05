@@ -1,5 +1,9 @@
 # Supabase Backend Engineer Memory
 
+## Daily Sync Digest backend (2026-06-04) — [[digest-backend]]
+
+New `/` route (replaces widget dashboard). 12 `view_digest_*` SQL views (all aggregation here, SECURITY INVOKER) + `lib/digest/queries.ts` `getDigestData(): Promise<DigestData>` (shapes rows only). Contract `lib/digest/types.ts` (do NOT edit). operationalDate=latest day with ANY data (lags calendar). Employee parse in `view_digest_audit_enriched`: named-mgr BEFORE provenance fallback. Migration `20260604000000_create_digest_views.sql`. See digest-backend.md.
+
 ## Lean Sync Orchestrator — token-lean ICTC sync (2026-06-02) — [[lean-sync-orchestrator]]
 
 Refactored gsheet-sync to a two-phase Python orchestrator (`scripts/sync_gsheet.py`) on a shared PostgREST helper (`scripts/lib/db.py`, service-role key from .env.local) so the agent reads only a compact `decisions_<mode>.json` (~1k tokens) instead of the full DB dump + classified JSON (~349k tokens) — >99% reduction, proven read-only (idempotent). Apply phase replicates trigger contract: deliveries cost_basis=0 placeholder (L-008), never `current_weight +=` (L-005/6), UPDATE trigger audit row (L-001); rc_out manual audit. Other 4 employees designed in `LEAN_SYNC_REFACTOR.md`. See lean-sync-orchestrator.md.
