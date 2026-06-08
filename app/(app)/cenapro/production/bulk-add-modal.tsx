@@ -19,6 +19,15 @@ import { GridCell } from '@/components/shared/grid/GridCell';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type NavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
+import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import { saveProductionEvents, type ProductionEventDirtyRow } from './actions';
 import {
     SHIFT_CODES,
@@ -77,23 +86,18 @@ export function BulkAddModal({ open, onOpenChange, onInserted, defaultYear }: Bu
     );
 
     const [isSaving, setIsSaving] = React.useState(false);
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
-    const preEditValue = React.useRef<string>('');
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
 
-    // Excel-style "Enter after Tab" anchor. When a Tab RUN begins we remember the column
-    // it started from; a later Enter drops DOWN a row and returns to that anchor column
-    // (not the last cell tabbed to). Held in a ref so resets (mouse click, arrows, Escape)
-    // don't cause re-renders. Null = no active Tab run → Enter uses the current column.
-    const enterAnchorColRef = React.useRef<number | null>(null);
+    // Stable indirection so the mouse handlers can end an active edit without a forward
+    // reference to the edit session (created later, after updateRow). Mirrors RC IN.
+    const endEditRef = React.useRef<() => void>(() => {});
 
     // Reset the grid to a fresh 8-row sheet whenever the modal re-opens.
     React.useEffect(() => {
         if (open) {
             setRows(Array.from({ length: INITIAL_ROW_COUNT }, createEmptyRow));
             setActiveCell(null);
-            setIsEditing(false);
-            enterAnchorColRef.current = null;
+            endEditRef.current();
         }
     }, [open]);
 
@@ -144,8 +148,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted, defaultYear }: Bu
             if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
                 cellSelection.clearSelection();
                 setActiveCell({ row: rowIdx, col: colIdx });
-                setIsEditing(false);
-                enterAnchorColRef.current = null; // a fresh click ends any Tab run
+                endEditRef.current(); // commit any open edit (a fresh click ends any Tab run)
                 gridRef.current?.focus();
             }
             dragMovedRef.current = false;
@@ -221,186 +224,130 @@ export function BulkAddModal({ open, onOpenChange, onInserted, defaultYear }: Bu
         clearCell,
     });
 
-    // ─── Editing (text/numeric cells; dropdowns/dates are typed too here) ──────────
-    const startEditing = React.useCallback(
-        (rowIdx: number, colIdx: number, initialChar?: string) => {
-            const field = BULK_COLUMN_MAP[colIdx];
-            if (!field) return;
-            const row = rows[rowIdx];
-            if (!row) return;
-            preEditValue.current = String(row[field] ?? '');
-            setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(true);
-            if (initialChar !== undefined) updateRow(rowIdx, field, initialChar);
-        },
-        [rows, updateRow],
-    );
+    // ─── Edit session (shared Blackwood Table primitive) ───────────────────────────
+    // Owns isEditing + the pre-edit snapshot + start/revert/commit. onAfterCommit runs
+    // the Excel-style typed-date normalization that previously fired before leaving edit
+    // state on Tab/Enter — the merged date cell ("6/2" → yyyy-MM-dd) on commit.
+    const setCellValue = React.useCallback((id: CoordinateId, value: string) => {
+        const field = BULK_COLUMN_MAP[id.col];
+        if (field) updateRow(id.row, field, value);
+    }, [updateRow]);
+
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: (id) => getCellValue(id.row, id.col),
+        setValue: setCellValue,
+        onAfterCommit: commitActiveDateCell,
+    });
+    const isEditing = editSession.isEditing;
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
+    endEditRef.current = () => { if (editSession.isEditing) editSession.commit(); };
+
+    // GridCell-compatible adapters (GridCell calls onStartEditing(row,col,char?)).
+    const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
+        if (BULK_COLUMN_MAP[colIdx] == null) return;
+        setActiveCell({ row: rowIdx, col: colIdx });
+        editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
+    }, [editSession]);
 
     const revertChanges = React.useCallback(() => {
-        if (!activeCell) return;
-        const field = BULK_COLUMN_MAP[activeCell.col];
-        if (field) updateRow(activeCell.row, field, preEditValue.current);
-        setIsEditing(false);
-        enterAnchorColRef.current = null; // Escape ends any Tab run
+        editSession.revertChanges();
         gridRef.current?.focus();
-    }, [activeCell, updateRow]);
+    }, [editSession]);
 
-    // ─── Keyboard navigation (mirrors RC IN's grid) ────────────────────────────────
-    // Excel-style "Enter after Tab": the column a Tab RUN starts from is remembered as
-    // the anchor; a later Enter drops a row and returns to that anchor column. The anchor
-    // is set on the FIRST Tab of a run (kept through subsequent Tabs/Shift+Tabs), consumed
-    // + cleared on Enter, and cleared by any arrow/Home/End move (those end the run).
-    const moveActive = React.useCallback(
-        (key: string, shift: boolean) => {
-            if (!activeCell) return;
-            let { row, col } = activeCell;
-            if (key === 'ArrowUp') { row = Math.max(0, row - 1); enterAnchorColRef.current = null; }
-            else if (key === 'ArrowDown') { row = Math.min(rows.length - 1, row + 1); enterAnchorColRef.current = null; }
-            else if (key === 'ArrowLeft') {
-                do { col--; } while (col > 0 && BULK_COLUMN_MAP[col] === null);
-                col = Math.max(1, col);
-                enterAnchorColRef.current = null;
-            } else if (key === 'ArrowRight') {
-                do { col++; } while (col < BULK_COL_COUNT - 1 && BULK_COLUMN_MAP[col] === null);
-                col = Math.min(BULK_COL_COUNT - 1, col);
-                enterAnchorColRef.current = null;
-            } else if (key === 'Enter') {
-                if (shift) {
-                    // Shift+Enter moves UP (existing behavior); ends the Tab run.
-                    row = Math.max(0, row - 1);
-                    enterAnchorColRef.current = null;
-                } else {
-                    // Drop down a row and return to the anchor column (or current col if no
-                    // run was in progress), then consume the anchor so the next Enter goes
-                    // straight down at this same column.
-                    const targetCol = enterAnchorColRef.current ?? col;
-                    row = Math.min(rows.length - 1, row + 1);
-                    col = targetCol;
-                    enterAnchorColRef.current = null;
-                }
-            } else if (key === 'Tab') {
-                // Starting (or continuing) a Tab run — remember the column it began at.
-                if (enterAnchorColRef.current === null) enterAnchorColRef.current = activeCell.col;
-                if (shift) {
-                    do { col--; if (col < 1) { row--; col = BULK_COL_COUNT - 1; } } while (row >= 0 && BULK_COLUMN_MAP[col] === null);
-                    if (row < 0) { row = 0; col = activeCell.col; }
-                } else {
-                    do { col++; if (col >= BULK_COL_COUNT) { row++; col = 1; } } while (row < rows.length && BULK_COLUMN_MAP[col] === null);
-                    if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; }
-                }
-            } else if (key === 'Home') { col = 1; enterAnchorColRef.current = null; }
-            else if (key === 'End') { col = BULK_COL_COUNT - 1; enterAnchorColRef.current = null; }
-            setActiveCell({ row, col });
-        },
-        [activeCell, rows.length],
+    // ─── Grid navigation (shared Blackwood Table primitives) ───────────────────────
+    // Coordinate resolver, wrapped to preserve two bulk-add-specific behaviors the base
+    // factory doesn't express:
+    //   • ArrowLeft clamps to col 1 (col 0 is the row#/trash column, never selectable) —
+    //     the base factory's Math.max(0, …) would land on col 0.
+    // Home/End (also bulk-add-only) aren't NavMoves, so they're intercepted in the
+    // container handler below before delegating to the shared hook.
+    const baseResolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap: BULK_COLUMN_MAP }),
+        [rows.length],
     );
-
-    const handleGridKeyDown = React.useCallback(
-        (e: React.KeyboardEvent) => {
-            if (!activeCell) return;
-            const isRangeSelected = cellSelection.getSelectionSize() > 1;
-
-            if (isEditing) {
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Prevent Radix Dialog from catching Escape and closing the modal
-                    // mid-edit — same guard the RC IN grid uses inside its Dialog.
-                    e.nativeEvent.stopImmediatePropagation();
-                    revertChanges();
-                } else if (e.key === 'Enter' || e.key === 'Tab') {
-                    e.preventDefault();
-                    // Excel-style: auto-transcribe a typed shorthand date (e.g. "6/2")
-                    // to yyyy-MM-dd the instant the cell is committed. Done BEFORE leaving
-                    // edit state because the grid intercepts Tab/Enter (the input's own
-                    // onBlur may not fire on Tab).
-                    commitActiveDateCell();
-                    setIsEditing(false);
-                    moveActive(e.key, e.shiftKey);
-                    gridRef.current?.focus();
-                }
-                return;
+    const resolver = React.useMemo<NavResolver<CoordinateId>>(() => ({
+        ...baseResolver,
+        resolve(from, move) {
+            const next = baseResolver.resolve(from, move);
+            // ArrowLeft must clamp to col 1, not col 0 (the row# column).
+            if (next && move.kind === 'arrow' && move.dir === 'left' && next.col < 1) {
+                return { row: next.row, col: 1 };
             }
-
-            if (isRangeSelected) {
-                if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                    e.preventDefault();
-                    cellSelection.handleKeyDown(e);
-                    return;
-                }
-                if ((e.metaKey || e.ctrlKey) && e.key === 'c') { handleCopyKeyDown(e); return; }
-                if (e.key === 'Backspace' || e.key === 'Delete') { handleDeleteKeyDown(e); cellSelection.clearSelection(); return; }
-                if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); enterAnchorColRef.current = null; return; }
-                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) cellSelection.clearSelection();
-            }
-
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter', 'Home', 'End'].includes(e.key)) {
-                e.preventDefault();
-                if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                    cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent);
-                    cellSelection.handleMouseUp();
-                    cellSelection.handleKeyDown(e);
-                    return;
-                }
-                moveActive(e.key, e.shiftKey);
-                return;
-            }
-
-            if (e.key === 'F2') { e.preventDefault(); startEditing(activeCell.row, activeCell.col); return; }
-            if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); startEditing(activeCell.row, activeCell.col, ''); return; }
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                e.preventDefault();
-                startEditing(activeCell.row, activeCell.col, e.key);
-            }
+            return next;
         },
-        [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing, commitActiveDateCell],
-    );
+    }), [baseResolver]);
 
-    // ─── Paste engine (Excel/Sheets TSV → grid, auto-extends rows) ─────────────────
-    // This is the "works like a charm" part, mirrored faithfully from RC IN's
-    // handleSmartPaste: split on newlines into rows, tabs into columns, fill from the
-    // active cell, and push fresh rows when the paste is taller than the grid.
-    const handleSmartPaste = React.useCallback(
-        (e: React.ClipboardEvent, startRow: number, startCol: number) => {
+    const isRangeSelected = cellSelection.getSelectionSize() > 1;
+
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
+            if (!activeCell) return;
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent,
+            );
+            cellSelection.handleMouseUp();
+        },
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
+
+    const { handleKeyDown: handleNavKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        // Excel-style "Enter after a Tab run returns to the run's lane" — the numeric
+        // enterAnchorColRef behavior this modal had is now provided by the shared hook.
+        enableEnterAnchor: true,
+    });
+
+    // Container key handler — intercept Home/End (move to first/last editable column in
+    // the row), which aren't NavMoves the shared hook routes; everything else delegates.
+    const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
+        if (!activeCell) { handleNavKeyDown(e); return; }
+        // Home/End (bulk-add only) jump to the first/last editable column in the row,
+        // without touching the range selection — exactly as the old moveActive did. They
+        // aren't NavMoves the shared hook routes, so handle them here when not editing.
+        if (!isEditing && (e.key === 'Home' || e.key === 'End')) {
             e.preventDefault();
-            const text = e.clipboardData.getData('text');
-            if (!text) return;
-            const pastedRows = text.split(/\r\n|\n|\r/).filter((r) => r.trim() !== '');
-            if (!pastedRows.length) return;
+            const col = e.key === 'Home' ? 1 : BULK_COL_COUNT - 1;
+            setActiveCell({ row: activeCell.row, col });
+            return;
+        }
+        handleNavKeyDown(e);
+    }, [activeCell, isEditing, handleNavKeyDown]);
 
-            setRows((prev) => {
-                const next = [...prev];
-                pastedRows.forEach((pastedRow, rOffset) => {
-                    const targetRow = startRow + rOffset;
-                    // Auto-extend: grow the grid when the paste runs past the last row.
-                    if (targetRow >= next.length) next.push(createEmptyRow());
-                    const cols = pastedRow.split('\t');
-                    cols.forEach((cellVal, cOffset) => {
-                        const targetCol = startCol + cOffset;
-                        if (targetCol >= BULK_COL_COUNT) return; // don't spill past the grid
-                        const field = BULK_COLUMN_MAP[targetCol];
-                        if (!field) return; // skip read-only/row# columns
-                        next[targetRow] = { ...next[targetRow], [field]: cleanBulkPasteValue(cellVal, field) };
-                    });
-                });
-                return next;
-            });
+    // ─── Paste engine (shared smart-paste primitive — Excel/Sheets TSV → grid) ─────
+    const { handleSmartPaste, handleGridPaste: handleGridPasteAt } = useGridPaste<BulkRow>({
+        columnMap: BULK_COLUMN_MAP,
+        setRows,
+        createEmptyRow,
+        cleanCellValue: cleanBulkPasteValue,
+    });
 
-            toast.success(`Pasted ${pastedRows.length} row${pastedRows.length !== 1 ? 's' : ''}`);
-        },
-        [],
-    );
-
-    // Grid-level paste (selection mode, not mid-edit) — same seam as RC IN.
-    const handleGridPaste = React.useCallback(
-        (e: React.ClipboardEvent) => {
-            if (!isEditing && activeCell) {
-                handleSmartPaste(e, activeCell.row, activeCell.col);
-                cellSelection.clearSelection();
-            }
-        },
-        [isEditing, activeCell, handleSmartPaste, cellSelection],
-    );
+    // Grid-level paste (selection mode, not mid-edit).
+    const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
+        if (!isEditing) {
+            handleGridPasteAt(e, activeCell, () => cellSelection.clearSelection());
+        }
+    }, [isEditing, activeCell, handleGridPasteAt, cellSelection]);
 
     // ─── Save ──────────────────────────────────────────────────────────────────────
     const filledRowCount = rows.filter((r) => !isBlankRow(r)).length;

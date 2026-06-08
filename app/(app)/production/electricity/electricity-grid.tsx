@@ -28,6 +28,13 @@ import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
 import { saveBulkElectricity } from './actions';
@@ -125,10 +132,12 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         return [...base, createEmptyRow()];
     });
 
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
     const [isSaving, setIsSaving] = React.useState(false);
-    const preEditValue = React.useRef<string>('');
+
+    // Stable indirection so mouse/blur handlers can end an active edit without a
+    // forward reference to the edit session (created after the row mutators).
+    const endEditRef = React.useRef<() => void>(() => {});
 
     const cellSelection = useCellSelection({
         rowCount: rows.length,
@@ -205,7 +214,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         const down = mouseDownCellRef.current;
         mouseDownCellRef.current = null;
         if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
-            cellSelection.clearSelection(); setActiveCell({ row: rowIdx, col: colIdx }); setIsEditing(false); gridRef.current?.focus();
+            cellSelection.clearSelection(); setActiveCell({ row: rowIdx, col: colIdx }); endEditRef.current(); gridRef.current?.focus();
         }
         dragMovedRef.current = false;
     }, [cellSelection]);
@@ -267,75 +276,102 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         getSelectedRange: cellSelection.getSelectedRange, getSelectionSize: cellSelection.getSelectionSize, clearCell,
     });
 
-    const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
-        const field = COL_MAP[colIdx];
-        if (!field || field === '_state' || field === '_id' || field === '_meter_select') return;
-        const row = rows[rowIdx];
-        preEditValue.current = row ? String(row[field] ?? '') : '';
-        setActiveCell({ row: rowIdx, col: colIdx }); setIsEditing(true);
-        if (initialChar !== undefined) updateRow(rowIdx, field, initialChar);
-    }, [rows, updateRow]);
+    // ─── Editing (shared Blackwood Table edit session) ────────────────────────
+    const setCellValue = React.useCallback((id: CoordinateId, value: string) => {
+        const field = COL_MAP[id.col];
+        if (field) updateRow(id.row, field, value);
+    }, [updateRow]);
 
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: (id) => getCellValue(id.row, id.col),
+        setValue: setCellValue,
+    });
+    const isEditing = editSession.isEditing;
+    endEditRef.current = () => { if (editSession.isEditing) editSession.commit(); };
+
+    const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
+        if (COL_MAP[colIdx] == null) return;
+        setActiveCell({ row: rowIdx, col: colIdx });
+        editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
+    }, [editSession]);
+
+    // Custom revert (NOT the session's) so the `_state` rollback is preserved:
+    // reverting an id-backed modified row drops it back to 'existing'. The session's
+    // setValue path would re-mark it 'modified', so mutate directly using the
+    // session snapshot, then clear the edit flag via commit.
     const revertChanges = React.useCallback(() => {
         if (!activeCell) return;
         const field = COL_MAP[activeCell.col];
-        if (field && field !== '_state' && field !== '_id' && field !== '_meter_select') {
+        if (field) {
+            const snapshot = editSession.preEditValueRef.current ?? '';
             setRows(prev => {
                 const next = [...prev]; const row = { ...next[activeCell.row] };
-                (row as Record<string, unknown>)[field] = preEditValue.current;
+                (row as Record<string, unknown>)[field] = snapshot;
                 if (row._state === 'modified' && row._id) row._state = 'existing';
                 next[activeCell.row] = row; return next;
             });
         }
-        setIsEditing(false); gridRef.current?.focus();
-    }, [activeCell]);
+        editSession.commit(); gridRef.current?.focus();
+    }, [activeCell, editSession]);
 
-    const moveActive = React.useCallback((key: string, shift: boolean) => {
-        if (!activeCell) return;
-        let { row, col } = activeCell;
-        if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
-        else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
-        else if (key === 'ArrowLeft') { do { col--; } while (col > 0 && COL_MAP[col] === null); col = Math.max(0, col); }
-        else if (key === 'ArrowRight') { do { col++; } while (col < COL_COUNT - 1 && COL_MAP[col] === null); col = Math.min(COL_COUNT - 1, col); }
-        else if (key === 'Tab') {
-            if (shift) { do { col--; if (col < 0) { row--; col = COL_COUNT - 1; } } while (row >= 0 && COL_MAP[col] === null); if (row < 0) { row = 0; col = activeCell.col; } }
-            else { do { col++; if (col >= COL_COUNT) { row++; col = 0; } } while (row < rows.length && COL_MAP[col] === null); if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; } }
-        } else if (key === 'Home') col = 1;
-        else if (key === 'End') col = COL_COUNT - 2;
-        setActiveCell({ row, col });
-    }, [activeCell, rows.length]);
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
 
+    // ─── Grid navigation (shared Blackwood Table primitives) ──────────────────
+    const resolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap: COL_MAP }),
+        [rows.length]
+    );
+
+    const isRangeSelected = cellSelection.getSelectionSize() > 1;
+
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
+            if (!activeCell) return;
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent
+            );
+            cellSelection.handleMouseUp();
+        },
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
+
+    const { handleKeyDown: navKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        enableEnterAnchor: false,
+    });
+
+    // Home/End column jumps (not in the shared state machine) are intercepted here
+    // when not editing — Home → first writable col, End → last writable col
+    // (COL_COUNT - 2, i.e. REMARKS; the trailing delete column is skipped).
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-        if (!activeCell) return;
-        const isRangeSelected = cellSelection.getSelectionSize() > 1;
-        if (isEditing) {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); e.nativeEvent.stopImmediatePropagation(); revertChanges(); }
-            else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); setIsEditing(false); moveActive(e.key, e.shiftKey); gridRef.current?.focus(); }
+        if (!isEditing && activeCell && (e.key === 'Home' || e.key === 'End')) {
+            e.preventDefault();
+            setActiveCell({ row: activeCell.row, col: e.key === 'Home' ? 1 : COL_COUNT - 2 });
             return;
         }
-        if (isRangeSelected) {
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); cellSelection.handleKeyDown(e); return; }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') { handleCopyKeyDown(e); return; }
-            if (e.key === 'Backspace' || e.key === 'Delete') { handleDeleteKeyDown(e); cellSelection.clearSelection(); return; }
-            if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); return; }
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) cellSelection.clearSelection();
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                const range = cellSelection.range;
-                if (range) { cellSelection.clearSelection(); setActiveCell({ row: range.startRow, col: range.startCol }); }
-            }
-        }
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter', 'Home', 'End'].includes(e.key)) {
-            e.preventDefault();
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent);
-                cellSelection.handleMouseUp(); cellSelection.handleKeyDown(e); return;
-            }
-            moveActive(e.key, e.shiftKey); return;
-        }
-        if (e.key === 'F2') { e.preventDefault(); startEditing(activeCell.row, activeCell.col); return; }
-        if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); startEditing(activeCell.row, activeCell.col, ''); return; }
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); startEditing(activeCell.row, activeCell.col, e.key); }
-    }, [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing]);
+        navKeyDown(e);
+    }, [isEditing, activeCell, navKeyDown]);
 
     const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRow: number, startCol: number) => {
         e.preventDefault();
@@ -378,7 +414,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
 
     const handleDiscard = React.useCallback(() => {
         const base = initialData.map(dbRowToGridRow);
-        setRows([...base, createEmptyRow()]); setActiveCell(null); setIsEditing(false);
+        setRows([...base, createEmptyRow()]); setActiveCell(null); endEditRef.current();
     }, [initialData]);
 
     const handleSave = async () => {

@@ -20,7 +20,8 @@ Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF an
 All columns always render (no price gating). DIFF and TTL KWH are read-only/computed; TTL KWH renders as a plain right-aligned `font-mono` number with no ₱ symbol. The DB regenerates the stored `consumption_kwh` column on save, so the UI computes TTL KWH client-side only for live preview and never sends it in the payload.
 
 ## Key Behaviors
-- **Meter select:** MAIN / BUNKHOUSE / PUMP dropdown; choosing "Other (type manually)" switches to free-text Input for that row
+- **Inline editing (shared Blackwood Table primitives):** keyboard nav + the edit session are driven by `useGridKeyboardNav` (coordinate resolver via `createCoordinateNavResolver({ rowCount, columnMap: COL_MAP })`) + `useGridEditSession` — see `components/shared/grid/CONTEXT.md`. `enableEnterAnchor: false` (plain Enter drops straight down). `revertChanges` is kept custom (NOT the session's) to preserve the `_state: 'modified' → 'existing'` rollback. `Home`/`End` are intercepted before the shared handler (Home → col 1, End → `COL_COUNT - 2`, i.e. REMARKS — the trailing delete column is skipped). `handleSmartPaste` stays local because it must mark `_state='modified'` + maintain the trailing empty row (the generic `useGridPaste` cannot express that). The reference wiring is `app/(app)/inventory/rc-in/bulk-delivery-input.tsx`.
+- **Meter select:** MAIN / BUNKHOUSE / PUMP dropdown; choosing "Other (type manually)" switches to free-text Input for that row. (This uses the shadcn `<Select>`, NOT the shared `SelectCell` — left unchanged in the migration since it is not a GridCell-style dropdown.)
 - **No price gating:** MULT and TTL KWH are operational kWh data (not sensitive pricing) — always visible to all roles. The grid no longer imports `useAuth`/`hasPermission`.
 - **Computed DIFF:** `diff_kwh` is a generated DB column (`end_kwh - start_kwh`), shown as read-only muted cell
 - **Computed TTL KWH (consumption):** `consumption_kwh` is a generated DB column (`(end_kwh - start_kwh) × meter_multiplier`) — raw kWh, NOT pesos. The UI mirrors this client-side (`diff × meter_multiplier`) for live preview as the user edits MULT; the value is not written (DB regenerates it).
@@ -29,6 +30,7 @@ All columns always render (no price gating). DIFF and TTL KWH are read-only/comp
 - **Error toasts:** `errorToast()` from `lib/toast.ts`
 
 ## Hooks Used
+- `useGridKeyboardNav` + `createCoordinateNavResolver`, `useGridEditSession` — shared Blackwood Table keyboard/edit primitives (see `components/shared/grid/CONTEXT.md`)
 - `useCellSelection`, `useClipboardCopy`, `useCellDelete`, `useCellAggregation`, `useStatusBar`
 
 ## Server Action Contract

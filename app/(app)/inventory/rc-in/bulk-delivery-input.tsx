@@ -35,6 +35,14 @@ import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
+import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { DeliveryRow, InputDeliveryRow } from '@/types/rc-in';
 import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
@@ -135,6 +143,11 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const rowIdsRef = React.useRef<string[]>(initialData?.map(d => d.id) ?? []);
     const gridRef = React.useRef<HTMLDivElement>(null);
 
+    // Stable indirection so the mouse/blur handlers can end an active edit
+    // without a forward reference to the edit session (which is created later,
+    // after updateRow). Assigned once the edit session exists.
+    const endEditRef = React.useRef<() => void>(() => {});
+
     const [rows, setRows] = React.useState<InputDeliveryRow[]>(() => {
         if (initialData && initialData.length > 0) {
             return initialData.map(deliveryToInputRow);
@@ -145,9 +158,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
     const [auditComments, setAuditComments] = React.useState<Record<number, string>>({});
 
     const [isSubmitting, setIsSubmitting] = React.useState(false);
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
-    const preEditValue = React.useRef<InputDeliveryRow[keyof InputDeliveryRow] | null>(null);
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
 
     // --- Cell range selection ---
     const cellSelection = useCellSelection({
@@ -229,11 +240,11 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         if (downCell && downCell.row === rowIdx && downCell.col === colIdx && !dragMovedRef.current) {
             cellSelection.clearSelection();
             setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(false);
+            endEditRef.current();
             gridRef.current?.focus();
         }
         dragMovedRef.current = false;
-    }, [cellSelection, setActiveCell, setIsEditing]);
+    }, [cellSelection, setActiveCell]);
 
     const handleGridCellMouseEnter = React.useCallback((rowIdx: number, colIdx: number) => {
         // Use mouseDownCellRef (set synchronously) instead of cellSelection.isDragging (stale state)
@@ -290,243 +301,104 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
     const isRangeSelected = cellSelection.getSelectionSize() > 1;
 
+    // --- EDIT SESSION (shared Blackwood Table primitive) ---
+    // Owns isEditing + the pre-edit snapshot + start/revert/commit. Wired to the
+    // grid's existing getCellValue/updateRow via the {row,col} coordinate id.
+    const setCellValue = React.useCallback((id: CoordinateId, value: string) => {
+        const field = COLUMN_MAP[id.col];
+        if (field) updateRow(id.row, field, value);
+    }, [updateRow]);
+
+    // NOTE: commit does NOT auto-focus the grid — focus is restored explicitly
+    // only at the call sites that did so before (Tab/Enter commit, Escape revert,
+    // single-cell click). onBlur must NOT re-focus, so focus is kept out of here.
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: (id) => getCellValue(id.row, id.col),
+        setValue: setCellValue,
+    });
+    const isEditing = editSession.isEditing;
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
+    // Keep the stable endEdit indirection pointing at the latest commit.
+    endEditRef.current = () => { if (editSession.isEditing) editSession.commit(); };
+
+    // GridCell-compatible adapters: GridCell calls onStartEditing(row, col, char?)
+    // and onRevert(); the edit session is keyed by a {row,col} id.
     const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
-        const field = COLUMN_MAP[colIdx];
-        if (!field) return;
-
-        // 1. Capture current value BEFORE any edit
-        const currentRow = rows[rowIdx];
-        const currentValue = currentRow ? currentRow[field] : '';
-        preEditValue.current = currentValue;
-
-        // 2. Set Editing
-        setActiveCell({ row: rowIdx, col: colIdx }); // Ensure active
-        setIsEditing(true);
-
-        // 3. Optional: Immediate update (Type-over)
-        if (initialChar !== undefined) {
-            updateRow(rowIdx, field, initialChar);
-        }
-    }, [rows, updateRow]);
+        if (COLUMN_MAP[colIdx] == null) return;
+        setActiveCell({ row: rowIdx, col: colIdx });
+        editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
+    }, [editSession]);
 
     const revertChanges = React.useCallback(() => {
-        if (!activeCell) return;
-        // REVERT changes
-        if (preEditValue.current !== null) {
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                updateRow(activeCell.row, field, preEditValue.current);
-            }
-        }
-        setIsEditing(false);
-        // Return focus to the grid container
+        editSession.revertChanges();
         gridRef.current?.focus();
-    }, [activeCell, updateRow]);
+    }, [editSession]);
 
-    // --- GRID NAVIGATION ---
-    // Defined after updateRow to avoid "used before declaration"
-    const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-        if (!activeCell) return;
+    // --- GRID NAVIGATION (shared Blackwood Table primitives) ---
+    // Coordinate resolver = the old moveSelection math (skip null cols, Tab
+    // row-wrap + clamp, Enter down / Shift+Enter up). Rebuilt when row count
+    // changes so Tab/Enter boundary clamps stay correct.
+    const resolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap: COLUMN_MAP }),
+        [rows.length]
+    );
 
-        // If editing, only handle Escape to exit, or Tab/Enter to commit & move
-        if (isEditing) {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                e.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation(); // Prevent Radix/Dialog from catching this
+    // Range slot = the existing useCellSelection + copy + delete instances, wired
+    // into the state machine's opt-in rectangular-selection capability.
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
+            if (!activeCell) return;
+            // Seed anchor at current cell (the old Shift+Arrow trick).
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, preventDefault: () => {} } as unknown as React.MouseEvent
+            );
+            cellSelection.handleMouseUp();
+        },
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
 
-                revertChanges();
-            } else if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
-                setIsEditing(false);
-                moveSelection(e.key, e.shiftKey);
-                gridRef.current?.focus();
-            }
-            return;
-        }
+    const { handleKeyDown: handleGridKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        // RC IN never used the Tab-then-Enter "return to lane" behavior — plain
+        // Enter always dropped straight down. Keep that exact behavior.
+        enableEnterAnchor: false,
+    });
 
-        // --- Range selection mode handling ---
-        if (isRangeSelected) {
-            // Shift+Arrow -> extend selection (delegate to hook)
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                e.preventDefault();
-                cellSelection.handleKeyDown(e);
-                return;
-            }
-            // Copy (Ctrl+C / Cmd+C)
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
-                handleCopyKeyDown(e);
-                return;
-            }
-            // Delete/Backspace -> clear selected cells
-            if (e.key === 'Backspace' || e.key === 'Delete') {
-                handleDeleteKeyDown(e);
-                cellSelection.clearSelection();
-                return;
-            }
-            // Escape -> clear range
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                cellSelection.clearSelection();
-                return;
-            }
-            // Non-shift nav keys -> exit range, do normal single-cell nav
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
-                cellSelection.clearSelection();
-                // fall through to existing nav handling below
-            }
-            // Printable char -> exit range, start editing anchor cell
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                const range = cellSelection.range;
-                if (range) {
-                    cellSelection.clearSelection();
-                    setActiveCell({ row: range.startRow, col: range.startCol });
-                }
-                // fall through to existing char handling below
-            }
-        }
+    // --- PASTE LOGIC (shared smart-paste primitive) ---
+    const { handleSmartPaste, handleGridPaste: handleGridPasteAt } = useGridPaste<InputDeliveryRow>({
+        columnMap: COLUMN_MAP,
+        setRows,
+        createEmptyRow,
+        cleanCellValue,
+    });
 
-        // --- NAVIGATION (Not Editing) ---
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
-            e.preventDefault();
-            // Shift+Arrow from single cell -> enter range selection
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                // Seed anchor at current cell, then extend with Shift+Arrow
-                cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, preventDefault: () => {} } as unknown as React.MouseEvent);
-                cellSelection.handleMouseUp();
-                cellSelection.handleKeyDown(e);
-                return;
-            }
-            moveSelection(e.key, e.shiftKey);
-            return;
-        }
-
-        // --- EDIT MODE triggers ---
-        if (e.key === 'F2') {
-            e.preventDefault();
-            startEditing(activeCell.row, activeCell.col);
-            return;
-        }
-
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-            e.preventDefault();
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                // Capture first, then clear
-                startEditing(activeCell.row, activeCell.col, '');
-            }
-            return;
-        }
-
-        // Printable characters -> Enter edit mode with value
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                // Prevent default so the subsequent input focus doesn't double-type the char
-                e.preventDefault();
-                startEditing(activeCell.row, activeCell.col, e.key);
-            }
-        }
-    }, [activeCell, isEditing, isRangeSelected, rows, updateRow, startEditing, revertChanges, cellSelection, handleCopyKeyDown, handleDeleteKeyDown]);
-
-    const moveSelection = (key: string, shift: boolean) => {
-        if (!activeCell) return;
-        let { row, col } = activeCell;
-
-        if (key === 'ArrowUp' || (key === 'Enter' && shift)) {
-            row = Math.max(0, row - 1);
-        } else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) {
-            row = Math.min(rows.length - 1, row + 1);
-        } else if (key === 'ArrowLeft') {
-            do {
-                col--;
-            } while (col > 0 && COLUMN_MAP[col] === null); // Skip nulls
-            col = Math.max(0, col);
-        } else if (key === 'ArrowRight') {
-            do {
-                col++;
-            } while (col < COLUMN_MAP.length && COLUMN_MAP[col] === null);
-            col = Math.min(COLUMN_MAP.length - 1, col);
-        } else if (key === 'Tab') {
-            if (shift) {
-                // Previous writable cell
-                do {
-                    col--;
-                    if (col < 0) {
-                        row--;
-                        col = COLUMN_MAP.length - 1;
-                    }
-                } while (row >= 0 && COLUMN_MAP[col] === null);
-                if (row < 0) { row = 0; col = activeCell.col; } // Boundary check
-            } else {
-                // Next writable cell
-                do {
-                    col++;
-                    if (col >= COLUMN_MAP.length) {
-                        row++;
-                        col = 0;
-                    }
-                } while (row < rows.length && COLUMN_MAP[col] === null);
-                if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; } // Boundary check
-            }
-        }
-
-        setActiveCell({ row, col });
-    };
-
-    // --- PASTE LOGIC (The Magic) ---
-    const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRowIndex: number, startColIndex: number) => {
-        e.preventDefault();
-        const clipboardData = e.clipboardData.getData('text');
-        if (!clipboardData) return;
-
-        // Parse Excel/TSV format
-        const pastedRows = clipboardData.split(/\r\n|\n|\r/).filter(row => row.trim() !== '');
-        if (pastedRows.length === 0) return;
-
-        setRows(prev => {
-            const newRows = [...prev];
-
-            pastedRows.forEach((pastedRow, rOffset) => {
-                const targetRowIndex = startRowIndex + rOffset;
-                const columns = pastedRow.split('\t');
-
-                // If we need more rows than exist, create them
-                if (targetRowIndex >= newRows.length) {
-                    newRows.push(createEmptyRow());
-                }
-
-                columns.forEach((cellValue, cOffset) => {
-                    const targetColIndex = startColIndex + cOffset;
-
-                    // Safety check: Don't paste beyond defined columns
-                    if (targetColIndex < COLUMN_MAP.length) {
-                        const fieldKey = COLUMN_MAP[targetColIndex];
-
-                        // Only paste into writable fields
-                        if (fieldKey) {
-                            newRows[targetRowIndex] = {
-                                ...newRows[targetRowIndex],
-                                [fieldKey]: cleanCellValue(cellValue, fieldKey)
-                            };
-                        }
-                    }
-                });
-            });
-
-            return newRows;
-        });
-
-        toast.success(`Pasted ${pastedRows.length} rows`);
-    }, []);
-
-    // Handle paste on the grid container when in selection mode
+    // Handle paste on the grid container when in selection mode (not editing).
     const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
-        if (!isEditing && activeCell) {
-            handleSmartPaste(e, activeCell.row, activeCell.col);
-            cellSelection.clearSelection();
+        if (!isEditing) {
+            handleGridPasteAt(e, activeCell, () => cellSelection.clearSelection());
         }
-    }, [isEditing, activeCell, handleSmartPaste, cellSelection]);
+    }, [isEditing, activeCell, handleGridPasteAt, cellSelection]);
 
     // --- DIRTY CHECKING ---
     React.useEffect(() => {

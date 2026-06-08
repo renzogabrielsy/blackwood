@@ -3,7 +3,6 @@
 import * as React from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import {
     Save,
     RotateCcw,
@@ -35,9 +34,22 @@ import {
     DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { GridCell } from '@/components/shared/grid/GridCell';
+import { SelectCell } from '@/components/shared/grid/SelectCell';
+import { DatePickerCell, formatDateShort } from '@/components/shared/grid/DatePickerCell';
+import { GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
+import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type NavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
+import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
 import type { ProductionEventRow } from '../types';
 import {
@@ -406,13 +418,7 @@ function plantBadgeClass(raw: string): string {
     }
 }
 
-// ─── Date display helper ─────────────────────────────────────────────────────────
-function formatDateShort(iso: string): string {
-    if (!iso) return '';
-    const parsed = parseISO(iso);
-    if (!isValidDate(parsed)) return iso;
-    return formatDate(parsed, 'MMM d');
-}
+// formatDateShort is imported from the shared DatePickerCell module (its canonical home).
 
 // ─── KG formatter (whole kg, thousands separators) ───────────────────────────────
 function formatKg(value: string): string {
@@ -422,185 +428,6 @@ function formatKg(value: string): string {
     return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
-// ─── DatePickerCell ──────────────────────────────────────────────────────────────
-// Always-visible date input with calendar icon + formatted display. The native
-// <input type="date"> overlays (opacity:0) so clicks anywhere open the native picker.
-// Selection (drag/anchor) is handled by the wrapping cell. Mirrors the ICTC ledger.
-interface DatePickerCellProps {
-    value: string;
-    onChange: (val: string) => void;
-    onPaste: (e: React.ClipboardEvent) => void;
-    isActive: boolean;
-    isRangeSelected: boolean;
-    isRangeAnchor: boolean;
-    onCellMouseDown: (e: React.MouseEvent) => void;
-    onCellMouseUp: () => void;
-    onCellMouseEnter: () => void;
-    muted?: boolean;
-}
-
-function DatePickerCell({
-    value,
-    onChange,
-    onPaste,
-    isActive,
-    isRangeSelected,
-    isRangeAnchor,
-    onCellMouseDown,
-    onCellMouseUp,
-    onCellMouseEnter,
-    muted,
-}: DatePickerCellProps) {
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    return (
-        <div
-            className={cn(
-                'group relative flex h-full w-full cursor-pointer select-none items-center justify-between gap-1 px-1',
-                'border border-dashed border-border/40 transition-colors hover:border-blue-500/60 hover:bg-blue-500/5',
-                isActive && !isRangeSelected && 'z-10 border-transparent ring-2 ring-primary ring-inset',
-                isRangeSelected && 'bg-primary/10 dark:bg-primary/20',
-                isRangeAnchor && 'z-10 border-transparent ring-2 ring-primary ring-inset',
-            )}
-            style={{ minHeight: '100%' }}
-            onMouseDown={onCellMouseDown}
-            onMouseUp={onCellMouseUp}
-            onMouseEnter={onCellMouseEnter}
-            onClick={(e) => {
-                e.stopPropagation();
-                const el = inputRef.current;
-                if (!el) return;
-                if (typeof el.showPicker === 'function') {
-                    try {
-                        el.showPicker();
-                    } catch {
-                        el.focus();
-                    }
-                } else {
-                    el.focus();
-                }
-            }}
-        >
-            <span
-                className={cn(
-                    'truncate font-mono text-[11px] font-bold tabular-nums',
-                    muted ? 'text-muted-foreground/60' : 'text-foreground',
-                )}
-            >
-                {formatDateShort(value) || (muted ? '—' : '')}
-            </span>
-            <Calendar className="h-3 w-3 flex-none text-muted-foreground/70 transition-colors group-hover:text-blue-500" />
-            <input
-                ref={inputRef}
-                type="date"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                onPaste={onPaste}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                tabIndex={-1}
-                aria-label="Select date"
-            />
-        </div>
-    );
-}
-
-// ─── SelectCell ──────────────────────────────────────────────────────────────────
-// A categorical dropdown cell. The trigger shows the current value (or a muted dash
-// for empty), and opens a DropdownMenu of the allowed options. Nullable columns get a
-// leading "— None" item that clears to ''. The trigger stops propagation on
-// mouse/pointer-down so opening the menu never starts a cell drag (same guard as the
-// ICTC NoteCell / ColumnFilterMenu). Selection visuals come from the wrapping cell.
-interface SelectCellProps {
-    value: string;
-    options: readonly string[];
-    onChange: (val: string) => void;
-    /** Render an option's label (defaults to the raw value). */
-    renderLabel?: (opt: string) => string;
-    /**
-     * Render the CURRENT value in the trigger (display state) as a custom node —
-     * e.g. a colored badge. Only affects the closed trigger; the dropdown menu items
-     * still use `renderLabel`/raw text, and the edit path is untouched. Returns null to
-     * fall back to the plain text label.
-     */
-    renderTrigger?: (value: string) => React.ReactNode;
-    /** When true, prepend a "— None" item that clears the value. */
-    nullable?: boolean;
-    /** Placeholder shown when value is '' (defaults to a muted dash). */
-    placeholder?: string;
-    /** Disable + show a hint (e.g. equipment when disposition is bagging). */
-    disabled?: boolean;
-    disabledHint?: string;
-    align?: 'start' | 'end';
-}
-
-function SelectCell({
-    value,
-    options,
-    onChange,
-    renderLabel,
-    renderTrigger,
-    nullable,
-    placeholder,
-    disabled,
-    disabledHint,
-    align = 'start',
-}: SelectCellProps) {
-    const label = value ? (renderLabel ? renderLabel(value) : value) : '';
-    const triggerNode = value && renderTrigger ? renderTrigger(value) : null;
-    return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild disabled={disabled}>
-                <button
-                    type="button"
-                    aria-label={label || placeholder || 'Select'}
-                    title={disabled ? disabledHint : label || placeholder}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className={cn(
-                        'flex h-full w-full items-center justify-between gap-0.5 px-1 text-left outline-none transition-colors duration-150',
-                        'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary',
-                        disabled
-                            ? 'cursor-not-allowed bg-muted/30'
-                            : 'hover:bg-accent/40',
-                    )}
-                >
-                    {triggerNode ? (
-                        <span className="flex min-w-0 items-center truncate">{triggerNode}</span>
-                    ) : (
-                        <span
-                            className={cn(
-                                'truncate font-mono text-xs font-bold',
-                                value ? 'text-foreground' : 'text-muted-foreground/40',
-                            )}
-                        >
-                            {label || (disabled ? '—' : placeholder ?? '—')}
-                        </span>
-                    )}
-                    {!disabled && (
-                        <ChevronDown className="h-3 w-3 flex-none text-muted-foreground/40" />
-                    )}
-                </button>
-            </DropdownMenuTrigger>
-            {!disabled && (
-                <DropdownMenuContent align={align} className="min-w-[120px] bg-popover/95 backdrop-blur-lg">
-                    <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-                        {nullable && (
-                            <DropdownMenuRadioItem value="" className="py-1 font-mono text-[11px] text-muted-foreground">
-                                — None
-                            </DropdownMenuRadioItem>
-                        )}
-                        {options.map((opt) => (
-                            <DropdownMenuRadioItem key={opt} value={opt} className="py-1 font-mono text-[11px]">
-                                {renderLabel ? renderLabel(opt) : opt}
-                            </DropdownMenuRadioItem>
-                        ))}
-                    </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-            )}
-        </DropdownMenu>
-    );
-}
 
 // ─── ColumnFilterMenu (header filter — HIDES rows, not a sort) ────────────────────
 interface ColumnFilterMenuProps {
@@ -1091,11 +918,9 @@ export function ProductionLedgerGrid({
         buildGridRows(initialRows, 'recv_date', 'desc'),
     );
 
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
     const [isSaving, setIsSaving] = React.useState(false);
     const [bulkAddOpen, setBulkAddOpen] = React.useState(false);
-    const preEditValue = React.useRef<string>('');
 
     // Live refs to `rows` + `activeCell`, synced during render. These let the cell
     // callbacks (`startEditing`, `revertChanges`) read current values WITHOUT listing
@@ -1119,24 +944,8 @@ export function ProductionLedgerGrid({
         setRows((prev) => sortGridRows(prev, dateSortKey, dateSortDir));
     }, [dateSortKey, dateSortDir]);
 
-    // ─── Context menu state ────────────────────────────────────────────────────────
-    const [contextMenu, setContextMenu] = React.useState<{ rowIdx: number; x: number; y: number } | null>(null);
-    React.useEffect(() => {
-        if (!contextMenu) return;
-        const handleClick = (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
-            if (!target.closest('[data-ctx-menu]')) setContextMenu(null);
-        };
-        const handleKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setContextMenu(null);
-        };
-        document.addEventListener('mousedown', handleClick, true);
-        document.addEventListener('keydown', handleKey, true);
-        return () => {
-            document.removeEventListener('mousedown', handleClick, true);
-            document.removeEventListener('keydown', handleKey, true);
-        };
-    }, [contextMenu]);
+    // ─── Context menu state (shared Blackwood Table primitive) ──────────────────────
+    const contextMenu = useGridContextMenu<number>({ width: 188, height: 164 });
 
     // ─── Cell selection (every column except row# is selectable) ───────────────────
     const isSelectableColumn = React.useCallback((c: number) => c !== 0 && COL_MAP[c] !== null, []);
@@ -1280,6 +1089,23 @@ export function ProductionLedgerGrid({
         });
     }, []);
 
+    // Right-click row menu items (shared Blackwood Table primitive). Delete vs
+    // Restore is modeled as TWO items gated by `hidden` (the shared GridMenuItem
+    // has a static `variant`, so destructive Delete and muted Restore can't be one
+    // dynamic item without losing the red styling).
+    const isRowDeleted = React.useCallback(
+        (idx: number) => rows[idx]?._state === 'deleted',
+        [rows],
+    );
+    const ROW_MENU_ITEMS = React.useMemo<GridMenuItem<number>[]>(() => [
+        { kind: 'item', label: 'Insert Row Above', icon: ArrowUpFromLine, onSelect: (idx) => insertRowAt(idx, 0) },
+        { kind: 'item', label: 'Insert Row Below', icon: ArrowDownFromLine, onSelect: (idx) => insertRowAt(idx, 1) },
+        { kind: 'item', label: 'Duplicate Row', icon: Copy, onSelect: (idx) => duplicateRow(idx) },
+        { kind: 'separator' },
+        { kind: 'item', label: 'Delete Row', icon: Trash2, variant: 'destructive', onSelect: (idx) => markDeleted(idx), hidden: isRowDeleted },
+        { kind: 'item', label: 'Restore Row', icon: RotateCcw, onSelect: (idx) => restoreRow(idx), hidden: (idx) => !isRowDeleted(idx) },
+    ], [insertRowAt, duplicateRow, markDeleted, restoreRow, isRowDeleted]);
+
     const clearCell = React.useCallback(
         (rowIdx: number, colIdx: number) => {
             const field = COL_MAP[colIdx];
@@ -1295,123 +1121,145 @@ export function ProductionLedgerGrid({
         clearCell,
     });
 
-    // ─── Editing (text/numeric cells only; dropdowns/dates self-manage) ────────────
-    // Reads `rowsRef.current` (not `rows`) so its identity stays stable across edits
-    // (`updateRow` is already stable) — the memoized rows don't churn on every keystroke.
+    // ─── Edit session (shared Blackwood Table primitive) ───────────────────────────
+    // STABILITY MATTERS HERE: the memoized ProductionRow relies on startEditing/
+    // revertChanges keeping a stable identity, so the session's getValue/setValue are
+    // ref-reading useCallbacks (empty/stable deps), keeping editSession.startEditing
+    // referentially stable so the rows don't churn on every keystroke.
+    const getValueStable = React.useCallback((id: CoordinateId): string => {
+        const field = COL_MAP[id.col];
+        if (!field) return '';
+        return String(rowsRef.current[id.row]?.[field] ?? '');
+    }, []);
+    const setValueStable = React.useCallback((id: CoordinateId, value: string) => {
+        const field = COL_MAP[id.col];
+        if (field) updateRow(id.row, field, value);
+    }, [updateRow]);
+
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: getValueStable,
+        setValue: setValueStable,
+    });
+    const isEditing = editSession.isEditing;
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
+
+    // GridCell-compatible startEditing adapter. Keeps the original typable-only guard
+    // (dropdown + date columns open their own UI and are never keyboard-typed).
     const startEditing = React.useCallback(
         (rowIdx: number, colIdx: number, initialChar?: string) => {
             const field = COL_MAP[colIdx];
             if (!field) return;
-            // Dropdown + date columns aren't keyboard-typed — they open their own UI.
             if (DROPDOWN_FIELDS.has(field) || field === 'recv_date' || field === 'prod_date') return;
-            const row = rowsRef.current[rowIdx];
-            if (!row) return;
-            preEditValue.current = String(row[field] ?? '');
             setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(true);
-            if (initialChar !== undefined) updateRow(rowIdx, field, initialChar);
+            editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
         },
-        [updateRow],
+        [editSession],
     );
 
-    // Reads `activeCellRef.current` so its identity is STABLE (empty deps) — otherwise
-    // it would change on every cell move and re-render all memoized rows.
+    // Custom revert (NOT editSession.revertChanges): the ledger additionally rolls a
+    // reverted MODIFIED-existing row back to 'existing' so an Escape un-dirties it. Reads
+    // the pre-edit snapshot from the session's ref + the active cell from activeCellRef
+    // (stable identity → memoized rows don't churn). editSession.commit() exits edit mode
+    // (no onAfterCommit is configured, so it has no side effect beyond isEditing=false).
     const revertChanges = React.useCallback(() => {
         const cell = activeCellRef.current;
-        if (!cell) return;
+        if (!cell) { editSession.commit(); gridRef.current?.focus(); return; }
         const field = COL_MAP[cell.col];
         if (field) {
+            const snapshot = editSession.preEditValueRef.current ?? '';
             setRows((prev) => {
                 const next = [...prev];
                 const row = { ...next[cell.row] };
-                (row as Record<string, unknown>)[field] = preEditValue.current;
+                (row as Record<string, unknown>)[field] = snapshot;
                 if (row._state === 'modified' && row.id) row._state = 'existing';
                 next[cell.row] = row;
                 return next;
             });
         }
-        setIsEditing(false);
+        editSession.commit();
         gridRef.current?.focus();
-    }, []);
+    }, [editSession]);
 
-    const moveActive = React.useCallback(
-        (key: string, shift: boolean) => {
-            if (!activeCell) return;
-            let { row, col } = activeCell;
-            if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
-            else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
-            else if (key === 'ArrowLeft') {
-                do { col--; } while (col > 0 && COL_MAP[col] === null);
-                col = Math.max(1, col);
-            } else if (key === 'ArrowRight') {
-                do { col++; } while (col < COL_COUNT - 1 && COL_MAP[col] === null);
-                col = Math.min(COL_COUNT - 1, col);
-            } else if (key === 'Tab') {
-                if (shift) {
-                    do { col--; if (col < 1) { row--; col = COL_COUNT - 1; } } while (row >= 0 && COL_MAP[col] === null);
-                    if (row < 0) { row = 0; col = activeCell.col; }
-                } else {
-                    do { col++; if (col >= COL_COUNT) { row++; col = 1; } } while (row < rows.length && COL_MAP[col] === null);
-                    if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; }
-                }
-            } else if (key === 'Home') col = 1;
-            else if (key === 'End') col = COL_COUNT - 1;
-            setActiveCell({ row, col });
-        },
-        [activeCell, rows.length],
+    // ─── Grid navigation (shared Blackwood Table primitives) ───────────────────────
+    // Coordinate resolver wrapped to preserve two ledger-specific behaviors the base
+    // factory doesn't express:
+    //   • ArrowLeft clamps to col 1 (col 0 is the row# column) — base would land on col 0.
+    //   • isEditable excludes dropdown + date columns (the old `isTypable` gate) so the
+    //     hook only triggers inline editing on the typable text/numeric/CCC-FLEC cells.
+    // Home/End (also ledger-only) aren't NavMoves, so they're intercepted in the
+    // container handler below.
+    const baseResolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap: COL_MAP }),
+        [rows.length],
     );
+    const resolver = React.useMemo<NavResolver<CoordinateId>>(() => ({
+        ...baseResolver,
+        resolve(from, move) {
+            const next = baseResolver.resolve(from, move);
+            if (next && move.kind === 'arrow' && move.dir === 'left' && next.col < 1) {
+                return { row: next.row, col: 1 };
+            }
+            return next;
+        },
+        isEditable(id) {
+            const field = COL_MAP[id.col];
+            return !!field && !DROPDOWN_FIELDS.has(field) && field !== 'recv_date' && field !== 'prod_date';
+        },
+    }), [baseResolver]);
 
-    const handleGridKeyDown = React.useCallback(
-        (e: React.KeyboardEvent) => {
+    const isRangeSelected = cellSelection.getSelectionSize() > 1;
+
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
             if (!activeCell) return;
-            const isRangeSelected = cellSelection.getSelectionSize() > 1;
-            if (isEditing) {
-                if (e.key === 'Escape') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    revertChanges();
-                } else if (e.key === 'Enter' || e.key === 'Tab') {
-                    e.preventDefault();
-                    setIsEditing(false);
-                    moveActive(e.key, e.shiftKey);
-                    gridRef.current?.focus();
-                }
-                return;
-            }
-            if (isRangeSelected) {
-                if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                    e.preventDefault();
-                    cellSelection.handleKeyDown(e);
-                    return;
-                }
-                if ((e.metaKey || e.ctrlKey) && e.key === 'c') { handleCopyKeyDown(e); return; }
-                if (e.key === 'Backspace' || e.key === 'Delete') { handleDeleteKeyDown(e); cellSelection.clearSelection(); return; }
-                if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); return; }
-                if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) cellSelection.clearSelection();
-            }
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter', 'Home', 'End'].includes(e.key)) {
-                e.preventDefault();
-                if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                    cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent);
-                    cellSelection.handleMouseUp();
-                    cellSelection.handleKeyDown(e);
-                    return;
-                }
-                moveActive(e.key, e.shiftKey);
-                return;
-            }
-            const field = COL_MAP[activeCell.col];
-            const isTypable = field && !DROPDOWN_FIELDS.has(field) && field !== 'recv_date' && field !== 'prod_date';
-            if (e.key === 'F2' && isTypable) { e.preventDefault(); startEditing(activeCell.row, activeCell.col); return; }
-            if ((e.key === 'Backspace' || e.key === 'Delete') && isTypable) { e.preventDefault(); startEditing(activeCell.row, activeCell.col, ''); return; }
-            if (isTypable && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                e.preventDefault();
-                startEditing(activeCell.row, activeCell.col, e.key);
-            }
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent,
+            );
+            cellSelection.handleMouseUp();
         },
-        [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing],
-    );
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
+
+    const { handleKeyDown: handleNavKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        // The ledger's moveActive used plain Enter → straight down (no Tab-then-Enter
+        // "return to lane"). Keep that exact behavior.
+        enableEnterAnchor: false,
+    });
+
+    // Container key handler — intercept Home/End (jump to first/last editable column in
+    // the row), which aren't NavMoves the shared hook routes; everything else delegates.
+    const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
+        if (!activeCell) { handleNavKeyDown(e); return; }
+        if (!isEditing && (e.key === 'Home' || e.key === 'End')) {
+            e.preventDefault();
+            const col = e.key === 'Home' ? 1 : COL_COUNT - 1;
+            setActiveCell({ row: activeCell.row, col });
+            return;
+        }
+        handleNavKeyDown(e);
+    }, [activeCell, isEditing, handleNavKeyDown]);
 
     // ─── Paste (Excel TSV → grid, starting at the active cell) ─────────────────────
     const handleSmartPaste = React.useCallback(
@@ -1565,16 +1413,10 @@ export function ProductionLedgerGrid({
     // stable handler (memo-friendly). Positions the menu, clamping to the viewport.
     const onRowContextMenu = React.useCallback((rowIdx: number, e: React.MouseEvent) => {
         e.preventDefault();
-        const MENU_W = 188;
-        const MENU_H = 164;
-        let x = e.clientX;
-        let y = e.clientY;
-        if (x + MENU_W > window.innerWidth) x -= MENU_W;
-        if (y + MENU_H > window.innerHeight) y -= MENU_H;
-        setContextMenu({ rowIdx, x, y });
+        contextMenu.open(rowIdx, e.clientX, e.clientY);
         setActiveCell({ row: rowIdx, col: 1 });
         setIsEditing(false);
-    }, []);
+    }, [contextMenu]);
 
     // ─── Selection range slice (drives per-row memo props) ─────────────────────────
     // The whole grid shares one selection rectangle; we pass each row only the columns
@@ -1908,7 +1750,7 @@ export function ProductionLedgerGrid({
                                     row={row}
                                     rowIdx={rowIdx}
                                     rowHidden={isRowHidden(row)}
-                                    contextMenuActive={contextMenu?.rowIdx === rowIdx}
+                                    contextMenuActive={contextMenu.state?.ref === rowIdx}
                                     activeColInRow={activeColInRow}
                                     isEditing={isEditing && activeColInRow >= 0}
                                     rowInRange={rowInRange}
@@ -1941,54 +1783,11 @@ export function ProductionLedgerGrid({
             </div>
 
             {/* Right-click context menu */}
-            {contextMenu && (() => {
-                const ctxRow = rows[contextMenu.rowIdx];
-                if (!ctxRow) return null;
-                const ctxIsDeleted = ctxRow._state === 'deleted';
-                return (
-                    <div
-                        data-ctx-menu
-                        className="fixed z-[9999] min-w-[188px] rounded-md border bg-popover/95 py-1 shadow-lg backdrop-blur-lg animate-fade-in"
-                        style={{ left: contextMenu.x, top: contextMenu.y }}
-                    >
-                        <button
-                            className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs transition-colors duration-150 hover:bg-accent"
-                            onClick={() => { insertRowAt(contextMenu.rowIdx, 0); setContextMenu(null); }}
-                        >
-                            <ArrowUpFromLine className="size-3.5 text-muted-foreground" />
-                            <span>Insert Row Above</span>
-                        </button>
-                        <button
-                            className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs transition-colors duration-150 hover:bg-accent"
-                            onClick={() => { insertRowAt(contextMenu.rowIdx, 1); setContextMenu(null); }}
-                        >
-                            <ArrowDownFromLine className="size-3.5 text-muted-foreground" />
-                            <span>Insert Row Below</span>
-                        </button>
-                        <button
-                            className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs transition-colors duration-150 hover:bg-accent"
-                            onClick={() => { duplicateRow(contextMenu.rowIdx); setContextMenu(null); }}
-                        >
-                            <Copy className="size-3.5 text-muted-foreground" />
-                            <span>Duplicate Row</span>
-                        </button>
-                        <div className="my-1 border-t border-border/50" />
-                        <button
-                            className={cn(
-                                'flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs transition-colors duration-150',
-                                ctxIsDeleted ? 'text-muted-foreground hover:bg-accent' : 'text-destructive hover:bg-destructive/10',
-                            )}
-                            onClick={() => {
-                                if (ctxIsDeleted) restoreRow(contextMenu.rowIdx);
-                                else markDeleted(contextMenu.rowIdx);
-                                setContextMenu(null);
-                            }}
-                        >
-                            {ctxIsDeleted ? (<><RotateCcw className="size-3.5" /><span>Restore Row</span></>) : (<><Trash2 className="size-3.5" /><span>Delete Row</span></>)}
-                        </button>
-                    </div>
-                );
-            })()}
+            <GridContextMenu<number>
+                state={contextMenu.state}
+                onClose={contextMenu.close}
+                items={ROW_MENU_ITEMS}
+            />
 
             {/* CCC/FLEC typeahead — the single merged cell references this via `list=` so
                 the operator can paste FLEC/C1/RK3 freely OR pick a suggestion. */}

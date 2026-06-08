@@ -2,9 +2,8 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { format as formatDate, parseISO, isValid as isValidDate } from 'date-fns';
 import { errorToast } from '@/lib/toast';
-import { Save, RotateCcw, Calendar } from 'lucide-react';
+import { Save, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,10 +15,18 @@ import {
     TableRow,
 } from '@/components/ui/table';
 import { GridCell } from '@/components/shared/grid/GridCell';
+import { DatePickerCell } from '@/components/shared/grid';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { parseExcelDate, trimCellValue } from '@/lib/paste-utils';
 import { saveBulkTrucks } from './actions';
@@ -162,86 +169,8 @@ function formatNum(value: number | string | null | undefined): string {
     });
 }
 
-// ─── Date display helper ──────────────────────────────────────────────────────
-function formatDateShort(iso: string): string {
-    if (!iso) return '';
-    const parsed = parseISO(iso);
-    if (!isValidDate(parsed)) return iso;
-    return formatDate(parsed, 'MMM d');
-}
-
 const inputClass =
     'h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none';
-
-// ─── DatePickerCell (mirrors daily ledger) ─────────────────────────────────────
-interface DatePickerCellProps {
-    value: string;
-    onChange: (val: string) => void;
-    onPaste: (e: React.ClipboardEvent) => void;
-    isActive: boolean;
-    isRangeSelected: boolean;
-    isRangeAnchor: boolean;
-    onCellMouseDown: (e: React.MouseEvent) => void;
-    onCellMouseUp: () => void;
-    onCellMouseEnter: () => void;
-}
-
-function DatePickerCell({
-    value,
-    onChange,
-    onPaste,
-    isActive,
-    isRangeSelected,
-    isRangeAnchor,
-    onCellMouseDown,
-    onCellMouseUp,
-    onCellMouseEnter,
-}: DatePickerCellProps) {
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    return (
-        <div
-            data-date-cell
-            className={cn(
-                'group/date relative h-full w-full flex items-center justify-between gap-1 px-1 cursor-pointer select-none',
-                'border border-dashed border-border/40 hover:border-blue-500/60 hover:bg-blue-500/5 transition-colors',
-                isActive && !isRangeSelected && 'ring-2 ring-primary ring-inset z-10 border-transparent',
-                isRangeSelected && 'bg-primary/10 dark:bg-primary/20',
-                isRangeAnchor && 'ring-2 ring-primary ring-inset z-10 border-transparent'
-            )}
-            style={{ minHeight: '100%' }}
-            onMouseDown={onCellMouseDown}
-            onMouseUp={onCellMouseUp}
-            onMouseEnter={onCellMouseEnter}
-            onClick={(e) => {
-                e.stopPropagation();
-                if (inputRef.current) {
-                    if (typeof inputRef.current.showPicker === 'function') {
-                        try { inputRef.current.showPicker(); } catch { inputRef.current.focus(); }
-                    } else {
-                        inputRef.current.focus();
-                    }
-                }
-            }}
-        >
-            <span className="font-mono font-semibold text-[11px] tabular-nums text-foreground truncate">
-                {formatDateShort(value)}
-            </span>
-            <Calendar className="w-3 h-3 text-muted-foreground/70 group-hover/date:text-blue-500 transition-colors flex-none" />
-            <input
-                ref={inputRef}
-                type="date"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                onPaste={onPaste}
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={(e) => e.stopPropagation()}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                tabIndex={-1}
-                aria-label="Select date"
-            />
-        </div>
-    );
-}
 
 interface TrucksGridProps {
     initialData: TruckReadingRow[];
@@ -286,10 +215,12 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
         return [...base, createEmptyRow(plates)];
     });
 
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
     const [isSaving, setIsSaving] = React.useState(false);
-    const preEditValue = React.useRef<string>('');
+
+    // Stable indirection so mouse/blur handlers can end an active edit without a
+    // forward reference to the edit session (created after the row mutators).
+    const endEditRef = React.useRef<() => void>(() => {});
 
     // ─── Cell selection ───────────────────────────────────────────────────────
     const isSelectableColumn = React.useCallback(
@@ -389,7 +320,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
         if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
             cellSelection.clearSelection();
             setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(false);
+            endEditRef.current();
             gridRef.current?.focus();
         }
         dragMovedRef.current = false;
@@ -449,7 +380,25 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
         clearCell,
     });
 
-    // ─── Editing ────────────────────────────────────────────────────────────────
+    // ─── Editing (shared Blackwood Table edit session) ────────────────────────
+    // setValue routes by column kind: 'cell' → updateCell, 'date' → updateDate;
+    // 'ttl' is read-only. The session only ever drives the 'cell' path (date/ttl
+    // are short-circuited in startEditing before the session is invoked).
+    const setCellValue = React.useCallback((id: CoordinateId, value: string) => {
+        const a = colAddr(id.col);
+        if (!a) return;
+        if (a.kind === 'cell') updateCell(id.row, a.addr, value);
+        else if (a.kind === 'date') updateDate(id.row, value);
+        // ttl is read-only
+    }, [colAddr, updateCell, updateDate]);
+
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: (id) => getCellValue(id.row, id.col),
+        setValue: setCellValue,
+    });
+    const isEditing = editSession.isEditing;
+    endEditRef.current = () => { if (editSession.isEditing) editSession.commit(); };
+
     const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
         const a = colAddr(colIdx);
         if (!a || a.kind === 'ttl') return; // TTL is read-only (computed)
@@ -458,99 +407,102 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
             // enough; never enter text-edit mode (a stray keystroke would have
             // nowhere to go and would strand isEditing=true).
             setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(false);
+            endEditRef.current();
             return;
         }
-        const row = rows[rowIdx];
-        const cell = row?.cells[a.addr.plate];
-        preEditValue.current = cell ? String(cell[a.addr.field] ?? '') : '';
         setActiveCell({ row: rowIdx, col: colIdx });
-        setIsEditing(true);
-        if (initialChar !== undefined) updateCell(rowIdx, a.addr, initialChar);
-    }, [rows, colAddr, updateCell]);
+        editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
+    }, [colAddr, editSession]);
 
+    // Custom revert (NOT the session's): trucks intentionally KEEPS the row's
+    // `modified` state and the cell's `_dirty` flag on revert (only the field value
+    // rolls back), so we mutate directly using the session snapshot.
     const revertChanges = React.useCallback(() => {
         if (!activeCell) return;
         const a = colAddr(activeCell.col);
         if (a && a.kind === 'cell') {
             const addr = a.addr;
-            const restore = preEditValue.current;
+            const restore = editSession.preEditValueRef.current ?? '';
             setRows(prev => {
                 const next = [...prev];
                 const row = { ...next[activeCell.row] };
                 const cells = { ...row.cells };
                 const prevCell = cells[addr.plate] ?? emptyPlateCell();
-                // Restore the field to its pre-edit value. We intentionally keep
-                // the row's `modified` state and the cell's `_dirty` flag as-is:
-                // reverting a single keystroke shouldn't un-dirty a row that the
-                // user may have edited elsewhere. Discard is the full reset path.
                 cells[addr.plate] = { ...prevCell, [addr.field]: restore };
                 row.cells = cells;
                 next[activeCell.row] = row;
                 return next;
             });
         }
-        setIsEditing(false);
+        editSession.commit();
         gridRef.current?.focus();
-    }, [activeCell, colAddr]);
+    }, [activeCell, colAddr, editSession]);
 
-    const moveActive = React.useCallback((key: string, shift: boolean) => {
-        if (!activeCell) return;
-        let { row, col } = activeCell;
-        if (key === 'ArrowUp' || (key === 'Enter' && shift)) row = Math.max(0, row - 1);
-        else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) row = Math.min(rows.length - 1, row + 1);
-        else if (key === 'ArrowLeft') { col = Math.max(0, col - 1); }
-        else if (key === 'ArrowRight') { col = Math.min(colCount - 1, col + 1); }
-        else if (key === 'Tab') {
-            if (shift) {
-                col--;
-                if (col < 0) { row = Math.max(0, row - 1); col = colCount - 1; }
-            } else {
-                col++;
-                if (col >= colCount) { row = Math.min(rows.length - 1, row + 1); col = 0; }
-            }
-        } else if (key === 'Home') col = 0;
-        else if (key === 'End') col = colCount - 1;
-        // Every column is navigable: DATE (picker), the editable metric cells,
-        // and the read-only computed TTL columns. No columns are skipped.
-        setActiveCell({ row, col });
-    }, [activeCell, rows.length, colCount]);
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
 
+    // ─── Grid navigation (shared Blackwood Table primitives) ──────────────────
+    // Every truck column is navigable (DATE picker, editable metric cells, and the
+    // read-only computed TTL cols) — so the columnMap has NO null entries and the
+    // resolver never skips a column, matching the old moveActive (which used plain
+    // col±1 with no skip).
+    const columnMap = React.useMemo<(string | null)[]>(
+        () => Array.from({ length: colCount }, () => 'cell'),
+        [colCount]
+    );
+    const resolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap }),
+        [rows.length, columnMap]
+    );
+
+    const isRangeSelected = cellSelection.getSelectionSize() > 1;
+
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
+            if (!activeCell) return;
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent
+            );
+            cellSelection.handleMouseUp();
+        },
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
+
+    const { handleKeyDown: navKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        enableEnterAnchor: false,
+    });
+
+    // Home/End column jumps (not in the shared state machine) are intercepted here
+    // when not editing — Home → col 0 (DATE), End → last col.
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-        if (!activeCell) return;
-        const isRangeSelected = cellSelection.getSelectionSize() > 1;
-        if (isEditing) {
-            if (e.key === 'Escape') {
-                e.preventDefault(); e.stopPropagation(); e.nativeEvent.stopImmediatePropagation();
-                revertChanges();
-            } else if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault(); setIsEditing(false); moveActive(e.key, e.shiftKey); gridRef.current?.focus();
-            }
+        if (!isEditing && activeCell && (e.key === 'Home' || e.key === 'End')) {
+            e.preventDefault();
+            setActiveCell({ row: activeCell.row, col: e.key === 'Home' ? 0 : colCount - 1 });
             return;
         }
-        if (isRangeSelected) {
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); cellSelection.handleKeyDown(e); return; }
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') { handleCopyKeyDown(e); return; }
-            if (e.key === 'Backspace' || e.key === 'Delete') { handleDeleteKeyDown(e); cellSelection.clearSelection(); return; }
-            if (e.key === 'Escape') { e.preventDefault(); cellSelection.clearSelection(); return; }
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) cellSelection.clearSelection();
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                const range = cellSelection.range;
-                if (range) { cellSelection.clearSelection(); setActiveCell({ row: range.startRow, col: range.startCol }); }
-            }
-        }
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter', 'Home', 'End'].includes(e.key)) {
-            e.preventDefault();
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, button: 0, preventDefault: () => {} } as unknown as React.MouseEvent);
-                cellSelection.handleMouseUp(); cellSelection.handleKeyDown(e); return;
-            }
-            moveActive(e.key, e.shiftKey); return;
-        }
-        if (e.key === 'F2') { e.preventDefault(); startEditing(activeCell.row, activeCell.col); return; }
-        if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); startEditing(activeCell.row, activeCell.col, ''); return; }
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); startEditing(activeCell.row, activeCell.col, e.key); }
-    }, [activeCell, isEditing, cellSelection, handleCopyKeyDown, handleDeleteKeyDown, revertChanges, moveActive, startEditing]);
+        navKeyDown(e);
+    }, [isEditing, activeCell, navKeyDown, colCount]);
 
     // ─── Smart paste ──────────────────────────────────────────────────────────
     const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRow: number, startCol: number) => {
@@ -609,7 +561,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
         const base = buildGridRows(initialData, plates);
         setRows([...base, createEmptyRow(plates)]);
         setActiveCell(null);
-        setIsEditing(false);
+        endEditRef.current();
     }, [initialData, plates]);
 
     // ─── Save: group dirty (date, plate) cells → upsert per (date, plate) ────────

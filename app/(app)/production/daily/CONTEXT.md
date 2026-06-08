@@ -38,7 +38,7 @@ Total visible columns: 23. Table `minWidth: 1604px` — horizontal scroll on `ov
 - `sacks_bags` (production.BAGS) — UI removed 2026-05-28
 - `production_waste.remarks` (waste.REM) — UI removed 2026-05-28
 
-**Row actions:** Right-click any row for the context menu — Insert Above/Below, Duplicate Row, Add Grade Row (primary only), Delete/Restore Row. The previous inline + / × icon column was removed.
+**Row actions:** Right-click any row for the context menu — Insert Above/Below, Duplicate Row, Add Grade Row (primary only), Delete/Restore Row. The previous inline + / × icon column was removed. **(Phase 4 consolidation)** The menu now runs on the shared `useGridContextMenu` hook + declarative `GridContextMenu` component (`GridMenuItem<number>[]` keyed on `rowIdx`; see `components/shared/grid/CONTEXT.md`): Insert Above/Below use `disabled` on non-primary (secondary) rows; Add Grade Row uses `hidden` unless the row is primary AND not new; Delete (destructive) / Restore (muted) are two items gated by `hidden` on the row's deleted state. The hook is configured with a fixed menu height (164, the primary-row height); secondary-row menus are shorter (120) but the difference only nudges the bottom-edge flip threshold.
 
 ## Multi-grade-per-shift rendering
 
@@ -97,8 +97,8 @@ All four aggregates respect the active column-header filters (see "Column header
   - **Known limitation (downtime/waste on hidden primary):** SHIFT filtering hides whole shift groups cleanly (downtime/waste ride along on the primary row). But CUSTOMER/GRADE are per-run: if a filter hides a shift's PRIMARY row (the one that owns the downtime/waste cells) while leaving a secondary run row visible, that shift's downtime/waste is not shown (secondary rows never render those cells). This is acceptable for a focus filter — downtime is NOT re-homed onto a surviving secondary row.
   - Filters are not auto-reset when their matching rows all disappear after edits — the grid simply shows only the trailing new row.
 - **Footer decimal precision:** DT TTL and PROD HRS show 2 decimal places (e.g., `8.83`). TTL KG shows 0 decimals. TTL WASTE shows 2 decimals.
-- **Date cell UX:** Each primary row's DATE cell is a `DatePickerCell` (defined inside `daily-ledger-grid.tsx`) — always-visible calendar icon + formatted date (`MMM d`, e.g. "May 23"). Clicking anywhere in the cell opens the native browser date picker via `input.showPicker()`. Hover shows a blue border + tinted background to signal interactivity. Secondary rows show `↑` arrow (date inherited from the shift, not editable).
-- **Inline editing:** Click to select, double-click or type-over to edit. F2 enters edit mode. Escape reverts. Enter/Tab commits and moves.
+- **Date cell UX:** Each primary row's DATE cell is the shared `DatePickerCell` (imported from `@/components/shared/grid`) — always-visible calendar icon + formatted date (`MMM d`, e.g. "May 23"). Clicking anywhere in the cell opens the native browser date picker via `input.showPicker()`. Hover shows a blue border + tinted background to signal interactivity. Secondary rows show `↑` arrow (date inherited from the shift, not editable). (The former local copy of `DatePickerCell` was deleted in the Phase 2 Blackwood Table migration.)
+- **Inline editing (shared Blackwood Table primitives):** Click to select, double-click or type-over to edit. F2 enters edit mode. Escape reverts. Enter/Tab commits and moves. Keyboard nav + the edit session are now driven by `useGridKeyboardNav` (coordinate resolver via `createCoordinateNavResolver({ rowCount, columnMap: COL_MAP })`) + `useGridEditSession` — see `components/shared/grid/CONTEXT.md`. **Row-dependent editability is preserved at the `startEditing` guard** (secondary rows reject downtime/waste cols 8-22): the coordinate resolver gates editability by column only, so the grid's own `startEditing` remains the authoritative per-cell check. `revertChanges` is kept custom (NOT the session's) to preserve the `_state: 'modified' → 'existing'` rollback. `Home`/`End` are intercepted before the shared handler (Home → col 1, End → last col), and `handleSmartPaste` stays local because it must run `recomputeShiftPrimary` + maintain the trailing empty row (the generic `useGridPaste` cannot express that).
 - **Dirty tracking:** `_state: 'existing' | 'new' | 'modified' | 'deleted'`. Modified primary rows show amber left border. New rows show blue left border. Deleted rows have strikethrough.
 - **Save/Discard:** Single Save button for the whole grid. Calls `saveBulkDailyLedger` with all dirty rows grouped by shift.
 - **Paste:** Ctrl+V at active cell expands grid and fills from TSV clipboard.
@@ -114,6 +114,8 @@ All four aggregates respect the active column-header filters (see "Column header
 - **Error toasts:** `errorToast()` from `lib/toast.ts` — HARD RULE
 
 ## Hooks Used
+- `useGridKeyboardNav` + `createCoordinateNavResolver` — shared Blackwood Table keyboard state machine (Esc/Enter/Tab/F2/Delete/printable + nav). `enableEnterAnchor: false` (plain Enter drops straight down). Range wired via the `range` slot.
+- `useGridEditSession` — shared `isEditing` flag + pre-edit snapshot (revert kept custom for `_state` rollback)
 - `useCellSelection` — range selection with drag, Shift+Arrow, Ctrl+A
 - `useClipboardCopy` — Ctrl+C copies selected range as TSV
 - `useCellDelete` — Delete/Backspace clears selected cells
@@ -146,9 +148,15 @@ saveBulkDailyLedger(rows: LedgerRowPayload[])
 - `@/lib/hooks/use-cell-aggregation` — SUM in status bar
 - `@/lib/paste-utils` — `parseExcelDate`, `trimCellValue`
 - `@/components/shared/grid/GridCell` — unified cell display/edit component
+- `@/components/shared/grid` — shared `DatePickerCell` (replaced the former local copy)
+- `@/lib/hooks/use-grid-keyboard-nav` — shared keyboard state machine + `createCoordinateNavResolver` (see `components/shared/grid/CONTEXT.md`)
+- `@/lib/hooks/use-grid-edit-session` — shared inline-edit session (isEditing + pre-edit snapshot)
 - `@/components/ui/tooltip` — Tooltip on footer compact-value cells (full value on hover)
 - `@/components/ui/popover` — `NoteCell` Popover for REM / DT REASON editing
 - `@/components/ui/dropdown-menu` — `ColumnFilterMenu` single-select filter on SHIFT / CUSTOMER / GRADE headers
 - `@/components/ui/textarea` — `NoteCell` editable text field
 - `@/lib/toast` — `errorToast()` for all error toasts (HARD RULE)
 - `@/types/supabase` — `Tables<>`, `TablesInsert<>`, `TablesUpdate<>` for all type inference
+
+## See Also
+- `components/shared/grid/CONTEXT.md` — the shared "Blackwood Table" primitives (`GridCell`, `DatePickerCell`, `SelectCell`, `useGridKeyboardNav`, `useGridEditSession`, `useGridPaste`) this grid now consumes. The canonical reference wiring is `app/(app)/inventory/rc-in/bulk-delivery-input.tsx`.

@@ -308,6 +308,7 @@ Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` 
 - `app/(app)/inventory/blocking/CONTEXT.md` — Blocking (Warehouse Grid Visualization)
 - `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
 - `components/widgets/CONTEXT.md` — Widget System (registry, size tiers, how to add a widget)
+- `components/shared/grid/CONTEXT.md` — Blackwood Table (universal cell selection, inline editing, keyboard nav, context menu — the agnostic grid primitive all data grids share)
 - `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
 - `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
 - `components/NOTIFICATIONS.md` — Notifications (realtime bell)

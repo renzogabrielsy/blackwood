@@ -41,6 +41,8 @@ export interface GridCellProps {
     onCellMouseUp?: () => void;
     /** Mouse enter handler for cell selection */
     onCellMouseEnter?: () => void;
+    /** Context-menu (right-click) handler on the display-mode cell */
+    onContextMenu?: (e: React.MouseEvent) => void;
     /** Whether this cell is part of a range selection */
     isCellRangeSelected?: boolean;
     /** Whether this cell is the anchor of a range selection */
@@ -80,6 +82,7 @@ export function GridCell({
     onCellMouseDown,
     onCellMouseUp,
     onCellMouseEnter,
+    onContextMenu,
     isCellRangeSelected,
     isCellRangeAnchor,
     isDragActive,
@@ -135,6 +138,7 @@ export function GridCell({
             onMouseEnter={() => {
                 onCellMouseEnter?.();
             }}
+            onContextMenu={onContextMenu}
             onDoubleClick={(e) => {
                 e.stopPropagation();
                 onStartEditing(row, col);

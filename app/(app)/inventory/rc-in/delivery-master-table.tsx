@@ -88,6 +88,8 @@ export type { DeliveryHistoryRow };
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import { GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
+import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from '../components/DeliverySheetFooter';
@@ -319,58 +321,17 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     const [historyOpen, setHistoryOpen] = React.useState(false);
     const [settingsOpen, setSettingsOpen] = React.useState(false);
 
-    // ─── Row Action Popup State ───────────────────────────────────────────────
+    // ─── Row + Column Context Menus (shared Blackwood Table primitive) ─────────
+    // Two instances of the same hook: the row menu keys on the delivery id (string),
+    // the column-header menu keys on the column id (string). Both carry their own
+    // viewport edge-flip + close-on-outside/Esc.
+    const rowMenu = useGridContextMenu<string>({ width: POPUP_WIDTH, height: POPUP_HEIGHT });
+    const columnMenu = useGridContextMenu<string>({ width: POPUP_WIDTH, height: POPUP_HEIGHT });
 
-    const [popupState, setPopupState] = React.useState<{ rowId: string; x: number; y: number } | null>(null);
-
-    // ─── Column Context Menu State ───────────────────────────────────────────
-    const [columnPopupState, setColumnPopupState] = React.useState<{ colId: string; x: number; y: number } | null>(null);
-
-    // Close column popup on outside click or Escape
-    React.useEffect(() => {
-        if (!columnPopupState) return;
-        const handleClick = (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
-            if (target.closest('[data-column-popup]')) return;
-            setColumnPopupState(null);
-        };
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setColumnPopupState(null);
-        };
-        document.addEventListener('mousedown', handleClick);
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            document.removeEventListener('mousedown', handleClick);
-            document.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [columnPopupState]);
-
-    const openPopup = React.useCallback((id: string, clientX: number, clientY: number) => {
-        let x = clientX;
-        let y = clientY;
-        if (x + POPUP_WIDTH > window.innerWidth) x = x - POPUP_WIDTH;
-        if (y + POPUP_HEIGHT > window.innerHeight) y = y - POPUP_HEIGHT;
-        setPopupState({ rowId: id, x, y });
-    }, []);
-
-    // Close popup on outside click or Escape
-    React.useEffect(() => {
-        if (!popupState) return;
-        const handleClick = (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
-            if (target.closest('[data-row-popup]')) return;
-            setPopupState(null);
-        };
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setPopupState(null);
-        };
-        document.addEventListener('mousedown', handleClick);
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            document.removeEventListener('mousedown', handleClick);
-            document.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [popupState]);
+    const openPopup = React.useCallback(
+        (id: string, clientX: number, clientY: number) => rowMenu.open(id, clientX, clientY),
+        [rowMenu],
+    );
 
     // ─── Search State ─────────────────────────────────────────────────────────
 
@@ -1307,6 +1268,200 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         }, 0);
     }, [columns, columnSizing, density]);
 
+    // ─── Context menu item sets (shared Blackwood Table primitive) ─────────────
+    // The row menu has TWO modes: a single-row action set and a multi-row bulk set
+    // (when 2+ rows are selected and the right-clicked row is part of the selection).
+    // The ref is always the right-clicked delivery id; bulk actions read selectedIds
+    // from closure. Permission-gated Delete uses `hidden` (it was conditionally
+    // rendered before, never disabled). No dynamic Delete↔Restore here.
+
+    const SINGLE_ROW_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: 'View Details', icon: FileText,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) handleViewHistory(delivery);
+            },
+        },
+        {
+            kind: 'item', label: 'Edit Delivery', icon: Pencil,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) handleSingleEdit(delivery);
+            },
+        },
+        {
+            kind: 'item', label: 'Select Row', icon: CheckSquare,
+            onSelect: (id) => {
+                if (!selectionMode) {
+                    setSelectionMode(true);
+                    setSelectedIds(new Set([id]));
+                    cellSelection.clearSelection();
+                } else {
+                    toggleSelect(id);
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Copy Row', icon: Copy,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) {
+                    const row = rows.find((r) => r.original.id === id);
+                    if (row) {
+                        const values = visibleColumns.map((_, colIdx) => getCellValue(row.index, colIdx));
+                        navigator.clipboard.writeText(values.join('\t')).then(() => {
+                            toast.success('Row copied to clipboard');
+                        });
+                    }
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Filter by Supplier', icon: Filter,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery?.supplier) {
+                    const next = new Set(supIncluded);
+                    next.add(delivery.supplier);
+                    setFilters((prev) => ({ ...prev, supIncluded: next }));
+                    syncInclusionToUrl('sup', next);
+                    if (next.size > 0 && yearParam !== 'all') {
+                        if (preFilterDate.current === null) {
+                            preFilterDate.current = { year: yearParam, month };
+                        }
+                        handleYearChange('all', buildFilterOverrides('sup', next));
+                    }
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Filter by Batch', icon: Filter,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                const loc = delivery?.block_loc || delivery?.batches?.location_ref;
+                if (loc) {
+                    const next = new Set(locIncluded);
+                    next.add(loc);
+                    setFilters((prev) => ({ ...prev, locIncluded: next }));
+                    syncInclusionToUrl('loc', next);
+                    if (next.size > 0 && yearParam !== 'all') {
+                        if (preFilterDate.current === null) {
+                            preFilterDate.current = { year: yearParam, month };
+                        }
+                        handleYearChange('all', buildFilterOverrides('loc', next));
+                    }
+                }
+            },
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Delete Delivery', icon: Trash2, variant: 'destructive',
+            hidden: () => !hasPermission('delete:all'),
+            onSelect: async (id) => {
+                if (confirm('Are you sure you want to delete this delivery?')) {
+                    const res = await deleteDelivery(id);
+                    if (res.success) {
+                        toast.success('Delivery deleted');
+                        handleRefresh();
+                    } else {
+                        errorToast('Delete failed: ' + res.message);
+                    }
+                }
+            },
+        },
+    ], [
+        data, rows, visibleColumns, selectionMode, supIncluded, locIncluded, yearParam, month,
+        handleViewHistory, handleSingleEdit, toggleSelect, getCellValue, syncInclusionToUrl,
+        handleYearChange, buildFilterOverrides, hasPermission, handleRefresh, cellSelection,
+    ]);
+
+    const MULTI_ROW_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: () => `Edit Selected (${selectedIds.size})`, icon: Pencil,
+            onSelect: () => handleBulkEdit(),
+        },
+        {
+            kind: 'item', label: () => `Copy Selected (${selectedIds.size})`, icon: Copy,
+            onSelect: () => {
+                const selectedRowData = rows.filter((r) => selectedIds.has(r.original.id));
+                const tsvLines = selectedRowData.map((r) =>
+                    visibleColumns.map((_, colIdx) => getCellValue(r.index, colIdx)).join('\t'),
+                );
+                navigator.clipboard.writeText(tsvLines.join('\n')).then(() => {
+                    toast.success(`${selectedIds.size} rows copied to clipboard`);
+                });
+            },
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Select All', icon: CheckSquare,
+            onSelect: () => setSelectedIds(new Set(rows.map((r) => r.original.id))),
+        },
+        {
+            kind: 'item', label: 'Deselect All', icon: Square,
+            onSelect: () => setSelectedIds(new Set()),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: () => `Delete Selected (${selectedIds.size})`, icon: Trash2, variant: 'destructive',
+            hidden: () => !hasPermission('delete:all'),
+            onSelect: () => handleBulkDelete(),
+        },
+    ], [selectedIds, rows, visibleColumns, getCellValue, handleBulkEdit, handleBulkDelete, hasPermission]);
+
+    // Which row-menu set to render: bulk when 2+ selected AND the clicked row is in
+    // the selection (mirrors the old `isMultiSelected` branch).
+    const rowMenuRef = rowMenu.state?.ref;
+    const rowMenuItems = React.useMemo<GridMenuItem<string>[]>(() => {
+        const isMultiSelected =
+            selectionMode && selectedIds.size > 1 && rowMenuRef != null && selectedIds.has(rowMenuRef);
+        return isMultiSelected ? MULTI_ROW_ITEMS : SINGLE_ROW_ITEMS;
+    }, [selectionMode, selectedIds, rowMenuRef, MULTI_ROW_ITEMS, SINGLE_ROW_ITEMS]);
+
+    // Column-header menu. The bold/italic/underline toggles keep the menu OPEN
+    // (keepOpen) and show a right-aligned Check (trailingIcon) when active — both
+    // reproduce the prior hand-rolled menu exactly.
+    const COLUMN_MENU_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: 'Sort Ascending', icon: ArrowUp,
+            onSelect: (colId) => table.getColumn(colId)?.toggleSorting(false),
+        },
+        {
+            kind: 'item', label: 'Sort Descending', icon: ArrowDown,
+            onSelect: (colId) => table.getColumn(colId)?.toggleSorting(true),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Bold', icon: Bold, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { bold: !settings.columnFormats[colId]?.bold }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.bold ? Check : null),
+        },
+        {
+            kind: 'item', label: 'Italic', icon: Italic, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { italic: !settings.columnFormats[colId]?.italic }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.italic ? Check : null),
+        },
+        {
+            kind: 'item', label: 'Underline', icon: Underline, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { underline: !settings.columnFormats[colId]?.underline }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.underline ? Check : null),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Hide Column', icon: EyeOff,
+            onSelect: (colId) => toggleColumn(colId),
+        },
+        {
+            kind: 'item', label: 'Reset Column Width', icon: RotateCcw,
+            onSelect: (colId) => {
+                const defaultWidth = getDefaultColWidth(colId, density);
+                setColumnSizing((prev) => ({ ...prev, [colId]: defaultWidth }));
+                setColumnWidth(colId, defaultWidth);
+            },
+        },
+    ], [table, settings.columnFormats, setColumnFormat, toggleColumn, density, setColumnWidth]);
+
     // ─── Render ───────────────────────────────────────────────────────────────
 
     return (
@@ -1553,12 +1708,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                         style={{ width: header.getSize() }}
                                                         onContextMenu={(e) => {
                                                             e.preventDefault();
-                                                            const colId = header.column.id;
-                                                            let x = e.clientX;
-                                                            let y = e.clientY;
-                                                            if (x + POPUP_WIDTH > window.innerWidth) x = x - POPUP_WIDTH;
-                                                            if (y + POPUP_HEIGHT > window.innerHeight) y = y - POPUP_HEIGHT;
-                                                            setColumnPopupState({ colId, x, y });
+                                                            columnMenu.open(header.column.id, e.clientX, e.clientY);
                                                         }}
                                                     >
                                                         {header.isPlaceholder
@@ -1796,321 +1946,19 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     />
                 </div>
 
-                {/* ─── Row Context Menu ─── */}
-                {popupState && (() => {
-                    const isMultiSelected = selectionMode && selectedIds.size > 1 && selectedIds.has(popupState.rowId);
+                {/* ─── Row Context Menu (shared Blackwood Table primitive) ─── */}
+                <GridContextMenu<string>
+                    state={rowMenu.state}
+                    onClose={rowMenu.close}
+                    items={rowMenuItems}
+                />
 
-                    if (isMultiSelected) {
-                        return (
-                            <div
-                                data-row-popup
-                                className="fixed z-50 bg-popover/95 backdrop-blur-lg border rounded-md shadow-lg py-1 min-w-[200px] animate-fade-in"
-                                style={{ left: popupState.x, top: popupState.y }}
-                            >
-                                <button
-                                    className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                    onClick={() => {
-                                        handleBulkEdit();
-                                        setPopupState(null);
-                                    }}
-                                >
-                                    <Pencil className="size-3.5 text-muted-foreground" />
-                                    <span>Edit Selected ({selectedIds.size})</span>
-                                </button>
-                                <button
-                                    className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                    onClick={() => {
-                                        // Copy all selected rows as TSV
-                                        const selectedRowData = rows.filter(r => selectedIds.has(r.original.id));
-                                        const tsvLines = selectedRowData.map(r => {
-                                            return visibleColumns.map((_, colIdx) => getCellValue(r.index, colIdx)).join('\t');
-                                        });
-                                        navigator.clipboard.writeText(tsvLines.join('\n')).then(() => {
-                                            toast.success(`${selectedIds.size} rows copied to clipboard`);
-                                        });
-                                        setPopupState(null);
-                                    }}
-                                >
-                                    <Copy className="size-3.5 text-muted-foreground" />
-                                    <span>Copy Selected ({selectedIds.size})</span>
-                                </button>
-                                <div className="my-1 border-t border-border/50" />
-                                <button
-                                    className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                    onClick={() => {
-                                        const allIds = new Set(rows.map(r => r.original.id));
-                                        setSelectedIds(allIds);
-                                        setPopupState(null);
-                                    }}
-                                >
-                                    <CheckSquare className="size-3.5 text-muted-foreground" />
-                                    <span>Select All</span>
-                                </button>
-                                <button
-                                    className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                    onClick={() => {
-                                        setSelectedIds(new Set());
-                                        setPopupState(null);
-                                    }}
-                                >
-                                    <Square className="size-3.5 text-muted-foreground" />
-                                    <span>Deselect All</span>
-                                </button>
-                                {hasPermission('delete:all') && (
-                                    <>
-                                        <div className="my-1 border-t border-border/50" />
-                                        <button
-                                            className="w-full flex items-center gap-2 py-1.5 px-2 text-xs text-destructive hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                            onClick={() => {
-                                                setPopupState(null);
-                                                handleBulkDelete();
-                                            }}
-                                        >
-                                            <Trash2 className="size-3.5" />
-                                            <span>Delete Selected ({selectedIds.size})</span>
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        );
-                    }
-
-                    // Default single-row context menu
-                    return (
-                        <div
-                            data-row-popup
-                            className="fixed z-50 bg-popover/95 backdrop-blur-lg border rounded-md shadow-lg py-1 min-w-[200px] animate-fade-in"
-                            style={{ left: popupState.x, top: popupState.y }}
-                        >
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    const delivery = data.find(d => d.id === popupState.rowId);
-                                    if (delivery) handleViewHistory(delivery);
-                                    setPopupState(null);
-                                }}
-                            >
-                                <FileText className="size-3.5 text-muted-foreground" />
-                                <span>View Details</span>
-                            </button>
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    const delivery = data.find(d => d.id === popupState.rowId);
-                                    if (delivery) handleSingleEdit(delivery);
-                                    setPopupState(null);
-                                }}
-                            >
-                                <Pencil className="size-3.5 text-muted-foreground" />
-                                <span>Edit Delivery</span>
-                            </button>
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    if (!selectionMode) {
-                                        setSelectionMode(true);
-                                        setSelectedIds(new Set([popupState.rowId]));
-                                        cellSelection.clearSelection();
-                                    } else {
-                                        toggleSelect(popupState.rowId);
-                                    }
-                                    setPopupState(null);
-                                }}
-                            >
-                                <CheckSquare className="size-3.5 text-muted-foreground" />
-                                <span>Select Row</span>
-                            </button>
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    const delivery = data.find(d => d.id === popupState.rowId);
-                                    if (delivery) {
-                                        const row = rows.find(r => r.original.id === popupState.rowId);
-                                        if (row) {
-                                            const values = visibleColumns.map((_, colIdx) => getCellValue(row.index, colIdx));
-                                            navigator.clipboard.writeText(values.join('\t')).then(() => {
-                                                toast.success('Row copied to clipboard');
-                                            });
-                                        }
-                                    }
-                                    setPopupState(null);
-                                }}
-                            >
-                                <Copy className="size-3.5 text-muted-foreground" />
-                                <span>Copy Row</span>
-                            </button>
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    const delivery = data.find(d => d.id === popupState.rowId);
-                                    if (delivery?.supplier) {
-                                        const next = new Set(supIncluded);
-                                        next.add(delivery.supplier);
-                                        setFilters(prev => ({ ...prev, supIncluded: next }));
-                                        syncInclusionToUrl('sup', next);
-                                        if (next.size > 0 && yearParam !== 'all') {
-                                            if (preFilterDate.current === null) {
-                                                preFilterDate.current = { year: yearParam, month };
-                                            }
-                                            handleYearChange('all', buildFilterOverrides('sup', next));
-                                        }
-                                    }
-                                    setPopupState(null);
-                                }}
-                            >
-                                <Filter className="size-3.5 text-muted-foreground" />
-                                <span>Filter by Supplier</span>
-                            </button>
-                            <button
-                                className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                onClick={() => {
-                                    const delivery = data.find(d => d.id === popupState.rowId);
-                                    const loc = delivery?.block_loc || delivery?.batches?.location_ref;
-                                    if (loc) {
-                                        const next = new Set(locIncluded);
-                                        next.add(loc);
-                                        setFilters(prev => ({ ...prev, locIncluded: next }));
-                                        syncInclusionToUrl('loc', next);
-                                        if (next.size > 0 && yearParam !== 'all') {
-                                            if (preFilterDate.current === null) {
-                                                preFilterDate.current = { year: yearParam, month };
-                                            }
-                                            handleYearChange('all', buildFilterOverrides('loc', next));
-                                        }
-                                    }
-                                    setPopupState(null);
-                                }}
-                            >
-                                <Filter className="size-3.5 text-muted-foreground" />
-                                <span>Filter by Batch</span>
-                            </button>
-                            {hasPermission('delete:all') && (
-                                <>
-                                    <div className="my-1 border-t border-border/50" />
-                                    <button
-                                        className="w-full flex items-center gap-2 py-1.5 px-2 text-xs text-destructive hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                        onClick={async () => {
-                                            const id = popupState.rowId;
-                                            setPopupState(null);
-                                            if (confirm('Are you sure you want to delete this delivery?')) {
-                                                const res = await deleteDelivery(id);
-                                                if (res.success) {
-                                                    toast.success('Delivery deleted');
-                                                    handleRefresh();
-                                                } else {
-                                                    errorToast('Delete failed: ' + res.message);
-                                                }
-                                            }
-                                        }}
-                                    >
-                                        <Trash2 className="size-3.5" />
-                                        <span>Delete Delivery</span>
-                                    </button>
-                                </>
-                            )}
-                        </div>
-                    );
-                })()}
-
-                {/* ─── Column Context Menu ─── */}
-                {columnPopupState && (
-                    <div
-                        data-column-popup
-                        className="fixed z-50 bg-popover/95 backdrop-blur-lg border rounded-md shadow-lg py-1 min-w-[180px] animate-fade-in"
-                        style={{ left: columnPopupState.x, top: columnPopupState.y }}
-                    >
-                        <button
-                            className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                            onClick={() => {
-                                const col = table.getColumn(columnPopupState.colId);
-                                if (col) col.toggleSorting(false);
-                                setColumnPopupState(null);
-                            }}
-                        >
-                            <ArrowUp className="size-3.5 text-muted-foreground" />
-                            <span>Sort Ascending</span>
-                        </button>
-                        <button
-                            className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                            onClick={() => {
-                                const col = table.getColumn(columnPopupState.colId);
-                                if (col) col.toggleSorting(true);
-                                setColumnPopupState(null);
-                            }}
-                        >
-                            <ArrowDown className="size-3.5 text-muted-foreground" />
-                            <span>Sort Descending</span>
-                        </button>
-                        <div className="my-1 border-t border-border/50" />
-                        {(() => {
-                            const fmt = settings.columnFormats[columnPopupState.colId] || {};
-                            return (
-                                <>
-                                    <button
-                                        className="w-full flex items-center justify-between py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                        onClick={() => {
-                                            setColumnFormat(columnPopupState.colId, { bold: !fmt.bold });
-                                        }}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <Bold className="size-3.5 text-muted-foreground" />
-                                            <span>Bold</span>
-                                        </span>
-                                        {fmt.bold && <Check className="size-3.5 text-primary" />}
-                                    </button>
-                                    <button
-                                        className="w-full flex items-center justify-between py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                        onClick={() => {
-                                            setColumnFormat(columnPopupState.colId, { italic: !fmt.italic });
-                                        }}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <Italic className="size-3.5 text-muted-foreground" />
-                                            <span>Italic</span>
-                                        </span>
-                                        {fmt.italic && <Check className="size-3.5 text-primary" />}
-                                    </button>
-                                    <button
-                                        className="w-full flex items-center justify-between py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                                        onClick={() => {
-                                            setColumnFormat(columnPopupState.colId, { underline: !fmt.underline });
-                                        }}
-                                    >
-                                        <span className="flex items-center gap-2">
-                                            <Underline className="size-3.5 text-muted-foreground" />
-                                            <span>Underline</span>
-                                        </span>
-                                        {fmt.underline && <Check className="size-3.5 text-primary" />}
-                                    </button>
-                                </>
-                            );
-                        })()}
-                        <div className="my-1 border-t border-border/50" />
-                        <button
-                            className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                            onClick={() => {
-                                toggleColumn(columnPopupState.colId);
-                                setColumnPopupState(null);
-                            }}
-                        >
-                            <EyeOff className="size-3.5 text-muted-foreground" />
-                            <span>Hide Column</span>
-                        </button>
-                        <button
-                            className="w-full flex items-center gap-2 py-1.5 px-2 text-xs hover:bg-accent transition-colors duration-150 cursor-pointer"
-                            onClick={() => {
-                                const colId = columnPopupState.colId;
-                                const defaultWidth = getDefaultColWidth(colId, density);
-                                setColumnSizing(prev => ({ ...prev, [colId]: defaultWidth }));
-                                setColumnWidth(colId, defaultWidth);
-                                setColumnPopupState(null);
-                            }}
-                        >
-                            <RotateCcw className="size-3.5 text-muted-foreground" />
-                            <span>Reset Column Width</span>
-                        </button>
-                    </div>
-                )}
+                {/* ─── Column Context Menu (shared Blackwood Table primitive) ─── */}
+                <GridContextMenu<string>
+                    state={columnMenu.state}
+                    onClose={columnMenu.close}
+                    items={COLUMN_MENU_ITEMS}
+                />
             </div>
         </TooltipProvider>
     );
