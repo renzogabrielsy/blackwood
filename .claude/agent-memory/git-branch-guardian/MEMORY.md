@@ -2,10 +2,10 @@
 
 ## Project Context
 - **Repository:** Blackwood (industrial charcoal inventory management system)
-- **Main Branch:** `main` (production)
-- **Active Development:** `feat/UI/NavigationBar` branch
-- **Recent Merge:** `feat/UI/NavigationBar-extraDropdown` into `feat/UI/NavigationBar` (Commit 78104ed)
+- **Main Branch:** `main` (production); `dev` is staging — never commit directly to either, always branch a `feat/*` first
+- **Active Development (2026-06-08):** `feat/blackwood-table-universal-grid` branched from `dev` — universal "Blackwood Table" grid primitive extraction (commit 60092a2), pushed to origin, no PR yet
 - **Routing:** Next.js App Router with route groups: `app/(app)/` pattern
+- **Note:** branch-naming has shifted from `feat/<UI|backend>/<name>` (early) to flat `feat/<kebab-name>` (recent, e.g. feat/blackwood-table-universal-grid)
 
 ## Workflow Conventions
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — how to split one staged changeset into multiple logical commits without per-file/hunk staging (stage whole tree, then `git commit -- <pathspec>` per group). Includes the exact Co-Authored-By trailer requirement.

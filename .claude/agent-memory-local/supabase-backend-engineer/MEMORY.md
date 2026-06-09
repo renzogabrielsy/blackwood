@@ -1,5 +1,17 @@
 # Supabase Backend Engineer Memory
 
+## RC Movement CAMPAIGN re-key (2026-06-09) — [[rc-movement-campaign]]
+
+Matrix re-keyed calendar-month → PRODUCTION CAMPAIGN = (rc_out.production_batch, campaign_year=EXTRACT(YEAR FROM transaction_date)). 8 SECURITY-INVOKER views (options/cells/day_price/price/production_daily/production_daily_total/production/yield), all GRANT authenticated+anon. Migration `20260609030000_create_rc_movement_campaign_views.sql`. KEY: GROUP BY production_batch splits the 5/29 two-campaign day (MAY 11210 + JUNE 10600 same batch JAN-26-BLK10, NOT merged — proven). Exclude production_batch NULL/''. Same key on rc_out (fed) + production_shifts.production_batch (produced) for yield. SURPRISE: production data only Dec-2025+ → all 2025 Apr–Nov campaigns FED-NO-PRODUCTION (yield 0). view_rc_movement + _batch_price untouched. types regenerated. See rc-movement-campaign.md.
+
+## RC Movement PRODUCTION + YIELD views (2026-06-09) — [[rc-movement-production-yield]]
+
+4 SECURITY-INVOKER views connecting RC fed to ICTC production output by grade. Migration `20260609020000_create_rc_movement_production_yield_views.sql`, GRANT authenticated+anon. produced=SUM(production_runs.ttl_kg) via shift_id→production_shifts.transaction_date; fed=SUM(rc_out.weight_kg) (matches view_rc_movement_month_price.total_fed, verified). yield/daily/monthly grains. Grades live: 3X50/6X50/2X6 (dynamic). 2025-09/10 have fed-no-production (FULL OUTER JOIN). See rc-movement-production-yield.md.
+
+## RC Movement FED PRICE views (2026-06-09) — [[rc-movement-fed-price]]
+
+3 additive SECURITY-INVOKER views (day/month/batch grain) for weighted-avg fed price, all from deliveries.cost_basis (NOT batches.avg_cost). Migration `20260609010000_create_rc_movement_fed_price_views.sql`, GRANT to authenticated+anon. KEY FINDING: batches.avg_cost is STALE for some live batches (JAN-26-BLK11 off ₱3.13/kg) — always compute cost from deliveries in SQL. See rc-movement-fed-price.md.
+
 ## Daily Sync Digest backend (2026-06-04) — [[digest-backend]]
 
 New `/` route (replaces widget dashboard). 12 `view_digest_*` SQL views (all aggregation here, SECURITY INVOKER) + `lib/digest/queries.ts` `getDigestData(): Promise<DigestData>` (shapes rows only). Contract `lib/digest/types.ts` (do NOT edit). operationalDate=latest day with ANY data (lags calendar). Employee parse in `view_digest_audit_enriched`: named-mgr BEFORE provenance fallback. Migration `20260604000000_create_digest_views.sql`. See digest-backend.md.

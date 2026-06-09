@@ -32,13 +32,36 @@ values into views.
   big mono value + unit, delta badge (▲/▼), optional `sub` line, recharts area
   sparkline (`isAnimationActive={false}`). `net_flow` is visually distinct
   (dashed/muted, neutral delta coloring, "expected drift" tooltip — never red).
-  Uses `stagger-children` + `hover-lift`.
+  Uses `stagger-children` + `hover-lift`. ALL cards always render (no
+  card-hiding); the empty state shows only when `kpis` is empty. **Sparkline
+  zero-skip:** the four operational spark SERIES (`rc_in`, `rc_out`,
+  `production`, `power`) drop zero-value days so a 0 day doesn't plunge the area
+  chart to the floor and ruin the line — see queries.ts (Data below). This is a
+  spark-only transform: card values and `avg7` are unaffected, and `net_flow`'s
+  spark is left intact (a 0 net day is meaningful).
 - `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
   **Feed In vs Out** (dual area, `connectNulls` keeps zero days flat),
   **RC In price ₱/kg** (line), **Production by grade** (stacked bar — pivots
-  long `GradePoint[]` to wide rows; single-grade case hides the legend and
-  renders one bar series gracefully). All colors are `var(--chart-1..5)` tokens
+  long `GradePoint[]` to wide rows). All colors are `var(--chart-1..5)` tokens
   (dark-mode safe). Glass tooltip via theme tokens.
+  **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
+  from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
+  series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
+  shift in the window — single-shift/shift-less grades stay one clean bar with a
+  bare-grade legend label. Color is assigned per GRADE (shared hue); shifts
+  within a grade are distinguished by a stepped `fillOpacity` (1 → 0.7 → 0.45).
+  All series share one `stackId` (pre-ordered grade→shift), so each day still
+  reads as a single stacked column across grades, with shift sub-segments
+  contiguous inside each grade band. Legend hides when there's ≤1 series.
+- `components/digest/trucks-summary.tsx` — `'use client'`. Excel-Standard dense
+  table of trucks that logged a trip (`ttl_km > 0`) on the operational date,
+  busiest first. Columns: Plate / Distance (km) / Fuel (L) — numerics `font-mono`
+  tabular-nums right-aligned, `px-2 py-1`, `h-8` rows, `text-xs`. Remarks (when
+  present) shown via a dotted-underline plate + shadcn Tooltip on hover. Wrapped
+  in a `ChartCard`-style glass frame (`bg-card/95 backdrop-blur … hover-lift`).
+  **Renders `null` when no truck moved that day** (skips the band, matching how
+  other bands avoid hollow cards). Rendered between the charts and the sync band
+  in `page.tsx`. Source: `data.trucks` (see Data below).
 - `components/digest/sync-summary.tsx` — Server component. Compact header from
   `data.latestSync`: "{date} · {n} new · {n} updated (· {n} removed)" + per-
   employee count chips (`byEmployee`).
@@ -57,19 +80,33 @@ values into views.
 
 ## Data
 - **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
-  (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`.
-  **Do not edit** `lib/digest/types.ts` or `lib/digest/queries.ts` — fixed contract.
+  (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`,
+  plus the `truck_readings` table for the trucks band. The contract in
+  `lib/digest/types.ts` is intentionally stable — extend it deliberately (as with
+  `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all
+  aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
-  price, grades, latestSync, activity, flags, monthToDate }`.
+  price, grades, latestSync, activity, flags, monthToDate, trucks }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
+    The four operational `spark[]` series (rc_in/rc_out/production/power) are
+    built with zero-value days FILTERED OUT (pre-`tail`) so a 0 day doesn't dip
+    the sparkline to the floor; `net_flow.spark` keeps all days. `value`/`avg7`
+    are computed from the full series and are NOT affected by this spark filter.
   - `flow[]` — `{ date, in, out }` (kg, ~30 d).  `price[]` — `{ date, phpPerKg }`.
-  - `grades[]` — `{ date, grade, kg }` (long form; UI pivots to wide for stacking).
+  - `grades[]` — `{ date, grade, kg, shift? }` (long form; UI pivots to wide for
+    stacking; `shift` = 'M'|'E'|'N'|undefined, segments multi-shift grades).
   - `latestSync` — `{ date, insertCount, updateCount, deleteCount, byEmployee[] }`.
   - `activity[]` — `{ id, at, table, operation, note, employee, provenance, diff[] }`.
   - `flags[]` — `{ kind, severity, message, date? }`.
   - `monthToDate` — `{ label, rcInKg, rcOutKg, productionKg, netKg }`.
+  - `trucks[]` — `{ plateNo, ttlKm, fuelLiters, remarks }`. Queried directly from
+    the `truck_readings` TABLE (not a `view_digest_*` view) in `getDigestData()`:
+    `.eq('reading_date', operationalDate).gt('ttl_km', 0).order('ttl_km', desc)`.
+    `ttl_km` is a GENERATED column (= end_km − start_km); `> 0` ⇒ "had a trip".
+    Keyed on the SAME `operationalDate` as the KPIs (fetched after it resolves,
+    same pattern as the `rcInSub` follow-up query). Empty array ⇒ band hidden.
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
@@ -79,8 +116,13 @@ values into views.
   feed tank balances month-end, not daily (project rule).
 - **Zero/empty handling** — every band has a tasteful empty state ("No data",
   "—", "No recent sync activity") and never crashes on missing streams.
-- **Single-grade production** — the stacked-bar chart detects ≤1 grade and
-  renders one bar series with no legend.
+- **Single-series production** — the stacked-bar chart detects ≤1 resulting
+  series (after grade×shift pivoting) and renders one bar with no legend.
+- **Sparkline zero-skip** — the `rc_in`/`rc_out`/`production`/`power` spark
+  series omit zero-value days (filtered pre-`tail` in queries.ts) so a 0 day
+  doesn't sink the area chart; cards/`avg7`/`net_flow` spark are unaffected.
+- **Trucks band** — lists trucks with `ttl_km > 0` on the operational date; the
+  whole band disappears on a no-movement day (renders `null`).
 - **Motion** — `animate-fade-up` on header/feed container, `stagger-children`
   on the KPI grid, `hover-lift` on cards/charts. Activity rows use only a
   `transition-colors` hover, no per-row entrance.

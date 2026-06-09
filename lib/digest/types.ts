@@ -85,11 +85,24 @@ export interface PricePoint {
   phpPerKg: number;
 }
 
-/** Production output by grade per day (stacked-bar source), trailing window. */
+/** Production output by grade per day (stacked-bar source), trailing window.
+ *  `shift` segments a (date, grade) into separate rows — 'M' | 'E' | 'N'
+ *  (morning / evening / night), null when the view doesn't attribute a shift. */
 export interface GradePoint {
   date: string; // yyyy-MM-dd
   grade: string;
   kg: number;
+  shift?: string;
+}
+
+// ---------- Trucks band ----------
+
+/** A truck that logged a trip (ttl_km > 0) on the operational date. */
+export interface TruckTrip {
+  plateNo: string;
+  ttlKm: number;
+  fuelLiters: number | null;
+  remarks: string | null;
 }
 
 // ---------- Sync band ----------
@@ -162,4 +175,6 @@ export interface DigestData {
   activity: ActivityItem[];
   flags: Flag[];
   monthToDate: MonthToDate;
+  /** Trucks with a trip (ttl_km > 0) on the operational date, busiest first. */
+  trucks: TruckTrip[];
 }

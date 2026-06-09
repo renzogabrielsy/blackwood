@@ -29,6 +29,7 @@ import type {
   StreamFreshness,
   Freshness,
   DigestMeta,
+  TruckTrip,
 } from "./types";
 
 // Trailing-window sizes (kept here, not in SQL, so the contract windows
@@ -81,6 +82,15 @@ interface GradeRow {
   date: string;
   grade: string;
   kg: number | string;
+  shift: string | null;
+}
+interface TruckReadingRow {
+  plate_no: string;
+  start_km: number | string | null;
+  end_km: number | string | null;
+  ttl_km: number | string | null;
+  fuel_liters: number | string | null;
+  remarks: string | null;
 }
 interface MtdRow {
   label: string;
@@ -238,11 +248,22 @@ export async function getDigestData(): Promise<DigestData> {
   for (const r of powerRows) powerByDate.set(r.date, n(r.kwh));
 
   // ---------- sparks (trailing windows from the full series) ----------
-  const inSpark: SparkPoint[] = tail(flowRows, SPARK_DAYS).map((r) => ({
+  // The four operational sparks (in/out/prod/power) DROP zero-value days
+  // BEFORE taking the trailing window — a 0 day plunges the area chart to the
+  // floor and "ruins the graph". Filtering pre-tail keeps up to SPARK_DAYS
+  // real (non-zero) points so the line connects only days with activity.
+  // netSpark is intentionally NOT filtered: a 0 net day is meaningful.
+  const inSpark: SparkPoint[] = tail(
+    flowRows.filter((r) => n(r.in_kg) !== 0),
+    SPARK_DAYS
+  ).map((r) => ({
     date: r.date,
     value: round(n(r.in_kg)),
   }));
-  const outSpark: SparkPoint[] = tail(flowRows, SPARK_DAYS).map((r) => ({
+  const outSpark: SparkPoint[] = tail(
+    flowRows.filter((r) => n(r.out_kg) !== 0),
+    SPARK_DAYS
+  ).map((r) => ({
     date: r.date,
     value: round(n(r.out_kg)),
   }));
@@ -250,11 +271,17 @@ export async function getDigestData(): Promise<DigestData> {
     date: r.date,
     value: round(n(r.in_kg) - n(r.out_kg)),
   }));
-  const prodSpark: SparkPoint[] = tail(productionRows, SPARK_DAYS).map((r) => ({
+  const prodSpark: SparkPoint[] = tail(
+    productionRows.filter((r) => n(r.kg) !== 0),
+    SPARK_DAYS
+  ).map((r) => ({
     date: r.date,
     value: round(n(r.kg)),
   }));
-  const powerSpark: SparkPoint[] = tail(powerRows, SPARK_DAYS).map((r) => ({
+  const powerSpark: SparkPoint[] = tail(
+    powerRows.filter((r) => n(r.kwh) !== 0),
+    SPARK_DAYS
+  ).map((r) => ({
     date: r.date,
     value: round(n(r.kwh)),
   }));
@@ -292,6 +319,26 @@ export async function getDigestData(): Promise<DigestData> {
     if (stats) {
       rcInSub = `${stats.suppliers} supplier${stats.suppliers === 1 ? "" : "s"} · ${stats.sacks} sacks`;
     }
+  }
+
+  // ---------- trucks with a trip on the operational date ----------
+  // ttl_km is a GENERATED column (= end_km - start_km); > 0 means "had a trip".
+  // Keyed on the SAME operationalDate as the KPIs so the band stays in sync.
+  let trucks: TruckTrip[] = [];
+  if (operationalDate) {
+    const truckRes = await supabase
+      .from("truck_readings")
+      .select("plate_no, start_km, end_km, ttl_km, fuel_liters, remarks")
+      .eq("reading_date", operationalDate)
+      .gt("ttl_km", 0)
+      .order("ttl_km", { ascending: false });
+    const truckRows = (truckRes.data as TruckReadingRow[] | null) ?? [];
+    trucks = truckRows.map((t) => ({
+      plateNo: t.plate_no,
+      ttlKm: round(n(t.ttl_km)),
+      fuelLiters: t.fuel_liters == null ? null : round(n(t.fuel_liters)),
+      remarks: t.remarks,
+    }));
   }
 
   const kpis: DigestKpi[] = [
@@ -365,7 +412,12 @@ export async function getDigestData(): Promise<DigestData> {
   const keepGradeDates = new Set(tail(gradeDates, GRADE_DAYS));
   const grades: GradePoint[] = gradeRows
     .filter((r) => keepGradeDates.has(r.date))
-    .map((r) => ({ date: r.date, grade: r.grade, kg: round(n(r.kg)) }));
+    .map((r) => ({
+      date: r.date,
+      grade: r.grade,
+      kg: round(n(r.kg)),
+      shift: r.shift ?? undefined,
+    }));
 
   // ---------- latest sync ----------
   const latestSyncRow = latestSyncRes.data as LatestSyncRow | null;
@@ -494,6 +546,7 @@ export async function getDigestData(): Promise<DigestData> {
     activity,
     flags,
     monthToDate,
+    trucks,
   };
 }
 

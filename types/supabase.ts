@@ -241,6 +241,20 @@ export type Database = {
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
         ]
       }
       electricity_readings: {
@@ -822,6 +836,13 @@ export type Database = {
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_id"]
           },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
         ]
       }
       truck_readings: {
@@ -1079,6 +1100,7 @@ export type Database = {
           date: string | null
           grade: string | null
           kg: number | null
+          shift: string | null
         }
         Relationships: []
       }
@@ -1201,6 +1223,20 @@ export type Database = {
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_code"]
           },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
         ]
       }
       view_rc_movement: {
@@ -1237,7 +1273,174 @@ export type Database = {
             referencedRelation: "view_blocking_grid"
             referencedColumns: ["batch_id"]
           },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
         ]
+      }
+      view_rc_movement_batch_price: {
+        Row: {
+          batch_code: string | null
+          batch_id: string | null
+          batch_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_cells: {
+        Row: {
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          campaign_year: number | null
+          date: string | null
+          fed_kg: number | null
+          production_batch: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      view_rc_movement_campaign_day_price: {
+        Row: {
+          campaign_year: number | null
+          date: string | null
+          production_batch: string | null
+          total_fed: number | null
+          wtd_fed_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_options: {
+        Row: {
+          campaign_year: number | null
+          feed_days: number | null
+          max_date: string | null
+          min_date: string | null
+          production_batch: string | null
+          total_fed: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_price: {
+        Row: {
+          campaign_year: number | null
+          production_batch: string | null
+          total_fed: number | null
+          wtd_fed_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_production: {
+        Row: {
+          campaign_year: number | null
+          grade: string | null
+          produced_kg: number | null
+          production_batch: string | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_production_daily: {
+        Row: {
+          campaign_year: number | null
+          date: string | null
+          grade: string | null
+          produced_kg: number | null
+          production_batch: string | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_production_daily_total: {
+        Row: {
+          campaign_year: number | null
+          date: string | null
+          produced_kg: number | null
+          production_batch: string | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_yield: {
+        Row: {
+          campaign_year: number | null
+          loss_kg: number | null
+          production_batch: string | null
+          total_fed: number | null
+          total_produced: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_day_price: {
+        Row: {
+          date: string | null
+          total_fed: number | null
+          wtd_fed_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_month_price: {
+        Row: {
+          month_start: string | null
+          total_fed: number | null
+          wtd_fed_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_production_daily: {
+        Row: {
+          date: string | null
+          grade: string | null
+          produced_kg: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_production_daily_total: {
+        Row: {
+          date: string | null
+          produced_kg: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_production_monthly: {
+        Row: {
+          grade: string | null
+          month_start: string | null
+          produced_kg: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_yield_monthly: {
+        Row: {
+          loss_kg: number | null
+          month_start: string | null
+          total_fed: number | null
+          total_produced: number | null
+          yield_pct: number | null
+        }
+        Relationships: []
       }
       view_supplier_deliveries: {
         Row: {
@@ -1295,6 +1498,20 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
             referencedColumns: ["batch_code"]
           },
         ]

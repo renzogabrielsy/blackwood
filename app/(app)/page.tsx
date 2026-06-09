@@ -7,6 +7,7 @@ import { DigestCharts } from "@/components/digest/digest-charts";
 import { SyncSummary } from "@/components/digest/sync-summary";
 import { ActivityFeed } from "@/components/digest/activity-feed";
 import { DigestFooterBand } from "@/components/digest/digest-footer-band";
+import { TrucksSummary } from "@/components/digest/trucks-summary";
 
 export default async function DigestPage() {
   const data = await getDigestData();
@@ -28,6 +29,11 @@ export default async function DigestPage() {
       {/* C. Rich charts */}
       <section>
         <DigestCharts flow={data.flow} price={data.price} grades={data.grades} />
+      </section>
+
+      {/* C2. Trucks with a trip on the operational date (skips if none moved) */}
+      <section>
+        <TrucksSummary trucks={data.trucks} />
       </section>
 
       {/* D. Sync band — what the last sync brought in */}

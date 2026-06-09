@@ -315,49 +315,166 @@ const GRADE_COLORS = [
   "var(--chart-5)",
 ];
 
+/** Stepped fill opacity for successive shift segments within a single grade. */
+const SHIFT_OPACITY = [1, 0.7, 0.45, 0.3];
+
 interface GradeWideRow {
   date: string;
-  [grade: string]: string | number;
+  [seriesKey: string]: string | number;
 }
 
-function pivotGrades(grades: GradePoint[]): {
+/** Series-key separator between grade and shift, e.g. "3X50·M". */
+const SHIFT_SEP = "·";
+
+/** Human-readable shift suffix for legends/tooltips. */
+function shiftLabel(shift: string): string {
+  switch (shift) {
+    case "M":
+      return "Morning";
+    case "E":
+      return "Evening";
+    case "N":
+      return "Night";
+    default:
+      return shift;
+  }
+}
+
+interface PivotResult {
   rows: GradeWideRow[];
-  gradeKeys: string[];
-} {
-  const byDate = new Map<string, GradeWideRow>();
-  const gradeSet = new Set<string>();
+  /** chart dataKeys, in stack order (grouped by grade, then shift) */
+  seriesKeys: string[];
+  /** seriesKey → legend/tooltip label */
+  keyLabels: Record<string, string>;
+  /** seriesKey → grade it belongs to (drives color + stackId) */
+  keyGrade: Record<string, string>;
+  /** distinct grades, sorted — drives the color ramp */
+  grades: string[];
+  /** true when no shift segmentation is in play (one bar series per grade) */
+  singleSeries: boolean;
+}
+
+/**
+ * Pivot long GradePoint[] (date, grade, shift, kg) into wide rows for the
+ * stacked bar chart. A (grade) is split into per-shift series ONLY when that
+ * grade actually has >1 distinct shift across the window — so single-shift (or
+ * shift-less) grades stay as one clean bar with a bare-grade legend label.
+ */
+function pivotGrades(grades: GradePoint[]): PivotResult {
+  // 1. Discover the distinct shifts each grade carries across the window.
+  const shiftsByGrade = new Map<string, Set<string>>();
   for (const g of grades) {
-    gradeSet.add(g.grade);
+    const shift = g.shift ?? "";
+    let set = shiftsByGrade.get(g.grade);
+    if (!set) {
+      set = new Set<string>();
+      shiftsByGrade.set(g.grade, set);
+    }
+    set.add(shift);
+  }
+
+  const gradeList = Array.from(shiftsByGrade.keys()).sort();
+
+  /** Should this grade be segmented by shift? Only if it has >1 real shift. */
+  const splitGrade = (grade: string): boolean => {
+    const set = shiftsByGrade.get(grade);
+    if (!set) return false;
+    const real = Array.from(set).filter((s) => s !== "");
+    return real.length > 1;
+  };
+
+  /** Compute the series key for a row's contribution. */
+  const seriesKeyFor = (grade: string, shift: string): string =>
+    splitGrade(grade) && shift !== "" ? `${grade}${SHIFT_SEP}${shift}` : grade;
+
+  // 2. Build wide rows keyed by date, summing into each series key.
+  const byDate = new Map<string, GradeWideRow>();
+  const seriesSet = new Set<string>();
+  for (const g of grades) {
+    const key = seriesKeyFor(g.grade, g.shift ?? "");
+    seriesSet.add(key);
     let row = byDate.get(g.date);
     if (!row) {
       row = { date: g.date };
       byDate.set(g.date, row);
     }
-    // sum same grade on same day defensively (should already be aggregated)
-    row[g.grade] = (Number(row[g.grade] ?? 0) + g.kg) as number;
+    row[key] = (Number(row[key] ?? 0) + g.kg) as number;
   }
+
   const rows = Array.from(byDate.values()).sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : 0
   );
-  // fill missing grade keys with 0 so stacks render consistently
-  const gradeKeys = Array.from(gradeSet).sort();
+
+  // 3. Order series by grade, then by shift, for stable stacks + colors.
+  const seriesKeys = Array.from(seriesSet).sort((a, b) => {
+    const ga = a.split(SHIFT_SEP)[0];
+    const gb = b.split(SHIFT_SEP)[0];
+    if (ga !== gb) return ga < gb ? -1 : 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  // 4. Fill missing series keys with 0 so stacks render consistently.
   for (const row of rows) {
-    for (const k of gradeKeys) {
+    for (const k of seriesKeys) {
       if (row[k] === undefined) row[k] = 0;
     }
   }
-  return { rows, gradeKeys };
+
+  // 5. Labels + grade mapping for color/stack assignment.
+  const keyLabels: Record<string, string> = {};
+  const keyGrade: Record<string, string> = {};
+  for (const k of seriesKeys) {
+    const [grade, shift] = k.split(SHIFT_SEP);
+    keyGrade[k] = grade;
+    keyLabels[k] = shift ? `${grade} (${shiftLabel(shift)})` : grade;
+  }
+
+  return {
+    rows,
+    seriesKeys,
+    keyLabels,
+    keyGrade,
+    grades: gradeList,
+    singleSeries: seriesKeys.length <= 1,
+  };
 }
 
 function GradeChart({ grades }: { grades: GradePoint[] }) {
   const tip = tooltipChrome();
-  const { rows, gradeKeys } = React.useMemo(() => pivotGrades(grades), [grades]);
-  const singleGrade = gradeKeys.length <= 1;
+  const { rows, seriesKeys, keyLabels, keyGrade, grades: gradeList, singleSeries } =
+    React.useMemo(() => pivotGrades(grades), [grades]);
+
+  // Color is assigned per GRADE so all shift segments of a grade share a hue;
+  // shifts within a grade are distinguished by a stepped fill opacity instead.
+  const gradeColorIndex = React.useMemo(() => {
+    const idx: Record<string, number> = {};
+    gradeList.forEach((g, i) => {
+      idx[g] = i % GRADE_COLORS.length;
+    });
+    return idx;
+  }, [gradeList]);
+
+  // Per-grade running shift index → opacity step (1.0, 0.7, 0.45 …).
+  const shiftOpacityForKey = React.useMemo(() => {
+    const seenPerGrade: Record<string, number> = {};
+    const op: Record<string, number> = {};
+    for (const k of seriesKeys) {
+      const grade = keyGrade[k];
+      const n = seenPerGrade[grade] ?? 0;
+      // single-series-per-grade keeps full opacity; only split grades step down
+      op[k] = SHIFT_OPACITY[Math.min(n, SHIFT_OPACITY.length - 1)];
+      seenPerGrade[grade] = n + 1;
+    }
+    return op;
+  }, [seriesKeys, keyGrade]);
+
+  // The single top-most series of the shared stack gets rounded top corners.
+  const topSeriesKey = seriesKeys[seriesKeys.length - 1];
 
   return (
     <ChartCard
       title="Production by grade"
-      subtitle={singleGrade ? "daily · kg" : "stacked · kg"}
+      subtitle={singleSeries ? "daily · kg" : "by grade · shift · kg"}
       empty={rows.length === 0}
     >
       <ResponsiveContainer width="100%" height="100%">
@@ -386,30 +503,38 @@ function GradeChart({ grades }: { grades: GradePoint[] }) {
             {...tip}
             formatter={(value, name) => [
               `${fmtKg(Number(value) || 0)} kg`,
-              String(name),
+              keyLabels[String(name)] ?? String(name),
             ]}
             labelFormatter={(l) => l}
           />
-          {/* Only show legend when there's more than one grade to disambiguate. */}
-          {!singleGrade && (
+          {/* Legend only when there's more than one series to disambiguate. */}
+          {!singleSeries && (
             <Legend
               iconType="square"
               wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
+              formatter={(v) => keyLabels[String(v)] ?? String(v)}
             />
           )}
-          {gradeKeys.map((grade, i) => (
-            <Bar
-              key={grade}
-              dataKey={grade}
-              stackId="grade"
-              fill={GRADE_COLORS[i % GRADE_COLORS.length]}
-              isAnimationActive={false}
-              radius={
-                i === gradeKeys.length - 1 ? [3, 3, 0, 0] : [0, 0, 0, 0]
-              }
-              maxBarSize={28}
-            />
-          ))}
+          {seriesKeys.map((key) => {
+            const grade = keyGrade[key];
+            const isTop = key === topSeriesKey;
+            return (
+              <Bar
+                key={key}
+                dataKey={key}
+                name={key}
+                // ONE shared stack per day: series are pre-ordered grade→shift,
+                // so a grade's shift segments sit contiguously within the column
+                // and the day still reads as a single stacked bar across grades.
+                stackId="grade"
+                fill={GRADE_COLORS[gradeColorIndex[grade] ?? 0]}
+                fillOpacity={shiftOpacityForKey[key] ?? 1}
+                isAnimationActive={false}
+                radius={isTop ? [3, 3, 0, 0] : [0, 0, 0, 0]}
+                maxBarSize={28}
+              />
+            );
+          })}
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>

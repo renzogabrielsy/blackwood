@@ -28,14 +28,27 @@ const W_ROWNUM = 48;
 const W_DATE = 100;
 const W_DAY = 52;
 const W_BATCH = 96;
+const W_FEDPRICE = 96; // frozen "Fed ₱/kg" column, BETWEEN Batch and Total fed
 const W_TOTAL = 88;
 const W_BLOCK = 92; // each dynamic block column
+// ── Scrolling PRODUCED section (after the frozen Total fed, BEFORE the block cols) ──
+const W_PRODUCED = 88; // TOTAL PRODUCED column (matches W_TOTAL rhythm)
+const W_GRADE = 80; // each dynamic per-grade column
 
+// Column-group divider — a 2px left border marking the start of a scrolling column
+// GROUP (the 2px divider idiom already used elsewhere, e.g. the cenapro ledger's
+// border-l-2). Placed on the FIRST cell of the PRODUCED group and again on the FIRST
+// cell of the BLOCK group, so FED-blocks vs PRODUCED read as distinct sections.
+const GROUP_DIVIDER = 'border-l-2 border-l-border';
+
+// Cumulative left offsets (each frozen column's left = sum of widths to its left).
+// Column order: # · Date · Day · Batch · Fed ₱/kg · Total fed (last frozen, carries .frozen-edge).
 const LEFT_ROWNUM = 0;
 const LEFT_DATE = W_ROWNUM;
 const LEFT_DAY = W_ROWNUM + W_DATE;
 const LEFT_BATCH = W_ROWNUM + W_DATE + W_DAY;
-const LEFT_TOTAL = W_ROWNUM + W_DATE + W_DAY + W_BATCH;
+const LEFT_FEDPRICE = W_ROWNUM + W_DATE + W_DAY + W_BATCH;
+const LEFT_TOTAL = W_ROWNUM + W_DATE + W_DAY + W_BATCH + W_FEDPRICE;
 
 // Frozen-pane z-scale + opacity: see the canonical "Frozen Panes" pattern in
 // globals.css. Frozen surfaces overlap scrolling content, so they are ALWAYS
@@ -53,6 +66,18 @@ function fmtKg(n: number | undefined): string {
 function fmtPct2(n: number | undefined): string {
     if (n === undefined || n === null || n === 0) return '—';
     return `${n.toFixed(2)}%`;
+}
+
+/** Accounting-format number (2 dp, thousands separators); null/zero-fed renders blank. */
+function fmtPrice(n: number | null | undefined): string {
+    if (n === null || n === undefined) return '';
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Yield fraction → 1-dp percent (×100). Em-dash when null (total_fed = 0). 0 stays "0.0%". */
+function fmtYieldPct(fraction: number | null): string {
+    if (fraction === null || fraction === undefined) return '—';
+    return `${(fraction * 100).toFixed(1)}%`;
 }
 
 /** Signed 2-decimal percent for block loss; em-dash when the ratio is null (in = 0). */
@@ -94,15 +119,19 @@ function statusTint(status: string): string {
 
 interface RcMovementMatrixProps {
     data: RcMovementMatrixData;
-    /** Called when the user picks a different cycle-month from the toolbar Select. */
-    onMonthChange?: (month: string) => void;
+    /** Called when the user picks a different production campaign from the toolbar Select.
+     *  Receives the encoded campaign key (e.g. "JUNE-2026"). */
+    onCampaignChange?: (campaign: string) => void;
 }
 
-export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps) {
-    const { month, columns, rows, monthOptions, grandTotalFed } = data;
+export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixProps) {
+    const {
+        campaign, columns, rows, campaignOptions, grandTotalFed, campaignAvgFedPrice,
+        producedGrades, campaignTotalProduced, campaignYieldPct,
+    } = data;
 
-    const handleMonthChange = (value: string) => {
-        onMonthChange?.(value);
+    const handleCampaignChange = (value: string) => {
+        onCampaignChange?.(value);
     };
 
     // ── Detail panel (shared with the Blocking tab) ──
@@ -138,14 +167,14 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
 
     return (
         <div className="flex flex-col h-full min-h-0">
-            {/* Toolbar — month picker + summary */}
+            {/* Toolbar — campaign picker + summary */}
             <div className="flex items-center gap-3 pb-3 shrink-0">
-                <Select value={month} onValueChange={handleMonthChange}>
+                <Select value={campaign} onValueChange={handleCampaignChange}>
                     <SelectTrigger className="h-8 w-[180px] text-xs">
-                        <SelectValue placeholder="Select cycle-month" />
+                        <SelectValue placeholder="Select campaign" />
                     </SelectTrigger>
                     <SelectContent className="bg-popover/95 backdrop-blur-lg">
-                        {monthOptions.map((opt) => (
+                        {campaignOptions.map((opt) => (
                             <SelectItem key={opt.value} value={opt.value} className="text-xs">
                                 <span className="flex items-center justify-between gap-3 w-full">
                                     <span>{opt.label}</span>
@@ -197,7 +226,14 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                 <col style={{ width: W_DATE }} />
                                 <col style={{ width: W_DAY }} />
                                 <col style={{ width: W_BATCH }} />
+                                <col style={{ width: W_FEDPRICE }} />
                                 <col style={{ width: W_TOTAL }} />
+                                {/* PRODUCED group: TOTAL PRODUCED + one per present grade */}
+                                <col style={{ width: W_PRODUCED }} />
+                                {producedGrades.map((g) => (
+                                    <col key={`col-grade-${g.grade}`} style={{ width: W_GRADE }} />
+                                ))}
+                                {/* BLOCK group */}
                                 {columns.map((c) => (
                                     <col key={c.batchId} style={{ width: W_BLOCK }} />
                                 ))}
@@ -218,6 +254,9 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                     <FrozenHeaderCell left={LEFT_BATCH} width={W_BATCH} align="left">
                                         Batch
                                     </FrozenHeaderCell>
+                                    <FrozenHeaderCell left={LEFT_FEDPRICE} width={W_FEDPRICE} align="right">
+                                        Fed ₱/kg
+                                    </FrozenHeaderCell>
                                     <FrozenHeaderCell
                                         left={LEFT_TOTAL}
                                         width={W_TOTAL}
@@ -227,10 +266,36 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                         Total fed
                                     </FrozenHeaderCell>
 
+                                    {/* ── PRODUCED group (scrolling header cells, sticky-top
+                                        only via frozen-row + OPAQUE bg-muted). Group caption
+                                        on the TOTAL PRODUCED cell via GROUP_DIVIDER 2px left
+                                        border so it reads as a distinct section. ── */}
+                                    <th
+                                        className={cn(
+                                            'frozen-row bg-muted border-b border-r border-border/50 align-bottom text-right font-medium px-2 py-1',
+                                            GROUP_DIVIDER,
+                                        )}
+                                    >
+                                        <span className="flex flex-col gap-0 leading-tight">
+                                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                produced
+                                            </span>
+                                            <span>Total</span>
+                                        </span>
+                                    </th>
+                                    {producedGrades.map((g) => (
+                                        <th
+                                            key={`hd-grade-${g.grade}`}
+                                            className="frozen-row bg-muted border-b border-r border-border/50 align-bottom text-right font-medium px-2 py-1"
+                                        >
+                                            <span className="font-mono text-[11px]">{g.grade}</span>
+                                        </th>
+                                    ))}
+
                                     {/* Dynamic block columns — scrolling header cells:
                                         sticky-top only (frozen-row), OPAQUE bg-muted so
                                         body rows can't bleed through on vertical scroll. */}
-                                    {columns.map((c) => {
+                                    {columns.map((c, ci) => {
                                         const isSelected = selectedColumn?.batchId === c.batchId;
                                         return (
                                         <th
@@ -242,6 +307,8 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                 // border-r adds the vertical column separator (matches the
                                                 // horizontal border-border/50 gridline weight).
                                                 'frozen-row bg-muted border-b border-r border-border/50 align-bottom text-left font-medium p-0',
+                                                // First block column starts the BLOCK group — 2px divider.
+                                                ci === 0 && GROUP_DIVIDER,
                                             )}
                                         >
                                             <Tooltip>
@@ -331,6 +398,20 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                 {row.productionBatch ?? ''}
                                             </FrozenBodyCell>
                                             <FrozenBodyCell
+                                                left={LEFT_FEDPRICE}
+                                                width={W_FEDPRICE}
+                                                className="font-mono tabular-nums"
+                                            >
+                                                {/* Accounting format: ₱ pinned left, value pinned right.
+                                                    Blank on zero-fed days (avgFedPriceDay === null). */}
+                                                {row.avgFedPriceDay !== null && (
+                                                    <span className="flex items-baseline justify-between gap-1">
+                                                        <span className="text-muted-foreground">₱</span>
+                                                        <span>{fmtPrice(row.avgFedPriceDay)}</span>
+                                                    </span>
+                                                )}
+                                            </FrozenBodyCell>
+                                            <FrozenBodyCell
                                                 left={LEFT_TOTAL}
                                                 width={W_TOTAL}
                                                 className="text-right font-mono font-medium tabular-nums frozen-edge"
@@ -338,8 +419,38 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                 {fmtKg(row.totalFed)}
                                             </FrozenBodyCell>
 
+                                            {/* ── PRODUCED group (scrolling body cells) ──
+                                                TOTAL PRODUCED (SQL daily_total) then one per
+                                                grade; kg, mono right-aligned, blank on null/0.
+                                                group-hover repaints the row hover tint to match
+                                                the frozen + block cells. */}
+                                            <td
+                                                className={cn(
+                                                    'px-2 py-1 text-right font-mono font-medium tabular-nums border-b border-r border-border/50 group-hover:bg-accent',
+                                                    GROUP_DIVIDER,
+                                                    (row.totalProduced ?? 0) === 0 && 'text-transparent',
+                                                )}
+                                            >
+                                                {fmtKg(row.totalProduced ?? undefined)}
+                                            </td>
+                                            {producedGrades.map((g) => {
+                                                const kg = row.producedByGrade[g.grade];
+                                                const active = !!kg && kg !== 0;
+                                                return (
+                                                    <td
+                                                        key={`bd-grade-${g.grade}`}
+                                                        className={cn(
+                                                            'px-2 py-1 text-right font-mono tabular-nums border-b border-r border-border/50 group-hover:bg-accent',
+                                                            active ? 'text-foreground' : 'text-transparent',
+                                                        )}
+                                                    >
+                                                        {fmtKg(kg)}
+                                                    </td>
+                                                );
+                                            })}
+
                                             {/* Dynamic block cells */}
-                                            {columns.map((c) => {
+                                            {columns.map((c, ci) => {
                                                 const kg = row.fedByBatch[c.batchId];
                                                 const active = !!kg && kg !== 0;
                                                 return (
@@ -347,6 +458,7 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                         key={c.batchId}
                                                         className={cn(
                                                             'px-2 py-1 text-right font-mono tabular-nums border-b border-r border-border/50',
+                                                            ci === 0 && GROUP_DIVIDER,
                                                             active
                                                                 ? 'bg-emerald-500/10 text-foreground'
                                                                 : 'text-transparent',
@@ -383,6 +495,22 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                     </FrozenFooterCell>
                                     <FrozenFooterCell left={LEFT_DAY} width={W_DAY} />
                                     <FrozenFooterCell left={LEFT_BATCH} width={W_BATCH} />
+                                    {/* Campaign's weighted-avg fed price — THE headline calc value.
+                                        Accounting format (₱ left / value right), bold. Tiny "camp. avg"
+                                        label so it reads as the campaign figure. Blank when zero-fed. */}
+                                    <FrozenFooterCell left={LEFT_FEDPRICE} width={W_FEDPRICE}>
+                                        <div className="flex flex-col gap-0 leading-tight">
+                                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                camp. avg
+                                            </span>
+                                            {campaignAvgFedPrice !== null && (
+                                                <span className="flex items-baseline justify-between gap-1 font-mono text-xs font-bold tabular-nums">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{fmtPrice(campaignAvgFedPrice)}</span>
+                                                </span>
+                                            )}
+                                        </div>
+                                    </FrozenFooterCell>
                                     <FrozenFooterCell
                                         left={LEFT_TOTAL}
                                         width={W_TOTAL}
@@ -390,6 +518,64 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                     >
                                         {fmtKg(grandTotalFed)}
                                     </FrozenFooterCell>
+
+                                    {/* ── PRODUCED group footer (scrolling, sticky-bottom only).
+                                        These cells SCROLL with the block columns, so they use
+                                        .frozen-row-bottom (z20) + .frozen-edge-top — NOT the
+                                        corner. Neutral OPAQUE bg-muted (not a batch state, so
+                                        no statusTint). The TOTAL PRODUCED cell is the yield/loss
+                                        payoff: campaign produced headline + yield% + loss%. ── */}
+                                    {/* p-0 here (NOT the helper's px-2 py-0.5) so the tricolor
+                                        bands bleed EDGE TO EDGE. h-full makes the inner stack span
+                                        the full cell height; each band is flex-1 (equal thirds). */}
+                                    <td
+                                        className={cn(
+                                            'frozen-row-bottom frozen-edge-top bg-muted border-r border-border/50 p-0 align-middle',
+                                            GROUP_DIVIDER,
+                                        )}
+                                    >
+                                        {/* LABEL-LESS TRICOLOR bands — color encodes the metric
+                                            (no text labels). Three OPAQUE bands stack vertically and
+                                            FILL the cell completely (full-bleed, equal thirds, no
+                                            rounded corners, no gaps, no per-band padding); only a
+                                            tiny pr-1 keeps the digits off the right border. `title`
+                                            keeps the meaning discoverable on hover. OPAQUE tint pairs
+                                            mirror statusTint() (frozen-pane rule — no glass).
+                                              amber  = Produced (kg)
+                                              emerald= Yield (%)
+                                              red    = Loss (%)
+                                            null/zero handling preserved (— when null). */}
+                                        <div className="flex h-full flex-col leading-tight">
+                                            <div
+                                                title="Produced"
+                                                className="flex flex-1 w-full items-center justify-end bg-amber-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-amber-950 dark:bg-amber-950 dark:text-amber-50"
+                                            >
+                                                {fmtKg(campaignTotalProduced ?? undefined) || '—'}
+                                            </div>
+                                            <div
+                                                title="Yield"
+                                                className="flex flex-1 w-full items-center justify-end bg-emerald-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-emerald-950 dark:bg-emerald-950 dark:text-emerald-50"
+                                            >
+                                                {fmtYieldPct(campaignYieldPct)}
+                                            </div>
+                                            <div
+                                                title="Loss"
+                                                className="flex flex-1 w-full items-center justify-end bg-red-100 pr-1 font-mono text-[11px] font-bold tabular-nums text-red-950 dark:bg-red-950 dark:text-red-50"
+                                            >
+                                                {fmtYieldPct(campaignYieldPct === null ? null : 1 - campaignYieldPct)}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    {producedGrades.map((g) => (
+                                        <td
+                                            key={`ft-grade-${g.grade}`}
+                                            className="frozen-row-bottom frozen-edge-top bg-muted border-r border-border/50 px-2 py-0.5 align-middle text-right"
+                                        >
+                                            <span className="font-mono text-xs font-bold tabular-nums">
+                                                {fmtKg(g.campaignTotal ?? undefined)}
+                                            </span>
+                                        </td>
+                                    ))}
 
                                     {/* Per-column 2-line summary — scrolling footer cells
                                         (sticky-bottom only). STATE is shown by coloring the
@@ -404,7 +590,7 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                         loss red/green could clash, so loss inherits the cell
                                         foreground there; on the blue and neutral tints it keeps
                                         the red(neg)/emerald(pos) sign coloring. */}
-                                    {columns.map((c) => {
+                                    {columns.map((c, ci) => {
                                         const isClosedTint = c.status === 'CLOSED' || c.status === 'FEED';
                                         const lossClass = c.blockLoss === null
                                             ? 'text-muted-foreground'
@@ -418,6 +604,7 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                             key={c.batchId}
                                             className={cn(
                                                 'frozen-row-bottom frozen-edge-top border-r border-border/50 p-0 align-middle',
+                                                ci === 0 && GROUP_DIVIDER,
                                                 statusTint(c.status),
                                             )}
                                         >
@@ -437,6 +624,18 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                             <span className={cn('font-mono text-[10px]', lossClass)}>
                                                                 {fmtSignedPct(c.blockLoss)}
                                                             </span>
+                                                        </div>
+                                                        {/* Line 3 — weighted-avg fed price (₱/kg). Accounting
+                                                            format (₱ left / value right). Blank when null. The
+                                                            label slot is kept even when blank so all per-column
+                                                            footers stay the SAME height. */}
+                                                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                                                            <span className="text-[10px] uppercase tracking-wide opacity-70">₱/kg</span>
+                                                            {c.avgFedPrice !== null && (
+                                                                <span className="font-mono text-[10px]">
+                                                                    {fmtPrice(c.avgFedPrice)}
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 </TooltipTrigger>
@@ -507,6 +706,12 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
                                                                 <dd className="font-mono tabular-nums">{fmtPct2(c.ash)}</dd>
                                                             </div>
                                                             <div className="flex items-baseline justify-between gap-3">
+                                                                <dt className="text-muted-foreground">Fed price</dt>
+                                                                <dd className="font-mono tabular-nums">
+                                                                    {c.avgFedPrice !== null ? `₱${fmtPrice(c.avgFedPrice)}/kg` : '—'}
+                                                                </dd>
+                                                            </div>
+                                                            <div className="flex items-baseline justify-between gap-3">
                                                                 <dt className="text-muted-foreground">Loss</dt>
                                                                 <dd
                                                                     className={cn(
@@ -540,7 +745,7 @@ export function RcMovementMatrix({ data, onMonthChange }: RcMovementMatrixProps)
             ) : (
                 <div className="flex-1 min-h-0 flex items-center justify-center animate-fade-up">
                     <div className="text-center text-sm text-muted-foreground">
-                        No feeding movement for this cycle-month.
+                        No feeding movement for this campaign.
                     </div>
                 </div>
             )}
