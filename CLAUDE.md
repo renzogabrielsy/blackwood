@@ -141,6 +141,8 @@ Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
 
 **Dev Role Override:** Privileged users (Owner/Admin/Dev) can impersonate any role via localStorage (`dev_mock_role`) + cookie. Server-side `getUserRole()` in `lib/auth.ts` reads the cookie. UI controlled via navbar Shield icon dropdown.
 
+**Price gating (security boundary) — `canViewPrices()` is canonical.** All ₱/cost data (`cost_basis`, `avg_price`, `avg_wtd_value`, fed ₱/kg) is gated by the ONE helper `canViewPrices()` in `lib/auth.ts`. It derives the effective role from `getUserRole()`, so it respects the impersonation cookie (an Owner "viewing as Production" is denied). **Production is the only role that cannot see prices.** Server actions/components MUST null/omit ₱ fields BEFORE returning the payload when `!canViewPrices()` — never rely on hiding them client-side (the network response is the leak) — and pass a `canViewPrices` boolean down for conditional render. Never re-derive price visibility with an inline `profiles.select('role')` lookup (it ignores impersonation). See `components/providers/AUTH.md` → "Price Gating".
+
 ## Supabase CLI
 
 The project is linked to Supabase. Common commands (see `/supabase` workflow for full details):

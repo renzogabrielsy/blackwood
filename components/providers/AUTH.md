@@ -26,6 +26,23 @@ Global authentication and permission context (180 lines, `components/providers/a
 4. Client: `useAuth().role` returns override if set, otherwise `dbRole`
 5. Server: `getUserRole()` in `lib/auth.ts` reads `dev_mock_role` cookie for SSR parity
 
+## Price Gating — `canViewPrices()` is the CANONICAL server-side gate
+
+Price/cost data (₱/kg, weighted-avg values, `cost_basis`) is a security boundary. The **single source of truth** for whether a request may receive ₱ values is `lib/auth.ts`:
+
+- **`canViewPrices(): Promise<boolean>`** — the gate to call in server actions / server components. Resolves the EFFECTIVE role via `getUserRole()`, so it **respects the `dev_mock_role` impersonation cookie** (an Owner "viewing as Production" is correctly denied). Fails CLOSED (returns `false`) when there's no authenticated user.
+- **`roleCanViewPrices(role: UserRole): boolean`** — pure predicate form (no DB/cookie). Mirrors the `view:prices` matrix above: all roles `true` EXCEPT `Production`.
+
+**Server boundary rule (mandatory):** when `!canViewPrices()`, OMIT/null every ₱ field **before the payload leaves the server** — never just hide it in the browser (the network response is the leak). Pass a `canViewPrices: boolean` back in the returned data so the client can render conditionally without re-deriving the role.
+
+Server callers (canonical references):
+- `app/(app)/inventory/page.tsx` (RC IN) — `cost_basis: showPrices ? d.cost_basis : undefined`
+- `app/(app)/inventory/rc-out/actions.ts#fetchRcOutTabData` — nulls `avg_price` / `avg_wtd_value`, returns `canViewPrices`
+- `app/(app)/inventory/rc-movement/actions.ts#fetchRcMovementMatrix` — nulls `avgFedPriceDay` / `avgFedPrice` / `campaignAvgFedPrice`, returns `canViewPrices`
+- `app/(app)/inventory/blocking/actions.ts` — nulls `avg_price` per block
+
+Client-side `hasPermission('view:prices')` remains for conditional RENDER only — it is a UX nicety, NOT the security boundary. The boundary is the server-side null-before-send.
+
 ## Status Gating Flow
 On auth state change or profile fetch:
 1. Fetch `profiles.status` for current user
