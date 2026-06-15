@@ -3,7 +3,8 @@
 ## Project Context
 - **Repository:** Blackwood (industrial charcoal inventory management system)
 - **Main Branch:** `main` (production); `dev` is staging — never commit directly to either, always branch a `feat/*` first
-- **Active Development (2026-06-08):** `feat/blackwood-table-universal-grid` branched from `dev` — universal "Blackwood Table" grid primitive extraction (commit 60092a2), pushed to origin, no PR yet
+- **Active Development (2026-06-09):** `feat/blackwood-table-universal-grid` is at `56a375a` (campaign-grouped RC Movement matrix + digest enhancements). `dev`, `origin/dev`, and the feature branch all point at `56a375a` — fast-forwarded, no divergence, no PR. `main` untouched at `4deb20e`.
+- **Observed FF pattern:** this repo's `feat/*` branches frequently sit at the exact same commit as `origin/dev` (branched from dev tip, dev hasn't moved). When that holds, landing on dev = commit on feature branch, then `git branch -f dev <feat>` fast-forward + push both. No merge commit, zero conflict risk. Always verify with `git merge-base --is-ancestor origin/dev HEAD` first.
 - **Routing:** Next.js App Router with route groups: `app/(app)/` pattern
 - **Note:** branch-naming has shifted from `feat/<UI|backend>/<name>` (early) to flat `feat/<kebab-name>` (recent, e.g. feat/blackwood-table-universal-grid)
 

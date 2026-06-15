@@ -30,3 +30,6 @@
 
 ## Component Profiles
 - [Cenapro Production Ledger](cenapro_production_ledger.md) -- /cenapro/production renders all ~752 rows, no virtualization, no memoized row; every edit/drag re-renders all 10.5k cells. Fix = period picker first, then memoized Row, virtualization as escape hatch. Diagnosed 2026-06-02.
+
+## Security Audits
+- [Price Gate Audit 2026-06-15](price_gate_audit_2026_06_15.md) -- charcoal ₱/cost gating review; found LIVE leak fetchSingleDelivery (blocking/actions.ts) ships cost_basis ungated to Production via detail panel. Rest clean (RC OUT/Movement/inventory page fail closed, impersonation-aware).
