@@ -5,10 +5,8 @@ import { cn } from '@/lib/utils';
 import { useInventoryTab, type InventoryTab } from './inventory-tab-context';
 
 const TABS: { name: string; id: InventoryTab }[] = [
-    { name: 'Blocking', id: 'blocking' },
     { name: 'Deliveries', id: 'deliveries' },
     { name: 'Usage', id: 'usage' },
-    { name: 'Movement', id: 'movement' },
 ];
 
 export function InventorySheetTabs() {

@@ -1181,6 +1181,13 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     React.useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const editBatch = params.get('editBatch');
+        // Both the Deliveries and Usage tables are always mounted on /inventory and BOTH
+        // read `?editBatch=`. `editView` discriminates which one acts: only consume the
+        // param when it targets deliveries (a MISSING editView defaults to 'deliveries'
+        // for backward-compat with existing deep links). The Usage table early-returns on
+        // 'deliveries', so it leaves both params intact for us.
+        const editView = params.get('editView') ?? 'deliveries';
+        if (editView !== 'deliveries') return;
         if (editBatch && data.length > 0) {
             const matchingIds = data.filter(d => d.batch_code === editBatch).map(d => d.id);
             if (matchingIds.length > 0) {
@@ -1191,8 +1198,9 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     const matchingRows = data.filter(d => matchingIds.includes(d.id));
                     setEditRows(matchingRows);
                 }, 100);
-                // Clean up URL
+                // Clean up URL — strip BOTH params so the matching consumer fully owns them.
                 params.delete('editBatch');
+                params.delete('editView');
                 const qs = params.toString();
                 window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
             }

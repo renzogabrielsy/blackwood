@@ -14,8 +14,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import type { FullDeliveryRecord } from './types';
-import { fetchSingleDelivery } from './actions';
+import type { FullDeliveryRecord } from '../blocking/types';
+import { fetchSingleDelivery } from '../blocking/actions';
 import { bulkUpdateDeliveries } from '@/app/(app)/inventory/rc-in/actions';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -55,7 +55,9 @@ function deliveryToForm(d: FullDeliveryRecord): FormState {
     truck_plate:      d.truck_plate ?? '',
     sacks:            String(d.sacks),
     weight_kg:        String(d.weight_kg),
-    cost_basis:       String(d.cost_basis),
+    // cost_basis is null when role-gated (Production); default to '' so the (hidden)
+    // PHP/KG input neither crashes nor shows a stale/zero price.
+    cost_basis:       d.cost_basis !== null ? String(d.cost_basis) : '',
     remarks:          d.remarks ?? '',
     mc:               String(d.lab_results.mc),
     ash:              String(d.lab_results.ash),

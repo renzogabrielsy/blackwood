@@ -4,12 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, Loader2, Pencil, Check, XIcon, StickyNote, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { BlockData, BlockingDetailData, DeliveryHistoryRecord } from './types';
-import { fetchBlockingDetail, updateBlockNotes, fetchSingleDelivery } from './actions';
+import type { BlockData, BlockingDetailData, DeliveryHistoryRecord } from '../blocking/types';
+import { fetchBlockingDetail, updateBlockNotes, fetchSingleDelivery } from '../blocking/actions';
 import { EditDeliveryDialog } from './edit-delivery-dialog';
 import { DeliveryHistoryDialog } from '@/app/(app)/inventory/rc-in/components/DeliveryHistoryDialog';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
-import { useInventoryTab } from '@/app/(app)/inventory/components/inventory-tab-context';
 import {
   Tooltip,
   TooltipContent,
@@ -54,7 +53,7 @@ function parseLocKey(locKey: string): { whse: string; col: string; row: string }
 
 /** Convert a FullDeliveryRecord to a DeliveryHistoryRow for the DeliveryHistoryDialog */
 function toDeliveryHistoryRow(
-  full: import('./types').FullDeliveryRecord,
+  full: import('../blocking/types').FullDeliveryRecord,
 ): DeliveryHistoryRow {
   return {
     id: full.id,
@@ -65,7 +64,8 @@ function toDeliveryHistoryRow(
     truck_plate: full.truck_plate ?? '',
     sacks: full.sacks,
     weight_kg: full.weight_kg,
-    cost_basis: full.cost_basis,
+    // null (role-gated) → undefined so the info dialog treats it as withheld, not zero.
+    cost_basis: full.cost_basis ?? undefined,
     remarks: full.remarks ?? undefined,
     created_at: '', // not available from fetchSingleDelivery, dialog doesn't strictly need it
     lab_results: full.lab_results,
@@ -73,6 +73,33 @@ function toDeliveryHistoryRow(
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
+
+/**
+ * Where an "Edit All" action wants to land. The panel itself owns the `router.push`
+ * to `/inventory?...`; this callback is the SHELL-SPECIFIC hook a host wires up to do
+ * any extra work the route push can't (e.g. flipping the in-page tab when the panel is
+ * rendered inside the client tab shell). On a standalone route, the host can omit it
+ * (the router push alone navigates) or point it at a `router.push` of its own.
+ */
+export interface BlockingDetailNavTarget {
+  /** The batch whose records should be opened. */
+  batchCode: string;
+  /** Which inventory sub-view the records live in. */
+  view: 'deliveries' | 'usage';
+}
+
+/**
+ * Shell-agnostic navigation seam. When no `onNavigateToBatch` prop is supplied, the
+ * panel dispatches this `window` CustomEvent instead of reaching into any tab shell.
+ * An in-page host (e.g. the inventory tab provider) listens for it and flips the active
+ * tab; on a standalone route nothing listens and the router push alone drives nav.
+ */
+export const INVENTORY_NAVIGATE_EVENT = 'blackwood:inventory-navigate';
+
+export function emitInventoryNavigate(detail: BlockingDetailNavTarget) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<BlockingDetailNavTarget>(INVENTORY_NAVIGATE_EVENT, { detail }));
+}
 
 interface BlockingDetailPanelProps {
   /**
@@ -95,15 +122,22 @@ interface BlockingDetailPanelProps {
    */
   blockData?: BlockData | null;
   canViewPrices: boolean;
+  /**
+   * Optional host hook fired by the "Edit All" buttons, BEFORE the panel pushes the
+   * `/inventory?...` URL. Lets a host that lives inside the client tab shell flip the
+   * active tab so the deep-link lands on the right view. The panel imports NOTHING from
+   * the tab shell — this injected callback is the only seam. When omitted (e.g. a
+   * standalone route), the router push alone drives navigation.
+   */
+  onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices }: BlockingDetailPanelProps) {
+export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices, onNavigateToBatch }: BlockingDetailPanelProps) {
   const isOpen = locKey !== null;
   // Explicit blockData prop wins; otherwise fall back to the grid map lookup.
   const blockData: BlockData | undefined =
     blockDataProp ?? (locKey && data ? data[locKey] : undefined) ?? undefined;
   const router = useRouter();
-  const { setActiveTab } = useInventoryTab();
 
   const [detailData, setDetailData] = useState<BlockingDetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -237,18 +271,33 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
 
   // ── Edit All handler ──
 
+  function navigateToBatch(batchCode: string, view: 'deliveries' | 'usage') {
+    onClose();
+    if (onNavigateToBatch) {
+      // Host hook owns navigation ENTIRELY. The host pushes the correct
+      // `/inventory?tab=<view>&editBatch=<code>&editView=<view>` URL; the panel must
+      // NOT also router.push here — a second push without `tab=`/`editView=` would be
+      // the LAST write and would clobber the host's, dropping the target view.
+      onNavigateToBatch({ batchCode, view });
+      return;
+    }
+    // ── Fallback (no host hook) ──
+    // Forward-looking seam: announce the intent on `window` so a future in-shell host
+    // that renders this panel itself (no onNavigateToBatch prop) can flip its active
+    // tab. Today both routes (blocking + rc-movement) pass onNavigateToBatch, so this
+    // event branch + the panel's own router.push only run on that fallback path.
+    emitInventoryNavigate({ batchCode, view });
+    router.push(`/inventory?search=${encodeURIComponent(batchCode)}&year=all&editBatch=${encodeURIComponent(batchCode)}`);
+  }
+
   function handleEditAll() {
     if (!blockData) return;
-    onClose();
-    setActiveTab('deliveries');
-    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
+    navigateToBatch(blockData.batch_code, 'deliveries');
   }
 
   function handleEditAllUsage() {
     if (!blockData) return;
-    onClose();
-    setActiveTab('usage');
-    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
+    navigateToBatch(blockData.batch_code, 'usage');
   }
 
   if (!blockData || !locKey) {

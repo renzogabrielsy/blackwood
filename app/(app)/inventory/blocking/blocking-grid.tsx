@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
 import type { BlockData } from './types';
-import { BlockingDetailPanel } from './blocking-detail-panel';
+import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
@@ -217,10 +217,33 @@ function getSpotlightClass(match: SpotlightMatch, statusFilter: StatusFilter): s
 interface BlockingGridProps {
   data: Record<string, BlockData>;
   canViewPrices: boolean;
+  /**
+   * Controlled selection (the standalone `/inventory/blocking` route drives this from the
+   * `?block=` URL param so the open block is deep-linkable / refresh-safe). When BOTH
+   * `selectedLocKey` and `onSelectBlock` are supplied the grid is fully controlled;
+   * otherwise it falls back to internal selection state (legacy in-shell usage).
+   */
+  selectedLocKey?: string | null;
+  /** Toggle handler for a cell click — receives the block_loc that was clicked. */
+  onSelectBlock?: (locKey: string) => void;
+  /**
+   * Passed straight through to the detail panel's "Edit All". On a standalone route the
+   * route wires this to a `router.push('/inventory?tab=…')`; omitted in-shell so the
+   * panel falls back to its `window` CustomEvent → InventoryTabProvider tab switch.
+   */
+  onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
-  const [selectedLocKey, setSelectedLocKey] = useState<string | null>(null);
+export function BlockingGrid({
+  data,
+  canViewPrices,
+  selectedLocKey: controlledLocKey,
+  onSelectBlock,
+  onNavigateToBatch,
+}: BlockingGridProps) {
+  const isControlled = controlledLocKey !== undefined && onSelectBlock !== undefined;
+  const [internalLocKey, setInternalLocKey] = useState<string | null>(null);
+  const selectedLocKey = isControlled ? controlledLocKey! : internalLocKey;
   const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(() => makeDefaultActive());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const { settings } = useTableSettings();
@@ -235,11 +258,22 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
   const visibleWarehouses = ALL_WAREHOUSE_KEYS.filter((w) => activeWarehouses.has(w));
 
   const handleCellClick = (locKey: string) => {
-    setSelectedLocKey((prev) => (prev === locKey ? null : locKey));
+    if (isControlled) {
+      // Controlled: delegate the toggle decision to the parent (URL writer).
+      onSelectBlock!(locKey);
+      return;
+    }
+    setInternalLocKey((prev) => (prev === locKey ? null : locKey));
   };
 
   const handlePanelClose = () => {
-    setSelectedLocKey(null);
+    if (isControlled) {
+      // Close always clears. The panel only emits close while something is open, so
+      // toggling the currently-open key off (parent's toggle handler) clears the URL.
+      if (selectedLocKey) onSelectBlock!(selectedLocKey);
+      return;
+    }
+    setInternalLocKey(null);
   };
 
   // "ALL" mode = exactly the standard 4 (A/B/C/D). PCA/PCB are opt-in extras.
@@ -498,6 +532,7 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
         onClose={handlePanelClose}
         data={data}
         canViewPrices={canViewPrices}
+        onNavigateToBatch={onNavigateToBatch}
       />
     </div>
   );
