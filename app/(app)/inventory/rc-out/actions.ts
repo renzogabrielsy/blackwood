@@ -3,117 +3,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
-
-export async function getRcOutRecords(
-    search?: string,
-    field?: string,
-    offset: number = 0,
-    limit: number = 15,
-    startDate?: string,
-    endDate?: string
-) {
-    const supabase = await createClient();
-
-    let query = supabase
-        .from('rc_out')
-        .select(`
-      id,
-      transaction_date,
-      batch_id,
-      production_batch,
-      destination,
-      weight_kg,
-      remarks,
-      block_loc,
-      created_at,
-      avg_price:rc_out_avg_price,
-      avg_wtd_value:rc_out_avg_wtd_value,
-      batches (
-        batch_code,
-        status,
-        location_ref
-      )
-    `)
-        .order('transaction_date', { ascending: false })
-        .range(offset, offset + limit - 1);
-
-    if (startDate && endDate) {
-        query = query.gte('transaction_date', startDate).lte('transaction_date', endDate);
-    }
-
-    if (search) {
-        const term = `%${search}%`;
-        const searchField = field || 'all';
-
-        if (searchField === 'all') {
-            // Search local columns + batch_code via subquery
-            const { data: matchingBatches } = await supabase
-                .from('batches')
-                .select('id')
-                .ilike('batch_code', term);
-            const batchIds = (matchingBatches || []).map(b => b.id);
-
-            if (batchIds.length > 0) {
-                query = query.or(
-                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term},batch_id.in.(${batchIds.join(',')})`
-                );
-            } else {
-                query = query.or(
-                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term}`
-                );
-            }
-        } else if (searchField === 'batch_code') {
-            // Search via batches join
-            const { data: matchingBatches } = await supabase
-                .from('batches')
-                .select('id')
-                .ilike('batch_code', term);
-            const batchIds = (matchingBatches || []).map(b => b.id);
-            if (batchIds.length > 0) {
-                query = query.in('batch_id', batchIds);
-            } else {
-                query = query.in('batch_id', ['__no_match__']);
-            }
-        } else if (searchField === 'production_batch') {
-            query = query.ilike('production_batch', term);
-        } else if (searchField === 'destination') {
-            query = query.ilike('destination', term);
-        } else if (searchField === 'block_loc') {
-            query = query.ilike('block_loc', term);
-        } else if (searchField === 'remarks') {
-            query = query.ilike('remarks', term);
-        }
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-        console.error('Error fetching RC OUT:', JSON.stringify(error, null, 2));
-        // Fallback or re-throw
-        return [];
-    }
-
-    // Flatten the structure for the UI
-    return data.map((d) => {
-        const batchesArray = Array.isArray(d.batches) ? d.batches : (d.batches ? [d.batches] : []);
-        const batchCode = batchesArray[0]?.batch_code;
-
-        return {
-            id: d.id,
-            transaction_date: d.transaction_date,
-            batch_id: d.batch_id,
-            production_batch: d.production_batch,
-            destination: d.destination,
-            weight_kg: d.weight_kg,
-            remarks: d.remarks,
-            block_loc: d.block_loc,
-            created_at: d.created_at,
-            avg_price: d.avg_price,
-            avg_wtd_value: d.avg_wtd_value,
-            batches: batchCode ? { batch_code: batchCode, status: batchesArray[0]?.status || 'STORED', location_ref: batchesArray[0]?.location_ref || '' } : undefined,
-        } as RcOutRow;
-    });
-}
+import { canViewPrices } from '@/lib/auth';
 
 export async function deleteRcOutRecord(id: string) {
     const supabase = await createClient();
@@ -133,14 +23,6 @@ export async function bulkDeleteRcOut(ids: string[]) {
     if (error) {
         return { success: false, message: error.message };
     }
-    revalidatePath('/inventory');
-    return { success: true };
-}
-
-export async function createRcOutRecord(input: RcOutInput) {
-    const supabase = await createClient();
-    const { error } = await supabase.from('rc_out').insert(input);
-    if (error) return { success: false, message: error.message };
     revalidatePath('/inventory');
     return { success: true };
 }
@@ -226,6 +108,12 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
 export async function fetchRcOutTabData() {
     const supabase = await createClient();
 
+    // CANONICAL price gate — Production (incl. impersonated) must NOT receive ₱ data.
+    // Resolved ONCE here, then the avg_price / avg_wtd_value fields are nulled BEFORE
+    // the payload leaves the server (the security boundary). The returned canViewPrices
+    // boolean lets the client conditionally render without re-deriving the role.
+    const showPrices = await canViewPrices();
+
     // Paginated fetch helper to bypass PostgREST max_rows (1000)
     const PAGE = 1000;
     async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
@@ -266,7 +154,7 @@ export async function fetchRcOutTabData() {
             .order('transaction_date', { ascending: false })
     );
 
-    // Flatten the batches join (same pattern as getRcOutRecords)
+    // Flatten the batches join
     const records: RcOutRow[] = rcOutRaw.map((d) => {
         const batchesArray = Array.isArray(d.batches) ? d.batches : (d.batches ? [d.batches] : []);
         const batchCode = batchesArray[0]?.batch_code;
@@ -281,8 +169,10 @@ export async function fetchRcOutTabData() {
             remarks: d.remarks,
             block_loc: d.block_loc,
             created_at: d.created_at,
-            avg_price: d.avg_price,
-            avg_wtd_value: d.avg_wtd_value,
+            // Price fields nulled server-side when the role can't view prices —
+            // they never reach a Production user's network payload.
+            avg_price: showPrices ? d.avg_price : null,
+            avg_wtd_value: showPrices ? d.avg_wtd_value : null,
             batches: batchCode ? { batch_code: batchCode, status: batchesArray[0]?.status || 'STORED', location_ref: batchesArray[0]?.location_ref || '' } : undefined,
         } as RcOutRow;
     });
@@ -333,5 +223,7 @@ export async function fetchRcOutTabData() {
         batchOptions,
         yearOptions,
         blockLocs,
+        // Canonical price-gate flag — drives conditional render on the client.
+        canViewPrices: showPrices,
     };
 }

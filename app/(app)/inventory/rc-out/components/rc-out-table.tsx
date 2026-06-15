@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
-import { useAuth } from '@/components/providers/auth-context';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -109,6 +108,7 @@ export function RcOutTable({
     batchOptions,
     yearOptions,
     blockLocs,
+    canViewPrices,
     onRefresh,
 }: {
     data: RcOutRow[];
@@ -117,11 +117,14 @@ export function RcOutTable({
     batchOptions: string[];
     yearOptions: number[];
     blockLocs: string[];
+    // Server-computed price gate (lib/auth.canViewPrices, resolved in fetchRcOutTabData).
+    // Single source of truth for price column/footer visibility — render exactly matches
+    // the server data gate (the price fields are already nulled server-side when false).
+    canViewPrices: boolean;
     onRefresh?: () => Promise<void>;
 }) {
     const searchParams = useSearchParams();
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { hasPermission } = useAuth();
     const { setCellSelectionCount, setCellAggregates } = useStatusBar();
 
     // Refresh state
@@ -167,6 +170,12 @@ export function RcOutTable({
     React.useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const editBatch = params.get('editBatch');
+        // Both the Deliveries and Usage tables are always mounted on /inventory and BOTH
+        // read `?editBatch=`. `editView` discriminates which one acts: this Usage table
+        // only consumes the param when it explicitly targets 'usage'. A missing/other
+        // editView defaults to deliveries, so we leave both params intact for that table.
+        const editView = params.get('editView');
+        if (editView !== 'usage') return;
         if (editBatch && allData.length > 0) {
             // Match by production_batch or batches.batch_code
             const matchingIds = allData
@@ -180,8 +189,9 @@ export function RcOutTable({
                     const matchingRows = allData.filter(d => matchingIds.includes(d.id));
                     setEditRows(matchingRows);
                 }, 100);
-                // Clean up URL
+                // Clean up URL — strip BOTH params so the matching consumer fully owns them.
                 params.delete('editBatch');
+                params.delete('editView');
                 const qs = params.toString();
                 window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
             }
@@ -510,11 +520,12 @@ export function RcOutTable({
         return allColumns.filter(col => {
             const key = 'accessorKey' in col ? col.accessorKey : undefined;
             if (key === 'avg_price' || key === 'avg_wtd_value') {
-                return hasPermission('view:prices');
+                // Render gate matches the server data gate (price fields nulled when false).
+                return canViewPrices;
             }
             return true;
         });
-    }, [fontSize, hasPermission]);
+    }, [fontSize, canViewPrices]);
 
     const table = useReactTable({
         data: filteredData,
@@ -1254,8 +1265,8 @@ export function RcOutTable({
                                             <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
                                             <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
                                             <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                            {/* AVG PRICE + AVG VAL (permission-gated) */}
-                                            {hasPermission('view:prices') && (
+                                            {/* AVG PRICE + AVG VAL (price-gated — server canViewPrices) */}
+                                            {canViewPrices && (
                                                 <>
                                                     <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
                                                         <div className="flex items-center justify-between">

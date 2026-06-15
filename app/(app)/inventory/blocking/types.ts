@@ -61,7 +61,7 @@ export interface FullDeliveryRecord {
   truck_plate: string | null;
   sacks: number;
   weight_kg: number;
-  cost_basis: number;
+  cost_basis: number | null;  // null when role-gated (withheld from non-price-viewers)
   remarks: string | null;
   lab_results: {
     mc: number;

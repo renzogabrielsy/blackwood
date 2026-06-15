@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
-import { getUserRole } from '@/lib/auth';
+import { getUserRole, roleCanViewPrices } from '@/lib/auth';
 import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord, BlockDataForBatch, BlockData } from './types';
 
 export async function fetchBlockingGridData(): Promise<BlockingGridData> {
@@ -252,6 +252,12 @@ export async function fetchSingleDelivery(
       return { success: false, message: 'Not authenticated' };
     }
 
+    // Resolve the EFFECTIVE role (respects dev-impersonation cookie) and gate price
+    // fields exactly like the sibling fetchBlockingDetail — Production must never receive
+    // cost_basis, even via the detail panel's edit dialog / delivery-info path.
+    const role = await getUserRole(user.id);
+    const canViewPrices = roleCanViewPrices(role);
+
     const { data, error } = await supabase
       .from('deliveries')
       .select('id, transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg, cost_basis, remarks, lab_results')
@@ -275,7 +281,10 @@ export async function fetchSingleDelivery(
         truck_plate:      data.truck_plate,
         sacks:            data.sacks ?? 0,
         weight_kg:        Number(data.weight_kg),
-        cost_basis:       Number(data.cost_basis),
+        // Withhold cost_basis (omit → undefined) when the caller may not view prices.
+        cost_basis:       canViewPrices && data.cost_basis !== null && data.cost_basis !== undefined
+          ? Number(data.cost_basis)
+          : null,
         remarks:          data.remarks,
         lab_results: {
           mc:      Number(labResults.mc ?? 0),

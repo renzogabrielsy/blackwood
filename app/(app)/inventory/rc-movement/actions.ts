@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { canViewPrices } from '@/lib/auth';
 
 // ===========================================================================
 // RC MOVEMENT MATRIX (cross-tab / pivot) — CAMPAIGN-SCOPED
@@ -113,6 +114,12 @@ export type RcMovementMatrix = {
   /** Campaign's loss in kg (fed − produced), from view_rc_movement_campaign_yield.
    *  NULL when the yield row is absent. */
   campaignLossKg: number | null;
+  /** Canonical price-gate flag (from lib/auth.canViewPrices). FALSE for Production
+   *  (incl. impersonated). When false, ALL ₱ fields above — avgFedPriceDay (rows),
+   *  avgFedPrice (columns), campaignAvgFedPrice — are forced to null BEFORE this
+   *  payload leaves the server, so no ₱ value ever reaches a Production browser.
+   *  The client uses this flag to conditionally render price cells. */
+  canViewPrices: boolean;
 };
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -161,6 +168,7 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     campaign: '', productionBatch: '', campaignYear: 0, campaignLabel: '',
     columns: [], rows: [], campaignOptions: [], grandTotalFed: 0, campaignAvgFedPrice: null,
     producedGrades: [], campaignTotalProduced: null, campaignYieldPct: null, campaignLossKg: null,
+    canViewPrices: false,
   };
 
   try {
@@ -168,6 +176,12 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
 
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) return empty;
+
+    // CANONICAL price gate — resolved ONCE up front. When false (Production, incl.
+    // impersonated), every ₱ field is nulled before this action returns, so prices
+    // never reach the client. We still RUN the price views (cheap, keeps the code
+    // path uniform) but discard their values into nulls below.
+    const showPrices = await canViewPrices();
 
     // --- Paginated fetch helper (bypass PostgREST max_rows = 1000) ---
     const PAGE = 1000;
@@ -242,6 +256,7 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       campaignYear: yr,
       campaignLabel: resolved.label,
       campaignOptions,
+      canViewPrices: showPrices,
     };
 
     // --- Fed cells for the campaign (date × block, kg) -------------------------
@@ -330,9 +345,11 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
         .eq('production_batch', pb)
         .eq('campaign_year', yr),
     );
+    // Price gate applied at the map: when !showPrices, every per-day price is null,
+    // so no ₱ value enters the row payload (the cells below read straight from here).
     const dayPriceByDate = new Map<string, number | null>();
     for (const r of dayPriceRows) {
-      if (r.date) dayPriceByDate.set(r.date, r.wtd_fed_price);
+      if (r.date) dayPriceByDate.set(r.date, showPrices ? r.wtd_fed_price : null);
     }
 
     const { data: campaignPriceRow } = await supabase
@@ -342,7 +359,8 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       .eq('campaign_year', yr)
       .maybeSingle();
     // EXACT — do NOT round in the data layer (display formats to 2 dp downstream).
-    const campaignAvgFedPrice: number | null = campaignPriceRow?.wtd_fed_price ?? null;
+    // Price-gated: null for Production (incl. impersonated).
+    const campaignAvgFedPrice: number | null = showPrices ? (campaignPriceRow?.wtd_fed_price ?? null) : null;
 
     // --- Production output + campaign yield/loss views (kg; SQL-aggregated) ----
     // Continuous-tank production is NOT attributable to an input batch, so it's keyed
@@ -505,9 +523,10 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     ]);
 
     // batch_price by batch_id (NULL passes straight through — zero-fed batch).
+    // Price-gated: when !showPrices, store null so no per-column ₱ reaches the client.
     const priceById = new Map<string, number | null>();
     for (const r of batchPriceRows) {
-      if (r.batch_id) priceById.set(r.batch_id, r.batch_price);
+      if (r.batch_id) priceById.set(r.batch_id, showPrices ? r.batch_price : null);
     }
 
     // status by batch_id
@@ -581,6 +600,7 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       campaignTotalProduced,
       campaignYieldPct,
       campaignLossKg,
+      canViewPrices: showPrices,
     };
   } catch (err) {
     console.error('[RcMovement] fetchRcMovementMatrix failed:', err);
