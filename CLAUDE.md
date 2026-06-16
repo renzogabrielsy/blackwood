@@ -402,7 +402,9 @@ The Blocking tab is the **primary tab** in the Inventory page — a warehouse gr
 
 ## Agent Model
 
-When spawning subagents via the `Task` tool, always use `model: 'opus'` (maps to the latest Opus, currently Opus 4.8). All project subagent definitions in `.claude/agents/` are pinned to `model: opus`. Do not default to sonnet or haiku for implementation work in this project.
+When spawning subagents via the `Task` tool, always use `model: 'opus'` (maps to the latest Opus, currently Opus 4.8). All project implementation subagent definitions in `.claude/agents/` (frontend-design, backend, etc.) are pinned to `model: opus`. Do not default to sonnet or haiku for implementation work in this project.
+
+**Carve-out — the four ICTC sync employees run on Sonnet for routine daily runs.** `gsheet-sync`, `deliveries-manager`, `rc-out-manager`, and `production-manager` are pinned to `model: sonnet`. Their daily PROPOSE/EXECUTE path is deterministic-Python-heavy (extract → classify → diff happens in Python; the agent only orchestrates + judges), so Sonnet is the daily driver. **Escalate an individual sync run to Opus ONLY for genuine conflict adjudication** — a flagged conflict, an ambiguous batch mapping, or a ledger-HOLD decision — by re-launching that agent (or that one row) on Opus, never by the agent self-upgrading. The "always Opus" rule still holds for every implementation agent; this carve-out applies exclusively to the four sync ingestion employees.
 
 ## Agent Prompts
 
