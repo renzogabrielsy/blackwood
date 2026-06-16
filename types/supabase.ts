@@ -1030,6 +1030,95 @@ export type Database = {
         }
         Relationships: []
       }
+      view_delivery_monthly_analytics: {
+        Row: {
+          ash: number | null
+          avg_price: number | null
+          bd_astm: number | null
+          bd_jis: number | null
+          deliveries: number | null
+          fc: number | null
+          grit: number | null
+          mc: number | null
+          month: number | null
+          php_total: number | null
+          sacks: number | null
+          vm: number | null
+          volume_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_delivery_supplier_monthly_analytics: {
+        Row: {
+          ash: number | null
+          avg_price: number | null
+          bd_astm: number | null
+          bd_jis: number | null
+          deliveries: number | null
+          fc: number | null
+          grit: number | null
+          mc: number | null
+          month: number | null
+          php_total: number | null
+          sacks: number | null
+          supplier: string | null
+          vm: number | null
+          volume_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_delivery_supplier_subgroup_yearly_analytics: {
+        Row: {
+          avg_price: number | null
+          deliveries: number | null
+          main_supplier: string | null
+          php_total: number | null
+          sacks: number | null
+          subgroup: string | null
+          volume_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_delivery_supplier_yearly_analytics: {
+        Row: {
+          ash: number | null
+          avg_price: number | null
+          bd_astm: number | null
+          bd_jis: number | null
+          deliveries: number | null
+          fc: number | null
+          grit: number | null
+          mc: number | null
+          php_total: number | null
+          sacks: number | null
+          supplier: string | null
+          vm: number | null
+          volume_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
+      view_delivery_yearly_analytics: {
+        Row: {
+          ash: number | null
+          avg_price: number | null
+          bd_astm: number | null
+          bd_jis: number | null
+          deliveries: number | null
+          fc: number | null
+          grit: number | null
+          mc: number | null
+          php_total: number | null
+          sacks: number | null
+          vm: number | null
+          volume_kg: number | null
+          year: number | null
+        }
+        Relationships: []
+      }
       view_digest_audit_enriched: {
         Row: {
           comment: string | null
@@ -1541,6 +1630,7 @@ export type Database = {
         }
         Returns: undefined
       }
+      canonical_supplier: { Args: { p_supplier: string }; Returns: string }
       cenapro_flec_balance: {
         Args: { p_start_date: string; p_warehouse_code: string }
         Returns: {

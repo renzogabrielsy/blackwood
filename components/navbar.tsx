@@ -51,6 +51,14 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
+    { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
+    // Price & Volume Analysis design concepts (planning-stage demos).
+    // Specific demo routes MUST precede the `/price-demos` index catch-all.
+    { test: prefix('/price-demos/demo1'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Terminal', pageDescription: 'Dual-axis volume × price command view (concept 1 of 4)' },
+    { test: prefix('/price-demos/demo2'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Ledger', pageDescription: 'Sortable supplier league table with sparklines (concept 2 of 4)' },
+    { test: prefix('/price-demos/demo3'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Heatmap', pageDescription: 'Month × supplier ₱/kg & volume matrix (concept 3 of 4)' },
+    { test: prefix('/price-demos/demo4'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Analyst Brief', pageDescription: 'Executive monthly review dashboard (concept 4 of 4)' },
+    { test: prefix('/price-demos'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Price & Volume Demos', pageDescription: 'Four design concepts for delivery price & volume analysis' },
     // Cenapro sub-routes — MUST precede the `/cenapro` catch-all below.
     { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
     { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
@@ -100,6 +108,7 @@ const ICTC_INVENTORY: Module[] = [
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
 const ICTC_MODULES: Module[] = [
     { name: 'Production', href: '/production' },
+    { name: 'Summaries', href: '/summaries' },
     { name: 'Accounting', href: '/accounting', disabled: true },
 ];
 
