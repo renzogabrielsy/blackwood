@@ -131,7 +131,7 @@ python3 .claude/skills/sync-ictc/scripts/extract_rc_movement.py \
   > "$WORK_DIR/extract_movement.json"
 ```
 
-### Step 7 — Reconcile
+### Step 7 — Reconcile (PROPOSED vs RC MOVEMENT — first pass)
 ```bash
 python3 .claude/skills/sync-ictc/scripts/reconcile_rc_movement.py \
   --proposed-json "$WORK_DIR/extract_proposed.json" \
@@ -147,6 +147,8 @@ Exit codes: 0 = clean, 1 = warning drift, 2 = SERIOUS drift.
 
 If exit code 1: continue but flag in summary.
 
+> This first pass compares the two operator reports to each other. It is BLIND to duplication already in the DB (it never looks at `rc_out`). The DB-side duplication gate is Step 9.5 below — it is the check that would have caught the May 29–Jun 16 doubling.
+
 ### Step 8 — Build batch_code -> batch_id lookup
 Collect all `batch_code_primary` + `batch_code_fallbacks` values from extracted rows, dedupe.
 ```sql
@@ -154,41 +156,60 @@ SELECT batch_code, id FROM batches WHERE batch_code = ANY(ARRAY[<list>])
 ```
 Write the result as `$WORK_DIR/batch_lookup.json` in shape `{batch_code: id, ...}`.
 
-### Step 9 — Query existing rc_out in date window
-For all dates present in extracted rows ± 3 days:
+### Step 9 — Query existing rc_out covering the FULL extract date span (DEDUP-WINDOW RULE — BUG-1 fix, HARD)
+The classifier's NEW/NOOP decision is only as good as the DB compare-set you hand it. The compare-set MUST cover the **full min..max `transaction_date` of the rows you are about to classify** — NOT a fixed narrow tail. The PROPOSED report is cumulative; if you only pass a recent slice of rc_out, historical rows fall outside the compare-set, mis-classify as NEW, and get re-INSERTed — that is exactly what doubled May 29–Jun 16 (~31 feedings). Compute `<min>`/`<max>` from the **extracted** rows (after the watermark filter in Step 5) and query the whole span:
 ```sql
 SELECT json_agg(row_to_json(rc)) AS data
 FROM (
   SELECT id, transaction_date::text, batch_id, destination, weight_kg::float,
          remarks, block_loc, production_batch
   FROM rc_out
-  WHERE transaction_date BETWEEN '<min>'::date - 3 AND '<max>'::date + 3
+  WHERE transaction_date BETWEEN '<min_extract>'::date - 3 AND '<max_extract>'::date + 3
 ) rc;
 ```
-Write to `$WORK_DIR/rc_out_rows.json`.
+(`<min_extract>`/`<max_extract>` are the min/max of the post-filter extracted rows. With the Step-1 tail-scope, the extract span is already a small recent window, so this stays token-lean — but it must fully contain that window, never undershoot it.) Write to `$WORK_DIR/rc_out_rows.json`.
 
-Also build daily sums for reconciliation:
+Also build daily sums of EXISTING rc_out — over the SAME full extract span as Step 9:
 ```sql
 SELECT json_agg(json_build_object('transaction_date', transaction_date::text, 'total_kg', total_kg)) AS data
 FROM (
   SELECT transaction_date, SUM(weight_kg) AS total_kg
   FROM rc_out
-  WHERE transaction_date BETWEEN '<min>'::date AND '<max>'::date
+  WHERE transaction_date BETWEEN '<min_extract>'::date - 3 AND '<max_extract>'::date + 3
   GROUP BY transaction_date
 ) sums;
 ```
-Write to `$WORK_DIR/rc_out_sums.json`. Re-run the reconciler with `--rc-out-sums-json` to also catch PROPOSED-vs-existing-rc_out drift.
+Write to `$WORK_DIR/rc_out_sums.json`.
 
-### Step 10 — Classify
+### Step 9.5 — DB-vs-RC-MOVEMENT duplication gate (BUG-1 fix, HARD — the check that catches DB-side doubling)
+Re-run the reconciler WITH `--rc-out-sums-json` so it also compares the DB's own per-date rc_out SUM (O) against RC MOVEMENT (M):
+```bash
+python3 .claude/skills/sync-ictc/scripts/reconcile_rc_movement.py \
+  --proposed-json "$WORK_DIR/extract_proposed.json" \
+  --movement-json "$WORK_DIR/extract_movement.json" \
+  --rc-out-sums-json "$WORK_DIR/rc_out_sums.json" \
+  --tolerance-kg 50 \
+  --serious-drift-kg 500 \
+  --output "$WORK_DIR/reconcile_report_db.json"
+```
+This pass walks **every date the DB has rows for** (not only the PROPOSED dates), so it catches doubled feedings sitting on settled dates the current extract no longer covers. A DB sum that **exceeds** RC MOVEMENT (`O > M` beyond tolerance) trips a SERIOUS halt (exit 2) — that is the duplication signature. A DB sum **below** M is the normal continuous-flow lag and is ignored.
+
+**If exit code 2 here: HALT.** Surface the offending date(s) (`O`, `M`, excess kg) to Renzo. Do NOT write — duplication must be cleaned up first (see L-012 DELETE path). If RC MOVEMENT spans more dates than your `rc_out_sums.json`, widen the sums query to RC MOVEMENT's range so no doubled date is missed.
+
+### Step 10 — Classify (PASS --watermark — SUB-WATERMARK WRITE GUARD, BUG-1 fix, HARD)
+Pass `--watermark = <latest>` (the live DB MAX(transaction_date) from Step 1). Any extracted row on or before the watermark that has no DB natural-key match is a SETTLED date and is routed to a `flagged` bucket instead of NEW — a settled date must NEVER produce an INSERT. This is a belt-and-suspenders guard on top of the full-span compare-set: even if the compare-set is somehow incomplete, a sub-watermark row can no longer silently duplicate.
 ```bash
 python3 .claude/skills/sync-ictc/scripts/classify_rc_out.py \
   --extract-json "$WORK_DIR/extract_proposed.json" \
   --batch-lookup-json "$WORK_DIR/batch_lookup.json" \
   --db-rows-json "$WORK_DIR/rc_out_rows.json" \
+  --watermark "<latest>" \
   --output "$WORK_DIR/classified_rc_out.json" \
   --verbose
 ```
-Capture: new/changed/noop/unmapped/malformed counts.
+Capture: new/changed/noop/**flagged**/unmapped/malformed counts. The classifier also reports `extract_date_span` vs `db_date_span` and warns (stderr) if the compare-set does not cover the extract span — if you see that warning, re-query Step 9 over the full span before trusting NEW counts. **Omit `--watermark` ONLY for a first-time historical backfill**, never on the daily driver.
+
+> **FLAGGED rows never auto-insert.** Surface every `flagged` row to Renzo (date / weight / batch_code / reason) exactly like UNMAPPED — they are suspected duplicates on a settled date. Do not move them to NEW without his explicit confirmation that the feed is genuinely missing from the DB.
 
 > **Context discipline (LEVER 4 — HARD).** Do NOT read the full `classified_rc_out.json` into context. The classifier writes it to the work_dir; load ONLY the summary counts + the NEW / VALUE_CHANGED (`changed`) / UNMAPPED / MALFORMED / FLAGGED rows you must act on. **NEVER load DUPLICATE_NOOP rows into context** — they are the bulk and add zero value. Use `jq` to slice just the buckets you need (e.g. `jq '{summary, new, changed, unmapped, malformed}'`), never `cat classified_rc_out.json`.
 
@@ -259,7 +280,9 @@ Read `$WORK_DIR/classified_rc_out.json`. Ensure decisions cover every VALUE_CHAN
 ### Step 2 — Safety gates (refuse with clear error if tripped)
 - `new_count > 100` -> "Too many NEW rows. Inspect manually via /review-queue."
 - Any row with `confidence < 0.7` -> route those rows to /review-queue (do not write).
-- If reconciliation report shows max_severity = 'serious' -> refuse to write until reconciled.
+- If EITHER reconcile report (`reconcile_report.json` PROPOSED-vs-MOVEMENT, OR `reconcile_report_db.json` DB-vs-MOVEMENT duplication gate) shows `max_severity = 'serious'` -> refuse to write until reconciled.
+- `flagged_count > 0` and any flagged row is not explicitly resolved in the decisions -> do NOT auto-insert flagged rows. They are sub-watermark suspected duplicates; insert one only if Renzo explicitly confirms it is genuinely missing.
+- **Idempotent INSERT:** when writing NEW rows, dedup at write time on the rc_out natural key `(transaction_date, batch_id, destination)` — re-check existence immediately before each insert (or use `DBClient.insert_if_absent("rc_out", rows, natural_key=("transaction_date","batch_id","destination"))`). A second EXECUTE of the same batch must be a no-op, never a re-insert. Do NOT add a DB UNIQUE constraint.
 
 ### Step 3 — Resolve any UNMAPPED rows
 For each UNMAPPED row with `unmapped_decisions[idx] == 'skip'`: skip the row.
