@@ -46,6 +46,7 @@ import {
     Underline,
     EyeOff,
     RotateCcw,
+    Sigma,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -93,6 +94,7 @@ import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from '../components/DeliverySheetFooter';
+import { TrueWeightPopover } from '@/app/(app)/inventory/_shared/true-weight-popover';
 import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 import { DensityToggle } from './components/density-toggle';
 import { ColumnsPopover } from './components/columns-popover';
@@ -849,15 +851,46 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 enableResizing: true,
                 cell: ({ row }) => {
                     const wt = parseFloat(String(row.original.weight_kg)) || 0;
+                    const tw = row.original.true_weight_kg;
+                    // Display-only deduction marker (DEDUCTIONS_DESIGN.md): rendered ONLY
+                    // when the row is tagged. Placed LEFT of the number so the value stays
+                    // hard-right against the column edge; untagged rows render unchanged.
+                    const deductionMarker = tw != null ? (
+                        <TrueWeightPopover
+                            trueWeightKg={tw}
+                            weightKg={wt}
+                            deductionNote={row.original.deduction_note ?? null}
+                            costBasis={row.original.cost_basis ?? null}
+                            canViewPrices={canViewPrices}
+                        >
+                            <button
+                                type="button"
+                                aria-label="View true weight / deduction"
+                                title="View true weight / deduction"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                <Sigma className="h-3 w-3" />
+                            </button>
+                        </TrueWeightPopover>
+                    ) : null;
                     if (density === 'expanded') {
                         return (
                             <div className="flex flex-col justify-center text-right font-mono">
-                                <span>{formatWeight(wt)}</span>
+                                <span className="flex items-center justify-end gap-1">
+                                    {deductionMarker}
+                                    <span>{formatWeight(wt)}</span>
+                                </span>
                                 <span className="text-[10px] text-muted-foreground leading-none mt-0.5">{row.original.sacks} sks</span>
                             </div>
                         );
                     }
-                    return <span className="font-mono text-right block">{formatWeight(wt)}</span>;
+                    return (
+                        <span className="flex items-center justify-end gap-1 font-mono">
+                            {deductionMarker}
+                            <span>{formatWeight(wt)}</span>
+                        </span>
+                    );
                 },
             },
             {

@@ -44,6 +44,11 @@ import { calculateWhse } from '@/lib/rc-utils';
 
 const LAB_KEYS = ['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc'];
 
+/** Whole-kg formatter for the display-only Weight Deduction block (no decimals). */
+function formatKg(value: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
 /** Popover for viewing/adding remarks on an audit log entry */
 function RemarkPopover({ entry }: { entry: AuditLogRow }) {
   const [open, setOpen] = React.useState(false);
@@ -494,6 +499,45 @@ function DeliveryHistoryContent({
             )}
 
             {canViewPrices && <div className="h-px bg-border/50" />}
+
+            {/* Weight Deduction (display-only — DEDUCTIONS_DESIGN.md). Rendered ONLY
+                when this delivery is tagged (true_weight_kg != null). Weight + note
+                lines are not gated; the effective ₱/kg line is canViewPrices-gated. */}
+            {current.true_weight_kg != null && (
+              <div>
+                <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Weight Deduction</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">True Weight</div>
+                    <div className="text-xs font-mono truncate">{formatKg(Number(current.true_weight_kg))} kg</div>
+                  </div>
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Recorded</div>
+                    <div className="text-xs font-mono truncate">{formatKg(Number(current.weight_kg))} kg</div>
+                  </div>
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden col-span-2">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Deduction</div>
+                    <div className="text-xs font-mono">{current.deduction_note || '—'}</div>
+                  </div>
+                  {canViewPrices &&
+                    Number(current.true_weight_kg) > 0 &&
+                    current.cost_basis !== undefined &&
+                    current.cost_basis !== null && (
+                      <div className="rounded-md border px-2 py-1.5 overflow-hidden col-span-2">
+                        <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Effective ₱/kg</div>
+                        <div className="text-xs font-mono">
+                          <span className="inline-flex w-full justify-between">
+                            <span className="text-muted-foreground">&#8369;</span>
+                            <span>
+                              {(Number(current.cost_basis) / Number(current.true_weight_kg)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                </div>
+              </div>
+            )}
 
             <div className="h-px bg-border/50" />
 
