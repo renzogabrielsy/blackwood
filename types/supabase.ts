@@ -189,6 +189,7 @@ export type Database = {
           block_loc: string | null
           cost_basis: number
           created_at: string | null
+          deduction_note: string | null
           id: string
           lab_results: Json
           remarks: string | null
@@ -196,6 +197,7 @@ export type Database = {
           supplier: string
           transaction_date: string
           truck_plate: string | null
+          true_weight_kg: number | null
           weight_kg: number
         }
         Insert: {
@@ -203,6 +205,7 @@ export type Database = {
           block_loc?: string | null
           cost_basis: number
           created_at?: string | null
+          deduction_note?: string | null
           id?: string
           lab_results?: Json
           remarks?: string | null
@@ -210,6 +213,7 @@ export type Database = {
           supplier: string
           transaction_date: string
           truck_plate?: string | null
+          true_weight_kg?: number | null
           weight_kg: number
         }
         Update: {
@@ -217,6 +221,7 @@ export type Database = {
           block_loc?: string | null
           cost_basis?: number
           created_at?: string | null
+          deduction_note?: string | null
           id?: string
           lab_results?: Json
           remarks?: string | null
@@ -224,6 +229,7 @@ export type Database = {
           supplier?: string
           transaction_date?: string
           truck_plate?: string | null
+          true_weight_kg?: number | null
           weight_kg?: number
         }
         Relationships: [
@@ -1702,6 +1708,21 @@ export type Database = {
           period_start_date: string
           side: string
           warehouse_code: string
+        }[]
+      }
+      fn_blend_proposal: {
+        Args: { p_block_locs: string[] }
+        Returns: {
+          block_count: number
+          raw_price_per_kg: number
+          total_balance: number
+          w_ash: number
+          w_bd_astm: number
+          w_bd_jis: number
+          w_fc: number
+          w_grit: number
+          w_mc: number
+          w_vm: number
         }[]
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }

@@ -2,8 +2,43 @@
 
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
-import { getUserRole, roleCanViewPrices } from '@/lib/auth';
+import { getUserRole, roleCanViewPrices, canViewPrices as canViewPricesGate } from '@/lib/auth';
 import type { BlockingGridData, BlockingDetailData, FullDeliveryRecord, BlockDataForBatch, BlockData } from './types';
+
+// ─── Blend Proposal ──────────────────────────────────────────────────────────
+// A read-only "what-if": the user selects multiple warehouse blocks; this layer
+// returns the blended (balance-weighted) lab stats + price across them, plus a
+// yield-adjusted product cost. All weighted averages are computed SQL-side via the
+// `fn_blend_proposal` RPC — TypeScript only does the trivial ×1.30 markup and shapes
+// the object. Imported by the (separate) frontend selection UI.
+
+/** One selected block's passthrough stats, as it appears in the blend. */
+export interface BlendProposalBlock {
+  block_loc: string;
+  batch_code: string;
+  status: string;
+  /** current remaining kg in that block */
+  balance: number;
+  mc: number; ash: number; bd_astm: number; bd_jis: number; grit: number; vm: number; fc: number;
+  /** that block's avg ₱/kg — NULL when prices are gated */
+  php_kg: number | null;
+}
+
+/** The blended what-if result across the selected blocks. */
+export interface BlendProposal {
+  blocks: BlendProposalBlock[];
+  block_count: number;
+  /** SUM of balances across selected blocks, kg */
+  total_balance: number;
+  weighted: { mc: number; ash: number; bd_astm: number; bd_jis: number; grit: number; vm: number; fc: number };
+  /** balance-weighted avg ₱/kg across selected blocks; NULL when gated */
+  raw_price_per_kg: number | null;
+  /** always 30 — the user's chosen "production loss" expressed as a 30% markup */
+  production_loss_pct: number;
+  /** raw_price_per_kg × 1.30 ; NULL when gated */
+  product_cost_per_kg: number | null;
+  can_view_prices: boolean;
+}
 
 export async function fetchBlockingGridData(): Promise<BlockingGridData> {
   const empty: BlockingGridData = { blocks: {}, canViewPrices: false };
@@ -187,7 +222,7 @@ export async function fetchBlockingDetail(
     const [deliveriesResult, rcOutResult, batchResult] = await Promise.all([
       supabase
         .from('deliveries')
-        .select('id, transaction_date, supplier, sacks, weight_kg, cost_basis, lab_results')
+        .select('id, transaction_date, supplier, sacks, weight_kg, cost_basis, true_weight_kg, deduction_note, lab_results')
         .eq('batch_code', batchCode)
         .order('transaction_date', { ascending: false }),
       supabase
@@ -213,6 +248,9 @@ export async function fetchBlockingDetail(
         mc:               labResults.mc !== undefined ? Number(labResults.mc) : undefined,
         bd_astm:          labResults.bd_astm !== undefined ? Number(labResults.bd_astm) : undefined,
         ash:              labResults.ash !== undefined ? Number(labResults.ash) : undefined,
+        // Display-only annotation, passed straight through (NOT price-gated here).
+        true_weight_kg:   d.true_weight_kg ?? null,
+        deduction_note:   d.deduction_note ?? null,
       };
       if (canViewPrices && d.cost_basis !== null && d.cost_basis !== undefined) {
         record.cost_basis = Number(d.cost_basis);
@@ -260,7 +298,7 @@ export async function fetchSingleDelivery(
 
     const { data, error } = await supabase
       .from('deliveries')
-      .select('id, transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg, cost_basis, remarks, lab_results')
+      .select('id, transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg, cost_basis, true_weight_kg, deduction_note, remarks, lab_results')
       .eq('id', deliveryId)
       .single();
 
@@ -285,6 +323,9 @@ export async function fetchSingleDelivery(
         cost_basis:       canViewPrices && data.cost_basis !== null && data.cost_basis !== undefined
           ? Number(data.cost_basis)
           : null,
+        // Display-only annotation, passed straight through (NOT price-gated here).
+        true_weight_kg:   data.true_weight_kg ?? null,
+        deduction_note:   data.deduction_note ?? null,
         remarks:          data.remarks,
         lab_results: {
           mc:      Number(labResults.mc ?? 0),
@@ -327,5 +368,136 @@ export async function updateBlockNotes(batchId: string, notes: string | null) {
   } catch (error: unknown) {
     console.error('updateBlockNotes failed:', error);
     return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
+  }
+}
+
+/**
+ * Build a Blend Proposal for the given selected blocks — a read-only what-if.
+ *
+ * The blended `weighted.*` values and `raw_price_per_kg` are BALANCE-WEIGHTED averages
+ * computed in SQL (the `fn_blend_proposal` RPC: SUM(stat * balance) / SUM(balance) over
+ * the selected rows), per the project rule "never compute weighted averages in TS".
+ * Here in TS we only apply the ×1.30 product-cost markup and assemble the object.
+ *
+ * Price gating: uses the canonical `canViewPrices()` (respects dev-impersonation). When
+ * denied, `raw_price_per_kg`, `product_cost_per_kg`, and EVERY block's `php_kg` are set
+ * to null BEFORE returning — ₱ data never leaves the server for a no-price user.
+ *
+ * This is a pure read-only computation: no writes, no audit logs, no revalidatePath.
+ */
+export async function buildBlendProposal(blockLocs: string[]): Promise<BlendProposal> {
+  const PRODUCTION_LOSS_PCT = 30;
+
+  // Normalize + dedupe the input; drop empties/whitespace.
+  const locs = Array.from(
+    new Set((blockLocs ?? []).map((l) => (l ?? '').trim()).filter((l) => l.length > 0)),
+  );
+
+  const emptyProposal: BlendProposal = {
+    blocks: [],
+    block_count: 0,
+    total_balance: 0,
+    weighted: { mc: 0, ash: 0, bd_astm: 0, bd_jis: 0, grit: 0, vm: 0, fc: 0 },
+    raw_price_per_kg: null,
+    production_loss_pct: PRODUCTION_LOSS_PCT,
+    product_cost_per_kg: null,
+    can_view_prices: false,
+  };
+
+  // Resolve price visibility once (canonical gate — respects impersonation, fails closed).
+  let canView = false;
+  try {
+    canView = await canViewPricesGate();
+  } catch {
+    canView = false;
+  }
+
+  if (locs.length === 0) {
+    return { ...emptyProposal, can_view_prices: canView };
+  }
+
+  try {
+    const supabase = await createClient();
+
+    // Per-block passthrough rows (no aggregation here — just shaping the view rows the
+    // frontend lists). Ignore any block_loc not present in the view.
+    const [rowsResult, aggResult] = await Promise.all([
+      supabase
+        .from('view_blocking_grid')
+        .select('block_loc, batch_code, status, balance, avg_mc, avg_ash, avg_bd_astm, avg_bd_jis, avg_grit, avg_vm, avg_fc, avg_php_kg')
+        .in('block_loc', locs),
+      // Balance-weighted aggregation — SQL-side, single row.
+      supabase.rpc('fn_blend_proposal', { p_block_locs: locs }),
+    ]);
+
+    if (rowsResult.error) {
+      console.error('[Blocking] buildBlendProposal rows query error:', rowsResult.error);
+      return { ...emptyProposal, can_view_prices: canView };
+    }
+    if (aggResult.error) {
+      console.error('[Blocking] buildBlendProposal fn_blend_proposal error:', aggResult.error);
+      return { ...emptyProposal, can_view_prices: canView };
+    }
+
+    const blocks: BlendProposalBlock[] = (rowsResult.data ?? []).map((r) => ({
+      block_loc:  r.block_loc,
+      batch_code: r.batch_code,
+      status:     r.status,
+      balance:    Number(r.balance ?? 0),
+      mc:         Number(r.avg_mc      ?? 0),
+      ash:        Number(r.avg_ash     ?? 0),
+      bd_astm:    Number(r.avg_bd_astm ?? 0),
+      bd_jis:     Number(r.avg_bd_jis  ?? 0),
+      grit:       Number(r.avg_grit    ?? 0),
+      vm:         Number(r.avg_vm      ?? 0),
+      fc:         Number(r.avg_fc      ?? 0),
+      // Gate ₱ per block BEFORE it leaves the server.
+      php_kg:     canView && r.avg_php_kg !== null ? Number(r.avg_php_kg) : null,
+    }));
+
+    // fn_blend_proposal returns a single row (or none if no block matched).
+    const agg = Array.isArray(aggResult.data) ? aggResult.data[0] : aggResult.data;
+
+    if (!agg || Number(agg.block_count ?? 0) === 0) {
+      // No selected loc exists in the view (or SUM(balance) = 0) — graceful empty.
+      return {
+        blocks,
+        block_count: blocks.length,
+        total_balance: 0,
+        weighted: { mc: 0, ash: 0, bd_astm: 0, bd_jis: 0, grit: 0, vm: 0, fc: 0 },
+        raw_price_per_kg: null,
+        production_loss_pct: PRODUCTION_LOSS_PCT,
+        product_cost_per_kg: null,
+        can_view_prices: canView,
+      };
+    }
+
+    const rawPrice =
+      canView && agg.raw_price_per_kg !== null && agg.raw_price_per_kg !== undefined
+        ? Number(agg.raw_price_per_kg)
+        : null;
+
+    return {
+      blocks,
+      block_count: Number(agg.block_count ?? blocks.length),
+      total_balance: Number(agg.total_balance ?? 0),
+      weighted: {
+        mc:      Number(agg.w_mc      ?? 0),
+        ash:     Number(agg.w_ash     ?? 0),
+        bd_astm: Number(agg.w_bd_astm ?? 0),
+        bd_jis:  Number(agg.w_bd_jis  ?? 0),
+        grit:    Number(agg.w_grit    ?? 0),
+        vm:      Number(agg.w_vm      ?? 0),
+        fc:      Number(agg.w_fc      ?? 0),
+      },
+      raw_price_per_kg: rawPrice,
+      production_loss_pct: PRODUCTION_LOSS_PCT,
+      // ×1.30 exactly (30% markup) — the only price math done in TS.
+      product_cost_per_kg: rawPrice !== null ? rawPrice * 1.3 : null,
+      can_view_prices: canView,
+    };
+  } catch (err) {
+    console.error('[Blocking] buildBlendProposal failed:', err);
+    return { ...emptyProposal, can_view_prices: canView };
   }
 }
