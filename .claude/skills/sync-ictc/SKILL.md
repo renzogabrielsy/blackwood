@@ -146,6 +146,8 @@ The script outputs JSON to stdout:
         "mc": 8.2, "ash": 4.1, "fc": 78.5, "vm": 9.2,
         "grit": 0.05, "bd_astm": 0.480, "bd_jis": 0.495
       },
+      "true_weight_kg": null,
+      "deduction_note": null,
       "warnings": [],
       "confidence": 1.0
     }
@@ -159,6 +161,8 @@ The script outputs JSON to stdout:
 ```
 
 If the script exits non-zero, capture stderr and surface to Renzo as an error (with copy-friendly formatting). Skip that file and continue with others.
+
+**Deductions + recovery rows (see `DEDUCTIONS_DESIGN.md`).** Every `rows[]` element carries two additive fields: `true_weight_kg` (physical/GROSS weight before ASH+wet deductions, parsed from a `net kilos of <GROSS> … = <NET>` remark — **NULL on ordinary rows, never 0**) and `deduction_note` (a short hover label, e.g. `−1.60% MC; −2.88% ASH`). `weight_kg` stays the deducted NET; the natural key / dedup is unchanged, and these fields are write-only (the classifier never diffs on them). A wet **recovery sub-row** (own weight + sacks + MC, no truck/batch/block/date of its own) is emitted as its OWN delivery row inheriting the mother's truck/block/supplier/batch/date/price (tagged `"_recovery": true`) — it is no longer dropped as MALFORMED.
 
 ## Step 5 — Classify each row via natural-key lookup
 
@@ -240,17 +244,29 @@ Refuse to proceed if any of these trip — explain why and stop:
 
 On confirmation, execute writes via Supabase MCP. For each operation, write an audit_log entry **in the same transaction-like sequence**:
 
-### Inserts (NEW rows)
+### Inserts (NEW rows) — IDEMPOTENT (BUG-2 guard, HARD RULE)
+
+Insert each NEW row **guarded on the delivery natural key** `(transaction_date, batch_code, truck_plate, weight_kg, sacks)` so a re-run or an accidental double-execute cannot land the same delivery twice (this is the fix for the 21-seconds-apart duplicate insert). Do NOT add a DB UNIQUE constraint — legitimately identical truckloads can occur; the guard lives in the write, not the schema:
 
 ```sql
 INSERT INTO deliveries (
   transaction_date, supplier, batch_code, block_loc, truck_plate,
-  sacks, weight_kg, cost_basis, remarks, lab_results
-) VALUES (...)
+  sacks, weight_kg, cost_basis, remarks, lab_results, true_weight_kg, deduction_note
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12
+WHERE NOT EXISTS (
+  SELECT 1 FROM deliveries
+  WHERE transaction_date = $1 AND batch_code = $3
+    AND truck_plate IS NOT DISTINCT FROM $5
+    AND weight_kg = $7
+    AND sacks IS NOT DISTINCT FROM $6
+)
 RETURNING id;
 ```
 
-Then immediately:
+A statement returning 0 rows means the row already existed (a prevented duplicate) — count it as skipped, not an error. When writing via the Python helper, use `DBClient.insert_if_absent("deliveries", rows, natural_key=(...))` instead, which performs the same re-check before each insert. `true_weight_kg` + `deduction_note` are additive display fields (`DEDUCTIONS_DESIGN.md`): pass the extractor's values straight through (both NULL on ordinary rows — never 0), and keep them OUT of the natural-key guard (the key stays `(transaction_date, batch_code, truck_plate, weight_kg, sacks)`, and `weight_kg` stays the deducted NET).
+
+For each row that actually inserted, immediately:
 
 ```sql
 INSERT INTO audit_logs (

@@ -114,7 +114,7 @@ supabase gen types typescript --linked > types/supabase.ts
 
 **Tables:**
 - **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum: STORED/IN-USE/CLOSED/FEED), `avg_cost`, `current_weight`, `quality_stats` (JSONB)
-- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc)
+- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc), `true_weight_kg` (nullable — physical/gross weight before ASH+wet deductions; display-only, NULL = no deduction, never used in any balance/view/trigger), `deduction_note` (nullable text — short human note, e.g. '−5.86% ASH; −1,009 wet'; display-only)
 - **`usage`** — `id`, `batch_id` (FK→batches), `destination`, `transaction_date`, `weight_kg`, `snapshot_location`, `snapshot_price`
 - **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`, `status` (`'active'` | `'disabled'` | `'pending'`), `created_at`, `updated_at`
 - **`audit_logs`** — `id`, `table_name`, `record_id`, `operation`, `diff` (JSONB), `snapshot` (JSONB), `comment`, `performed_by`, resolve fields
