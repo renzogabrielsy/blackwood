@@ -121,6 +121,14 @@ python3 .claude/skills/sync-ictc/scripts/extract_rc_deliveries.py \
 ```
 Check: `extract_latest.json` should have non-empty `rows[]` and `summary.total_rows > 0`. If `extraction_warnings` are present, capture them for the summary.
 
+**Weight deductions + wet-recovery rows (see `DEDUCTIONS_DESIGN.md`).** The extractor now emits two additive fields on **every** `rows[]` element:
+- `true_weight_kg` — the physical/GROSS weight BEFORE both ASH and wet deductions, parsed directly from a `net kilos of <GROSS> … = <NET>` remark. **NULL on ordinary rows** (no deduction); never 0. "Tagged" = `true_weight_kg IS NOT NULL`.
+- `deduction_note` — a short hover label, e.g. `−.67% MC` or `−1.60% MC; −2.88% ASH`.
+
+`weight_kg` STAYS the Sheet's deducted NET (the number after the final `=`) — it is never changed, and the natural key / dedup logic is untouched. The two fields are write-only: they are written on INSERT (and on a relevant UPDATE backfill), but the classifier never diffs on them, so a deducted row can never become a perpetual VALUE_CHANGED.
+
+**Wet "recovery" sub-rows are now their OWN delivery rows** (this REPLACES the old "drop as MALFORMED" behavior — the D-20D leak). A continuation row that carries its own weight + sacks + MC but no truck / batch / block / supplier / date of its own is emitted as a separate row that INHERITS the mother delivery's `truck_plate`, `block_loc`, `supplier`, `batch_code`, `transaction_date`, and `cost_basis`, while keeping its own `weight_kg` / `sacks` / `lab_results` and its own `true_weight_kg` + `deduction_note`. Such rows are tagged `"_recovery": true` + `"_mother_source_row": <n>` in the JSON. Because they now carry an inherited `batch_code`, they classify as normal NEW/NOOP/VALUE_CHANGED rows (no longer MALFORMED). A recovery-shaped row with **no preceding mother** to inherit from is left unmapped and surfaces in MALFORMED — that is the correct "orphan recovery" signal; HOLD + flag it, never invent a batch.
+
 > **Tail-filter the extract (HARD).** `extract_rc_deliveries.py` has no `--since`, so it emits the full year-to-date file. Immediately reduce its `rows[]` to only `transaction_date >= since_date` (the Step-1 watermark − 3 days) before enrichment/classification — the settled bulk below the watermark must not be re-classified. (See SKILL.md follow-up: a `--since` flag on the extractor would push this filter Python-side.)
 
 ### Step 6 — Enrich rows with prices from Czarina (if available)
@@ -254,8 +262,29 @@ RETURNING batch_code;
 ```
 Track which batches were newly created (mention in the audit_logs comment).
 
-### Step 4 — Insert NEW rows
-Build a single INSERT statement for all NEW rows. Use `lab_results::jsonb` for JSONB columns. Return the new IDs.
+### Step 4 — Insert NEW rows (IDEMPOTENT — BUG-2 guard, HARD RULE)
+Build the INSERT for the NEW rows, but make every insert **idempotent on the delivery natural key** `(transaction_date, batch_code, truck_plate, weight_kg, sacks)` so a re-run (or an accidental double-execute) cannot land the same delivery twice. Two equivalent ways — use whichever fits how you're writing:
+
+**(A) Python helper path (preferred when writing via `lib/db.py`):** call `DBClient.insert_if_absent("deliveries", rows, natural_key=("transaction_date","batch_code","truck_plate","weight_kg","sacks"))`. It re-SELECTs each row's natural key in the DB immediately before inserting and skips any that already exist; it returns `{inserted, skipped, inserted_count, skipped_count}`. Report `skipped_count` in the final summary (>0 means a duplicate was prevented).
+
+**(B) MCP `execute_sql` path:** wrap each insert in a `WHERE NOT EXISTS` guard so the DB itself re-checks at write time (NOT a UNIQUE constraint — legit identical truckloads are allowed; this guards only the re-run path):
+```sql
+INSERT INTO deliveries (transaction_date, supplier, batch_code, block_loc, truck_plate, sacks, weight_kg, cost_basis, remarks, lab_results, true_weight_kg, deduction_note)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12
+WHERE NOT EXISTS (
+  SELECT 1 FROM deliveries
+  WHERE transaction_date = $1 AND batch_code = $3
+    AND truck_plate IS NOT DISTINCT FROM $5
+    AND weight_kg = $7
+    AND sacks IS NOT DISTINCT FROM $6
+)
+RETURNING id;
+```
+A statement that inserts 0 rows means the row was already present (a prevented duplicate) — count it as skipped, do not treat it as an error.
+
+Use `lab_results::jsonb` for JSONB columns. Pass the extractor's `true_weight_kg` + `deduction_note` straight through (both NULL on ordinary rows — never coerce to 0); they are **not** in the natural-key guard. Return the new IDs.
+
+**EXECUTE re-run guard:** before issuing the insert batch, if `work_dir` already contains an `executed.json` marker from a prior EXECUTE of this same `classified.json`, do NOT blindly re-insert — re-run the natural-key existence check first and only insert rows still absent. Write `executed.json` (with the inserted ids) after a successful batch so a second EXECUTE invocation is a no-op rather than a duplicator.
 
 > ⚠️ **NEVER `UPDATE batches SET current_weight = ...` after inserting a delivery.** The `fn_update_blackwood_state` trigger already maintains `current_weight` (a single `+= NEW.weight_kg`) on every delivery insert — issuing a manual `+= delta` on top **double-counts** it (this is exactly what caused the ~54 t phantom-inventory bug — see LEARNING_LEDGER **L-006** / AUDIT_FINDINGS **AF-001**). The *only* legitimate `current_weight` write is the `VALUES (..., 0) ON CONFLICT DO NOTHING` for a brand-new batch in Step 3. If a reconciliation ever genuinely must correct `current_weight`, use the idempotent **absolute** form `SET current_weight = SUM(in) − SUM(out)`, never `+= delta`.
 

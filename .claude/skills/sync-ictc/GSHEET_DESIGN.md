@@ -63,6 +63,22 @@ Czarina email side later.
   (forward-fill date, tolerate missing lab metrics).
 - Columns **R–X (`WTD *`)** are weighted products (weight × metric) used for the
   Sheet's own weighted-average math — **IGNORED**, not source data.
+- **Weight deductions + wet-recovery rows (parity with the email path, via the shared
+  `scripts/lib/deductions.py` — see `DEDUCTIONS_DESIGN.md` / `LEARNING_LEDGER.md` L-021).**
+  Every RC IN row now carries two ADDITIVE, display-only fields:
+  - `true_weight_kg` — the physical/GROSS weight BEFORE both ASH and wet deductions,
+    parsed directly from a `net kilos of <GROSS> … = <NET>` remark (col Q). **NULL when
+    there is no deduction; NEVER 0.** "Tagged" = `true_weight_kg IS NOT NULL`.
+  - `deduction_note` — a short hover label (e.g. `−1.60% MC; −2.88% ASH`).
+  `weight_kg` (col H) STAYS the Sheet's deducted NET — never overwritten. These two
+  fields are **never diffed** (see "Compared vs ignored fields") and never part of the
+  natural key; they are written additively on insert. A wet **recovery sub-row** (its
+  own WT + MC + sacks but blank C/D/E/F/G — no date/supplier/batch/block/truck of its
+  own) is emitted as its **own** delivery row inheriting the mother's
+  date/supplier/batch (+ fallbacks)/block/truck/price (tagged `_recovery`), keeping its
+  own weight/sacks/lab + its own `true_weight_kg`/`deduction_note`. It is **no longer
+  dropped as MALFORMED** (the D-20D leak). A recovery-shaped row with no preceding
+  mother is left unmapped → MALFORMED (the correct orphan signal).
 
 ### Column → schema map (LOCKED)
 
@@ -175,6 +191,11 @@ but the path is in place for when granularity diverges.)
 
 - **RC IN diff fields:** `supplier`, `truck_plate`, `sacks`, `remarks`, `lab_results`
   (lab compared at 2-dp). **`cost_basis` is never diffed** (out of scope).
+  **`true_weight_kg` + `deduction_note` are also never diffed** — they are additive,
+  write-only display fields (DEDUCTIONS_DESIGN.md / L-021), derived from the remark at
+  extract time and written on insert; diffing them would turn every deducted row into a
+  perpetual VALUE_CHANGED before the DB backfills them. They are not part of the natural
+  key, and `weight_kg` stays the Sheet's deducted NET.
 - **RC OUT diff fields:** `weight_kg` (±1 kg tol), `remarks`, `production_batch`
   (only when *both* sides non-empty — DB stores `''` for most legacy rows, so an
   empty-vs-`MAY` mismatch is intentionally *not* a diff to avoid thousands of noise breaks).

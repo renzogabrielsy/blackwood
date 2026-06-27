@@ -129,6 +129,8 @@ python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \
 ```
 Capture from each STDOUT block: `summary` (counts) + `decisions_file` path. (RC IN header is row 7; RC OUT header is row 4, batch_code in column C — the extractor handles this. Cols R–X on RC IN are weighted-avg helpers, ignored. The orchestrator builds the `batches` lookup for RC OUT itself.)
 
+> **RC IN deductions + recovery rows (parity with `deliveries-manager`, via the shared `scripts/lib/deductions.py` — see `DEDUCTIONS_DESIGN.md` / `LEARNING_LEDGER.md` L-021).** The RC IN extract now tags weight deductions: each row carries `true_weight_kg` (physical/GROSS weight before ASH+wet, parsed from a `net kilos of <GROSS> … = <NET>` remark — **NULL when no deduction, NEVER 0**) + a short `deduction_note`. `weight_kg` stays the Sheet's deducted NET. Both fields are **additive / write-only**: they are written on insert but the classifier **never diffs** them and they are **not** part of the natural key — so a deducted row never becomes a perpetual Sheet-vs-DB VALUE_CHANGED. A wet **recovery sub-row** (own WT + MC + sacks, blank date/supplier/batch/block/truck) is emitted as its **own** `deliveries` row inheriting the mother's identity (tagged `_recovery`) instead of being dropped as MALFORMED (the D-20D leak); an orphan recovery with no mother stays MALFORMED (flag it).
+
 ### Step 3 — Read ONLY the compact decisions files
 ```bash
 cat "$WORK_DIR/decisions_rc_in.json"
@@ -195,7 +197,7 @@ Required input from the dispatcher prompt:
 The compact `decisions_<mode>.json` files already hold the full write plan. NEW + material VALUE_CHANGED rows are pre-approved by "apply the write plan". For each FLAGGED item, set its `decision` to `skip` (default), `insert`, or `reassign:<db_id>`; for each UNMAPPED item, set a real `batch_code` or leave `skip`. To suppress a NEW/CHANGED row, add `"skip": true` to it. Edit ONLY these small files — never the audit dumps.
 
 ### Step 2 — Run the deterministic apply phase
-The orchestrator performs all writes + audit logs via `lib/db.py`. It replicates the DB-trigger contract exactly: RC IN inserts set `cost_basis=0` (L-008 placeholder), never touch `current_weight` (the BEFORE-INSERT trigger owns it — L-005/L-006), and UPDATE the trigger-written audit row for provenance (L-001); RC OUT inserts write a manual audit row (no audit trigger). It enforces the safety gates (NEW>50 → halt; confidence<0.7 → halt) and NEVER deletes a row or auto-writes a flagged/unmapped row.
+The orchestrator performs all writes + audit logs via `lib/db.py`. It replicates the DB-trigger contract exactly: RC IN inserts set `cost_basis=0` (L-008 placeholder), carry the additive `true_weight_kg` + `deduction_note` straight through (both NULL on ordinary rows — never 0; L-021), never touch `current_weight` (the BEFORE-INSERT trigger owns it — L-005/L-006), and UPDATE the trigger-written audit row for provenance (L-001); RC OUT inserts write a manual audit row (no audit trigger). It enforces the safety gates (NEW>50 → halt; confidence<0.7 → halt) and NEVER deletes a row or auto-writes a flagged/unmapped row.
 
 ```bash
 python3 .claude/skills/sync-ictc/scripts/sync_gsheet.py \

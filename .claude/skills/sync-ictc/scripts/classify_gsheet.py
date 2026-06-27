@@ -219,6 +219,12 @@ def resolve_batch_id(row: dict, lookup: dict[str, str]) -> tuple[str | None, str
 # Diff functions
 # ---------------------------------------------------------------------------
 def rc_in_diffs(ex: dict, db: dict) -> list[dict]:
+    # NOTE: true_weight_kg / deduction_note are intentionally NOT diffed here — they
+    # are additive, write-only display fields (DEDUCTIONS_DESIGN.md / L-021): derived
+    # from the remark at extract time, written on insert, but a Sheet-vs-DB diff must
+    # never fire on them (else a deducted row becomes a perpetual VALUE_CHANGED before
+    # the DB backfills them). The natural key stays (date, batch_code, block_loc,
+    # weight_kg) and weight_kg stays the Sheet's deducted NET.
     diffs: list[dict] = []
 
     if norm_str(ex.get("supplier")) != norm_str(db.get("supplier")):
