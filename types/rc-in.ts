@@ -9,6 +9,10 @@ export type DeliveryRow = {
     weight_kg: number;
     cost_basis?: number;
     remarks?: string;
+    // Weight-deduction / true-weight annotation (display-only — see DEDUCTIONS_DESIGN.md).
+    // Additive + nullable so existing DeliveryRow/edit-shape construction is unaffected.
+    true_weight_kg?: number | null;
+    deduction_note?: string | null;
     lab_results: {
         mc: number;
         ash: number;

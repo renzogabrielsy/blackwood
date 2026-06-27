@@ -49,6 +49,9 @@ export interface DeliveryHistoryRecord {
   mc?: number;          // from lab_results
   bd_astm?: number;     // from lab_results
   ash?: number;         // from lab_results
+  // Weight-deduction / true-weight annotation (display-only — see DEDUCTIONS_DESIGN.md).
+  true_weight_kg?: number | null;
+  deduction_note?: string | null;
 }
 
 /** Full delivery record returned by fetchSingleDelivery for the edit dialog */
@@ -61,8 +64,11 @@ export interface FullDeliveryRecord {
   truck_plate: string | null;
   sacks: number;
   weight_kg: number;
-  cost_basis: number;
+  cost_basis: number | null;  // null when role-gated (withheld from non-price-viewers)
   remarks: string | null;
+  // Weight-deduction / true-weight annotation (display-only — see DEDUCTIONS_DESIGN.md).
+  true_weight_kg?: number | null;
+  deduction_note?: string | null;
   lab_results: {
     mc: number;
     ash: number;
@@ -88,3 +94,8 @@ export interface BlockingDetailData {
   notes: string | null;
   avg_cost: number | null;  // batch avg_cost, role-gated
 }
+
+// Blend Proposal types (`BlendProposal`, `BlendProposalBlock`) live in `actions.ts`
+// alongside the `buildBlendProposal` server action that produces them — import them
+// from there. They are co-located with the action because the action is their sole
+// producer and the agreed consumer seam is `import { … } from '.../blocking/actions'`.

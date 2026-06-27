@@ -29,6 +29,8 @@ interface RcOutTableWrapperProps {
     batchOptions: string[];
     yearOptions: number[];
     blockLocs: string[];
+    // Server-computed price gate (lib/auth.canViewPrices) — drives price column/footer render.
+    canViewPrices: boolean;
     onRefresh?: () => Promise<void>;
 }
 

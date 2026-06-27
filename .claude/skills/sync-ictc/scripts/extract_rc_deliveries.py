@@ -57,6 +57,17 @@ except ImportError:
     )
     sys.exit(3)
 
+# Shared weight-deduction grammar + wet-recovery core (one source of truth shared
+# with extract_gsheet.py — see DEDUCTIONS_DESIGN.md / LEARNING_LEDGER L-021).
+# When this script is run directly, sys.path[0] is its own dir, so `lib` (a sibling
+# package with __init__.py) imports the same way lib.db is imported elsewhere.
+from lib.deductions import (  # noqa: E402
+    detect_deduction,
+    build_recovery_row,
+    is_recovery_row_dict,
+    _is_inheritable_mother,
+)
+
 
 # ---------------------------------------------------------------------------
 # Operator-specific format constants
@@ -391,6 +402,12 @@ def extract_row(
             if not check(val):
                 warnings.append(f"Row {row_num}: {msg} ({short_key}={val})")
 
+    # Weight deduction (ASH / MC / wet) annotated in the remark — additive,
+    # display-only fields; weight_kg stays the deducted NET (see DEDUCTIONS_DESIGN.md).
+    true_weight_kg, deduction_note, ded_warnings = detect_deduction(remarks, weight_kg)
+    if ded_warnings:
+        warnings.extend(f"Row {row_num}: {w}" for w in ded_warnings)
+
     # Confidence: start at 1.0, subtract 0.10 per warning (lighter than v1 since
     # batch-code translation always adds a warning), floor at 0.0
     confidence = max(0.0, 1.0 - 0.10 * len(warnings))
@@ -407,11 +424,38 @@ def extract_row(
         "cost_basis": None,  # operator file has no price columns
         "remarks": remarks,
         "lab_results": lab_results if any(v is not None for v in lab_results.values()) else None,
+        # Deduction annotation (NULL on ordinary rows — every row carries both keys):
+        "true_weight_kg": true_weight_kg,
+        "deduction_note": deduction_note,
         "warnings": warnings,
         "confidence": round(confidence, 3),
         "_source_row": row_num,
     }
     return row_dict, last_seen_date, []
+
+
+# ---------------------------------------------------------------------------
+# Wet "recovery" sub-rows (see DEDUCTIONS_DESIGN.md Decision 8)
+# ---------------------------------------------------------------------------
+# A recovery sub-row is a continuation row directly under a full delivery (the
+# "mother") that carries its OWN weight + sacks + MC but NO truck / batch label /
+# block / supplier / date of its own. Historically these were dropped (silently,
+# or flagged MALFORMED for lacking a batch_code) — the D-20D leak. We now emit
+# each one as its OWN delivery row that INHERITS the mother's truck_plate,
+# block_loc, supplier, batch_code (+ operator_batch_label), transaction_date and
+# cost_basis, while keeping its own weight_kg / sacks / lab_results, plus its own
+# true_weight_kg + deduction_note.
+#
+# The detection + builder live in lib.deductions (shared with extract_gsheet.py).
+# This file only owns the email-specific "did the row have its OWN date?" check,
+# which random-accesses the date cell — so is_recovery_candidate is a thin wrapper
+# over the shared sheet-agnostic predicate.
+def is_recovery_candidate(sheet, row_num: int, row_dict: dict[str, Any]) -> bool:
+    """Email-path wrapper: compute has_own_date from the RAW col-2 date cell
+    (extract_row forward-fills the date, so the row_dict value is non-null even on a
+    recovery row) and delegate to the shared is_recovery_row_dict."""
+    has_own_date = coerce_date(sheet.cell(row_num, 2).value) is not None
+    return is_recovery_row_dict(row_dict, has_own_date=has_own_date)
 
 
 def extract_sheet(sheet) -> tuple[list[dict[str, Any]], list[str]]:
@@ -427,12 +471,37 @@ def extract_sheet(sheet) -> tuple[list[dict[str, Any]], list[str]]:
     data_start = first_data_row_below(sheet, header_row)
     rows: list[dict[str, Any]] = []
     last_seen_date: str | None = None
+    # The most recent successfully-emitted MAIN (non-recovery) delivery row that a
+    # recovery sub-row can inherit identity from.
+    last_mother: dict[str, Any] | None = None
 
     for r in range(data_start, sheet.max_row + 1):
         row_dict, last_seen_date, extra = extract_row(sheet, r, last_seen_date)
         sheet_warnings.extend(extra)
-        if row_dict is not None:
-            rows.append(row_dict)
+        if row_dict is None:
+            continue
+
+        if is_recovery_candidate(sheet, r, row_dict):
+            if _is_inheritable_mother(last_mother):
+                recovery = build_recovery_row(row_dict, last_mother)
+                rows.append(recovery)
+                # A recovery does NOT become the mother for a subsequent recovery —
+                # keep inheriting identity from the original mother delivery.
+            else:
+                # No mother to inherit from — keep the row as-is (it will surface
+                # in MALFORMED at classify time, which is the correct signal that
+                # an orphan recovery row appeared with no preceding delivery).
+                sheet_warnings.append(
+                    f"Row {r}: recovery-shaped sub-row with no preceding mother "
+                    f"delivery to inherit from — left unmapped"
+                )
+                rows.append(row_dict)
+            continue
+
+        rows.append(row_dict)
+        # Only a real, batch-carrying delivery row becomes the inheritance source.
+        if _is_inheritable_mother(row_dict):
+            last_mother = row_dict
 
     return rows, sheet_warnings
 

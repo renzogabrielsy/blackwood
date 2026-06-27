@@ -31,65 +31,49 @@ interface Breadcrumb {
     pageDescription?: string;
 }
 
+/**
+ * Ordered breadcrumb registry. Each entry's `test` decides whether it applies to the
+ * current pathname; the FIRST match wins, so MORE-SPECIFIC routes must come BEFORE their
+ * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all, and
+ * `/cenapro/production` precedes `/cenapro`). Replaces the old long if-chain.
+ */
+interface BreadcrumbEntry extends Breadcrumb {
+    test: (pathname: string) => boolean;
+}
+
+const exact = (path: string) => (pathname: string) => pathname === path;
+const prefix = (path: string) => (pathname: string) => pathname.startsWith(path);
+
+const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
+    { test: prefix('/edit/'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' },
+    // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
+    { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
+    { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
+    { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
+    { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
+    { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
+    // Price & Volume Analysis design concepts (planning-stage demos).
+    // Specific demo routes MUST precede the `/price-demos` index catch-all.
+    { test: prefix('/price-demos/demo1'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Terminal', pageDescription: 'Dual-axis volume × price command view (concept 1 of 4)' },
+    { test: prefix('/price-demos/demo2'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Ledger', pageDescription: 'Sortable supplier league table with sparklines (concept 2 of 4)' },
+    { test: prefix('/price-demos/demo3'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Heatmap', pageDescription: 'Month × supplier ₱/kg & volume matrix (concept 3 of 4)' },
+    { test: prefix('/price-demos/demo4'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Analyst Brief', pageDescription: 'Executive monthly review dashboard (concept 4 of 4)' },
+    { test: prefix('/price-demos'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Price & Volume Demos', pageDescription: 'Four design concepts for delivery price & volume analysis' },
+    // Cenapro sub-routes — MUST precede the `/cenapro` catch-all below.
+    { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
+    { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
+    { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
+    { test: exact('/notifications'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' },
+    { test: exact('/settings'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' },
+    { test: exact('/admin'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' },
+    { test: exact('/review-queue'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' },
+];
+
 function getBreadcrumb(pathname: string): Breadcrumb | null {
-    if (pathname.startsWith('/edit/')) {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' };
-    }
-    if (pathname.startsWith('/inventory')) {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' };
-    }
-    if (pathname.startsWith('/production')) {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' };
-    }
-    if (pathname.startsWith('/cenapro/production')) {
-        return { backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' };
-    }
-    if (pathname.startsWith('/cenapro/inventory')) {
-        return { backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' };
-    }
-    if (pathname.startsWith('/cenapro')) {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' };
-    }
-    if (pathname === '/notifications') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
-    }
-    if (pathname === '/settings') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' };
-    }
-    if (pathname === '/admin') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' };
-    }
-    if (pathname === '/review-queue') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' };
-    }
-    if (pathname === '/rcindraft1') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 1', pageDescription: 'Banded Zones' };
-    }
-    if (pathname === '/rcindraft2') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 2', pageDescription: 'Pinned Spine' };
-    }
-    if (pathname === '/rcindraft3') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'RC IN Draft 3', pageDescription: 'Density Tiers' };
-    }
-    if (pathname === '/draft1') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 1', pageDescription: 'Ops Console — Industrial Control Room' };
-    }
-    if (pathname === '/draft2') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 2', pageDescription: "Director's Brief — Executive Overview" };
-    }
-    if (pathname === '/draft3') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 3', pageDescription: 'Pivot Matrix — Rotated Spreadsheet' };
-    }
-    if (pathname === '/draft4') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 4', pageDescription: 'Monthly Focus — Spotlight + Visual Inventory' };
-    }
-    if (pathname === '/draft5') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 5', pageDescription: 'Quarterly Ledger — Accordion Drilldown' };
-    }
-    if (pathname === '/draft6') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Draft 6', pageDescription: 'Modular Dashboard — Drag & Drop Grid' };
-    }
-    return null;
+    const entry = BREADCRUMB_REGISTRY.find((e) => e.test(pathname));
+    if (!entry) return null;
+    const { backLabel, backHref, pageTitle, pageDescription } = entry;
+    return { backLabel, backHref, pageTitle, pageDescription };
 }
 
 function getInitials(name: string | null, email: string | null): string {
@@ -111,10 +95,20 @@ const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
 type Module = { name: string; href: string; disabled?: boolean };
 
-// ICTC / Davao tenant modules (the platform's first tenant).
-const MODULES: Module[] = [
-    { name: 'Inventory', href: '/inventory' },
+// ICTC / Davao Inventory sub-group — the four inventory surfaces, shown INDENTED under an
+// "Inventory" mini-label in the dropdown. Deliveries/Usage deep-link into the logs page's
+// tab; Blocking/Movement are standalone routes. Plain labels (no "RC " prefix).
+const ICTC_INVENTORY: Module[] = [
+    { name: 'Blocking', href: '/inventory/blocking' },
+    { name: 'Deliveries', href: '/inventory?tab=deliveries' },
+    { name: 'Usage', href: '/inventory?tab=usage' },
+    { name: 'Movement', href: '/inventory/rc-movement' },
+];
+
+// ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
+const ICTC_MODULES: Module[] = [
     { name: 'Production', href: '/production' },
+    { name: 'Summaries', href: '/summaries' },
     { name: 'Accounting', href: '/accounting', disabled: true },
 ];
 
@@ -200,13 +194,24 @@ export function Navbar() {
                             <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                                 ICTC · Davao
                             </DropdownMenuLabel>
-                            {MODULES.map((mod) =>
+                            {/* Inventory sub-group — a mini-label with indented children, so
+                                the four inventory surfaces read as a scannable cluster. */}
+                            <DropdownMenuLabel className="pl-2 text-[11px] font-medium text-muted-foreground/80">
+                                Inventory
+                            </DropdownMenuLabel>
+                            {ICTC_INVENTORY.map((mod) => (
+                                <DropdownMenuItem key={`ictc-inv-${mod.name}`} asChild className="pl-5">
+                                    <Link href={mod.href}>{mod.name}</Link>
+                                </DropdownMenuItem>
+                            ))}
+                            {/* Sibling modules below the Inventory sub-group. */}
+                            {ICTC_MODULES.map((mod) =>
                                 mod.disabled ? (
-                                    <DropdownMenuItem key={mod.name} disabled>
+                                    <DropdownMenuItem key={`ictc-${mod.name}`} disabled>
                                         {mod.name}
                                     </DropdownMenuItem>
                                 ) : (
-                                    <DropdownMenuItem key={mod.name} asChild>
+                                    <DropdownMenuItem key={`ictc-${mod.name}`} asChild>
                                         <Link href={mod.href}>{mod.name}</Link>
                                     </DropdownMenuItem>
                                 )

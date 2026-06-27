@@ -6,17 +6,28 @@ daily totals AND against rc_out daily sums in the DB.
 For each date where PROPOSED has data:
   P = sum of PROPOSED block_section.day_total_kg for that date
   M = RC MOVEMENT.raw_charcoal_fed_kls for that date (None if no row)
-  O = SUM(rc_out.weight_kg) for that date (already-ingested data, optional)
+  O = SUM(rc_out.weight_kg) for that date (already-ingested DB data, optional)
 
 Drift checks:
   abs(P - M) > tolerance_kg     -> flag "PROPOSED vs RC MOVEMENT drift"
   abs(P - O) > tolerance_kg     -> flag "PROPOSED vs existing rc_out drift"
                                    (only relevant for re-runs or partial ingestion)
 
+DB-vs-RC-MOVEMENT DUPLICATION GATE (BUG-1 fix, see SKILL.md / LEARNING_LEDGER L-019):
+  O_over_M = O - M, evaluated on EVERY date the DB already has rc_out rows for —
+  NOT only the PROPOSED dates. If the DB's own per-date rc_out SUM (O) exceeds the
+  RC MOVEMENT fed total (M) by more than tolerance, that is the signature of
+  duplicated feedings already landed in the DB (e.g. the May 29–Jun 16 doubling).
+  This must HALT (serious), because comparing the two operator reports to each
+  other (P vs M) is blind to DB-side doubling. Pass --rc-out-sums-json so O is
+  populated; the gate is skipped for dates with no DB rows or no M.
+  An O *below* M is normal (continuous-flow tank; not every fed kg is ingested yet)
+  and never trips the gate — only O materially ABOVE M does.
+
 Output: human-readable + JSON drift report. Exit code reflects severity:
   0 = no drift
   1 = warnings but tolerable
-  2 = serious drift (>500 kg or >5% relative)
+  2 = serious drift (>500 kg or >5% relative, OR any DB-over-MOVEMENT duplication)
 
 Usage:
     python3 reconcile_rc_movement.py \\
@@ -94,38 +105,64 @@ def main() -> int:
     # RC MOVEMENT date -> fed_kls
     movement_date_to_fed = movement.get("date_to_fed_kls", {})
 
-    # Walk every PROPOSED date and reconcile
+    # Walk every date present in PROPOSED *or* already in the DB rc_out sums, and
+    # reconcile. Including DB-only dates is what makes the duplication gate work:
+    # the doubled feedings (May 29–Jun 16) sit on SETTLED dates that the current
+    # PROPOSED extract may no longer cover, so a PROPOSED-only walk is blind to them.
     drift_rows = []
     ok_rows = []
     max_drift_severity = 0  # 0=none, 1=warning, 2=serious
 
-    for d in sorted(proposed_by_date.keys()):
-        P = round(proposed_by_date[d], 2)
+    all_dates = sorted(set(proposed_by_date.keys()) | set(rc_out_sums.keys()))
+
+    for d in all_dates:
+        P = round(proposed_by_date[d], 2) if d in proposed_by_date else None
         M = movement_date_to_fed.get(d)
         O = rc_out_sums.get(d)
 
         p_vs_m_drift = None
         p_vs_o_drift = None
+        o_vs_m_excess = None  # DB rc_out SUM minus RC MOVEMENT (duplication signal)
         notes = []
 
-        if M is None:
-            notes.append("No RC MOVEMENT entry for this date")
-        else:
-            p_vs_m_drift = round(P - M, 2)
-            if abs(p_vs_m_drift) > args.serious_drift_kg:
-                notes.append(f"SERIOUS drift PROPOSED vs RC MOVEMENT: {p_vs_m_drift:+.0f} kg")
-                max_drift_severity = max(max_drift_severity, 2)
-            elif abs(p_vs_m_drift) > args.tolerance_kg:
-                notes.append(f"Tolerable drift PROPOSED vs RC MOVEMENT: {p_vs_m_drift:+.0f} kg")
-                max_drift_severity = max(max_drift_severity, 1)
+        if P is not None:
+            if M is None:
+                notes.append("No RC MOVEMENT entry for this date")
+            else:
+                p_vs_m_drift = round(P - M, 2)
+                if abs(p_vs_m_drift) > args.serious_drift_kg:
+                    notes.append(f"SERIOUS drift PROPOSED vs RC MOVEMENT: {p_vs_m_drift:+.0f} kg")
+                    max_drift_severity = max(max_drift_severity, 2)
+                elif abs(p_vs_m_drift) > args.tolerance_kg:
+                    notes.append(f"Tolerable drift PROPOSED vs RC MOVEMENT: {p_vs_m_drift:+.0f} kg")
+                    max_drift_severity = max(max_drift_severity, 1)
 
-        if O is not None:
-            p_vs_o_drift = round(P - O, 2)
-            if abs(p_vs_o_drift) > args.serious_drift_kg:
-                notes.append(f"SERIOUS drift PROPOSED vs existing rc_out: {p_vs_o_drift:+.0f} kg")
+            if O is not None:
+                p_vs_o_drift = round(P - O, 2)
+                if abs(p_vs_o_drift) > args.serious_drift_kg:
+                    notes.append(f"SERIOUS drift PROPOSED vs existing rc_out: {p_vs_o_drift:+.0f} kg")
+                    max_drift_severity = max(max_drift_severity, 2)
+                elif abs(p_vs_o_drift) > args.tolerance_kg:
+                    notes.append(f"Tolerable drift PROPOSED vs existing rc_out: {p_vs_o_drift:+.0f} kg")
+                    max_drift_severity = max(max_drift_severity, 1)
+
+        # DB-vs-RC-MOVEMENT DUPLICATION GATE — runs on every date the DB has rows for,
+        # PROPOSED or not. Only a DB sum that EXCEEDS the fed total is a problem; a DB
+        # sum below M is the normal continuous-flow lag, not duplication.
+        if O is not None and M is not None:
+            o_vs_m_excess = round(O - M, 2)
+            if o_vs_m_excess > args.serious_drift_kg:
+                notes.append(
+                    f"SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by "
+                    f"{o_vs_m_excess:+.0f} kg (O={O:.0f} > M={M:.0f}). Likely duplicated "
+                    f"feedings already in the DB — do NOT write; investigate this date."
+                )
                 max_drift_severity = max(max_drift_severity, 2)
-            elif abs(p_vs_o_drift) > args.tolerance_kg:
-                notes.append(f"Tolerable drift PROPOSED vs existing rc_out: {p_vs_o_drift:+.0f} kg")
+            elif o_vs_m_excess > args.tolerance_kg:
+                notes.append(
+                    f"DB rc_out SUM above RC MOVEMENT by {o_vs_m_excess:+.0f} kg "
+                    f"(possible partial duplication) — review."
+                )
                 max_drift_severity = max(max_drift_severity, 1)
 
         entry = {
@@ -135,7 +172,8 @@ def main() -> int:
             "rc_out_existing_kg": O,
             "drift_p_vs_m_kg": p_vs_m_drift,
             "drift_p_vs_o_kg": p_vs_o_drift,
-            "blocks": proposed_blocks_by_date[d],
+            "excess_o_vs_m_kg": o_vs_m_excess,
+            "blocks": proposed_blocks_by_date.get(d, []),
             "notes": notes,
         }
         if notes:
@@ -145,7 +183,9 @@ def main() -> int:
 
     report = {
         "summary": {
-            "total_dates": len(proposed_by_date),
+            "total_dates": len(all_dates),
+            "proposed_dates": len(proposed_by_date),
+            "db_dates_checked": len(rc_out_sums),
             "ok_dates": len(ok_rows),
             "drift_dates": len(drift_rows),
             "max_severity": ["none", "warning", "serious"][max_drift_severity],

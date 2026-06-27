@@ -1,8 +1,11 @@
+import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import { format } from 'date-fns';
 import { InventoryView } from './components/inventory-view';
+import { LogsShell } from './components/logs-shell';
 import { getTableSettings } from './rc-in/actions';
+import { canViewPrices } from '@/lib/auth';
 
 export default async function InventoryPage({
     searchParams
@@ -64,22 +67,17 @@ export default async function InventoryPage({
         (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     ) as string[];
 
-    const { data: userRaw } = await supabase.auth.getUser();
-    let role = 'Production';
-    if (userRaw?.user) {
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', userRaw.user.id)
-            .single();
-        if (profile?.role) role = profile.role;
-    }
+    // CANONICAL price gate — derives the EFFECTIVE role via lib/auth.getUserRole(),
+    // so the dev-impersonation cookie is respected (an Owner "viewing as Production"
+    // is correctly denied). Replaces the previous inline profiles lookup, which
+    // ignored the cookie and leaked cost_basis to impersonating admins.
+    const showPrices = await canViewPrices();
 
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
         state: (d.batches as Record<string, unknown> | null)?.status as string || 'STORED',
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
-        cost_basis: role === 'Production' ? undefined : d.cost_basis,
+        cost_basis: showPrices ? d.cost_basis : undefined,
     }));
 
     const activeBatches = (batches || []).map(b => ({
@@ -91,13 +89,18 @@ export default async function InventoryPage({
     const initialSettings = await getTableSettings('rc_in');
 
     return (
-        <InventoryView
-            deliveries={deliveries}
-            batches={activeBatches}
-            search={search}
-            allSuppliers={allSuppliers}
-            allLocations={allLocations}
-            initialSettings={initialSettings}
-        />
+        // useSearchParams (inside LogsShell's tab provider) needs a Suspense boundary.
+        <Suspense fallback={<div className="h-full w-full" />}>
+            <LogsShell>
+                <InventoryView
+                    deliveries={deliveries}
+                    batches={activeBatches}
+                    search={search}
+                    allSuppliers={allSuppliers}
+                    allLocations={allLocations}
+                    initialSettings={initialSettings}
+                />
+            </LogsShell>
+        </Suspense>
     );
 }

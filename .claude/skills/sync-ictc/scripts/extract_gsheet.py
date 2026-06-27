@@ -61,6 +61,17 @@ except ImportError:
           file=sys.stderr)
     sys.exit(3)
 
+# Shared weight-deduction grammar + wet-recovery core (one source of truth shared
+# with extract_rc_deliveries.py — see DEDUCTIONS_DESIGN.md / LEARNING_LEDGER L-021).
+# Run directly, sys.path[0] is this script's dir, so `lib` (sibling package with
+# __init__.py) imports the same way lib.db is imported elsewhere.
+from lib.deductions import (  # noqa: E402
+    detect_deduction,
+    build_recovery_row,
+    is_recovery_row_dict,
+    _is_inheritable_mother,
+)
+
 
 # ---------------------------------------------------------------------------
 # Blackwood batch_code month-prefix conventions — INCONSISTENT in the DB.
@@ -215,6 +226,9 @@ def extract_rc_in(ws) -> dict[str, Any]:
     grid = list(ws.iter_rows(min_row=RC_IN_DATA_START, max_col=17, values_only=True))
 
     last_seen_date: str | None = None
+    # The most recent emitted MAIN (non-recovery) row carrying a real batch_code,
+    # which a wet-recovery sub-row inherits identity from (see DEDUCTIONS_DESIGN §8).
+    last_mother: dict[str, Any] | None = None
     for offset, raw in enumerate(grid):
         rnum = RC_IN_DATA_START + offset
 
@@ -232,6 +246,10 @@ def extract_rc_in(ws) -> dict[str, Any]:
         source_rows += 1
 
         row_warnings: list[str] = []
+
+        # Did this row carry its OWN date cell? (computed BEFORE forward-fill, so a
+        # forward-filled date doesn't count — used for the recovery-row predicate.)
+        has_own_date = txn_date is not None
 
         # Forward-fill date for sparse continuation rows.
         if txn_date is None:
@@ -266,9 +284,16 @@ def extract_rc_in(ws) -> dict[str, Any]:
                 if not check(v):
                     row_warnings.append(f"Row {rnum}: {msg} ({key}={v})")
 
+        # Weight-deduction detection (parity with the email path, via lib.deductions).
+        # Parses the GROSS from a "net kilos of <GROSS> … = <NET>" remark; weight_kg
+        # stays the deducted NET. NULL/NULL when no deduction; NEVER 0. Additive only.
+        true_weight_kg, deduction_note, ded_warnings = detect_deduction(remarks, weight_kg)
+        for w in ded_warnings:
+            row_warnings.append(f"Row {rnum}: {w}")
+
         confidence = max(0.0, 1.0 - 0.10 * len(row_warnings))
 
-        rows.append({
+        candidate = {
             "transaction_date": txn_date,
             "supplier": supplier,
             "batch_code_primary": batch_code,
@@ -280,12 +305,41 @@ def extract_rc_in(ws) -> dict[str, Any]:
             "cost_basis": None,  # Sheet has no price column
             "remarks": remarks,
             "lab_results": lab_results if any(v is not None for v in lab_results.values()) else None,
+            "true_weight_kg": true_weight_kg,
+            "deduction_note": deduction_note,
             "warnings": row_warnings,
             "confidence": round(confidence, 3),
             "_source_row": rnum,
             "_source_tab": "RC IN",
-        })
+        }
+
+        # Wet-recovery sub-row: own weight but no truck/batch/block/own-date. Emit it
+        # as its OWN delivery row inheriting the mother's identity (truck/block/
+        # supplier/batch/date/price) while keeping its own weight/sacks/lab + its own
+        # true_weight_kg/deduction_note. Otherwise it would be MALFORMED (no batch).
+        if is_recovery_row_dict(candidate, has_own_date=has_own_date):
+            if _is_inheritable_mother(last_mother):
+                recovery = build_recovery_row(candidate, last_mother)
+                rows.append(recovery)
+                warnings.extend(recovery.get("warnings") or [])
+                # A recovery does NOT become the mother for a later recovery — keep
+                # inheriting from the original mother delivery.
+            else:
+                row_warnings.append(
+                    f"Row {rnum}: recovery-shaped sub-row with no preceding mother "
+                    f"delivery to inherit from — left unmapped"
+                )
+                candidate["warnings"] = row_warnings
+                candidate["confidence"] = round(max(0.0, 1.0 - 0.10 * len(row_warnings)), 3)
+                rows.append(candidate)
+                warnings.extend(row_warnings)
+            continue
+
+        rows.append(candidate)
         warnings.extend(row_warnings)
+        # Only a real, batch-carrying delivery row becomes the inheritance source.
+        if _is_inheritable_mother(candidate):
+            last_mother = candidate
 
     confidences = [r["confidence"] for r in rows]
     return {

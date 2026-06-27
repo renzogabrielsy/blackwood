@@ -97,7 +97,16 @@ def deep_lab_equal(a: dict | None, b: dict | None) -> bool:
 
 
 def field_differences(extracted: dict, db_row: dict) -> list[dict]:
-    """Return list of {field, emailValue, dbValue} where the two rows differ."""
+    """Return list of {field, emailValue, dbValue} where the two rows differ.
+
+    NOTE: `true_weight_kg` and `deduction_note` are intentionally NOT compared
+    here. They are additive, write-only display fields (see DEDUCTIONS_DESIGN.md):
+    they are derived from the remark at ingestion and written on insert/update, but
+    a Sheet-vs-DB diff must never FIRE on them (a deducted row must not become a
+    perpetual VALUE_CHANGED just because the DB hasn't backfilled them yet). The
+    natural key (date, batch_code, block_loc, weight_kg) is likewise unchanged —
+    weight_kg stays the Sheet's deducted NET.
+    """
     diffs = []
 
     if norm_str(extracted.get("supplier")) != norm_str(db_row.get("supplier")):

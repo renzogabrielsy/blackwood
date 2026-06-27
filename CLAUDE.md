@@ -114,7 +114,7 @@ supabase gen types typescript --linked > types/supabase.ts
 
 **Tables:**
 - **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum: STORED/IN-USE/CLOSED/FEED), `avg_cost`, `current_weight`, `quality_stats` (JSONB)
-- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc)
+- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc), `true_weight_kg` (nullable — physical/gross weight before ASH+wet deductions; display-only, NULL = no deduction, never used in any balance/view/trigger), `deduction_note` (nullable text — short human note, e.g. '−5.86% ASH; −1,009 wet'; display-only)
 - **`usage`** — `id`, `batch_id` (FK→batches), `destination`, `transaction_date`, `weight_kg`, `snapshot_location`, `snapshot_price`
 - **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`, `status` (`'active'` | `'disabled'` | `'pending'`), `created_at`, `updated_at`
 - **`audit_logs`** — `id`, `table_name`, `record_id`, `operation`, `diff` (JSONB), `snapshot` (JSONB), `comment`, `performed_by`, resolve fields
@@ -140,6 +140,8 @@ Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
 - **`handle_invite_creation()`** — After INSERT on `user_invites`: activates matching pending profiles
 
 **Dev Role Override:** Privileged users (Owner/Admin/Dev) can impersonate any role via localStorage (`dev_mock_role`) + cookie. Server-side `getUserRole()` in `lib/auth.ts` reads the cookie. UI controlled via navbar Shield icon dropdown.
+
+**Price gating (security boundary) — `canViewPrices()` is canonical.** All ₱/cost data (`cost_basis`, `avg_price`, `avg_wtd_value`, fed ₱/kg) is gated by the ONE helper `canViewPrices()` in `lib/auth.ts`. It derives the effective role from `getUserRole()`, so it respects the impersonation cookie (an Owner "viewing as Production" is denied). **Production is the only role that cannot see prices.** Server actions/components MUST null/omit ₱ fields BEFORE returning the payload when `!canViewPrices()` — never rely on hiding them client-side (the network response is the leak) — and pass a `canViewPrices` boolean down for conditional render. Never re-derive price visibility with an inline `profiles.select('role')` lookup (it ignores impersonation). See `components/providers/AUTH.md` → "Price Gating".
 
 ## Supabase CLI
 
@@ -400,7 +402,9 @@ The Blocking tab is the **primary tab** in the Inventory page — a warehouse gr
 
 ## Agent Model
 
-When spawning subagents via the `Task` tool, always use `model: 'opus'` (maps to the latest Opus, currently Opus 4.8). All project subagent definitions in `.claude/agents/` are pinned to `model: opus`. Do not default to sonnet or haiku for implementation work in this project.
+When spawning subagents via the `Task` tool, always use `model: 'opus'` (maps to the latest Opus, currently Opus 4.8). All project implementation subagent definitions in `.claude/agents/` (frontend-design, backend, etc.) are pinned to `model: opus`. Do not default to sonnet or haiku for implementation work in this project.
+
+**Carve-out — the four ICTC sync employees run on Sonnet for routine daily runs.** `gsheet-sync`, `deliveries-manager`, `rc-out-manager`, and `production-manager` are pinned to `model: sonnet`. Their daily PROPOSE/EXECUTE path is deterministic-Python-heavy (extract → classify → diff happens in Python; the agent only orchestrates + judges), so Sonnet is the daily driver. **Escalate an individual sync run to Opus ONLY for genuine conflict adjudication** — a flagged conflict, an ambiguous batch mapping, or a ledger-HOLD decision — by re-launching that agent (or that one row) on Opus, never by the agent self-upgrading. The "always Opus" rule still holds for every implementation agent; this carve-out applies exclusively to the four sync ingestion employees.
 
 ## Agent Prompts
 

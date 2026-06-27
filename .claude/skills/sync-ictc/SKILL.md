@@ -19,6 +19,26 @@ You are running the ICTC daily report ingestion workflow. Your job: fetch new XL
 
 **Your safety posture:** Never auto-commit VALUE_CHANGED rows. Always show summary before writes. Idempotent via Gmail labels — re-running this skill should produce zero duplicate writes.
 
+---
+
+## Daily-run lean defaults (orchestrator — READ THIS)
+
+The production daily sync launches **four specialist agents** (`gsheet-sync`, `deliveries-manager`, `rc-out-manager`, `production-manager`) in parallel Task calls. These defaults are MANDATORY on every routine run — they exist purely to keep each agent token-lean without weakening any safety gate or correctness rule. (The step-by-step protocol below is the single-agent RC-DELIVERIES reference flow; the same four levers apply to all four employees.)
+
+1. **Model = Sonnet (daily driver).** Launch all four sync agents on **Sonnet**, not Opus. Their PROPOSE/EXECUTE path is deterministic-Python-heavy; the agent only orchestrates + judges. **Escalate to Opus ONLY for genuine conflict adjudication** — a flagged conflict, an ambiguous batch mapping, or a ledger-HOLD decision — by re-launching that one agent (or that one row) on Opus. Never let an agent self-upgrade. (See CLAUDE.md "Agent Model" carve-out.)
+
+2. **Tail-scope, never re-scan settled history.** Each agent passes `--since = watermark − 3 days` to its extractor/classifier and filters source rows (sheet/email) to `transaction_date >= watermark − 3 days` BEFORE classifying. The DB lookup for classification is scoped to that same window. Rows below `watermark − buffer` are settled — never re-classified. Re-scanning the full 2025→today history every run is forbidden (it was the #2 token sink). The fixed `--since 2025-01-01` (gsheet) or omitting `--since` (production) is for a **first-time historical backfill ONLY**, never the daily driver.
+
+3. **Rules Digest, not the full ledger.** Each agent reads `RULES_DIGEST.md` (one cheap line per rule) top-to-bottom every run, and opens the full `LEARNING_LEDGER.md` entry for an `L-###` ONLY when a row matches that digest line's symptom tag. `LEARNING_LEDGER.md` stays the append-only source of truth + where corrections are appended.
+
+4. **Summary-only JSON — keep big JSON on disk.** Extractors/classifiers write full classified JSON to the work_dir; agents load ONLY the summary counts + the NEW / VALUE_CHANGED / FLAGGED / UNMAPPED / MALFORMED rows. **NEVER load DUPLICATE_NOOP rows into context** — they are the bulk and add zero value. Slice with `jq`, never `cat` the full file.
+
+All existing safety behavior is unchanged: PROPOSE → approve → EXECUTE, audit logs, Gmail labels, the ledger rules, and every drift/confidence/count gate still hold. These levers are purely an efficiency change.
+
+### Script-side follow-up (flagged, NOT yet done — needs a careful Python edit)
+
+Tail-scoping is fully effective for **production** (both extractors accept `--since`, exclusive, sheet/row-level) and effectively tail-bounded for **deliveries** and **rc-out** (the agent filters the extracted rows to `>= watermark` before classifying, and the DB-window query is tail-bounded). The **one residual gap is gsheet**: `extract_gsheet.py` has **no `--since`**, so it still parses the entire Sheet (~2,000 rows, growing) into the on-disk classified JSON every run. The `--since` passed to `sync_gsheet.py` / `classify_gsheet.py` keeps the DB-compare + agent context lean (pre-`since` rows become a cheap `out_of_scope` count, not DB-compared), so the agent stays token-lean — but the *extraction* parse is still full-sheet. **Proposed fix (one-line `--since` row filter in `extract_gsheet.py`, mirroring `extract_daily_production.py`):** add an optional `--since YYYY-MM-DD` argument that drops rows with `transaction_date < since` before emitting, and have `sync_gsheet.py` forward its `--since` to the extractor. This was NOT applied here because `extract_gsheet.py` lacked an obviously-safe single-line insertion point and a botched edit could break the daily sync — escalate to a careful pass when convenient.
+
 ## Pre-flight checks (do these first, abort on failure)
 
 1. **Gmail App Password file exists.** Check `~/.config/sync-ictc/credentials.env`. If missing, tell Renzo: *"Gmail credentials aren't set up. Create the file with: `mkdir -p ~/.config/sync-ictc && chmod 700 ~/.config/sync-ictc && printf 'GMAIL_USER=you@gmail.com\\nGMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\\n' > ~/.config/sync-ictc/credentials.env && chmod 600 ~/.config/sync-ictc/credentials.env`. Generate the App Password at https://myaccount.google.com/apppasswords."* and stop.
@@ -126,6 +146,8 @@ The script outputs JSON to stdout:
         "mc": 8.2, "ash": 4.1, "fc": 78.5, "vm": 9.2,
         "grit": 0.05, "bd_astm": 0.480, "bd_jis": 0.495
       },
+      "true_weight_kg": null,
+      "deduction_note": null,
       "warnings": [],
       "confidence": 1.0
     }
@@ -139,6 +161,8 @@ The script outputs JSON to stdout:
 ```
 
 If the script exits non-zero, capture stderr and surface to Renzo as an error (with copy-friendly formatting). Skip that file and continue with others.
+
+**Deductions + recovery rows (see `DEDUCTIONS_DESIGN.md`).** Every `rows[]` element carries two additive fields: `true_weight_kg` (physical/GROSS weight before ASH+wet deductions, parsed from a `net kilos of <GROSS> … = <NET>` remark — **NULL on ordinary rows, never 0**) and `deduction_note` (a short hover label, e.g. `−1.60% MC; −2.88% ASH`). `weight_kg` stays the deducted NET; the natural key / dedup is unchanged, and these fields are write-only (the classifier never diffs on them). A wet **recovery sub-row** (own weight + sacks + MC, no truck/batch/block/date of its own) is emitted as its OWN delivery row inheriting the mother's truck/block/supplier/batch/date/price (tagged `"_recovery": true`) — it is no longer dropped as MALFORMED.
 
 ## Step 5 — Classify each row via natural-key lookup
 
@@ -220,17 +244,29 @@ Refuse to proceed if any of these trip — explain why and stop:
 
 On confirmation, execute writes via Supabase MCP. For each operation, write an audit_log entry **in the same transaction-like sequence**:
 
-### Inserts (NEW rows)
+### Inserts (NEW rows) — IDEMPOTENT (BUG-2 guard, HARD RULE)
+
+Insert each NEW row **guarded on the delivery natural key** `(transaction_date, batch_code, truck_plate, weight_kg, sacks)` so a re-run or an accidental double-execute cannot land the same delivery twice (this is the fix for the 21-seconds-apart duplicate insert). Do NOT add a DB UNIQUE constraint — legitimately identical truckloads can occur; the guard lives in the write, not the schema:
 
 ```sql
 INSERT INTO deliveries (
   transaction_date, supplier, batch_code, block_loc, truck_plate,
-  sacks, weight_kg, cost_basis, remarks, lab_results
-) VALUES (...)
+  sacks, weight_kg, cost_basis, remarks, lab_results, true_weight_kg, deduction_note
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12
+WHERE NOT EXISTS (
+  SELECT 1 FROM deliveries
+  WHERE transaction_date = $1 AND batch_code = $3
+    AND truck_plate IS NOT DISTINCT FROM $5
+    AND weight_kg = $7
+    AND sacks IS NOT DISTINCT FROM $6
+)
 RETURNING id;
 ```
 
-Then immediately:
+A statement returning 0 rows means the row already existed (a prevented duplicate) — count it as skipped, not an error. When writing via the Python helper, use `DBClient.insert_if_absent("deliveries", rows, natural_key=(...))` instead, which performs the same re-check before each insert. `true_weight_kg` + `deduction_note` are additive display fields (`DEDUCTIONS_DESIGN.md`): pass the extractor's values straight through (both NULL on ordinary rows — never 0), and keep them OUT of the natural-key guard (the key stays `(transaction_date, batch_code, truck_plate, weight_kg, sacks)`, and `weight_kg` stays the deducted NET).
+
+For each row that actually inserted, immediately:
 
 ```sql
 INSERT INTO audit_logs (

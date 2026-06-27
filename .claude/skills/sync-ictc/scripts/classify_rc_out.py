@@ -10,6 +10,7 @@ Outcomes per row:
   - NEW              : natural key not in DB -> queue for INSERT
   - DUPLICATE_NOOP   : natural key in DB, all non-key fields match -> silently skip
   - VALUE_CHANGED    : natural key in DB, >=1 field differs -> queue with diff for human decision
+  - FLAGGED          : a sub-watermark row that classified as NEW -> NEVER auto-insert (see watermark guard)
   - UNMAPPED         : batch_code couldn't be resolved to a batch_id in the DB -> needs manual lookup
   - MALFORMED        : missing required field (date / weight) -> skip with reason
 
@@ -20,12 +21,30 @@ Equality rules:
   - production_batch: case-insensitive trim, null == empty
   - block_loc: usually empty string in DB; skip from comparison unless extracted is non-null
 
+DEDUP-WINDOW RULE (BUG-1 fix, see SKILL.md / LEARNING_LEDGER L-019):
+  The --db-rows-json passed in MUST cover the FULL date range of the rows being
+  classified (min..max of the extract), not a fixed narrow tail. The PROPOSED
+  report is cumulative (rows back to the season start); if the DB comparison set
+  only covers a recent window, historical rows fall outside it, get mis-classified
+  as NEW, and are re-INSERTed — doubling consumption. The calling agent is
+  responsible for querying rc_out over the extract's min..max date span.
+
+SUB-WATERMARK WRITE GUARD (BUG-1 fix):
+  Pass --watermark = the live DB MAX(transaction_date) for rc_out. Any row whose
+  transaction_date <= watermark that would otherwise be NEW is a SETTLED date and
+  is routed to the FLAGGED bucket instead of NEW — a settled date must NEVER
+  produce an INSERT. Settled dates may only be NOOP or VALUE_CHANGED. This is a
+  hard guard: even if the DB comparison set is somehow incomplete, a sub-watermark
+  row can no longer silently duplicate. Omitting --watermark disables the guard
+  (first-time historical backfill ONLY — never the daily driver).
+
 Usage:
     python3 classify_rc_out.py \\
         --extract-json /tmp/.../extract_proposed.json \\
         --batch-lookup-json /tmp/.../batch_lookup.json \\
         --db-rows-json /tmp/.../rc_out_rows.json \\
         --output /tmp/.../classified_rc_out.json \\
+        [--watermark 2026-06-16] \\
         [--verbose]
 
 batch_lookup.json format: {"BATCH_CODE": "uuid-string", ...}
@@ -135,10 +154,17 @@ def main() -> int:
     parser.add_argument("--batch-lookup-json", required=True,
                         help='JSON object mapping {batch_code: batch_id (uuid)}')
     parser.add_argument("--db-rows-json", required=True,
-                        help='Array of existing rc_out rows in the date window')
+                        help='Array of existing rc_out rows covering the FULL min..max date '
+                             'range of the extract (NOT a narrow tail) — see DEDUP-WINDOW RULE')
+    parser.add_argument("--watermark",
+                        help='Live DB MAX(transaction_date) for rc_out (YYYY-MM-DD). Sub-watermark '
+                             'rows that would be NEW are routed to FLAGGED, never inserted. '
+                             'Omit ONLY for a first-time historical backfill.')
     parser.add_argument("--output", required=True)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+
+    watermark = (args.watermark or "").strip() or None
 
     extract_path = Path(args.extract_json).expanduser()
     lookup_path = Path(args.batch_lookup_json).expanduser()
@@ -175,6 +201,7 @@ def main() -> int:
     classified_noop = []
     classified_unmapped = []
     classified_malformed = []
+    classified_flagged = []  # sub-watermark rows that classified as NEW — never auto-insert
 
     for ex_row in extracted_rows:
         # Required field check
@@ -207,7 +234,24 @@ def main() -> int:
         matches = db_index.get(key, [])
 
         if not matches:
-            classified_new.append({"index": ex_row.get("_source_row"), "row": ex_row})
+            # SUB-WATERMARK WRITE GUARD: a settled date (<= live DB watermark) must
+            # never produce an INSERT. If a row with no natural-key match lands on or
+            # before the watermark, the DB comparison set was likely incomplete OR this
+            # is a genuine miss — either way it is NOT safe to auto-insert (that is the
+            # exact path that doubled May 29–Jun 16). Route to FLAGGED for human review.
+            if watermark is not None and ex_row["transaction_date"] <= watermark:
+                classified_flagged.append({
+                    "index": ex_row.get("_source_row"),
+                    "row": ex_row,
+                    "reason": (
+                        f"sub-watermark NEW: transaction_date {ex_row['transaction_date']} "
+                        f"<= watermark {watermark} but no DB natural-key match. A settled date "
+                        f"must not be inserted (suspected duplicate / incomplete compare-set). "
+                        f"Resolve manually: confirm it is truly missing before any write."
+                    ),
+                })
+            else:
+                classified_new.append({"index": ex_row.get("_source_row"), "row": ex_row})
         else:
             db_row = matches[0]
             diffs = field_differences(ex_row, db_row)
@@ -225,19 +269,32 @@ def main() -> int:
                     "diff": diffs,
                 })
 
+    # Compute the date span the DB comparison set actually covers, so the agent can
+    # verify the DEDUP-WINDOW RULE held (db span must contain the extract span).
+    extract_dates = [r["transaction_date"] for r in extracted_rows if r.get("transaction_date")]
+    db_dates = [r.get("transaction_date") for r in db_rows if r.get("transaction_date")]
+    db_span = {"min": min(db_dates), "max": max(db_dates)} if db_dates else {"min": None, "max": None}
+    extract_span = ({"min": min(extract_dates), "max": max(extract_dates)}
+                    if extract_dates else {"min": None, "max": None})
+
     result = {
         "summary": {
             "extracted_total": len(extracted_rows),
             "new_count": len(classified_new),
             "changed_count": len(classified_changed),
             "noop_count": len(classified_noop),
+            "flagged_count": len(classified_flagged),
             "unmapped_count": len(classified_unmapped),
             "malformed_count": len(classified_malformed),
             "db_rows_in_window": len(db_rows),
+            "watermark": watermark,
+            "extract_date_span": extract_span,
+            "db_date_span": db_span,
         },
         "new": classified_new,
         "changed": classified_changed,
         "noop": classified_noop,
+        "flagged": classified_flagged,
         "unmapped": classified_unmapped,
         "malformed": classified_malformed,
     }
@@ -247,8 +304,23 @@ def main() -> int:
         s = result["summary"]
         print("=== rc_out Classification Summary ===", file=sys.stderr)
         for k in ("extracted_total", "new_count", "changed_count", "noop_count",
-                  "unmapped_count", "malformed_count", "db_rows_in_window"):
+                  "flagged_count", "unmapped_count", "malformed_count", "db_rows_in_window"):
             print(f"  {k}: {s[k]}", file=sys.stderr)
+        print(f"  watermark: {watermark}", file=sys.stderr)
+        print(f"  extract_date_span: {extract_span}", file=sys.stderr)
+        print(f"  db_date_span: {db_span}", file=sys.stderr)
+        # Loud warning if the DB compare-set does not cover the extract span — this is
+        # the precondition the dedup correctness depends on.
+        if (extract_span["min"] and db_span["min"]
+                and (db_span["min"] > extract_span["min"] or
+                     (db_span["max"] or "") < (extract_span["max"] or ""))):
+            print("  WARNING: DB compare-set span does NOT cover the extract span — "
+                  "dedup may be incomplete. Re-query rc_out over the full extract "
+                  "min..max before trusting NEW counts.", file=sys.stderr)
+        if classified_flagged:
+            print(f"  WARNING: {len(classified_flagged)} sub-watermark row(s) FLAGGED "
+                  "(would have been NEW on a settled date — NOT auto-inserted).",
+                  file=sys.stderr)
 
     print(json.dumps({"ok": True, "summary": result["summary"], "output_path": str(output_path)}))
     return 0

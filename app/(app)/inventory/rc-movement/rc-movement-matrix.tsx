@@ -16,7 +16,7 @@ import {
     TooltipTrigger,
 } from '@/components/ui/tooltip';
 import type { RcMovementMatrix as RcMovementMatrixData, RcMovementMatrixColumn } from './actions';
-import { BlockingDetailPanel } from '../blocking/blocking-detail-panel';
+import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
 
@@ -27,8 +27,7 @@ import type { BlockData } from '../blocking/types';
 const W_ROWNUM = 48;
 const W_DATE = 100;
 const W_DAY = 52;
-const W_BATCH = 96;
-const W_FEDPRICE = 96; // frozen "Fed ₱/kg" column, BETWEEN Batch and Total fed
+const W_FEDPRICE = 96; // frozen "Fed ₱/kg" column, BETWEEN Day and Total fed
 const W_TOTAL = 88;
 const W_BLOCK = 92; // each dynamic block column
 // ── Scrolling PRODUCED section (after the frozen Total fed, BEFORE the block cols) ──
@@ -42,13 +41,20 @@ const W_GRADE = 80; // each dynamic per-grade column
 const GROUP_DIVIDER = 'border-l-2 border-l-border';
 
 // Cumulative left offsets (each frozen column's left = sum of widths to its left).
-// Column order: # · Date · Day · Batch · Fed ₱/kg · Total fed (last frozen, carries .frozen-edge).
+// Column order: # · Date · Day · [Fed ₱/kg] · Total fed (last frozen, carries .frozen-edge).
+// The "Batch" column was removed (it showed the campaign's production_batch on every
+// row — uniform now the whole view is ONE campaign, so it was pure repetition; the
+// active campaign is surfaced in the toolbar instead).
+//
+// The Fed ₱/kg column is PRICE-GATED — hidden entirely for Production (!canViewPrices).
+// When hidden, its width drops out of the frozen geometry so Total fed (and everything
+// after it) shifts LEFT by W_FEDPRICE. LEFT_TOTAL is therefore computed at runtime from
+// the `showFedPrice` flag (see the component), NOT a static constant. The offsets up to
+// and including Day are fixed.
 const LEFT_ROWNUM = 0;
 const LEFT_DATE = W_ROWNUM;
 const LEFT_DAY = W_ROWNUM + W_DATE;
-const LEFT_BATCH = W_ROWNUM + W_DATE + W_DAY;
-const LEFT_FEDPRICE = W_ROWNUM + W_DATE + W_DAY + W_BATCH;
-const LEFT_TOTAL = W_ROWNUM + W_DATE + W_DAY + W_BATCH + W_FEDPRICE;
+const LEFT_FEDPRICE = W_ROWNUM + W_DATE + W_DAY;
 
 // Frozen-pane z-scale + opacity: see the canonical "Frozen Panes" pattern in
 // globals.css. Frozen surfaces overlap scrolling content, so they are ALWAYS
@@ -122,13 +128,33 @@ interface RcMovementMatrixProps {
     /** Called when the user picks a different production campaign from the toolbar Select.
      *  Receives the encoded campaign key (e.g. "JUNE-2026"). */
     onCampaignChange?: (campaign: string) => void;
+    /**
+     * Passed straight through to the shared detail panel's "Edit All". On the standalone
+     * `/inventory/rc-movement` route this is wired to a `router.push('/inventory?tab=…')`;
+     * omitted in-shell, where the panel falls back to its `window` CustomEvent →
+     * InventoryTabProvider tab switch.
+     */
+    onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixProps) {
+export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: RcMovementMatrixProps) {
     const {
-        campaign, columns, rows, campaignOptions, grandTotalFed, campaignAvgFedPrice,
-        producedGrades, campaignTotalProduced, campaignYieldPct,
+        campaign, campaignLabel, columns, rows, campaignOptions, grandTotalFed, campaignAvgFedPrice,
+        producedGrades, campaignTotalProduced, campaignYieldPct, canViewPrices,
     } = data;
+
+    // PRICE GATE — drop the frozen "Fed ₱/kg" column (header/body/footer), its per-column
+    // footer ₱/kg line, and the tooltip "Fed price" row when the effective role can't view
+    // prices (Production, incl. an impersonating Owner/Admin/Dev). The server already nulls
+    // every ₱ field; this is the frontend render guard so no confusingly-empty column shows.
+    const showFedPrice = canViewPrices;
+
+    // Total fed is the LAST frozen-left column. Its `left` offset depends on whether the
+    // Fed ₱/kg column occupies a slot before it — keeping the frozen panes aligned per the
+    // CLAUDE.md Frozen Panes rules (cumulative offsets from explicit pixel widths).
+    const LEFT_TOTAL = showFedPrice
+        ? LEFT_FEDPRICE + W_FEDPRICE // # · Date · Day · Fed ₱/kg · [Total]
+        : LEFT_FEDPRICE;             // # · Date · Day · [Total] (Fed ₱/kg column removed)
 
     const handleCampaignChange = (value: string) => {
         onCampaignChange?.(value);
@@ -167,8 +193,24 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
 
     return (
         <div className="flex flex-col h-full min-h-0">
-            {/* Toolbar — campaign picker + summary */}
+            {/* Toolbar — active-campaign label + picker + summary.
+                The "Batch" frozen column (which repeated the campaign's production_batch
+                on every row) was removed; the active campaign is anchored HERE instead so
+                the context isn't lost. The label is the prominent heading; the Select sits
+                beside it to switch campaigns. */}
             <div className="flex items-center gap-3 pb-3 shrink-0">
+                {/* Active campaign — prominent context anchor. Eyebrow label over the
+                    campaignLabel heading (e.g. "June 2026"). Falls back gracefully when
+                    no campaign resolved (empty data). */}
+                <div className="flex flex-col leading-none">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Campaign
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">
+                        {campaignLabel || '—'}
+                    </span>
+                </div>
+
                 <Select value={campaign} onValueChange={handleCampaignChange}>
                     <SelectTrigger className="h-8 w-[180px] text-xs">
                         <SelectValue placeholder="Select campaign" />
@@ -204,7 +246,7 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                             border-collapse. Under border-collapse the browser's collapsed
                             border model makes position:sticky cell BACKGROUNDS render
                             transparent, so scrolling content bleeds straight through the
-                            frozen Date/Day/Batch/Total columns. border-separate keeps each
+                            frozen Date/Day/Fed/Total columns. border-separate keeps each
                             cell's own opaque bg painting reliably. Cell dividers are then
                             reconstructed per-cell (border-b / border-r on the markup) since
                             collapsed-border merging no longer applies. */}
@@ -225,8 +267,7 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                 <col style={{ width: W_ROWNUM }} />
                                 <col style={{ width: W_DATE }} />
                                 <col style={{ width: W_DAY }} />
-                                <col style={{ width: W_BATCH }} />
-                                <col style={{ width: W_FEDPRICE }} />
+                                {showFedPrice && <col style={{ width: W_FEDPRICE }} />}
                                 <col style={{ width: W_TOTAL }} />
                                 {/* PRODUCED group: TOTAL PRODUCED + one per present grade */}
                                 <col style={{ width: W_PRODUCED }} />
@@ -251,12 +292,11 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                     <FrozenHeaderCell left={LEFT_DAY} width={W_DAY} align="left">
                                         Day
                                     </FrozenHeaderCell>
-                                    <FrozenHeaderCell left={LEFT_BATCH} width={W_BATCH} align="left">
-                                        Batch
-                                    </FrozenHeaderCell>
-                                    <FrozenHeaderCell left={LEFT_FEDPRICE} width={W_FEDPRICE} align="right">
-                                        Fed ₱/kg
-                                    </FrozenHeaderCell>
+                                    {showFedPrice && (
+                                        <FrozenHeaderCell left={LEFT_FEDPRICE} width={W_FEDPRICE} align="right">
+                                            Fed ₱/kg
+                                        </FrozenHeaderCell>
+                                    )}
                                     <FrozenHeaderCell
                                         left={LEFT_TOTAL}
                                         width={W_TOTAL}
@@ -390,27 +430,22 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                             >
                                                 {row.dayOfWeek}
                                             </FrozenBodyCell>
-                                            <FrozenBodyCell
-                                                left={LEFT_BATCH}
-                                                width={W_BATCH}
-                                                className="font-mono"
-                                            >
-                                                {row.productionBatch ?? ''}
-                                            </FrozenBodyCell>
-                                            <FrozenBodyCell
-                                                left={LEFT_FEDPRICE}
-                                                width={W_FEDPRICE}
-                                                className="font-mono tabular-nums"
-                                            >
-                                                {/* Accounting format: ₱ pinned left, value pinned right.
-                                                    Blank on zero-fed days (avgFedPriceDay === null). */}
-                                                {row.avgFedPriceDay !== null && (
-                                                    <span className="flex items-baseline justify-between gap-1">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{fmtPrice(row.avgFedPriceDay)}</span>
-                                                    </span>
-                                                )}
-                                            </FrozenBodyCell>
+                                            {showFedPrice && (
+                                                <FrozenBodyCell
+                                                    left={LEFT_FEDPRICE}
+                                                    width={W_FEDPRICE}
+                                                    className="font-mono tabular-nums"
+                                                >
+                                                    {/* Accounting format: ₱ pinned left, value pinned right.
+                                                        Blank on zero-fed days (avgFedPriceDay === null). */}
+                                                    {row.avgFedPriceDay !== null && (
+                                                        <span className="flex items-baseline justify-between gap-1">
+                                                            <span className="text-muted-foreground">₱</span>
+                                                            <span>{fmtPrice(row.avgFedPriceDay)}</span>
+                                                        </span>
+                                                    )}
+                                                </FrozenBodyCell>
+                                            )}
                                             <FrozenBodyCell
                                                 left={LEFT_TOTAL}
                                                 width={W_TOTAL}
@@ -494,23 +529,25 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                         Totals
                                     </FrozenFooterCell>
                                     <FrozenFooterCell left={LEFT_DAY} width={W_DAY} />
-                                    <FrozenFooterCell left={LEFT_BATCH} width={W_BATCH} />
                                     {/* Campaign's weighted-avg fed price — THE headline calc value.
                                         Accounting format (₱ left / value right), bold. Tiny "camp. avg"
-                                        label so it reads as the campaign figure. Blank when zero-fed. */}
-                                    <FrozenFooterCell left={LEFT_FEDPRICE} width={W_FEDPRICE}>
-                                        <div className="flex flex-col gap-0 leading-tight">
-                                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
-                                                camp. avg
-                                            </span>
-                                            {campaignAvgFedPrice !== null && (
-                                                <span className="flex items-baseline justify-between gap-1 font-mono text-xs font-bold tabular-nums">
-                                                    <span className="text-muted-foreground">₱</span>
-                                                    <span>{fmtPrice(campaignAvgFedPrice)}</span>
+                                        label so it reads as the campaign figure. Blank when zero-fed.
+                                        Price-gated — the whole column is dropped for Production. */}
+                                    {showFedPrice && (
+                                        <FrozenFooterCell left={LEFT_FEDPRICE} width={W_FEDPRICE}>
+                                            <div className="flex flex-col gap-0 leading-tight">
+                                                <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                    camp. avg
                                                 </span>
-                                            )}
-                                        </div>
-                                    </FrozenFooterCell>
+                                                {campaignAvgFedPrice !== null && (
+                                                    <span className="flex items-baseline justify-between gap-1 font-mono text-xs font-bold tabular-nums">
+                                                        <span className="text-muted-foreground">₱</span>
+                                                        <span>{fmtPrice(campaignAvgFedPrice)}</span>
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </FrozenFooterCell>
+                                    )}
                                     <FrozenFooterCell
                                         left={LEFT_TOTAL}
                                         width={W_TOTAL}
@@ -628,15 +665,18 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                                         {/* Line 3 — weighted-avg fed price (₱/kg). Accounting
                                                             format (₱ left / value right). Blank when null. The
                                                             label slot is kept even when blank so all per-column
-                                                            footers stay the SAME height. */}
-                                                        <div className="flex items-baseline justify-between gap-1 tabular-nums">
-                                                            <span className="text-[10px] uppercase tracking-wide opacity-70">₱/kg</span>
-                                                            {c.avgFedPrice !== null && (
-                                                                <span className="font-mono text-[10px]">
-                                                                    {fmtPrice(c.avgFedPrice)}
-                                                                </span>
-                                                            )}
-                                                        </div>
+                                                            footers stay the SAME height. Price-gated — the whole
+                                                            line is dropped for Production. */}
+                                                        {showFedPrice && (
+                                                            <div className="flex items-baseline justify-between gap-1 tabular-nums">
+                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">₱/kg</span>
+                                                                {c.avgFedPrice !== null && (
+                                                                    <span className="font-mono text-[10px]">
+                                                                        {fmtPrice(c.avgFedPrice)}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </TooltipTrigger>
                                                 <TooltipContent
@@ -705,12 +745,14 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                                                                 <dt className="text-muted-foreground">Ash</dt>
                                                                 <dd className="font-mono tabular-nums">{fmtPct2(c.ash)}</dd>
                                                             </div>
-                                                            <div className="flex items-baseline justify-between gap-3">
-                                                                <dt className="text-muted-foreground">Fed price</dt>
-                                                                <dd className="font-mono tabular-nums">
-                                                                    {c.avgFedPrice !== null ? `₱${fmtPrice(c.avgFedPrice)}/kg` : '—'}
-                                                                </dd>
-                                                            </div>
+                                                            {showFedPrice && (
+                                                                <div className="flex items-baseline justify-between gap-3">
+                                                                    <dt className="text-muted-foreground">Fed price</dt>
+                                                                    <dd className="font-mono tabular-nums">
+                                                                        {c.avgFedPrice !== null ? `₱${fmtPrice(c.avgFedPrice)}/kg` : '—'}
+                                                                    </dd>
+                                                                </div>
+                                                            )}
                                                             <div className="flex items-baseline justify-between gap-3">
                                                                 <dt className="text-muted-foreground">Loss</dt>
                                                                 <dd
@@ -761,6 +803,7 @@ export function RcMovementMatrix({ data, onCampaignChange }: RcMovementMatrixPro
                 blockData={panelBlockData}
                 onClose={handlePanelClose}
                 canViewPrices={panelCanViewPrices}
+                onNavigateToBatch={onNavigateToBatch}
             />
         </div>
     );

@@ -29,6 +29,16 @@ DB trigger facts replicated by the write helpers (see LEARNING_LEDGER L-001/L-00
   So: after inserting a delivery, do NOT touch current_weight, and do NOT INSERT a second
   audit row — UPDATE the trigger-written one for provenance.
 - `rc_out` has NO audit trigger — its `audit_logs` row must be written manually.
+
+Deduction fields (additive — see DEDUCTIONS_DESIGN.md / LEARNING_LEDGER L-021):
+- `deliveries` has two nullable display-only columns `true_weight_kg` (physical/gross
+  weight before ASH+wet deductions; NULL = no deduction, NEVER 0) and `deduction_note`.
+  insert()/update() are generic (they write whatever dict keys are passed and there is NO
+  column whitelist), so these flow through automatically when the EXECUTE caller includes
+  them — do NOT strip them. They are NOT part of any natural key: `insert_if_absent`'s
+  deliveries key stays (transaction_date, batch_code, truck_plate, weight_kg, sacks), and
+  `weight_kg` remains the Sheet's deducted NET. They are written on INSERT and on relevant
+  UPDATE backfills only; dedup/compare never keys on them.
 """
 
 from __future__ import annotations
@@ -152,6 +162,72 @@ class DBClient:
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"insert {table} failed {resp.status_code}: {resp.text[:1000]}")
         return resp.json() if returning == "representation" else []
+
+    def insert_if_absent(
+        self,
+        table: str,
+        rows: list[dict[str, Any]],
+        *,
+        natural_key: Iterable[str],
+        returning: str = "representation",
+    ) -> dict[str, Any]:
+        """
+        Idempotent insert (BUG-2 fix, see LEARNING_LEDGER L-020).
+
+        For each candidate row, re-SELECT the DB on `natural_key` IMMEDIATELY before
+        inserting it. If a matching row already exists, the candidate is SKIPPED (not
+        inserted). This closes the "EXECUTE ran twice" window: even if the insert batch
+        is re-invoked after the first run already committed (a retry after a transient
+        error), the second pass sees the freshly-committed rows and inserts nothing —
+        so the same delivery can never land twice 21 seconds apart.
+
+        NOTE (per project rule): this is a SYNC-LAYER guard, NOT a DB UNIQUE constraint.
+        Legitimately identical truckloads (same date / batch / truck / weight / sacks)
+        can occur and must be allowed by the DB; the dedup decision is made here, where
+        the classifier's intent ("these N are the rows to add") is authoritative.
+        Because PostgREST has no multi-statement transaction, there is still a tiny
+        race window if two separate processes run concurrently — but the sync runs
+        single-threaded per employee, so the re-check before each insert is sufficient
+        in practice and strictly better than the previous unconditional insert.
+
+        natural_key: column names that uniquely identify a row for dedup purposes,
+                     e.g. ("transaction_date", "batch_code", "truck_plate",
+                     "weight_kg", "sacks") for deliveries. Every key column must be
+                     present in each candidate row.
+
+        Returns {"inserted": [<inserted rows>], "skipped": [<candidate rows that
+        already existed>], "inserted_count": N, "skipped_count": M}.
+        """
+        natural_key = list(natural_key)
+        inserted: list[dict] = []
+        skipped: list[dict] = []
+        to_insert: list[dict] = []
+
+        for row in rows:
+            filters: dict[str, str] = {}
+            for col in natural_key:
+                val = row.get(col)
+                if val is None:
+                    # A null key column makes equality matching ambiguous in PostgREST;
+                    # fall back to "is.null" so we still dedup correctly.
+                    filters[col] = "is.null"
+                else:
+                    filters[col] = f"eq.{val}"
+            existing = self.select_one(table, filters, columns="id")
+            if existing is not None:
+                skipped.append(row)
+            else:
+                to_insert.append(row)
+
+        if to_insert:
+            inserted = self.insert(table, to_insert, returning=returning)
+
+        return {
+            "inserted": inserted,
+            "skipped": skipped,
+            "inserted_count": len(inserted) if returning == "representation" else len(to_insert),
+            "skipped_count": len(skipped),
+        }
 
     def update(self, table: str, filters: dict[str, str], patch: dict[str, Any],
                returning: str = "representation") -> list[dict]:

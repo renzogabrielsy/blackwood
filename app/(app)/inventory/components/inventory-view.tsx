@@ -4,8 +4,6 @@ import { useState, useEffect } from 'react';
 import { useInventoryTab, type InventoryTab } from './inventory-tab-context';
 import { DeliveryMasterTableWrapper } from '../rc-in/components/delivery-master-table-wrapper';
 import { RcOutLazyTab } from './rc-out-lazy-tab';
-import { BlockingLazyTab } from './blocking-lazy-tab';
-import { RcMovementMatrixLazyTab } from './rc-movement-matrix-lazy-tab';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import type { RcInTableSettings } from '@/types/table-settings';
 
@@ -44,9 +42,6 @@ export function InventoryView({ deliveries, batches, search, allSuppliers, allLo
 
     return (
         <>
-            <div className={getTabClass('blocking', 'overflow-y-auto')}>
-                <BlockingLazyTab />
-            </div>
             <div className={getTabClass('deliveries')}>
                 <DeliveryMasterTableWrapper
                     data={deliveries}
@@ -59,9 +54,6 @@ export function InventoryView({ deliveries, batches, search, allSuppliers, allLo
             </div>
             <div className={getTabClass('usage')}>
                 <RcOutLazyTab />
-            </div>
-            <div className={getTabClass('movement')}>
-                <RcMovementMatrixLazyTab />
             </div>
         </>
     );

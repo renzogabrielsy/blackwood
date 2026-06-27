@@ -29,6 +29,21 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 - **RPC:** `set_audit_comment(comment text)` — sets comment context before update trigger fires
 - **Types:** `DeliveryRow`, `InputDeliveryRow`, `AuditLogRow`, `AuditComment` (in `types/rc-in.ts`)
 
+### `deliveries` weight-deduction / true-weight columns (added 2026-06-25)
+Two **purely additive, display-only** annotation columns on `deliveries` (migration `20260625000000_add_deliveries_true_weight_deduction_note.sql`; locked design in `DEDUCTIONS_DESIGN.md`). The sync populates them; the UI reads them as a popover/hover.
+
+| Column | Type | Nullability | Meaning |
+|---|---|---|---|
+| `true_weight_kg` | `numeric` | NULL | Physical/gross weight BEFORE both ASH and wet deductions. `NULL` = ordinary load with no deduction. |
+| `deduction_note` | `text` | NULL | Short human note explaining the deduction, e.g. `−5.86% ASH; −1,009 wet`. `NULL` = no deduction. |
+
+Key semantics:
+- **Display-only / informational.** `weight_kg` stays the Sheet-DEDUCTED weight (the only value the sync compares — zero new conflicts) and `cost_basis` stays the FULL price. The two new columns are extra tags, never overwriting either.
+- **"Tagged" = `true_weight_kg IS NOT NULL`.** A row "has a deduction" when this column is non-null; that's the derived tag the UI marker keys on.
+- **NO balance/view/trigger uses them.** Every balance everywhere (grid, closing, blend proposal, batch totals) stays on `weight_kg`. No trigger reads/writes them, no view aggregates them, no computation parses `deduction_note`. So Blackwood still matches the Sheet on every column and every balance.
+- **Effective ₱/kg (cost ÷ true weight) is DISPLAYED, never stored** — and stays price-gated like every ₱ value.
+- **Shared UI: `../_shared/true-weight-popover.tsx`** (`TrueWeightPopover`) — the one display-only component that surfaces these columns cross-surface. It renders ONLY on **tagged** rows (`true_weight_kg != null`); each caller mounts its own quiet `Σ` (lucide `Sigma`) marker button as the trigger. Surfaces: (1) the **master table** Weight cell (marker left of the right-aligned number, both density modes), (2) the **Blocking detail panel** delivery-history rows (`_shared/blocking-detail-panel.tsx`). The **DeliveryHistoryDialog** shows the same four facts INLINE as field-cards (no popover) instead. In all three, the **effective ₱/kg** line is `canViewPrices`-gated (computed `cost_basis / true_weight_kg`, accounting ₱ format) while the **true-weight + recorded + deduction-note** lines are NOT gated. Purely informational — touches no balance/total/aggregate; untagged rows render byte-for-byte as before (no marker, no extra DOM).
+
 ## Key Behaviors
 - **Batch upsert-first:** Dedup by `batch_code` via JS Map, upsert batches before inserting deliveries
 - **Cost scrubbing:** Production role users have `cost_basis` stripped from history snapshots/diffs in `getDeliveryHistory()` and `getAuditLogEntry()`
@@ -125,6 +140,7 @@ state, transaction_date, supplier, batch_code, block_loc, truck_plate, weight_kg
 - `@/lib/hooks/use-grid-keyboard-nav` — shared keyboard state machine + `createCoordinateNavResolver` (bulk input grid; the linchpin Blackwood Table primitive)
 - `@/lib/hooks/use-grid-edit-session` — shared inline-edit flag + pre-edit snapshot (bulk input grid)
 - `@/lib/hooks/use-grid-paste` — shared Excel/TSV smart-paste (bulk input grid)
+- `@/app/(app)/inventory/_shared/true-weight-popover` — `TrueWeightPopover`, the display-only weight-deduction / true-weight popover shown on the master table Weight cell (also reused by the Blocking detail panel). See the weight-deduction columns block above.
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `date-fns`, `sonner`
 
 ## See Also

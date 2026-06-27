@@ -38,3 +38,21 @@ MC UID **119148** (1 thread) + Ivy UID **119257** (latest of 2; 119147 supersede
 **L-007 applied cleanly again (same blank-shift sub-case as 3rd EXECUTE):** run R8 blank shift cell → inferred M from same-day downtime+electricity+Ivy-waste, single-batch JUNE, no STARTING/ENDING boundary. No dt_mins split (6<60), no waste collision (06-03 and 06-04 are distinct shift parents). Zero VALUE_CHANGED, zero MALFORMED.
 
 Next sync starts from watermark **2026-06-04** (since_date = 6/01 in Gmail). Note the split watermark: runs/downtime/electricity at 06-03, shifts/waste at 06-04 — MC's 06-04 sheet will arrive in a later email.
+
+## Sixth EXECUTE — 2026-06-11 (watermark 6/05 → 6/10) + new failure mode L-016
+(5th EXECUTE was 2026-06-08, the L-014 6/05 catch-up that left the DB at 6/05.) This run caught up **6/6–6/10**. MC UID **119723** + Ivy UID **119724** (latest cumulative workbooks; older MC 119470/119520/119632 + Ivy 119147/119620 also labeled — 7 threads total). 6/7 absent (Sunday). Wrote **5 shifts + 4 runs + 3 downtime + 4 waste + 3 electricity + 3 trucks = 22 rows + 22 audit_logs**; all 6 production tables now current through **2026-06-10**.
+
+**NEW failure mode → L-016 (date-relabel duplicate).** MC's 06-06 day-sheet was **byte-identical to the 6/05 day already in the DB** (run 20,904/804; elec 465.4→472.1; truck AAV6111 12,983.7→13,299.1; downtime 12h/130min same REPAIR text). The watermark (`MAX(transaction_date)`=6/05, `--since` exclusive) does NOT catch this — 6/6 is "after" 6/5 so it survives the filter, and all 5 classifiers called it NEW (natural keys differ only by the date label). The cumulative electricity meter is the tell: 6/5 ended 472.1 and the next *genuine* reading (6/8) STARTS 472.1 → no separate 6/6 reading; **6/6 IS 6/5 relabeled.** Renzo: DROP 6/6 entirely. Held it (no shift parent created); verified post-write 6/6 shift=0 & elec=0.
+
+**6/8 = no-production maintenance day.** Blank-shift run was **0 kg / 0 sacks** → per Renzo, SKIP the 0-kg run but DO write the day's downtime (REPAIR, 0 min) + electricity (472.1→473.2) + truck (KCA 378). L-007/L-014 blank-shift→M still applied to the *parent shift* (2026-06-08, JUNE, M). 6/9 + 6/10 each ran M+E (genuine two-shift days). No dt_mins split (15, 13, both <60). Reconcile all-green.
+
+Next sync starts from watermark **2026-06-10** (since_date = 6/07 in Gmail). All three watermarks (shifts/electricity/trucks) now aligned at 6/10.
+
+**Standing PROPOSE check now owed (L-016):** for any day-sheet dated exactly watermark+1, cross-check it against the immediately-preceding ingested day (run/elec-meter/truck/downtime) before trusting NEW — a byte-identical day is a date-relabel DUPLICATE, HOLD it.
+
+## Seventh EXECUTE — 2026-06-12 (watermark 6/10 → 6/11) — clean single-day, L-016 check PASSED
+Single new day **06-11**. MC UID **119807** + Ivy UID **119804** (both sent 6/12 morning, reporting the prior production day). Wrote **2 shifts + 2 runs + 1 downtime + 2 waste + 1 electricity = 6 rows + 2 shifts + 8 audit_logs**; both threads labeled. Shift ids: M `4e377b45-eece-4f93-9242-d9d2a8b69dbb`, E `d155641f-9fe3-41a3-b1b3-0c19a2a3d952`. Two genuine shifts: M run 25,090 kg/965 sacks, E run 23,712 kg/912 sacks (CEBU 3X50, batch JUNE; day total 48,802). Downtime M only (12 min REPAIR, <60 no split). Waste M 3,639.5 (ZAMBAONGA) + E 3,171.5 (PCG/BUNAWAN). Electricity MAIN 491.2→500.1 ×120 (consumption 1068). No trucks on the 6/11 sheet → truck watermark stays 6/10 (expected). Reconcile all-green.
+
+**L-016 check applied and PASSED (first clean pass of the new standing check):** 6/11 = watermark+1, so cross-checked vs the 6/10 DB day. Electricity meter is the tell: DB 6/10 ended **491.2**, MC 6/11 STARTS **491.2** → genuine continuation, NOT a relabel (a duplicate would repeat 482.2→491.2). Production values also differ materially (6/11 M 25,090 vs 6/10 M 27,066). Confirmed NEW, wrote it. Zero VALUE_CHANGED, zero MALFORMED, no holds. No new ledger entry (append-on-correction only; nothing was corrected).
+
+Next sync starts from watermark **2026-06-11** (since_date = 6/08 in Gmail). shifts + electricity at 6/11; trucks at 6/10 (awaiting a truck row from a later MC sheet).

@@ -2,14 +2,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { X, Loader2, Pencil, Check, XIcon, StickyNote, ExternalLink } from 'lucide-react';
+import { X, Loader2, Pencil, Check, XIcon, StickyNote, ExternalLink, Printer, Sigma } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { BlockData, BlockingDetailData, DeliveryHistoryRecord } from './types';
-import { fetchBlockingDetail, updateBlockNotes, fetchSingleDelivery } from './actions';
+import { errorToast } from '@/lib/toast';
+import { TrueWeightPopover } from './true-weight-popover';
+import type { BlockData, BlockingDetailData, DeliveryHistoryRecord } from '../blocking/types';
+import { fetchBlockingDetail, updateBlockNotes, fetchSingleDelivery } from '../blocking/actions';
+import { EMDASH, escapeHtml, peso, printViaIframe, PRINT_CSS } from './print-utils';
 import { EditDeliveryDialog } from './edit-delivery-dialog';
 import { DeliveryHistoryDialog } from '@/app/(app)/inventory/rc-in/components/DeliveryHistoryDialog';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
-import { useInventoryTab } from '@/app/(app)/inventory/components/inventory-tab-context';
 import {
   Tooltip,
   TooltipContent,
@@ -54,7 +56,7 @@ function parseLocKey(locKey: string): { whse: string; col: string; row: string }
 
 /** Convert a FullDeliveryRecord to a DeliveryHistoryRow for the DeliveryHistoryDialog */
 function toDeliveryHistoryRow(
-  full: import('./types').FullDeliveryRecord,
+  full: import('../blocking/types').FullDeliveryRecord,
 ): DeliveryHistoryRow {
   return {
     id: full.id,
@@ -65,14 +67,226 @@ function toDeliveryHistoryRow(
     truck_plate: full.truck_plate ?? '',
     sacks: full.sacks,
     weight_kg: full.weight_kg,
-    cost_basis: full.cost_basis,
+    // null (role-gated) → undefined so the info dialog treats it as withheld, not zero.
+    cost_basis: full.cost_basis ?? undefined,
     remarks: full.remarks ?? undefined,
+    // Weight-deduction / true-weight annotation (display-only — carried through to the dialog).
+    true_weight_kg: full.true_weight_kg ?? null,
+    deduction_note: full.deduction_note ?? null,
     created_at: '', // not available from fetchSingleDelivery, dialog doesn't strictly need it
     lab_results: full.lab_results,
   };
 }
 
+// ─── Print document ─────────────────────────────────────────────────────────
+// The escaping (`escapeHtml`), peso formatting (`peso`), iframe print mechanism
+// (`printViaIframe`), and base print CSS (`PRINT_CSS`) are shared with the blend
+// proposal printout — see `./print-utils`. Only this document-body builder differs.
+
+interface PrintDocInput {
+  locKey: string;
+  loc: { whse: string; col: string; row: string } | null;
+  blockData: BlockData;
+  detailData: BlockingDetailData | null;
+  canViewPrices: boolean;
+}
+
+/**
+ * Build a fully self-contained print document (its OWN `<html>` with minimal print
+ * CSS). Rendered into a hidden same-origin iframe and printed from there, it is
+ * completely immune to the app's dark mode, Tailwind, portals, overlays, transforms,
+ * and the slide-over's fixed positioning — none of which exist in this document.
+ *
+ * Price gating: PHP/KG, Est. Value, the delivery PHP/KG column and the usage Avg Price
+ * column are emitted ONLY when `canViewPrices && blockData.php !== null` — the exact
+ * flag/condition the on-screen panel uses — so a Production user's printout omits all
+ * ₱ data. The flag is passed in from the panel; this function does no role lookup.
+ */
+function buildPrintDocument({ locKey, loc, blockData, detailData, canViewPrices }: PrintDocInput): string {
+  const showPrices = canViewPrices && blockData.php !== null;
+  const totalIn = blockData.total_in;
+  const pct = totalIn > 0 ? Math.min(100, (blockData.balance / totalIn) * 100) : 0;
+  const estValue = blockData.php !== null ? blockData.balance * blockData.php : 0;
+
+  const subtitleLoc = loc ? `WHSE ${escapeHtml(loc.whse)}, Col ${escapeHtml(loc.col)}, Row ${escapeHtml(loc.row)} &middot; ` : '';
+
+  const summaryRows: string[] = [
+    `<div class="row"><dt>Balance</dt><dd>${blockData.balance.toLocaleString()} kg (${pct.toFixed(1)}%)</dd></div>`,
+    `<div class="row"><dt>Total Delivered</dt><dd>${totalIn.toLocaleString()} kg</dd></div>`,
+  ];
+  if (showPrices && blockData.php !== null) {
+    summaryRows.push(`<div class="row"><dt>PHP/KG</dt><dd>${peso(blockData.php)}</dd></div>`);
+    summaryRows.push(`<div class="row"><dt>Est. Value</dt><dd>${peso(estValue)}</dd></div>`);
+  }
+
+  const labRows = [
+    ['MC', blockData.mc.toFixed(2)],
+    ['ASH', blockData.ash.toFixed(2)],
+    ['BD ASTM', blockData.bd_astm.toFixed(3)],
+    ['BD JIS', blockData.bd_jis.toFixed(3)],
+    ['GRIT', blockData.grit.toFixed(2)],
+    ['VM', blockData.vm.toFixed(2)],
+    ['FC', blockData.fc.toFixed(2)],
+  ]
+    .map(([k, v]) => `<div class="row"><dt>${k}</dt><dd>${v}</dd></div>`)
+    .join('');
+
+  const notesSection =
+    detailData?.notes && detailData.notes.trim().length > 0
+      ? `<section><h2>Notes</h2><p class="notes">${escapeHtml(detailData.notes)}</p></section>`
+      : '';
+
+  // ── Delivery history ──
+  let deliverySection: string;
+  if (detailData && detailData.deliveries.length > 0) {
+    const body = detailData.deliveries
+      .map((d) => {
+        const priceCell = showPrices
+          ? `<td class="num">${d.cost_basis !== undefined ? peso(d.cost_basis) : EMDASH}</td>`
+          : '';
+        return (
+          `<tr>` +
+          `<td>${escapeHtml(d.transaction_date)}</td>` +
+          `<td>${escapeHtml(d.supplier)}</td>` +
+          `<td class="num">${d.sacks.toLocaleString()}</td>` +
+          `<td class="num">${d.weight_kg.toLocaleString()}</td>` +
+          priceCell +
+          `<td class="num">${d.mc !== undefined ? d.mc.toFixed(2) : EMDASH}</td>` +
+          `<td class="num">${d.bd_astm !== undefined ? d.bd_astm.toFixed(3) : EMDASH}</td>` +
+          `<td class="num">${d.ash !== undefined ? d.ash.toFixed(2) : EMDASH}</td>` +
+          `</tr>`
+        );
+      })
+      .join('');
+    const totalSacks = detailData.deliveries.reduce((s, d) => s + d.sacks, 0);
+    const totalWeight = detailData.deliveries.reduce((s, d) => s + d.weight_kg, 0);
+    deliverySection =
+      `<table>` +
+      `<thead><tr>` +
+      `<th>Date</th><th>Supplier</th><th class="num">Sacks</th><th class="num">Weight (kg)</th>` +
+      (showPrices ? `<th class="num">PHP/KG</th>` : '') +
+      `<th class="num">MC</th><th class="num">BD</th><th class="num">ASH</th>` +
+      `</tr></thead>` +
+      `<tbody>${body}</tbody>` +
+      `<tfoot><tr>` +
+      `<td colspan="2">Total</td>` +
+      `<td class="num">${totalSacks.toLocaleString()}</td>` +
+      `<td class="num">${totalWeight.toLocaleString()}</td>` +
+      (showPrices ? `<td></td>` : '') +
+      `<td></td><td></td><td></td>` +
+      `</tr></tfoot>` +
+      `</table>`;
+  } else {
+    deliverySection = `<p class="empty">No deliveries found.</p>`;
+  }
+
+  // ── Usage history ──
+  let usageSection: string;
+  if (detailData && detailData.usage.length > 0) {
+    const body = detailData.usage
+      .map((u) => {
+        const priceCell = showPrices
+          ? `<td class="num">${u.avg_price !== null ? peso(u.avg_price) : EMDASH}</td>`
+          : '';
+        return (
+          `<tr>` +
+          `<td>${escapeHtml(u.transaction_date)}</td>` +
+          `<td>${u.production_batch !== null ? escapeHtml(u.production_batch) : EMDASH}</td>` +
+          `<td>${escapeHtml(u.destination)}</td>` +
+          `<td class="num">${u.weight_kg.toLocaleString()}</td>` +
+          priceCell +
+          `</tr>`
+        );
+      })
+      .join('');
+    const totalWeight = detailData.usage.reduce((s, u) => s + u.weight_kg, 0);
+    usageSection =
+      `<table>` +
+      `<thead><tr>` +
+      `<th>Date</th><th>Batch</th><th>Plant/Etc</th><th class="num">Weight (kg)</th>` +
+      (showPrices ? `<th class="num">Avg Price</th>` : '') +
+      `</tr></thead>` +
+      `<tbody>${body}</tbody>` +
+      `<tfoot><tr>` +
+      `<td colspan="3">Total</td>` +
+      `<td class="num">${totalWeight.toLocaleString()}</td>` +
+      (showPrices ? `<td></td>` : '') +
+      `</tr></tfoot>` +
+      `</table>`;
+  } else {
+    usageSection = `<p class="empty">No usage records found.</p>`;
+  }
+
+  const title = `Block ${escapeHtml(locKey)} ${EMDASH} ${escapeHtml(blockData.batch_code)}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<style>${PRINT_CSS}</style>
+</head>
+<body>
+  <h1>${title}</h1>
+  <p class="subtitle">${subtitleLoc}Status: ${escapeHtml(blockData.status)}</p>
+
+  <section>
+    <h2>Summary</h2>
+    <dl>${summaryRows.join('')}</dl>
+  </section>
+
+  <section>
+    <h2>Quality (Weighted Avg)</h2>
+    <dl>${labRows}</dl>
+  </section>
+
+  ${notesSection}
+
+  <section>
+    <h2>Delivery History (RC IN)</h2>
+    ${deliverySection}
+  </section>
+
+  <section>
+    <h2>Usage History (RC OUT)</h2>
+    ${usageSection}
+  </section>
+
+  <div class="doc-footer">Blackwood ${EMDASH} Blocking detail &middot; Block ${escapeHtml(
+    locKey,
+  )} &middot; Printed ${escapeHtml(new Date().toLocaleString())}</div>
+</body>
+</html>`;
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
+
+/**
+ * Where an "Edit All" action wants to land. The panel itself owns the `router.push`
+ * to `/inventory?...`; this callback is the SHELL-SPECIFIC hook a host wires up to do
+ * any extra work the route push can't (e.g. flipping the in-page tab when the panel is
+ * rendered inside the client tab shell). On a standalone route, the host can omit it
+ * (the router push alone navigates) or point it at a `router.push` of its own.
+ */
+export interface BlockingDetailNavTarget {
+  /** The batch whose records should be opened. */
+  batchCode: string;
+  /** Which inventory sub-view the records live in. */
+  view: 'deliveries' | 'usage';
+}
+
+/**
+ * Shell-agnostic navigation seam. When no `onNavigateToBatch` prop is supplied, the
+ * panel dispatches this `window` CustomEvent instead of reaching into any tab shell.
+ * An in-page host (e.g. the inventory tab provider) listens for it and flips the active
+ * tab; on a standalone route nothing listens and the router push alone drives nav.
+ */
+export const INVENTORY_NAVIGATE_EVENT = 'blackwood:inventory-navigate';
+
+export function emitInventoryNavigate(detail: BlockingDetailNavTarget) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<BlockingDetailNavTarget>(INVENTORY_NAVIGATE_EVENT, { detail }));
+}
 
 interface BlockingDetailPanelProps {
   /**
@@ -95,15 +309,22 @@ interface BlockingDetailPanelProps {
    */
   blockData?: BlockData | null;
   canViewPrices: boolean;
+  /**
+   * Optional host hook fired by the "Edit All" buttons, BEFORE the panel pushes the
+   * `/inventory?...` URL. Lets a host that lives inside the client tab shell flip the
+   * active tab so the deep-link lands on the right view. The panel imports NOTHING from
+   * the tab shell — this injected callback is the only seam. When omitted (e.g. a
+   * standalone route), the router push alone drives navigation.
+   */
+  onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices }: BlockingDetailPanelProps) {
+export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices, onNavigateToBatch }: BlockingDetailPanelProps) {
   const isOpen = locKey !== null;
   // Explicit blockData prop wins; otherwise fall back to the grid map lookup.
   const blockData: BlockData | undefined =
     blockDataProp ?? (locKey && data ? data[locKey] : undefined) ?? undefined;
   const router = useRouter();
-  const { setActiveTab } = useInventoryTab();
 
   const [detailData, setDetailData] = useState<BlockingDetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -237,18 +458,64 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
 
   // ── Edit All handler ──
 
+  function navigateToBatch(batchCode: string, view: 'deliveries' | 'usage') {
+    onClose();
+    if (onNavigateToBatch) {
+      // Host hook owns navigation ENTIRELY. The host pushes the correct
+      // `/inventory?tab=<view>&editBatch=<code>&editView=<view>` URL; the panel must
+      // NOT also router.push here — a second push without `tab=`/`editView=` would be
+      // the LAST write and would clobber the host's, dropping the target view.
+      onNavigateToBatch({ batchCode, view });
+      return;
+    }
+    // ── Fallback (no host hook) ──
+    // Forward-looking seam: announce the intent on `window` so a future in-shell host
+    // that renders this panel itself (no onNavigateToBatch prop) can flip its active
+    // tab. Today both routes (blocking + rc-movement) pass onNavigateToBatch, so this
+    // event branch + the panel's own router.push only run on that fallback path.
+    emitInventoryNavigate({ batchCode, view });
+    router.push(`/inventory?search=${encodeURIComponent(batchCode)}&year=all&editBatch=${encodeURIComponent(batchCode)}`);
+  }
+
   function handleEditAll() {
     if (!blockData) return;
-    onClose();
-    setActiveTab('deliveries');
-    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
+    navigateToBatch(blockData.batch_code, 'deliveries');
   }
 
   function handleEditAllUsage() {
     if (!blockData) return;
-    onClose();
-    setActiveTab('usage');
-    router.push(`/inventory?search=${encodeURIComponent(blockData.batch_code)}&year=all&editBatch=${encodeURIComponent(blockData.batch_code)}`);
+    navigateToBatch(blockData.batch_code, 'usage');
+  }
+
+  // ── Print handler ──
+  // Build a fully self-contained print document from the data the panel already holds
+  // and print THAT in a hidden iframe — never the live DOM. This keeps the output immune
+  // to dark mode, Tailwind, portals, overlays, transforms, and the slide-over's fixed
+  // positioning (the old @media-print visibility toggle leaked all of those). Price
+  // gating mirrors the on-screen panel via the `canViewPrices` flag passed into the
+  // builder — no role lookup here.
+  function handlePrint() {
+    if (!blockData || !locKey) return;
+    try {
+      const html = buildPrintDocument({
+        locKey,
+        loc: parseLocKey(locKey),
+        blockData,
+        detailData,
+        canViewPrices,
+      });
+      const ok = printViaIframe(html);
+      if (!ok) {
+        errorToast('Could not open the print view', {
+          description:
+            'The browser blocked creating the hidden print frame. Try again, or use your browser menu (File → Print) with the panel open.',
+        });
+      }
+    } catch (err) {
+      errorToast('Failed to print block details', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   if (!blockData || !locKey) {
@@ -342,16 +609,30 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
                 {blockData.status}
               </span>
             </div>
-            {/* Close button */}
-            <button
-              onClick={onClose}
-              className="flex items-center justify-center w-7 h-7 rounded-md border border-border
-                         text-muted-foreground hover:text-foreground hover:bg-muted
-                         transition-all duration-150 cursor-pointer"
-              title="Close (Esc)"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            {/* Header actions */}
+            <div className="flex items-center gap-1.5">
+              {/* Print button */}
+              <button
+                onClick={handlePrint}
+                className="flex items-center justify-center w-7 h-7 rounded-md border border-border
+                           text-muted-foreground hover:text-foreground hover:bg-muted
+                           transition-all duration-150 cursor-pointer"
+                title="Print block details"
+                aria-label="Print block details"
+              >
+                <Printer className="w-3.5 h-3.5" />
+              </button>
+              {/* Close button */}
+              <button
+                onClick={onClose}
+                className="flex items-center justify-center w-7 h-7 rounded-md border border-border
+                           text-muted-foreground hover:text-foreground hover:bg-muted
+                           transition-all duration-150 cursor-pointer"
+                title="Close (Esc)"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {loc && (
@@ -784,7 +1065,30 @@ function DeliveryRow({
         {delivery.sacks.toLocaleString()}
       </td>
       <td className="text-[10px] font-mono text-foreground text-right px-1.5 py-1">
-        {delivery.weight_kg.toLocaleString()}
+        {delivery.true_weight_kg != null ? (
+          <span className="inline-flex items-center justify-end gap-1">
+            <TrueWeightPopover
+              trueWeightKg={delivery.true_weight_kg}
+              weightKg={delivery.weight_kg}
+              deductionNote={delivery.deduction_note ?? null}
+              costBasis={delivery.cost_basis ?? null}
+              canViewPrices={canViewPrices}
+            >
+              <button
+                type="button"
+                aria-label="View true weight / deduction"
+                title="View true weight / deduction"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Sigma className="h-3 w-3" />
+              </button>
+            </TrueWeightPopover>
+            <span>{delivery.weight_kg.toLocaleString()}</span>
+          </span>
+        ) : (
+          delivery.weight_kg.toLocaleString()
+        )}
       </td>
       {canViewPrices && (
         <td className="text-[10px] font-mono text-foreground text-right px-1.5 py-1">

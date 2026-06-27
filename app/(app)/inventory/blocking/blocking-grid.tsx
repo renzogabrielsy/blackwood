@@ -1,10 +1,14 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { Calculator, Check, Layers, X, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { errorToast } from '@/lib/toast';
 import { WAREHOUSES, STANDARD_WAREHOUSES } from './constants';
 import type { BlockData } from './types';
-import { BlockingDetailPanel } from './blocking-detail-panel';
+import { buildBlendProposal, type BlendProposal } from './actions';
+import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
+import { BlendProposalDialog } from '../_shared/blend-proposal-dialog';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { getLabHighlightText } from '@/types/table-settings';
 import type { LabMetric, LabHighlightSpec } from '@/types/table-settings';
@@ -14,6 +18,35 @@ const ALL_WAREHOUSE_KEYS = Object.keys(WAREHOUSES);
 /** Default set when "ALL" is active — only the standard 4. PCA/PCB stay opt-in. */
 function makeDefaultActive(): Set<string> {
   return new Set<string>(STANDARD_WAREHOUSES);
+}
+
+// ─── Price-visibility preference (localStorage) ───────────────────────────────
+//
+// The "Prices" toggle is a CLIENT-SIDE DISPLAY PREFERENCE that can ONLY HIDE prices,
+// never reveal them. It layers ON TOP of the server-side gate: effective visibility is
+// always `serverCanViewPrices && showPrices`. Default is ON (prices shown). Persisted so
+// a presenter's "hide prices" choice survives reloads. Follows the project's localStorage
+// prefs convention (module-scoped key + guarded read/write).
+const SHOW_PRICES_PREFS_KEY = 'blocking_show_prices';
+
+function readShowPricesPref(): boolean {
+  if (typeof window === 'undefined') return true; // SSR / default ON
+  try {
+    const raw = window.localStorage.getItem(SHOW_PRICES_PREFS_KEY);
+    // Only an explicit "false" hides; anything else (missing/corrupt) → shown.
+    return raw !== 'false';
+  } catch {
+    return true;
+  }
+}
+
+function writeShowPricesPref(value: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SHOW_PRICES_PREFS_KEY, value ? 'true' : 'false');
+  } catch {
+    // Private mode / quota — non-fatal; the preference just won't persist.
+  }
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -217,14 +250,143 @@ function getSpotlightClass(match: SpotlightMatch, statusFilter: StatusFilter): s
 interface BlockingGridProps {
   data: Record<string, BlockData>;
   canViewPrices: boolean;
+  /**
+   * Controlled selection (the standalone `/inventory/blocking` route drives this from the
+   * `?block=` URL param so the open block is deep-linkable / refresh-safe). When BOTH
+   * `selectedLocKey` and `onSelectBlock` are supplied the grid is fully controlled;
+   * otherwise it falls back to internal selection state (legacy in-shell usage).
+   */
+  selectedLocKey?: string | null;
+  /** Toggle handler for a cell click — receives the block_loc that was clicked. */
+  onSelectBlock?: (locKey: string) => void;
+  /**
+   * Passed straight through to the detail panel's "Edit All". On a standalone route the
+   * route wires this to a `router.push('/inventory?tab=…')`; omitted in-shell so the
+   * panel falls back to its `window` CustomEvent → InventoryTabProvider tab switch.
+   */
+  onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
-  const [selectedLocKey, setSelectedLocKey] = useState<string | null>(null);
+export function BlockingGrid({
+  data,
+  canViewPrices: serverCanViewPrices,
+  selectedLocKey: controlledLocKey,
+  onSelectBlock,
+  onNavigateToBatch,
+}: BlockingGridProps) {
+  const isControlled = controlledLocKey !== undefined && onSelectBlock !== undefined;
+  const [internalLocKey, setInternalLocKey] = useState<string | null>(null);
+  const selectedLocKey = isControlled ? controlledLocKey! : internalLocKey;
   const [activeWarehouses, setActiveWarehouses] = useState<Set<string>>(() => makeDefaultActive());
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const { settings } = useTableSettings();
   const labHighlights = settings.labHighlights;
+
+  // ── Price-visibility toggle (hide-only, layered on the server gate) ──
+  // Lazy init from localStorage; default ON. We DON'T read it in the useState initializer
+  // to avoid an SSR/CSR hydration mismatch — start at the default (true) and hydrate the
+  // saved value after mount. (For a server-gated no-price user the toggle is hidden and
+  // this flag is irrelevant — the server already nulled the ₱ payload.)
+  const [showPrices, setShowPrices] = useState(true);
+  useEffect(() => {
+    setShowPrices(readShowPricesPref());
+  }, []);
+
+  const handleToggleShowPrices = useCallback(() => {
+    setShowPrices((prev) => {
+      const next = !prev;
+      writeShowPricesPref(next);
+      return next;
+    });
+  }, []);
+
+  // EFFECTIVE price visibility = server gate AND the client display preference. This is
+  // the ONLY value passed downstream for price render/export decisions — the toggle can
+  // hide but never reveal, because the server flag is ANDed first.
+  const canViewPrices = serverCanViewPrices && showPrices;
+
+  // ── Blend Proposal mode ──
+  // OFF by default. When ON, cell clicks multi-SELECT occupied blocks (the detail panel
+  // does not open); a floating bar offers Build Proposal / Clear; Build calls the
+  // backend action and shows the result in a Sheet. Toggling the mode off (or closing
+  // the sheet) clears the selection.
+  const [blendMode, setBlendMode] = useState(false);
+  const [blendSelection, setBlendSelection] = useState<Set<string>>(() => new Set());
+  const [proposalOpen, setProposalOpen] = useState(false);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposal, setProposal] = useState<BlendProposal | null>(null);
+
+  const clearBlend = useCallback(() => setBlendSelection(new Set()), []);
+
+  const handleToggleBlendMode = useCallback(() => {
+    setBlendMode((prev) => {
+      const next = !prev;
+      // Leaving blend mode clears any in-progress selection.
+      if (!next) setBlendSelection(new Set());
+      return next;
+    });
+  }, []);
+
+  const handleBuildProposal = useCallback(async () => {
+    const locs = Array.from(blendSelection);
+    if (locs.length === 0) return;
+    setProposalOpen(true);
+    setProposalLoading(true);
+    setProposal(null);
+    try {
+      const result = await buildBlendProposal(locs);
+      setProposal(result);
+    } catch (err) {
+      setProposalOpen(false);
+      errorToast('Failed to build blend proposal', {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setProposalLoading(false);
+    }
+  }, [blendSelection]);
+
+  const handleProposalOpenChange = useCallback((open: boolean) => {
+    setProposalOpen(open);
+    // Closing the proposal clears the selection (per spec).
+    if (!open) setBlendSelection(new Set());
+  }, []);
+
+  // Remove one block from inside the open proposal modal. The grid owns the
+  // source-of-truth `blendSelection` Set, so updating it here keeps the cell
+  // rings/checkmarks in sync with the modal — they can never diverge. We then
+  // re-run the blend calc for the reduced set so the modal's numbers update live.
+  // Removing the LAST block closes the modal and clears the selection (nothing to
+  // propose).
+  const handleRemoveBlendBlock = useCallback(
+    async (blockLoc: string) => {
+      const remaining = Array.from(blendSelection).filter((l) => l !== blockLoc);
+
+      // Keep the grid Set in sync immediately (rings update on close/reopen).
+      setBlendSelection(new Set(remaining));
+
+      if (remaining.length === 0) {
+        // Nothing left to propose — close gracefully (selection already cleared).
+        setProposalOpen(false);
+        setProposal(null);
+        return;
+      }
+
+      // Re-run the blend for the reduced set; the modal shows a loading state.
+      setProposalLoading(true);
+      try {
+        const result = await buildBlendProposal(remaining);
+        setProposal(result);
+      } catch (err) {
+        errorToast('Failed to update blend proposal', {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        setProposalLoading(false);
+      }
+    },
+    [blendSelection],
+  );
 
   const global = useMemo(
     () => getFilteredGlobalStats(activeWarehouses, data),
@@ -235,11 +397,34 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
   const visibleWarehouses = ALL_WAREHOUSE_KEYS.filter((w) => activeWarehouses.has(w));
 
   const handleCellClick = (locKey: string) => {
-    setSelectedLocKey((prev) => (prev === locKey ? null : locKey));
+    // Blend mode hijacks the click: multi-select occupied blocks instead of opening
+    // the detail panel. Only occupied cells (present in `data`) are selectable.
+    if (blendMode) {
+      if (!data[locKey]) return;
+      setBlendSelection((prev) => {
+        const next = new Set(prev);
+        if (next.has(locKey)) next.delete(locKey);
+        else next.add(locKey);
+        return next;
+      });
+      return;
+    }
+    if (isControlled) {
+      // Controlled: delegate the toggle decision to the parent (URL writer).
+      onSelectBlock!(locKey);
+      return;
+    }
+    setInternalLocKey((prev) => (prev === locKey ? null : locKey));
   };
 
   const handlePanelClose = () => {
-    setSelectedLocKey(null);
+    if (isControlled) {
+      // Close always clears. The panel only emits close while something is open, so
+      // toggling the currently-open key off (parent's toggle handler) clears the URL.
+      if (selectedLocKey) onSelectBlock!(selectedLocKey);
+      return;
+    }
+    setInternalLocKey(null);
   };
 
   // "ALL" mode = exactly the standard 4 (A/B/C/D). PCA/PCB are opt-in extras.
@@ -475,6 +660,64 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
             </>
           )}
         </div>
+
+        {/* Divider */}
+        <div className="h-5 w-px bg-border" />
+
+        {/* ── Prices visibility toggle (presenter/privacy) ── */}
+        {/* Shown ONLY when the server allows prices. For a server-gated no-price user the
+            toggle is irrelevant (the payload carries no ₱) so we hide it entirely. The
+            toggle can only HIDE — `canViewPrices` above is `serverCanViewPrices && showPrices`. */}
+        {serverCanViewPrices && (
+          <button
+            onClick={handleToggleShowPrices}
+            aria-pressed={showPrices}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold',
+              'border transition-all duration-150 cursor-pointer',
+              showPrices
+                ? 'bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground'
+                : 'bg-primary text-primary-foreground border-primary',
+            )}
+            title={showPrices ? 'Hide all prices (presenter mode)' : 'Show prices'}
+          >
+            {showPrices ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            <span>Prices</span>
+            <span
+              className={cn(
+                'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+                showPrices ? 'bg-border text-muted-foreground' : 'bg-primary-foreground/20 text-primary-foreground',
+              )}
+            >
+              {showPrices ? 'ON' : 'OFF'}
+            </span>
+          </button>
+        )}
+
+        {/* ── Blend Proposal toggle (top-right) ── */}
+        <button
+          onClick={handleToggleBlendMode}
+          aria-pressed={blendMode}
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold',
+            'border transition-all duration-150 cursor-pointer',
+            blendMode
+              ? 'bg-primary text-primary-foreground border-primary'
+              : 'bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground',
+          )}
+          title={blendMode ? 'Exit blend selection mode' : 'Select blocks to build a blend proposal'}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Blend Proposal</span>
+          <span
+            className={cn(
+              'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
+              blendMode ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-border text-muted-foreground',
+            )}
+          >
+            {blendMode ? 'ON' : 'OFF'}
+          </span>
+        </button>
       </div>
 
       {/* ── Warehouse Grids ── */}
@@ -489,6 +732,8 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
           data={data}
           canViewPrices={canViewPrices}
           labHighlights={labHighlights}
+          blendMode={blendMode}
+          blendSelection={blendSelection}
         />
       ))}
 
@@ -498,6 +743,52 @@ export function BlockingGrid({ data, canViewPrices }: BlockingGridProps) {
         onClose={handlePanelClose}
         data={data}
         canViewPrices={canViewPrices}
+        onNavigateToBatch={onNavigateToBatch}
+      />
+
+      {/* ── Blend Proposal floating action bar ── */}
+      {blendMode && blendSelection.size > 0 && (
+        <div
+          data-blend-action-bar
+          className="animate-fade-up fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3
+                     rounded-full bg-background/95 px-4 py-2 text-xs font-medium shadow-lg border
+                     backdrop-blur supports-backdrop-filter:bg-background/60"
+        >
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+            <Check className="w-3.5 h-3.5 text-primary" />
+            <span className="font-mono font-semibold text-foreground">{blendSelection.size}</span>
+            block{blendSelection.size === 1 ? '' : 's'} selected
+          </span>
+          <span className="text-border">|</span>
+          <button
+            onClick={handleBuildProposal}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary text-primary-foreground
+                       font-semibold hover:bg-primary/90 transition-all duration-150 cursor-pointer"
+          >
+            <Calculator className="w-3.5 h-3.5" />
+            Build Proposal
+          </button>
+          <button
+            onClick={clearBlend}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-muted-foreground
+                       hover:text-foreground hover:bg-muted transition-all duration-150 cursor-pointer"
+          >
+            <X className="w-3 h-3" />
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* ── Blend Proposal result modal ── */}
+      {/* `showPrices` is the client display preference; the dialog ANDs it with the
+          server `proposal.can_view_prices` so the toggle can hide but never reveal. */}
+      <BlendProposalDialog
+        open={proposalOpen}
+        onOpenChange={handleProposalOpenChange}
+        proposal={proposal}
+        loading={proposalLoading}
+        onRemoveBlock={handleRemoveBlendBlock}
+        showPrices={showPrices}
       />
     </div>
   );
@@ -514,9 +805,11 @@ interface WarehouseSectionProps {
   data: Record<string, BlockData>;
   canViewPrices: boolean;
   labHighlights: Record<LabMetric, LabHighlightSpec>;
+  blendMode: boolean;
+  blendSelection: Set<string>;
 }
 
-function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights }: WarehouseSectionProps) {
+function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, onToggleStatus, data, canViewPrices, labHighlights, blendMode, blendSelection }: WarehouseSectionProps) {
   const whse = WAREHOUSES[whseKey];
   const stats = getWarehouseStats(whseKey, data);
   const utilPct = parseFloat(stats.utilization);
@@ -690,6 +983,8 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
               data={data}
               canViewPrices={canViewPrices}
               labHighlights={labHighlights}
+              blendMode={blendMode}
+              blendSelection={blendSelection}
             />
           ))}
         </div>
@@ -728,9 +1023,11 @@ interface WarehouseRowProps {
   data: Record<string, BlockData>;
   canViewPrices: boolean;
   labHighlights: Record<LabMetric, LabHighlightSpec>;
+  blendMode: boolean;
+  blendSelection: Set<string>;
 }
 
-function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights }: WarehouseRowProps) {
+function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection }: WarehouseRowProps) {
   return (
     <>
       {/* Row label */}
@@ -765,6 +1062,8 @@ function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClic
               spotlightClass={spotlightClass}
               canViewPrices={canViewPrices}
               labHighlights={labHighlights}
+              blendMode={blendMode}
+              blendSelected={blendSelection.has(locKey)}
             />
           );
         }
@@ -794,9 +1093,13 @@ interface OccupiedCellProps {
   spotlightClass: string;
   canViewPrices: boolean;
   labHighlights: Record<LabMetric, LabHighlightSpec>;
+  /** True while Blend Proposal mode is active — drives the multi-select affordance. */
+  blendMode: boolean;
+  /** True when this cell is in the blend selection set. */
+  blendSelected: boolean;
 }
 
-function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights }: OccupiedCellProps) {
+function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canViewPrices, labHighlights, blendMode, blendSelected }: OccupiedCellProps) {
   const balanceTextClass = getBalanceTextClass(data.balance, data.total_in);
   const balancePct = data.total_in > 0 ? (data.balance / data.total_in) * 100 : 0;
   const isCritical = balancePct < 10;
@@ -808,9 +1111,24 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
 
   return (
     <div
-      className={cn('blocking-cell blocking-cell-occupied', isSelected && 'selected', spotlightClass)}
+      className={cn(
+        'blocking-cell blocking-cell-occupied relative',
+        // In blend mode the panel-selection ring is suppressed; blend-selection drives
+        // the highlight instead. Outside blend mode, the normal selected ring applies.
+        !blendMode && isSelected && 'selected',
+        blendSelected && 'ring-2 ring-primary ring-offset-1 ring-offset-card',
+        spotlightClass,
+      )}
       onClick={onClick}
+      role={blendMode ? 'checkbox' : undefined}
+      aria-checked={blendMode ? blendSelected : undefined}
     >
+      {/* Blend-selection checkmark badge */}
+      {blendSelected && (
+        <span className="absolute top-0.5 right-0.5 z-10 flex items-center justify-center w-3.5 h-3.5 rounded-full bg-primary text-primary-foreground shadow">
+          <Check className="w-2.5 h-2.5" strokeWidth={3} />
+        </span>
+      )}
       <div className="h-full flex flex-col" style={{ gap: '2px', padding: '4px 5px' }}>
         {/* Loc key — badge colored by status */}
         <div

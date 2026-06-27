@@ -3,12 +3,15 @@
 ## Project Context
 - **Repository:** Blackwood (industrial charcoal inventory management system)
 - **Main Branch:** `main` (production); `dev` is staging — never commit directly to either, always branch a `feat/*` first
-- **Active Development (2026-06-08):** `feat/blackwood-table-universal-grid` branched from `dev` — universal "Blackwood Table" grid primitive extraction (commit 60092a2), pushed to origin, no PR yet
+- **Active Development (2026-06-09):** `feat/blackwood-table-universal-grid` is at `56a375a` (campaign-grouped RC Movement matrix + digest enhancements). `dev`, `origin/dev`, and the feature branch all point at `56a375a` — fast-forwarded, no divergence, no PR. `main` untouched at `4deb20e`.
+- **Observed FF pattern:** this repo's `feat/*` branches frequently sit at the exact same commit as `origin/dev` (branched from dev tip, dev hasn't moved). When that holds, landing on dev = commit on feature branch, then `git branch -f dev <feat>` fast-forward + push both. No merge commit, zero conflict risk. Always verify with `git merge-base --is-ancestor origin/dev HEAD` first.
 - **Routing:** Next.js App Router with route groups: `app/(app)/` pattern
 - **Note:** branch-naming has shifted from `feat/<UI|backend>/<name>` (early) to flat `feat/<kebab-name>` (recent, e.g. feat/blackwood-table-universal-grid)
 
 ## Workflow Conventions
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — how to split one staged changeset into multiple logical commits without per-file/hunk staging (stage whole tree, then `git commit -- <pathspec>` per group). Includes the exact Co-Authored-By trailer requirement.
+- **`.claude/agent-memory-local/` is GITIGNORED but has legacy-tracked files in it.** `git check-ignore` on the tracked *file* reports "not ignored" (tracked paths bypass the check), but `git add` on the *directory* refuses it. Never include `agent-memory-local/*` in a shared commit — the `-local` + gitignore intent = machine-local only. Stage paths explicitly; don't `git add .` it in.
+- **Multi-concern split, buildable-commit rule:** when one file mixes two concerns (e.g. `rc-out/actions.ts` had price-gating + dead-code removal in adjacent hunks), keep the FILE whole in its dominant-concern commit rather than splitting hunks — hunk-splitting risks non-buildable intermediate commits. Split by file-grouping, reserving separate commits for cleanly-separable file-level changes (e.g. whole-file deletions). Note unavoidable WIP bleed in the commit body.
 
 ## Recent Issue Investigation (2026-02-13)
 **Issue:** Route `/inventory/rc-in` broken after merge from `feat/UI/NavigationBar-extraDropdown`
