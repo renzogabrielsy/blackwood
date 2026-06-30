@@ -1198,6 +1198,16 @@ function OccupiedCell({ locKey, data, isSelected, onClick, spotlightClass, canVi
           <div
             className={cn(
               'font-mono font-bold leading-none flex justify-between',
+              getLabHighlightText('bd_astm', data.bd_astm, labHighlights) || 'text-zinc-800 dark:text-white/95',
+            )}
+            style={{ fontSize: '10px' }}
+          >
+            <span>BD</span>
+            <span>{data.bd_astm.toFixed(3)}</span>
+          </div>
+          <div
+            className={cn(
+              'font-mono font-bold leading-none flex justify-between',
               getLabHighlightText('mc', data.mc, labHighlights) || 'text-zinc-800 dark:text-white/95',
             )}
             style={{ fontSize: '10px' }}
