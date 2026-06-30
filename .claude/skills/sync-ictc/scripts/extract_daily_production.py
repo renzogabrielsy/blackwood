@@ -76,7 +76,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Finished-grade allowlist for production_runs (PRODUCTION_DESIGN.md §3, §15.2).
 # Anything not in this set (KOREA POWDER, LOCAL POWDER, ZAMBOANGA ...) is dropped.
-VALID_GRADES = {"3X50", "6X50", "8X50", "2X6"}
+VALID_GRADES = {"3X50", "6X50", "8X50", "2X6", "4X8"}
 
 # Shift label -> canonical DB code (PRODUCTION_DESIGN.md §15.6).
 # NOTE: "NIGHT SHIFT" maps to E (the 2nd shift's canonical code in this DB), NOT N.
