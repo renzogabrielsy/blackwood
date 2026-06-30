@@ -93,7 +93,7 @@ Abort with a clear error if any fail:
 ## PROPOSE mode protocol
 
 ## Learning Ledger (read the DIGEST FIRST, every run)
-Before classifying anything, read `.claude/skills/sync-ictc/RULES_DIGEST.md` top-to-bottom every run (it is cheap — one line per rule). Consult the **full** `.claude/skills/sync-ictc/LEARNING_LEDGER.md` entry for an `L-###` ONLY when a row in front of you matches that digest line's symptom tag — then apply that entry's Rule verbatim (it OVERRIDES your heuristics). Do NOT read the entire ledger top-to-bottom on a routine run. (Production rules to know: STARTING/ENDING are batch-boundary markers, not shifts — L-007; null-shift run is recoverable from the day's other records + split `dt_mins`≥60 — L-014; a byte-identical `watermark+1` day is a date-relabel DUPLICATE, the meter is the tell — L-016.) The full ledger is still the append-only source of truth and where corrections get appended.
+Before classifying anything, read `.claude/skills/sync-ictc/RULES_DIGEST.md` top-to-bottom every run (it is cheap — one line per rule). Consult the **full** `.claude/skills/sync-ictc/LEARNING_LEDGER.md` entry for an `L-###` ONLY when a row in front of you matches that digest line's symptom tag — then apply that entry's Rule verbatim (it OVERRIDES your heuristics). Do NOT read the entire ledger top-to-bottom on a routine run. (Production rules to know: a blank/absent/unrecognized run-row shift — incl. STARTING/ENDING — now AUTO-DEFAULTS to Morning in the extractor, flagged `_shift_defaulted` + strippable note; it is NO LONGER MALFORMED for missing shift — L-025, which supersedes the manual blank-shift recovery of L-007/L-014 for that sub-case; STARTING/ENDING still carry their batch-boundary `production_batch` meaning — L-007; the WEIGHT-missing run still HOLDs and `dt_mins`≥60 still needs splitting — L-014; a byte-identical `watermark+1` day is a date-relabel DUPLICATE, the meter is the tell — L-016.) The full ledger is still the append-only source of truth and where corrections get appended.
 - **Flag, don't guess.** For any row you can't map with confidence (null-shift / MALFORMED, ambiguous batch or shift, etc.), HOLD it (never write a guess) and surface an actionable flag: **what** (date, weight, operator's raw label, your best guess + why unsure), **where** (`source_file` absolute path, sheet, exact rows), an **Open** command `open '<path>'` (first copy the flagged source file to `~/blackwood/.sync-flags/<YYYY-MM-DD>/` so it survives /tmp cleanup, and point the command there), and the one **question** to ask.
 - **Append-on-correction.** When Renzo corrects one of your classifications, append a new `L-####` entry to the ledger (Symptom / Ground truth / Rule / Provenance). Never edit or delete past entries.
 
@@ -153,7 +153,7 @@ python3 .claude/skills/sync-ictc/scripts/extract_daily_production.py \
   > "$WORK_DIR/extract_mc.json"
 ```
 `{watermark}` is the `latest` production_shifts date from Step 1 (format `YYYY-MM-DD`, e.g. `2026-05-23`). `--since` is **exclusive** — the extractor keeps only day-sheets dated STRICTLY AFTER the watermark, so the cumulative quarter workbook is filtered Python-side to just the new days. No in-process date filtering is needed; the extract is already correct.
-Output shape: `{runs[], downtime[], electricity[], trucks[], summary{day_totals,...}}`. `runs`/`downtime` carry `transaction_date, production_batch, shift`; `electricity`/`trucks` carry `reading_date` (a day-sheet's date applies to all four record types, so `--since` filters them together at the sheet level). Capture per-section counts + extractor warnings (esp. dropped KOREA/LOCAL/ZAMBOANGA rows). Note: with `--since` set past the labeled-shift cutover, the historical null-shift rows won't appear in a normal catch-up — but if any null-shift warnings do surface, capture them.
+Output shape: `{runs[], downtime[], electricity[], trucks[], summary{day_totals,...}}`. `runs`/`downtime` carry `transaction_date, production_batch, shift`; `electricity`/`trucks` carry `reading_date` (a day-sheet's date applies to all four record types, so `--since` filters them together at the sheet level). Capture per-section counts + extractor warnings (esp. dropped KOREA/LOCAL/ZAMBOANGA rows). Note (L-025): a blank/absent/unrecognized run-row shift no longer produces a null-shift row — the extractor DEFAULTS it to Morning (`_shift_defaulted=true` + a `shift defaulted to Morning (operator left blank)` remarks note) and emits a warning like `shift cell blank/absent — defaulted to Morning`. Capture those defaulted-shift warnings so the count of auto-defaulted rows is visible; they are NOT MALFORMED. The WEIGHT-missing warning (`missing TOTAL kg`) still indicates a held/MALFORMED row.
 
 ### Step 6 — Extract Ivy waste rows
 ```bash
@@ -335,13 +335,14 @@ trucks:            <reading_date | plate | start_km | end_km | fuel_liters>
 ### VALUE_CHANGED rows (per table, diff + recommendation: email_wins / db_wins / both)
 <per-row diff>
 
-### ⚠ MALFORMED / null-shift rows (NEVER written — manual fix required)
-<list: table, idx, reasons (esp. "missing shift; cannot key to production_shifts"), the raw record>
+### ⚠ MALFORMED rows (NEVER written — manual fix required)
+<list: table, idx, reasons, the raw record>
+Note (L-025): a blank/absent run-row shift is NO LONGER MALFORMED — it auto-defaults to Morning (flagged `_shift_defaulted`). Expect production_runs MALFORMED rows only for the WEIGHT guard (`ttl_kg not a non-negative number`) or a bad grade now. If a `_shift_defaulted` Morning row IS written, note "shift defaulted to Morning (operator left blank)" in its audit comment.
 
 ### Recommendations
-- Auto-approve all NEW rows (confidence ≥ 0.9). needs_shift_upsert rows: parent shift will be created first, then the child inserted.
+- Auto-approve all NEW rows (confidence ≥ 0.9). needs_shift_upsert rows: parent shift will be created first, then the child inserted. `_shift_defaulted` Morning rows are normal NEW rows — approve them and note the default in the audit comment.
 - VALUE_CHANGED: <per-row recommendation>
-- MALFORMED null-shift rows: fix the source sheet (assign a shift) and re-sync; never auto-written.
+- MALFORMED rows: fix the source sheet (supply the missing weight / correct the grade) and re-sync; never auto-written. (Blank shift no longer needs a fix — it defaults to Morning.)
 
 ### To execute
 Re-invoke me with: "EXECUTE — apply my recommendations" (and explicit decisions for any VALUE_CHANGED rows).
@@ -463,7 +464,7 @@ production_downtime:  inserted <N> | updated <M>
 production_waste:     inserted <N> | updated <M>
 electricity_readings: inserted <N>
 truck_readings:       inserted <N>
-MALFORMED skipped:    <K> (null-shift / unparseable — never written)
+MALFORMED skipped:    <K> (missing weight / bad grade / unparseable — never written; blank shift auto-defaults to Morning, not MALFORMED — L-025)
 Labeled Blackwood-Processed: <L> threads (MC + Ivy)
 Audit logs written: <A>
 
@@ -488,7 +489,7 @@ production_shifts latest date: <date>
 | MC or Ivy XLSX extraction error | Log file + stderr, skip that source for this run, continue with the other, mention prominently in summary |
 | Reconciliation drift (any magnitude) | **NEVER halt.** Surface as informational trend. The RC-IN→production daily imbalance is work-in-process inventory, not a data error. |
 | Internal arithmetic mismatch (runs sum vs G13, waste stream-sum vs reported) | Flag in summary as a data-quality note; does not auto-block, but recommend the user inspect before approving |
-| Null-shift / MALFORMED row | Surface in the MALFORMED list; NEVER write it. Tell user to fix the source sheet and re-sync. |
+| MALFORMED row (missing WEIGHT / bad grade) | Surface in the MALFORMED list; NEVER write it. Tell user to fix the source sheet (supply weight / correct grade) and re-sync. (Blank-shift RUN rows are NO LONGER MALFORMED — the extractor defaults them to Morning per L-025; the WEIGHT guard still HOLDs.) |
 | Some child rows need a shift that doesn't exist | Normal — `needs_shift_upsert`. Upsert the parent shift first (EXECUTE Step 3), then insert the child. Not an error. |
 | Supabase write fails mid-batch | STOP. Report which writes succeeded (shifts/children/electricity/trucks). DO NOT label any Gmail threads. Manual cleanup may be needed — but the watermark + unlabeled threads make the next run safe to retry. |
 | Gmail rate limit | Back off 30s, retry once. If the second attempt fails, stop and report. |
@@ -514,7 +515,8 @@ production_shifts latest date: <date>
 
 - **Reconciliation is INFORMATIONAL — NEVER halt on drift.** This is the defining difference from the RC Out Manager (whose PROPOSED-vs-RC-MOVEMENT reconcile HARD-halts on >500 kg drift, because those two files record the *same day's* events and must match). Here, RC IN → RC OUT → (production + waste) does **not** balance per day: raw charcoal sits in the feed tank for days and only reconciles at **month-end** when the tank is emptied. Daily drift is **expected**, not a data-quality signal. Show it as a trend; never refuse to write because of it.
 - **Shifts before children, always.** Every child row FKs to `production_shifts.shift_id`. Upsert the parent by `(transaction_date, production_batch, shift)` to obtain the id, then insert children against the map. A `needs_shift_upsert` flag means the parent is absent — create it first, never skip the child.
-- **Null-shift / MALFORMED rows are surfaced, never auto-written.** The MC extractor emits historical rows that can't be keyed to a shift; they go to the MALFORMED list for a human to fix, never to the DB. Wrong/guessed shift is worse than no write.
+- **Blank-shift RUN rows now auto-default to Morning (L-025) — no longer MALFORMED for missing shift.** As of 2026-06-29 `extract_daily_production.py` defaults any run row whose column-H shift is blank/absent/unrecognized (incl. the `STARTING`/`ENDING` batch-boundary markers of L-007) to **Morning (`M`)** and flags it `_shift_defaulted=true` with a strippable `remarks` note (`shift defaulted to Morning (operator left blank)`). Evening (`E`) is set only when column H indicates it; an explicit `MORNING` label is not flagged. So you should NOT expect production_runs MALFORMED/null-shift rows for a routine blank-shift day anymore — they arrive as ordinary NEW/NOOP Morning rows. When a `_shift_defaulted` row is written, your `audit_logs` comment should note **"shift defaulted to Morning (operator left blank)"** for traceability. This pushes the manual blank-shift recovery of L-007/L-014 into the extractor for the blank-shift sub-case (those entries still govern batch-boundary `production_batch` derivation and `dt_mins≥60` splitting).
+- **The WEIGHT guard still HOLDs — the shift default does not rescue a weightless row.** A run still missing `ttl_kg` (or carrying a grade outside `{3X50,6X50,8X50,2X6}`) is still MALFORMED and surfaced for a human, never auto-written. Other MALFORMED rows are surfaced, never auto-written — a wrong/guessed value is worse than no write. (Idempotency: a defaulted Morning row re-classifies as `DUPLICATE_NOOP` against an already-written note-less Morning row — the classifier strips the note before diffing remarks, so re-runs never re-insert or false-VALUE_CHANGED.)
 - **`customer` is real.** `CEBU` is the default; `KURARAY` is a legitimate customer — never drop it. (KOREA / LOCAL / ZAMBOANGA powder is a different thing — waste-buyer sales already dropped by the extractor.)
 - **Electricity `meter_multiplier` (the 120) is a meter multiplier, not a peso rate.** `consumption_kwh = diff_kwh × meter_multiplier` is a generated column — never write it, never compute peso cost. Store raw readings + the 120 factor.
 - **Shift normalization is canonical.** MC's "NIGHT SHIFT" and Ivy's "EVENING SHIFT" are the same physical 2nd shift → both emit `E`. `MORNING SHIFT → M`. Absent shift (pre-5/25 single daily waste rows) → `M`. `N` is reserved for a true future 3rd shift and is currently unused. The extractors handle this; trust their output.

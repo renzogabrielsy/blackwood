@@ -16,17 +16,27 @@ Outcomes per extracted run (mirrors classify_rc_out.py vocabulary):
   - VALUE_CHANGED    : same natural key in DB, >=1 comparable field differs -> include diff + existing_id.
   - DUPLICATE_NOOP   : same natural key in DB, all comparable fields equal (tolerance 0.01) -> skip.
   - MALFORMED        : missing/invalid required field -> NEVER written. For runs:
-                         * shift null/empty (cannot key to production_shifts)
-                         * ttl_kg not a non-negative number
+                         * ttl_kg not a non-negative number (WEIGHT guard — still holds)
                          * grade not in {3X50, 6X50, 8X50, 2X6}
+                         * shift null/empty (DEFENSIVE only — see below)
+
+  Shift note (L-025): a blank/absent/unrecognized column-H shift is NO LONGER a
+  MALFORMED reason. extract_daily_production.py now DEFAULTS such a run to Morning
+  ('M') and flags it `_shift_defaulted=true` with a strippable remarks note, so
+  extractor output never carries a null shift. The null/empty-shift MALFORMED gate
+  below is kept purely as a defensive guard against malformed external input; the
+  WEIGHT guard (ttl_kg) is unaffected — a weightless row still HOLDs even with a
+  defaulted shift.
 
 Natural key = shift_id + customer + grade. customer/grade ARE the key (within a shift), so
-the compared (non-key) fields are: ttl_kg, sacks_bags, remarks.
+the compared (non-key) fields are: ttl_kg, sacks_bags, remarks. The SHIFT_DEFAULT_NOTE
+marker is stripped from email-side remarks before diffing (additive/write-only; L-025).
+The `_shift_defaulted` flag is informational only — never a key or compared field.
 
 Shift resolution:
   Build a map (transaction_date, production_batch.strip().upper(), shift.strip().upper()) -> shift_id
   from --shifts-json. For each extracted row:
-    * shift null/empty                 -> MALFORMED ("missing shift; cannot key to production_shifts")
+    * shift null/empty                 -> MALFORMED (defensive; extractor defaults to 'M' so this is unreachable for its output)
     * triplet found in map             -> resolved_shift_id set, needs_shift_upsert=false
     * triplet NOT found                -> resolved_shift_id=null, needs_shift_upsert=true
                                           (agent upserts the parent shift first, then inserts this child)
@@ -60,6 +70,18 @@ from typing import Any
 
 VALID_GRADES = {"3X50", "6X50", "8X50", "2X6"}
 NUM_TOLERANCE = 0.01
+
+# Marker the extractor appends to a run's `remarks` when its shift was DEFAULTED
+# to Morning (column H blank/absent/unrecognized — L-025). It is an additive,
+# write-only annotation: a row already written to the DB as Morning BEFORE this
+# feature has no note, so we strip this exact marker off the EMAIL-side remarks
+# before diffing. Without this, every previously-written defaulted row would
+# resurface as a perpetual VALUE_CHANGED (db remarks=None vs email remarks=note).
+# This mirrors the L-021 additive-field exclusion (true_weight_kg/deduction_note).
+#
+# MUST stay byte-identical to SHIFT_DEFAULT_NOTE in extract_daily_production.py —
+# keep the two constants in sync.
+SHIFT_DEFAULT_NOTE = "shift defaulted to Morning (operator left blank)"
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +121,26 @@ def nums_equal(a: Any, b: Any) -> bool:
     return abs(na - nb) <= NUM_TOLERANCE
 
 
+def strip_shift_default_note(s: Any) -> Any:
+    """
+    Remove the additive SHIFT_DEFAULT_NOTE marker from a remarks string so the
+    note never causes a false VALUE_CHANGED against a DB row that lacks it (L-025;
+    mirrors the L-021 additive-field exclusion). Handles both shapes the extractor
+    can produce: a standalone note (-> '' -> None after norm) and an appended note
+    (' | <note>' trimmed off, leaving the original remarks). Non-strings and rows
+    without the marker pass through untouched.
+    """
+    if s is None or not isinstance(s, str):
+        return s
+    if SHIFT_DEFAULT_NOTE not in s:
+        return s
+    # Drop the marker plus an optional ' | ' separator on either side.
+    out = s.replace(f" | {SHIFT_DEFAULT_NOTE}", "")
+    out = out.replace(f"{SHIFT_DEFAULT_NOTE} | ", "")
+    out = out.replace(SHIFT_DEFAULT_NOTE, "")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Shift resolution
 # ---------------------------------------------------------------------------
@@ -120,7 +162,14 @@ def build_shift_map(shifts: list[dict]) -> dict[tuple, str]:
 # Field comparison (non-key fields only)
 # ---------------------------------------------------------------------------
 def field_diff(email_row: dict, db_row: dict) -> dict[str, dict]:
-    """Return {field: {db, email}} for each differing comparable field."""
+    """Return {field: {db, email}} for each differing comparable field.
+
+    NOTE: the additive SHIFT_DEFAULT_NOTE marker is stripped off the email-side
+    `remarks` before comparison (L-025) — it is a write-only annotation, so a row
+    already written as Morning (DB remarks=None) must not perpetually re-diff just
+    because the email now carries the note. The `_shift_defaulted` flag is never
+    compared or part of any key.
+    """
     diff: dict[str, dict] = {}
 
     if not nums_equal(email_row.get("ttl_kg"), db_row.get("ttl_kg")):
@@ -132,7 +181,8 @@ def field_diff(email_row: dict, db_row: dict) -> dict[str, dict]:
             "email": norm_num(email_row.get("sacks_bags")),
         }
 
-    if norm_str(email_row.get("remarks")) != norm_str(db_row.get("remarks")):
+    email_remarks = strip_shift_default_note(email_row.get("remarks"))
+    if norm_str(email_remarks) != norm_str(db_row.get("remarks")):
         diff["remarks"] = {"db": db_row.get("remarks"), "email": email_row.get("remarks")}
 
     return diff
@@ -189,6 +239,10 @@ def main() -> int:
         reasons: list[str] = []
 
         # --- MALFORMED gates ---
+        # DEFENSIVE only (L-025): the extractor now defaults a blank/absent/
+        # unrecognized column-H shift to Morning, so its output never reaches this
+        # branch. Kept to hold genuinely malformed external input (a null shift it
+        # didn't produce). The WEIGHT/grade guards below are the live gates.
         raw_shift = ex.get("shift")
         if raw_shift is None or str(raw_shift).strip() == "":
             classifications.append({

@@ -90,6 +90,27 @@ SHIFT_LABEL_TO_CODE = {
     "AFTERNOON SHIFT": "E",
 }
 
+# Default code for a run row whose column-H shift cannot be resolved to an
+# explicit label (blank/absent/unrecognized — e.g. the STARTING/ENDING batch
+# boundary markers of L-007). Such rows are no longer MALFORMED for "missing
+# shift"; they default to Morning and link to that date's M parent normally
+# (PRODUCTION_DESIGN.md §15.2/§15.6; ledger L-025, which supersedes the manual
+# blank-shift recovery of L-007/L-014 for this sub-case).
+DEFAULT_RUN_SHIFT = "M"
+
+# Stable, strippable marker appended to a run's `remarks` when its shift was
+# DEFAULTED to Morning because column H was blank/absent/unrecognized (NOT when
+# H explicitly said MORNING). It is the audit trail a human reads to tell an
+# auto-defaulted row from an explicitly-marked one.
+#
+# This is an ADDITIVE, write-only annotation: the classifier strips this exact
+# marker off the email-side remarks before diffing (mirrors the L-021 pattern
+# for true_weight_kg/deduction_note), so an already-written Morning row whose DB
+# remarks lack the note stays DUPLICATE_NOOP rather than a perpetual
+# VALUE_CHANGED. The constant MUST stay byte-identical to SHIFT_DEFAULT_NOTE in
+# classify_production_runs.py — keep the two in sync.
+SHIFT_DEFAULT_NOTE = "shift defaulted to Morning (operator left blank)"
+
 # production_batch = full English month name UPPERCASE derived from transaction_date.
 MONTH_NAME_UPPER = {
     1: "JANUARY", 2: "FEBRUARY", 3: "MARCH", 4: "APRIL", 5: "MAY", 6: "JUNE",
@@ -251,6 +272,48 @@ def normalize_shift(label: Any) -> tuple[str | None, str | None]:
     return code, None
 
 
+def resolve_run_shift(label: Any) -> tuple[str, bool, str | None]:
+    """
+    Resolve a run row's shift from its column-H value, applying the L-025 default.
+
+    Returns (shift_code, defaulted, warning):
+      - Explicit Evening label (NIGHT/EVENING/AFTERNOON SHIFT -> 'E')  -> ('E', False, None)
+      - Explicit Morning label (MORNING SHIFT/MORNING -> 'M')          -> ('M', False, None)
+      - Blank / absent / unrecognized (incl. STARTING/ENDING, L-007)   -> (DEFAULT_RUN_SHIFT, True, why)
+        `defaulted=True` flags that the shift was assumed, not stated; `warning`
+        records the reason (so the run carries it for transparency). A blank-shift
+        run is NO LONGER MALFORMED for "missing shift" — it defaults to Morning.
+    """
+    code, warn = normalize_shift(label)
+    if code is not None:
+        # Explicit label (Morning or Evening) — not a default.
+        return code, False, None
+    # Blank/absent (warn is None) or unrecognized (warn set, e.g. STARTING/ENDING).
+    raw = coerce_str(label)
+    if raw is None:
+        reason = "shift cell blank/absent — defaulted to Morning"
+    else:
+        reason = f"unrecognized shift '{raw}' — defaulted to Morning"
+    return DEFAULT_RUN_SHIFT, True, reason
+
+
+def append_note(existing: str | None, note: str) -> str:
+    """
+    Append `note` to a remarks string, preserving any existing text.
+
+    Currently runs have no other remarks source, so `existing` is virtually always
+    None and the result is just the note; written so that if a row ever does carry
+    other remarks text the note is appended (separated by ' | ') rather than
+    overwriting it. The note stays strippable by the classifier either way.
+    """
+    base = coerce_str(existing)
+    if base is None:
+        return note
+    if note in base:
+        return base
+    return f"{base} | {note}"
+
+
 def split_multiline(value: Any) -> list[str]:
     """Split a newline-separated cell into non-empty trimmed lines (skips blank spacer lines)."""
     s = coerce_str(value)
@@ -320,13 +383,16 @@ def extract_runs(
 
         ttl_kg = coerce_float(ws.cell(r, COL_RUN_TTL_KG).value)
         sacks = coerce_int(ws.cell(r, COL_RUN_SACKS).value)
-        shift_code, shift_warn = normalize_shift(ws.cell(r, COL_RUN_SHIFT).value)
+        # Shift default (L-025): explicit Evening -> 'E'; explicit Morning -> 'M';
+        # blank/absent/unrecognized (incl. STARTING/ENDING, L-007) -> 'M' defaulted.
+        # A blank shift is no longer MALFORMED — only a missing WEIGHT still holds.
+        shift_code, shift_defaulted, shift_warn = resolve_run_shift(
+            ws.cell(r, COL_RUN_SHIFT).value
+        )
 
         row_warnings: list[str] = []
         if shift_warn:
             row_warnings.append(shift_warn)
-        if shift_code is None:
-            row_warnings.append(f"missing/invalid shift for grade {grade}")
         if ttl_kg is None:
             row_warnings.append(f"missing TOTAL kg (G{r}) for {grade}")
         elif ttl_kg < 0:
@@ -334,6 +400,11 @@ def extract_runs(
 
         for w in row_warnings:
             sheet_warnings.append(f"[{ws.title.strip()}] runs R{r}: {w}")
+
+        # Transparency marker: only when the shift was DEFAULTED (blank/absent/
+        # unrecognized), never when column H explicitly said MORNING. The note is
+        # additive/write-only — the classifier strips it before diffing remarks.
+        remarks = append_note(None, SHIFT_DEFAULT_NOTE) if shift_defaulted else None
 
         confidence = max(0.0, 1.0 - 0.10 * len(row_warnings))
 
@@ -345,7 +416,8 @@ def extract_runs(
             "grade": grade,
             "ttl_kg": ttl_kg,
             "sacks_bags": sacks,
-            "remarks": None,
+            "remarks": remarks,
+            "_shift_defaulted": shift_defaulted,
             "_source_sheet": ws.title.strip(),
             "_source_row": r,
             "warnings": row_warnings,

@@ -18,12 +18,12 @@ The PROD sheet has **three side-by-side sub-tables**, each tracking a different 
 |---|---|---|---|---|
 | A | DATE | date | 2026-05-23 | |
 | B | BATCH | text | MAY | Month name UPPERCASE, used as `production_batch` |
-| C | GRADE | text | 3X50 / 6X50 / 8X50 / 2X6 | One of 4 mesh sizes |
+| C | GRADE | text | 3X50 / 6X50 / 8X50 / 2X6 / 4X8 | One of 5 mesh sizes (4X8 added 2026-06-30 — see §14 / L-027) |
 | D | SHIFT | text | M | M = Morning, E = Evening, N = Night (confirmed shift codes) |
 | E | TTL KG | numeric | 19266 | Total kg produced of this grade this shift |
 | F | REMARKS | text/null | (often null) | |
 
-**Granularity:** One row per `(date, grade, shift)`. Typical day has 1-2 rows (3X50 + 6X50). Some days produce 4 rows (all 4 grades).
+**Granularity:** One row per `(date, grade, shift)`. Typical day has 1-2 rows (3X50 + 6X50). Some days produce a row per grade (up to 5: 3X50 / 6X50 / 8X50 / 2X6 / 4X8).
 
 **Latest row in MASTER:** R248 = 5/23, MAY, 6X50, M, 8800 kg.
 
@@ -117,13 +117,13 @@ CREATE TABLE production_runs (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   shift_id   uuid NOT NULL REFERENCES production_shifts(id),
   customer   text NOT NULL DEFAULT 'CEBU',   -- 'CEBU' | 'KURARAY' | ...
-  grade      text NOT NULL,                  -- '3X50' | '6X50' | '8X50' | '2X6'
+  grade      text NOT NULL,                  -- '3X50' | '6X50' | '8X50' | '2X6' | '4X8'
   ttl_kg     numeric NOT NULL CHECK (ttl_kg >= 0),
   sacks_bags integer,
   remarks    text,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (shift_id, customer, grade),
-  CHECK (grade IN ('3X50', '6X50', '8X50', '2X6'))
+  CHECK (grade IN ('3X50', '6X50', '8X50', '2X6', '4X8'))   -- '4X8' added 2026-06-30 (migration 20260630000000; L-027)
 );
 CREATE INDEX idx_production_runs_shift_id ON production_runs(shift_id);
 CREATE INDEX idx_production_runs_customer ON production_runs(customer);
@@ -140,8 +140,8 @@ MC writes the grade column with a prefix. The extractor uses a strict allowlist 
 
 | MC's text | Where it goes | How we route it |
 |---|---|---|
-| `CEBU 3X50` / `CEBU 6X50` / `CEBU 8X50` / `CEBU 2X6` | `production_runs` | Strip `CEBU ` prefix → grade column |
-| Bare `3X50` / `6X50` / etc. (from MASTER backfill) | `production_runs` | Use as-is |
+| `CEBU 3X50` / `CEBU 6X50` / `CEBU 8X50` / `CEBU 2X6` / `CEBU 4X8` | `production_runs` | Strip `CEBU ` prefix → grade column |
+| Bare `3X50` / `6X50` / `4X8` / etc. (from MASTER backfill) | `production_runs` | Use as-is |
 | `KOREA POWDER` / `LOCAL POWDER` / `ZAMBOANGA <anything>` | **IGNORED** | Out of Production Manager scope per Renzo (2026-05-27). Future Bagging / Waste Sales Manager owns these. |
 | Anything else not matching the allowlist | **IGNORED** with a warning in the extractor summary | Surface for manual review; do NOT auto-write |
 
@@ -590,7 +590,7 @@ The base 12-hour estimate from Section 11 still holds — adding `rc_tank_level`
 - ✅ **ONE Production Manager** — owns production runs / downtime / waste / electricity / trucks
 - ✅ **Shifts: M / E / N** (Morning / Evening / Night) — preparing for future 3rd shift; currently M/N in active use
 - ✅ **Full backfill from MASTER** on first run (PROD ~250 rows + ELECTRICITY monthly + TRUCKS monthly)
-- ✅ **Grade enum: 3X50 / 6X50 / 8X50 / 2X6**
+- ✅ **Grade enum: 3X50 / 6X50 / 8X50 / 2X6 / 4X8** (`4X8` added 2026-06-30 — was silently dropped before; see §14 migration `20260630000000` + L-027)
 - ✅ **DT_REASON included** — scraped from MC's daily emails (not in MASTER but present in source emails)
 - ✅ **Daily kg-in/kg-out drift is INFORMATIONAL, not a write gate** — feed tank empties at month-end; daily drift is expected from work-in-process inventory
 - ✅ **Electricity + Trucks join the Production Manager's scope** (instead of separate Utilities agent) — same source email
@@ -634,7 +634,12 @@ All previously-open questions have been answered by Phase 0 inspection — see S
 | `20260527030000_add_customer_to_production_runs` | 2026-05-27 | Added `customer` column (default `CEBU`) to production_runs and included in natural key. Triggered by MASTER's 2026-04-16 KURARAY event. Backfilled: 205 CEBU + 2 KURARAY rows. |
 | `20260527040000_restructure_production_to_shifts_model` | 2026-05-28 | **Major restructure.** Created `production_shifts` parent table. Backfilled 158 shift rows from child UNION. Added `shift_id` FK to all 3 child tables. Swapped natural keys to shift_id-based. Dropped `transaction_date`, `production_batch`, `shift` from child tables. Dropped 7 SKS columns from production_waste. Dropped old date-based indexes, added FK indexes. |
 | `20260527040001_rewrite_view_production_daily` | 2026-05-28 | Rewrote view_production_daily. Now drives from production_shifts (LEFT JOIN to children via shift_id). Exposes `shift_id` as row identifier. SKS columns removed. FULL OUTER JOIN replaced by LEFT JOIN from parent. |
+| `20260630000000_add_4x8_to_production_runs_grade_check` | 2026-06-30 | **4X8 grade enabled.** Dropped + re-added `production_runs_grade_check` to allow `'4X8'` (now a 5-element array `['3X50','6X50','8X50','2X6','4X8']`). `grade` stays `text` — no type change, no data rewrite, no type regen. Forward-only: lets future syncs capture 4X8; historical 4X8 below the watermark is NOT backfilled (separate decision). Root cause: 4X8 is a real finished grade (MC writes it verbatim as `4X8`) that was silently dropped from `production_runs` on every sync because it was missing from BOTH the extractor `VALID_GRADES` allowlist AND this DB CHECK — a value must pass both gates. The extractor side was fixed separately (`extract_daily_production.py`). Verified live: constraint def includes `4X8`; `4X8` + `3X50` both pass a rolled-back probe insert; bogus grade still rejected. See L-027. |
 | `20260529000000_rework_electricity_to_meter_multiplier` | 2026-05-29 | **Electricity semantics fix.** Renamed `electricity_readings.rate_php_per_kwh → meter_multiplier` (kept NOT NULL DEFAULT 120 + values; renamed the dependent CHECK constraint to match). Added generated stored column `consumption_kwh = (end_kwh - start_kwh) × meter_multiplier` (defined against BASE columns — Postgres forbids referencing the generated `diff_kwh`). Dropped `view_electricity_monthly` (referenced the old column + computed bogus `month_ttl_php` peso math; UI removed May 2026, unqueried). DB stores raw readings + the 120 factor, so MAIN's 331 rows recompute automatically — no row rewrite. Row counts unchanged (MAIN 331 / BUNKHOUSE 205 / PUMP 205). MAIN 2026-05-23 verified: 7.0 × 120 = 840 kWh. Data layer (`electricity/actions.ts`, `types/supabase.ts`) updated; `electricity-grid.tsx` UI refs left for the frontend engineer. `view_trucks_monthly` left intact (different table, unused but out of electricity scope). |
+
+### Addendum — extractor-level behavior change (NO DB migration)
+
+> **2026-06-29 · run-shift DEFAULT rule (ledger L-025).** This is a change to the **MC production_runs extractor + classifier only** — there is **NO schema/DB migration** (no new column, no constraint change; the `production_shifts.shift` `CHECK (shift IN ('M','E','N'))` and the `production_runs` natural key are untouched). Behavior: `extract_daily_production.py` now DEFAULTS a run row whose column-H shift is blank/absent/unrecognized (incl. the `STARTING`/`ENDING` batch-boundary markers of L-007) to **Morning (`M`)** instead of emitting `shift=null` (which the classifier marked MALFORMED). Evening (`E`) is set only when column H indicates it; an explicit `MORNING` label is not flagged. A defaulted row carries `_shift_defaulted=true` + a strippable `remarks` note (sentinel `SHIFT_DEFAULT_NOTE`, additive/write-only and stripped from the email side in `classify_production_runs.py::field_diff`, so already-written Morning rows stay `DUPLICATE_NOOP`). The **WEIGHT guard is preserved** — a run still missing `ttl_kg` still HOLDs/MALFORMED, as does a bad grade. Files: `extract_daily_production.py`, `classify_production_runs.py`. Supersedes the manual blank-shift recovery workflow of L-007/L-014 for the blank-shift sub-case only (those entries remain valid for batch-boundary `production_batch` derivation and `dt_mins≥60` splitting).
 
 ---
 
@@ -667,10 +672,18 @@ Both files are **consolidated/cumulative** (the latest email carries the whole 2
 | `E{r}` | #sacks/bags |
 | `F{r}` | #kilos per sack |
 | `G{r}` | **TOTAL kg** (= E×F) → `ttl_kg` |
-| `H{r}` | Shift label: `MORNING SHIFT` / `NIGHT SHIFT` |
+| `H{r}` | Shift label: `MORNING SHIFT` / `NIGHT SHIFT` (often blank, or a `STARTING`/`ENDING` batch-boundary marker — see run-shift default below) |
 | `C13`,`G13` | `TOTAL` row, day total (CEBU only) — reconciliation check |
 
-Routing: strip `CEBU ` → `grade`, `customer='CEBU'`. Bare grade (no prefix) → as-is. **DROP** `KOREA POWDER`, `LOCAL POWDER`, `ZAMBOANGA …` and any non-allowlist grade (out of v1 scope). Shift `NIGHT SHIFT → E`.
+Routing: strip `CEBU ` → `grade`, `customer='CEBU'`. Bare grade (no prefix) → as-is. Allowlist (`VALID_GRADES`) = `3X50 / 6X50 / 8X50 / 2X6 / 4X8`. **DROP** `KOREA POWDER`, `LOCAL POWDER`, `ZAMBOANGA …` and any non-allowlist grade (out of v1 scope). Shift `NIGHT SHIFT → E`.
+
+**Run-shift DEFAULT rule (extractor-level, added 2026-06-29 — ledger L-025).** Column `H{r}` is frequently blank/absent, or carries a `STARTING`/`ENDING` batch-boundary marker (L-007) rather than a shift word. `extract_daily_production.py::resolve_run_shift()` now resolves a run's shift deterministically:
+- `H{r}` explicitly indicates **Evening** (maps to `E` via `SHIFT_LABEL_TO_CODE`: `NIGHT SHIFT`/`EVENING SHIFT`/`EVENING`/`NIGHT`/`AFTERNOON SHIFT`) → `shift='E'`.
+- **Everything else** — blank, absent, unrecognized (incl. `STARTING`/`ENDING`), OR an explicit **Morning** label (`MORNING SHIFT`/`MORNING`) → `shift='M'` (default to Morning).
+
+A blank-shift run is therefore **NO LONGER MALFORMED for "missing shift"** — it gets Morning by default and links to that date's `M` parent normally (this pushes the manual blank-shift recovery of L-007/L-014 into the extractor for the blank-shift sub-case). **The WEIGHT guard is preserved:** a run still missing `ttl_kg` (G{r}) is still held/MALFORMED, and a grade outside `{3X50,6X50,8X50,2X6,4X8}` is still MALFORMED — the shift default does NOT rescue a weightless or bad-grade row.
+
+**Transparency marker.** When a run's shift was defaulted *because column H was blank/absent/unrecognized* (NOT when H explicitly said `MORNING`), the run dict carries `_shift_defaulted: true` AND the constant note `shift defaulted to Morning (operator left blank)` is written into the run's `remarks` (the audit trail a human reads to tell auto-defaulted rows from explicitly-marked ones). An explicit `MORNING` label sets no flag and adds no note. This note is **additive/write-only**: `classify_production_runs.py::field_diff` strips it from the email-side remarks before diffing, so a Morning row already in the DB without the note stays `DUPLICATE_NOOP` (idempotent), never a perpetual `VALUE_CHANGED`. The sentinel `SHIFT_DEFAULT_NOTE` is defined once in `extract_daily_production.py` and duplicated byte-identically in `classify_production_runs.py` (they must stay in sync). The `_shift_defaulted` flag is never part of any natural key or diff.
 
 **Section B — Downtime → `production_downtime`** (left block ~rows 24–27):
 
@@ -757,7 +770,10 @@ Conclusion: MASTER's WASTE SUMMARY IS Ivy's email with renamed headers (FILTER=B
 | `NIGHT SHIFT` | MC | `E` |
 | `EVENING SHIFT` | Ivy | `E` |
 | (absent, single daily waste row) | Ivy pre-5/25 | `M` |
+| (blank / absent / unrecognized **on a RUN row**, incl. `STARTING`/`ENDING`) | MC | `M` (DEFAULTED — flagged `_shift_defaulted`; ledger L-025) |
 | (future 3rd shift) | — | `N` (reserved, unused) |
+
+> **Run-shift default (L-025, 2026-06-29):** for MC **production_runs** rows, a blank/absent/unrecognized column H now defaults to `M` at extraction time (was previously emitted as `shift=null` → MALFORMED). Evening (`E`) is set only when column H indicates it. The defaulted row is marked `_shift_defaulted=true` + a strippable `remarks` note for transparency. The WEIGHT guard is unaffected — a run still missing `ttl_kg` still HOLDs. See §15.2 "Run-shift DEFAULT rule" for the full contract.
 
 ### 15.7 Remaining minor open items (non-blocking; sensible defaults chosen)
 
@@ -766,6 +782,7 @@ Conclusion: MASTER's WASTE SUMMARY IS Ivy's email with renamed headers (FILTER=B
 3. **Truck `fuel_liters`** — use `H` (Liters issued); `L` (Weekly Fuel Issued) is weekly-cumulative — decide whether to record. Gauge `J/K` → remarks.
 4. **Truck 3rd vehicle (row 51)** — plate often blank (FORKLIFT?). Enumerate full plate list during build.
 5. **Pre-5/25 Ivy single-row days** — waste attached to `M` (consistent with the downtime→M rule).
+   **RESOLVED for MC runs 2026-06-29 (L-025):** a blank/absent/unrecognized run-row shift now defaults to `M` in the extractor (flagged `_shift_defaulted` + strippable note), instead of surfacing as a MALFORMED null-shift row for the agent to recover by hand. The WEIGHT-missing MALFORMED path is unchanged. (Waste-row absent-shift handling is separate and unchanged — Ivy's absent `V` still → `M`.)
 6. **`--since YYYY-MM-DD` watermark filter (added 2026-05-29)** — both extractors (`extract_daily_production.py`, `extract_waste_production.py`) gained an optional `--since` flag that keeps only records dated *strictly after* the watermark (exclusive — the watermark is the latest already-ingested date, not re-ingested). The agent now passes `--since {watermark}` alongside `--all-sheets`, so the cumulative workbooks (MC's quarter, Ivy's year) are filtered deterministically Python-side instead of in agent prose. Fixes the cumulative-workbook window bug found in the 2026-05-29 e2e test: without it the classifier's DB comparison window ballooned to ~5 months and 74 historical null-shift rows surfaced as MALFORMED noise. Omitting `--since` preserves the full-history backfill behavior unchanged.
 
 ---
