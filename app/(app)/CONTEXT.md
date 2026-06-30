@@ -62,6 +62,39 @@ values into views.
   **Renders `null` when no truck moved that day** (skips the band, matching how
   other bands avoid hollow cards). Rendered between the charts and the sync band
   in `page.tsx`. Source: `data.trucks` (see Data below).
+- `components/digest/open-blocks.tsx` — **Server component** (no interactivity;
+  Batch sub-label uses a native `title` tooltip, not shadcn Tooltip). A COMPACT
+  at-a-glance **card grid** — one card per currently-occupied block
+  (STORED/IN-USE), `block_loc` ascending — chosen because only a few blocks are
+  ever in-use, so cards read better than a dense table. Responsive grid
+  `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`. Each card, top→bottom:
+  **(1) header** — prominent `blockLoc` (`font-mono text-lg`) over a muted,
+  truncated `batchCode` sub-label (`title={batchCode}`), with a status dot+label
+  top-right (IN-USE `bg-primary` / else `bg-muted-foreground/40`);
+  **(2) the centerpiece "volume left" bar** — big `fmtKg(balanceKg)` + "kg left"
+  with "{pct}% remaining" and an "of {total}" sub-caption; fraction =
+  `balanceKg / totalInKg`, **guarded for `totalInKg === 0`** and **clamped [0,1]**;
+  a `h-2.5 rounded-full bg-muted` track holds a fill whose static width is the
+  inline `style={{ width: `${pct}%` }}` (server-rendered) and which **grows from
+  the LEFT on mount via `transform: scaleX`** (class `animate-status-grow` +
+  `origin-left` to override the utility's default `right center` origin — NEVER
+  animates width); fill tint by depletion via `depletionFill()` —
+  `< 0.20 → bg-red-500`, `< 0.50 → bg-primary`, `≥ 0.50 → bg-emerald-500`;
+  **(3) a compact 7-stat lab mini-grid** (`grid-cols-4`) — MC · ASH · BD ASTM ·
+  BD JIS · GRIT · VM · FC, each a tiny uppercase label over a mono value, 2 dp for
+  MC/ASH/GRIT/VM/FC and 3 dp for BD ASTM/JIS;
+  **(4) an optional gated ₱/kg line**. Wrapped in the same glass card frame as
+  trucks-summary (`bg-card/95 backdrop-blur … hover-lift`), and each card carries
+  its own `hover-lift` (cards, not rows — allowed). **Price gating is INFERRED**
+  (no `canViewPrices` flag on the contract): `showPrice =
+  openBlocks.some(b => b.phpKg !== null)` — when every card is null (Production
+  role gated server-side) NO ₱ element renders ANYWHERE; when shown, `phpKg === 0`
+  → `—` ("no priced deliveries", distinct from `null` = gated). Motion:
+  `animate-fade-up` + `hover-lift` on the outer band, `stagger-fast` on the card
+  grid (small ≤-handful group — allowed, NOT the 100+-instance table case), and
+  the bar fill's one-shot `animate-status-grow` scaleX. **Renders `null` when
+  empty.** Rendered between the trucks band (C2) and the sync band (D) in
+  `page.tsx`. Source: `data.openBlocks` (see Data below).
 - `components/digest/sync-summary.tsx` — Server component. Compact header from
   `data.latestSync`: "{date} · {n} new · {n} updated (· {n} removed)" + per-
   employee count chips (`byEmployee`).
@@ -81,12 +114,13 @@ values into views.
 ## Data
 - **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
   (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`,
-  plus the `truck_readings` table for the trucks band. The contract in
+  the `truck_readings` table for the trucks band, and `view_blocking_grid` for the
+  open-blocks band. The contract in
   `lib/digest/types.ts` is intentionally stable — extend it deliberately (as with
   `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
-  price, grades, latestSync, activity, flags, monthToDate, trucks }`.
+  price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -107,6 +141,18 @@ values into views.
     `ttl_km` is a GENERATED column (= end_km − start_km); `> 0` ⇒ "had a trip".
     Keyed on the SAME `operationalDate` as the KPIs (fetched after it resolves,
     same pattern as the `rcInSub` follow-up query). Empty array ⇒ band hidden.
+  - `openBlocks[]` — `{ blockLoc, batchCode, status, balanceKg, totalInKg, mc, ash,
+    bdAstm, bdJis, grit, vm, fc, phpKg }`. Currently-occupied blocks, `block_loc`
+    ascending. `totalInKg` (total RC-IN ever delivered to the block) is the
+    "volume left" bar denominator (`balanceKg / totalInKg`).
+    Queried from `view_blocking_grid` (all aggregation is the view's job — light
+    passthrough only): `.in('status', ['STORED','IN-USE']).order('block_loc', asc)`.
+    The `.in()` filter is load-bearing — the view ALSO returns SUNDRYING/SUNDRIED
+    (outside this band's contract), so they're excluded in the query. Current-state,
+    NOT date-keyed (independent of `operationalDate`). `phpKg` is **gated by
+    `canViewPrices()`** (`lib/auth.ts`): nulled SERVER-SIDE for the Production role
+    before the payload leaves; a visible-but-`0` value means "no priced deliveries"
+    (distinct from `null` = gated).
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
@@ -124,8 +170,13 @@ values into views.
 - **Trucks band** — lists trucks with `ttl_km > 0` on the operational date; the
   whole band disappears on a no-movement day (renders `null`).
 - **Motion** — `animate-fade-up` on header/feed container, `stagger-children`
-  on the KPI grid, `hover-lift` on cards/charts. Activity rows use only a
-  `transition-colors` hover, no per-row entrance.
+  on the KPI grid, `hover-lift` on cards/charts. The Open Blocks band is a small
+  card grid (≤ a handful), so it uses `stagger-fast` + per-card `hover-lift`
+  (allowed for small groups), and each card's volume bar fill grows from the left
+  on mount via `animate-status-grow` (`transform: scaleX`, `origin-left`) — never
+  animating width. The activity feed stays a single container fade with rows
+  using only a `transition-colors` hover and no per-row entrance (the
+  "never animate 100+ instances" rule).
 - **Navbar** — `/` returns `null` from `getBreadcrumb()`, so the left side stays
   empty (no redundant title). The digest renders its own sub-band header only.
 

@@ -8,6 +8,7 @@ import { SyncSummary } from "@/components/digest/sync-summary";
 import { ActivityFeed } from "@/components/digest/activity-feed";
 import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
+import { OpenBlocks } from "@/components/digest/open-blocks";
 
 export default async function DigestPage() {
   const data = await getDigestData();
@@ -20,6 +21,14 @@ export default async function DigestPage() {
         lastSyncAt={data.meta.lastSyncAt}
         freshness={data.meta.freshness}
       />
+
+      {/* Open blocks — current in-use inventory, surfaced at the very top (at-a-glance) */}
+      <section>
+        <OpenBlocks
+          openBlocks={data.openBlocks}
+          operationalDate={data.meta.operationalDate}
+        />
+      </section>
 
       {/* B. Hero — today's operations */}
       <section>

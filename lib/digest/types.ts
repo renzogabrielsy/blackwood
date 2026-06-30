@@ -105,6 +105,30 @@ export interface TruckTrip {
   remarks: string | null;
 }
 
+// ---------- Open blocks band ----------
+
+/** An OPEN block — one actively IN-USE (being fed/consumed) — with its running
+ *  balance and weighted-avg lab stats. All aggregation comes from
+ *  view_blocking_grid; this is a row-level passthrough. `phpKg` is null when
+ *  prices are gated (Production role) — nulled server-side, never hidden only
+ *  on the client. `totalInKg` is the total ever delivered to the block, so the
+ *  UI can show "volume left" as balanceKg / totalInKg. */
+export interface OpenBlock {
+  blockLoc: string;
+  batchCode: string;
+  status: string;          // 'IN-USE'
+  balanceKg: number;
+  totalInKg: number;       // total RC-IN ever delivered to this block (bar denominator)
+  mc: number;
+  ash: number;
+  bdAstm: number;
+  bdJis: number;
+  grit: number;
+  vm: number;
+  fc: number;
+  phpKg: number | null;    // null when prices are gated (Production role)
+}
+
 // ---------- Sync band ----------
 
 export interface SyncEmployeeStat {
@@ -177,4 +201,7 @@ export interface DigestData {
   monthToDate: MonthToDate;
   /** Trucks with a trip (ttl_km > 0) on the operational date, busiest first. */
   trucks: TruckTrip[];
+  /** Currently-occupied blocks (STORED/IN-USE) with balance + lab stats,
+   *  block_loc ascending. phpKg is null when prices are gated (Production). */
+  openBlocks: OpenBlock[];
 }

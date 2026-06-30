@@ -13,6 +13,7 @@
 
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import { canViewPrices } from "@/lib/auth";
 import type {
   DigestData,
   DigestKpi,
@@ -30,6 +31,7 @@ import type {
   Freshness,
   DigestMeta,
   TruckTrip,
+  OpenBlock,
 } from "./types";
 
 // Trailing-window sizes (kept here, not in SQL, so the contract windows
@@ -91,6 +93,22 @@ interface TruckReadingRow {
   ttl_km: number | string | null;
   fuel_liters: number | string | null;
   remarks: string | null;
+}
+interface BlockingGridRow {
+  batch_id: string;
+  batch_code: string;
+  block_loc: string;
+  status: string;
+  balance: number | string | null;
+  total_in: number | string | null;
+  avg_php_kg: number | string | null;
+  avg_bd_astm: number | string | null;
+  avg_bd_jis: number | string | null;
+  avg_ash: number | string | null;
+  avg_mc: number | string | null;
+  avg_grit: number | string | null;
+  avg_vm: number | string | null;
+  avg_fc: number | string | null;
 }
 interface MtdRow {
   label: string;
@@ -174,7 +192,11 @@ export async function getDigestData(): Promise<DigestData> {
   const supabase = await createClient();
 
   // Fetch everything in parallel. Views carry the aggregation.
+  // canViewPrices() is the canonical price gate (respects the dev
+  // impersonation cookie, fails closed); resolved concurrently here so
+  // ₱ fields can be nulled SERVER-SIDE before the payload leaves.
   const [
+    showPrices,
     opDaysRes,
     streamsRes,
     flowRes,
@@ -188,7 +210,9 @@ export async function getDigestData(): Promise<DigestData> {
     activityRes,
     flagAuditRes,
     zeroCostRes,
+    blockingRes,
   ] = await Promise.all([
+    canViewPrices(),
     supabase.from("view_digest_operational_days").select("*").maybeSingle(),
     supabase.from("view_digest_stream_freshness").select("*"),
     supabase.from("view_digest_daily_flow").select("*").order("date", { ascending: true }),
@@ -215,6 +239,17 @@ export async function getDigestData(): Promise<DigestData> {
       .limit(20),
     // count of unpriced deliveries (cost_basis = 0) in the trailing 30 days
     supabase.from("view_digest_unpriced_recent").select("*").maybeSingle(),
+    // OPEN blocks = the ones actively IN USE (being fed/consumed) — NOT STORED.
+    // view_blocking_grid already does ALL aggregation and excludes CLOSED/empty
+    // rows; filter to IN-USE only here. Current-state, not date-keyed, so it's
+    // independent of operationalDate.
+    supabase
+      .from("view_blocking_grid")
+      .select(
+        "batch_id, batch_code, block_loc, status, balance, total_in, avg_php_kg, avg_bd_astm, avg_bd_jis, avg_ash, avg_mc, avg_grit, avg_vm, avg_fc"
+      )
+      .eq("status", "IN-USE")
+      .order("block_loc", { ascending: true }),
   ]);
 
   const opDays = (opDaysRes.data as OperationalDaysRow | null) ?? {
@@ -340,6 +375,27 @@ export async function getDigestData(): Promise<DigestData> {
       remarks: t.remarks,
     }));
   }
+
+  // ---------- open blocks (currently-occupied, STORED/IN-USE) ----------
+  // Row-level passthrough of view_blocking_grid (all aggregation is the
+  // view's job). phpKg is nulled SERVER-SIDE when prices are gated, so a
+  // no-price (Production) user never receives ₱ data in the payload.
+  const blockingRows = (blockingRes.data as BlockingGridRow[] | null) ?? [];
+  const openBlocks: OpenBlock[] = blockingRows.map((r) => ({
+    blockLoc: r.block_loc,
+    batchCode: r.batch_code,
+    status: r.status,
+    balanceKg: round(n(r.balance)),
+    totalInKg: round(n(r.total_in)),
+    mc: round(n(r.avg_mc)),
+    ash: round(n(r.avg_ash)),
+    bdAstm: round(n(r.avg_bd_astm)),
+    bdJis: round(n(r.avg_bd_jis)),
+    grit: round(n(r.avg_grit)),
+    vm: round(n(r.avg_vm)),
+    fc: round(n(r.avg_fc)),
+    phpKg: showPrices ? round(n(r.avg_php_kg)) : null,
+  }));
 
   const kpis: DigestKpi[] = [
     {
@@ -547,6 +603,7 @@ export async function getDigestData(): Promise<DigestData> {
     flags,
     monthToDate,
     trucks,
+    openBlocks,
   };
 }
 
