@@ -210,8 +210,16 @@ def main() -> int:
         all_rows.extend(rows)
         all_warnings.extend(warns)
 
-    # Build a date -> fed_kls lookup for convenient reconciliation
-    date_index = {r["transaction_date"]: r["raw_charcoal_fed_kls"] for r in all_rows}
+    # Build a date -> fed_kls lookup for convenient reconciliation.
+    # A boundary date can appear on MORE THAN ONE month-tab (e.g. May 29 closes out
+    # on the "MAY 2026" tab and opens on the "JUNE 2026" tab). SUM across tabs —
+    # never overwrite — otherwise a cross-month date undercounts here, and the
+    # DB-vs-RC-MOVEMENT duplication gate (L-019) reads the DB's correct cross-tab
+    # total as a phantom excess and false-halts. (L-022)
+    date_index: dict[str, float] = {}
+    for r in all_rows:
+        _d = r["transaction_date"]
+        date_index[_d] = round(date_index.get(_d, 0.0) + r["raw_charcoal_fed_kls"], 2)
 
     output = {
         "filename": path.name,
