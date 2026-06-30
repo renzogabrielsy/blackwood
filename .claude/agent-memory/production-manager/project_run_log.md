@@ -11,6 +11,70 @@ Live DB watermark = `MAX(production_shifts.transaction_date)`. The DB watermark
 (not the Gmail label) is the real idempotency guard — trust it over any stale
 "already synced through X" note in a launch prompt.
 
+## 2026-06-30 — Jun 29 catch-up (auto-execute daily sync, L-025 first run)
+**Why:** daily ICTC sync, auto-execute. L-025 first live run: blank/unrecognized shift rows now default to Morning automatically and are written (not held).
+**State before:** production_shifts/waste/electricity → 2026-06-27; trucks → 2026-06-22 (still lagging — no truck rows in Jun 28/29 MC sheets).
+
+- **MC "Daily Production Report":** 1 new email (UID 121279, Jun 30). Latest: `Daily Production Report 2026 2Q.xlsx`. Sheet `06-29-26` only (1 day after `--since 2026-06-27`; Jun 28 = Sunday, not filed).
+- **Ivy "WASTE PRODUCTION REPORT":** 1 new email (UID 121281, Jun 30). 1 new waste row: Jun 29 M.
+- **L-025 first live run:** 2 run rows with operator labels "DAY SHIFT" and "OVERTIME" — both defaulted to Morning per L-025. Both had `_shift_defaulted=True` and `grade=3X50`, with weights.
+- **L-026 triggered (new rule):** Both rows mapped to `(shift_id=e7cd956a, CEBU, 3X50)` — same natural key. INSERT of two rows failed `23505 duplicate key production_runs_natural_key`. Resolution: COMBINED into one row: 16,380 + 6,890 = **23,270 kg**, 630 + 265 = **895 sacks**, with remarks noting both segments. One combined INSERT succeeded.
+- **Upserted 1 new production_shifts:** 6/29 JUNE M (`e7cd956a-e988-4a81-b730-3ed3a1237f82`).
+- **production_runs:** 1 row inserted (combined; `36d8034b-db29-477f-8a68-b4712290e33d`; 23,270 kg / 895 sacks; grade 3X50; customer CEBU). 2 source rows → 1 DB row per L-026. Shift auto-defaulted Morning (L-025).
+- **production_downtime:** 0 NEW (no downtime rows in Jun 29 MC sheet).
+- **production_waste:** 1 NEW (`cd7bcddc-7053-45c8-9b92-2765911ae083`; 6/29 JUNE M; rs1a=1959/rs1b=1522/bf=140/rs23=616/rs5=176/trml1=84/trml2=0.75/grit=50 = 4,547.75 kg total; remarks=PCG/BUNAWAN/ZAMBAONGA).
+- **electricity_readings:** 0 NEW (no electricity rows in Jun 29 MC sheet).
+- **truck_readings:** 0 NEW (no truck rows in Jun 29 MC sheet). Trucks still at 2026-06-22.
+- **Audit logs written:** 3. **Labeled Blackwood-Processed:** MC UID 121279 + Ivy UID 121281.
+- **State after:** production_shifts/waste → **2026-06-29**. Electricity still **2026-06-27**. Trucks still **2026-06-22**.
+
+**New ledger entries appended:** L-026 (DAY SHIFT/OVERTIME combining pattern). RULES_DIGEST updated.
+
+**MALFORMED — cumulative outstanding (never written; MC must fix source sheet):**
+1. 6/15 E — null ttl_kg (blank weight in source).
+2. 6/16 x2 — null shift; one 23,140 kg, one null weight.
+3. 6/17 — null shift (22,880 kg). [Note: with L-025 now live, if MC re-files these days, blank shift will default to Morning automatically. Only the null-weight row on 6/15 and null-weight on 6/16 will still HOLD.]
+4. 6/19 — grade 3X50, null shift (now: would auto-default to Morning on re-sync).
+5. 6/20 — grade 3X50, null shift (same).
+6. 6/22 — grade 3X50, null shift (same).
+7. 6/23 — grade 3X50, null shift (same).
+8. 6/24 — grade 3X50, null shift (same; not yet in MC workbook as of prior run).
+9. 6/25 — grade 3X50, null shift (same).
+10. 6/26 — grade 3X50, null shift (same).
+11. 6/27 — grade 3X50, null shift (21,632 kg / 832 sacks — from Jun 29 run, still outstanding).
+Action: With L-025 live, the "null shift" runs above would NOW auto-default to Morning on re-sync — only the null-weight/null-ttl_kg rows still HOLD as MALFORMED. MC should fix the blank weights on 6/15 and 6/16 (the null-kg ones).
+
+## 2026-06-29 — Jun 27 catch-up (auto-execute daily sync)
+**Why:** daily ICTC sync, full auto-execute (priority catch-up run). Sequential IMAP.
+**State before:** production_shifts/waste/electricity → 2026-06-26; trucks → 2026-06-22.
+
+- **MC "Daily Production Report":** 1 new email (UID 121190, Jun 29). Latest attachment: `Daily Production Report 2026 2Q.xlsx`. Sheet `06-27-26` only (1 day after `--since 2026-06-26`). 0 trucks in MC sheet for Jun 27.
+- **Ivy "WASTE PRODUCTION REPORT":** 1 new email (UID 121187, Jun 29). 1 new waste row: Jun 27 M.
+- **Upserted 1 new production_shifts:** 6/27 JUNE M (`ed348e7d-a2cb-4406-97c3-dc202cdbfb75`).
+- **production_runs:** 0 NEW. MALFORMED 1 (Jun 27 — 3X50 grade, null shift, 21,632 kg / 832 sacks — same recurring pattern; never written).
+- **production_downtime:** 1 NEW (6/27 M; dt_mins=8; REPAIR cleaned screens RS 2A/2B/tank 4X8, SC #9 sprocket, RS 2 changed spring). Note: remarks show 3 time ranges (8+20+15=43 min total) but extractor captured only 8 min (first range) — data quality note, inserted as extracted.
+- **production_waste:** 1 NEW (6/27 M JUNE; rs1a=2080/rs1b=2027/bf=195/rs23=750/rs5=195/trml1=145/trml2=0.5/grit=57 = 5449.5 kg total; remarks=PCG/BUNAWAN/ZAMBAONGA).
+- **electricity_readings:** 1 NEW (6/27 MAIN 579.7→587.8; chain: Jun 26 end 579.7 = Jun 27 start — clean).
+- **truck_readings:** 0 NEW (no truck row in Jun 27 MC sheet).
+- **Audit logs written:** 4. **Labeled Blackwood-Processed:** MC UID 121190 + Ivy UID 121187.
+- **State after:** production_shifts/waste/electricity → **2026-06-27**. Trucks still → **2026-06-22**.
+
+**Reconciliation (INFORMATIONAL):** runs_sum vs G13 mismatch expected — 3X50 null-shift run (21,632 kg) excluded from sum. Same as every prior run. Waste internal arithmetic: clean (stream sum = 5449.5 kg reported). Never gates writes.
+
+**MALFORMED — cumulative outstanding (never written; MC must fix source sheet):**
+1. 6/15 E — null ttl_kg (blank weight in source).
+2. 6/16 x2 — null shift; one 23,140 kg, one null weight.
+3. 6/17 — null shift (22,880 kg).
+4. 6/19 — grade 3X50, null shift.
+5. 6/20 — grade 3X50, null shift.
+6. 6/22 — grade 3X50, null shift (20,800 kg / 800 sacks).
+7. 6/23 — grade 3X50, null shift (21,736 kg / 836 sacks).
+8. 6/24 — grade 3X50, null shift (unknown kg — not yet in MC workbook as of this run; MC sheet only went to Jun 27 via Jun 27 sheet; Jun 24-26 3X50 rows status unknown).
+9. 6/25 — grade 3X50, null shift (same).
+10. 6/26 — grade 3X50, null shift (same).
+11. 6/27 — grade 3X50, null shift (21,632 kg / 832 sacks — this run).
+Action: MC needs to assign shift labels to STARTING/ENDING annotated rows; re-sync once fixed.
+
 ## 2026-06-24 — full catch-up Jun 22–23 (auto-execute daily sync)
 **Why:** one-click daily ICTC sync, full auto-execute. Running alone (sequential) to avoid IMAP connection limits.
 **State before:** production_shifts/waste → 2026-06-22; electricity/trucks → 2026-06-20.
