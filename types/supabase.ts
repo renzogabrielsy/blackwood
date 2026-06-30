@@ -261,6 +261,13 @@ export type Database = {
             referencedRelation: "view_rc_movement_campaign_cells"
             referencedColumns: ["batch_code"]
           },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_code"]
+          },
         ]
       }
       electricity_readings: {
@@ -849,6 +856,13 @@ export type Database = {
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_id"]
           },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_id"]
+          },
         ]
       }
       truck_readings: {
@@ -1332,6 +1346,13 @@ export type Database = {
             referencedRelation: "view_rc_movement_campaign_cells"
             referencedColumns: ["batch_code"]
           },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_code"]
+          },
         ]
       }
       view_rc_movement: {
@@ -1375,6 +1396,13 @@ export type Database = {
             referencedRelation: "view_rc_movement_batch_price"
             referencedColumns: ["batch_id"]
           },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_id"]
+          },
         ]
       }
       view_rc_movement_batch_price: {
@@ -1415,6 +1443,13 @@ export type Database = {
             columns: ["batch_id"]
             isOneToOne: false
             referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
           },
         ]
@@ -1537,6 +1572,20 @@ export type Database = {
         }
         Relationships: []
       }
+      view_rc_out_closed_blocks: {
+        Row: {
+          avg_price: number | null
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          close_date: string | null
+          feed_count: number | null
+          first_fed_date: string | null
+          total_fed_kg: number | null
+          total_value: number | null
+        }
+        Relationships: []
+      }
       view_supplier_deliveries: {
         Row: {
           batch_code: string | null
@@ -1607,6 +1656,13 @@ export type Database = {
             columns: ["batch_code"]
             isOneToOne: false
             referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_code"]
           },
         ]

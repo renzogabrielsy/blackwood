@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
+import type { Tables } from '@/types/supabase';
 import { canViewPrices } from '@/lib/auth';
 
 export async function deleteRcOutRecord(id: string) {
@@ -226,4 +227,26 @@ export async function fetchRcOutTabData() {
         // Canonical price-gate flag — drives conditional render on the client.
         canViewPrices: showPrices,
     };
+}
+
+export async function fetchClosedBlocks(): Promise<{ rows: Tables<'view_rc_out_closed_blocks'>[]; canViewPrices: boolean; error?: string }> {
+    const supabase = await createClient();
+    const showPrices = await canViewPrices();
+
+    const { data, error } = await supabase
+        .from('view_rc_out_closed_blocks')
+        .select('*')
+        .order('close_date', { ascending: false });
+
+    if (error) {
+        return { rows: [], canViewPrices: showPrices, error: error.message };
+    }
+
+    // Price gate is the security boundary: null ₱ fields BEFORE the payload leaves the
+    // server so a Production user's network response never contains them.
+    const rows = (data ?? []).map((r) =>
+        showPrices ? r : { ...r, total_value: null, avg_price: null }
+    );
+
+    return { rows, canViewPrices: showPrices };
 }

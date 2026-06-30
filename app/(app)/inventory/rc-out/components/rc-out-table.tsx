@@ -18,7 +18,7 @@ import {
     useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Plus, Settings, Trash2, Pencil, X, RefreshCw } from 'lucide-react';
+import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Plus, Settings, Trash2, Pencil, X, RefreshCw, PackageCheck, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -64,8 +64,9 @@ import {
     CommandList,
 } from '@/components/ui/command';
 import { Checkbox } from '@/components/ui/checkbox';
-import { deleteRcOutRecord, bulkDeleteRcOut } from '../actions';
+import { deleteRcOutRecord, bulkDeleteRcOut, fetchClosedBlocks } from '../actions';
 import type { RcOutRow } from '@/types/rc-out';
+import type { Tables } from '@/types/supabase';
 import { BulkUsageInput } from '../bulk-usage-input';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
@@ -101,6 +102,10 @@ type Batch = {
     location_ref: string;
 };
 
+// Generated view Row type — resolves the shipped `view_rc_out_closed_blocks` view.
+// Powers the "Closed Blocks" summary toggle (one row per closed block).
+type ClosedBlockRow = Tables<'view_rc_out_closed_blocks'>;
+
 export function RcOutTable({
     data,
     batches,
@@ -129,6 +134,39 @@ export function RcOutTable({
 
     // Refresh state
     const [refreshing, setRefreshing] = React.useState(false);
+
+    // ─── Closed Blocks summary toggle ────────────────────────────────────
+    // Default OFF — swaps the feeding table for a one-row-per-closed-block
+    // summary sourced from `view_rc_out_closed_blocks`. Data is lazy-fetched
+    // on first toggle-ON. Price columns gate on the SERVER's canViewPrices.
+    const [closedBlocksMode, setClosedBlocksMode] = React.useState(false);
+    const [closedBlocks, setClosedBlocks] = React.useState<ClosedBlockRow[] | null>(null);
+    const [closedLoading, setClosedLoading] = React.useState(false);
+    const [closedCanViewPrices, setClosedCanViewPrices] = React.useState(canViewPrices);
+
+    // Lazy-fetch closed blocks on first toggle-ON only. The `closedBlocks !== null`
+    // guard prevents refetch once data is held; on error we leave it null so a later
+    // toggle-off/on retries.
+    React.useEffect(() => {
+        if (!closedBlocksMode || closedBlocks !== null) return;
+        let cancelled = false;
+        setClosedLoading(true);
+        fetchClosedBlocks()
+            .then((res) => {
+                if (cancelled) return;
+                if (res.error) {
+                    errorToast('Failed to load closed blocks.', { description: res.error });
+                    return;
+                }
+                setClosedBlocks(res.rows);
+                setClosedCanViewPrices(res.canViewPrices);
+            })
+            .catch((e) => {
+                if (!cancelled) errorToast('Failed to load closed blocks.', { description: e instanceof Error ? e.message : String(e) });
+            })
+            .finally(() => { if (!cancelled) setClosedLoading(false); });
+        return () => { cancelled = true; };
+    }, [closedBlocksMode, closedBlocks]);
 
     const handleRefresh = React.useCallback(async () => {
         if (!onRefresh) return;
@@ -772,6 +810,9 @@ export function RcOutTable({
 
                 {/* Toolbar */}
                 <div className="flex-none flex items-center justify-between py-1">
+                    {/* In Closed Blocks summary mode the 5 feeding filters are hidden;
+                        the empty <div /> placeholder keeps the right cluster right-aligned. */}
+                    {!closedBlocksMode ? (
                     <div className="flex items-center gap-2">
                         {/* Search */}
                         <div className="relative max-w-sm w-56">
@@ -1051,8 +1092,18 @@ export function RcOutTable({
                             </Button>
                         )}
                     </div>
+                    ) : (<div />)}
 
                     <div className="flex items-center gap-1.5">
+                        <Button
+                            variant={closedBlocksMode ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 gap-1"
+                            onClick={() => setClosedBlocksMode(prev => !prev)}
+                        >
+                            <PackageCheck className="h-4 w-4" />
+                            Closed Blocks
+                        </Button>
                         <Button
                             variant={selectionMode ? "default" : "outline"}
                             size="sm"
@@ -1149,7 +1200,8 @@ export function RcOutTable({
                     </div>
                 )}
 
-                {/* Scrollable Table */}
+                {/* Scrollable Table — feeding view (toggle OFF) */}
+                {!closedBlocksMode && (
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     <div
                         className="flex-1 overflow-auto relative w-full outline-none select-none"
@@ -1291,6 +1343,86 @@ export function RcOutTable({
                         </div>
                     </div>
                 </div>
+                )}
+
+                {/* Closed Blocks summary (toggle ON). Rows render in server array order
+                    (close_date desc) — NO client re-sort, NO re-sum, NO re-aggregation. */}
+                {closedBlocksMode && (
+                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background animate-fade-up">
+                    {closedLoading && closedBlocks === null ? (
+                        <div className="flex-1 flex items-center justify-center">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : closedBlocks && closedBlocks.length === 0 ? (
+                        <div className="flex-1 flex items-center justify-center">
+                            <span className="animate-fade-up text-muted-foreground text-sm">No closed blocks.</span>
+                        </div>
+                    ) : (
+                        <div className="flex-1 overflow-auto relative w-full">
+                            <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
+                                <thead className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
+                                    <tr className="border-b" style={{ height: '32px' }}>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[110px]">CLOSE DATE</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[140px]">BATCH</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[90px]">BLOCK</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[120px]">TOTAL FED (KG)</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[90px]">FEEDINGS</th>
+                                        {closedCanViewPrices && (
+                                            <>
+                                                <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[120px]">AVG ₱/KG</th>
+                                                <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[130px]">TOTAL VALUE</th>
+                                            </>
+                                        )}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(closedBlocks ?? []).map((b) => (
+                                        <tr
+                                            key={b.batch_id ?? `${b.batch_code}-${b.block_loc}-${b.close_date}`}
+                                            className="border-b last:border-0 hover:bg-muted/50 transition-all duration-150"
+                                            style={{ height: '32px' }}
+                                        >
+                                            <td className="px-2 py-1 font-mono text-center text-xs">{b.close_date ?? '—'}</td>
+                                            <td className="px-2 py-1 font-mono font-bold text-center text-xs">{b.batch_code ?? '—'}</td>
+                                            <td className="px-2 py-1 font-mono text-center text-xs">{b.block_loc || '—'}</td>
+                                            <td className="px-2 py-1 font-mono text-right text-xs">
+                                                {b.total_fed_kg != null ? b.total_fed_kg.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                                            </td>
+                                            <td className="px-2 py-1 font-mono text-right text-xs">
+                                                {b.feed_count != null ? b.feed_count.toLocaleString() : '—'}
+                                            </td>
+                                            {closedCanViewPrices && (
+                                                <>
+                                                    <td className="px-1 text-xs">
+                                                        {b.avg_price != null ? (
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span className="font-mono">{b.avg_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-right"><span className="text-muted-foreground font-mono text-xs">—</span></div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-1 text-xs">
+                                                        {b.total_value != null ? (
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span className="font-mono font-bold">{b.total_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-right"><span className="text-muted-foreground font-mono text-xs">—</span></div>
+                                                        )}
+                                                    </td>
+                                                </>
+                                            )}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+                )}
 
 
             </div>
