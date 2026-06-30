@@ -17,7 +17,7 @@ Outcomes per extracted run (mirrors classify_rc_out.py vocabulary):
   - DUPLICATE_NOOP   : same natural key in DB, all comparable fields equal (tolerance 0.01) -> skip.
   - MALFORMED        : missing/invalid required field -> NEVER written. For runs:
                          * ttl_kg not a non-negative number (WEIGHT guard — still holds)
-                         * grade not in {3X50, 6X50, 8X50, 2X6}
+                         * grade not in {3X50, 6X50, 8X50, 2X6, 4X8}
                          * shift null/empty (DEFENSIVE only — see below)
 
   Shift note (L-025): a blank/absent/unrecognized column-H shift is NO LONGER a
@@ -68,7 +68,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-VALID_GRADES = {"3X50", "6X50", "8X50", "2X6"}
+VALID_GRADES = {"3X50", "6X50", "8X50", "2X6", "4X8"}  # 4X8 added 2026-06-30 (L-027) — keep in lockstep with extractor + DB CHECK
 NUM_TOLERANCE = 0.01
 
 # Marker the extractor appends to a run's `remarks` when its shift was DEFAULTED
