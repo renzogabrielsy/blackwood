@@ -75,7 +75,7 @@ No test framework is configured.
 ## Stack
 
 - **Next.js 16** (App Router) with React 19 and TypeScript (strict mode)
-- **Supabase** (PostgreSQL) — client in `lib/supabase.ts`, env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- **Supabase** (PostgreSQL) — clients in `lib/supabase/` (`client.ts` browser, `server.ts` per-request RSC/actions, `admin.ts` service-role), env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
 - **Shadcn UI** (new-york style, zinc base) with Radix primitives in `components/ui/`
 - **TanStack Table** for data tables, **date-fns** for dates, **cmdk** for command menus
 - **Tailwind CSS v4** with dark mode support via CSS variables
@@ -167,6 +167,7 @@ Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
 
 ### Functions (`public`)
 - `fn_blend_proposal(p_block_locs text[])` — weighted-average blend metrics for selected blocks
+- `fn_bulk_update_deliveries(rows jsonb)` / `fn_bulk_update_usage(rows jsonb)` — **transactional** bulk-edit RPCs (PERF-3). Each applies an array of `{id, data, comment}` partial updates to `deliveries` / `rc_out` in ONE transaction (all-or-nothing, no mid-loop partial commit). SECURITY INVOKER, `search_path=public` pinned, EXECUTE revoked from `anon`. They let the existing per-row AFTER triggers fire (so the `audit_logs` trail is byte-for-byte identical to the old loop) and reproduce the "attach edit remark to the record's latest audit_log" glue. Called by `bulkUpdateDeliveries` / `bulkUpdateUsage`.
 - `set_audit_comment(comment text)`, `_insert_notification(...)`, `is_admin(user_id)`, `canonical_supplier(p_supplier)`, `rc_out_avg_price(...)`, `rc_out_avg_wtd_value(...)`
 - Cenapro RPCs: `cenapro_flec_balance`, `cenapro_flec_ledger`, `cenapro_opening_balances`, `cenapro_opening_balance_history`, `cenapro_set_opening_balance`
 

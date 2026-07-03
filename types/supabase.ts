@@ -1925,6 +1925,8 @@ export type Database = {
           w_vm: number
         }[]
       }
+      fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
+      fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       rc_out_avg_price: {
         Args: { rc_out_row: Database["public"]["Tables"]["rc_out"]["Row"] }

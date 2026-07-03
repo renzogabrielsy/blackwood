@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
+import type { Json } from '@/types/supabase';
 import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
 
 import { getUserRole, roleCanViewPrices } from '@/lib/auth';
@@ -228,46 +229,27 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         await upsertBatchesFromRows(rows);
 
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
 
-        for (const { id, data, comment } of updates) {
-            // Set audit comment if provided
-            if (comment) {
-                await supabase.rpc('set_audit_comment', { comment });
-            } else {
-                await supabase.rpc('set_audit_comment', { comment: null });
-            }
+        // PERF-3: one transactional RPC instead of a per-row loop of
+        // (set_audit_comment -> update -> audit_logs lookup -> audit_comments insert).
+        // A mid-batch failure now rolls back the WHOLE batch. The payload is built here
+        // (same toDeliveryPayload transform + block_loc normalization as before), then
+        // fn_bulk_update_deliveries applies each partial update inside a single
+        // transaction. The deliveries AFTER trigger still fires per row, so the
+        // audit_logs trail is byte-for-byte identical to the old path; the RPC also
+        // reproduces the exact "attach comment to latest audit_log" glue.
+        const payload = updates.map(({ id, data, comment }) => ({
+            id,
+            data: toDeliveryPayload(data),
+            comment: comment ?? null,
+        }));
 
-            const payload = toDeliveryPayload(data);
-            const { error } = await supabase
-                .from('deliveries')
-                .update(payload)
-                .eq('id', id);
+        const { error } = await supabase.rpc('fn_bulk_update_deliveries', {
+            rows: payload as unknown as Json,
+        });
 
-            if (error) {
-                throw new Error(`Update Error (${id}): ${translateDbError(error.message)}`);
-            }
-
-            // Also post the edit remark as a discussion comment on the new audit log
-            if (comment && user) {
-                const { data: latestLog } = await supabase
-                    .from('audit_logs')
-                    .select('id')
-                    .eq('record_id', id)
-                    .order('performed_at', { ascending: false })
-                    .limit(1)
-                    .single();
-
-                if (latestLog) {
-                    await supabase
-                        .from('audit_comments')
-                        .insert({
-                            audit_log_id: latestLog.id,
-                            user_id: user.id,
-                            body: comment,
-                        });
-                }
-            }
+        if (error) {
+            throw new Error(translateDbError(error.message));
         }
 
         revalidatePath('/inventory');

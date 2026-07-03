@@ -3,7 +3,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
-import type { Tables } from '@/types/supabase';
+import type { Tables, Json } from '@/types/supabase';
 import { canViewPrices, getUserRole } from '@/lib/auth';
 import { PRIVILEGED_ROLES } from '@/types/auth';
 import { fetchAllRows } from '@/lib/supabase/paginate';
@@ -83,45 +83,25 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
 
     try {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
 
-        for (const { id, data, comment } of updates) {
-            // Set audit comment if provided
-            if (comment) {
-                await supabase.rpc('set_audit_comment', { comment });
-            } else {
-                await supabase.rpc('set_audit_comment', { comment: null });
-            }
+        // PERF-3: one transactional RPC instead of a per-row loop of
+        // (set_audit_comment -> update -> audit_logs lookup -> audit_comments insert).
+        // A mid-batch failure now rolls back the WHOLE batch. rc_out has no audit
+        // trigger, so fn_bulk_update_usage reproduces the exact old glue: set the GUC,
+        // partial-update the row, then attach the edit remark to the record's LATEST
+        // existing audit_log (identical to the prior post-update lookup + insert).
+        const payload = updates.map(({ id, data, comment }) => ({
+            id,
+            data,
+            comment: comment ?? null,
+        }));
 
-            const { error } = await supabase
-                .from('rc_out')
-                .update(data)
-                .eq('id', id);
+        const { error } = await supabase.rpc('fn_bulk_update_usage', {
+            rows: payload as unknown as Json,
+        });
 
-            if (error) {
-                throw new Error(`Update Error (${id}): ${error.message}`);
-            }
-
-            // Post the edit remark as a discussion comment on the new audit log
-            if (comment && user) {
-                const { data: latestLog } = await supabase
-                    .from('audit_logs')
-                    .select('id')
-                    .eq('record_id', id)
-                    .order('performed_at', { ascending: false })
-                    .limit(1)
-                    .single();
-
-                if (latestLog) {
-                    await supabase
-                        .from('audit_comments')
-                        .insert({
-                            audit_log_id: latestLog.id,
-                            user_id: user.id,
-                            body: comment,
-                        });
-                }
-            }
+        if (error) {
+            throw new Error(error.message);
         }
 
         revalidatePath('/inventory');

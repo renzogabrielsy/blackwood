@@ -22,6 +22,12 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format } from 'date-fns';
 import type { BlendProposal } from '../blocking/actions';
+// PERF-4: the pure filename helpers live in a jspdf-free module so callers can import
+// them WITHOUT pulling jsPDF into the bundle. Re-exported here for back-compat + the
+// node/test path.
+import { sanitizeLabel, composeBlendPdfFilename } from './blend-proposal-filename';
+
+export { sanitizeLabel, composeBlendPdfFilename };
 
 // ─── Formatting helpers (match the modal/print precision) ─────────────────────
 
@@ -49,43 +55,6 @@ const LAB_KEYS: { key: keyof BlendProposal['weighted']; label: string }[] = [
   { key: 'vm', label: 'VM' },
   { key: 'fc', label: 'FC' },
 ];
-
-// ─── Filename ─────────────────────────────────────────────────────────────────
-
-/**
- * Reserved characters illegal/awkward in filenames across Windows/macOS/Linux:
- * `/ \ : * ? " < > |`. Spaces and dashes are intentionally KEPT (the user wants
- * `4x8 RUN` intact). Control characters are stripped separately by codepoint so this
- * regex carries no literal control bytes.
- */
-const RESERVED_FILENAME_CHARS = /[/\\:*?"<>|]/g;
-
-/**
- * Sanitize a user label for use in a filename. Strips the reserved characters
- * (`/ \ : * ? " < > |`) and any control characters (codepoint < 0x20), but KEEPS spaces
- * (`4x8 RUN` stays intact), collapses runs of whitespace, and trims. Returns `''` for an
- * all-illegal/blank label so callers can require a non-empty result.
- */
-export function sanitizeLabel(label: string): string {
-  return Array.from(label)
-    .filter((ch) => ch.codePointAt(0)! >= 0x20) // drop control chars by codepoint
-    .join('')
-    .replace(RESERVED_FILENAME_CHARS, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Compose the blend-proposal PDF filename: `YYMMDD - {label}.pdf`, where YYMMDD is
- * `date` (defaults to NOW at call time — dynamic, never hardcoded) via date-fns. The
- * label is sanitized first. Returns `null` when the sanitized label is empty (the caller
- * should keep the Download button disabled until the label is non-empty).
- */
-export function composeBlendPdfFilename(label: string, date: Date = new Date()): string | null {
-  const safe = sanitizeLabel(label);
-  if (!safe) return null;
-  return `${format(date, 'yyMMdd')} - ${safe}.pdf`;
-}
 
 // ─── Document builder ─────────────────────────────────────────────────────────
 

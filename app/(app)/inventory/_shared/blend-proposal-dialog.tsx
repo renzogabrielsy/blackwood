@@ -15,7 +15,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
 import { EMDASH, escapeHtml, peso, printViaIframe, PRINT_CSS } from './print-utils';
-import { downloadBlendPdf, composeBlendPdfFilename } from './blend-proposal-pdf';
+// PERF-4: composeBlendPdfFilename is jspdf-free (pure filename helper) and is used
+// synchronously for the live preview / validity, so it stays a static import. The
+// heavy downloadBlendPdf (jsPDF + jspdf-autotable) is loaded lazily on the Download
+// click via `await import('./blend-proposal-pdf')` so those libs ship in a separate
+// chunk instead of the main bundle.
+import { composeBlendPdfFilename } from './blend-proposal-filename';
 import type { BlendProposal, BlendProposalBlock } from '../blocking/actions';
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
@@ -300,9 +305,11 @@ export function BlendProposalDialog({
   const previewFilename = composeBlendPdfFilename(pdfLabel);
   const labelValid = previewFilename !== null;
 
-  function handleDownloadPdf() {
+  async function handleDownloadPdf() {
     if (!proposal || !labelValid) return;
     try {
+      // Lazy-load jsPDF only when the user actually downloads (PERF-4).
+      const { downloadBlendPdf } = await import('./blend-proposal-pdf');
       // Pass the display preference so a hidden-prices PDF carries NO ₱ (the PDF builder
       // re-ANDs it with the server `can_view_prices`).
       downloadBlendPdf(proposal, pdfLabel, showPricesPref);
