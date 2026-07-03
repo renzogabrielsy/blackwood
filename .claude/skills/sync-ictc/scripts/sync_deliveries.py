@@ -220,8 +220,22 @@ def phase_apply(args) -> int:
         try:
             # defensive batch upsert (never auto-create beyond the resolved code; L-006: current_weight owned by trigger)
             if bc and not db.select_one("batches", {"batch_code": f"eq.{bc}"}, columns="batch_code"):
-                db.insert("batches", [{"batch_code": bc, "location_ref": r.get("block_loc") or "",
-                                       "status": "STORED", "current_weight": 0, "avg_cost": 0}], returning="minimal")
+                try:
+                    db.insert("batches", [{"batch_code": bc, "location_ref": r.get("block_loc") or "",
+                                           "status": "STORED", "current_weight": 0, "avg_cost": 0}], returning="minimal")
+                except Exception as bexc:  # noqa: BLE001
+                    # block_loc already holds an active batch → HOLD, don't crash the run.
+                    if oc.is_location_collision(bexc):
+                        held.append({
+                            "reason": "location_occupied",
+                            "natural_key": f"{r['transaction_date']}|{bc}|{r.get('block_loc')}",
+                            "detail": (f"block_loc {r.get('block_loc')} already holds an active batch; "
+                                       f"new batch {bc} not created and this delivery was not written. "
+                                       f"Resolve which batch owns this slot (close the prior batch or fix the "
+                                       f"location) via the sync employee, then re-run."),
+                        })
+                        continue
+                    raise
             payload = {
                 "transaction_date": r["transaction_date"], "supplier": r.get("supplier"),
                 "batch_code": bc, "block_loc": r.get("block_loc"), "truck_plate": r.get("truck_plate"),

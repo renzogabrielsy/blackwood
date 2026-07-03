@@ -53,6 +53,24 @@ def emit(obj: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# DB error classification
+# ---------------------------------------------------------------------------
+def is_location_collision(exc: Exception) -> bool:
+    """
+    True when a batch INSERT was rejected because the block_loc already holds an
+    active (non-CLOSED) batch — Postgres unique-violation 23505 on
+    idx_unique_active_batch_per_location. This is a DATA conflict for a human to
+    resolve (close the prior batch or fix the location), NOT a bug: the orchestrator
+    routes the row to `held` instead of hard-erroring the whole run
+    ("1 block_loc = 1 active batch" — CLAUDE.md Blocking rules).
+    """
+    s = str(exc)
+    return "23505" in s and (
+        "idx_unique_active_batch_per_location" in s or "location_ref" in s
+    )
+
+
+# ---------------------------------------------------------------------------
 # work dir
 # ---------------------------------------------------------------------------
 def make_work_dir(report_type: str, work_dir: str | None) -> Path:

@@ -88,6 +88,10 @@ Deterministic writer. `--input` is the `classified_path` from classify (optional
   "applied": { "inserts": 0, "updates": 0, "replaced_dates": 0 },
   "held": [                                    // rows deliberately NOT written
     { "reason": "unmapped_batch_code", "natural_key": 42, "detail": "…" }
+    // reasons include: unmapped_batch_code, unmapped_bag_type_code, malformed,
+    // already_exists (idempotent skip), and location_occupied — a NEW batch whose
+    // block_loc already holds an active batch (23505 on idx_unique_active_batch_per_location).
+    // A location collision is HELD (human resolves the slot), never a hard error (L-032).
   ],
   "labeled": false,                            // Gmail thread labeled Blackwood-Processed?
   "watermark_updated": true,                   // ingestion_watermarks row upserted?

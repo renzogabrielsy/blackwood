@@ -331,12 +331,21 @@ def _apply_from_compact(compact: dict) -> dict:
             # defensive batch upsert (current_weight starts 0; trigger maintains it)
             existing = db.select_one("batches", {"batch_code": f"eq.{bc}"}, columns="batch_code")
             if not existing:
-                db.insert("batches", [{
-                    "batch_code": bc,
-                    "location_ref": r.get("block_loc") or "",
-                    "status": "STORED", "current_weight": 0, "avg_cost": 0,
-                }], returning="minimal")
-                new_batches.append(bc)
+                try:
+                    db.insert("batches", [{
+                        "batch_code": bc,
+                        "location_ref": r.get("block_loc") or "",
+                        "status": "STORED", "current_weight": 0, "avg_cost": 0,
+                    }], returning="minimal")
+                    new_batches.append(bc)
+                except Exception as bexc:  # noqa: BLE001
+                    # block_loc already holds an active batch → skip (held), don't abort the mode.
+                    if oc.is_location_collision(bexc):
+                        skipped.append({"index": r.get("index"),
+                                        "why": f"location_occupied: block_loc {r.get('block_loc')} already "
+                                               f"holds an active batch; new batch {bc} not created — resolve the slot"})
+                        continue
+                    raise
             payload = {
                 "transaction_date": r["date"],
                 "supplier": r.get("supplier"),

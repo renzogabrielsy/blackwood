@@ -241,4 +241,30 @@ mistake is made *at most once*.
 
 ---
 
+## L-032 — App-side audit writes: two RPCs, and location collisions are HELD not fatal (2026-07-03)
+
+Surfaced by the first real in-app "Run Sync" button click. Three distinct root causes, all fixed:
+
+- **L-009 has an UPDATE sibling.** The service-role key has NO grant on `audit_logs` — neither INSERT
+  nor UPDATE. INSERT was already routed through `write_ingestion_audit` (SECURITY DEFINER). The
+  `deliveries` provenance STAMP is a direct `UPDATE audit_logs` and 403'd (42501) the same way. Fix:
+  `stamp_ingestion_audit(p_table_name, p_record_id, p_operation, p_comment, p_snapshot)` — SECURITY
+  DEFINER, owner postgres, service_role-only EXECUTE; `lib/db.py::update_trigger_audit_provenance`
+  now calls it (migration `20260703043000`).
+- **`audit_logs.operation` only allowed INSERT/UPDATE/DELETE.** Flecon's REPLACE-BY-DATE logs
+  `operation='REPLACE'` → 23514 check violation. Fix: added `REPLACE` to `audit_logs_operation_check`
+  (same migration). REPLACE is a first-class operation for whole-day replace.
+- **A block_loc collision is a HUMAN decision, not a crash.** A NEW batch whose `block_loc` already
+  holds an active batch hits `idx_unique_active_batch_per_location` (23505). The orchestrators now
+  catch this (`orchestrator_common.is_location_collision`) and route the row to `held`
+  (`reason: location_occupied`) — the clean rows still apply, the run stays `ok:true`. Resolve the
+  slot (close the prior batch or fix the location) then re-run. (`sync_deliveries.py`, `sync_gsheet.py`.)
+- **Provenance:** first button click 2026-07-03; root-caused + fixed inline by main agent. Backfilled
+  the 3 un-stamped `deliveries` INSERT audit rows + the missing flecon `2026-07-02` REPLACE audit row
+  through the real `lib.db` paths (proving both RPCs live). Outstanding real-world item: **A-19C** —
+  incoming `JULY-26-BLK9` wants a slot still held by `JUNE-26-BLK9` (STORED); needs a human call
+  (close the June batch or fix the location).
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

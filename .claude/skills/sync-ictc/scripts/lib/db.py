@@ -256,17 +256,31 @@ class DBClient:
         For tables whose INSERT fires an audit trigger (deliveries): UPDATE the
         trigger-written audit row's comment for provenance (L-001 — never INSERT a 2nd).
         Returns True if a row was updated.
+
+        L-009 fix, part 2 (2026-07-03): a direct `UPDATE audit_logs` over PostgREST with
+        the service-role key 403s (`permission denied for table audit_logs`, 42501) — the
+        service role has no UPDATE grant either. We go through the SECURITY DEFINER RPC
+        `stamp_ingestion_audit` (owner postgres, service_role-only EXECUTE), which updates
+        the row(s) as the owner and returns the affected row count. Same pattern as
+        `insert_manual_audit`/`write_ingestion_audit`. Signature unchanged.
         """
-        patch: dict[str, Any] = {"comment": comment}
-        if snapshot is not None:
-            patch["snapshot"] = snapshot
-        updated = self.update(
-            "audit_logs",
-            {"table_name": f"eq.{table_name}", "record_id": f"eq.{record_id}",
-             "operation": "eq.INSERT"},
-            patch,
+        payload: dict[str, Any] = {
+            "p_table_name": table_name,
+            "p_record_id": record_id,
+            "p_operation": "INSERT",
+            "p_comment": comment,
+            "p_snapshot": snapshot,
+        }
+        resp = self._session.post(
+            f"{self.base}/rpc/stamp_ingestion_audit",
+            data=json.dumps(payload),
         )
-        return bool(updated)
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(
+                f"stamp_ingestion_audit RPC failed {resp.status_code}: {resp.text[:1000]}"
+            )
+        count = resp.json() if resp.text else 0
+        return bool(count)
 
     def insert_manual_audit(self, *, table_name: str, record_id: str, operation: str,
                             comment: str, diff: dict | None = None,
