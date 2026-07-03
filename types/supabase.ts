@@ -309,6 +309,135 @@ export type Database = {
         }
         Relationships: []
       }
+      flecon_bag_movements: {
+        Row: {
+          bag_type_id: string
+          created_at: string
+          id: string
+          particular: string | null
+          qty_delta: number
+          remarks: string | null
+          source_row: number | null
+          transaction_date: string
+        }
+        Insert: {
+          bag_type_id: string
+          created_at?: string
+          id?: string
+          particular?: string | null
+          qty_delta: number
+          remarks?: string | null
+          source_row?: number | null
+          transaction_date: string
+        }
+        Update: {
+          bag_type_id?: string
+          created_at?: string
+          id?: string
+          particular?: string | null
+          qty_delta?: number
+          remarks?: string | null
+          source_row?: number | null
+          transaction_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flecon_bag_movements_bag_type_id_fkey"
+            columns: ["bag_type_id"]
+            isOneToOne: false
+            referencedRelation: "flecon_bag_types"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "flecon_bag_movements_bag_type_id_fkey"
+            columns: ["bag_type_id"]
+            isOneToOne: false
+            referencedRelation: "view_flecon_bag_balance"
+            referencedColumns: ["bag_type_id"]
+          },
+        ]
+      }
+      flecon_bag_opening_balances: {
+        Row: {
+          bag_type_id: string
+          id: string
+          qty: number
+          year: number
+        }
+        Insert: {
+          bag_type_id: string
+          id?: string
+          qty?: number
+          year: number
+        }
+        Update: {
+          bag_type_id?: string
+          id?: string
+          qty?: number
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flecon_bag_opening_balances_bag_type_id_fkey"
+            columns: ["bag_type_id"]
+            isOneToOne: false
+            referencedRelation: "flecon_bag_types"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "flecon_bag_opening_balances_bag_type_id_fkey"
+            columns: ["bag_type_id"]
+            isOneToOne: false
+            referencedRelation: "view_flecon_bag_balance"
+            referencedColumns: ["bag_type_id"]
+          },
+        ]
+      }
+      flecon_bag_types: {
+        Row: {
+          active: boolean
+          capacity_kls: number | null
+          code: string
+          color: string | null
+          id: string
+          label: string
+          material: string | null
+          nickname: string | null
+          notes: string | null
+          sort_order: number | null
+          source_column: string | null
+          source_label: string | null
+        }
+        Insert: {
+          active?: boolean
+          capacity_kls?: number | null
+          code: string
+          color?: string | null
+          id?: string
+          label: string
+          material?: string | null
+          nickname?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          source_column?: string | null
+          source_label?: string | null
+        }
+        Update: {
+          active?: boolean
+          capacity_kls?: number | null
+          code?: string
+          color?: string | null
+          id?: string
+          label?: string
+          material?: string | null
+          nickname?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          source_column?: string | null
+          source_label?: string | null
+        }
+        Relationships: []
+      }
       ingestion_watermarks: {
         Row: {
           last_email_id: string | null
@@ -1267,6 +1396,21 @@ export type Database = {
       view_digest_unpriced_recent: {
         Row: {
           cnt: number | null
+        }
+        Relationships: []
+      }
+      view_flecon_bag_balance: {
+        Row: {
+          bag_type_id: string | null
+          balance: number | null
+          code: string | null
+          label: string | null
+          last_movement_date: string | null
+          nickname: string | null
+          opening: number | null
+          sort_order: number | null
+          total_in: number | null
+          total_out: number | null
         }
         Relationships: []
       }

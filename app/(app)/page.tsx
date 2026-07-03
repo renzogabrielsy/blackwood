@@ -9,6 +9,7 @@ import { ActivityFeed } from "@/components/digest/activity-feed";
 import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
 import { OpenBlocks } from "@/components/digest/open-blocks";
+import { BagInventory } from "@/components/digest/bag-inventory";
 
 export default async function DigestPage() {
   const data = await getDigestData();
@@ -43,6 +44,11 @@ export default async function DigestPage() {
       {/* C2. Trucks with a trip on the operational date (skips if none moved) */}
       <section>
         <TrucksSummary trucks={data.trucks} />
+      </section>
+
+      {/* C3. FLECON bag inventory snapshot */}
+      <section>
+        <BagInventory fleconBags={data.fleconBags} />
       </section>
 
       {/* D. Sync band — what the last sync brought in */}

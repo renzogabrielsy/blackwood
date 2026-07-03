@@ -49,6 +49,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
     { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
+    { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
@@ -103,6 +104,7 @@ const ICTC_INVENTORY: Module[] = [
     { name: 'Deliveries', href: '/inventory?tab=deliveries' },
     { name: 'Usage', href: '/inventory?tab=usage' },
     { name: 'Movement', href: '/inventory/rc-movement' },
+    { name: 'Bag Inventory', href: '/inventory/flecon-bags' },
 ];
 
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.

@@ -11,6 +11,45 @@ Live DB watermark = `MAX(production_shifts.transaction_date)`. The DB watermark
 (not the Gmail label) is the real idempotency guard — trust it over any stale
 "already synced through X" note in a launch prompt.
 
+## 2026-07-02 — Jul 1 waste-only catch-up (EXECUTE mode, coordinator-relayed approval)
+**Why:** daily ICTC sync EXECUTE — Renzo approved write plan from PROPOSE run at work_dir `/tmp/ictc-sync-production/20260702T013134Z`.
+**State before:** production_shifts/waste → 2026-06-30; electricity → 2026-06-27; trucks → 2026-06-22.
+
+- **MC "Daily Production Report":** UID 121398 (Jul 2). No NEW runs/downtime/electricity/trucks — 8 VALUE_CHANGED all db_wins (L-026 artifacts; DB already holds correct combined totals). No writes.
+- **Ivy "WASTE PRODUCTION REPORT":** UID 121497 (Jul 2). 1 NEW waste row (Jul 1 JULY M) + 1 VALUE_CHANGED db_wins (Jun 30 JULY carryover `6f44d94e` already correct in DB).
+- **Upserted 1 new production_shifts:** 7/1 JULY M (`8d0b8331-0828-44e6-89d1-6a2e3c792487`).
+- **production_runs:** 0 NEW. 8 VALUE_CHANGED → db_wins, no writes (L-026 artifacts).
+- **production_downtime:** 0 NEW/changed.
+- **production_waste:** 1 NEW (`5b4d39e5-3240-40ed-b683-f7a978fc201c`; 7/1 JULY M; rs1a=2370/rs1b=2486/bf=315/rs23=607/rs5=226/trml1=100/trml2=0.5/grit=48 = 6152.5 kg; remarks=PCG/BUNAWAN/ZAMBAONGA). 1 VALUE_CHANGED → db_wins (Jun 30 carryover row; no write).
+- **electricity_readings:** 0 NEW.
+- **truck_readings:** 0 NEW. Trucks still at 2026-06-22.
+- **Audit logs written:** 1. **Labeled Blackwood-Processed:** MC UID 121398 + Ivy UID 121497.
+- **State after:** production_shifts/waste → **2026-07-01**. Electricity still **2026-06-27**. Trucks still **2026-06-22**.
+
+**Outstanding:** UNIQUE(shift_id) constraint on production_waste still prevents a second row per shift (the Jun 30 Row B JULY carryover at 2145.5 kg is still blocked). Backend engineer task required.
+
+## 2026-07-01 — Jun 30 catch-up (EXECUTE mode, coordinator-relayed approval)
+**Why:** daily ICTC sync EXECUTE — Renzo approved write plan from PROPOSE run at work_dir `/tmp/ictc-sync-production/20260701T021550Z`.
+**State before:** production_shifts/waste → 2026-06-29; electricity → 2026-06-27; trucks → 2026-06-22.
+
+- **MC "Daily Production Report":** UID 121407 (Jun 30). Sheet `06-30-26`. L-026 applied: ENDING+STARTING segments for two grades combined before INSERT.
+- **Ivy "WASTE PRODUCTION REPORT":** UID 121400 (Jun 30). Two 06-30 waste rows in extract (Row A JUNE sheet, Row B JULY carryover). Only Row A inserted — see waste block below.
+- **Upserted 1 new production_shifts:** 6/30 JUNE M (`e825d3ac-96f1-43bf-acbb-45b91c296989`).
+- **production_runs:** 2 NEW (combined per L-026):
+  - CEBU / 3X50: 18,694 kg / 719 sacks (`e8c6de48`; combined ENDING 13234+STARTING 5460)
+  - CEBU / 4X8: 7,475 kg / 13 sacks (`9dd305ff`; combined ENDING 5175+STARTING 2300)
+  Both shift-defaulted to Morning (L-025). 5 VALUE_CHANGED → db_wins, no writes (all L-026 artifacts / false-positives; DB is correct).
+- **production_downtime:** 0 NEW. 1 VALUE_CHANGED email_wins UPDATE: appended time-range detail to `dt_reason` on row `93a602d6` (6/27 M; "... | Time ranges: 8:00 AM-8:08 AM; 8:15 AM-8:35 AM; 9:25 AM-9:40 AM"). NOTE: production_downtime has no `remarks` column — time-range detail appended to `dt_reason` instead.
+- **production_waste:** 1 NEW inserted (Row A — JUNE sheet, `c67c0682`; rs1a=1040/rs1b=1040/bf=110/rs23=332/rs5=109/trml1=75/trml2=0.5/grit=28; total=2734.5 kg). **Row B BLOCKED** — `production_waste_natural_key UNIQUE(shift_id)` forbids two waste rows per shift. Row B (JULY sheet carryover, 2145.5 kg: rs1a=1038/rs1b=784/bf=35/rs23=137/rs5=71/trml1=50/trml2=0.5/grit=30) held. **Schema decision needed: widen UNIQUE(shift_id) to allow multiple waste recordings per shift on transition days — escalate to backend engineer.**
+- **electricity_readings:** 0 NEW.
+- **truck_readings:** 0 NEW. Trucks still at 2026-06-22.
+- **Audit logs written:** 5. **Labeled Blackwood-Processed:** MC UID 121407 + Ivy UID 121400.
+- **State after:** production_shifts/waste → **2026-06-30**. Electricity still **2026-06-27**. Trucks still **2026-06-22**.
+
+**Schema flag (outstanding):** `production_waste_natural_key UNIQUE(shift_id)` prevents inserting Row B. On June→July transition days the operator records two real waste measurements under the same shift. The unique constraint needs loosening (e.g. to `UNIQUE(shift_id, source_sheet)` or removing altogether with a different dedup key). Backend engineer task required before Row B can be inserted.
+
+**MALFORMED — cumulative outstanding (unchanged):** same list as 2026-06-30 run above. Blank-shift rows (6/16–6/27) now auto-default to Morning on re-sync per L-025. Only null-weight rows (6/15 E, one 6/16 row) still HOLD as MALFORMED.
+
 ## 2026-06-30 — Jun 29 catch-up (auto-execute daily sync, L-025 first run)
 **Why:** daily ICTC sync, auto-execute. L-025 first live run: blank/unrecognized shift rows now default to Morning automatically and are written (not held).
 **State before:** production_shifts/waste/electricity → 2026-06-27; trucks → 2026-06-22 (still lagging — no truck rows in Jun 28/29 MC sheets).
