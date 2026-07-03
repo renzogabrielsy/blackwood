@@ -538,10 +538,15 @@ export async function getDigestData(): Promise<DigestData> {
     out: round(n(r.out_kg)),
   }));
 
-  const price: PricePoint[] = tail(priceRows, PRICE_DAYS).map((r) => ({
-    date: r.date,
-    phpPerKg: round(n(r.php_per_kg)),
-  }));
+  // ₱/kg is price data: gated by the canonical canViewPrices() resolved above.
+  // When the role can't view prices, the series is EMPTY so the payload leaving
+  // the server carries no ₱ values (the security boundary — not a UI-only hide).
+  const price: PricePoint[] = showPrices
+    ? tail(priceRows, PRICE_DAYS).map((r) => ({
+        date: r.date,
+        phpPerKg: round(n(r.php_per_kg)),
+      }))
+    : [];
 
   // grades trailing window: keep only the last GRADE_DAYS distinct dates.
   const gradeDates = Array.from(new Set(gradeRows.map((r) => r.date))).sort();

@@ -10,23 +10,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Architecture: Hexagonal (Ports & Adapters).** The widget is the application core. The "port" is the typed interface it declares (`ChartConfig`, `KPIData`, `ScatterPoint[]`). The "adapter" is whoever fills it — today a static mock adapter, tomorrow a live Supabase adapter. The widget is permanently isolated from the adapter. This vocabulary is canonical throughout the codebase.
 
-**Layer separation rule:** If code lives in `components/widgets/` or `components/dashboard/`, it is **platform code** — zero tenant knowledge allowed. If it lives in `app/(app)/inventory/`, `lib/widgets/adapters/`, or `lib/widgets/mock-data.ts`, it is **tenant code** — domain-specific is expected and correct. Never add domain/tenant knowledge to platform-layer components.
+**Layer separation rule:** If code lives in `components/shared/`, `components/ui/`, `components/providers/`, or the navbar/shell chrome, it is **platform code** — zero tenant knowledge allowed. If it lives in `app/(app)/inventory/`, `app/(app)/production/`, `app/(app)/cenapro/`, `components/digest/`, or `lib/digest/`, it is **tenant code** — domain-specific is expected and correct. Never add domain/tenant knowledge to platform-layer components.
 
 **Two coexisting UX paradigms:**
-- **Dashboard (`/`):** Composable widget grid — drag/resize/add, like a Bloomberg terminal. High information density, visual-first, no page reloads. **Platform layer.**
-- **Inventory pages (`/inventory/...`):** Industrial Spreadsheet — dense, keyboard-navigable tables that feel like Excel but enforce data integrity underneath. These stay as dedicated pages forever (too specialized for generic widgets). **Tenant/domain layer.**
+- **Home Digest (`/`):** The Daily Sync Digest — a read-focused briefing page of dense bands (KPIs, charts, open blocks, bag inventory, sync activity). High information density, visual-first. **Tenant-shaped presentation** over the platform's SQL-view adapter pattern.
+- **Inventory pages (`/inventory/...`):** Industrial Spreadsheet — dense, keyboard-navigable tables that feel like Excel but enforce data integrity underneath. These stay as dedicated pages forever. **Tenant/domain layer.**
 
 ## Platform Vocabulary
 
 | Term | Meaning |
 |------|---------|
-| **Platform layer** | Widgets, dashboard shell, widget registry — source-agnostic by design, domain-neutral |
-| **Domain module** | RC IN, RC OUT, Blocking — charcoal-specific. The first tenant on the platform. |
-| **Tenant** | An organization/domain using the platform. Blackwood charcoal is Tenant #1. Adapters, domain modules, and business logic are always tenant-specific. |
-| **Data-agnostic interface** | The typed contract a widget accepts: `ChartConfig`, `KPIData`, `ScatterPoint[]`, etc. Equivalent to Grafana's "data frame." |
-| **Adapter** | Pure function — transforms any data source's raw output into the widget's data-agnostic interface. Lives in `lib/widgets/adapters/`. |
-| **Static adapter** | `lib/widgets/mock-data.ts` — a hardcoded adapter used for development, demos, and fallback. Not the charcoal data; a charcoal-shaped static implementation of the platform's widget interfaces. |
-| **Live adapter** | Future: `lib/widgets/adapters/charcoal-chart.ts`, etc. — fetches from Supabase and transforms to widget interfaces. |
+| **Platform layer** | Source-agnostic, domain-neutral infrastructure: providers, the shared Blackwood Table grid primitive, navbar/shell. Zero tenant knowledge allowed. |
+| **Domain module** | RC IN, RC OUT, Blocking, RC Movement, Production, Flecon Bags — charcoal-specific. The first tenant on the platform. |
+| **Tenant** | An organization/domain using the platform. Blackwood/ICTC charcoal is Tenant #1; Cenapro (CI/Cebu) is Tenant #2 (own `cenapro` schema/module). Domain modules and business logic are always tenant-specific. |
+| **Data-agnostic interface** | The typed contract a presentation component accepts (e.g. the digest's `DigestData` bands, or a future widget's `ChartConfig`). Equivalent to Grafana's "data frame." |
+| **Adapter** | Pure function — transforms a data source's raw output (a Supabase view/query) into a normalized, presentation-ready shape. The digest's `lib/digest/queries.ts` (`getDigestData()`) is the live adapter today. |
+
+> **Historical note:** the platform's first UX experiment was a composable **widget dashboard** (Grafana-style: `components/widgets/`, `components/dashboard/`, `lib/widgets/` mock/live adapters). That system is **archived at `_archived/dashboard-v1/`** and no longer live — `/` is now the Daily Sync Digest (see the **Home Digest** section below). The platform-vs-tenant philosophy and the Grafana data-source framing above still govern all future work; only the widget implementation was retired.
 
 ## Project Timeline (MANDATORY READ)
 
@@ -112,28 +112,63 @@ Auto-generated TypeScript types live in `types/supabase.ts` — **never hand-edi
 supabase gen types typescript --linked > types/supabase.ts
 ```
 
-**Tables:**
-- **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum: STORED/IN-USE/CLOSED/FEED), `avg_cost`, `current_weight`, `quality_stats` (JSONB)
-- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc), `true_weight_kg` (nullable — physical/gross weight before ASH+wet deductions; display-only, NULL = no deduction, never used in any balance/view/trigger), `deduction_note` (nullable text — short human note, e.g. '−5.86% ASH; −1,009 wet'; display-only)
-- **`usage`** — `id`, `batch_id` (FK→batches), `destination`, `transaction_date`, `weight_kg`, `snapshot_location`, `snapshot_price`
+### Core inventory tables (`public`)
+- **`batches`** — `id`, `batch_code` (unique), `location_ref`, `status` (`batch_status` enum), `avg_cost`, `current_weight`, `quality_stats` (JSONB), `notes`, `created_at`, `updated_at`
+- **`deliveries`** — `id`, `transaction_date`, `supplier`, `batch_code` (FK→batches), `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`, `lab_results` (JSONB: mc/ash/bd_astm/bd_jis/grit/vm/fc), `true_weight_kg` (nullable — physical/gross weight before ASH+wet deductions; display-only, NULL = no deduction, never used in any balance/view/trigger), `deduction_note` (nullable text — short human note, e.g. '−5.86% ASH; −1,009 wet'; display-only), `created_at`
+- **`rc_out`** — `id`, `transaction_date`, `batch_id` (FK→batches), `production_batch`, `destination`, `weight_kg`, `block_loc`, `remarks`, `created_at`. (Replaced the legacy `usage` table; FK constraint keeps the historic `usage_batch_id_fkey` name.) Computed columns: `rc_out_avg_price`, `rc_out_avg_wtd_value`
+
+### Production tables (`public`) — ingested by the `production-manager` employee
+- **`production_shifts`** — parent; one row per `(transaction_date, production_batch, shift)`. `production_runs`/`production_downtime`/`production_waste` all FK to it via `shift_id`.
+- **`production_runs`** — daily output by grade/shift. `customer`, `grade`, `ttl_kg`, `sacks_bags`, `remarks`, `shift_id`.
+- **`production_downtime`** — per-shift downtime. `dt_hrs`, `dt_mins`, `dt_reason`, `shift_hrs`, `shift_id`.
+- **`production_waste`** — 8-stream waste per shift. `bf_kg`, `grit_kg`, `rs1a_kg`/`rs1b_kg`/`rs23_kg`/`rs5_kg`, `trml1_kg`/`trml2_kg`, `remarks`, `shift_id`.
+- **`electricity_readings`** — daily meter readings. Natural key `(reading_date, meter)`. `start_kwh`, `end_kwh`, `diff_kwh` (computed), `consumption_kwh`, `meter_multiplier`, `remarks`.
+- **`truck_readings`** — daily odometer + fuel. Natural key `(reading_date, plate_no)`. `start_km`, `end_km`, `ttl_km` (computed), `fuel_liters`, `remarks`.
+
+### FLECON bag inventory (`public`) — ingested by the `bagging-manager` employee
+- **`flecon_bag_types`** — packaging-material SKU dimension. `code`, `label`, `nickname`, `material`, `capacity_kls`, `color`, `sort_order`, `active`, `source_column`, `source_label`, `notes`.
+- **`flecon_bag_opening_balances`** — per-year opening (`year`, `bag_type_id` FK, `qty`). The 2026 opening folds in all pre-2026 stock.
+- **`flecon_bag_movements`** — signed movements (`qty_delta`; negative = OUT/consumed, positive = IN). `transaction_date`, `bag_type_id` FK, `particular`, `remarks`, `source_row`. No natural-key UNIQUE — sync uses replace-by-date idempotency.
+
+### Sync / ingestion infrastructure (`public`)
+- **`ingestion_watermarks`** — per-report-type high-water mark. `report_type` (PK), `last_run_at`, `last_email_id`, `last_email_received_at`.
+- **`pending_review`** — staged extractions awaiting human commit. `report_type`, `status`, `rows_json`/`final_rows_json`/`diagnostic_json` (JSONB), `overall_confidence`, source-email refs, `reviewed_by` (FK→profiles), `commit_audit_log_id` (FK→audit_logs).
+
+### Jarvis AI assistant (`public`)
+- **`jarvis_conversations`** — `id`, `user_id`, `title`, `last_message_at`, `archived`, `created_at`.
+- **`jarvis_messages`** — `conversation_id` (FK), `role`, `content`, `position`, `tool_calls`/`tool_results` (JSONB), `created_at`.
+- **`jarvis_learnings`** — `user_id`, `type`, `content`, `source_message_id` (FK→jarvis_messages), `last_used_at`, `created_at`.
+
+### Platform / auth / audit tables (`public`)
 - **`profiles`** — `id` (FK→auth.users), `email`, `display_name`, `avatar_url`, `role`, `status` (`'active'` | `'disabled'` | `'pending'`), `created_at`, `updated_at`
 - **`audit_logs`** — `id`, `table_name`, `record_id`, `operation`, `diff` (JSONB), `snapshot` (JSONB), `comment`, `performed_by`, resolve fields
 - **`audit_comments`** — `id`, `audit_log_id` (FK→audit_logs), `body`, `user_id`, `resolved`
-
-**Views:** `view_rc_in_master`
-**Functions:** `set_audit_comment(comment text)`
-**Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED | SUNDRYING | SUNDRIED`
-
-Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
-
-**Additional Tables:**
-- **`rc_out`** — `id`, `transaction_date`, `batch_id` (FK→batches), `production_batch`, `destination`, `weight_kg`, `block_loc`, `remarks`, `created_at`. Computed columns: `rc_out_avg_price`, `rc_out_avg_wtd_value`
 - **`notifications`** — `id`, `user_id`, `type` (`notification_type` enum), `title`, `body`, `source_user_id`, `metadata` (JSONB), `read`, `read_at`, `archived`, `created_at`
 - **`notification_subscriptions`** — `id`, `user_id`, `audit_log_id` (FK→audit_logs), `created_at`
 - **`user_invites`** — `email` (PK), `role`, `invited_by` (FK→profiles), `created_at`. Whitelist for invite-only access.
+- **`user_table_settings`** — per-user, per-module table prefs. `user_id`, `module`, `settings` (JSONB).
+- **`user_dashboard_prefs`** — `user_id` (PK), `prefs` (JSONB), `updated_at`.
 
-**Additional Functions:** `_insert_notification(p_user_id, p_title, p_body, p_type, p_source_user_id, p_metadata)`, `is_admin(user_id)`
-**Additional Enums:** `notification_type` = `resolve_request | resolve_approved | resolve_denied | delivery_created | delivery_edited | delivery_deleted | remarks_added | audit_comment_reply`
+### Cenapro tenant (`cenapro` schema — Tenant #2, zero ICTC coupling)
+Dimensions: `shift`, `grade`, `plant`, `warehouse`, `source_location`, `partner_equipment`. Facts: `production_event` (CI production spine, one row per workbook Production row), `warehouse_opening_balance` (APPEND-ONLY flec-count openings per warehouse/grade/side), `drift_log` (append-only drift/exclusion telemetry). See `cenapro/CENAPRO_PRODUCTION_ANALYSIS.md`.
+
+**Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED | SUNDRYING | SUNDRIED` (6 values) · `notification_type` = `resolve_request | resolve_approved | resolve_denied | delivery_created | delivery_edited | delivery_deleted | remarks_added | audit_comment_reply`
+
+Batch upsert strategy: upsert by `batch_code` to prevent duplicates.
+
+### Views (`public`, ~40 total)
+- **RC IN / deliveries:** `view_rc_in_master`, `view_supplier_deliveries`, `view_delivery_monthly_analytics`, `view_delivery_yearly_analytics`, `view_delivery_supplier_monthly_analytics`, `view_delivery_supplier_yearly_analytics`, `view_delivery_supplier_subgroup_yearly_analytics`
+- **Blocking / balance:** `view_blocking_grid`, `view_rc_out_closed_blocks`
+- **RC Movement (feeding + campaign + yield):** `view_rc_movement`, `view_rc_movement_batch_price`, `view_rc_movement_day_price`, `view_rc_movement_month_price`, `view_rc_movement_campaign_cells`, `view_rc_movement_campaign_options`, `view_rc_movement_campaign_price`, `view_rc_movement_campaign_day_price`, `view_rc_movement_campaign_production`, `view_rc_movement_campaign_production_daily`, `view_rc_movement_campaign_production_daily_total`, `view_rc_movement_campaign_yield`, `view_rc_movement_production_daily`, `view_rc_movement_production_daily_total`, `view_rc_movement_production_monthly`, `view_rc_movement_yield_monthly`
+- **Production / trucks:** `view_production_daily`, `view_trucks_monthly`
+- **Home Digest (feed the `/` bands):** `view_digest_daily_flow`, `view_digest_daily_price`, `view_digest_daily_power`, `view_digest_daily_production`, `view_digest_grades`, `view_digest_rcin_daystats`, `view_digest_mtd`, `view_digest_operational_days`, `view_digest_stream_freshness`, `view_digest_unpriced_recent`, `view_digest_latest_sync`, `view_digest_latest_sync_by_employee`, `view_digest_audit_enriched`
+- **FLECON:** `view_flecon_bag_balance`
+- **Cenapro:** `cenapro_production_events`
+
+### Functions (`public`)
+- `fn_blend_proposal(p_block_locs text[])` — weighted-average blend metrics for selected blocks
+- `set_audit_comment(comment text)`, `_insert_notification(...)`, `is_admin(user_id)`, `canonical_supplier(p_supplier)`, `rc_out_avg_price(...)`, `rc_out_avg_wtd_value(...)`
+- Cenapro RPCs: `cenapro_flec_balance`, `cenapro_flec_ledger`, `cenapro_opening_balances`, `cenapro_opening_balance_history`, `cenapro_set_opening_balance`
 
 **Triggers:**
 - **`handle_new_user()`** — After INSERT on `auth.users`: creates profile from `user_invites` whitelist (role + status='active') or with default role + status='pending'
@@ -304,12 +339,21 @@ Each major module has a co-located `.md` context file documenting its files, dat
 Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` first. Check for `CONTEXT.md` in the working directory and parent directories.
 
 **Context file locations:**
-- `app/(app)/CONTEXT.md` — Dashboard (modular widget grid, localStorage prefs)
+- `app/(app)/CONTEXT.md` — Home Daily Sync Digest (`/`, server-rendered bands)
+- `app/(app)/inventory/CONTEXT.md` — Inventory route map (submodule catalog)
 - `app/(app)/inventory/rc-in/CONTEXT.md` — RC IN (Delivery Master Log)
 - `app/(app)/inventory/rc-out/CONTEXT.md` — RC OUT (Inventory Usage)
 - `app/(app)/inventory/blocking/CONTEXT.md` — Blocking (Warehouse Grid Visualization)
+- `app/(app)/inventory/rc-movement/CONTEXT.md` — RC Movement (feeding matrix)
+- `app/(app)/inventory/flecon-bags/CONTEXT.md` — FLECON Bags (packaging-material inventory)
+- `app/(app)/production/CONTEXT.md` (+ `daily/`, `electricity/`, `trucks/`) — Production module
+- `app/(app)/summaries/CONTEXT.md` — Summaries
+- `app/(app)/review-queue/CONTEXT.md` — Sync review queue
+- `app/(app)/jarvis/CONTEXT.md` — Jarvis route (UI lives in `components/jarvis/`)
+- `app/(app)/cenapro/CONTEXT.md` — Cenapro tenant (CI/Cebu)
 - `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
-- `components/widgets/CONTEXT.md` — Widget System (registry, size tiers, how to add a widget)
+- `components/digest/CONTEXT.md` — Home Digest bands (the `/` presentation components)
+- `components/jarvis/CONTEXT.md` — Jarvis chat UI (mounted via `app-shell.tsx`)
 - `components/shared/grid/CONTEXT.md` — Blackwood Table (universal cell selection, inline editing, keyboard nav, context menu — the agnostic grid primitive all data grids share)
 - `components/NAVBAR.md` — Navbar (page titles, breadcrumbs)
 - `components/providers/AUTH.md` — Auth Provider (permissions, dev override)
@@ -325,80 +369,31 @@ Create a new `CONTEXT.md` when a module reaches 3+ files AND 200+ total lines. U
 - Modules (directories): `CONTEXT.md`
 - Standalone components (single file in shared dir): `<NAME>.md` (e.g., `NAVBAR.md`)
 
-## Widget System
+## Home Digest (`/`)
 
-Blackwood's dashboard at `/` is a composable grid of widgets. Each widget is a self-contained display component — it never imports from Supabase directly. Data flows in via a **static adapter** (`lib/widgets/mock-data.ts`) today — a charcoal-shaped static implementation of the platform's data-agnostic widget interfaces. Real **live adapters** (`lib/widgets/adapters/`) will drop in alongside without any changes to widgets.
+The home page at `/` is the **Daily Sync Digest** — a read-only, top-to-bottom operational briefing rendered as a Server Component (`app/(app)/page.tsx`). It replaced the archived widget dashboard (`_archived/dashboard-v1/`). It never talks to Supabase from the client: one server-side **adapter**, `getDigestData()` in `lib/digest/queries.ts`, queries the `view_digest_*` views (plus blocking + flecon balance) and returns a single normalized `DigestData` object (`lib/digest/types.ts`). Each band is a presentation component in `components/digest/` that consumes one slice of that object — the same port/adapter discipline the widget dashboard used, minus the composable grid.
 
-### Widget Interface Contract
+### Bands (render order, top → bottom in `page.tsx`)
 
-```typescript
-// Every widget component accepts these props at minimum:
-interface WidgetProps<TSettings> {
-  instanceId: string
-  settings: TSettings
-  onSettingsChange: (partial: Partial<TSettings>) => void
-}
+| # | Band component | `DigestData` slice | Purpose |
+|---|---|---|---|
+| — | `DigestHeader` | `meta` | Operational date, last-sync time, per-stream freshness |
+| 1 | `OpenBlocks` | `openBlocks` | Currently **IN-USE** blocks (balance + lab stats), surfaced at the very top |
+| 2 | `KpiHero` | `kpis` | Today's headline KPIs with sparklines |
+| 3 | `DigestCharts` | `flow`, `price`, `grades` | Daily RC-in/out flow, ₱/kg price (price-gated), production grades |
+| 4 | `TrucksSummary` | `trucks` | Trucks with a trip on the operational date (skips if none) |
+| 5 | `BagInventory` | `fleconBags` | FLECON bag balance snapshot |
+| 6 | `SyncSummary` + `ActivityFeed` | `latestSync`, `activity` | What the last sync brought in |
+| 7 | `DigestFooterBand` | `flags`, `monthToDate` | Data-quality flags + month-to-date totals |
 
-// Registry entry (components/widgets/index.ts):
-interface WidgetDefinition {
-  type: string
-  displayName: string
-  description: string
-  defaultSize: { w: number; h: number; minW?: number; minH?: number }
-  createDefaultSettings: () => unknown
-  component: React.ComponentType<any>
-}
-```
-
-### Current Widget Catalog
-
-| Widget | Component | Description |
-|--------|-----------|-------------|
-| `chart` | `ChartWidget` | Multi-series price/quality chart with comparison slices, X/Y builder, font scale |
-| `kpi-strip` | `KPIStripWidget` | Responsive KPI chips — adapts layout by size tier |
-| `quality-scatter` | `QualityScatterWidget` | SVG scatter (PHP/KG vs MC/ASH) |
-| `warehouse-occupancy` | `WarehouseOccupancyWidget` | WHSE A/B/C/D occupancy bars |
-
-### How to Add a New Widget Type
-
-1. Create `components/widgets/<name>/<Name>Widget.tsx` — export a named React component
-2. Call `useWidgetSize()` from `@/components/widgets/chart/utils` for responsive behavior
-3. Add an entry to `WIDGET_REGISTRY` in `components/widgets/index.ts`
-4. Widget receives no required props beyond what `WidgetShell` provides via `WidgetSizeContext`
-
-### Widget Size Tier System
-
-`WidgetShell` measures the content area via `ResizeObserver` and provides `WidgetSize` via `WidgetSizeContext`. Tiers: `xs` (<160px) | `sm` (160–280px) | `md` (280–440px) | `lg` (440–640px) | `xl` (>640px). Apply the same breakpoints to height for `heightTier`.
-
-### Dashboard Shell
-
-| Component | File | Responsibility |
-|-----------|------|----------------|
-| `DashboardGrid` | `components/dashboard/DashboardGrid.tsx` | Layout state, localStorage prefs, edit mode, ReactGridLayout |
-| `WidgetShell` | `components/dashboard/WidgetShell.tsx` | Generic frame: title bar, collapse, remove, ResizeObserver |
-| `WidgetPicker` | `components/dashboard/WidgetPicker.tsx` | "Add widget" modal — reads from WIDGET_REGISTRY |
-
-Layout and per-widget settings persist to localStorage key `bw_d6_prefs`. CSS imports for ReactGridLayout (`react-grid-layout/css/styles.css`, `react-resizable/css/styles.css`) live in `DashboardGrid.tsx`.
-
-## Adapter Layer
-
-Adapters translate any data source's raw output into the data-agnostic interface a widget declares. They are the only place where tenant/domain knowledge meets the platform layer.
-
-**Current adapter:**
-- `lib/widgets/mock-data.ts` — static adapter. Exports `CHARCOAL_UNIVERSAL_CONFIG`, `LEDGER`, `USAGE_LEDGER`, etc. These are charcoal-shaped implementations of platform interfaces — not the "real" data, but structurally identical to what a live adapter would produce.
-
-**Future adapters (to be built per user approval):**
-- `lib/widgets/adapters/charcoal-chart.ts` — queries Supabase views and transforms to `ChartConfig`
-- `lib/widgets/adapters/charcoal-kpi.ts` — queries KPI aggregates and transforms to `KPIData[]`
-
-**Rules:**
-- Widgets consume normalized interfaces — never raw data or Supabase queries
-- Adapters are pure functions — no React, no rendering logic, no knowledge of which widget will consume their output
-- When a live adapter replaces a static adapter, the widget requires zero changes
+### Rules
+- The digest is **presentation-only** — all aggregation happens in the `view_digest_*` SQL views, never in TypeScript.
+- **Price gating:** ₱/kg data in `DigestCharts` and `openBlocks[].phpKg` must be nulled server-side in `getDigestData()` when `!canViewPrices()`. See the Price gating boundary above.
+- See `components/digest/CONTEXT.md` and `app/(app)/CONTEXT.md` for the full band-by-band architecture.
 
 ## Blocking Module
 
-The Blocking tab is the **primary tab** in the Inventory page — a warehouse grid visualization of 220 block locations across 4 warehouses (A/B/C/D). Uses `view_blocking_grid` SQL view for pre-computed data, CSS Grid heatmap cells, slide-over detail panel with delivery/usage history. See `app/(app)/inventory/blocking/CONTEXT.md` for full architecture. Key patterns: lazy-loaded via tab context (same as RC OUT), role-gated cost data, heatmap coloring by balance percentage, spotlight status filter with dim/glow effect.
+Blocking is a **standalone route** at `/inventory/blocking` — a warehouse grid visualization of 220 block locations across 4 warehouses (A/B/C/D). Uses `view_blocking_grid` SQL view for pre-computed data, CSS Grid heatmap cells, slide-over detail panel with delivery/usage history. See `app/(app)/inventory/blocking/CONTEXT.md` for full architecture. Key patterns: role-gated cost data, heatmap coloring by balance percentage, spotlight status filter with dim/glow effect.
 
 ## Agent Model
 

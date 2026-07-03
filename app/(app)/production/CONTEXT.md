@@ -99,9 +99,9 @@ The Year + Batch picker is a **module-level, shared period control** — NOT per
 - ~~`view_electricity_monthly`~~ — **DROPPED 2026-05-29** (referenced the old `rate_php_per_kwh` column + computed a bogus `month_ttl_php` peso total; the monthly-summary UI was removed May 2026 and nothing queried it).
 - `view_trucks_monthly` — monthly aggregates per plate (note: also unused by the UI — monthly summary card was removed; harmless but a candidate for future cleanup)
 
-**Note (2026-05-27):** `production_runs.customer` was added during the MASTER backfill. Default `CEBU` covers ~99% of rows. The `production-runs-grid.tsx` UI does not yet expose a customer column — new rows entered via the grid will silently default to `CEBU` via the DB default. Follow-up UI work: add a customer dropdown to the grid for non-CEBU rows.
+**Note (2026-05-27):** `production_runs.customer` was added during the MASTER backfill. Default `CEBU` covers ~99% of rows. The unified Daily ledger grid (`daily/daily-ledger-grid.tsx`, which replaced the old `production-runs-grid.tsx`) exposes a CUSTOMER column with a single-select header filter; new rows entered via the grid default to `CEBU` via the DB default when not set.
 
-**Note (2026-05-28):** The Daily tab UI (`daily/`) was built against the flat 3-table schema. After the shift model restructure its server actions (`fetchDailyTabData`, `saveBulk*`) and grid components need to be rewritten to work with `production_shifts` as the entry point. **This is a pending frontend task — the UI currently reads stale type signatures.** See `daily/CONTEXT.md` for the full picture.
+**Note (2026-05-28, DONE):** The Daily tab UI (`daily/`) was **rebuilt** for the parent-child shift model. Its server actions (`fetchDailyTabData`, `saveBulkDailyLedger`) now use `production_shifts` as the entry point, and the former 3 side-by-side grids were replaced by the single unified `daily-ledger-grid.tsx` (old `production-runs-grid.tsx`/`downtime-grid.tsx`/`waste-grid.tsx` deleted). No stale type signatures remain. See `daily/CONTEXT.md` for the full picture.
 
 ## Dependencies
 - `@/components/providers/auth-context` — `useAuth()`, `hasPermission('view:prices')` for cost gating

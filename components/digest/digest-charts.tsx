@@ -550,10 +550,15 @@ interface DigestChartsProps {
 }
 
 export function DigestCharts({ flow, price, grades }: DigestChartsProps) {
+  // The price series is EMPTY for price-denied roles (gated server-side in
+  // getDigestData). Skip the ₱/kg chart entirely in that case so no broken /
+  // empty-looking chart renders — mirrors how other digest bands drop out on
+  // empty data.
+  const showPrice = price.length > 0;
   return (
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
       <FlowChart flow={flow} />
-      <PriceChart price={price} />
+      {showPrice && <PriceChart price={price} />}
       <GradeChart grades={grades} />
     </div>
   );

@@ -10,7 +10,7 @@ Whitelist-based user invitation, role assignment, and soft-delete access control
 |------|-------|------|
 | `page.tsx` | 52 | Server component — auth check, fetches all profiles, passes to table |
 | `actions.ts` | 201 | 4 server actions: `inviteUser`, `revokeUserAccess`, `reactivateUser`, `updateUserRole` |
-| `layout.tsx` | 25 | Route guard — redirects non-privileged users to `/inventory/rc-in` |
+| `layout.tsx` | 25 | Route guard — redirects non-privileged users to `/inventory` (and unauthenticated users to `/login`) |
 | `loading.tsx` | 15 | Skeleton loading state |
 | `components/UserManagementTable.tsx` | 168 | Dense data table with inline role dropdown + revoke/reactivate |
 | `components/InviteUserDialog.tsx` | 113 | Modal form — email + role selection, calls `inviteUser()` |

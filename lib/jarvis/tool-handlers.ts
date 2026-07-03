@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { canViewPrices } from '@/lib/auth'
 import type { Database } from '@/types/supabase'
 
 type BatchStatus = Database['public']['Enums']['batch_status']
@@ -80,6 +81,14 @@ export async function executeToolCall(
 ): Promise<unknown> {
   const supabase = createAdminClient()
 
+  // The admin client bypasses RLS, so the price boundary must be enforced HERE
+  // before any cost/price column reaches the model (and, via the chat, the
+  // user). canViewPrices() is the canonical, impersonation-aware gate; when it
+  // denies, every ₱/cost field is nulled out of the returned rows below.
+  // NEVER re-derive this via profiles.select('role') — that ignores the dev
+  // impersonation cookie (CLAUDE.md price-gating rule).
+  const showPrices = await canViewPrices()
+
   switch (name) {
     case 'query_batches': {
       const { batch_code, status, location_ref, limit } = args as {
@@ -113,10 +122,15 @@ export async function executeToolCall(
         return { error: error.message, table: 'batches' }
       }
 
+      // Scrub avg_cost for price-denied roles before returning to the model.
+      const batchRows = (data ?? []).map((row) =>
+        showPrices ? row : { ...row, avg_cost: null }
+      )
+
       return {
         table: 'batches',
-        count: data?.length ?? 0,
-        rows: data ?? [],
+        count: batchRows.length,
+        rows: batchRows,
       }
     }
 
@@ -156,10 +170,15 @@ export async function executeToolCall(
         return { error: error.message, table: 'deliveries' }
       }
 
+      // Scrub cost_basis (PHP/KG) for price-denied roles before returning.
+      const deliveryRows = (data ?? []).map((row) =>
+        showPrices ? row : { ...row, cost_basis: null }
+      )
+
       return {
         table: 'deliveries',
-        count: data?.length ?? 0,
-        rows: data ?? [],
+        count: deliveryRows.length,
+        rows: deliveryRows,
       }
     }
 

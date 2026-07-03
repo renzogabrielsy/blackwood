@@ -19,7 +19,10 @@ values into views.
 
 ## Files
 - `page.tsx` — **async Server Component**. Calls `getDigestData()` once and
-  composes the six bands. Thin: fetch + layout only. No `'use client'`.
+  composes the bands. Thin: fetch + layout only. No `'use client'`.
+  **Render order, top→bottom:** DigestHeader → **OpenBlocks** (surfaced at the
+  very top) → KpiHero → DigestCharts → TrucksSummary → **BagInventory** →
+  (SyncSummary + ActivityFeed) → DigestFooterBand.
 - `components/digest/format.ts` — pure display formatters (`fmtKg`, `fmtKwh`,
   `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`).
   No aggregation (HARD RULE — that lives in SQL views).
@@ -41,7 +44,9 @@ values into views.
   spark is left intact (a 0 net day is meaningful).
 - `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
   **Feed In vs Out** (dual area, `connectNulls` keeps zero days flat),
-  **RC In price ₱/kg** (line), **Production by grade** (stacked bar — pivots
+  **RC In price ₱/kg** (line — skipped entirely when `price` is empty, which
+  happens for price-denied roles since the series is gated server-side),
+  **Production by grade** (stacked bar — pivots
   long `GradePoint[]` to wide rows). All colors are `var(--chart-1..5)` tokens
   (dark-mode safe). Glass tooltip via theme tokens.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
@@ -64,9 +69,9 @@ values into views.
   in `page.tsx`. Source: `data.trucks` (see Data below).
 - `components/digest/open-blocks.tsx` — **Server component** (no interactivity;
   Batch sub-label uses a native `title` tooltip, not shadcn Tooltip). A COMPACT
-  at-a-glance **card grid** — one card per currently-occupied block
-  (STORED/IN-USE), `block_loc` ascending — chosen because only a few blocks are
-  ever in-use, so cards read better than a dense table. Responsive grid
+  at-a-glance **card grid** — one card per currently **IN-USE** block
+  (`status = 'IN-USE'`), `block_loc` ascending — chosen because only a few blocks
+  are ever in-use, so cards read better than a dense table. Responsive grid
   `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`. Each card, top→bottom:
   **(1) header** — prominent `blockLoc` (`font-mono text-lg`) over a muted,
   truncated `batchCode` sub-label (`title={batchCode}`), with a status dot+label
@@ -93,8 +98,18 @@ values into views.
   `animate-fade-up` + `hover-lift` on the outer band, `stagger-fast` on the card
   grid (small ≤-handful group — allowed, NOT the 100+-instance table case), and
   the bar fill's one-shot `animate-status-grow` scaleX. **Renders `null` when
-  empty.** Rendered between the trucks band (C2) and the sync band (D) in
-  `page.tsx`. Source: `data.openBlocks` (see Data below).
+  empty.** Rendered at the **very top** of the digest (right after the header,
+  before the KPI hero) in `page.tsx`. Source: `data.openBlocks` (see Data below).
+- `components/digest/bag-inventory.tsx` — **Server component** (pure display,
+  mirrors open-blocks). A compact at-a-glance **chip group** — one chip per
+  FLECON bag type (label + balance), `sort_order` ascending (backend order
+  preserved, never re-sorted/re-summed in TS). Zero-balance chips render
+  dimmed (`opacity-70`); non-zero chips read prominent. **No price data anywhere
+  in this domain — nothing gated.** Glass card frame (`bg-card/95 backdrop-blur
+  … hover-lift`), `stagger-fast` on the chip group (small group — allowed).
+  **Renders `null` when there are no bag types.** Rendered between the trucks
+  band and the sync band in `page.tsx`. Source: `data.fleconBags` (balances from
+  `view_flecon_bag_balance`; see Data below).
 - `components/digest/sync-summary.tsx` — Server component. Compact header from
   `data.latestSync`: "{date} · {n} new · {n} updated (· {n} removed)" + per-
   employee count chips (`byEmployee`).
@@ -114,13 +129,15 @@ values into views.
 ## Data
 - **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
   (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`,
-  the `truck_readings` table for the trucks band, and `view_blocking_grid` for the
-  open-blocks band. The contract in
+  the `truck_readings` table for the trucks band, `view_blocking_grid` for the
+  open-blocks band, and `view_flecon_bag_balance` for the bag-inventory band.
+  The contract in
   `lib/digest/types.ts` is intentionally stable — extend it deliberately (as with
   `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
-  price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks }`.
+  price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks,
+  fleconBags }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -128,7 +145,8 @@ values into views.
     built with zero-value days FILTERED OUT (pre-`tail`) so a 0 day doesn't dip
     the sparkline to the floor; `net_flow.spark` keeps all days. `value`/`avg7`
     are computed from the full series and are NOT affected by this spark filter.
-  - `flow[]` — `{ date, in, out }` (kg, ~30 d).  `price[]` — `{ date, phpPerKg }`.
+  - `flow[]` — `{ date, in, out }` (kg, ~30 d).  `price[]` — `{ date, phpPerKg }`
+    (₱ = gated by `canViewPrices()`: EMPTY array for price-denied roles).
   - `grades[]` — `{ date, grade, kg, shift? }` (long form; UI pivots to wide for
     stacking; `shift` = 'M'|'E'|'N'|undefined, segments multi-shift grades).
   - `latestSync` — `{ date, insertCount, updateCount, deleteCount, byEmployee[] }`.
@@ -142,17 +160,22 @@ values into views.
     Keyed on the SAME `operationalDate` as the KPIs (fetched after it resolves,
     same pattern as the `rcInSub` follow-up query). Empty array ⇒ band hidden.
   - `openBlocks[]` — `{ blockLoc, batchCode, status, balanceKg, totalInKg, mc, ash,
-    bdAstm, bdJis, grit, vm, fc, phpKg }`. Currently-occupied blocks, `block_loc`
+    bdAstm, bdJis, grit, vm, fc, phpKg }`. Currently **IN-USE** blocks, `block_loc`
     ascending. `totalInKg` (total RC-IN ever delivered to the block) is the
     "volume left" bar denominator (`balanceKg / totalInKg`).
     Queried from `view_blocking_grid` (all aggregation is the view's job — light
-    passthrough only): `.in('status', ['STORED','IN-USE']).order('block_loc', asc)`.
-    The `.in()` filter is load-bearing — the view ALSO returns SUNDRYING/SUNDRIED
-    (outside this band's contract), so they're excluded in the query. Current-state,
-    NOT date-keyed (independent of `operationalDate`). `phpKg` is **gated by
+    passthrough only): `.eq('status', 'IN-USE').order('block_loc', asc)`.
+    The `.eq()` filter is load-bearing — the view ALSO returns
+    STORED/SUNDRYING/SUNDRIED (outside this band's contract: OPEN blocks = the
+    ones actively being fed/consumed), so they're excluded in the query.
+    Current-state, NOT date-keyed (independent of `operationalDate`). `phpKg` is **gated by
     `canViewPrices()`** (`lib/auth.ts`): nulled SERVER-SIDE for the Production role
     before the payload leaves; a visible-but-`0` value means "no priced deliveries"
     (distinct from `null` = gated).
+  - `fleconBags[]` — `{ bagTypeId, code, label, sortOrder, opening, totalIn,
+    totalOut, balance, lastMovementDate }`. One entry per bag type,
+    `sort_order` ascending. Row-level passthrough from `view_flecon_bag_balance`
+    (all aggregation is the view's job). **No price data** — nothing gated.
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,

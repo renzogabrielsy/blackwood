@@ -2,9 +2,12 @@ import Link from 'next/link';
 import { Factory, Boxes, ArrowRight } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
-// Cenapro landing — a small hub linking to the two read-only screens.
+// Cenapro landing — a small hub linking to the two screens.
 // Cenapro is the platform's second tenant (the CI / Cebu charcoal company),
-// fully decoupled from the ICTC / Davao tenant.
+// fully decoupled from the ICTC / Davao tenant. Both screens are EDITABLE:
+// the app itself is now the maintaining system of record for the `cenapro`
+// schema (production events + opening balances are entered/edited in-app),
+// having been seeded from the original .xlsb workbook.
 export default function CenaproLandingPage() {
     return (
         <div className="flex-1 min-h-0 overflow-y-auto p-6 md:p-10">
@@ -16,9 +19,10 @@ export default function CenaproLandingPage() {
                         </span>
                     </div>
                     <p className="mt-3 max-w-2xl text-sm text-muted-foreground">
-                        Read-only views over the Cenapro production workbook. The source of truth is the
-                        uploaded <code className="font-mono text-xs">.xlsb</code> file — these screens visualize what
-                        has been ingested into the <code className="font-mono text-xs">cenapro</code> schema.
+                        Editable production &amp; inventory screens for Cenapro. The app is now the system of
+                        record for the <code className="font-mono text-xs">cenapro</code> schema — events and
+                        opening balances are entered and edited here, seeded from the original{' '}
+                        <code className="font-mono text-xs">.xlsb</code> workbook.
                     </p>
                 </div>
 

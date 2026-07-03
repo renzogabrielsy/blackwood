@@ -4,10 +4,24 @@ import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
 import type { Tables } from '@/types/supabase';
-import { canViewPrices } from '@/lib/auth';
+import { canViewPrices, getUserRole } from '@/lib/auth';
+import { PRIVILEGED_ROLES } from '@/types/auth';
 
 export async function deleteRcOutRecord(id: string) {
     const supabase = await createClient();
+
+    // Server-side permission gate — only Owner/Admin/Dev (PRIVILEGED_ROLES) may
+    // delete, matching the client hasPermission('delete:all') check. The UI hides
+    // the button, but the action must re-check or the guard is skin-deep.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete usage records' };
+    }
+
     const { error } = await supabase.from('rc_out').delete().eq('id', id);
 
     if (error) {
@@ -19,6 +33,17 @@ export async function deleteRcOutRecord(id: string) {
 
 export async function bulkDeleteRcOut(ids: string[]) {
     const supabase = await createClient();
+
+    // Server-side permission gate (see deleteRcOutRecord).
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete usage records' };
+    }
+
     const { error } = await supabase.from('rc_out').delete().in('id', ids);
 
     if (error) {

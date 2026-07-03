@@ -116,8 +116,12 @@ export default function PriceDemosIndex() {
       </div>
 
       <p className="mt-8 text-center text-xs text-muted-foreground/70">
-        These are frontend concepts on static sample data — no backend wiring yet. Tell me which one
-        (or which mix) to take forward.
+        Design concepts for delivery price &amp; volume analysis. Concept 4 (Analyst Brief) has been
+        taken forward — it&apos;s live on real data at{' '}
+        <Link href="/summaries" className="underline underline-offset-2 hover:text-foreground">
+          /summaries
+        </Link>
+        . The rest remain static sample-data explorations.
       </p>
     </div>
   );

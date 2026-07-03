@@ -13,6 +13,7 @@
 | `/inventory?tab=usage` | Logs page, Usage tab active | Yes |
 | `/inventory/blocking` | Standalone warehouse grid + shared detail panel | **No** |
 | `/inventory/rc-movement` | Standalone campaign feed matrix | **No** |
+| `/inventory/flecon-bags` | Standalone FLECON bag inventory (balances + movement ledger) | **No** |
 
 ## URL contracts
 - **`?tab=deliveries|usage`** — drives the logs tab (Phase 1). The URL is the source of truth (`useSearchParams` + `router.replace`, the project house style — NOT the nuqs library). localStorage (`inventory_active_tab`) is a **fallback only**: it seeds the tab on first load when no `?tab=` is present (written into the URL once, post-hydration). Default `deliveries`. Deep-linkable / shareable.
@@ -59,6 +60,7 @@
 | Deliveries (`?tab=deliveries`) | `rc-in/` | [RC IN](./rc-in/CONTEXT.md) — Delivery Master Log |
 | Usage (`?tab=usage`) | `rc-out/` | [RC OUT](./rc-out/CONTEXT.md) — Inventory Usage |
 | Movement (`/inventory/rc-movement`) | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix |
+| Bag Inventory (`/inventory/flecon-bags`) | `flecon-bags/` | [FLECON Bags](./flecon-bags/CONTEXT.md) — packaging-material stock |
 
 ## Dependencies
 - Submodules share `@/components/providers/auth-context` / `lib/auth` for permission gating (cost visibility).
@@ -66,5 +68,5 @@
 - Tab state + block/campaign selection use `next/navigation` (`useSearchParams` / `useRouter` / `usePathname`).
 
 ## See Also
-- [Navbar](../../../components/NAVBAR.md) — breadcrumbs for `/inventory`, `/inventory/blocking`, `/inventory/rc-movement` + the nested Inventory module dropdown
+- [Navbar](../../../components/NAVBAR.md) — breadcrumbs for `/inventory`, `/inventory/blocking`, `/inventory/rc-movement`, `/inventory/flecon-bags` + the nested Inventory module dropdown
 - [Auth Provider](../../../components/providers/AUTH.md) — permission model for cost visibility

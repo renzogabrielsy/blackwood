@@ -36,8 +36,8 @@ function depletionFill(fraction: number): string {
 }
 
 /**
- * Open Blocks — a COMPACT, at-a-glance CARD GRID of every currently-occupied
- * block (STORED / IN-USE), block_loc ascending. There are only a few in-use
+ * Open Blocks — a COMPACT, at-a-glance CARD GRID of every currently in-use
+ * block (status = IN-USE), block_loc ascending. There are only a few in-use
  * blocks, so one card per block reads better than a dense table. Current
  * inventory state, NOT date-keyed (the "as of" label just reflects the latest
  * operational day for context).

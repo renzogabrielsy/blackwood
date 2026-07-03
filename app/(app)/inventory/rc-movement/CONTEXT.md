@@ -145,5 +145,5 @@ Migration: `supabase/migrations/20260609010000_create_rc_movement_fed_price_view
 - [RC IN](../rc-in/CONTEXT.md) — Source of `deliveries.lab_results`, `deliveries.cost_basis`, `deliveries.block_loc` which feed `view_rc_movement` via `batch_meta` CTE
 - [RC OUT](../rc-out/CONTEXT.md) — Source of `rc_out.weight_kg`, `rc_out.transaction_date`, and `rc_out.production_batch` which feed the matrix
 - [Blocking](../blocking/CONTEXT.md) — Sibling visualization showing physical warehouse occupancy. The shared `BlockingDetailPanel` the matrix reuses now lives in `../_shared/` (shell-agnostic), but Blocking still owns its data: `fetchBlockDataForBatch` (batch-accurate header summary for the panel) and `fetchBlockingDetail`/`updateBlockNotes` in `blocking/actions.ts`, plus `BlockData` & friends in `blocking/types.ts`.
-- [Inventory](../CONTEXT.md) — Parent module that owns the tab system; the Movement tab mounts this matrix
+- [Inventory](../CONTEXT.md) — Parent module + route map. RC Movement is a **standalone route** (`/inventory/rc-movement`), not a tab; `page.tsx` → `rc-movement-route-view.tsx` mounts this matrix outside the logs tab shell.
 - Reference frozen-pane implementation alongside the Cenapro production ledger (`app/(app)/cenapro/production/production-ledger-grid.tsx`)

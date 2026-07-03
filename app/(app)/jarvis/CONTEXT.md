@@ -17,8 +17,13 @@ Full design: `AI_INGESTION_AGENT.md` at project root.
 - `lib/jarvis/extractors/daily-production.ts` — DailyProductionExtractor skeleton (Phase 2)
 
 ### Frontend (senior-frontend-engineer's domain)
-- `app/(app)/jarvis/` — chat UI components (slide-out panel, message list, input bar)
-- Mounted in `app/(app)/layout.tsx` so it's accessible from every page
+- `components/jarvis/` — chat UI components: `JarvisProvider`, `JarvisFloatingButton`,
+  `JarvisChatPanel` (slide-out panel, dynamically imported), `JarvisConversationList`,
+  `JarvisMessage`, `JarvisInput`, and the `useJarvisChat` hook. See
+  `components/jarvis/CONTEXT.md`. (This `app/(app)/jarvis/` folder holds only
+  `actions.ts` — there is no `page.tsx`/route; Jarvis is a floating panel, not a page.)
+- Mounted via `app/(app)/app-shell.tsx` (which `app/(app)/layout.tsx` renders) so
+  it's accessible from every page.
 
 ## Data
 
@@ -64,7 +69,7 @@ Request-response only. Streaming is Phase 2.
 | query_batches | Query batches table | batch_code, status, location_ref, limit |
 | query_deliveries | Query deliveries (RC IN) | start_date, end_date, supplier, batch_code, limit |
 
-Both tools use `createAdminClient()` (service role) so they bypass RLS for AI reads. Cost/price fields are included — if user role is Production, the actions layer should handle scrubbing (v1 does not yet implement this; Renzo is Owner so it's fine for now).
+Both tools use `createAdminClient()` (service role) so they bypass RLS for AI reads. Cost/price fields ARE now gated: `executeToolCall` resolves the canonical `canViewPrices()` (`lib/auth.ts`, impersonation-aware) once and nulls `avg_cost` (batches) / `cost_basis` (deliveries) out of the returned rows for price-denied roles (Production) BEFORE they reach the model.
 
 ## Dependencies
 
@@ -73,7 +78,7 @@ Both tools use `createAdminClient()` (service role) so they bypass RLS for AI re
 - `SUPABASE_SERVICE_ROLE_KEY` — in .env.local (used by createAdminClient for tool queries)
 - `lib/supabase/server.ts` — createClient() for authenticated user operations
 - `lib/supabase/admin.ts` — createAdminClient() for tool reads
-- `lib/auth.ts` — getUserRole() (not yet used in v1 Jarvis; will gate cost fields in Phase 2)
+- `lib/auth.ts` — `canViewPrices()` gates cost fields in tool results (see Tools note above)
 
 ## Ingestion Pipeline (Phase A — shipped 2026-05-27)
 

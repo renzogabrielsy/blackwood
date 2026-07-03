@@ -234,7 +234,7 @@ export interface DigestData {
   monthToDate: MonthToDate;
   /** Trucks with a trip (ttl_km > 0) on the operational date, busiest first. */
   trucks: TruckTrip[];
-  /** Currently-occupied blocks (STORED/IN-USE) with balance + lab stats,
+  /** Currently in-use blocks (status = IN-USE) with balance + lab stats,
    *  block_loc ascending. phpKg is null when prices are gated (Production). */
   openBlocks: OpenBlock[];
   /** FLECON bag balance snapshot — one entry per bag type, sort_order ascending.

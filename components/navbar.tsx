@@ -65,7 +65,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
     { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
     { test: exact('/notifications'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' },
-    { test: exact('/settings'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' },
+    { test: exact('/settings'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Your profile and sign-out' },
     { test: exact('/admin'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' },
     { test: exact('/review-queue'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' },
 ];

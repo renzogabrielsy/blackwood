@@ -32,7 +32,7 @@ Physical warehouse grid visualization — the digital equivalent of the Excel bl
 > **`balance` is self-correcting (migration `20260531041520_fix_blocking_view_balance_from_transactions`).** It is computed directly from the transaction tables as `SUM(deliveries.weight_kg) − SUM(rc_out.weight_kg)`, NOT sourced from the `batches.current_weight` cache. This means the grid shows the true balance even if `current_weight` ever drifts (e.g. an ingestion path double-counts it). The rc_out total is pulled via a correlated subquery (evaluated once per batch, outside the GROUP BY) so the per-delivery `LEFT JOIN` fan-out does not multiply it. `balance` therefore always equals the row's own `total_in` minus realized usage. Background: AUDIT_FINDINGS AF-001 / LEARNING_LEDGER L-005 (a 2026-05-27 deliveries-manager run had imperatively added `current_weight += weight` on top of the trigger's own increment, rendering ~54 t phantom inventory).
 
 **Data loading pattern:**
-- Grid data lazy-loaded via `fetchBlockingGridData()` server action on tab mount (follows RC OUT pattern via `blocking-lazy-tab.tsx` in `inventory/components/`)
+- Grid data fetched via `fetchBlockingGridData()` server action in `blocking-route-view.tsx` (the standalone-route host — Blocking is `/inventory/blocking`, not a tab; the fetch/loading/error/Retry logic was repurposed from the deleted `blocking-lazy-tab.tsx`)
 - Detail data (deliveries + usage + notes + avg_cost) fetched on-demand per cell click via `fetchBlockingDetail(batchCode, batchId)`
 - PHP/KG is role-gated: Production role users receive `null` for cost data
 

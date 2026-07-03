@@ -17,14 +17,16 @@ Real-time notification bell (500 lines, `components/notification-bell.tsx`) with
 - **RPC:** `_insert_notification()` — server-side function to create notifications
 
 ## Notification Type -> URL Mapping
+Resolved by `getNavigationTarget()` in `components/notification-bell.tsx`. There is no `/inventory/rc-in` route — delivery notifications land on `/inventory` (the logs shell).
 | Type | Target URL |
 |------|-----------|
-| `resolve_request/approved/denied` | `/edit/{audit_log_id}` |
-| `delivery_created` | `/inventory/rc-in?date={date}` |
-| `delivery_edited` | `/edit/{audit_log_id}` |
-| `delivery_deleted` | `/inventory/rc-in` |
-| `remarks_added` | `/edit/{audit_log_id}` |
-| `audit_comment_reply` | `/edit/{audit_log_id}` |
+| `resolve_request/approved/denied` | `/edit/{audit_log_id}` (fallback `/inventory`) |
+| `delivery_created` | `/inventory?date={date}` (fallback `/inventory`) |
+| `delivery_edited` | `/edit/{audit_log_id}` (fallback `/inventory`) |
+| `delivery_deleted` | `/inventory` |
+| `remarks_added` | `/edit/{audit_log_id}` (fallback `/inventory`) |
+| `audit_comment_reply` | `/edit/{audit_log_id}` (fallback `/inventory`) |
+| _(unknown/default)_ | `/` |
 
 ## Key Behaviors
 

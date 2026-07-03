@@ -13,20 +13,27 @@ Persistent navigation bar (`components/navbar.tsx`). Owns ALL page titles/descri
 The dashboard (`/`) returns `null` from `getBreadcrumb()` — no breadcrumb shown.
 
 ## Breadcrumb Registry (`BREADCRUMB_REGISTRY` → `getBreadcrumb()`)
-The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname)` predicate (built via the `exact()` / `prefix()` helpers); the FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/inventory/blocking` and `/inventory/rc-movement` precede the `/inventory` catch-all; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb()` just `.find()`s the first matching entry.
+The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname)` predicate (built via the `exact()` / `prefix()` helpers); the FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb()` just `.find()`s the first matching entry.
 
 | Match | Back Label | Page Title | Description |
 |------|-----------|------------|-------------|
 | `prefix('/edit/')` | Back to Inventory | Edit Discussion | — |
 | `prefix('/inventory/blocking')` | Back to Inventory | Blocking | Warehouse grid — block occupancy & balances |
 | `prefix('/inventory/rc-movement')` | Back to Inventory | Movement | Daily feed matrix — campaign-scoped day × block |
+| `prefix('/inventory/flecon-bags')` | Back to Inventory | Bag Inventory | FLECON bag stock — balances & movement ledger |
 | `prefix('/inventory')` | Back to Dashboard | Inventory | Raw charcoal deliveries, usage & tracking |
 | `prefix('/production')` | Back to Dashboard | Production | Daily runs, downtime, waste, electricity & trucks |
+| `prefix('/summaries')` | Back to Dashboard | Summaries | Delivery price & volume analysis — by period or supplier |
+| `prefix('/price-demos/demo1')` | Back to Demos | Terminal | Dual-axis volume × price command view (concept 1 of 4) |
+| `prefix('/price-demos/demo2')` | Back to Demos | Ledger | Sortable supplier league table with sparklines (concept 2 of 4) |
+| `prefix('/price-demos/demo3')` | Back to Demos | Heatmap | Month × supplier ₱/kg & volume matrix (concept 3 of 4) |
+| `prefix('/price-demos/demo4')` | Back to Demos | Analyst Brief | Executive monthly review dashboard (concept 4 of 4) |
+| `prefix('/price-demos')` | Back to Dashboard | Price & Volume Demos | Four design concepts for delivery price & volume analysis |
 | `prefix('/cenapro/production')` | Back to Cenapro | Cenapro · Production | CI production events — bagging & partner draws |
 | `prefix('/cenapro/inventory')` | Back to Cenapro | Cenapro · Flec Inventory | Per-warehouse flec balances & movement ledger |
 | `prefix('/cenapro')` | Back to Dashboard | Cenapro | CI / Cebu production & flec inventory — second tenant |
 | `exact('/notifications')` | Back to Dashboard | Notifications | — |
-| `exact('/settings')` | Back to Dashboard | Settings | Manage user roles and permissions |
+| `exact('/settings')` | Back to Dashboard | Settings | Your profile and sign-out |
 | `exact('/admin')` | Back to Dashboard | Admin Panel | Manage users and invitations |
 | `exact('/review-queue')` | Back to Dashboard | Review Queue | Pre-extracted rows from daily reports awaiting approval |
 
@@ -39,8 +46,8 @@ A nested information architecture grouped by tenant. The dropdown is built from 
 
 | Constant | Section | Items |
 |----------|---------|-------|
-| `ICTC_INVENTORY` | ICTC · Davao → **Inventory** sub-group (indented) | Blocking (`/inventory/blocking`) · Deliveries (`/inventory?tab=deliveries`) · Usage (`/inventory?tab=usage`) · Movement (`/inventory/rc-movement`) |
-| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · Accounting (disabled) |
+| `ICTC_INVENTORY` | ICTC · Davao → **Inventory** sub-group (indented) | Blocking (`/inventory/blocking`) · Deliveries (`/inventory?tab=deliveries`) · Usage (`/inventory?tab=usage`) · Movement (`/inventory/rc-movement`) · Bag Inventory (`/inventory/flecon-bags`) |
+| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · Summaries (`/summaries`) · Accounting (disabled) |
 | `CENAPRO_MODULES` | Cenapro · Cebu | Production (`/cenapro/production`) · Flec Inventory (`/cenapro/inventory`) |
 
 Render structure inside `DropdownMenuContent`:
@@ -51,7 +58,9 @@ ICTC · Davao                 ← uppercase tenant label
     Deliveries
     Usage
     Movement
+    Bag Inventory
   Production                 ← sibling module
+  Summaries
   Accounting (disabled)
 ─────────────
 Cenapro · Cebu               ← uppercase tenant label
