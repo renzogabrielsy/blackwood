@@ -163,19 +163,41 @@ Confirmed sizes: `delivery-master-table.tsx` 2300, `supplier-brief-client.tsx` 2
 
 ---
 
-## Phase 4 — Database / RLS hardening (217 advisors)
+## Phase 4 — Database / RLS hardening (217 advisors) · **[x] DONE (Steps 1–4 shipped; 5 = evidence-based no-op; 6 = manual)**
 
-**Plain:** the database mostly trusts the app to behave rather than enforcing rules at the data layer itself. Real-world risk is **low** (invite-only, single organization; the Python sync writes with a service-role key that bypasses RLS anyway, so enabling RLS **won't break ingestion**). The price boundary is enforced server-side in the app (`canViewPrices()`); RLS is the *org* boundary. Fix in phased migrations, testing an `authenticated`-role read after each.
+**Plain:** the database mostly trusts the app to behave rather than enforcing rules at the data layer itself. Real-world risk is **low** (invite-only, single organization; the Python sync writes with a service-role key that bypasses RLS anyway, so enabling RLS **won't break ingestion**). The price boundary is enforced server-side in the app (`canViewPrices()`); RLS is the *org* boundary. Fixed in 7 phased migrations, verifying an `authenticated`-role read (and, where relevant, a write) after EACH on the live remote DB.
 
-| Advisor | Count | Fix |
-|---|---|---|
-| `rls_disabled_in_public` (ERROR) | 7 | Enable RLS + authenticated-scoped policies on `production_shifts/runs/downtime/waste`, `electricity_readings`, `truck_readings`, `ingestion_watermarks`. |
-| `security_definer_view` (ERROR) | 26 | Convert analytics/movement/digest/flecon views to `security_invoker`. |
-| `rls_policy_always_true` (WARN) | 21 / 9 tables | Scope the always-true USING/WITH-CHECK policies (audit_logs, batches, deliveries, flecon_*, notifications, profiles, rc_out). |
-| `function_search_path_mutable` (WARN) | 12 | Pin `search_path` on the 12 functions. |
-| `anon_security_definer_function_executable` (WARN) | 14 | `REVOKE EXECUTE ... FROM anon` on the notify/`is_admin`/`set_audit_comment` funcs unless intentionally public. |
-| `pg_graphql_anon/authenticated_table_exposed` | ~49 / ~73 | `REVOKE SELECT` from `anon` where unused; note **`cenapro.*` tables are exposed to anon via GraphQL** — tighten. |
-| `auth_leaked_password_protection` (WARN) | 1 | Enable HaveIBeenPwned check in Supabase Auth settings (dashboard toggle). |
+**Migrations shipped (2026-07-03, all applied + on disk in `supabase/migrations/`):**
+1. `20260703023945_phase4_enable_rls_production_tables.sql`
+2. `20260703024226_phase4_invoker_delivery_analytics_views.sql`
+3. `20260703024300_phase4_invoker_rc_movement_views.sql`
+4. `20260703024338_phase4_invoker_digest_flecon_production_views.sql`
+5. `20260703024510_phase4_pin_function_search_path.sql`
+6. `20260703024718_phase4_revoke_anon_access.sql`
+7. `20260703024907_phase4_revoke_public_execute_on_definer_funcs.sql` + `20260703025033_phase4_regrant_is_admin_execute_for_rls.sql` (correction pair)
+
+**Before → after advisor counts:**
+
+| Advisor | Before | After | Status |
+|---|---|---|---|
+| `rls_disabled_in_public` (ERROR) | 7 | **0** | **[x] DONE** — RLS enabled on all 7. The 6 production/electricity/truck tables got the rc_out 4-policy shape (authenticated SELECT/INSERT/UPDATE/DELETE, all `true`); `ingestion_watermarks` got RLS with **no** policy (app never touches it — only the service-role sync writes it). |
+| `security_definer_view` (ERROR) | 26 | **0** | **[x] DONE** — all 26 flagged views → `security_invoker`, in 3 family migrations, each verified with a live `authenticated` SELECT. Every underlying table was confirmed to have authenticated GRANT SELECT + a permissive SELECT policy first (the flecon-L trap). `view_rc_in_master` is DEFINER but was **NOT** advisor-flagged → left as-is (out of scope). |
+| `function_search_path_mutable` (WARN) | 12 | **0** | **[x] DONE** — pinned `SET search_path = public` on all 12 (not `''`, because `handle_audit_log`/`log_delivery_changes` reference unqualified public objects — `= public` keeps bodies untouched). Verified the audit trigger chain still writes `audit_logs`. |
+| `anon_security_definer_function_executable` (WARN) | 14 | **0** | **[x] DONE** — the real fix was `REVOKE EXECUTE … FROM PUBLIC` (an initial `FROM anon` was a no-op: EXECUTE was a PUBLIC grant anon inherited). |
+| `authenticated_security_definer_function_executable` (WARN) | 14 | **1** | **[x] DONE (accepted)** — the `FROM PUBLIC` revoke also cleared authenticated for 13. The remaining **`is_admin`** is a LOAD-BEARING grant: RLS policies on `pending_review` + `profiles` call `is_admin(auth.uid())`, and policy evaluation requires the caller to hold EXECUTE even on a SECURITY DEFINER function. Revoking it broke an admin UPDATE in testing (`ERROR 42501: permission denied for function is_admin`) → re-granted to authenticated. Accepted risk. |
+| `pg_graphql_anon_table_exposed` (WARN) | 49 | **0** | **[x] DONE** — `REVOKE ALL/SELECT FROM anon` on the 38 flagged public objects + the 10 `cenapro.*` objects. anon reads confirmed denied; authenticated reads confirmed intact (cenapro accessors run as authenticated, which keeps its cenapro grant). No pre-login anon usage exists (middleware walls all but /login,/auth,/api; there is no app/api; auth callback reads via service-role + writes only post-session). |
+| `pg_graphql_authenticated_table_exposed` (WARN) | ~73 | **73** | **[x] ACCEPTED — intentional.** These are the INTENDED authenticated org-member reads (invite-only single org). Nothing revoked from `authenticated` this phase, by design. |
+| `rls_policy_always_true` (WARN) | 21 | **39** | **[/] EVALUATED — no safe tightening (see Step 5 below).** Count rose because enabling RLS on the 6 production tables added their (intended) always-true write policies. |
+| `rls_enabled_no_policy` (INFO) | 0 | **1** | **[x] INTENTIONAL** — `ingestion_watermarks` (service-role-only; deny-by-default for anon/authenticated is correct). |
+| `auth_leaked_password_protection` (WARN) | 1 | **1** | **[ ] MANUAL — Renzo dashboard step (Step 6).** No MCP tool and no safe CLI path in this environment (no local `supabase/config.toml`, no Management API token; synthesizing + `config push` would risk clobbering dashboard-only auth settings). **Action:** Dashboard → Authentication → Providers → Password → enable **"Leaked password protection"** (HaveIBeenPwned). Pro plan required. |
+
+**Step 5 — always-true write policies: evaluated, LEFT permissive with evidence (no migration).** Per the "tighten only where provably safe" rule, each flagged write policy was traced to its real app path:
+- **`audit_logs` UPDATE** — LEFT permissive. The advisor's own sample suggests scoping to `is_admin`, but `requestResolveAuditLog` (`rc-in/actions.ts:545`) lets ANY authenticated user UPDATE `audit_logs` (to request a resolve) — verified a Production user's UPDATE succeeds today. Scoping to admin would break that feature. Accepted: server actions are the enforcement layer (the privileged `resolveAuditLog`/`approveResolveRequest` paths gate on `PRIVILEGED_ROLES` server-side).
+- **`notifications` UPDATE** — already correctly scoped to `auth.uid() = user_id` (not flagged); only its INSERT is always-true and is unused by the app (notifications are created by the `_insert_notification` SECURITY DEFINER trigger). Left as-is (no app write path to tighten).
+- **`profiles` UPDATE** — already scoped (`id = auth.uid()` for own row; `is_admin(auth.uid())` for admins). Only the `Service role can insert profiles` INSERT is always-true and unused (profiles are created by the `handle_new_user` trigger; service_role bypasses RLS). Left as-is.
+- **`deliveries` / `batches` / `rc_out` / `flecon_*` writes** — LEFT always-true. Written by many authenticated roles; server actions (+ the new PERF-3 transactional RPCs) are the enforcement layer today. Accepted risk, documented.
+
+**Verification discipline:** every migration was verified live as `set local role authenticated` (and `anon` for the revokes) inside a rolled-back transaction; the RLS-policy `is_admin` regression was caught by exercising the actual admin UPDATE path and fixed before proceeding. Types regenerated; `tsc --noEmit` clean.
 
 ---
 
