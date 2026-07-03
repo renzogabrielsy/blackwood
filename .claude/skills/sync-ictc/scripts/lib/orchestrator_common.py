@@ -23,8 +23,11 @@ and TRUST them (emitting `codified_rules_applied`).
 from __future__ import annotations
 
 import json
+import os
+import random
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -50,6 +53,59 @@ def log(*parts: Any) -> None:
 def emit(obj: dict) -> None:
     """Print the single machine-JSON object to stdout."""
     print(json.dumps(obj, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# Curated progress events (the in-app "Run Sync" panel streams these live)
+# ---------------------------------------------------------------------------
+# FROZEN CONTRACT (see SYNC_CLI_CONTRACT.md → "Progress events"): one line on
+# STDERR per event, flushed, sentinel-prefixed. stdout stays PURE machine JSON.
+#   ##SYNC_PROGRESS {"stage":"fetch|extract|classify|apply|reconcile|finalize",
+#                    "pct":<0-100 int>,"label":"<plain-English>",
+#                    "detail":"<optional>","level":"info|warn"}
+# Labels are written for a plant manager, NEVER echoed terminal lines or tracebacks.
+PROGRESS_SENTINEL = "##SYNC_PROGRESS "
+_PROGRESS_STAGES = {"fetch", "extract", "classify", "apply", "reconcile", "finalize"}
+
+# monotonic guard — pct never goes backwards within a single process run.
+_LAST_PCT = 0
+
+
+def progress(
+    stage: str,
+    label: str,
+    pct: int,
+    detail: str | None = None,
+    level: str = "info",
+) -> None:
+    """
+    Emit ONE curated progress event on stderr (sentinel-prefixed compact JSON).
+
+    stage  — one of fetch|extract|classify|apply|reconcile|finalize.
+    label  — plain-English current activity ("Checking Gmail for new reports…").
+    pct    — 0-100 int; clamped and forced monotonically nondecreasing per process.
+    detail — optional specifics (may be omitted).
+    level  — "info" | "warn".
+
+    stdout is untouched — this only ever writes to stderr.
+    """
+    global _LAST_PCT
+    try:
+        p = int(round(pct))
+    except (TypeError, ValueError):
+        p = _LAST_PCT
+    p = max(0, min(100, p))
+    if p < _LAST_PCT:
+        p = _LAST_PCT
+    _LAST_PCT = p
+
+    st = stage if stage in _PROGRESS_STAGES else "classify"
+    lvl = level if level in ("info", "warn") else "info"
+    payload: dict[str, Any] = {"stage": st, "pct": p, "label": str(label), "level": lvl}
+    if detail:
+        payload["detail"] = str(detail)
+    print(PROGRESS_SENTINEL + json.dumps(payload, separators=(",", ":"), default=str),
+          file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -161,14 +217,116 @@ def run_json(cmd: list[str]) -> dict:
         raise
 
 
+# ---------------------------------------------------------------------------
+# Gmail transient-fault handling
+# ---------------------------------------------------------------------------
+# When 4 orchestrators hit Gmail IMAP simultaneously, Gmail drops burst connections
+# with an EOF / socket error / abort. That is TRANSIENT — a retry a couple seconds
+# later almost always succeeds. A clean rc=0 that fails to PARSE is NOT transient
+# (the child ran fine but produced bad JSON) and must surface immediately.
+_TRANSIENT_MARKERS = (
+    "socket error",
+    "eof",
+    "abort",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "broken pipe",
+    "child produced no stdout",
+)
+
+# Backoff schedule between attempts (3 attempts total → 2 sleeps): ~2s then ~6s,
+# each with a little jitter so parallel modules don't re-collide in lockstep.
+_GMAIL_BACKOFFS = (2.0, 6.0)
+
+# One-time per-process startup jitter so 4 parallel modules stop knocking on Gmail
+# in the same instant. Seeded off pid → deterministic within a process, spread across.
+_gmail_jitter_done = False
+
+
+def _looks_transient(text: str) -> bool:
+    t = (text or "").lower()
+    return any(m in t for m in _TRANSIENT_MARKERS)
+
+
+def _gmail_startup_jitter() -> None:
+    """Sleep a small pid-seeded amount (0–2.5s) before the FIRST Gmail fetch per process."""
+    global _gmail_jitter_done
+    if _gmail_jitter_done:
+        return
+    _gmail_jitter_done = True
+    delay = random.Random(os.getpid()).uniform(0.0, 2.5)
+    if delay > 0:
+        log(f"[gmail] startup jitter {delay:.2f}s (de-sync parallel modules)")
+        time.sleep(delay)
+
+
+def _run_json_gmail(cmd: list[str], *, what: str, attempts: int = 3) -> dict:
+    """
+    Run a Gmail child (fetch/mark-processed) with transient-fault retries.
+
+    Retries the WHOLE child invocation up to `attempts` times (default 3) on transient
+    classes only — nonzero rc, empty stdout, or stderr/exc text containing a transient
+    marker (socket error / EOF / abort / timed out). A clean rc=0 JSON-parse failure is
+    raised immediately (not transient). Each retry emits a 'warn' progress event.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        log(f"[run] {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.stderr:
+            log(proc.stderr.rstrip())
+        out = proc.stdout.strip()
+
+        if proc.returncode == 0 and out:
+            # rc=0 with output → parse; a parse failure here is NOT transient, surface it.
+            try:
+                return json.loads(out)
+            except json.JSONDecodeError:
+                for line in reversed(out.splitlines()):
+                    line = line.strip()
+                    if line.startswith("{"):
+                        return json.loads(line)
+                raise
+
+        # Reached here => failure. Transient iff rc!=0/no-stdout AND markers match, OR
+        # empty stdout (Gmail child died before printing its JSON — the observed EOF case).
+        combined = f"rc={proc.returncode} {proc.stderr or ''} {out or ''}"
+        transient = (not out) or _looks_transient(combined)
+        last_exc = RuntimeError(
+            f"{what} failed (rc={proc.returncode}, no_stdout={not out}): "
+            f"{(proc.stderr or out or '').strip()[:400]}"
+        )
+        if not transient or attempt >= attempts:
+            raise last_exc
+
+        wait = _GMAIL_BACKOFFS[min(attempt - 1, len(_GMAIL_BACKOFFS) - 1)]
+        wait += random.uniform(0.0, 1.0)  # jitter each retry
+        progress("fetch", f"Gmail dropped the connection — retrying (attempt {attempt + 1} of {attempts})…",
+                 pct=_LAST_PCT, detail=f"{what}; waiting {wait:.1f}s", level="warn")
+        log(f"[gmail] transient fault on {what} (attempt {attempt}/{attempts}); retrying in {wait:.1f}s")
+        time.sleep(wait)
+
+    # unreachable, but keeps type checkers content
+    raise last_exc if last_exc else RuntimeError(f"{what} failed with no captured error")
+
+
 def fetch_gmail(query: str, out_dir: Path, *, limit: int = 50) -> dict:
-    """Fetch matching emails' attachments. Returns fetch_gmail.py's result dict."""
-    return run_json([
+    """
+    Fetch matching emails' attachments. Returns fetch_gmail.py's result dict.
+
+    Resilient to transient Gmail IMAP faults (EOF / socket error / abort) that happen
+    when several orchestrators query Gmail at once: the child invocation is retried up
+    to 3 times with exponential backoff, and each process applies a one-time startup
+    jitter before its FIRST fetch to de-sync parallel modules.
+    """
+    _gmail_startup_jitter()
+    return _run_json_gmail([
         "python3", FETCH_GMAIL,
         "--query", query,
         "--output-dir", str(out_dir),
         "--limit", str(limit),
-    ])
+    ], what="Gmail fetch")
 
 
 def latest_xlsx(fetch_result: dict) -> tuple[str | None, dict | None]:
@@ -193,11 +351,11 @@ def mark_processed(uids: Iterable[str]) -> bool:
     uids = [u for u in uids if u]
     if not uids:
         return False
-    res = run_json([
+    res = _run_json_gmail([
         "python3", FETCH_GMAIL,
         "--mark-processed",
         "--uids", ",".join(uids),
-    ])
+    ], what="Gmail mark-processed")
     return bool(res.get("ok"))
 
 

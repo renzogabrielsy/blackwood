@@ -94,12 +94,15 @@ def phase_classify(args) -> int:
     year = int(since[:4])
 
     # fetch MC + Ivy
+    oc.progress("fetch", "Checking Gmail for the daily production report…", pct=5)
     mc_fetch = oc.fetch_gmail(GMAIL_MC.format(since=since_gmail), work / "mc")
     mc_xlsx, mc_email = oc.latest_xlsx(mc_fetch)
+    oc.progress("fetch", "Checking Gmail for the waste report…", pct=15)
     ivy_fetch = oc.fetch_gmail(GMAIL_IVY.format(since=since_gmail), work / "ivy")
     ivy_xlsx, ivy_email = oc.latest_xlsx(ivy_fetch)
 
     if not mc_xlsx and not ivy_xlsx:
+        oc.progress("finalize", "Nothing new today — no production or waste report waiting.", pct=100)
         oc.emit(oc.classify_envelope(
             report_type=REPORT_TYPE, ok=True, gate_failures=[], counts={"noop": 0},
             rows_preview=[], classified_path="",
@@ -107,8 +110,11 @@ def phase_classify(args) -> int:
             watermark=watermark, codified_rules_applied=CODIFIED_RULES,
             extra={"note": "No MC or Ivy production email in window — nothing to ingest."}))
         return 0
+    _found = [name for name, x in (("production report", mc_xlsx), ("waste report", ivy_xlsx)) if x]
+    oc.progress("fetch", f"Found {len(_found)} report(s): {', '.join(_found)}", pct=22)
 
     # extract
+    oc.progress("extract", "Reading the production spreadsheet(s)…", pct=30)
     runs = downtime = electricity = trucks = {"runs": [], "downtime": [], "electricity": [], "trucks": []}
     if mc_xlsx:
         mc = oc.run_json(["python3", EXTRACT_MC, "--file", mc_xlsx, "--year", str(year),
@@ -175,6 +181,9 @@ def phase_classify(args) -> int:
                         columns=["id", "reading_date", "plate_no", "start_km", "end_km", "fuel_liters", "remarks"]), default=str))
 
     # classify each section
+    _row_count = len(mc.get("runs", [])) + len(mc.get("downtime", [])) + len(ivy.get("waste", []))
+    oc.progress("extract", f"Read {_row_count} production/waste row(s) across 5 sections.", pct=45)
+    oc.progress("classify", "Comparing the reports against the database…", pct=55)
     c_runs = _run_cls(["python3", CLS_RUNS, "--extract-json", str(runs_ex), "--db-rows-json", str(db_runs),
                        "--shifts-json", str(shifts_path), "--output", str(work / "cls_runs.json")], work / "cls_runs.json")
     c_dt = _run_cls(["python3", CLS_DT, "--extract-json", str(dt_ex), "--db-rows-json", str(db_dt),
@@ -187,6 +196,7 @@ def phase_classify(args) -> int:
                         "--output", str(work / "cls_truck.json")], work / "cls_truck.json")
 
     # informational reconcile (never gates) — best-effort
+    oc.progress("reconcile", "Running an informational production cross-check…", pct=80)
     recon_summary = None
     try:
         recon_out = work / "reconcile.json"
@@ -233,6 +243,12 @@ def phase_classify(args) -> int:
                 "summary": "; ".join(c.get("reasons", []))[:120]}
                for c in all_cls if c.get("class") in ("NEW", "VALUE_CHANGED", "MALFORMED")][:20]
 
+    oc.progress("classify",
+                f"{noop} already recorded · {new} new · {changed} changed"
+                + (f" · {malformed} to review" if malformed else ""),
+                pct=92)
+    oc.progress("finalize", "Review ready — nothing written yet.", pct=100)
+
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=True, gate_failures=[],
         counts={"noop": noop, "insert": new, "update": changed, "flagged": malformed},
@@ -260,6 +276,8 @@ def phase_apply(args) -> int:
 
     def _norm(s):
         return (str(s).strip().upper() if s is not None else s)
+
+    oc.progress("apply", "Setting up production shifts…", pct=15)
 
     # --- 1. collect distinct shift triplets needing upsert from runs+downtime+waste NEW rows ---
     triplets: dict[tuple, dict] = {}
@@ -296,6 +314,8 @@ def phase_apply(args) -> int:
             return c["resolved_shift_id"]
         rec = c.get("record", {})
         return shift_map.get((rec.get("transaction_date"), _norm(rec.get("production_batch")), _norm(rec.get("shift"))))
+
+    oc.progress("apply", "Writing production runs, downtime, and waste…", pct=40)
 
     # --- 2. children (runs / downtime / waste) ---
     # L-026: combine duplicate (shift_id, customer, grade) NEW run rows before insert.
@@ -355,6 +375,8 @@ def phase_apply(args) -> int:
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{sec_name} insert shift {sid}: {exc}")
 
+    oc.progress("apply", "Writing electricity and truck readings…", pct=62)
+
     # --- 3. electricity + trucks (natural-key, no shift; never write generated cols) ---
     for sec_name, cols, nkey in (
         ("electricity_readings", ["reading_date", "meter", "start_kwh", "end_kwh", "meter_multiplier", "remarks"], ("reading_date", "meter")),
@@ -376,6 +398,8 @@ def phase_apply(args) -> int:
                                  "detail": "idempotent skip"})
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{sec_name} insert: {exc}")
+
+    oc.progress("apply", "Applying changed rows…", pct=78)
 
     # --- VALUE_CHANGED (all sections) → UPDATE existing_id + manual audit ---
     table_for = {"runs": "production_runs", "downtime": "production_downtime", "waste": "production_waste",
@@ -408,13 +432,22 @@ def phase_apply(args) -> int:
 
     watermark_updated = labeled = False
     if not errors:
+        oc.progress("apply", "Updating the audit trail…", pct=90)
         watermark_updated = oc.upsert_ingestion_watermark(
             db, REPORT_TYPE, last_email_id=compact.get("source", {}).get("mc_thread_id"))
         if not args.no_label:
             uids = [u for u in (compact.get("source", {}).get("mc_uid"),
                                 compact.get("source", {}).get("ivy_uid")) if u]
             if uids:
+                oc.progress("apply", "Marking the email(s) as processed…", pct=95)
                 labeled = oc.mark_processed(uids)
+
+    if errors:
+        oc.progress("finalize", f"Finished with {len(errors)} problem(s) — see details.", pct=100, level="warn")
+    elif inserts or updates:
+        oc.progress("finalize", f"Done — {inserts} new, {updates} updated.", pct=100)
+    else:
+        oc.progress("finalize", "Done — nothing new to write.", pct=100)
 
     oc.emit(oc.apply_envelope(
         report_type=REPORT_TYPE, ok=not errors, inserts=inserts, updates=updates,

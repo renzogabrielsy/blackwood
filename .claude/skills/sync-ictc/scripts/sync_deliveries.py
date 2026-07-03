@@ -82,9 +82,11 @@ def phase_classify(args) -> int:
     since_gmail = since.replace("-", "/")
 
     # 1. fetch operator RC DELIVERIES
+    oc.progress("fetch", "Checking Gmail for new delivery reports…", pct=5)
     fetch = oc.fetch_gmail(GMAIL_OP.format(since=since_gmail), work / "op")
     op_xlsx, op_email = oc.latest_xlsx(fetch)
     if not op_xlsx:
+        oc.progress("finalize", "Nothing new today — no RC DELIVERIES report waiting.", pct=100)
         oc.emit(oc.classify_envelope(
             report_type=REPORT_TYPE, ok=True, gate_failures=[],
             counts={"noop": 0}, rows_preview=[], classified_path="",
@@ -93,15 +95,19 @@ def phase_classify(args) -> int:
             extra={"note": "No RC DELIVERIES email in window — nothing to ingest."},
         ))
         return 0
+    oc.progress("fetch", f"Found the report: {op_email.get('subject') or 'RC DELIVERIES'}", pct=15)
 
     # 2. fetch Czarina prices (optional)
+    oc.progress("fetch", "Checking Gmail for the latest price sheet…", pct=20)
     cz_fetch = oc.fetch_gmail(GMAIL_CZ, work / "cz")
     cz_xlsx, _ = oc.latest_xlsx(cz_fetch)
 
     # 3. extract + tail-filter
+    oc.progress("extract", "Reading the delivery spreadsheet…", pct=28)
     extract = oc.run_json(["python3", EXTRACT, "--file", op_xlsx])
     rows = [r for r in extract.get("rows", []) if str(r.get("transaction_date") or "")[:10] >= since]
     extract["rows"] = rows
+    oc.progress("extract", f"Read {len(rows)} recent delivery row(s) to check.", pct=40)
     extract_path = work / "extract.json"
     extract_path.write_text(json.dumps(extract, default=str))
 
@@ -133,6 +139,7 @@ def phase_classify(args) -> int:
             enriched_path = extract_path
 
     # 5. classify vs DB window
+    oc.progress("classify", "Comparing the report against the database…", pct=55)
     db_rows = db.read_rows("deliveries", since_date=since, columns=DELIVERIES_COLS)
     db_path = work / "db_rows.json"
     db_path.write_text(json.dumps(db_rows, default=str))
@@ -186,6 +193,14 @@ def phase_classify(args) -> int:
                    "summary": f"{c.get('date')} diff={[d['field'] for d in c.get('diff', [])]}"} for c in classified.get("changed", [])]
                + [{"action": "FLAGGED", "natural_key": f.get("index"), "summary": f.get("reason")} for f in flagged])
 
+    _noop = classified["summary"]["noop_count"]
+    _flag = len(flagged) + len(classified.get("malformed", []))
+    oc.progress("classify",
+                f"{_noop} already recorded · {len(inserts)} new · {len(classified.get('changed', []))} changed"
+                + (f" · {_flag} to review" if _flag else ""),
+                pct=90)
+    oc.progress("finalize", "Review ready — nothing written yet.", pct=100)
+
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=True, gate_failures=[],
         counts={"noop": classified["summary"]["noop_count"], "insert": len(inserts),
@@ -212,6 +227,13 @@ def phase_apply(args) -> int:
     inserts = updates = 0
     held: list[dict] = []
     errors: list[str] = []
+
+    _new_rows = compact["actionable"]["new"]
+    _chg_rows = compact["actionable"]["changed"]
+    _total_writes = max(1, len(_new_rows) + len(_chg_rows))
+    _write_batch = max(1, -(-_total_writes // 10))  # ceil(n/10): ≤10 progress ticks
+    _done = 0
+    oc.progress("apply", f"Writing {len(_new_rows)} new and {len(_chg_rows)} changed delivery row(s)…", pct=10)
 
     # NEW rows → INSERT deliveries (idempotent), UPDATE trigger audit row (L-001).
     for item in compact["actionable"]["new"]:
@@ -254,6 +276,10 @@ def phase_apply(args) -> int:
             inserts += 1
             note = "" if r.get("cost_basis") is not None else "cost_basis=0 UNPRICED PLACEHOLDER (L-008) — deliveries pricing enrich pending."
             db.update_trigger_audit_provenance("deliveries", new_id, _prov(item.get("index"), note), snapshot=payload)  # L-001
+            _done += 1
+            if _done % _write_batch == 0 or _done == _total_writes:
+                oc.progress("apply", f"Writing {_done} of {_total_writes} — {bc} @ {r.get('block_loc')}",
+                            pct=10 + int(70 * _done / _total_writes))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"insert row {item.get('index')}: {exc}")
 
@@ -266,6 +292,10 @@ def phase_apply(args) -> int:
                 continue
             db.update("deliveries", {"id": f"eq.{c['db_row']['id']}"}, patch, returning="minimal")
             updates += 1
+            _done += 1
+            if _done % _write_batch == 0 or _done == _total_writes:
+                oc.progress("apply", f"Writing {_done} of {_total_writes} — updating delivery {c.get('date') or ''}".rstrip(),
+                            pct=10 + int(70 * _done / _total_writes))
             diff_json = {d["field"]: {"old": d.get("dbValue"), "new": d.get("emailValue")} for d in c["diff"]}
             ok = db.update_trigger_audit_provenance("deliveries", c["db_row"]["id"],
                                                     _prov(c.get("index"), f"UPDATE diff={json.dumps(diff_json, default=str)}"))
@@ -287,6 +317,7 @@ def phase_apply(args) -> int:
     watermark_updated = False
     labeled = False
     if not errors:
+        oc.progress("apply", "Updating the audit trail…", pct=88)
         watermark_updated = oc.upsert_ingestion_watermark(
             db, REPORT_TYPE,
             last_email_id=compact.get("source", {}).get("email_thread_id"))
@@ -294,7 +325,15 @@ def phase_apply(args) -> int:
         if not non_held_unapplied and not args.no_label:
             uid = compact.get("source", {}).get("email_uid")
             if uid:
+                oc.progress("apply", "Marking the email as processed…", pct=94)
                 labeled = oc.mark_processed([uid])
+
+    if errors:
+        oc.progress("finalize", f"Finished with {len(errors)} problem(s) — see details.", pct=100, level="warn")
+    elif inserts or updates:
+        oc.progress("finalize", f"Done — {inserts} new, {updates} updated.", pct=100)
+    else:
+        oc.progress("finalize", "Done — nothing new to write.", pct=100)
 
     oc.emit(oc.apply_envelope(
         report_type=REPORT_TYPE, ok=not errors, inserts=inserts, updates=updates,

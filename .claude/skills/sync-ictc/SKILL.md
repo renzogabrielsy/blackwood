@@ -70,8 +70,14 @@ FLAGGED / UNMAPPED / MALFORMED / uncertain rows go to `held` — never auto-writ
 the clean rows. A tripped HARD gate (rc_out) writes nothing and sets `ok:false`. Gmail label
 applies ONLY on zero errors AND zero unapplied non-held rows (`--no-label` skips labeling for tests).
 
+**Live progress:** each orchestrator streams curated, plain-English `##SYNC_PROGRESS {…}` events on
+**stderr** (stage/pct/label/level) for the Run Sync panel — stdout stays pure machine JSON. Gmail
+fetches also auto-retry transient EOF/socket faults (3 attempts, backoff + startup jitter) so
+parallel modules don't get dropped by a Gmail connection burst. See SYNC_CLI_CONTRACT.md →
+"Progress events".
+
 **Shared plumbing:** `scripts/lib/orchestrator_common.py` (watermark, Gmail fetch + label gate,
-contract envelopes, `ingestion_watermarks` upsert). **Audit provenance (L-009):** non-`deliveries`
+contract envelopes, `ingestion_watermarks` upsert, `progress()`). **Audit provenance (L-009):** non-`deliveries`
 audit rows are written via the SECURITY DEFINER RPC `write_ingestion_audit` (migration
 `20260703032537`, `service_role`-only) — `lib/db.py::insert_manual_audit` routes through it, closing
 the grant gap without a broad `audit_logs` INSERT grant. **Watermarks:** data watermark stays

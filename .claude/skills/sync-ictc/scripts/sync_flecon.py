@@ -65,9 +65,11 @@ def phase_classify(args) -> int:
         since = "2026-01-01"
         since_gmail = "2025/12/31"
 
+    oc.progress("fetch", "Checking Gmail for the bag inventory report…", pct=5)
     fetch = oc.fetch_gmail(GMAIL.format(since=since_gmail), work / "gmail")
     xlsx, email_meta = oc.latest_xlsx(fetch)
     if not xlsx:
+        oc.progress("finalize", "Nothing new today — no FLECON BAGGED report waiting.", pct=100)
         oc.emit(oc.classify_envelope(
             report_type=REPORT_TYPE, ok=True, gate_failures=[], counts={"noop": 0},
             rows_preview=[], classified_path="",
@@ -75,13 +77,16 @@ def phase_classify(args) -> int:
             watermark=watermark, codified_rules_applied=CODIFIED_RULES,
             extra={"note": "No FLECON BAGGED email in window — nothing to ingest."}))
         return 0
+    oc.progress("fetch", f"Found the report: {email_meta.get('subject') or 'FLECON BAGGED'}", pct=18)
 
+    oc.progress("extract", "Reading the bag inventory spreadsheet…", pct=30)
     extract = oc.run_json(["python3", EXTRACT, "--file", xlsx, "--since", since])
     extract_path = work / "extract.json"
     extract_path.write_text(json.dumps(extract, default=str))
 
     # classify_flecon_bags self-fetches DB movements + bag_types + view via lib.db when
     # --db-rows-json is omitted (it imports lib.db). We rely on that.
+    oc.progress("classify", "Comparing bag movements against the database…", pct=55)
     classified_path = work / "classified.json"
     oc.run_json(["python3", CLASSIFY, "--extract-json", str(extract_path),
                  "--since", since, "--output", str(classified_path)])
@@ -99,6 +104,13 @@ def phase_classify(args) -> int:
                + ([{"action": "FLAGGED_COLUMNS", "natural_key": "columns",
                     "summary": f"unmapped={col_flags.get('unmapped_columns')} missing={col_flags.get('missing_columns')}"}]
                   if column_flagged else []))
+
+    oc.progress("classify",
+                f"{s.get('duplicate_noop_days', 0)} day(s) already recorded · {s.get('new_days', 0)} new · "
+                f"{s.get('date_changed_days', 0)} changed"
+                + (" · columns to review" if column_flagged else ""),
+                pct=90)
+    oc.progress("finalize", "Review ready — nothing written yet.", pct=100)
 
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=True, gate_failures=[],
@@ -131,6 +143,10 @@ def phase_apply(args) -> int:
     errors: list[str] = []
     replaced_dates = inserts = 0
 
+    _total = max(1, len(per_date))
+    _batch = max(1, -(-_total // 10))
+    oc.progress("apply", f"Rewriting bag movements for {len(per_date)} day(s)…", pct=12)
+
     # Column flags → held (never auto-create a bag type).
     col_flags = classified.get("column_flags", {})
     if col_flags.get("flagged"):
@@ -138,8 +154,10 @@ def phase_apply(args) -> int:
                      "detail": f"unmapped={col_flags.get('unmapped_columns')} missing={col_flags.get('missing_columns')} "
                                f"— register/acknowledge before these bag types can be written."})
 
+    _seen = 0
     for p in per_date:
         d = p["transaction_date"]
+        _seen += 1
         if since and d < since:  # bounded floor — never touch settled history
             held.append({"reason": "below_since_floor", "natural_key": d,
                          "detail": f"{d} < since {since}; settled history not replaced."})
@@ -178,11 +196,15 @@ def phase_apply(args) -> int:
                 db.insert_manual_audit(table_name="flecon_bag_movements", record_id=marker_id,
                                        operation="REPLACE", comment=_prov(d, p["class"], f"{len(rows)} movements"),
                                        snapshot={"transaction_date": d, "movement_count": len(rows)})
+            if _seen % _batch == 0 or _seen == _total:
+                oc.progress("apply", f"Rewriting day {_seen} of {_total} — {d}",
+                            pct=12 + int(75 * _seen / _total))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"replace date {d}: {exc}")
 
     watermark_updated = labeled = False
     if not errors:
+        oc.progress("apply", "Updating the audit trail…", pct=90)
         watermark_updated = oc.upsert_ingestion_watermark(
             db, REPORT_TYPE, last_email_id=classified.get("email_thread_id"))
         # label only if zero errors AND no held date left un-replaced that wasn't intentional.
@@ -190,7 +212,15 @@ def phase_apply(args) -> int:
         if not held_dates and not args.no_label:
             uid = classified.get("email_uid")
             if uid:
+                oc.progress("apply", "Marking the email as processed…", pct=95)
                 labeled = oc.mark_processed([uid])
+
+    if errors:
+        oc.progress("finalize", f"Finished with {len(errors)} problem(s) — see details.", pct=100, level="warn")
+    elif replaced_dates:
+        oc.progress("finalize", f"Done — {replaced_dates} day(s) rewritten, {inserts} movement(s) written.", pct=100)
+    else:
+        oc.progress("finalize", "Done — nothing new to write.", pct=100)
 
     oc.emit(oc.apply_envelope(
         report_type=REPORT_TYPE, ok=not errors, inserts=inserts, replaced_dates=replaced_dates,

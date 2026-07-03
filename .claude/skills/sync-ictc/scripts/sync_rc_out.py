@@ -92,9 +92,11 @@ def phase_classify(args) -> int:
     since_gmail = since.replace("-", "/")
 
     # fetch PROPOSED + RC MOVEMENT
+    oc.progress("fetch", "Checking Gmail for the daily feeding report…", pct=5)
     prop_fetch = oc.fetch_gmail(GMAIL_PROP.format(since=since_gmail), work / "prop")
     prop_xlsx, prop_email = oc.latest_xlsx(prop_fetch)
     if not prop_xlsx:
+        oc.progress("finalize", "Nothing new today — no PROPOSED DAILY REPORT waiting.", pct=100)
         oc.emit(oc.classify_envelope(
             report_type=REPORT_TYPE, ok=True, gate_failures=[], counts={"noop": 0},
             rows_preview=[], classified_path="",
@@ -102,10 +104,13 @@ def phase_classify(args) -> int:
             watermark=watermark, codified_rules_applied=CODIFIED_RULES,
             extra={"note": "No PROPOSED DAILY REPORT email in window — nothing to ingest."}))
         return 0
+    oc.progress("fetch", f"Found the report: {prop_email.get('subject') or 'PROPOSED DAILY REPORT'}", pct=15)
+    oc.progress("fetch", "Checking Gmail for the movement cross-check sheet…", pct=20)
     rcm_fetch = oc.fetch_gmail(GMAIL_RCM, work / "rcm")
     rcm_xlsx, _ = oc.latest_xlsx(rcm_fetch)
 
     year = int(since[:4])
+    oc.progress("extract", "Reading the daily feeding spreadsheet…", pct=28)
     proposed = oc.run_json(["python3", EXTRACT_PROP, "--file", prop_xlsx, "--year", str(year), "--all-sheets"])
     proposed_path = work / "extract_proposed.json"
     proposed_path.write_text(json.dumps(proposed, default=str))
@@ -113,6 +118,7 @@ def phase_classify(args) -> int:
     gate_failures: list[dict] = []
     reconcile_report = None
     if rcm_xlsx:
+        oc.progress("reconcile", "Cross-checking feeding totals against the movement sheet…", pct=42)
         movement = oc.run_json(["python3", EXTRACT_RCM, "--file", rcm_xlsx, "--all-sheets"])
         movement_path = work / "extract_movement.json"
         movement_path.write_text(json.dumps(movement, default=str))
@@ -135,7 +141,14 @@ def phase_classify(args) -> int:
     else:
         oc.log("[warn] no RC MOVEMENT email — reconciliation gates skipped (cannot verify drift).")
 
+    if gate_failures:
+        oc.progress("reconcile", "Feeding totals disagree beyond tolerance — this run will not write.",
+                    pct=52, level="warn")
+    elif rcm_xlsx:
+        oc.progress("reconcile", "Feeding totals reconcile — safe to proceed.", pct=52)
+
     # batch lookup (batch_code -> id) for classification
+    oc.progress("classify", "Comparing the report against the database…", pct=58)
     batches = db.read_rows("batches", columns=["batch_code", "id"], since_column=None)
     lookup = {b["batch_code"]: b["id"] for b in batches if b.get("batch_code")}
     lookup_path = work / "batch_lookup.json"
@@ -181,6 +194,17 @@ def phase_classify(args) -> int:
                + [{"action": "FLAGGED", "natural_key": f.get("index"), "summary": f.get("reason")}
                   for f in classified.get("flagged", []) + classified.get("unmapped", [])])
 
+    _flag = s["flagged_count"] + s["unmapped_count"] + s["malformed_count"]
+    oc.progress("classify",
+                f"{s['noop_count']} already recorded · {s['new_count']} new · {s['changed_count']} changed"
+                + (f" · {_flag} to review" if _flag else ""),
+                pct=90)
+    if gate_tripped:
+        oc.progress("finalize", "Review ready — a safety check tripped, so apply will write nothing.",
+                    pct=100, level="warn")
+    else:
+        oc.progress("finalize", "Review ready — nothing written yet.", pct=100)
+
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=not gate_tripped, gate_failures=gate_failures,
         counts={"noop": s["noop_count"], "insert": s["new_count"], "update": s["changed_count"],
@@ -208,6 +232,7 @@ def phase_apply(args) -> int:
     # HARD gate: if a gate tripped in classify, apply NOTHING.
     gate_failures = compact.get("gate_failures", [])
     if gate_failures:
+        oc.progress("finalize", "A safety check tripped earlier — writing nothing.", pct=100, level="warn")
         oc.emit(oc.apply_envelope(
             report_type=REPORT_TYPE, ok=False,
             held=[{"reason": g["gate"], "natural_key": None, "detail": g["detail"]} for g in gate_failures],
@@ -216,6 +241,13 @@ def phase_apply(args) -> int:
         return 1
 
     inserts = updates = 0
+    _new_rows = compact["actionable"]["new"]
+    _chg_rows = compact["actionable"]["changed"]
+    _total_writes = max(1, len(_new_rows) + len(_chg_rows))
+    _write_batch = max(1, -(-_total_writes // 10))
+    _done = 0
+    oc.progress("apply", f"Writing {len(_new_rows)} new and {len(_chg_rows)} changed feeding row(s)…", pct=10)
+
     # NEW → INSERT rc_out (idempotent, L-020), manual audit via RPC (no audit trigger).
     for item in compact["actionable"]["new"]:
         r = item["row"]
@@ -239,6 +271,10 @@ def phase_apply(args) -> int:
             inserts += 1
             db.insert_manual_audit(table_name="rc_out", record_id=new_id, operation="INSERT",
                                    comment=_prov(item.get("index")), snapshot=payload)
+            _done += 1
+            if _done % _write_batch == 0 or _done == _total_writes:
+                oc.progress("apply", f"Writing {_done} of {_total_writes} — {r.get('weight_kg')}kg fed {r['transaction_date']}",
+                            pct=10 + int(75 * _done / _total_writes))
         except Exception as exc:  # noqa: BLE001
             errors.append(f"insert row {item.get('index')}: {exc}")
 
@@ -251,6 +287,10 @@ def phase_apply(args) -> int:
                 continue
             db.update("rc_out", {"id": f"eq.{c['db_row']['id']}"}, patch, returning="minimal")
             updates += 1
+            _done += 1
+            if _done % _write_batch == 0 or _done == _total_writes:
+                oc.progress("apply", f"Writing {_done} of {_total_writes} — updating a feeding row",
+                            pct=10 + int(75 * _done / _total_writes))
             diff_json = {d["field"]: {"old": d.get("dbValue"), "new": d.get("emailValue")} for d in c["diff"]}
             db.insert_manual_audit(table_name="rc_out", record_id=c["db_row"]["id"], operation="UPDATE",
                                    comment=_prov(c.get("index"), "UPDATE"), diff=diff_json)
@@ -265,12 +305,21 @@ def phase_apply(args) -> int:
 
     watermark_updated = labeled = False
     if not errors:
+        oc.progress("apply", "Updating the audit trail…", pct=90)
         watermark_updated = oc.upsert_ingestion_watermark(
             db, REPORT_TYPE, last_email_id=compact.get("source", {}).get("email_thread_id"))
         if not args.no_label:
             uid = compact.get("source", {}).get("email_uid")
             if uid:
+                oc.progress("apply", "Marking the email as processed…", pct=95)
                 labeled = oc.mark_processed([uid])
+
+    if errors:
+        oc.progress("finalize", f"Finished with {len(errors)} problem(s) — see details.", pct=100, level="warn")
+    elif inserts or updates:
+        oc.progress("finalize", f"Done — {inserts} new, {updates} updated.", pct=100)
+    else:
+        oc.progress("finalize", "Done — nothing new to write.", pct=100)
 
     oc.emit(oc.apply_envelope(
         report_type=REPORT_TYPE, ok=not errors, inserts=inserts, updates=updates,

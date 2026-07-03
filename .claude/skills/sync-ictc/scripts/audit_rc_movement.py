@@ -73,9 +73,11 @@ def phase_classify(args) -> int:
         since = "2025-01-01"
 
     # 1. fetch RC MOVEMENT
+    oc.progress("fetch", "Checking Gmail for the raw-charcoal movement report…", pct=8)
     fetch = oc.fetch_gmail(GMAIL_QUERY, work / "gmail")
     xlsx, email_meta = oc.latest_xlsx(fetch)
     if not xlsx:
+        oc.progress("finalize", "Nothing to audit — no RC MOVEMENT report found.", pct=100)
         oc.emit(oc.classify_envelope(
             report_type=REPORT_TYPE, ok=True,
             gate_failures=[], counts={"noop": 0, "flagged": 0},
@@ -85,8 +87,10 @@ def phase_classify(args) -> int:
             extra={"note": "No RC MOVEMENT email found in window — nothing to audit."},
         ))
         return 0
+    oc.progress("fetch", f"Found the report: {email_meta.get('subject') or 'RC MOVEMENT'}", pct=25)
 
     # 2. extract movement totals
+    oc.progress("extract", "Reading the movement spreadsheet…", pct=40)
     movement_json = work / "movement.json"
     ext = oc.run_json(["python3", EXTRACT_RCM, "--file", xlsx, "--all-sheets"])
     movement_json.write_text(json.dumps(ext, default=str))
@@ -102,6 +106,7 @@ def phase_classify(args) -> int:
     proposed_path.write_text(json.dumps(proposed, default=str))
 
     # 4. reconcile — returns exit code 0/1/2 (none/warning/serious)
+    oc.progress("reconcile", f"Cross-checking {len(sums)} day(s) of feeding totals…", pct=60)
     recon_out = work / "reconcile.json"
     import subprocess
     rc = subprocess.run(
@@ -126,6 +131,15 @@ def phase_classify(args) -> int:
                     f"p_vs_m={d.get('drift_p_vs_m_kg')} excess_o_vs_m={d.get('excess_o_vs_m_kg')} "
                     f"| {'; '.join(d.get('notes', []))}"),
     } for d in drift]
+
+    if severity >= 2:
+        oc.progress("finalize", f"Audit done — {len(drift)} day(s) need attention (serious drift).",
+                    pct=100, level="warn")
+    elif drift:
+        oc.progress("finalize", f"Audit done — {len(ok_dates)} day(s) match, {len(drift)} minor difference(s).",
+                    pct=100)
+    else:
+        oc.progress("finalize", f"Audit done — all {len(ok_dates)} day(s) match.", pct=100)
 
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE,

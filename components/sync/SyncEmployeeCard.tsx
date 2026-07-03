@@ -4,10 +4,12 @@ import * as React from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Copy,
   Loader2,
   Lock,
   MinusCircle,
+  Terminal,
 } from 'lucide-react'
 
 import { toast } from 'sonner'
@@ -37,9 +39,29 @@ function Count({ label, value, tone }: { label: string; value: number; tone?: 'i
   )
 }
 
+/**
+ * Thin progress bar. The fill is animated via `transform: scaleX(pct/100)` from
+ * the left origin — NEVER `width` (compositor-only rule). 300ms transition.
+ */
+function ProgressBar({ pct, warn }: { pct: number; warn: boolean }) {
+  return (
+    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden>
+      <div
+        className={cn(
+          'h-full origin-left rounded-full transition-transform duration-300 ease-out',
+          warn ? 'bg-amber-500' : 'bg-primary'
+        )}
+        style={{ transform: `scaleX(${Math.max(0, Math.min(100, pct)) / 100})` }}
+      />
+    </div>
+  )
+}
+
 export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
   const meta = metaFor(card.type)
-  const { status, classify, apply, error } = card
+  const { status, classify, apply, error, statusLine, warn, pct, log } = card
+
+  const [logOpen, setLogOpen] = React.useState(false)
 
   const copyError = React.useCallback(() => {
     if (!error) return
@@ -50,6 +72,9 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
 
   const isBusy = status === 'classifying' || status === 'applying'
   const isBad = status === 'gate-failed' || status === 'error'
+
+  // Fallback verb when no plain-English status line has arrived yet.
+  const busyVerb = status === 'classifying' ? 'Classifying…' : 'Applying clean rows…'
 
   return (
     <div
@@ -83,11 +108,19 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
         </div>
       </div>
 
-      {/* Busy label */}
+      {/* Live progress: bar + plain-English status line (replaces "CLASSIFYING…") */}
       {isBusy && (
-        <p className="mt-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-          {status === 'classifying' ? 'Classifying…' : 'Applying clean rows…'}
-        </p>
+        <>
+          <ProgressBar pct={pct} warn={warn} />
+          <p
+            className={cn(
+              'mt-1 text-xs leading-snug tabular-nums',
+              warn ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
+            )}
+          >
+            {statusLine ?? busyVerb}
+          </p>
+        </>
       )}
 
       {/* Counts (classify) */}
@@ -143,6 +176,30 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
           <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-snug text-destructive/90">
             {error}
           </pre>
+        </div>
+      )}
+
+      {/* Technical log (collapsible, default closed) — where terminal noise lives */}
+      {log.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setLogOpen((o) => !o)}
+            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/80 hover:text-foreground"
+            aria-expanded={logOpen}
+          >
+            <ChevronRight
+              className={cn('h-3 w-3 transition-transform duration-150', logOpen && 'rotate-90')}
+            />
+            <Terminal className="h-3 w-3" />
+            Technical log
+            <span className="font-mono tabular-nums opacity-60">({log.length})</span>
+          </button>
+          {logOpen && (
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-border/60 bg-muted/40 p-1.5 font-mono text-[10px] leading-snug text-muted-foreground">
+              {log.join('\n')}
+            </pre>
+          )}
         </div>
       )}
     </div>

@@ -121,6 +121,43 @@ labeling entirely (used by no-op verification runs so a test never touches Gmail
   successful apply the orchestrator upserts `(report_type, last_email_id, last_run_at)`. Best-effort
   — a failure here never fails the apply.
 
+## Progress events (live panel stream)
+
+While an orchestrator runs, it streams curated **progress events** on `stderr` so the in-app
+**Run Sync** panel can show plain-English status (not just "CLASSIFYING…"). This is a **FROZEN
+contract** — the frontend parses exactly this shape.
+
+**Format** — one line on **stderr** per event, flushed, sentinel-prefixed:
+
+```
+##SYNC_PROGRESS {"stage":"fetch|extract|classify|apply|reconcile|finalize","pct":<0-100 int>,"label":"<plain-English current activity>","detail":"<optional specifics, may be omitted>","level":"info|warn"}
+```
+
+- `stage` — one of `fetch | extract | classify | apply | reconcile | finalize`.
+- `pct` — integer 0–100, **monotonically nondecreasing** within a single process run.
+- `label` — the current activity in plain English (see language rule below). Required.
+- `detail` — optional extra specifics. May be omitted.
+- `level` — `info` (normal) or `warn` (a retry, a tripped gate, a finish-with-problems).
+
+**stdout stays PURE machine JSON** — the single classify/apply envelope, unchanged. Progress
+events are **stderr only**; everything else on stderr remains ordinary technical logging. There is
+never a `##SYNC_PROGRESS` line on stdout.
+
+**Digestible-language rule (HARD).** Labels are written the way you'd tell a plant manager what's
+happening — never echoed terminal lines, file paths, SQL, or tracebacks. Good:
+`"Checking Gmail for new reports…"`, `"Found 1 new report: RC DELIVERIES JUL-02"`,
+`"195 already recorded · 5 new · 2 changed"`, `"Writing 2 of 5 — JULY-26-BLK2 @ D-13D"`,
+`"Marking the email as processed…"`, `"Done — 3 new rows written"`, `"Nothing new today"`. Numbers
+and percentages must be **honest** — derived from real counts / loop indexes, never faked.
+
+**Volume guidance.** Aim for **fewer than 30 events per run** — 4–8 curated calls per phase at the
+natural beats, not one per row. For long write loops (e.g. 200 rows), emit on every `ceil(n/10)`
+rows (≤10 ticks) rather than per row.
+
+**Emitted by** `oc.progress(stage, label, pct, detail=None, level="info")` in
+`scripts/lib/orchestrator_common.py`. Gmail-fetch retries (transient EOF / socket error / abort)
+automatically emit a `warn` event like `"Gmail dropped the connection — retrying (attempt 2 of 3)…"`.
+
 ## Audit provenance (L-009)
 
 - `deliveries` INSERTs fire a SECURITY DEFINER audit trigger (`log_delivery_changes`); the writer

@@ -204,6 +204,7 @@ def ensure_workbook(work_dir: Path, xlsx_path: Path) -> None:
     if xlsx_path.exists() and xlsx_path.stat().st_size > 0:
         return
     work_dir.mkdir(parents=True, exist_ok=True)
+    oc.progress("fetch", "Downloading the Google Sheet…", pct=8)
     subprocess.run(
         ["curl", "-sL", GSHEET_EXPORT_URL, "-o", str(xlsx_path)],
         check=True,
@@ -492,8 +493,15 @@ def phase_classify_contract(work_dir: Path, since: str) -> int:
     totals = {"noop": 0, "insert": 0, "update": 0, "flagged": 0}
     preview: list[dict] = []
 
-    for mode in ("rc_in", "rc_out"):
+    _mode_label = {"rc_in": "deliveries (RC IN)", "rc_out": "feedings (RC OUT)"}
+    for _mi, mode in enumerate(("rc_in", "rc_out")):
+        oc.progress("classify", f"Comparing {_mode_label[mode]} against the database…",
+                    pct=30 + _mi * 30)
         compact, _cpath, s = _classify_one_mode(work_dir, mode, since)
+        oc.progress("classify",
+                    f"{_mode_label[mode]}: {s['noop_count']} already recorded · "
+                    f"{s['new_count']} new · {s['changed_count']} changed",
+                    pct=55 + _mi * 30)
         modes_out[mode] = compact
         totals["noop"] += s["noop_count"]
         totals["insert"] += s["new_count"]
@@ -518,6 +526,8 @@ def phase_classify_contract(work_dir: Path, since: str) -> int:
     combined_path = work_dir / "decisions_gsheet.json"
     combined_path.write_text(json.dumps(combined, indent=2, default=str))
 
+    oc.progress("finalize", "Review ready — nothing written yet.", pct=100)
+
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=True, gate_failures=[], counts=totals,
         rows_preview=preview, classified_path=str(combined_path),
@@ -541,7 +551,11 @@ def phase_apply_contract(input_path: str) -> int:
     held: list[dict] = []
     errors: list[str] = []
 
-    for mode, compact in modes.items():
+    _mode_label = {"rc_in": "deliveries (RC IN)", "rc_out": "feedings (RC OUT)"}
+    _mode_list = list(modes.items())
+    for _mi, (mode, compact) in enumerate(_mode_list):
+        oc.progress("apply", f"Writing {_mode_label.get(mode, mode)}…",
+                    pct=15 + int(70 * _mi / max(1, len(_mode_list))))
         try:
             # _apply_from_compact honors only top-level "skip"; FLAGGED/UNMAPPED default to
             # skip (never auto-written) — exactly the --only-clean contract. Sheet-wins
@@ -560,8 +574,16 @@ def phase_apply_contract(input_path: str) -> int:
 
     watermark_updated = False
     if not errors:
+        oc.progress("apply", "Updating the audit trail…", pct=92)
         # Sheet, not email → last_email_id is null; never label Gmail for gsheet.
         watermark_updated = oc.upsert_ingestion_watermark(DBClient(), REPORT_TYPE, last_email_id=None)
+
+    if errors:
+        oc.progress("finalize", f"Finished with {len(errors)} problem(s) — see details.", pct=100, level="warn")
+    elif total_inserts or total_updates:
+        oc.progress("finalize", f"Done — {total_inserts} new, {total_updates} updated.", pct=100)
+    else:
+        oc.progress("finalize", "Done — the sheet already matches the database.", pct=100)
 
     oc.emit(oc.apply_envelope(
         report_type=REPORT_TYPE, ok=not errors, inserts=total_inserts, updates=total_updates,

@@ -160,6 +160,56 @@ export interface ApplyResult {
 }
 
 // ============================================================
+// SSE progress contract — the live stream shape
+// ============================================================
+
+/**
+ * The FROZEN progress-event contract. Each Python script flushes ONE line per
+ * event on stderr, prefixed by the sentinel below, containing exactly this JSON:
+ *
+ *   ##SYNC_PROGRESS {"stage":"classify","pct":42,"label":"Comparing against the database…","detail":"195 already recorded","level":"info"}
+ *
+ * Any other stderr line is treated as a raw technical-log line (never a status
+ * line). stdout stays the single machine-JSON result object (contract unchanged).
+ */
+export const SYNC_PROGRESS_SENTINEL = '##SYNC_PROGRESS ' as const
+
+/** The coarse pipeline stages a progress event can report. */
+export type SyncProgressStage =
+  | 'fetch'
+  | 'extract'
+  | 'classify'
+  | 'apply'
+  | 'reconcile'
+  | 'finalize'
+
+/** One decoded `##SYNC_PROGRESS` event. */
+export interface SyncProgressEvent {
+  stage: SyncProgressStage
+  /** Integer 0–100. */
+  pct: number
+  /** Plain-English activity — what to show as the status line. */
+  label: string
+  /** Optional specifics appended muted after the label. */
+  detail?: string
+  level: 'info' | 'warn'
+}
+
+/**
+ * The terminal SSE `result` event payload. Mirrors what the old server action
+ * returned (parsed stdout), plus the transport metadata the client needs to
+ * decide gate-failure vs error and to surface stderr on a crash.
+ */
+export interface SyncStreamResult {
+  /** Process exit code (0 = clean). */
+  exitCode: number
+  /** Parsed stdout as the phase's contract object, or null if unparseable. */
+  json: ClassifyResult | ApplyResult | null
+  /** Last chunk of stderr (technical), for a copyable crash detail. */
+  stderrTail: string
+}
+
+// ============================================================
 // Adjudication (Anthropic) — held-row recommendations
 // ============================================================
 
@@ -192,4 +242,16 @@ export interface SyncCardState {
   apply: ApplyResult | null
   /** Full error text (incl. stderr) for the inline error block + Copy. */
   error: string | null
+
+  // --- live progress (populated from the SSE stream) ---
+  /** Latest reported stage, or null before the first progress event. */
+  stage: SyncProgressStage | null
+  /** 0–100 progress; drives the scaleX bar. */
+  pct: number
+  /** Plain-English status line (label + optional detail). Null → fall back to the busy verb. */
+  statusLine: string | null
+  /** True when the latest progress event was level:'warn' — tints the status line amber. */
+  warn: boolean
+  /** Technical stderr lines for the collapsible log (capped). */
+  log: string[]
 }
