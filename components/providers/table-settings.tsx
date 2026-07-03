@@ -3,7 +3,7 @@
 import * as React from 'react';
 import type { DensityMode, LabMetric, RcInTableSettings, LabHighlightSpec, ColumnFormat } from '@/types/table-settings';
 import { DEFAULT_RC_IN_SETTINGS } from '@/types/table-settings';
-import { saveTableSettings } from '@/app/(app)/inventory/rc-in/actions';
+import { saveTableSettings } from '@/lib/actions/table-settings';
 
 /** Map density mode to a row height in px for backward compatibility */
 function densityToRowHeight(mode: DensityMode): number {
@@ -38,13 +38,23 @@ const TableSettingsContext = React.createContext<TableSettingsContextType | unde
 interface TableSettingsProviderProps {
   children: React.ReactNode;
   initialSettings?: RcInTableSettings;
+  /**
+   * Which table these settings belong to — the (user_id, module) key in
+   * `user_table_settings` and the base of the localStorage cache key. Defaults to
+   * 'rc_in' so existing consumers (mounted without this prop) are unchanged. This
+   * is what de-tenants the provider: the platform infra no longer hardcodes RC IN.
+   */
+  tableId?: string;
 }
 
-export function TableSettingsProvider({ children, initialSettings }: TableSettingsProviderProps) {
+export function TableSettingsProvider({ children, initialSettings, tableId = 'rc_in' }: TableSettingsProviderProps) {
+  // localStorage cache key derived from tableId, e.g. "rc_in_table_settings".
+  const storageKey = `${tableId}_table_settings`;
+
   const [settings, setSettings] = React.useState<RcInTableSettings>(() => {
     // Try localStorage first for instant restore, fall back to server-provided settings
     if (typeof window !== 'undefined') {
-      const cached = localStorage.getItem('rc_in_table_settings');
+      const cached = localStorage.getItem(storageKey);
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -74,21 +84,21 @@ export function TableSettingsProvider({ children, initialSettings }: TableSettin
     setSettings(newSettings);
 
     // Immediate localStorage write
-    localStorage.setItem('rc_in_table_settings', JSON.stringify(newSettings));
+    localStorage.setItem(storageKey, JSON.stringify(newSettings));
 
     // Debounced DB persist (500ms)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       setIsSaving(true);
       try {
-        await saveTableSettings('rc_in', newSettings);
+        await saveTableSettings(tableId, newSettings);
       } catch (e) {
         console.error('Failed to save table settings:', e);
       } finally {
         setIsSaving(false);
       }
     }, 500);
-  }, []);
+  }, [storageKey, tableId]);
 
   // Cleanup timer on unmount
   React.useEffect(() => {

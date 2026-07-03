@@ -87,41 +87,52 @@ The docs have drifted enough that they actively mislead a fresh agent. All fixes
 
 ## Phase 2 — Redundancy → universalize (the primary goal)
 
-### DUP-1 · `fetchAll` pagination helper copy-pasted in 4 files · ✓ VERIFIED · S
+### DUP-1 · `fetchAll` pagination helper copy-pasted in 4 files · ✓ VERIFIED · S · **[x] DONE**
 The 1000-row `.range()` loop is re-implemented in `app/(app)/inventory/page.tsx`, `rc-out/actions.ts`, `flecon-bags/actions.ts`, `rc-movement/actions.ts` (one `.range()` each, confirmed).
 - **Fix:** extract one `fetchAllRows(query)` into `lib/supabase/paginate.ts`; replace all four.
+- **DONE:** Created `lib/supabase/paginate.ts` — `fetchAllRows<T>(buildQuery: (from, to) => PromiseLike<{data,error}>, pageSize=1000): Promise<T[]>`. The builder applies `.range(from, to)` itself; the helper THROWS on the first page error, same early-exit (short page). All four sites now delegate: page.tsx calls it directly; rc-out + flecon wrap it in a thin local `fetchAll` that catches the throw (rc-out returns partial/empty = its old swallow contract; flecon returns `{rows, error}` = its old surfaced-error contract); rc-movement's local `fetchAll` delegates straight through (its throw still becomes the action's `empty` fallback). Zero local pagination loops remain in the four files.
 
-### DUP-2 · Price-gate rule written 4 different ways · ✓ VERIFIED · S · (security-adjacent)
+### DUP-2 · Price-gate rule written 4 different ways · ✓ VERIFIED · S · (security-adjacent) · **[x] DONE**
 14 call sites correctly use canonical `canViewPrices()` — but 5 sites hand-roll the rule:
 - `rc-in/actions.ts:349`, `:738` → `role === 'Production'`
 - `blocking/actions.ts:57`, `:128`, `:220` → `role !== 'Production'`
 - **Risk today:** all go through `getUserRole()` so impersonation is respected — but adding a second price-denied role to `PRICE_DENIED_ROLES` (`lib/auth.ts`) would **silently miss these 5**.
 - **Fix:** replace the 5 inline compares with `roleCanViewPrices(role)` / `canViewPrices()`. Single source of truth.
+- **DONE:** blocking's 3 `role !== 'Production'` → `roleCanViewPrices(role)` (import already present). rc-in's 2 `isProduction = role === 'Production'` (getDeliveryHistory / getAuditLogEntry cost-scrubbing) → `!roleCanViewPrices(role)` (added `roleCanViewPrices` import). Behaviour identical today (Production is the only price-denied role). Grep confirms zero `=== 'Production'` / `!== 'Production'` price compares outside `lib/auth.ts` (remaining matches are explanatory comments only).
 
-### DUP-3 · Three near-identical frozen-pane matrices · map-only · L (design task)
+### DUP-3 · Three near-identical frozen-pane matrices · map-only · L (design task) · **[ ] DEFERRED** (own scoped effort; not part of this Phase-2 quick-wins pass)
 `rc-movement/rc-movement-matrix.tsx`, `flecon-bags/components/flecon-bags-view.tsx`, `cenapro/production/production-ledger-grid.tsx` all reimplement the frozen-column/header/corner matrix (CLAUDE.md already names them as the reference implementations).
 - **Fix:** design a shared `<FrozenMatrix>` primitive in `components/shared/`. Biggest, highest-value universalization — but treat as its own scoped design effort, not a quick edit.
 
-### DUP-4 · Block-loc validation duplicated · map-only · S
+### DUP-4 · Block-loc validation duplicated · map-only · S · **[x] DONE**
 The ~60-line block-loc + occupied-location validation appears twice in `rc-in/actions.ts` (~`:68-140` and `~:204-263`).
 - **Fix:** extract a `validateBlockLoc()` helper (candidate: `lib/validation.ts`, which already validates the grid).
+- **DONE:** Extracted a **module-scope** `validateBlockLocsForRows(rows): Promise<string[]>` in `rc-in/actions.ts` (NOT lib/validation.ts — the occupied check queries `deliveries`/`batches` and is rc-in-specific; lib/validation.ts keeps its pure format-only role, no third notion of validity). Both `submitBulkDeliveries` and `bulkUpdateDeliveries` now call it. Preserved exactly: returns ALL errors at once, occupied-check is NON-FATAL on query error (proceeds with format errors only), 1-based row numbers. Normalized both call sites to `normalizeBlockLoc` (submit previously used inline `trim().toUpperCase()` — semantically identical).
 
-### DUP-5 · Peso/kg/lab formatters duplicated across `format.ts` files · map-only · S
+### DUP-5 · Peso/kg/lab formatters duplicated across `format.ts` files · map-only · S · **[x] DONE (scoped)**
 - **Fix:** consolidate into `lib/format-utils.ts`; import everywhere.
+- **DONE:** The true cross-file duplicate — the round-and-group `fmtKg` + accounting `fmtPhpNumber` — is now single-homed in `lib/format-utils.ts` (added `fmtKg`/`fmtPhpNumber` alongside the existing `formatCurrency`/`formatWeight`/`formatCompact`/`formatLabValue`). `components/digest/format.ts` re-exports them (its 7 importers unchanged) and keeps its digest-specific `fmtKwh`/`fmtByUnit`/`fmtDeltaPct`/`relativeTime`/`diffValue`.
+- **Left un-unified ON PURPOSE (different semantics, documented in `format-utils.ts`):**
+  - `formatWeight()` — no `Math.round`, uses `toLocaleString(max:0)` half-to-even rounding (2.5 → "2" vs `fmtKg` 2.5 → "3"). Distinct.
+  - `formatCurrency()` — prefixes the `₱` glyph; `fmtPhpNumber` is number-part-only. Distinct.
+  - The **blank-on-zero** `fmtKg` locals in `rc-movement/rc-movement-matrix.tsx` and `cenapro/inventory/flec-inventory-client.tsx` — return `''` for 0/empty so dense grids show blank cells (a deliberate presentation choice). Unifying them would change table rendering, so NOT touched.
+  - `_shared/blend-proposal-pdf.ts`'s local `fmtKg` — omits the `'en-US'` locale for PDF locale-safety; left as-is to avoid altering generated PDF output.
 
-### DUP-6 · `UserRole` type defined twice · ✓ VERIFIED · XS
+### DUP-6 · `UserRole` type defined twice · ✓ VERIFIED · XS · **[x] DONE**
 Identical union in `types/auth.ts:1` and `components/providers/auth-context.tsx:7`.
 - **Fix:** import from `types/auth.ts`; delete the duplicate.
+- **DONE:** `auth-context.tsx` now `export type { UserRole } from '@/types/auth'` (+ a local `import type` for its own use). 6 files import `UserRole` from auth-context — all keep working via the re-export; `types/auth.ts` is the single definition.
 
-### PURITY-1 · Platform provider imports a tenant action · ✓ VERIFIED · M
+### PURITY-1 · Platform provider imports a tenant action · ✓ VERIFIED · M · **[x] DONE**
 `components/providers/table-settings.tsx` is mounted globally (`providers/index.tsx`) yet imports `saveTableSettings` from `@/app/(app)/inventory/rc-in/actions` (`:6`) and hardcodes the `rc_in_table_settings` localStorage key — tenant knowledge inside platform infrastructure.
 - **Fix:** generalize the provider (settings keyed by table id) or move it into the RC-IN module. Lower urgency than the leaks, but it's the clearest layer-purity violation.
+- **DONE:** Moved `getTableSettings`/`saveTableSettings` to the neutral `lib/actions/table-settings.ts` (`'use server'`, identical DB writes to `user_table_settings` keyed by `(user_id, module)`). NOTE: a `'use server'` file can't re-export server actions, so rc-in/actions.ts no longer defines them and `app/(app)/inventory/page.tsx` imports `getTableSettings` straight from the neutral module. The provider now takes a `tableId?` prop (default `'rc_in'` → existing mount in `providers/index.tsx` unchanged); `tableId` drives both the `module` write key and the `${tableId}_table_settings` localStorage key. Public `useTableSettings()` hook API unchanged. Provider no longer imports any tenant code.
 
-### CLEAN-1 · Dead code to delete · ✓ partly VERIFIED · XS
-- `app/(app)/inventory/rc-in/error.tsx` + `loading.tsx` — orphaned (no `page.tsx` / route segment). ✓
-- `app/(app)/settings/components/RoleAssignmentTable.tsx` + the duplicate `updateUserRole` in `settings/actions.ts` — zero importers. map-only
-- `lib/supabase.ts` (legacy untyped anon client) — zero importers. map-only
-- `components/floating-status-bar.tsx:127-185` — hardcoded **Next.js logomark SVG** leftover; remove/replace with real branding. ✓
+### CLEAN-1 · Dead code to delete · ✓ partly VERIFIED · XS · **[x] DONE**
+- `app/(app)/inventory/rc-in/error.tsx` + `loading.tsx` — orphaned (no `page.tsx` / route segment). ✓ → **DELETED** (no route segment, so Next never wired them).
+- `app/(app)/settings/components/RoleAssignmentTable.tsx` + the duplicate `updateUserRole` in `settings/actions.ts` — zero importers. map-only → **DELETED both** (`RoleAssignmentTable` had no importer; settings `updateUserRole` was only used by it — the LIVE `updateUserRole` lives in `admin/actions.ts`). `settings/actions.ts` became empty so the whole file was deleted. `SignOutButton.tsx` kept (still used by settings/page.tsx).
+- `lib/supabase.ts` (legacy untyped anon client) — zero importers. map-only → **DELETED** (grep confirmed zero importers).
+- `components/floating-status-bar.tsx:127-185` — hardcoded **Next.js logomark SVG** leftover; remove/replace with real branding. ✓ → **REMOVED** the logomark SVG + its leading `|` separator; bar layout otherwise untouched (no redesign).
 
 ---
 

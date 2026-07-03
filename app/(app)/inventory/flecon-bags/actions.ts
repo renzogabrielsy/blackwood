@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { Tables } from '@/types/supabase';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 
 // A single FLECON bag movement row, flattened with its bag-type label/code from
 // the joined flecon_bag_types row. Rows are returned ASCENDING (oldest → newest)
@@ -58,29 +59,24 @@ export async function fetchFleconBagData(): Promise<{
         return { balances: [], movements: [], error: balancesRes.error.message };
     }
 
-    // Paginated fetch to bypass PostgREST's 1000-row response cap (mirrors the
-    // RC OUT pattern). The single localized `any` on the builder param is
-    // accepted here because the PostgREST builder type is awkward to express;
-    // it is the ONLY `any` in this module.
-    const PAGE = 1000;
-    async function fetchAll<T>(buildQuery: () => any): Promise<{ rows: T[]; error: string | null }> {
-        const all: T[] = [];
-        let from = 0;
-        let hasMore = true;
-        while (hasMore) {
-            const { data, error } = await buildQuery().range(from, from + PAGE - 1);
-            if (error) return { rows: [], error: error.message };
-            const batch = (data as T[]) ?? [];
-            all.push(...batch);
-            hasMore = batch.length === PAGE;
-            from += PAGE;
+    // Paginated fetch to bypass PostgREST's 1000-row response cap — the shared
+    // fetchAllRows helper. It THROWS on a page error; we keep this module's
+    // surfaced-error contract by catching and returning { error } like before.
+    // The single localized `any` on the builder param is accepted because the
+    // PostgREST builder type is awkward to express.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll<T>(buildQuery: (from: number, to: number) => any): Promise<{ rows: T[]; error: string | null }> {
+        try {
+            const rows = await fetchAllRows<T>((from, to) => buildQuery(from, to));
+            return { rows, error: null };
+        } catch (e) {
+            return { rows: [], error: e instanceof Error ? e.message : 'Unknown error' };
         }
-        return { rows: all, error: null };
     }
 
     const currentYear = new Date().getFullYear();
 
-    const { rows: rawMovements, error: movementsError } = await fetchAll<RawMovementRow>(() =>
+    const { rows: rawMovements, error: movementsError } = await fetchAll<RawMovementRow>((from, to) =>
         supabase
             .from('flecon_bag_movements')
             .select(
@@ -108,7 +104,8 @@ export async function fetchFleconBagData(): Promise<{
             // operator's original sequence; created_at is the final fallback.
             .order('transaction_date', { ascending: true })
             .order('source_row', { ascending: true, nullsFirst: true })
-            .order('created_at', { ascending: true }),
+            .order('created_at', { ascending: true })
+            .range(from, to),
     );
 
     if (movementsError) {

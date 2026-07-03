@@ -4,7 +4,11 @@ import * as React from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js';
 
-export type UserRole = 'Owner' | 'Admin' | 'Dev' | 'Production' | 'Accounting';
+// Canonical UserRole lives in types/auth.ts. Re-exported here so the many existing
+// consumers that import `UserRole` from this provider keep working (single source
+// of truth, no duplicate union).
+export type { UserRole } from '@/types/auth';
+import type { UserRole } from '@/types/auth';
 
 export type Permission =
     | 'view:all'

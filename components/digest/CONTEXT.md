@@ -18,7 +18,7 @@ in order is `app/(app)/page.tsx` (an async Server Component).
 ## Files
 | File | Client? | `DigestData` slice | Role |
 |------|---------|--------------------|------|
-| `format.ts` | — (pure) | — | Display-only formatters: `fmtKg`, `fmtKwh`, `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`. No aggregation. Client- and server-safe. |
+| `format.ts` | — (pure) | — | Display-only formatters: `fmtKwh`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue` (defined here) + `fmtKg`, `fmtPhpNumber` (**re-exported from `@/lib/format-utils`** — DUP-5 single-homed the canonical round-and-group kg/₱ formatters there; digest components still `import … from "./format"` unchanged). No aggregation. Client- and server-safe. |
 | `digest-header.tsx` | `'use client'` | `meta` | Sub-band header ("As of {operationalDate}") + glass freshness pill (fresh/recent/stale). Relative sync time ticks every 60 s client-side. |
 | `open-blocks.tsx` | Server | `openBlocks` | Compact card grid — one card per currently **IN-USE** block (`status = 'IN-USE'`), `block_loc` ascending: header + "volume left" bar + 7-stat lab mini-grid + optional gated ₱/kg line. Price display is INFERRED from whether any `phpKg` is non-null (Production gets all-null → no ₱ renders). Renders `null` when empty. **Surfaced at the very top** of the digest. |
 | `kpi-hero.tsx` | `'use client'` | `kpis` | Responsive stat-card grid (rc_in/rc_out/production/power/net_flow). Each card: label, big mono value, delta badge, recharts area sparkline (no animation). `net_flow` styled neutral ("expected drift", never red). |

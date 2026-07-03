@@ -3,24 +3,20 @@
 // =====================================================================
 // Pure presentational formatters. No aggregation (HARD RULE: that lives
 // in SQL). These only turn already-computed numbers into strings.
+//
+// fmtKg + fmtPhpNumber are the CANONICAL formatters — their single home is
+// lib/format-utils.ts. Re-exported here so the digest components keep importing
+// them from "./format" unchanged (see DUP-5 note in format-utils.ts for why the
+// blank-on-zero grid variants are intentionally NOT unified).
 // =====================================================================
 
-/** Thousands-separated integer kg, e.g. 12,480. No unit suffix. */
-export function fmtKg(value: number): string {
-  return Math.round(value).toLocaleString("en-US");
-}
+import { fmtKg, fmtPhpNumber } from "@/lib/format-utils";
+export { fmtKg, fmtPhpNumber };
 
-/** kWh with thousands separators, 0 dp. */
+/** kWh with thousands separators, 0 dp. Same rounding as fmtKg but a distinct
+ *  UNIT, so it stays a named function here rather than aliasing fmtKg. */
 export function fmtKwh(value: number): string {
   return Math.round(value).toLocaleString("en-US");
-}
-
-/** ₱ accounting figure, 2 dp. Returns the number part only (no symbol). */
-export function fmtPhpNumber(value: number): string {
-  return value.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 }
 
 /** Signed percentage, e.g. "+12.4%" / "-3.0%". */

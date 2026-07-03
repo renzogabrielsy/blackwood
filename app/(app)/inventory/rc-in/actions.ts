@@ -3,10 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
-import type { RcInTableSettings } from '@/types/table-settings';
-import { DEFAULT_RC_IN_SETTINGS } from '@/types/table-settings';
 
-import { getUserRole } from '@/lib/auth';
+import { getUserRole, roleCanViewPrices } from '@/lib/auth';
 import { UserRole, PRIVILEGED_ROLES } from '@/types/auth';
 import { validateBlockLoc, normalizeBlockLoc } from '@/lib/validation';
 
@@ -47,6 +45,84 @@ async function upsertBatchesFromRows(rows: DeliveryRow[]) {
     }
 }
 
+/**
+ * Shared block-location validation for the bulk INSERT (submitBulkDeliveries) and
+ * bulk UPDATE (bulkUpdateDeliveries) paths — previously copy-pasted in both.
+ *
+ * Runs two checks against the given rows and returns ALL errors at once (never
+ * short-circuits) so the caller can surface every problem in one message:
+ *   1. FORMAT — each row with a non-empty block_loc must pass validateBlockLoc().
+ *   2. OCCUPIED — for the format-valid rows, no submitted location may already be
+ *      held by a DIFFERENT active (STORED/IN-USE) batch.
+ *
+ * The occupied check is deliberately NON-FATAL on query error: if the lookup
+ * fails we proceed WITHOUT the occupied check (returning only format errors)
+ * rather than blocking the write — identical to the original inline behaviour.
+ *
+ * Row numbers in messages are 1-based over the input array order.
+ */
+async function validateBlockLocsForRows(rows: DeliveryRow[]): Promise<string[]> {
+    const validationErrors: string[] = [];
+
+    // 1. Format validation for each row with a block_loc
+    for (let i = 0; i < rows.length; i++) {
+        const loc = rows[i].block_loc?.trim();
+        if (!loc) continue;
+        const result = validateBlockLoc(loc);
+        if (!result.valid) {
+            validationErrors.push(`Row ${i + 1}: ${result.error}`);
+        }
+    }
+
+    // 2. Duplicate/occupied location check — only for rows with valid block_loc values
+    const rowsWithValidLocs = rows
+        .map((row, i) => ({ row, index: i }))
+        .filter(({ row }) => {
+            const loc = row.block_loc?.trim();
+            if (!loc) return false;
+            return validateBlockLoc(loc).valid;
+        });
+
+    if (rowsWithValidLocs.length > 0) {
+        const supabaseCheck = await createClient();
+        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => normalizeBlockLoc(row.block_loc)))];
+
+        const { data: activeBatches, error: checkError } = await supabaseCheck
+            .from('deliveries')
+            .select('block_loc, batch_code, batches!inner(status)')
+            .in('block_loc', uniqueLocs)
+            .in('batches.status', ['STORED', 'IN-USE']);
+
+        if (checkError) {
+            console.error('Error checking block location conflicts:', checkError);
+            // Non-fatal: proceed without duplicate check rather than blocking submission
+        } else if (activeBatches && activeBatches.length > 0) {
+            const locToBatches = new Map<string, Set<string>>();
+            for (const record of activeBatches) {
+                const loc = record.block_loc.toUpperCase();
+                if (!locToBatches.has(loc)) locToBatches.set(loc, new Set());
+                locToBatches.get(loc)!.add(record.batch_code);
+            }
+
+            for (const { row, index } of rowsWithValidLocs) {
+                const loc = normalizeBlockLoc(row.block_loc);
+                const existingBatches = locToBatches.get(loc);
+                if (!existingBatches) continue;
+                // Only flag if the existing batch is DIFFERENT from the one being submitted
+                for (const existingBatch of existingBatches) {
+                    if (existingBatch !== row.batch_code) {
+                        validationErrors.push(
+                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    return validationErrors;
+}
+
 /** Strips `state` and casts numerics for the deliveries table */
 function toDeliveryPayload(row: DeliveryRow) {
     const { state, ...deliveryData } = row;
@@ -65,73 +141,9 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
         return { success: false, message: 'No rows to submit' };
     }
 
-    // --- Block location validation ---
-    const validationErrors: string[] = [];
+    // --- Block location validation (format + occupied check; all errors at once) ---
+    const validationErrors = await validateBlockLocsForRows(rows);
 
-    // 1. Format validation for each row with a block_loc
-    for (let i = 0; i < rows.length; i++) {
-        const loc = rows[i].block_loc?.trim();
-        if (!loc) continue;
-
-        const result = validateBlockLoc(loc);
-        if (!result.valid) {
-            validationErrors.push(`Row ${i + 1}: ${result.error}`);
-        }
-    }
-
-    // 2. Duplicate location check — only for rows with valid block_loc values
-    const rowsWithValidLocs = rows
-        .map((row, i) => ({ row, index: i }))
-        .filter(({ row }) => {
-            const loc = row.block_loc?.trim();
-            if (!loc) return false;
-            return validateBlockLoc(loc).valid;
-        });
-
-    if (rowsWithValidLocs.length > 0) {
-        const supabaseCheck = await createClient();
-        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => row.block_loc.trim().toUpperCase()))];
-
-        // Query active batches at these locations
-        const { data: activeBatches, error: checkError } = await supabaseCheck
-            .from('deliveries')
-            .select('block_loc, batch_code, batches!inner(status)')
-            .in('block_loc', uniqueLocs)
-            .in('batches.status', ['STORED', 'IN-USE']);
-
-        if (checkError) {
-            console.error('Error checking block location conflicts:', checkError);
-            // Non-fatal: proceed without duplicate check rather than blocking submission
-        } else if (activeBatches && activeBatches.length > 0) {
-            // Build a map of location -> active batch codes (deduplicated)
-            const locToBatches = new Map<string, Set<string>>();
-            for (const record of activeBatches) {
-                const loc = record.block_loc.toUpperCase();
-                if (!locToBatches.has(loc)) {
-                    locToBatches.set(loc, new Set());
-                }
-                locToBatches.get(loc)!.add(record.batch_code);
-            }
-
-            // Check each submitted row against existing occupants
-            for (const { row, index } of rowsWithValidLocs) {
-                const loc = row.block_loc.trim().toUpperCase();
-                const existingBatches = locToBatches.get(loc);
-                if (!existingBatches) continue;
-
-                // Only flag if the existing batch is DIFFERENT from the one being submitted
-                for (const existingBatch of existingBatches) {
-                    if (existingBatch !== row.batch_code) {
-                        validationErrors.push(
-                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Return all validation errors at once
     if (validationErrors.length > 0) {
         return {
             success: false,
@@ -202,58 +214,8 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
     }
 
     // --- Block location validation (same rules as submitBulkDeliveries) ---
-    const validationErrors: string[] = [];
     const rows = updates.map(u => u.data);
-
-    for (let i = 0; i < rows.length; i++) {
-        const loc = rows[i].block_loc?.trim();
-        if (!loc) continue;
-        const result = validateBlockLoc(loc);
-        if (!result.valid) {
-            validationErrors.push(`Row ${i + 1}: ${result.error}`);
-        }
-    }
-
-    const rowsWithValidLocs = rows
-        .map((row, i) => ({ row, index: i }))
-        .filter(({ row }) => {
-            const loc = row.block_loc?.trim();
-            if (!loc) return false;
-            return validateBlockLoc(loc).valid;
-        });
-
-    if (rowsWithValidLocs.length > 0) {
-        const supabaseCheck = await createClient();
-        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => normalizeBlockLoc(row.block_loc)))];
-
-        const { data: activeBatches, error: checkError } = await supabaseCheck
-            .from('deliveries')
-            .select('block_loc, batch_code, batches!inner(status)')
-            .in('block_loc', uniqueLocs)
-            .in('batches.status', ['STORED', 'IN-USE']);
-
-        if (!checkError && activeBatches && activeBatches.length > 0) {
-            const locToBatches = new Map<string, Set<string>>();
-            for (const record of activeBatches) {
-                const loc = record.block_loc.toUpperCase();
-                if (!locToBatches.has(loc)) locToBatches.set(loc, new Set());
-                locToBatches.get(loc)!.add(record.batch_code);
-            }
-
-            for (const { row, index } of rowsWithValidLocs) {
-                const loc = normalizeBlockLoc(row.block_loc);
-                const existingBatches = locToBatches.get(loc);
-                if (!existingBatches) continue;
-                for (const existingBatch of existingBatches) {
-                    if (existingBatch !== row.batch_code) {
-                        validationErrors.push(
-                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
-                        );
-                    }
-                }
-            }
-        }
-    }
+    const validationErrors = await validateBlockLocsForRows(rows);
 
     if (validationErrors.length > 0) {
         return {
@@ -359,7 +321,9 @@ export async function getDeliveryHistory(deliveryId: string) {
         role = await getUserRole(user.id);
     }
 
-    const isProduction = role === 'Production';
+    // "Cannot view prices" — canonical gate (equivalent to the old `role === 'Production'`
+    // since Production is the only price-denied role today, but future-proof).
+    const isProduction = !roleCanViewPrices(role);
 
     // 1. Fetch delivery and raw audit logs (no join)
     const [deliveryRes, logsRes] = await Promise.all([
@@ -760,7 +724,9 @@ export async function getAuditLogEntry(auditLogId: string) {
     if (user) {
         role = await getUserRole(user.id);
     }
-    const isProduction = role === 'Production';
+    // "Cannot view prices" — canonical gate (equivalent to the old `role === 'Production'`
+    // since Production is the only price-denied role today, but future-proof).
+    const isProduction = !roleCanViewPrices(role);
 
     const { data: log, error } = await supabase
         .from('audit_logs')
@@ -810,54 +776,8 @@ export async function getAuditLogEntry(auditLogId: string) {
     };
 }
 
-export async function getTableSettings(module = 'rc_in'): Promise<RcInTableSettings> {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return DEFAULT_RC_IN_SETTINGS;
-
-    const { data } = await supabase
-        .from('user_table_settings')
-        .select('settings')
-        .eq('user_id', user.id)
-        .eq('module', module)
-        .single();
-
-    if (!data?.settings) return DEFAULT_RC_IN_SETTINGS;
-
-    // Merge stored settings with defaults (stored values override defaults)
-    return { ...DEFAULT_RC_IN_SETTINGS, ...(data.settings as Partial<RcInTableSettings>) };
-}
-
-export async function saveTableSettings(module: string, settings: Partial<RcInTableSettings>) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) return { success: false, message: 'Not authenticated' };
-
-    // Read existing settings first, merge, then upsert
-    const { data: existing } = await supabase
-        .from('user_table_settings')
-        .select('settings')
-        .eq('user_id', user.id)
-        .eq('module', module)
-        .single();
-
-    const merged = { ...(existing?.settings as Record<string, unknown> ?? {}), ...settings };
-
-    const { error } = await supabase
-        .from('user_table_settings')
-        .upsert({
-            user_id: user.id,
-            module,
-            settings: merged,
-            updated_at: new Date().toISOString(),
-        }, { onConflict: 'user_id,module' });
-
-    if (error) {
-        console.error('Error saving table settings:', error);
-        return { success: false, message: error.message };
-    }
-
-    return { success: true };
-}
+// Per-user table settings actions live in the neutral platform-layer module
+// lib/actions/table-settings.ts (so the globally-mounted TableSettingsProvider no
+// longer imports from this tenant module). A "use server" file may only export
+// async functions — NOT re-exports — so importers pull getTableSettings /
+// saveTableSettings straight from '@/lib/actions/table-settings'.

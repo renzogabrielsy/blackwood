@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { canViewPrices } from '@/lib/auth';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 
 // ===========================================================================
 // RC MOVEMENT MATRIX (cross-tab / pivot) — CAMPAIGN-SCOPED
@@ -184,19 +185,13 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     const showPrices = await canViewPrices();
 
     // --- Paginated fetch helper (bypass PostgREST max_rows = 1000) ---
-    const PAGE = 1000;
-    async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
-      let all: T[] = [];
-      let from = 0;
-      let hasMore = true;
-      while (hasMore) {
-        const { data, error } = await buildQuery().range(from, from + PAGE - 1);
-        if (error) throw error;
-        all = all.concat((data ?? []) as T[]);
-        hasMore = (data?.length ?? 0) === PAGE;
-        from += PAGE;
-      }
-      return all;
+    // Thin wrapper over the shared fetchAllRows: it throws on a page error, which
+    // the outer try/catch of this action turns into the `empty` fallback (same as
+    // the previous local copy that rethrew). The `any` on the builder param is the
+    // awkward-to-express PostgREST builder type, unchanged from before.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll<T>(buildQuery: (from: number, to: number) => any): Promise<T[]> {
+      return fetchAllRows<T>((from, to) => buildQuery(from, to));
     }
 
     // --- Build campaign options from the options view (most recent first) ------
@@ -210,12 +205,13 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       min_date: string | null;
       max_date: string | null;
     };
-    const optionRows = await fetchAll<OptionRow>(() =>
+    const optionRows = await fetchAll<OptionRow>((from, to) =>
       supabase
         .from('view_rc_movement_campaign_options')
         .select('production_batch, campaign_year, feed_days, total_fed, min_date, max_date')
         .gte('campaign_year', 2025)
-        .order('max_date', { ascending: false }),
+        .order('max_date', { ascending: false })
+        .range(from, to),
     );
 
     const campaignOptions: RcMovementCampaignOption[] = optionRows
@@ -267,14 +263,15 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       block_loc: string | null;
       fed_kg: number | null;
     };
-    const cells = await fetchAll<CellRow>(() =>
+    const cells = await fetchAll<CellRow>((from, to) =>
       supabase
         .from('view_rc_movement_campaign_cells')
         .select('date, batch_id, batch_code, block_loc, fed_kg')
         .eq('production_batch', pb)
         .eq('campaign_year', yr)
         .order('date', { ascending: true })
-        .order('batch_id', { ascending: true }),
+        .order('batch_id', { ascending: true })
+        .range(from, to),
     );
 
     // Campaign day-range comes from the OPTIONS view (authoritative min/max),
@@ -338,12 +335,13 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     //     campaign-independent). All price columns are NUMERIC, NULL when zero-fed
     //     — map straight through, NEVER recompute a weighted average in TS.
     type DayPriceRow = { date: string | null; wtd_fed_price: number | null };
-    const dayPriceRows = await fetchAll<DayPriceRow>(() =>
+    const dayPriceRows = await fetchAll<DayPriceRow>((from, to) =>
       supabase
         .from('view_rc_movement_campaign_day_price')
         .select('date, wtd_fed_price')
         .eq('production_batch', pb)
-        .eq('campaign_year', yr),
+        .eq('campaign_year', yr)
+        .range(from, to),
     );
     // Price gate applied at the map: when !showPrices, every per-day price is null,
     // so no ₱ value enters the row payload (the cells below read straight from here).
@@ -372,26 +370,29 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     type ProdCampaignRow = { grade: string | null; produced_kg: number | null };
 
     const [prodDailyRows, prodDailyTotalRows, prodCampaignRows] = await Promise.all([
-      fetchAll<ProdDailyRow>(() =>
+      fetchAll<ProdDailyRow>((from, to) =>
         supabase
           .from('view_rc_movement_campaign_production_daily')
           .select('date, grade, produced_kg')
           .eq('production_batch', pb)
-          .eq('campaign_year', yr),
+          .eq('campaign_year', yr)
+          .range(from, to),
       ),
-      fetchAll<ProdDailyTotalRow>(() =>
+      fetchAll<ProdDailyTotalRow>((from, to) =>
         supabase
           .from('view_rc_movement_campaign_production_daily_total')
           .select('date, produced_kg')
           .eq('production_batch', pb)
-          .eq('campaign_year', yr),
+          .eq('campaign_year', yr)
+          .range(from, to),
       ),
-      fetchAll<ProdCampaignRow>(() =>
+      fetchAll<ProdCampaignRow>((from, to) =>
         supabase
           .from('view_rc_movement_campaign_production')
           .select('grade, produced_kg')
           .eq('production_batch', pb)
-          .eq('campaign_year', yr),
+          .eq('campaign_year', yr)
+          .range(from, to),
       ),
     ]);
 
@@ -497,27 +498,29 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
 
     const [batchRows, deliveryRows, rcOutSumRows, batchPriceRows] = await Promise.all([
       batchIds.length
-        ? fetchAll<BatchRow>(() => supabase.from('batches').select('id, status').in('id', batchIds))
+        ? fetchAll<BatchRow>((from, to) => supabase.from('batches').select('id, status').in('id', batchIds).range(from, to))
         : Promise.resolve([] as BatchRow[]),
       batchCodes.length
-        ? fetchAll<DeliveryRow>(() =>
+        ? fetchAll<DeliveryRow>((from, to) =>
             supabase
               .from('deliveries')
               .select('batch_code, weight_kg, lab_results')
-              .in('batch_code', batchCodes),
+              .in('batch_code', batchCodes)
+              .range(from, to),
           )
         : Promise.resolve([] as DeliveryRow[]),
       batchIds.length
-        ? fetchAll<RcOutSumRow>(() =>
-            supabase.from('rc_out').select('batch_id, weight_kg').in('batch_id', batchIds),
+        ? fetchAll<RcOutSumRow>((from, to) =>
+            supabase.from('rc_out').select('batch_id, weight_kg').in('batch_id', batchIds).range(from, to),
           )
         : Promise.resolve([] as RcOutSumRow[]),
       batchIds.length
-        ? fetchAll<BatchPriceRow>(() =>
+        ? fetchAll<BatchPriceRow>((from, to) =>
             supabase
               .from('view_rc_movement_batch_price')
               .select('batch_id, batch_price')
-              .in('batch_id', batchIds),
+              .in('batch_id', batchIds)
+              .range(from, to),
           )
         : Promise.resolve([] as BatchPriceRow[]),
     ]);

@@ -6,6 +6,7 @@ import type { RcOutRow, RcOutInput } from '@/types/rc-out';
 import type { Tables } from '@/types/supabase';
 import { canViewPrices, getUserRole } from '@/lib/auth';
 import { PRIVILEGED_ROLES } from '@/types/auth';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 
 export async function deleteRcOutRecord(id: string) {
     const supabase = await createClient();
@@ -140,23 +141,21 @@ export async function fetchRcOutTabData() {
     // boolean lets the client conditionally render without re-deriving the role.
     const showPrices = await canViewPrices();
 
-    // Paginated fetch helper to bypass PostgREST max_rows (1000)
-    const PAGE = 1000;
-    async function fetchAll<T>(buildQuery: () => any): Promise<T[]> {
-        let all: T[] = [];
-        let from = 0;
-        let hasMore = true;
-        while (hasMore) {
-            const { data } = await buildQuery().range(from, from + PAGE - 1);
-            all = all.concat(data || []);
-            hasMore = (data?.length || 0) === PAGE;
-            from += PAGE;
+    // Paginated fetch — shared helper bypasses PostgREST max_rows (1000). This
+    // module's reads are best-effort (the previous local copy swallowed page
+    // errors and returned whatever it had), so we keep that lenient contract by
+    // catching the helper's throw and returning the empty/partial set.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll<T>(buildQuery: (from: number, to: number) => any): Promise<T[]> {
+        try {
+            return await fetchAllRows<T>((from, to) => buildQuery(from, to));
+        } catch {
+            return [];
         }
-        return all;
     }
 
     // Fetch ALL rc_out records with batch join
-    const rcOutRaw = await fetchAll<any>(() =>
+    const rcOutRaw = await fetchAll<any>((from, to) =>
         supabase
             .from('rc_out')
             .select(`
@@ -178,6 +177,7 @@ export async function fetchRcOutTabData() {
                 )
             `)
             .order('transaction_date', { ascending: false })
+            .range(from, to)
     );
 
     // Flatten the batches join
@@ -212,11 +212,11 @@ export async function fetchRcOutTabData() {
 
     // Fetch block_loc values from BOTH rc_out and batches.location_ref
     const [blockLocsFromRcOut, blockLocsFromBatches] = await Promise.all([
-        fetchAll<{ block_loc: string }>(() =>
-            supabase.from('rc_out').select('block_loc').not('block_loc', 'is', null).order('block_loc')
+        fetchAll<{ block_loc: string }>((from, to) =>
+            supabase.from('rc_out').select('block_loc').not('block_loc', 'is', null).order('block_loc').range(from, to)
         ),
-        fetchAll<{ location_ref: string }>(() =>
-            supabase.from('batches').select('location_ref').not('location_ref', 'is', null).order('location_ref')
+        fetchAll<{ location_ref: string }>((from, to) =>
+            supabase.from('batches').select('location_ref').not('location_ref', 'is', null).order('location_ref').range(from, to)
         ),
     ]);
     const blockLocsSet = new Set<string>();

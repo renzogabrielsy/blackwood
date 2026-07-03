@@ -9,7 +9,7 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 | File | Lines | Role |
 |------|-------|------|
 | _(no `page.tsx`)_ | — | RC IN is **not** its own route — it renders as the Deliveries tab of `/inventory`. Data is fetched server-side in `../page.tsx` (the parent inventory logs page) and passed to `DeliveryMasterTableWrapper` via `InventoryView`. |
-| `actions.ts` | ~680 | 11 server actions: `submitBulkDeliveries`, `bulkUpdateDeliveries`, `bulkDeleteDeliveries`, `deleteDelivery`, `updateDelivery`, `getDeliveryHistory`, `getAuditComments`, `getAuditLogEntry`, `addAuditComment` + 4 resolve actions + `getTableSettings(module)`, `saveTableSettings(module, settings)`. All mutation paths: (1) normalize `block_loc` via `normalizeBlockLoc()` before DB insert, (2) validate block_loc format + duplicate location on all writes, (3) translate DB constraint names to friendly errors via `translateDbError()`. **`bulkDeleteDeliveries` + `deleteDelivery` enforce a SERVER-SIDE permission gate** (getUserRole() + `PRIVILEGED_ROLES` = Owner/Admin/Dev, mirroring the client `hasPermission('delete:all')`) — deletes are re-checked server-side, not just UI-hidden. |
+| `actions.ts` | ~640 | Server actions: `submitBulkDeliveries`, `bulkUpdateDeliveries`, `bulkDeleteDeliveries`, `deleteDelivery`, `updateDelivery`, `getDeliveryHistory`, `getAuditComments`, `getAuditLogEntry`, `addAuditComment` + 4 resolve actions. All mutation paths: (1) normalize `block_loc` via `normalizeBlockLoc()` before DB insert, (2) validate block_loc format + occupied-location on all bulk writes via the **shared module-scope `validateBlockLocsForRows(rows)` helper** (DUP-4 — one copy, was duplicated in submit+bulkUpdate; returns ALL errors at once, occupied-check is deliberately NON-FATAL on query error), (3) translate DB constraint names to friendly errors via `translateDbError()`. **`bulkDeleteDeliveries` + `deleteDelivery` enforce a SERVER-SIDE permission gate** (getUserRole() + `PRIVILEGED_ROLES` = Owner/Admin/Dev, mirroring the client `hasPermission('delete:all')`) — deletes are re-checked server-side, not just UI-hidden. **Price-gate scrubbing** (getDeliveryHistory / getAuditLogEntry) uses canonical `!roleCanViewPrices(role)` from `@/lib/auth` (DUP-2 — no more inline `role === 'Production'`). **Table-settings actions (`getTableSettings`/`saveTableSettings`) MOVED OUT** to the neutral `@/lib/actions/table-settings` (PURITY-1) — a `'use server'` file can't re-export them, so importers pull them from there directly. |
 | `bulk-delivery-input.tsx` | ~1250 | Client grid editor — paste, keyboard nav, autocomplete, edit tracking, cell range selection + copy + delete. **Canonical Blackwood Table reference grid** (Phase 1 of the grid consolidation): the hand-rolled keyboard state machine (`handleGridKeyDown` + `moveSelection`), edit-trigger/revert logic, and smart-paste were replaced by the shared primitives — see "Blackwood Table primitives" below. |
 | `components/delivery-master-table-wrapper.tsx` | ~31 | Client wrapper — `dynamic()` with `ssr: false` to avoid Radix hydration mismatch |
 | `delivery-master-table.tsx` | ~2100 | Client data table — virtual scroll, column header filters (state/supplier/loc), 2 density modes (normal/expanded), heat-tinted lab cells, right-click context menu, column resize, settings dialog, year/month controls, cell selection + clipboard copy |
@@ -20,8 +20,7 @@ Captures incoming raw charcoal deliveries. Dense Excel-like grid with paste supp
 | `components/DeliveryHistoryDialog.tsx` | 561 | Delivery history + audit trail dialog |
 | `components/audit-shared.tsx` | 87 | Shared audit display utilities |
 | ~~`edit/[auditLogId]/`~~ | — | **Moved** to `app/(app)/edit/[auditLogId]/` (standalone route outside inventory layout) |
-| `error.tsx` | 25 | Error boundary |
-| `loading.tsx` | 47 | Loading skeleton |
+| ~~`error.tsx` / `loading.tsx`~~ | — | **Deleted** (CLEAN-1). Orphaned — Next.js only wires `error`/`loading` files to a route segment, and RC IN has no `page.tsx`. |
 
 ## Data
 - **Tables:** `deliveries`, `batches` (upserted), `audit_logs`, `audit_comments`, `profiles`, `user_table_settings` (per-user per-module JSONB settings, RLS-protected, `user_id` + `module` unique constraint)
@@ -128,7 +127,10 @@ state, transaction_date, supplier, batch_code, block_loc, truck_plate, weight_kg
 ## Dependencies
 - `@/lib/rc-utils.ts` — `calculateWhse()` derives warehouse from block_loc first letter
 - `@/lib/field-labels.ts` — `getFieldLabel()`, `formatFieldValue()`, `flattenLabResultsDiff()`
-- `@/lib/auth.ts` — `getUserRole()` (includes dev override check)
+- `@/lib/auth.ts` — `getUserRole()` (includes dev override check) + `roleCanViewPrices(role)` (canonical price gate; replaces inline `role === 'Production'` compares — DUP-2)
+- `@/lib/validation.ts` — `validateBlockLoc()`, `normalizeBlockLoc()` (used by `validateBlockLocsForRows` + `updateDelivery`)
+- `@/lib/supabase/paginate.ts` — `fetchAllRows()` shared PostgREST pagination helper (DUP-1); `../page.tsx`'s deliveries fetch uses it
+- `@/lib/actions/table-settings.ts` — neutral `getTableSettings`/`saveTableSettings` (PURITY-1; formerly defined in this module)
 - `@/components/providers/auth-context` — `useAuth()`, `hasPermission('view:prices')`
 - `@/types/table-settings` — shared types (`DensityMode`, `LabMetric`, `LabHighlightSpec`, `ColumnFormat`, `RcInTableSettings`), default constants (`DEFAULT_LAB_HIGHLIGHTS`, `HIGHLIGHT_COLORS`), utilities (`getLabHighlightBg`, `getStateDotClass`)
 - `@/components/providers/table-settings` — `useTableSettings()` provides full `RcInTableSettings` (density, fontSize, hiddenColumns, labHighlights, columnWidths, columnFormats). Methods: `setLabHighlights`, `setLabHighlightField`, `setColumnFormat`. Dual persistence: localStorage (instant) + DB via `user_table_settings` table (debounced 500ms). Backward compat: old `labRanges`/`disabledHighlights` in localStorage are silently migrated to defaults.

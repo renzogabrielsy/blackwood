@@ -54,7 +54,7 @@ export async function fetchBlockingGridData(): Promise<BlockingGridData> {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const role = await getUserRole(user.id);
-        canViewPrices = role !== 'Production';
+        canViewPrices = roleCanViewPrices(role);
       }
     } catch {
       // Auth check failed — proceed with canViewPrices = false
@@ -125,7 +125,7 @@ export async function fetchBlockDataForBatch(batchId: string): Promise<BlockData
     if (authError || !user) return empty;
 
     const role = await getUserRole(user.id);
-    const canViewPrices = role !== 'Production';
+    const canViewPrices = roleCanViewPrices(role);
 
     const { data: batch, error: batchError } = await supabase
       .from('batches')
@@ -217,7 +217,7 @@ export async function fetchBlockingDetail(
     if (authError || !user) return empty;
 
     const role = await getUserRole(user.id);
-    const canViewPrices = role !== 'Production';
+    const canViewPrices = roleCanViewPrices(role);
 
     const [deliveriesResult, rcOutResult, batchResult] = await Promise.all([
       supabase
