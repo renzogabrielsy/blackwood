@@ -43,6 +43,45 @@ All existing safety behavior is unchanged: PROPOSE → approve → EXECUTE, audi
 
 Tail-scoping is fully effective for **production** (both extractors accept `--since`, exclusive, sheet/row-level) and effectively tail-bounded for **deliveries** and **rc-out** (the agent filters the extracted rows to `>= watermark` before classifying, and the DB-window query is tail-bounded). The **one residual gap is gsheet**: `extract_gsheet.py` has **no `--since`**, so it still parses the entire Sheet (~2,000 rows, growing) into the on-disk classified JSON every run. The `--since` passed to `sync_gsheet.py` / `classify_gsheet.py` keeps the DB-compare + agent context lean (pre-`since` rows become a cheap `out_of_scope` count, not DB-compared), so the agent stays token-lean — but the *extraction* parse is still full-sheet. **Proposed fix (one-line `--since` row filter in `extract_gsheet.py`, mirroring `extract_daily_production.py`):** add an optional `--since YYYY-MM-DD` argument that drops rows with `transaction_date < since` before emitting, and have `sync_gsheet.py` forward its `--since` to the extractor. This was NOT applied here because `extract_gsheet.py` lacked an obviously-safe single-line insertion point and a botched edit could break the daily sync — escalate to a careful pass when convenient.
 
+## The in-app "Run Sync" button — deterministic two-phase orchestrators (2026-07-03)
+
+The daily sync can now run **without an agent doing any mechanical work**. Five two-phase Python
+orchestrators (`scripts/sync_*.py` + `scripts/audit_rc_movement.py`) do extract → classify →
+deterministic apply themselves; the app's Run Sync button shells out to them and parses a fixed
+JSON contract. The model is called ONLY to narrate the summary and adjudicate genuinely FLAGGED
+rows — a clean day costs ~0 model tokens. Full contract in **`SYNC_CLI_CONTRACT.md`**.
+
+| report_type | orchestrator | writes | special |
+|---|---|---|---|
+| `deliveries` | `sync_deliveries.py` | `deliveries` | Czarina price enrichment; L-001 trigger-audit UPDATE; L-004 block_loc-correction → held |
+| `rc_out` | `sync_rc_out.py` | `rc_out` | two HARD reconcile gates (>500 kg drift; DB duplication O>M) baked into Python |
+| `production` | `sync_production.py` | 6 tables | parent-shift-first FK order; reconcile INFORMATIONAL (never gates) |
+| `flecon` | `sync_flecon.py` | `flecon_bag_movements` | REPLACE-BY-DATE bounded `>= since`; unmapped column → held |
+| `gsheet` | `sync_gsheet.py` | `deliveries` + `rc_out` | dual-CLI: contract path (`--json`, no `--mode`) runs rc_in+rc_out combined; legacy `--mode`/`--decisions` CLI unchanged; NEVER labels (Sheet, not email) |
+| `rc_movement_audit` | `audit_rc_movement.py` | none | classify-only, read-only, no apply phase |
+
+Each speaks: `python3 sync_<type>.py --phase classify --json` (read-only; emits the classify
+envelope with `counts`, `rows_preview`, `codified_rules_applied`, `gate_failures`, `watermark`)
+and `python3 sync_<type>.py --phase apply --input <classified_path> --only-clean --json`
+(deterministic writer; emits `applied`/`held`/`labeled`/`watermark_updated`/`errors`).
+
+**`--only-clean` (button default):** applies ONLY rows passing every codified mechanical rule;
+FLAGGED / UNMAPPED / MALFORMED / uncertain rows go to `held` — never auto-written, never blocking
+the clean rows. A tripped HARD gate (rc_out) writes nothing and sets `ok:false`. Gmail label
+applies ONLY on zero errors AND zero unapplied non-held rows (`--no-label` skips labeling for tests).
+
+**Shared plumbing:** `scripts/lib/orchestrator_common.py` (watermark, Gmail fetch + label gate,
+contract envelopes, `ingestion_watermarks` upsert). **Audit provenance (L-009):** non-`deliveries`
+audit rows are written via the SECURITY DEFINER RPC `write_ingestion_audit` (migration
+`20260703032537`, `service_role`-only) — `lib/db.py::insert_manual_audit` routes through it, closing
+the grant gap without a broad `audit_logs` INSERT grant. **Watermarks:** data watermark stays
+`MAX(transaction_date)`; the `ingestion_watermarks` table (previously dead) now records run
+provenance per report_type on each successful apply.
+
+These orchestrators are ADDITIVE — they wrap the existing `extract_*`/`classify_*`/`reconcile_*`
+scripts (no diff rule is re-implemented) and reuse `lib/db.py`. `sync_gsheet.py` remains the
+reference implementation for RC IN/RC OUT from the Google Sheet.
+
 ## Pre-flight checks (do these first, abort on failure)
 
 1. **Gmail App Password file exists.** Check `~/.config/sync-ictc/credentials.env`. If missing, tell Renzo: *"Gmail credentials aren't set up. Create the file with: `mkdir -p ~/.config/sync-ictc && chmod 700 ~/.config/sync-ictc && printf 'GMAIL_USER=you@gmail.com\\nGMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\\n' > ~/.config/sync-ictc/credentials.env && chmod 600 ~/.config/sync-ictc/credentials.env`. Generate the App Password at https://myaccount.google.com/apppasswords."* and stop.

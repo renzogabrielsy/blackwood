@@ -1,5 +1,13 @@
 # Jarvis Chat Component
 
+> **STATUS (2026-07-03): the chat panel is DORMANT — not mounted.** The floating
+> button (`JarvisFloatingButton`) now opens the **Daily Sync** panel
+> (`components/sync/SyncPanel.tsx`) and only renders for privileged roles; its icon
+> changed from `Sparkles` to `Zap`. `JarvisProvider` is still mounted (the Sync panel
+> reuses its `open` state + Cmd/Ctrl+K keybind). All chat files below remain in the
+> repo and are functional — to revive the chat, re-mount `JarvisChatPanel` in
+> `app/(app)/app-shell.tsx`. See `app/(app)/sync/CONTEXT.md`.
+
 ## Purpose
 Slide-out AI chat panel ("Jarvis") accessible from every page in the `(app)` route group. Conversational, tool-using, persistent across navigations. Powered by Sonnet 4.6 server-side via `chat()` server action. v1 is **request-response** (no streaming), **plain text** (no markdown), **inventory-only** in scope.
 
@@ -88,7 +96,7 @@ See `AI_INGESTION_AGENT.md` for the broader agent design and `handoffs/2026-05-2
 
 ## Mount point
 
-- `app/(app)/app-shell.tsx` — wraps all `(app)/*` children with `<JarvisProvider>`, mounts `<JarvisFloatingButton />` and `<JarvisChatPanel />`. Routes outside the `(app)` group (`/login`, `/access-denied`) do not include Jarvis.
+- `app/(app)/app-shell.tsx` — wraps all `(app)/*` children with `<JarvisProvider>` and mounts `<JarvisFloatingButton />`. As of 2026-07-03 it mounts `<SyncPanel />` (Daily Sync) where `<JarvisChatPanel />` used to be — `JarvisChatPanel` is **no longer mounted** (dormant). Routes outside the `(app)` group (`/login`, `/access-denied`) include neither.
 
 ## Keyboard shortcuts
 

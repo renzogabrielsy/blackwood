@@ -1,10 +1,19 @@
 # Jarvis Module — CONTEXT.md
 
+> **STATUS (2026-07-03): Jarvis chat is DORMANT.** The floating button now opens the
+> **Daily Sync** panel (`components/sync/SyncPanel.tsx`), not the chat. The chat
+> components (`components/jarvis/JarvisChatPanel.tsx` etc.), the `chat()` server
+> action, and the Jarvis DB tables all remain in the repo and are fully functional —
+> they are simply **not mounted** in `app-shell.tsx` (a one-line comment marks where
+> `JarvisChatPanel` used to be). `JarvisProvider` is still mounted: the Sync panel
+> reuses its `open` state + Cmd/Ctrl+K keybind. To revive the chat, re-mount
+> `JarvisChatPanel` alongside `SyncPanel` (or in place of it).
+
 ## Purpose
 
 Jarvis is the AI chat agent embedded in Blackwood. It answers Renzo's inventory questions using live Supabase data via tool calls. Chat sessions persist across reloads. Tool-use loop handles multi-step queries (e.g. "how many STORED batches are in warehouse A?" → query_batches → answer).
 
-Full design: `AI_INGESTION_AGENT.md` at project root.
+Full design: `AI_INGESTION_AGENT.md` at project root. The Sync panel that replaced the chat in the FAB is documented at `app/(app)/sync/CONTEXT.md`.
 
 ## Files
 

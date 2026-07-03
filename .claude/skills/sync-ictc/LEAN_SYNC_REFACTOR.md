@@ -3,6 +3,26 @@
 > **Status (2026-06-02):** `gsheet-sync` is DONE and PROVEN (read-only). The other four
 > employees are designed here; each follows the same pattern and reuses the same shared
 > `scripts/lib/db.py` helper. No code written for the others yet — this doc is the blueprint.
+>
+> **Status update (2026-07-03): ALL FIVE ORCHESTRATORS BUILT.** The four missing orchestrators
+> plus the read-only auditor now exist and speak the `SYNC_CLI_CONTRACT.md` two-phase JSON
+> contract (`--phase classify|apply --json`, `--only-clean`, `held` rows, `codified_rules_applied`):
+> `sync_deliveries.py` (§2), `sync_rc_out.py` (§3, both HARD gates baked into Python),
+> `sync_production.py` (§4, parent-shift-first FK order, 6 tables), `sync_flecon.py`
+> (REPLACE-BY-DATE), `audit_rc_movement.py` (§5, classify-only). Shared plumbing lives in
+> `scripts/lib/orchestrator_common.py` (watermarks, Gmail fetch/label gate, `ingestion_watermarks`
+> upsert, contract envelopes). The L-009 audit grant gap is closed by the `write_ingestion_audit`
+> RPC (migration `20260703032537`); `lib/db.py::insert_manual_audit` now routes through it.
+> These orchestrators are ADDITIVE — the existing `extract_*`/`classify_*`/`reconcile_*` scripts
+> are wrapped, not rewritten. They are the deterministic backend the in-app Run Sync button calls.
+>
+> **Two backend gaps found + fixed during verification (2026-07-03):** (1) the 6 production tables
+> had NO `service_role` grants (only `authenticated`) — a service-role read 403'd; fixed by migration
+> `20260703035027_grant_service_role_production_tables.sql` (deliveries/rc_out/flecon already had
+> them). (2) `production_downtime` has no `remarks` column and `electricity_readings`/`truck_readings`
+> key on `reading_date` not `transaction_date` — the orchestrator's DB reads were corrected to match.
+> All five classify phases then ran REAL against Gmail+DB and emitted contract-valid JSON (watermark
+> 2026-07-01, NOOP-heavy as expected); a no-op production apply verified the plumbing + watermark write.
 
 ## The problem (all five employees share it)
 
@@ -63,7 +83,7 @@ replicates L-008 (cost_basis=0 placeholder), L-001 (UPDATE trigger audit row), L
 
 ---
 
-## 2. `deliveries-manager` — RC IN email + Czarina price enrichment → `deliveries`
+## 2. `deliveries-manager` — RC IN email + Czarina price enrichment → `deliveries`  ✅ BUILT (`sync_deliveries.py`, 2026-07-03)
 
 **Current bloat:** pulls full `deliveries` window + full `classify_deliveries.py` output into
 context; also pulls Czarina price rows for enrichment; writes deliveries one-by-one via MCP,
@@ -90,7 +110,7 @@ calling `classify_deliveries.py --db-rows-json` manually. Verify post-apply that
 
 ---
 
-## 3. `rc-out-manager` — PROPOSED DAILY REPORT email → `rc_out`
+## 3. `rc-out-manager` — PROPOSED DAILY REPORT email → `rc_out`  ✅ BUILT (`sync_rc_out.py`, 2026-07-03 — both HARD gates in Python)
 
 **Current bloat:** full `rc_out` window + full `classify_rc_out.py` output in context; plus it
 runs the **RC MOVEMENT daily-drift reconciliation** (HARD gate >500 kg) by pulling both the
@@ -115,7 +135,7 @@ in Python and keep it HARD. Rollback = the existing standalone classify+reconcil
 
 ---
 
-## 4. `production-manager` — MC + Ivy reports → 6 tables
+## 4. `production-manager` — MC + Ivy reports → 6 tables  ✅ BUILT (`sync_production.py`, 2026-07-03 — parent-shift-first FK order)
 
 Tables: `production_shifts`, `production_runs`, `production_downtime`, `production_waste`,
 `electricity_readings`, `truck_readings`.
@@ -150,7 +170,7 @@ no orphaned `shift_id`; downtime CHECK (`0 ≤ dt_mins < 60`) passes; one waste 
 
 ---
 
-## 5. `rc-movement-auditor` — RC MOVEMENT read-only cross-check (NO writes)
+## 5. `rc-movement-auditor` — RC MOVEMENT read-only cross-check (NO writes)  ✅ BUILT (`audit_rc_movement.py`, 2026-07-03 — classify-only)
 
 **Current bloat:** pulls the RC MOVEMENT extract AND the `rc_out` / `deliveries` window into
 context to cross-check, then narrates discrepancies — a pure read path that still burns a big dump.

@@ -103,6 +103,16 @@ class DBClient:
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         })
+        # Inject a default timeout on EVERY request so a slow/large PostgREST GET can never
+        # hang the sync indefinitely (was `read timeout=None` → an unbounded hang). Callers
+        # never pass a timeout; this wrapper supplies one unless they explicitly override.
+        _orig_request = self._session.request
+
+        def _request_with_timeout(method, url, **kwargs):
+            kwargs.setdefault("timeout", (10, 120))  # (connect, read) seconds
+            return _orig_request(method, url, **kwargs)
+
+        self._session.request = _request_with_timeout  # type: ignore[assignment]
 
     # -- reads ---------------------------------------------------------------
     def read_rows(
@@ -262,20 +272,35 @@ class DBClient:
                             comment: str, diff: dict | None = None,
                             snapshot: dict | None = None) -> dict | None:
         """
-        For tables with NO audit trigger (rc_out): INSERT the audit_logs row manually.
+        For tables with NO audit trigger (rc_out, production_*, electricity_readings,
+        truck_readings, flecon_bag_movements): write the audit_logs row.
+
+        L-009 fix (2026-07-03): a direct `INSERT INTO audit_logs` over PostgREST with the
+        service-role key 403s (`permission denied for table audit_logs`, 42501) — the
+        service role has no INSERT grant, and it does NOT inherit postgres's. The employees
+        only got away with it before because the Supabase MCP connects as `postgres`.
+        We now go through the SECURITY DEFINER RPC `write_ingestion_audit` (owner postgres,
+        service_role-only EXECUTE), which inserts the row as the owner and returns its id.
+        Signature is unchanged; callers do not need to know about the RPC.
         """
-        row: dict[str, Any] = {
-            "table_name": table_name,
-            "record_id": record_id,
-            "operation": operation,
-            "comment": comment,
+        payload: dict[str, Any] = {
+            "p_table_name": table_name,
+            "p_record_id": record_id,
+            "p_operation": operation,
+            "p_comment": comment,
+            "p_diff": diff,
+            "p_snapshot": snapshot,
         }
-        if diff is not None:
-            row["diff"] = diff
-        if snapshot is not None:
-            row["snapshot"] = snapshot
-        out = self.insert("audit_logs", [row])
-        return out[0] if out else None
+        resp = self._session.post(
+            f"{self.base}/rpc/write_ingestion_audit",
+            data=json.dumps(payload),
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(
+                f"write_ingestion_audit RPC failed {resp.status_code}: {resp.text[:1000]}"
+            )
+        new_id = resp.json() if resp.text else None
+        return {"id": new_id} if new_id else None
 
 
 # Convenience top-level helpers (so callers can do `from lib.db import read_rows`)

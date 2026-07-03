@@ -61,6 +61,7 @@ sys.path.insert(0, str(SCRIPT_DIR / "lib"))
 import extract_gsheet  # noqa: E402
 import classify_gsheet  # noqa: E402
 from lib.db import DBClient  # noqa: E402
+import lib.orchestrator_common as oc  # noqa: E402  (contract envelopes + ingestion_watermarks)
 
 GSHEET_FILE_ID = "1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM"
 GSHEET_EXPORT_URL = (
@@ -215,46 +216,49 @@ def ensure_workbook(work_dir: Path, xlsx_path: Path) -> None:
         )
 
 
-def phase_classify(args) -> int:
-    work_dir = Path(args.work_dir)
+def _classify_one_mode(work_dir: Path, mode: str, since: str) -> tuple[dict, Path, dict]:
+    """
+    Core per-mode classify (shared by the legacy CLI and the contract CLI). Downloads the
+    Sheet once per work_dir, classifies one mode against the live DB, writes the full
+    classified JSON (audit) + the compact decisions file, and returns
+    (compact_dict, compact_path, classified_summary). Prints NOTHING.
+    """
     work_dir.mkdir(parents=True, exist_ok=True)
     xlsx_path = work_dir / "rc_gsheet.xlsx"
     ensure_workbook(work_dir, xlsx_path)
 
-    # --- extract (reuse extract_gsheet) ---
     from openpyxl import load_workbook
     wb = load_workbook(filename=str(xlsx_path), data_only=True, read_only=True)
-    if args.mode == "rc_in":
+    if mode == "rc_in":
         extract = extract_gsheet.extract_rc_in(wb["RC IN"])
     else:
         extract = extract_gsheet.extract_rc_out(wb["RC OUT"])
     rows = extract["rows"]
 
-    # --- fetch DB rows OURSELVES (never into the agent context) ---
     db = DBClient()
-    if args.mode == "rc_in":
-        db_rows = db.read_rows("deliveries", since_date=args.since, columns=DELIVERIES_COLS)
-        classified = classify_gsheet.classify_rc_in(rows, db_rows, args.since)
+    if mode == "rc_in":
+        db_rows = db.read_rows("deliveries", since_date=since, columns=DELIVERIES_COLS)
+        classified = classify_gsheet.classify_rc_in(rows, db_rows, since)
     else:
-        db_rows = db.read_rows("rc_out", since_date=args.since, columns=RC_OUT_COLS)
-        # batch lookup: {batch_code: id}
+        db_rows = db.read_rows("rc_out", since_date=since, columns=RC_OUT_COLS)
         batches = db.read_rows("batches", columns=["batch_code", "id"], since_column=None)
         lookup = {b["batch_code"]: b["id"] for b in batches if b.get("batch_code")}
-        # write the lookup for the apply phase to reuse (so it need not refetch)
         (work_dir / "batch_lookup.json").write_text(json.dumps(lookup, default=str))
-        classified = classify_gsheet.classify_rc_out(rows, db_rows, lookup, args.since)
+        classified = classify_gsheet.classify_rc_out(rows, db_rows, lookup, since)
 
-    # --- write full classified JSON (audit) — NEVER printed ---
-    full_path = work_dir / f"{args.mode}_classified.json"
+    full_path = work_dir / f"{mode}_classified.json"
     full_path.write_text(json.dumps(classified, indent=2, default=str))
 
-    # --- write COMPACT decisions (the only thing the agent reads) ---
-    compact = build_compact(classified, args.mode)
-    compact_path = work_dir / f"decisions_{args.mode}.json"
+    compact = build_compact(classified, mode)
+    compact_path = work_dir / f"decisions_{mode}.json"
     compact_path.write_text(json.dumps(compact, indent=2, default=str))
+    return compact, compact_path, classified["summary"]
 
-    s = classified["summary"]
-    # STDOUT: summary counts + compact path ONLY. Never the row set.
+
+def phase_classify(args) -> int:
+    compact, compact_path, s = _classify_one_mode(Path(args.work_dir), args.mode, args.since)
+    full_path = Path(args.work_dir) / f"{args.mode}_classified.json"
+    # STDOUT: summary counts + compact path ONLY. Never the row set. (LEGACY output shape.)
     print(json.dumps({
         "ok": True,
         "phase": "classify",
@@ -294,9 +298,12 @@ def _provenance_comment(mode: str, index: Any, note_extra: str = "") -> str:
     return base + (f" {note_extra}" if note_extra else "")
 
 
-def phase_apply(args) -> int:
-    decisions_path = Path(args.decisions)
-    compact = json.loads(decisions_path.read_text())
+def _apply_from_compact(compact: dict) -> dict:
+    """
+    Core deterministic apply for one mode's compact decisions dict. Returns the legacy
+    result dict (inserted/updated ids, new_batches, flagged_resolved, skipped). Prints
+    NOTHING — shared by the legacy CLI and the contract CLI.
+    """
     mode = compact["mode"]
     actionable = compact["actionable"]
     db = DBClient()
@@ -439,15 +446,118 @@ def phase_apply(args) -> int:
             skipped.append({"index": r.get("index"),
                             "why": f"unmapped decision='{decision}' requires re-classify with corrected batch_code"})
 
-    print(json.dumps({
+    return {
         "ok": True, "phase": "apply", "mode": mode,
         "inserted": len(inserted_ids), "inserted_ids": inserted_ids,
         "updated": len(updated_ids), "updated_ids": updated_ids,
         "new_batches_created": new_batches,
         "flagged_resolved": flagged_resolved,
         "skipped": skipped,
-    }, indent=2))
+    }
+
+
+def phase_apply(args) -> int:
+    """LEGACY apply CLI (`--phase apply --decisions <file>`). Byte-identical output."""
+    compact = json.loads(Path(args.decisions).read_text())
+    print(json.dumps(_apply_from_compact(compact), indent=2))
     return 0
+
+
+# ---------------------------------------------------------------------------
+# CONTRACT phase (SYNC_CLI_CONTRACT.md) — the in-app Run Sync button path.
+# report_type "gsheet"; runs BOTH rc_in + rc_out in one invocation; NO Gmail label
+# (it's a Sheet, not email) → labeled:false always; still upserts ingestion_watermarks.
+# ---------------------------------------------------------------------------
+REPORT_TYPE = "gsheet"
+CODIFIED_RULES = [
+    "rounding-null-zero-noop", "sheet-wins-material-value-changed", "L-004", "L-008",
+    "L-013", "L-018", "batch_code-fallback-prefixes", "never-auto-create-batch",
+    "never-delete", "2025-scope-floor",
+]
+
+
+def phase_classify_contract(work_dir: Path, since: str) -> int:
+    """Run rc_in + rc_out classify, emit ONE contract classify envelope (report_type gsheet)."""
+    modes_out: dict[str, dict] = {}
+    combined_actionable: dict[str, list] = {}
+    totals = {"noop": 0, "insert": 0, "update": 0, "flagged": 0}
+    preview: list[dict] = []
+
+    for mode in ("rc_in", "rc_out"):
+        compact, _cpath, s = _classify_one_mode(work_dir, mode, since)
+        modes_out[mode] = compact
+        totals["noop"] += s["noop_count"]
+        totals["insert"] += s["new_count"]
+        totals["update"] += s["changed_count"]
+        totals["flagged"] += s["flagged_count"] + s["unmapped_count"] + s["malformed_count"]
+        a = compact["actionable"]
+        for k in ("new", "changed", "flagged", "unmapped", "malformed"):
+            combined_actionable.setdefault(k, []).extend(
+                [{**item, "_mode": mode} for item in a.get(k, [])])
+        for item in a.get("new", []):
+            preview.append({"action": "INSERT", "natural_key": f"{mode}:{item.get('batch_code')}|{item.get('date')}",
+                            "summary": f"{item.get('weight_kg')}kg"})
+        for item in a.get("changed", []):
+            preview.append({"action": "UPDATE", "natural_key": f"{mode}:{item.get('db_id')}",
+                            "summary": f"{item.get('date')} diff={[d['field'] for d in item.get('diff', [])]}"})
+        for item in a.get("flagged", []) + a.get("unmapped", []):
+            preview.append({"action": "FLAGGED", "natural_key": f"{mode}:{item.get('index')}",
+                            "summary": item.get("reason") or item.get("flag_kind") or "flagged"})
+
+    # ONE combined classified file holding both modes' compacts — the apply --input.
+    combined = {"report_type": REPORT_TYPE, "since": since, "modes": modes_out}
+    combined_path = work_dir / "decisions_gsheet.json"
+    combined_path.write_text(json.dumps(combined, indent=2, default=str))
+
+    oc.emit(oc.classify_envelope(
+        report_type=REPORT_TYPE, ok=True, gate_failures=[], counts=totals,
+        rows_preview=preview, classified_path=str(combined_path),
+        source={"email_subject": f"Google Sheet {GSHEET_FILE_ID} (RC IN + RC OUT tabs)",
+                "email_uid": None},
+        watermark=since, codified_rules_applied=CODIFIED_RULES,
+        extra={"per_mode": {m: {"new": modes_out[m]["summary"]["new_count"],
+                                "changed": modes_out[m]["summary"]["changed_count"],
+                                "flagged": (modes_out[m]["summary"]["flagged_count"]
+                                            + modes_out[m]["summary"]["unmapped_count"]
+                                            + modes_out[m]["summary"]["malformed_count"])}
+                            for m in modes_out}}))
+    return 0
+
+
+def phase_apply_contract(input_path: str) -> int:
+    """Apply both modes' clean rows from the combined file; emit ONE contract apply envelope."""
+    combined = json.loads(Path(input_path).read_text())
+    modes = combined.get("modes", {})
+    total_inserts = total_updates = 0
+    held: list[dict] = []
+    errors: list[str] = []
+
+    for mode, compact in modes.items():
+        try:
+            # _apply_from_compact honors only top-level "skip"; FLAGGED/UNMAPPED default to
+            # skip (never auto-written) — exactly the --only-clean contract. Sheet-wins
+            # material VALUE_CHANGED is applied (locked policy); rounding/null↔0 already NOOP.
+            res = _apply_from_compact(compact)
+            total_inserts += res.get("inserted", 0)
+            total_updates += res.get("updated", 0)
+            for sk in res.get("skipped", []):
+                held.append({"reason": "skipped", "natural_key": f"{mode}:{sk.get('index')}",
+                             "detail": sk.get("why")})
+            for fr in res.get("flagged_resolved", []):
+                held.append({"reason": "flagged_needs_manual_apply", "natural_key": f"{mode}:{fr.get('index')}",
+                             "detail": fr.get("note")})
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{mode} apply: {exc}")
+
+    watermark_updated = False
+    if not errors:
+        # Sheet, not email → last_email_id is null; never label Gmail for gsheet.
+        watermark_updated = oc.upsert_ingestion_watermark(DBClient(), REPORT_TYPE, last_email_id=None)
+
+    oc.emit(oc.apply_envelope(
+        report_type=REPORT_TYPE, ok=not errors, inserts=total_inserts, updates=total_updates,
+        held=held, labeled=False, watermark_updated=watermark_updated, errors=errors))
+    return 0 if not errors else 1
 
 
 # ---------------------------------------------------------------------------
@@ -457,9 +567,33 @@ def main() -> int:
     ap.add_argument("--mode", choices=["rc_in", "rc_out"])
     ap.add_argument("--since", default=classify_gsheet.DEFAULT_SINCE)
     ap.add_argument("--work-dir", help="Work directory (classify phase). Default /tmp/gsheet-sync/<ts>.")
-    ap.add_argument("--decisions", help="Approved compact decisions JSON (apply phase).")
+    ap.add_argument("--decisions", help="Approved compact decisions JSON (LEGACY apply phase).")
+    # Contract CLI (in-app Run Sync button) — see SYNC_CLI_CONTRACT.md.
+    ap.add_argument("--json", action="store_true",
+                    help="Emit the SYNC_CLI_CONTRACT envelope (combined rc_in+rc_out). "
+                         "When set on classify WITHOUT --mode, runs both modes.")
+    ap.add_argument("--input", help="Combined classified JSON (contract apply phase).")
+    ap.add_argument("--only-clean", action="store_true",
+                    help="Apply only rows passing every codified rule; flagged/uncertain → held.")
+    ap.add_argument("--no-label", action="store_true", help="(gsheet never labels; accepted for parity.)")
     args = ap.parse_args()
 
+    # ---- CONTRACT path: --json AND --mode omitted (the button) ----
+    if args.json and not args.mode:
+        if not args.work_dir:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            args.work_dir = f"/tmp/gsheet-sync/{ts}"
+        if args.phase == "classify":
+            Path(args.work_dir).mkdir(parents=True, exist_ok=True)
+            return phase_classify_contract(Path(args.work_dir), args.since)
+        else:
+            if not args.input:
+                oc.emit({"report_type": REPORT_TYPE, "ok": False,
+                         "errors": ["--input required for contract apply"]})
+                return 2
+            return phase_apply_contract(args.input)
+
+    # ---- LEGACY path (employee CLI) — byte-identical to before ----
     if args.phase == "classify":
         if not args.mode:
             print(json.dumps({"ok": False, "error": "--mode required for classify"}), file=sys.stderr)

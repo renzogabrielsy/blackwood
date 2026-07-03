@@ -1,22 +1,27 @@
 'use client'
 
 import * as React from 'react'
-import { Sparkles } from 'lucide-react'
+import { Zap } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/components/providers/auth-context'
+import { PRIVILEGED_ROLES } from '@/types/auth'
 import { useJarvis } from './JarvisProvider'
 
 const FIRST_MOUNT_KEY = 'bw_jarvis_seen'
 
 /**
- * Fixed-position FAB at the bottom-right of the viewport. Toggles the chat
- * panel; hides itself while the panel is open so it doesn't overlap.
+ * Fixed-position FAB at the bottom-right of the viewport. Opens the Daily Sync
+ * panel (the Jarvis chat is dormant — see app-shell.tsx). Hides itself while the
+ * panel is open so it doesn't overlap, and only renders for privileged roles
+ * (Owner / Admin / Dev) since Run Sync is restricted server-side.
  *
  * On the user's very first visit (no localStorage marker), the button gets a
  * subtle fade-up entrance to draw the eye. After that, mounts are silent.
  */
 export function JarvisFloatingButton() {
     const { open, toggle } = useJarvis()
+    const { role } = useAuth()
     const [isFirstMount, setIsFirstMount] = React.useState(false)
 
     React.useEffect(() => {
@@ -31,14 +36,16 @@ export function JarvisFloatingButton() {
         }
     }, [])
 
+    // Run Sync is Owner/Admin/Dev only — hide the FAB for everyone else.
+    if (!PRIVILEGED_ROLES.includes(role)) return null
     if (open) return null
 
     return (
         <button
             type="button"
             onClick={toggle}
-            aria-label="Open Jarvis"
-            title="Jarvis (Cmd+K)"
+            aria-label="Open Daily Sync"
+            title="Daily Sync (Cmd+K)"
             className={cn(
                 'fixed bottom-4 right-4 z-40 flex h-11 w-11 items-center justify-center rounded-full',
                 'border border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60',
@@ -47,7 +54,7 @@ export function JarvisFloatingButton() {
                 isFirstMount && 'animate-fade-up'
             )}
         >
-            <Sparkles className="h-5 w-5" />
+            <Zap className="h-5 w-5" />
         </button>
     )
 }

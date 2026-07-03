@@ -10,11 +10,13 @@ const Navbar = dynamic(
     { ssr: false }
 )
 
-// Jarvis panel is heavy (textareas, history fetch, server-action wiring) and
-// pulls in nothing unless the user opens it. Lazy-load with ssr=false to avoid
-// Radix Dialog hydration mismatches — same pattern the Navbar uses.
-const JarvisChatPanel = dynamic(
-    () => import('@/components/jarvis/JarvisChatPanel').then((m) => m.JarvisChatPanel),
+// The floating button now opens the Daily Sync panel (the "Run Sync" button),
+// not the Jarvis chat. The chat components remain in the repo (components/jarvis/)
+// but are intentionally UNMOUNTED — JarvisChatPanel was previously mounted here.
+// Lazy-load with ssr=false to avoid Radix Dialog hydration mismatches — same
+// pattern the Navbar uses.
+const SyncPanel = dynamic(
+    () => import('@/components/sync/SyncPanel').then((m) => m.SyncPanel),
     { ssr: false }
 )
 
@@ -26,7 +28,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <div className="flex-1 min-h-0 flex flex-col">{children}</div>
                 <FloatingStatusBar />
                 <JarvisFloatingButton />
-                <JarvisChatPanel />
+                <SyncPanel />
             </div>
         </JarvisProvider>
     )

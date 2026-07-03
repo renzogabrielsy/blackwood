@@ -1,5 +1,9 @@
 # Supabase Backend Engineer Memory
 
+## Run Sync button backend — 5 orchestrators + write_ingestion_audit RPC (2026-07-03) — [[sync-orchestrators]]
+
+L-009 fix `write_ingestion_audit` RPC (migration `20260703032537`, SECURITY DEFINER owner postgres, service_role-only EXECUTE, returns audit id) closes the audit_logs INSERT grant gap for non-deliveries writers; `lib/db.py::insert_manual_audit` routes through it. Five two-phase orchestrators in `.claude/skills/sync-ictc/scripts/` (sync_deliveries/rc_out/production/flecon + audit_rc_movement) speak the `SYNC_CLI_CONTRACT.md` classify/apply --json contract; shared `lib/orchestrator_common.py`. rc_out has 2 HARD Python gates; production is parent-shift-first FK order; flecon is REPLACE-BY-DATE. `ingestion_watermarks` (PK report_type) now adopted. Added a default request timeout to lib/db.py. See sync-orchestrators.md.
+
 ## Phase 0 Security fixes shipped (2026-07-03) — [[phase0-security]]
 
 CODE_AUDIT_PLAN.md Phase 0, branch dev, tsc clean. SEC-1: `lib/digest/queries.ts` price series now `[]` when `!showPrices` + digest-charts.tsx skips PriceChart on empty. SEC-2: `lib/jarvis/tool-handlers.ts` executeToolCall resolves canViewPrices() once (admin client bypasses RLS) + nulls avg_cost/cost_basis for denied roles. SEC-3: server-side `PRIVILEGED_ROLES` gate (=client delete:all=Owner/Admin/Dev; Accounting/Production CANNOT delete) added BEFORE .delete() in rc-in bulkDeleteDeliveries+deleteDelivery, rc-out deleteRcOutRecord+bulkDeleteRcOut. Pattern from resolveAuditLog. Edits (bulkUpdate*) deliberately NOT gated. See phase0-security.md.

@@ -1937,6 +1937,17 @@ export type Database = {
         Returns: number
       }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
+      write_ingestion_audit: {
+        Args: {
+          p_comment?: string
+          p_diff?: Json
+          p_operation: string
+          p_record_id: string
+          p_snapshot?: Json
+          p_table_name: string
+        }
+        Returns: string
+      }
     }
     Enums: {
       batch_status:
