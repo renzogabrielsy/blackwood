@@ -1,12 +1,18 @@
 # Jarvis Chat Component
 
-> **STATUS (2026-07-03): the chat panel is DORMANT — not mounted.** The floating
-> button (`JarvisFloatingButton`) now opens the **Daily Sync** panel
-> (`components/sync/SyncPanel.tsx`) and only renders for privileged roles; its icon
-> changed from `Sparkles` to `Zap`. `JarvisProvider` is still mounted (the Sync panel
-> reuses its `open` state + Cmd/Ctrl+K keybind). All chat files below remain in the
-> repo and are functional — to revive the chat, re-mount `JarvisChatPanel` in
-> `app/(app)/app-shell.tsx`. See `app/(app)/sync/CONTEXT.md`.
+> **STATUS (2026-07-04): the WHOLE Jarvis surface is DORMANT — nothing mounted.**
+> The floating button (`JarvisFloatingButton`), the chat panel (`JarvisChatPanel`),
+> AND `JarvisProvider` are all **unmounted**. The Daily Sync UI — which the floating
+> button used to open — moved to a **dashboard modal** (`components/sync/SyncLauncher.tsx`,
+> mounted in `app/(app)/page.tsx`). With the FAB + Sync Sheet retired, `JarvisProvider`
+> had **no remaining live consumers** (its only ones were the FAB and the Sheet-based
+> `SyncPanel`; the chat was already unmounted), so it was removed from `app-shell.tsx`
+> — and with it the Cmd/Ctrl+K keybind.
+>
+> All chat files below remain in the repo and are functional. To revive the chat you
+> must **re-add `<JarvisProvider>` to `app/(app)/app-shell.tsx`** and re-mount
+> `JarvisChatPanel` inside it (the provider is a hard dependency of every Jarvis
+> component). See `app/(app)/sync/CONTEXT.md`.
 
 ## Purpose
 Slide-out AI chat panel ("Jarvis") accessible from every page in the `(app)` route group. Conversational, tool-using, persistent across navigations. Powered by Sonnet 4.6 server-side via `chat()` server action. v1 is **request-response** (no streaming), **plain text** (no markdown), **inventory-only** in scope.
@@ -96,7 +102,7 @@ See `AI_INGESTION_AGENT.md` for the broader agent design and `handoffs/2026-05-2
 
 ## Mount point
 
-- `app/(app)/app-shell.tsx` — wraps all `(app)/*` children with `<JarvisProvider>` and mounts `<JarvisFloatingButton />`. As of 2026-07-03 it mounts `<SyncPanel />` (Daily Sync) where `<JarvisChatPanel />` used to be — `JarvisChatPanel` is **no longer mounted** (dormant). Routes outside the `(app)` group (`/login`, `/access-denied`) include neither.
+- **None (as of 2026-07-04).** `app/(app)/app-shell.tsx` no longer references any Jarvis component — `<JarvisProvider>`, `<JarvisFloatingButton />`, and `<JarvisChatPanel />` are all unmounted. The Daily Sync UI that the FAB used to open now lives in the dashboard modal `<SyncLauncher />` (mounted in `app/(app)/page.tsx`), which uses its own local state and does **not** depend on `JarvisProvider`. To revive Jarvis, re-add `<JarvisProvider>` to `app-shell.tsx` first (every component here needs it), then mount `<JarvisChatPanel />` inside it.
 
 ## Keyboard shortcuts
 

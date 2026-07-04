@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Play, RefreshCw, X, Zap } from 'lucide-react'
+import { X, Zap } from 'lucide-react'
 
 import {
   Sheet,
@@ -14,16 +14,20 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/providers/auth-context'
 import { PRIVILEGED_ROLES } from '@/types/auth'
-import { SYNC_REPORTS } from '@/app/(app)/sync/types'
 import { useJarvis } from '@/components/jarvis/JarvisProvider'
-import { SyncEmployeeCard } from './SyncEmployeeCard'
-import { HeldRows } from './HeldRows'
+import { SyncPanelBody } from './SyncPanelBody'
 import { useSyncRun } from './useSyncRun'
 
 /**
- * The "Run Sync" slide-out panel. Reuses the Jarvis panel shell + glass patterns
- * (the FAB toggles this via the shared JarvisProvider `open` state). Restricted
- * to Owner / Admin / Dev — under-privileged roles never render the panel body.
+ * DORMANT — the original "Run Sync" slide-out panel. The Daily Sync UI now lives
+ * on the dashboard as a MODAL (`SyncLauncher.tsx` → Dialog wrapping the shared
+ * `SyncPanelBody`). This Sheet version is no longer mounted in `app-shell.tsx`
+ * and depends on the (also-retired) `JarvisProvider`. Kept in the repo as a
+ * reference — same policy as the dormant Jarvis chat. Do NOT re-mount without
+ * restoring `JarvisProvider`.
+ *
+ * Restricted to Owner / Admin / Dev — under-privileged roles never render the
+ * panel body.
  */
 export function SyncPanel() {
   const { open, setOpen } = useJarvis()
@@ -31,8 +35,6 @@ export function SyncPanel() {
   const { state, run, adjudicate } = useSyncRun()
 
   const privileged = PRIVILEGED_ROLES.includes(role)
-
-  const idle = !state.running && !state.ran
 
   return (
     <Sheet open={open && privileged} onOpenChange={setOpen}>
@@ -71,65 +73,8 @@ export function SyncPanel() {
           </div>
         </div>
 
-        {/* Run button */}
-        <div className="flex-none border-b border-border px-3 py-2.5">
-          <Button
-            type="button"
-            className="w-full"
-            disabled={state.running}
-            onClick={() => void run()}
-          >
-            {state.running ? (
-              <>
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                Running sync…
-              </>
-            ) : state.ran ? (
-              <>
-                <RefreshCw className="h-4 w-4" />
-                Run again
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4" />
-                Run Sync
-              </>
-            )}
-          </Button>
-          {idle && (
-            <p className="mt-1.5 px-0.5 text-[10px] leading-snug text-muted-foreground">
-              Classifies every report in parallel, auto-applies the clean rows, and holds anything
-              that needs your judgment.
-            </p>
-          )}
-        </div>
-
-        {/* Employee cards */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2.5 space-y-2">
-          {SYNC_REPORTS.map((meta) => (
-            <SyncEmployeeCard key={meta.type} card={state.cards[meta.type]} />
-          ))}
-
-          {/* Held rows */}
-          <HeldRows groups={state.heldGroups} onAdjudicate={adjudicate} />
-        </div>
-
-        {/* Summary footer */}
-        <div className="flex-none border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 py-2.5">
-          {state.summarizing ? (
-            <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <RefreshCw className="h-3 w-3 animate-spin" />
-              Summarizing the run…
-            </p>
-          ) : state.summary ? (
-            <p className="animate-fade-up text-[11px] leading-snug text-foreground/90">
-              {state.summary}
-            </p>
-          ) : (
-            <p className="text-[11px] text-muted-foreground/70">
-              Run summary appears here once the sync completes.
-            </p>
-          )}
+        <div className="flex-1 min-h-0 overflow-y-auto px-3">
+          <SyncPanelBody state={state} run={run} adjudicate={adjudicate} />
         </div>
       </SheetContent>
     </Sheet>

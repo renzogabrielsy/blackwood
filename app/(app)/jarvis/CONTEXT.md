@@ -1,13 +1,17 @@
 # Jarvis Module — CONTEXT.md
 
-> **STATUS (2026-07-03): Jarvis chat is DORMANT.** The floating button now opens the
-> **Daily Sync** panel (`components/sync/SyncPanel.tsx`), not the chat. The chat
-> components (`components/jarvis/JarvisChatPanel.tsx` etc.), the `chat()` server
-> action, and the Jarvis DB tables all remain in the repo and are fully functional —
-> they are simply **not mounted** in `app-shell.tsx` (a one-line comment marks where
-> `JarvisChatPanel` used to be). `JarvisProvider` is still mounted: the Sync panel
-> reuses its `open` state + Cmd/Ctrl+K keybind. To revive the chat, re-mount
-> `JarvisChatPanel` alongside `SyncPanel` (or in place of it).
+> **STATUS (2026-07-04): the ENTIRE Jarvis surface is DORMANT — nothing mounted.**
+> The floating button (`JarvisFloatingButton`), the chat (`JarvisChatPanel`), and
+> `JarvisProvider` itself are all **unmounted** from `app-shell.tsx`. The Daily Sync
+> UI the FAB used to open moved to a **dashboard modal** — `components/sync/SyncLauncher.tsx`,
+> mounted in `app/(app)/page.tsx`, with its own local state (no `JarvisProvider`
+> dependency). With the FAB + Sheet-based `SyncPanel` retired, `JarvisProvider` had
+> no live consumers left, so it (and its Cmd/Ctrl+K keybind) was removed. The chat
+> components, the `chat()` server action, and the Jarvis DB tables all remain in the
+> repo and are fully functional. To revive the chat, re-add `<JarvisProvider>` to
+> `app-shell.tsx` (a hard dependency of every Jarvis component) and re-mount
+> `JarvisChatPanel` inside it. See `app/(app)/sync/CONTEXT.md` +
+> `components/jarvis/CONTEXT.md`.
 
 ## Purpose
 

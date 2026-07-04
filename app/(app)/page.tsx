@@ -10,18 +10,26 @@ import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
 import { OpenBlocks } from "@/components/digest/open-blocks";
 import { BagInventory } from "@/components/digest/bag-inventory";
+import { SyncLauncher } from "@/components/sync/SyncLauncher";
 
 export default async function DigestPage() {
   const data = await getDigestData();
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6">
-      {/* A. Header strip (sub-band — navbar owns the page title) */}
-      <DigestHeader
-        operationalDate={data.meta.operationalDate}
-        lastSyncAt={data.meta.lastSyncAt}
-        freshness={data.meta.freshness}
-      />
+      {/* A. Header strip (sub-band — navbar owns the page title). The Daily Sync
+          launcher (privileged-only modal trigger) lives in this top band,
+          right-aligned, replacing the retired floating button. */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <DigestHeader
+            operationalDate={data.meta.operationalDate}
+            lastSyncAt={data.meta.lastSyncAt}
+            freshness={data.meta.freshness}
+          />
+        </div>
+        <SyncLauncher />
+      </div>
 
       {/* Open blocks — current in-use inventory, surfaced at the very top (at-a-glance) */}
       <section>

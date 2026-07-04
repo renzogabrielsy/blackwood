@@ -20,9 +20,15 @@ values into views.
 ## Files
 - `page.tsx` — **async Server Component**. Calls `getDigestData()` once and
   composes the bands. Thin: fetch + layout only. No `'use client'`.
-  **Render order, top→bottom:** DigestHeader → **OpenBlocks** (surfaced at the
-  very top) → KpiHero → DigestCharts → TrucksSummary → **BagInventory** →
-  (SyncSummary + ActivityFeed) → DigestFooterBand.
+  **Render order, top→bottom:** (DigestHeader + **SyncLauncher**) header row →
+  **OpenBlocks** (surfaced at the very top) → KpiHero → DigestCharts →
+  TrucksSummary → **BagInventory** → (SyncSummary + ActivityFeed) →
+  DigestFooterBand.
+  The header row is a `flex justify-between` wrapper: DigestHeader takes the
+  remaining width (`flex-1`), and `<SyncLauncher />` (client component from
+  `components/sync/`) sits right-aligned. **This is where the Daily Sync launcher
+  lives** — a privileged-only "Run Sync" button that opens the sync **modal**,
+  replacing the retired floating button. See `app/(app)/sync/CONTEXT.md`.
 - `components/digest/format.ts` — pure display formatters (`fmtKg`, `fmtKwh`,
   `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`).
   No aggregation (HARD RULE — that lives in SQL views).
