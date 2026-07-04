@@ -249,6 +249,21 @@ export class DbClient {
     return (data ?? []) as Row[];
   }
 
+  /**
+   * Unconditional DELETE FROM `table` WHERE transaction_date = eq.{date}, return
+   * minimal. The flecon REPLACE-BY-DATE apply needs this (its Python reached into
+   * db._session.delete(...) raw — flecon apply.ts PORTING TRAP #1). Additive to the
+   * base client; no report logic depends on its return value.
+   */
+  async deleteByDate(table: string, date: string): Promise<void> {
+    const { error } = await this.sb.from(table).delete().eq("transaction_date", date);
+    if (error) {
+      throw new Error(
+        `delete_by_date ${table} failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

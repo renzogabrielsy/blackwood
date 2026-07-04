@@ -67,8 +67,11 @@ async function handle(
 
     const body = await readBody(req);
     let runId: string | undefined;
+    let dryRun = false;
     try {
-      runId = JSON.parse(body || "{}").runId;
+      const parsed = JSON.parse(body || "{}");
+      runId = parsed.runId;
+      dryRun = parsed.dryRun === true;
     } catch {
       sendJson(res, 400, { ok: false, error: "invalid JSON body" });
       return;
@@ -80,8 +83,9 @@ async function handle(
 
     // Start the run workflow in the background. The runId is the workflow ID, so a
     // duplicate kick for the same runId is idempotent (DBOS dedups on workflowID).
-    await DBOS.startWorkflow(runSyncWorkflow, { workflowID: `run:${runId}` })({ runId });
-    sendJson(res, 202, { ok: true, runId, status: "started" });
+    // `dryRun` (classify-only) threads through to every report.
+    await DBOS.startWorkflow(runSyncWorkflow, { workflowID: `run:${runId}` })({ runId, dryRun });
+    sendJson(res, 202, { ok: true, runId, dryRun, status: "started" });
     return;
   }
 

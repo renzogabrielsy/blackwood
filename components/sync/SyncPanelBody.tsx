@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Play, RefreshCw } from 'lucide-react'
+import { FlaskConical, Play, RefreshCw } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { SYNC_REPORTS, type SyncReportType } from '@/app/(app)/sync/types'
@@ -11,7 +11,7 @@ import type { SyncRunState } from './useSyncRun'
 
 interface SyncPanelBodyProps {
   state: SyncRunState
-  run: () => void | Promise<void>
+  run: (opts?: { dryRun?: boolean }) => void | Promise<void>
   adjudicate: (type: SyncReportType) => void
 }
 
@@ -25,40 +25,84 @@ interface SyncPanelBodyProps {
  * above the modal boundary — a run keeps streaming while the modal is closed,
  * and reopening shows it still live.
  */
+/** HH:MM local time from an ISO timestamp, for the "already running since" note. */
+function formatStarted(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
 export function SyncPanelBody({ state, run, adjudicate }: SyncPanelBodyProps) {
   const idle = !state.running && !state.ran
 
   return (
     <div className="flex flex-col gap-0">
-      {/* Run button */}
+      {/* Run buttons: full run + a deliberate dry-run (classify-only). */}
       <div className="flex-none px-1 py-2.5">
-        <Button
-          type="button"
-          className="w-full"
-          disabled={state.running}
-          onClick={() => void run()}
-        >
-          {state.running ? (
-            <>
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              Running sync…
-            </>
-          ) : state.ran ? (
-            <>
-              <RefreshCw className="h-4 w-4" />
-              Run again
-            </>
-          ) : (
-            <>
-              <Play className="h-4 w-4" />
-              Run Sync
-            </>
-          )}
-        </Button>
+        {/* Attached-to-in-flight-run banner (multi-viewer / reopen / post-refresh). */}
+        {state.attached && state.running && (
+          <p className="mb-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5 text-[10px] leading-snug text-foreground/90">
+            A sync is already running{state.startedAt ? ` (started ${formatStarted(state.startedAt)})` : ''}
+            {' '}— watching it live.
+          </p>
+        )}
+
+        <div className="flex items-stretch gap-2">
+          <Button
+            type="button"
+            className="flex-1"
+            disabled={state.running}
+            onClick={() => void run()}
+          >
+            {state.running ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Running sync…
+              </>
+            ) : state.ran ? (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Run again
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4" />
+                Run Sync
+              </>
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="shrink-0"
+            disabled={state.running}
+            onClick={() => void run({ dryRun: true })}
+            title="Classify only — reads the reports and shows what WOULD change, writes nothing."
+          >
+            <FlaskConical className="h-4 w-4" />
+            Dry run
+          </Button>
+        </div>
+
+        {/* Non-fatal notice (e.g. "worker asleep — queued"). */}
+        {state.notice && (
+          <p className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+            {state.notice}
+          </p>
+        )}
+
+        {/* Overall (top-level workflow) progress line while running. */}
+        {state.running && state.overall.label && (
+          <p className="mt-1.5 px-0.5 text-[10px] leading-snug text-muted-foreground tabular-nums">
+            {state.overall.label}
+          </p>
+        )}
+
         {idle && (
           <p className="mt-1.5 px-0.5 text-[10px] leading-snug text-muted-foreground">
             Classifies every report in parallel, auto-applies the clean rows, and holds anything
-            that needs your judgment.
+            that needs your judgment. <span className="font-medium">Dry run</span> classifies only —
+            it writes nothing.
           </p>
         )}
       </div>

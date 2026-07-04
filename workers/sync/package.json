@@ -16,6 +16,8 @@
     "test:watch": "vitest",
     "gen:fixtures": "tsx scripts/gen-norm-fixtures.ts",
     "proof:crash-resume": "tsx scripts/crash-resume-proof.ts",
+    "proof:dryrun": "tsx scripts/dryrun-proof.ts",
+    "proof:dryrun-crash-resume": "tsx scripts/dryrun-crash-resume.ts",
     "mailclerk:live": "tsx scripts/mailclerk-live-test.ts",
     "parity": "tsx test/parity/runner.ts",
     "build:oracle": "python3 scripts/build_oracle.py",

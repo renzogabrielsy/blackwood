@@ -5,23 +5,31 @@ Durable, web-native TypeScript port of the ICTC sync engine, wrapped in **DBOS**
 This is a **standalone package**, NOT part of the Next.js build. It runs on a small
 cloud host (Fly.io, scale-to-zero) and is woken by an HTTP kick from the app.
 
-> Status: **M0 (Foundations) + M1 (Shared libraries + Mail Clerk) + M2 (Golden-master
-> parity harness) complete.** The per-report extract→classify→apply workflows are M3
-> (not built here) — they are built AGAINST the M2 harness (`npm run parity`).
-> Migration plan: `../../SYNC_TS_MIGRATION_PLAN.md`.
+> Status: **M0–M3 complete + M4-worker complete (2026-07-04, Wave 4A).** The real
+> `runSyncWorkflow` now drives all six Wave-3 report ports end to end, durably, in the
+> panel order. Proven with a local end-to-end dry-run AND a crash-resume on the real
+> workflow. M5 runbook shipped (`RUNBOOK.md`). Migration plan: `../../SYNC_TS_MIGRATION_PLAN.md`.
 
-## Architecture (this milestone)
+## Architecture
 
 ```
-[Run Sync click]  →  server action: INSERT sync_runs(queued) → POST worker /kick
+[Run Sync click]  →  server action: INSERT sync_runs(queued) → POST worker /kick {runId, dryRun?}
 [worker + DBOS]
-  runSyncWorkflow                      (top-level durable workflow)
-    └─ mailClerkWorkflow               (ONE Gmail IMAP session → all report files)
-         → Supabase Storage: sync-inbox/<runId>/<report>/<file>
-    └─ [M3] per-report child workflows: extract → classify → gates → apply
+  runSyncWorkflow  (run:<id>)          (top-level durable workflow)
+    ├─ mailClerkWorkflow (mailclerk:<id>)   ONE Gmail IMAP session → all report files
+    │      → Supabase Storage: sync-inbox/<runId>/<report>/<file>
+    ├─ report:<id>:gsheet               gsheet FIRST + alone (source of truth; self-downloads)
+    ├─ report:<id>:{deliveries,rc_out,production,flecon}   the 4 writers IN PARALLEL
+    │      (DBOS.startWorkflow fan-out + Promise.allSettled)
+    └─ report:<id>:rc_movement_audit    read-only auditor LAST (never writes)
+  status   → sync_runs: queued→running→succeeded|partial|failed  (result jsonb, error text)
   progress → sync_run_events rows      (Supabase Realtime → the modal)
-  result   → sync_runs.result
 ```
+
+Each report is its own child workflow (independently checkpointed). A report that throws
+is isolated — it returns an `ok:false` envelope and the run finishes `partial`; the others
+continue. **`dryRun`** (kick body) is classify-only: a write-blocking db proxy no-ops every
+mutation, so a run proves out end to end without writing data.
 
 Only **Supabase down** stops a run. Refresh / tab close / laptop off are irrelevant —
 the click just writes "sync requested"; the worker does the rest durably.
@@ -36,9 +44,11 @@ the click just writes "sync requested"; the worker does the rest durably.
 | `src/lib/xlsx.ts` | exceljs helpers matching openpyxl `data_only` semantics (formula → cached result, date cells, merges, sheet iteration). |
 | `src/lib/progress.ts` | `emitEvent` → `sync_run_events`; monotonic pct per (run,report); digestible-language rules carried verbatim; never throws. |
 | `src/dbos.ts` | DBOS config + launch/shutdown. |
-| `src/workflows/demo.ts` | The crash-resume proof workflow. |
+| `src/workflows/demo.ts` | The M0 crash-resume proof workflow (toy 3-step). |
 | `src/workflows/mailClerk.ts` | The PINNED Mail Clerk (one session → Storage manifest). `runMailClerk` is the DBOS-free variant for tests. |
-| `src/workflows/runSync.ts` | Top-level Run Sync workflow (M0/M1: Mail Clerk + status). |
+| `src/workflows/runSync.ts` | **The real top-level Run Sync workflow** — status lifecycle + Mail Clerk + all 6 reports in panel order + result aggregation + failure isolation. |
+| `src/workflows/reportWorkflow.ts` | The per-report CHILD workflow — dispatches to each report's `runReport`, normalizes into a uniform envelope, isolates failures. |
+| `src/workflows/reportDeps.ts` | Workflow-layer ADAPTERS: Storage-download-to-tmp, Gmail labeler, progress emitter, and the **write-blocking dry-run db proxy**. Wires each report's own deps type (reports are NOT reshaped). |
 | `src/server/kick.ts` | `POST /kick` (Bearer auth) + `GET /health`. |
 | `src/index.ts` | Entrypoint: register workflows → launch DBOS → start kick server. |
 
@@ -104,6 +114,23 @@ curl -X POST http://localhost:8080/kick \
   ```
   Fetches the latest xlsx for all report queries over ONE Gmail session and prints
   the manifest. Never uploads / never labels (`dryRun`).
+- **End-to-end DRY-RUN proof (M4-worker DoD):**
+  ```bash
+  # needs a filled .env (Gmail + Supabase service role + DBOS_DATABASE_URL + SYNC_KICK_SECRET)
+  npm run build
+  npx tsx scripts/dryrun-proof.ts
+  ```
+  Inserts a `sync_runs` row, boots the worker, kicks with `dryRun`, and asserts all 6
+  reports produce classify envelopes against LIVE Gmail/Sheet + DB, events stream into
+  `sync_run_events`, and the run finishes with a full `result` jsonb — **writing zero
+  data rows**. (Verified: `queued→running→partial`, 60 events, 6/6 reports.)
+- **CRASH-RESUME on the REAL workflow (M4-worker DoD):**
+  ```bash
+  npx tsx scripts/dryrun-crash-resume.ts
+  ```
+  Kicks a dry run, `kill -9`s the worker mid-run, boots a FRESH worker → DBOS recovers
+  `run:<id>` and drives it to completion with no re-kick. (Verified: `Recovering 2
+  workflows…`, second pid finished the run, all 8 workflows SUCCESS.)
 
 ## Golden-master parity harness (M2 — `npm run parity`)
 

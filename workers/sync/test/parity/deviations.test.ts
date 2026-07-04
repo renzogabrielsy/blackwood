@@ -89,11 +89,14 @@ describe("staleDeviations", () => {
 describe("shipped expected-deviations.json", () => {
   const raw = JSON.parse(
     readFileSync(resolve(__dirname, "expected-deviations.json"), "utf8"),
-  ) as { deviations: ExpectedDeviation[] };
+  ) as { deviations: ExpectedDeviation[]; apply_phase_deferred?: ExpectedDeviation[] };
 
-  it("parses and every entry has rule/type/case/path/note", () => {
+  const allEntries = [...(raw.deviations ?? []), ...(raw.apply_phase_deferred ?? [])];
+
+  it("parses and every entry (active + deferred) has rule/type/case/path/note", () => {
     expect(Array.isArray(raw.deviations)).toBe(true);
-    for (const d of raw.deviations) {
+    expect(Array.isArray(raw.apply_phase_deferred)).toBe(true);
+    for (const d of allEntries) {
       expect(typeof d.rule).toBe("string");
       expect(typeof d.type).toBe("string");
       expect(typeof d.case).toBe("string");
@@ -102,11 +105,19 @@ describe("shipped expected-deviations.json", () => {
     }
   });
 
-  it("covers PORTING_DECISIONS rulings #2-#5", () => {
-    const rules = new Set(raw.deviations.map((d) => d.rule));
-    expect(rules.has("PD-2")).toBe(true);
-    expect(rules.has("PD-3")).toBe(true);
-    expect(rules.has("PD-4")).toBe(true);
-    expect(rules.has("PD-5")).toBe(true);
+  it("still records PORTING_DECISIONS rulings #2-#5 (active OR apply-phase-deferred)", () => {
+    // PD-5 fires at classify parity (active); PD-2/3/4 are gsheet APPLY-phase — parked in
+    // apply_phase_deferred so they don't report STALE on every run, but the record persists
+    // (Wave 4A: prune-stale-with-a-home, not silent-delete). See the file's $apply_phase_todo.
+    const activeRules = new Set(raw.deviations.map((d) => d.rule));
+    const allRules = new Set(allEntries.map((d) => d.rule));
+    expect(activeRules.has("PD-5")).toBe(true);
+    for (const r of ["PD-2", "PD-3", "PD-4", "PD-5"]) expect(allRules.has(r)).toBe(true);
+  });
+
+  it("keeps the deferred gsheet apply-phase entries out of the ACTIVE set (no STALE noise)", () => {
+    const activeGsheet = raw.deviations.filter((d) => d.type === "gsheet");
+    expect(activeGsheet).toHaveLength(0);
+    expect((raw.apply_phase_deferred ?? []).every((d) => d.type === "gsheet")).toBe(true);
   });
 });

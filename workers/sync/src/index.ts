@@ -17,6 +17,7 @@ import { startKickServer } from "./server/kick.js";
 // Side-effect imports: register every workflow before launch.
 import "./workflows/demo.js";
 import "./workflows/mailClerk.js";
+import "./workflows/reportWorkflow.js";
 import "./workflows/runSync.js";
 
 async function main(): Promise<void> {

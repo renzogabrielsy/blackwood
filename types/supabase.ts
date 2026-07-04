@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       audit_comments: {
@@ -994,6 +969,83 @@ export type Database = {
           },
         ]
       }
+      sync_run_events: {
+        Row: {
+          at: string
+          detail: string | null
+          id: number
+          label: string | null
+          level: string | null
+          pct: number | null
+          report_type: string | null
+          run_id: string
+          stage: string | null
+        }
+        Insert: {
+          at?: string
+          detail?: string | null
+          id?: never
+          label?: string | null
+          level?: string | null
+          pct?: number | null
+          report_type?: string | null
+          run_id: string
+          stage?: string | null
+        }
+        Update: {
+          at?: string
+          detail?: string | null
+          id?: never
+          label?: string | null
+          level?: string | null
+          pct?: number | null
+          report_type?: string | null
+          run_id?: string
+          stage?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_run_events_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sync_runs: {
+        Row: {
+          created_at: string
+          error: string | null
+          finished_at: string | null
+          id: string
+          requested_by: string | null
+          result: Json | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["sync_run_status"]
+        }
+        Insert: {
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          requested_by?: string | null
+          result?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["sync_run_status"]
+        }
+        Update: {
+          created_at?: string
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          requested_by?: string | null
+          result?: Json | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["sync_run_status"]
+        }
+        Relationships: []
+      }
       truck_readings: {
         Row: {
           created_at: string
@@ -1937,6 +1989,16 @@ export type Database = {
         Returns: number
       }
       set_audit_comment: { Args: { comment: string }; Returns: undefined }
+      stamp_ingestion_audit: {
+        Args: {
+          p_comment: string
+          p_operation: string
+          p_record_id: string
+          p_snapshot?: Json
+          p_table_name: string
+        }
+        Returns: number
+      }
       write_ingestion_audit: {
         Args: {
           p_comment?: string
@@ -1966,6 +2028,7 @@ export type Database = {
         | "delivery_deleted"
         | "remarks_added"
         | "audit_comment_reply"
+      sync_run_status: "queued" | "running" | "succeeded" | "failed" | "partial"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -2091,9 +2154,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       batch_status: [
@@ -2114,6 +2174,7 @@ export const Constants = {
         "remarks_added",
         "audit_comment_reply",
       ],
+      sync_run_status: ["queued", "running", "succeeded", "failed", "partial"],
     },
   },
 } as const

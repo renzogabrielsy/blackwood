@@ -160,19 +160,15 @@ export interface ApplyResult {
 }
 
 // ============================================================
-// SSE progress contract — the live stream shape
+// Durable progress contract — Supabase Realtime (Wave 4B)
 // ============================================================
-
-/**
- * The FROZEN progress-event contract. Each Python script flushes ONE line per
- * event on stderr, prefixed by the sentinel below, containing exactly this JSON:
- *
- *   ##SYNC_PROGRESS {"stage":"classify","pct":42,"label":"Comparing against the database…","detail":"195 already recorded","level":"info"}
- *
- * Any other stderr line is treated as a raw technical-log line (never a status
- * line). stdout stays the single machine-JSON result object (contract unchanged).
- */
-export const SYNC_PROGRESS_SENTINEL = '##SYNC_PROGRESS ' as const
+//
+// The old transport was an SSE stream that spawned Python on Renzo's laptop and
+// forwarded `##SYNC_PROGRESS` stderr lines. That is RETIRED. Progress now lives in
+// two Supabase tables the DBOS worker writes and the browser watches over Realtime:
+//   - `sync_runs`        — one row per "Run Sync" click (lifecycle + terminal result)
+//   - `sync_run_events`  — the live progress feed (one row per beat)
+// See supabase/migrations/20260704000000_sync_runs_and_events.sql.
 
 /** The coarse pipeline stages a progress event can report. */
 export type SyncProgressStage =
@@ -183,7 +179,11 @@ export type SyncProgressStage =
   | 'reconcile'
   | 'finalize'
 
-/** One decoded `##SYNC_PROGRESS` event. */
+/**
+ * One decoded progress event. In the SSE era this was a `##SYNC_PROGRESS` stderr
+ * line; now it is projected from a `sync_run_events` row. The digestible-language
+ * shape is IDENTICAL, so the card reducer is unchanged.
+ */
 export interface SyncProgressEvent {
   stage: SyncProgressStage
   /** Integer 0–100. */
@@ -195,18 +195,82 @@ export interface SyncProgressEvent {
   level: 'info' | 'warn'
 }
 
+/** Lifecycle status of a durable sync run (mirrors the `sync_run_status` enum). */
+export type SyncRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'partial'
+
+/** The terminal statuses — a run in one of these will emit no further events. */
+export const TERMINAL_RUN_STATUSES: readonly SyncRunStatus[] = [
+  'succeeded',
+  'failed',
+  'partial',
+] as const
+
+export function isTerminalRunStatus(s: SyncRunStatus): boolean {
+  return TERMINAL_RUN_STATUSES.includes(s)
+}
+
 /**
- * The terminal SSE `result` event payload. Mirrors what the old server action
- * returned (parsed stdout), plus the transport metadata the client needs to
- * decide gate-failure vs error and to surface stderr on a crash.
+ * A `sync_run_events` row exactly as it arrives over Realtime (or a mount-time
+ * catch-up query). All fields are nullable to mirror the table (defensive — a
+ * malformed worker write must never crash the reducer). `report_type` keys the
+ * card; the sentinel `'_run'` is the top-level workflow's own progress track.
  */
-export interface SyncStreamResult {
-  /** Process exit code (0 = clean). */
-  exitCode: number
-  /** Parsed stdout as the phase's contract object, or null if unparseable. */
-  json: ClassifyResult | ApplyResult | null
-  /** Last chunk of stderr (technical), for a copyable crash detail. */
-  stderrTail: string
+export interface SyncRunEventRow {
+  id: number
+  run_id: string
+  report_type: string | null
+  stage: string | null
+  pct: number | null
+  label: string | null
+  detail: string | null
+  level: string | null
+  at: string | null
+}
+
+/** The report-type sentinel the worker uses for the top-level run's own track. */
+export const RUN_TRACK_REPORT_TYPE = '_run' as const
+
+/**
+ * A `sync_runs` row as it arrives over Realtime / a catch-up query. `result` and
+ * `error` are only populated on the terminal transition.
+ */
+export interface SyncRunRow {
+  id: string
+  requested_by: string | null
+  status: SyncRunStatus
+  started_at: string | null
+  finished_at: string | null
+  result: SyncRunResult | null
+  error: string | null
+  created_at: string | null
+}
+
+/**
+ * The terminal `sync_runs.result` contract the worker writes and the modal reads.
+ *
+ * The worker (M3) fills `reports[<type>]` with the SAME `ClassifyResult` /
+ * `ApplyResult` objects the old CLI produced — so the downstream held-aggregation
+ * + narration logic (and `SyncPanelBody` / `HeldRows`) are untouched. During
+ * M0/M1 the worker instead writes a Mail-Clerk manifest (no `reports` key); the
+ * reducer treats a result with no `reports` as "run finished, nothing per-report
+ * to show yet" and simply clears the busy state.
+ */
+export interface SyncRunReportResult {
+  classify: ClassifyResult | null
+  apply: ApplyResult | null
+  /** Terminal card status the worker decided for this report, if any. */
+  status?: SyncCardStatus
+  /** Full error text (gate detail / crash) for the inline block + Copy. */
+  error?: string | null
+}
+
+export interface SyncRunResult {
+  /** Per-report terminal results, keyed by report type. Absent in M0/M1. */
+  reports?: Partial<Record<SyncReportType, SyncRunReportResult>>
+  /** Optional pre-narrated summary (else the app narrates client-side). */
+  summary?: string | null
+  /** Anything else the worker attaches (manifest, counts) — inspected loosely. */
+  [key: string]: unknown
 }
 
 // ============================================================

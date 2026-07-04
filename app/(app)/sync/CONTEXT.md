@@ -4,101 +4,191 @@
 
 The in-app **"Run Sync"** feature — a compact **modal** that runs the daily
 ICTC ingestion (the six "employee" pipelines) from inside Blackwood, instead of
-driving each sync employee by hand in Claude Code. One click classifies every
-report in parallel, auto-applies the clean rows, and surfaces anything that needs
-judgment (held/flagged rows, hard-gate failures).
+driving each sync employee by hand in Claude Code. One click enqueues a **durable
+run** on a cloud worker; the worker classifies every report, auto-applies the clean
+rows, and surfaces anything that needs judgment (held/flagged rows, hard-gate
+failures). The modal watches it **live over Supabase Realtime**.
 
-**Entry point (as of 2026-07):** a compact zinc **"Run Sync" launcher button** in
-the dashboard's digest header band (right-aligned) opens the sync as a Dialog. This
-**replaced the retired floating button** (bottom-right FAB) — which also retired the
-shared `JarvisProvider`. It is **Owner / Admin / Dev only** — enforced server-side in
-every action + the SSE route, and hidden client-side for other roles.
+**Entry point:** a compact zinc **"Run Sync" launcher button** in the dashboard's
+digest header band (right-aligned, `app/(app)/page.tsx`) opens the sync as a Dialog.
+It is **Owner / Admin / Dev only** — enforced server-side in `enqueueSyncRun` and
+hidden client-side for other roles.
 
-**Running-state survival:** `useSyncRun()` is lifted into `SyncLauncher` (ABOVE the
-Dialog), so closing the modal mid-run never kills the stream — the hook + its
-in-flight `EventSource`s persist, and reopening shows the run still live.
+## The durable flow (Wave 4B — laptop-proof)
 
-This is the app front-end for the Python orchestrators the sync-ictc backend agent
-builds at `.claude/skills/sync-ictc/scripts/sync_*.py`. The panel talks to them
-over a **fixed CLI contract** (see `types.ts`).
+The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE +
+`child_process`). That is **RETIRED**. The new model:
+
+```
+[Run Sync click]
+  └─ enqueueSyncRun(dryRun?)  (server action)
+       requirePrivileged → service-role INSERT sync_runs(status=queued, requested_by)
+       → POST ${SYNC_WORKER_URL}/kick  (Bearer SYNC_KICK_SECRET, body {runId, dryRun})
+       → returns { runId, kicked }
+[TS worker + DBOS  ·  workers/sync, a small cloud host]
+       extract → classify → gates → apply, all checkpointed (crash = resume)
+       progress → sync_run_events rows      terminal → sync_runs.result
+[Dashboard modal]  ← Supabase Realtime subscription on both tables (no SSE, no laptop)
+```
+
+- **Kick is best-effort.** If the POST fails/times out (~5s) the action does NOT
+  fail — it returns `{ kicked: false }` with a human message ("worker asleep — the
+  run is queued and will start when the worker wakes"). The `sync_runs` row is
+  durable and DBOS recovery starts it on the next worker wake. The click is never
+  lost.
+- **Attach-to-in-flight (the headline feature).** On mount, `useSyncRun` queries the
+  latest run; if it is non-terminal it **attaches** — a reopened modal, a second
+  viewer, or a post-refresh session picks up the SAME running job and shows "A sync
+  is already running (started HH:MM) — watching it live." Closing the laptop lid
+  can't kill the run.
+- **Realtime-hiccup fallback.** If the Realtime channel errors/times out, the hook
+  degrades to a ~3s poll of the two tables (mirrors `notification-bell.tsx`).
 
 ## Files
 
 ### Server (this folder)
 - `actions.ts` — server actions:
-  - `runSyncClassify(reportType)` → spawns `sync_<type>.py --phase classify --json`
-  - `runSyncApply(reportType, classifiedPath)` → `--phase apply --input <path> --only-clean --json`
-  - `adjudicateHeldRows(reportType, heldRows[])` → single Anthropic completion → per-row `apply|skip|needs-human` recommendations (advisory only)
-  - `narrateSyncRun(results[])` → optional 3-sentence plain-language summary; **skips the API call** (zero tokens) when every report is clean
-- `types.ts` — the FIXED CLI contract types (`ClassifyResult`, `ApplyResult`, `HeldRow`, …) + the report catalog (`SYNC_REPORTS`, `PARALLEL_WRITERS`). Import-safe from both server and client.
-- `mock.ts` — canned contract JSON for the `SYNC_MOCK=1` path. Exercises every UI state: clean run (gsheet), inserts+updates (deliveries), hard gate failure (rc_out), held rows (production), read-only auditor (rc_movement).
-
-### SSE route (`app/api/sync/stream/`)
-- `route.ts` — **live progress stream** for one pipeline phase. `GET /api/sync/stream?report=<type>&phase=classify|apply&input=<path>&onlyClean=1&noLabel=1`. Spawns `python3 <script> --phase <phase> --json […]` (via `spawn`, not `execFile`), line-buffers stderr, and streams three SSE event kinds: `progress` (decoded `##SYNC_PROGRESS` events), `log` (all other stderr lines — the technical log), and a terminal `result` (`{exitCode, json, stderrTail}`). Kills the child on client disconnect (`request.signal` abort); pings every ~15s to keep the connection alive. Respects `SYNC_MOCK=1` (canned progress + canned result from `mock.ts`, no Python).
-  - **Self-auth (critical):** `/api` is EXEMPT from the auth middleware, so the route re-runs the same server-side privileged gate as `actions.ts` (`createClient → getUser → getUserRole → PRIVILEGED_ROLES`) and returns 401/403 JSON otherwise. Verified: unauthenticated GET → 401 before any spawn.
-  - **Path safety:** `apply` requires an `input` that starts with `/tmp/` — arbitrary paths are rejected 400. `readOnly` reports (rc_movement) reject `apply`.
+  - **`enqueueSyncRun(dryRun?)`** → `{ runId, kicked, message? }`. requirePrivileged →
+    service-role INSERT into `sync_runs` → POST worker `/kick`. Best-effort kick
+    (queued row survives a failed kick). The ONLY write path the click owns.
+  - `adjudicateHeldRows(reportType, heldRows[])` → single Anthropic completion → per-row
+    `apply|skip|needs-human` recommendations (advisory only). **Unchanged** (app-side).
+  - `narrateSyncRun(results[])` → optional 3-sentence plain-language summary; **skips the
+    API call** (zero tokens) when every report is clean. **Unchanged** (app-side).
+  - RETIRED: `runSyncClassify` / `runSyncApply` (child_process spawn) + the SYNC_MOCK
+    plumbing. Classify/apply now run in the worker.
+- `types.ts` — the shared contract types. Import-safe from both server and client:
+  - Report catalog (`SYNC_REPORTS`, `PARALLEL_WRITERS`, `metaFor`).
+  - Legacy CLI-contract shapes still used as the RESULT payload the worker writes:
+    `ClassifyResult`, `ApplyResult`, `HeldRow`, `GateFailure`, …
+  - **Durable Realtime shapes (new):** `SyncRunStatus` + `TERMINAL_RUN_STATUSES` +
+    `isTerminalRunStatus`; `SyncRunRow` (a `sync_runs` row); `SyncRunEventRow` (a
+    `sync_run_events` row); `SyncProgressEvent`/`SyncProgressStage` (projected from an
+    event row — same digestible shape as before); `RUN_TRACK_REPORT_TYPE` (`'_run'`);
+    **`SyncRunResult`** (the terminal `sync_runs.result` contract: `{ reports?:
+    Partial<Record<SyncReportType, SyncRunReportResult>>, summary? }`, where each
+    `SyncRunReportResult` carries the SAME `ClassifyResult`/`ApplyResult` the old CLI
+    produced — so downstream aggregation + `HeldRows` are untouched).
 
 ### Client (`components/sync/`)
-- `SyncLauncher.tsx` — **the live entry point.** A compact zinc "Run Sync" button mounted in the digest header band (`app/(app)/page.tsx`), privileged-only. Owns `useSyncRun()` (lifted above the Dialog for running-state survival) + the modal `open` state. Opens a `Dialog` (`sm:max-w-3xl`, `max-h-[85vh] overflow-y-auto`, sticky glass header) wrapping `SyncPanelBody`. The button label/icon reflects run state (Zap → spinning "Syncing…").
-- `SyncPanelBody.tsx` — **the reusable panel content, written ONCE.** Run Sync button + employee cards + Held section + narration footer. Chrome-agnostic (no header/close of its own — the wrapping Dialog/Sheet owns that). Takes `state`/`run`/`adjudicate` as props so state can be lifted. Shared by `SyncLauncher` (modal, live) and `SyncPanel` (Sheet, dormant).
-- `SyncPanel.tsx` — **DORMANT.** The original slide-out Sheet shell (reuses the Jarvis Sheet + glass patterns) — now wraps `SyncPanelBody`. No longer mounted (the floating button + `JarvisProvider` it depended on are retired). Kept in the repo as a reference, same policy as the dormant Jarvis chat. Do NOT re-mount without restoring `JarvisProvider`.
-- `SyncEmployeeCard.tsx` — one card per report: **live progress bar** (thin track, fill animated via `transform: scaleX(pct/100)` — NEVER `width`, compositor rule) + **plain-English status line** (event label + muted detail; `level:'warn'` tints amber without flipping to error state), then counts → applied summary / gate-failed destructive state with inline error + Copy. A **collapsible "Technical log"** (default closed) holds the raw stderr lines — terminal noise never appears in the status line.
-- `HeldRows.tsx` — held-row groups with a per-group "Ask Claude" adjudication and per-row Copy.
-- `useSyncRun.ts` — the orchestration hook (run order, per-card state machine, held aggregation, narration). Each phase now **consumes the SSE stream** (`EventSource`, cookie-auth) instead of awaiting the server action; `progress`/`log` events patch the card live, the terminal `result` replaces the old action return value (downstream logic unchanged). **Fallback:** if the stream errors *before any event arrives*, it falls back to the server-action path once so a broken stream never breaks a sync. A *mid-stream* drop resolves with an error result (no double-run).
+- `SyncLauncher.tsx` — the live entry point. Compact zinc "Run Sync" button in the
+  digest header band, privileged-only. Owns `useSyncRun()` (lifted above the Dialog
+  so closing the modal never detaches the run) + the modal `open` state.
+- `SyncPanelBody.tsx` — the reusable panel content (written ONCE, shared with the
+  dormant `SyncPanel.tsx`). Run button + a **"Dry run"** secondary button
+  (classify-only; the first live full run should be a deliberate click) + the
+  **attached-run banner** ("A sync is already running (started HH:MM)") + a
+  **non-fatal notice** line (e.g. "worker asleep — queued") + the overall `_run`
+  progress line + employee cards + Held section + narration footer. Chrome-agnostic.
+- `SyncPanel.tsx` — DORMANT slide-out Sheet (still wraps `SyncPanelBody`; depends on
+  the retired `JarvisProvider`). Do NOT re-mount without restoring it.
+- `SyncEmployeeCard.tsx` — one card per report: live progress bar (`transform:
+  scaleX(pct/100)`, never `width` — compositor rule) + plain-English status line
+  (`level:'warn'` tints amber without an error state), counts → applied summary /
+  gate-failed destructive state with inline error + Copy. **Unchanged** — its card
+  state is now fed from Realtime instead of SSE, but the shape is identical.
+- `HeldRows.tsx` — held-row groups with per-group "Ask Claude" adjudication + per-row
+  Copy. **Unchanged.**
+- `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
+  subscribes (browser client) to `sync_run_events` INSERT (filtered by `run_id`) →
+  per-card live progress, and `sync_runs` UPDATE (filtered by `id`) → terminal
+  fold-in (per-report results → cards → held aggregation → narration). Mount-time
+  attach + poll fallback as above.
+
+### Pure reducer (`lib/sync/reducer.ts`)
+The load-bearing, framework-free transformations that turn raw Realtime rows into
+card state — factored OUT of the hook so they can be unit-driven without a browser:
+`projectEvent` (row → `SyncProgressEvent`, with the traceback digestibility guard),
+`isRunTrack`/`eventReportType` (routing), `applyEventToCard` (the per-card state
+machine: idle→classifying, `apply` stage→applying, monotonic pct, terminal cards
+frozen), `deriveCardStatus`/`gateErrorFrom` (terminal result → card status + copyable
+gate string).
+
+### Dev testing WITHOUT the worker
+- `scripts/dev-fake-run.ts` (+ `scripts/dev-fake-run.md`) — inserts a fake
+  `sync_runs` row + a sequence of `sync_run_events` + a terminal `result.reports`
+  via the service client. The logged-in browser animates the modal exactly as a real
+  run would. This REPLACES the retired `SYNC_MOCK=1` path.
+- `scripts/verify-sync-reducer.ts` — `npx tsx scripts/verify-sync-reducer.ts` runs 15
+  framework-free assertions driving `lib/sync/reducer.ts` with recorded Realtime
+  payload shapes (event projection, routing, the card state machine, terminal-result
+  → card status). Proves the wiring without a browser or the worker.
 
 ## Data
 
-No new DB tables. The panel is a thin client over:
-- The Python orchestrators — **live path:** the SSE route (`app/api/sync/stream/route.ts`) via `spawn`, streaming progress. **Fallback path:** `child_process.execFile` in `actions.ts` (`runSyncClassify` / `runSyncApply`) is still used when a stream fails before any event.
-- The Anthropic API (`lib/anthropic/client.ts` — reused `anthropic` + `JARVIS_MODEL`).
+Two DB tables (migration `supabase/migrations/20260704000000_sync_runs_and_events.sql`,
+applied to remote; both in the `supabase_realtime` publication; `types/supabase.ts`
+regenerated so `sync_runs`/`sync_run_events` are typed):
 
-### CLI contract (locked — must match `sync_*.py`)
-- **classify** stdout → `ClassifyResult`: `{ report_type, ok, gate_failures[], counts{noop,insert,update,flagged}, rows_preview[], classified_path, source, watermark }`
-- **apply** stdout → `ApplyResult`: `{ report_type, ok, applied{inserts,updates,replaced_dates}, held[], labeled, watermark_updated, errors[] }`
-- **stdout stays the single machine-JSON result object** (contract unchanged).
+- **`sync_runs`** — one row per click. `id`, `requested_by`, `status`
+  (`sync_run_status`: queued/running/succeeded/failed/partial), `started_at`,
+  `finished_at`, `result` (jsonb = `SyncRunResult`), `error`, `created_at`.
+- **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
+  (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
+  `level`, `at`.
 
-### Progress event contract (FROZEN — see `SYNC_CLI_CONTRACT.md`, owned by the backend agent)
-Each Python script flushes ONE line per event on **stderr**, prefixed by the sentinel:
-```
-##SYNC_PROGRESS {"stage":"fetch|extract|classify|apply|reconcile|finalize","pct":<0-100 int>,"label":"<plain-English activity>","detail":"<optional specifics>","level":"info|warn"}
-```
-- Types live in `types.ts`: `SYNC_PROGRESS_SENTINEL`, `SyncProgressStage`, `SyncProgressEvent`, `SyncStreamResult`.
-- **Any other stderr line** = raw technical log → SSE `log` event → the card's collapsible "Technical log".
-- **Digestibility guard** (belt-and-suspenders, in `route.ts` `parseProgressLine`): a `label` that looks like a traceback (`startsWith('Traceback')`, contains `File "`, or `length > 140`) is NOT shown as a status line — it drops to the technical log instead. `pct` is clamped to 0–100 and rounded; unknown `stage` / malformed JSON → treated as a log line.
+**RLS / grants (verified on remote):** authenticated = **SELECT only** (base GRANT +
+a `using(true)` select policy on each table); **no INSERT/UPDATE policy or grant** —
+the worker writes with the service role (bypasses RLS), and `enqueueSyncRun` uses
+`createAdminClient()` (service role) to INSERT the queued row. Proven: authenticated
+SELECT succeeds (the subscription's read path); authenticated INSERT is denied.
 
-### Run order (`useSyncRun.run`)
-1. `gsheet` first and alone (source of truth).
-2. `deliveries`, `rc_out`, `production`, `flecon` classify+apply in **parallel**.
-3. `rc_movement` audit **last** — classify only, never applied (`readOnly`).
+Also consumes the Anthropic API (`lib/anthropic/client.ts`) for adjudication +
+narration (unchanged).
+
+## Env
+
+- `SYNC_WORKER_URL` — the worker's base URL (Fly.io app in prod, `http://localhost:8080`
+  local). Unset → enqueue still works, run stays queued.
+- `SYNC_KICK_SECRET` — shared Bearer secret; MUST match the worker's `SYNC_KICK_SECRET`.
+- `SUPABASE_SERVICE_ROLE_KEY` — already present; used by `enqueueSyncRun` to INSERT the
+  run row.
+
+Documented in the root `.env.example`. The worker's own env is in `workers/sync/.env.example`.
 
 ## Key Behaviors
 
-- **One-click max-auto.** Run → all pipelines classify (per-card **live progress bar + plain-English status line** → counts) → clean rows auto-apply (`--only-clean`) → held rows land in the Held section → gate failures render the card destructive with the gate detail.
-- **Live, digestible progress.** Each phase streams `##SYNC_PROGRESS` events over SSE; the card shows a scaleX-animated bar + a normal-user status line (e.g. "Comparing against the database… · 195 already recorded"), with all raw terminal output hidden behind a collapsible "Technical log". `level:'warn'` events tint the line amber but do NOT flip the card to error state.
-- **Clean days cost ~0 model tokens.** `narrateSyncRun` returns a local string when nothing changed; the Anthropic call only happens when there's something to narrate.
-- **Held rows are advisory in v1.** The apply contract has no single-row path yet, so "Ask Claude" returns recommendations + a Copy-row action; **applying a held row stays a Claude-Code / sync-employee job.** The UI says so explicitly. Do not fake a single-row apply.
-- **Every failure is copyable.** Gate failures and errors render an inline block with the full stderr detail + a Copy button, AND fire `errorToast()` (HARD RULE — never `toast.error()` directly).
-- **Role gate (SEC pattern).** Every action calls `requirePrivileged()` (derives effective role via `getUserRole()`, respects impersonation, fails closed). The FAB + panel body are also hidden client-side for non-privileged roles.
+- **One click, then hands-off.** Enqueue → the worker does everything durably; the
+  modal is a pure viewer. Refresh / close / laptop off — the run continues.
+- **Live, digestible progress.** `sync_run_events` INSERTs drive a scaleX-animated bar
+  + a plain-English status line per card, plus a top-level `_run` line above them.
+- **Dry run.** A deliberate secondary button runs classify-only (writes nothing),
+  forwarded to the worker in the kick body as `dryRun: true`.
+- **Multi-viewer / reopen.** Any session attaches to the latest in-flight run.
+- **Clean days cost ~0 model tokens.** `narrateSyncRun` returns a local string when
+  nothing changed.
+- **Held rows are advisory in v1.** "Ask Claude" returns recommendations; applying a
+  held row stays a Claude-Code / sync-employee job.
+- **Every failure is copyable.** Gate failures + run-level failures render an inline
+  block with the full detail + Copy AND fire `errorToast()` (HARD RULE).
+- **Role gate.** `enqueueSyncRun` calls `requirePrivileged()` (effective role via
+  `getUserRole()`, respects impersonation, fails closed). The launcher + body are also
+  hidden client-side for non-privileged roles.
 
 ## Stubbed / pending
 
-- The real `sync_deliveries.py`, `sync_rc_out.py`, `sync_production.py`, `sync_flecon.py`, `audit_rc_movement.py` are being built by the sync-ictc backend agent. Until they emit `##SYNC_PROGRESS` events, the stream still works — it just shows fewer progress steps (all non-sentinel stderr flows to the technical log). Run with `SYNC_MOCK=1` in the dev server env to exercise the panel (incl. the live progress bar) end-to-end against `mock.ts`.
-- `sync_gsheet.py` exists; the other five do not yet. Both transports are isolated: the live SSE route (`app/api/sync/stream/route.ts`) and the fallback `runPhase()` in `actions.ts`, so the wiring is testable ahead of the scripts.
-- Applying held rows (single-row write) is intentionally not implemented — pending a backend contract addition.
+- The worker's **per-report extract→classify→apply workflows are M3** (see
+  `SYNC_TS_MIGRATION_PLAN.md`). Until they land, the worker (M0/M1) writes a Mail-Clerk
+  manifest as `result` (no `reports` key) and emits `_run` + the 4-writer progress
+  tracks. The reducer handles this: a terminal result with no `reports` simply settles
+  any still-spinning cards to done/error by the run status. `gsheet` and `rc_movement`
+  are not in the worker's Mail Clerk yet — their cards stay idle until M3.
+- Applying held rows (single-row write) is intentionally not implemented.
 
 ## Dependencies
 
+- `lib/supabase/client.ts` — browser client (Realtime subscription)
+- `lib/supabase/admin.ts` — `createAdminClient()` (service-role INSERT of the run row)
+- `lib/supabase/server.ts` — `createClient()` (the `requirePrivileged` auth check)
+- `lib/auth.ts` — `getUserRole()`; `types/auth.ts` — `PRIVILEGED_ROLES`
+- `lib/sync/reducer.ts` — the pure card-state reducer
 - `lib/anthropic/client.ts` — `anthropic`, `JARVIS_MODEL`
-- `lib/auth.ts` — `getUserRole()` (role gate)
-- `types/auth.ts` — `PRIVILEGED_ROLES`
 - `lib/toast.ts` — `errorToast()`
-- `lib/supabase/server.ts` — `createClient()` (auth check in `requirePrivileged` AND the SSE route's self-auth gate)
-- `components/ui/sheet.tsx`, `button.tsx`
-- `components/jarvis/JarvisProvider.tsx` — shared `open` state (the FAB toggles this panel)
-- `app/api/sync/stream/route.ts` — the live SSE progress route (Node runtime, `spawn`); consumed by `useSyncRun` via `EventSource`
+- `workers/sync/` — the durable worker (READ its README for the kick contract; do NOT
+  edit it from the app side)
 
 ## See Also
 
-- `.claude/skills/sync-ictc/SYNC_EFFICIENCY_AUDIT.md` — the audit that motivated the button (§5B-5D: what to reuse)
-- `app/(app)/jarvis/CONTEXT.md` — Jarvis (chat dormant; FAB now opens this panel)
+- `SYNC_TS_MIGRATION_PLAN.md` — the TS/DBOS migration (M4 = this frontend cutover)
+- `workers/sync/README.md` — the worker's kick contract + event/result shapes
 - `app/(app)/review-queue/CONTEXT.md` — the precedent extract→classify→approve→write pipeline

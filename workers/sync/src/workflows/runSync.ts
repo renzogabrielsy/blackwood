@@ -1,72 +1,155 @@
 /**
- * runSync.ts — the top-level "Run Sync" workflow.
+ * runSync.ts — the real top-level "Run Sync" workflow (Wave 4A, M4-worker).
  *
- * M0/M1 scope: this workflow (a) marks the sync_runs row running, (b) invokes the
- * Mail Clerk to pull all report attachments into Storage, (c) records the manifest
- * and finishes the run. The per-report extract→classify→apply child workflows are
- * M3 — they will be added here as `DBOS.startWorkflow(reportWorkflow, …)` fan-outs
- * that consume the Mail Clerk manifest from Storage.
+ * Workflow ID: "run:<runId>" (set by the kick server — a duplicate kick is a no-op).
  *
- * Because it is a DBOS workflow, a crash anywhere resumes from the last completed
- * step: if the Mail Clerk already uploaded to Storage, a restart does not re-fetch.
+ * Lifecycle & stages:
+ *   sync_runs: queued → running (started_at) → succeeded | partial | failed
+ *              (finished_at, result jsonb aggregating every report's envelope,
+ *               error text on a whole-run failure). Status writes go through the
+ *               service-role db (its own DBOS steps, so they are checkpointed).
+ *
+ *   Stage 1 — Mail Clerk (child workflow): ONE Gmail session → all report files into
+ *             Supabase Storage. gsheet is NOT an email — its download is storage-ized
+ *             inside the gsheet report (download.ts), so every report reads from a
+ *             stable source and a crash mid-run never re-hits Gmail for what's done.
+ *
+ *   Stage 2 — Reports, in the EXACT panel order (app/(app)/sync/types.ts):
+ *             gsheet FIRST and alone (source of truth) → then deliveries / rc_out /
+ *             production / flecon as PARALLEL child workflows (DBOS.startWorkflow
+ *             fan-out + Promise.allSettled) → rc_movement_audit LAST (read-only).
+ *
+ *   Each report is its OWN child workflow (reportWorkflow) with a stable workflowID
+ *   ("report:<runId>:<type>"), so DBOS checkpoints and resumes each independently.
+ *
+ * dryRun (kick body {runId, dryRun}): classify-only — no applies, no labeling, no
+ *   watermark writes (the write-blocking db proxy + no-op labeler in reportDeps.ts).
+ *   Events + the full result still flow. This proves end-to-end without writing data.
+ *
+ * FAILURE ISOLATION: a report that throws returns an ok:false envelope (reportWorkflow
+ * catches it); the run continues and its status becomes "partial". Only a failure in
+ * the orchestration itself (Mail Clerk crash, DB unreachable) fails the whole run.
  */
 import { DBOS } from "../dbos.js";
 import { mailClerkWorkflow, type MailClerkManifest } from "./mailClerk.js";
+import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./reportWorkflow.js";
 import { DbClient } from "../lib/db.js";
 import { makeEmitter } from "../lib/progress.js";
 
 export interface RunSyncParams {
   runId: string;
-  /** Gmail-date form YYYY/MM/DD for {since}. Defaults to a wide lookback if omitted. */
+  /** Classify-only proof mode — no writes. Threaded to every report. */
+  dryRun?: boolean;
+  /** Gmail-date form YYYY/MM/DD for the Mail Clerk {since}. Defaults to a wide lookback. */
   since?: string;
 }
 
 export interface RunSyncResult {
   runId: string;
+  dryRun: boolean;
   manifest: MailClerkManifest;
   reportsWithFiles: number;
+  /** Per-report classify/apply envelopes, keyed by report_type. */
+  reports: Record<string, ReportEnvelope>;
+  /** Aggregate — the run's final disposition. */
+  status: "succeeded" | "partial";
 }
+
+/** The panel's parallel writers (types.ts PARALLEL_WRITERS), run after gsheet. */
+const PARALLEL_WRITERS: RunReportType[] = ["deliveries", "rc_out", "production", "flecon"];
 
 async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   const { runId } = params;
-  // A generous default lookback so the primary queries catch anything recent; the
-  // per-report DATA watermark refinement lands in M3.
+  const dryRun = params.dryRun ?? false;
   const since = params.since ?? defaultSince();
 
-  // DB status transitions + progress are their own steps so they are checkpointed.
   await DBOS.runStep(() => markRunning(runId), { name: "markRunning" });
-  await DBOS.runStep(() => emitProgress(runId, "fetch", "Checking Gmail for new reports…", 5), {
-    name: "progress:fetchStart",
-  });
+  await DBOS.runStep(
+    () => emitProgress(runId, "fetch", dryRun ? "Starting a dry run — checking Gmail…" : "Checking Gmail for new reports…", 3),
+    { name: "progress:fetchStart" },
+  );
 
-  // Mail Clerk as a CHILD workflow — one Gmail session, uploads to Storage.
-  const manifest = await mailClerkWorkflow({ runId, since });
+  // ── Stage 1: Mail Clerk (child workflow) — one Gmail session → Storage manifest.
+  const manifest = await DBOS.startWorkflow(mailClerkWorkflow, {
+    workflowID: `mailclerk:${runId}`,
+  })({ runId, since });
+  const manifestResolved = await manifest.getResult();
 
-  const reportsWithFiles = Object.values(manifest.reports).filter(
-    (arr) => arr.length > 0
-  ).length;
-
+  const reportsWithFiles = Object.values(manifestResolved.reports).filter((a) => a.length > 0).length;
   await DBOS.runStep(
     () =>
       emitProgress(
         runId,
         "fetch",
-        reportsWithFiles > 0
-          ? `Downloaded ${reportsWithFiles} report file(s)`
-          : "Nothing new to download",
-        40
+        reportsWithFiles > 0 ? `Downloaded ${reportsWithFiles} report file(s)` : "No new email attachments",
+        30,
       ),
-    { name: "progress:fetchDone" }
+    { name: "progress:fetchDone" },
   );
 
-  const result: RunSyncResult = { runId, manifest, reportsWithFiles };
+  const reports: Record<string, ReportEnvelope> = {};
 
-  // M0/M1: no per-report apply yet — mark succeeded with the manifest as the result.
-  await DBOS.runStep(() => finishRun(runId, result), { name: "finishRun" });
+  // ── Stage 2a: gsheet FIRST and alone (the source of truth). It self-downloads.
+  const gsheetHandle = await DBOS.startWorkflow(reportWorkflow, {
+    workflowID: `report:${runId}:gsheet`,
+  })({ runId, reportType: "gsheet", manifest: manifestResolved, dryRun, since: params.since });
+  reports.gsheet = await gsheetHandle.getResult();
+
+  // ── Stage 2b: the four writers in PARALLEL (DBOS fan-out + allSettled).
+  const writerHandles = await Promise.all(
+    PARALLEL_WRITERS.map((rt) =>
+      DBOS.startWorkflow(reportWorkflow, { workflowID: `report:${runId}:${rt}` })({
+        runId,
+        reportType: rt,
+        manifest: manifestResolved,
+        dryRun,
+        since: params.since,
+      }),
+    ),
+  );
+  const settled = await Promise.allSettled(writerHandles.map((h) => h.getResult()));
+  settled.forEach((res, i) => {
+    const rt = PARALLEL_WRITERS[i];
+    if (res.status === "fulfilled") {
+      reports[rt] = res.value;
+    } else {
+      // reportWorkflow already isolates report-level throws; an allSettled reject here
+      // means the workflow machinery itself failed — record it as a failed report.
+      reports[rt] = {
+        report_type: rt,
+        ok: false,
+        counts: { noop: 0, insert: 0, update: 0, flagged: 0 },
+        gate_failures: [],
+        watermark: null,
+        error: res.reason instanceof Error ? res.reason.message : String(res.reason),
+      };
+    }
+  });
+
+  // ── Stage 2c: rc_movement_audit LAST (read-only — never writes, even on a real run).
+  const auditHandle = await DBOS.startWorkflow(reportWorkflow, {
+    workflowID: `report:${runId}:rc_movement_audit`,
+  })({ runId, reportType: "rc_movement_audit", manifest: manifestResolved, dryRun, since: params.since });
+  reports.rc_movement_audit = await auditHandle.getResult();
+
+  // ── Aggregate: any report ok:false (or carrying an error) → the run is "partial".
+  const anyFailed = Object.values(reports).some((r) => !r.ok || r.error);
+  const status: "succeeded" | "partial" = anyFailed ? "partial" : "succeeded";
+
+  const result: RunSyncResult = {
+    runId,
+    dryRun,
+    manifest: manifestResolved,
+    reportsWithFiles,
+    reports,
+    status,
+  };
+
+  await DBOS.runStep(() => finishRun(runId, status, result), { name: "finishRun" });
   return result;
 }
 
-// -- step bodies (plain async fns wrapped in DBOS.runStep) -------------------
+// ── step bodies (plain async fns wrapped in DBOS.runStep) ───────────────────
 async function markRunning(runId: string): Promise<void> {
   const db = DbClient.fromEnv();
   await db.setSyncRunStatus(runId, "running");
@@ -76,26 +159,62 @@ async function emitProgress(
   runId: string,
   stage: "fetch" | "extract" | "classify" | "apply" | "reconcile" | "finalize",
   label: string,
-  pct: number
+  pct: number,
 ): Promise<void> {
   const db = DbClient.fromEnv();
   const emit = makeEmitter(db, runId, "_run");
   await emit(stage, label, pct);
 }
 
-async function finishRun(runId: string, result: RunSyncResult): Promise<void> {
+async function finishRun(
+  runId: string,
+  status: "succeeded" | "partial",
+  result: RunSyncResult,
+): Promise<void> {
   const db = DbClient.fromEnv();
-  await db.finishSyncRun(runId, "succeeded", result as unknown as Record<string, unknown>);
+  await db.finishSyncRun(runId, status, result as unknown as Record<string, unknown>);
   const emit = makeEmitter(db, runId, "_run");
-  await emit("finalize", "Done", 100);
+  const label =
+    status === "partial"
+      ? "Done — but one or more reports need a look."
+      : result.dryRun
+        ? "Dry run complete — nothing was written."
+        : "Done";
+  await emit("finalize", label, 100, undefined, status === "partial" ? "warn" : "info");
 }
 
 function defaultSince(): string {
   // 60-day lookback in Gmail's YYYY/MM/DD form.
   const d = new Date(Date.now() - 60 * 24 * 3600 * 1000);
   return `${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(
-    d.getUTCDate()
+    d.getUTCDate(),
   ).padStart(2, "0")}`;
 }
 
-export const runSyncWorkflow = DBOS.registerWorkflow(runSyncBody, { name: "runSyncWorkflow" });
+/**
+ * Top-level failure path: if the orchestration itself throws (Mail Clerk crash, DB
+ * unreachable), mark the run failed with the error text before rethrowing so DBOS can
+ * record the terminal state. Wrapped as the registered workflow.
+ */
+async function runSyncGuarded(params: RunSyncParams): Promise<RunSyncResult> {
+  try {
+    return await runSyncBody(params);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      await DBOS.runStep(() => failRun(params.runId, message), { name: "failRun" });
+    } catch {
+      /* best-effort terminal write */
+    }
+    throw err;
+  }
+}
+
+async function failRun(runId: string, message: string): Promise<void> {
+  const db = DbClient.fromEnv();
+  await db.finishSyncRun(runId, "failed", null, message);
+  const emit = makeEmitter(db, runId, "_run");
+  await emit("finalize", "The run could not complete.", 100, message, "warn");
+}
+
+export const runSyncWorkflow = DBOS.registerWorkflow(runSyncGuarded, { name: "runSyncWorkflow" });

@@ -1,40 +1,32 @@
 'use server'
 
-import { execFile } from 'node:child_process'
-import path from 'node:path'
-import { promisify } from 'node:util'
-
 import { anthropic, JARVIS_MODEL } from '@/lib/anthropic/client'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { getUserRole } from '@/lib/auth'
 import { PRIVILEGED_ROLES } from '@/types/auth'
 
 import {
-  metaFor,
-  type ApplyResult,
-  type ClassifyResult,
   type HeldRow,
   type HeldRowRecommendation,
   type SyncReportType,
 } from './types'
-import { MOCK_APPLY, MOCK_CLASSIFY } from './mock'
-
-const execFileAsync = promisify(execFile)
 
 // ============================================================
-// Config
+// Config — durable worker kick (Wave 4B)
 // ============================================================
 
-/** Repo root — actions run from the Next.js server whose cwd is the repo root. */
-const REPO_ROOT = process.cwd()
-const SCRIPTS_DIR = '.claude/skills/sync-ictc/scripts'
-
-/** Generous timeout — the Python phase fetches Gmail + runs classify/apply. */
-const EXEC_TIMEOUT_MS = 5 * 60 * 1000
-/** 32 MB — classify JSON can be large on a big backfill. */
-const EXEC_MAX_BUFFER = 32 * 1024 * 1024
-
-const MOCK = process.env.SYNC_MOCK === '1'
+/**
+ * The durable sync worker's base URL (`workers/sync`, a small cloud host, Fly.io
+ * scale-to-zero). The kick POST wakes it. Documented in `.env.example`; when unset
+ * the enqueue still succeeds — the row stays queued and DBOS recovery starts it on
+ * the next worker wake.
+ */
+const SYNC_WORKER_URL = process.env.SYNC_WORKER_URL ?? ''
+/** Shared secret for `POST /kick` (Bearer). Set on BOTH the app and the worker. */
+const SYNC_KICK_SECRET = process.env.SYNC_KICK_SECRET ?? ''
+/** How long to wait for the kick before giving up (the row is durable regardless). */
+const KICK_TIMEOUT_MS = 5_000
 
 // ============================================================
 // Auth guard (mirrors the SEC-3 pattern in rc-in/actions.ts)
@@ -45,8 +37,10 @@ const MOCK = process.env.SYNC_MOCK === '1'
  * or adjudicate held rows. Derives the EFFECTIVE role via getUserRole() so the
  * dev-impersonation cookie is respected (an Owner "viewing as Production" is
  * denied). Fails closed — throws if unauthenticated or under-privileged.
+ *
+ * Returns the authenticated user id so the caller can stamp `requested_by`.
  */
-async function requirePrivileged(): Promise<void> {
+async function requirePrivileged(): Promise<string> {
   const supabase = await createClient()
   const {
     data: { user },
@@ -58,118 +52,124 @@ async function requirePrivileged(): Promise<void> {
   if (!PRIVILEGED_ROLES.includes(role)) {
     throw new Error('Not authorized — Run Sync is restricted to Owner / Admin / Dev.')
   }
+  return user.id
 }
 
 // ============================================================
-// child_process transport (mockable)
+// enqueueSyncRun — the durable-worker entry point (Wave 4B)
 // ============================================================
 
+export interface EnqueueSyncRunResult {
+  /** The new `sync_runs.id` — the browser subscribes to this run over Realtime. */
+  runId: string
+  /**
+   * Whether the worker acknowledged the kick (HTTP 2xx). `false` means the worker
+   * was asleep / unreachable — the run is still QUEUED and DBOS will start it on
+   * the next worker wake, so the click is never lost.
+   */
+  kicked: boolean
+  /** Human-readable note when `kicked` is false (shown as an info line, not an error). */
+  message?: string
+}
+
 /**
- * Single choke-point for spawning a sync orchestrator. Behind SYNC_MOCK it never
- * spawns anything — it returns the canned contract JSON. This is the ONE place
- * the child_process layer is isolated, so the whole panel is testable before the
- * real scripts exist.
+ * The ONLY write path the click owns now: INSERT a `sync_runs` row (status
+ * `queued`, `requested_by` = the caller) with the service role, then POST the
+ * worker's `/kick` endpoint so it wakes and runs the workflow durably.
  *
- * @throws an Error whose message includes stdout + stderr for the inline error
- *   block + Copy button (HARD RULE — never swallow the detail).
+ * Crash-proof by design:
+ *   - The row is written FIRST and is durable. Everything else (extract, classify,
+ *     apply, progress) happens in the worker and is checkpointed by DBOS.
+ *   - If the kick fails or times out (~5s), we do NOT fail the action. We return
+ *     `{ kicked: false }` with a human message; the queued row is recovered by
+ *     DBOS when the worker next wakes. The click is never lost.
+ *
+ * The service role is required because `sync_runs` is INSERT-locked for
+ * authenticated users (Phase-4 RLS: service_role writes, authenticated SELECT).
+ *
+ * @param dryRun classify-only (no writes) — forwarded to the worker in the kick body.
  */
-async function runPhase<T>(
-  reportType: SyncReportType,
-  phase: 'classify' | 'apply',
-  extraArgs: string[],
-  mockValue: T
-): Promise<T> {
-  if (MOCK) {
-    // Small delay so the UI spinners are observable in the mock path.
-    await new Promise((r) => setTimeout(r, 350))
-    return mockValue
+export async function enqueueSyncRun(dryRun = false): Promise<EnqueueSyncRunResult> {
+  const userId = await requirePrivileged()
+
+  // 1. Durable row FIRST — service role (authenticated cannot INSERT sync_runs).
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('sync_runs')
+    .insert({ requested_by: userId, status: 'queued' })
+    .select('id')
+    .single()
+
+  if (error || !data) {
+    throw new Error(
+      `Could not enqueue the sync run (writing the sync_runs row failed).\n\n${
+        error?.message ?? 'no row returned'
+      }`
+    )
   }
+  const runId = (data as { id: string }).id
 
-  const meta = metaFor(reportType)
-  const scriptPath = path.join(SCRIPTS_DIR, meta.script)
-  const args = [scriptPath, '--phase', phase, '--json', ...extraArgs]
-
-  let stdout: string
-  let stderr: string
-  try {
-    const res = await execFileAsync('python3', args, {
-      cwd: REPO_ROOT,
-      timeout: EXEC_TIMEOUT_MS,
-      maxBuffer: EXEC_MAX_BUFFER,
-    })
-    stdout = res.stdout
-    stderr = res.stderr
-  } catch (err) {
-    // execFile rejects on non-zero exit; the error carries stdout/stderr.
-    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string }
-    const detail = [
-      `python3 ${args.join(' ')}`,
-      `cwd: ${REPO_ROOT}`,
-      e.code ? `exit: ${e.code}` : null,
-      e.stdout ? `stdout:\n${e.stdout}` : null,
-      e.stderr ? `stderr:\n${e.stderr}` : null,
-      e.message ? `message: ${e.message}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-    throw new Error(`Sync ${phase} failed for ${reportType}.\n\n${detail}`)
+  // 2. Best-effort kick — the row is already durable, so a failed kick is non-fatal.
+  if (!SYNC_WORKER_URL || !SYNC_KICK_SECRET) {
+    return {
+      runId,
+      kicked: false,
+      message:
+        'Worker not configured (SYNC_WORKER_URL / SYNC_KICK_SECRET) — the run is queued and will start when the worker is available.',
+    }
   }
 
   try {
-    return JSON.parse(stdout.trim()) as T
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), KICK_TIMEOUT_MS)
+    let res: Response
+    try {
+      res = await fetch(`${SYNC_WORKER_URL.replace(/\/$/, '')}/kick`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${SYNC_KICK_SECRET}`,
+        },
+        body: JSON.stringify({ runId, dryRun }),
+        signal: controller.signal,
+        cache: 'no-store',
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      return {
+        runId,
+        kicked: false,
+        message: `Worker did not accept the kick (HTTP ${res.status}) — the run is queued and will start when the worker wakes.${
+          body ? `\n\n${body.slice(0, 500)}` : ''
+        }`,
+      }
+    }
+
+    return { runId, kicked: true }
   } catch {
-    const detail = [
-      `python3 ${args.join(' ')}`,
-      'Could not parse the script stdout as JSON.',
-      stderr ? `stderr:\n${stderr}` : null,
-      `stdout:\n${stdout}`,
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-    throw new Error(`Sync ${phase} returned malformed output for ${reportType}.\n\n${detail}`)
+    // Timeout / network error / worker asleep — the queued row survives (DBOS recovers it).
+    return {
+      runId,
+      kicked: false,
+      message:
+        'Worker asleep — the run is queued and will start when the worker wakes.',
+    }
   }
-}
-
-// ============================================================
-// Public actions
-// ============================================================
-
-/**
- * PROPOSE phase — classify a single report type. Spawns
- * `sync_<type>.py --phase classify --json` and returns the parsed contract.
- * Never writes to the DB.
- */
-export async function runSyncClassify(reportType: SyncReportType): Promise<ClassifyResult> {
-  await requirePrivileged()
-  return runPhase<ClassifyResult>(reportType, 'classify', [], MOCK_CLASSIFY[reportType])
-}
-
-/**
- * APPLY phase — deterministically apply the clean rows from a prior classify.
- * Spawns `sync_<type>.py --phase apply --input <path> --only-clean --json`.
- * Flagged/held rows are surfaced in the result's `held[]`, not written.
- *
- * The read-only auditor (rc_movement) must never be applied — guarded here.
- */
-export async function runSyncApply(
-  reportType: SyncReportType,
-  classifiedPath: string
-): Promise<ApplyResult> {
-  await requirePrivileged()
-  const meta = metaFor(reportType)
-  if (meta.readOnly) {
-    throw new Error(`${meta.label} is read-only — apply is not permitted for this report.`)
-  }
-  return runPhase<ApplyResult>(
-    reportType,
-    'apply',
-    ['--input', classifiedPath, '--only-clean'],
-    MOCK_APPLY[reportType]
-  )
 }
 
 // ============================================================
 // Adjudication + narration (Anthropic — single completion, no tool loop)
+//
+// NOTE (Wave 4B): the old child_process transport (runSyncClassify /
+// runSyncApply) and the SYNC_MOCK plumbing are RETIRED — classify/apply now run
+// in the durable worker, and progress arrives over Supabase Realtime. These two
+// actions are UNCHANGED — they are app-side Anthropic calls the modal still owns.
+// For dev testing WITHOUT the worker, insert fake sync_runs + sync_run_events
+// rows with the service client — see `scripts/dev-fake-run.md`.
 // ============================================================
 
 const ADJUDICATOR_SYSTEM = `You are the Blackwood daily-sync ADJUDICATOR.

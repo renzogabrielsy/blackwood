@@ -7,6 +7,7 @@
 - [Price gating](price-gating.md) — `canViewPrices()` in lib/auth.ts is CANONICAL; null ₱ SERVER-SIDE before payload; Production is the only denied role. [[price-gating]]
 
 ## Python → TS sync migration (`workers/sync/**`)
+- [Wave 4A runSync worker](sync-ts-wave4a-runsync-worker.md) — 2026-07-04: real runSync DBOS workflow runs all 6 ports end-to-end (gsheet→4 parallel writers→audit); write-blocking dry-run proxy (0 data rows); crash-resume PASSED; DbClient.deleteByDate added; kick `{runId,dryRun}`; env SYNC_WORKER_URL+SYNC_KICK_SECRET; LC_ALL=C for local PG. [[sync-ts-wave4a-runsync-worker]]
 - [M2 parity harness](sync-ts-parity-harness.md) — 2026-07-04: `npm run parity` golden-master gate; frozen `classifyCase` contract; 12 fixtures/6 types; oracle+canonicalizer (TS+Py mirror); PORTING_DECISIONS deviations. [[sync-ts-parity-harness]]
 - [Flecon TS port (Wave 3 #1)](flecon-ts-port.md) — 2026-07-04: 3/3 parity; sets porter idiom (deps/runReport, classifyCase returns classifier result). MERGED-CELL trap: exceljs duplicates merged-header values vs openpyxl → local sheet.ts wrapper. [[flecon-ts-port]]
 - [rc_out TS port (Wave 3 #2)](sync-ts-rc-out-port.md) — 2026-07-04: 2/2 parity, 0 deviations; TWO hard reconcile gates (P-vs-M, O-vs-M dup, strict >500/>50kg), L-019 sub-watermark FLAGGED, batch fallback resolution; classifyCase = classify_rc_out.py result dict. [[sync-ts-rc-out-port]]
