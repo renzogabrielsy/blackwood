@@ -1,0 +1,435 @@
+{
+  "_generated_by": "workers/sync/scripts/gen-norm-fixtures.ts (python3 oracle)",
+  "_note": "Expected values were produced by the ACTUAL Python norm_*/coerce_* functions. Do not hand-edit; run `npm run gen:fixtures`.",
+  "cases": {
+    "num": [
+      {
+        "v": 0.5,
+        "places": 0,
+        "expected": 0
+      },
+      {
+        "v": 1.5,
+        "places": 0,
+        "expected": 2
+      },
+      {
+        "v": 2.5,
+        "places": 0,
+        "expected": 2
+      },
+      {
+        "v": 3.5,
+        "places": 0,
+        "expected": 4
+      },
+      {
+        "v": 4.5,
+        "places": 0,
+        "expected": 4
+      },
+      {
+        "v": -0.5,
+        "places": 0,
+        "expected": 0
+      },
+      {
+        "v": -1.5,
+        "places": 0,
+        "expected": -2
+      },
+      {
+        "v": -2.5,
+        "places": 0,
+        "expected": -2
+      },
+      {
+        "v": 0.125,
+        "places": 2,
+        "expected": 0.12
+      },
+      {
+        "v": 0.135,
+        "places": 2,
+        "expected": 0.14
+      },
+      {
+        "v": 2.675,
+        "places": 2,
+        "expected": 2.67
+      },
+      {
+        "v": 1.005,
+        "places": 2,
+        "expected": 1
+      },
+      {
+        "v": 0.145,
+        "places": 2,
+        "expected": 0.14
+      },
+      {
+        "v": 2.5,
+        "places": 2,
+        "expected": 2.5
+      },
+      {
+        "v": 0.0005,
+        "places": 3,
+        "expected": 0.001
+      },
+      {
+        "v": 0.0015,
+        "places": 3,
+        "expected": 0.002
+      },
+      {
+        "v": 0.0025,
+        "places": 3,
+        "expected": 0.003
+      },
+      {
+        "v": 21789.0005,
+        "places": 3,
+        "expected": 21789
+      },
+      {
+        "v": 21789.0015,
+        "places": 3,
+        "expected": 21789.001
+      },
+      {
+        "v": 21789.0000001,
+        "places": 3,
+        "expected": 21789
+      },
+      {
+        "v": 21789.0000001,
+        "places": 0,
+        "expected": 21789
+      },
+      {
+        "v": 5820.499999999,
+        "places": 0,
+        "expected": 5820
+      },
+      {
+        "v": 5820.5,
+        "places": 0,
+        "expected": 5820
+      },
+      {
+        "v": 5820.500000001,
+        "places": 0,
+        "expected": 5821
+      },
+      {
+        "v": 5820,
+        "places": 3,
+        "expected": 5820
+      },
+      {
+        "v": 5820.123,
+        "places": 3,
+        "expected": 5820.123
+      },
+      {
+        "v": 5820.1235,
+        "places": 3,
+        "expected": 5820.123
+      },
+      {
+        "v": 5820.1234,
+        "places": 3,
+        "expected": 5820.123
+      },
+      {
+        "v": 0,
+        "places": 3,
+        "expected": 0
+      },
+      {
+        "v": 0,
+        "places": 3,
+        "expected": 0
+      },
+      {
+        "v": "21789.0000001",
+        "places": 3,
+        "expected": 21789
+      },
+      {
+        "v": "5820.5",
+        "places": 0,
+        "expected": 5820
+      },
+      {
+        "v": "  123.456  ",
+        "places": 2,
+        "expected": 123.46
+      },
+      {
+        "v": "1e3",
+        "places": 3,
+        "expected": 1000
+      },
+      {
+        "v": "0.145",
+        "places": 2,
+        "expected": 0.14
+      },
+      {
+        "v": null,
+        "places": 3,
+        "expected": null
+      },
+      {
+        "v": "",
+        "places": 3,
+        "expected": null
+      },
+      {
+        "v": "   ",
+        "places": 3,
+        "expected": null
+      },
+      {
+        "v": "abc",
+        "places": 3,
+        "expected": null
+      },
+      {
+        "v": "12.3.4",
+        "places": 3,
+        "expected": null
+      },
+      {
+        "v": 999999.9995,
+        "places": 3,
+        "expected": 1000000
+      },
+      {
+        "v": 100.055,
+        "places": 2,
+        "expected": 100.06
+      },
+      {
+        "v": 100.045,
+        "places": 2,
+        "expected": 100.05
+      }
+    ],
+    "int": [
+      {
+        "v": 123,
+        "expected_trunc": 123,
+        "expected_round": 123
+      },
+      {
+        "v": 123,
+        "expected_trunc": 123,
+        "expected_round": 123
+      },
+      {
+        "v": 123.4,
+        "expected_trunc": 123,
+        "expected_round": 123
+      },
+      {
+        "v": 123.5,
+        "expected_trunc": 123,
+        "expected_round": 124
+      },
+      {
+        "v": 123.6,
+        "expected_trunc": 123,
+        "expected_round": 124
+      },
+      {
+        "v": 122.5,
+        "expected_trunc": 122,
+        "expected_round": 122
+      },
+      {
+        "v": 124.5,
+        "expected_trunc": 124,
+        "expected_round": 124
+      },
+      {
+        "v": -1.9,
+        "expected_trunc": -1,
+        "expected_round": -2
+      },
+      {
+        "v": -2.5,
+        "expected_trunc": -2,
+        "expected_round": -2
+      },
+      {
+        "v": "123",
+        "expected_trunc": 123,
+        "expected_round": 123
+      },
+      {
+        "v": "123.0",
+        "expected_trunc": 123,
+        "expected_round": 123
+      },
+      {
+        "v": "123.9",
+        "expected_trunc": 123,
+        "expected_round": 124
+      },
+      {
+        "v": "  45.5  ",
+        "expected_trunc": 45,
+        "expected_round": 46
+      },
+      {
+        "v": 0,
+        "expected_trunc": 0,
+        "expected_round": 0
+      },
+      {
+        "v": 0,
+        "expected_trunc": 0,
+        "expected_round": 0
+      },
+      {
+        "v": null,
+        "expected_trunc": null,
+        "expected_round": null
+      },
+      {
+        "v": "",
+        "expected_trunc": null,
+        "expected_round": null
+      },
+      {
+        "v": "abc",
+        "expected_trunc": null,
+        "expected_round": null
+      },
+      {
+        "v": 2.5,
+        "expected_trunc": 2,
+        "expected_round": 2
+      },
+      {
+        "v": 3.5,
+        "expected_trunc": 3,
+        "expected_round": 4
+      }
+    ],
+    "str": [
+      {
+        "v": "  ABC ",
+        "expected": "abc"
+      },
+      {
+        "v": "abc",
+        "expected": "abc"
+      },
+      {
+        "v": "",
+        "expected": null
+      },
+      {
+        "v": "   ",
+        "expected": null
+      },
+      {
+        "v": null,
+        "expected": null
+      },
+      {
+        "v": "MiXeD Case",
+        "expected": "mixed case"
+      },
+      {
+        "v": "  Trailing  ",
+        "expected": "trailing"
+      },
+      {
+        "v": "B-3A",
+        "expected": "b-3a"
+      }
+    ],
+    "block": [
+      {
+        "v": "b-3a",
+        "expected": "B-3A"
+      },
+      {
+        "v": "  d-13d ",
+        "expected": "D-13D"
+      },
+      {
+        "v": "",
+        "expected": null
+      },
+      {
+        "v": null,
+        "expected": null
+      },
+      {
+        "v": "A-1A",
+        "expected": "A-1A"
+      },
+      {
+        "v": "c-15a",
+        "expected": "C-15A"
+      }
+    ],
+    "date": [
+      {
+        "v": "2026-07-02",
+        "expected": "2026-07-02"
+      },
+      {
+        "v": "07/02/2026",
+        "expected": "2026-07-02"
+      },
+      {
+        "v": "2/7/2026",
+        "expected": "2026-02-07"
+      },
+      {
+        "v": "2026/07/02",
+        "expected": "2026-07-02"
+      },
+      {
+        "v": "07-02-2026",
+        "expected": "2026-07-02"
+      },
+      {
+        "v": "2026-13-01",
+        "expected": null
+      },
+      {
+        "v": "02/30/2026",
+        "expected": null
+      },
+      {
+        "v": "",
+        "expected": null
+      },
+      {
+        "v": null,
+        "expected": null
+      },
+      {
+        "v": "garbage",
+        "expected": null
+      },
+      {
+        "v": "2026-2-3",
+        "expected": "2026-02-03"
+      },
+      {
+        "v": "1/1/2020",
+        "expected": "2020-01-01"
+      }
+    ]
+  }
+}
