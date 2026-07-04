@@ -25,6 +25,17 @@ const OP_STYLES: Record<
     label: "DELETE",
     cls: "bg-red-500/12 text-red-700 dark:text-red-300",
   },
+  // Whole-day replace (flecon REPLACE-BY-DATE audit rows, added 2026-07-03).
+  REPLACE: {
+    label: "REPLACE",
+    cls: "bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  },
+};
+
+// Unknown/future operations must never crash the digest — style them neutrally.
+const OP_FALLBACK = {
+  label: "CHANGE",
+  cls: "bg-muted text-muted-foreground",
 };
 
 function employeeLabel(key: string): string {
@@ -48,7 +59,7 @@ const NOTE_TRUNCATE = 120;
 
 function ActivityRow({ item }: { item: ActivityItem }) {
   const [expanded, setExpanded] = React.useState(false);
-  const op = OP_STYLES[item.operation];
+  const op = OP_STYLES[item.operation] ?? OP_FALLBACK;
   const longNote = item.note.length > NOTE_TRUNCATE;
   const noteText =
     longNote && !expanded ? item.note.slice(0, NOTE_TRUNCATE) + "…" : item.note;

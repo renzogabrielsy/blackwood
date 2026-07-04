@@ -60,6 +60,7 @@ DELIVERIES_COLS = [
 
 CODIFIED_RULES = [
     "rounding-null-zero-noop", "L-001", "L-004", "L-006", "L-008", "L-021",
+    "L-033-cross-batch-duplicate", "L-033-piled-in-remark-hint",
     "batch_code-fallback-prefixes", "never-auto-create-batch",
 ]
 
@@ -155,9 +156,80 @@ def phase_classify(args) -> int:
         k = (str(r.get("transaction_date"))[:10], r.get("batch_code"), norm_num(r.get("weight_kg"), 3))
         db_by_dbw.setdefault(k, []).append(r)
 
-    inserts, flagged = [], []
+    # L-033 index: the same physical truckload regardless of batch NAME.
+    # Month-boundary piles ("PILED IN JUNE BLOCK 9" on a July date) make the extractor
+    # derive a phantom current-month batch code (JULY-26-BLK9) for a truckload the DB
+    # already holds under the prior month's code (JUNE-26-BLK9). Batch names lie across
+    # month boundaries; (date, truck_plate, weight) doesn't.
+    def _norm_truck(v) -> str:
+        return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+
+    db_by_dtw: dict[tuple, list[dict]] = {}
+    for r in db_rows:
+        k = (str(r.get("transaction_date"))[:10], _norm_truck(r.get("truck_plate")), norm_num(r.get("weight_kg"), 3))
+        db_by_dtw.setdefault(k, []).append(r)
+
+    import re as _re
+    _MONTHS = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+               "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12}
+    _CODE_VARIANTS = {1: ["JAN"], 2: ["FEB"], 3: ["MARCH", "MAR"], 4: ["APRIL", "APR"],
+                      5: ["MAY"], 6: ["JUNE", "JUN"], 7: ["JULY", "JUL"], 8: ["AUG"],
+                      9: ["SEPT", "SEP"], 10: ["OCT"], 11: ["NOV"], 12: ["DEC"]}
+
+    def _piled_in_hint(row: dict) -> str | None:
+        """L-033: 'PILED IN <MONTH> BLOCK <N>' remark names the REAL batch. Return an
+        EXISTING batch_code it resolves to, else None (never invent a batch)."""
+        m = _re.search(r"PILED\s+IN\s+([A-Z]+)\.?\s+BLOCK\s*(\d+)", str(row.get("remarks") or ""), _re.I)
+        if not m:
+            return None
+        word, blk = m.group(1).upper(), int(m.group(2))
+        mnum = next((n for p, n in _MONTHS.items() if word.startswith(p)), None)
+        if not mnum:
+            return None
+        txn = str(row.get("transaction_date") or "")[:10]
+        try:
+            ty, tm = int(txn[:4]), int(txn[5:7])
+        except ValueError:
+            return None
+        year = ty - 1 if mnum > tm else ty  # Dec pile receiving a Jan truck crosses the year
+        for v in _CODE_VARIANTS[mnum]:
+            cand = f"{v}-{str(year)[2:]}-BLK{blk}"
+            if db.select_one("batches", {"batch_code": f"eq.{cand}"}, columns="batch_code"):
+                return cand
+        return None
+
+    inserts, flagged, dup_noops = [], [], []
     for item in classified.get("new", []):
         r = item["row"]
+
+        # L-033a — cross-batch duplicate: same (date, truck, weight) already in the DB.
+        kd = (str(r.get("transaction_date"))[:10], _norm_truck(r.get("truck_plate")), norm_num(r.get("weight_kg"), 3))
+        dups = db_by_dtw.get(kd, []) if _norm_truck(r.get("truck_plate")) else []
+        same_loc = [d for d in dups if norm_block_loc(d.get("block_loc")) == norm_block_loc(r.get("block_loc"))]
+        if same_loc:
+            db_bc = same_loc[0].get("batch_code")
+            if db_bc != r.get("batch_code"):
+                dup_noops.append({"index": item.get("index"),
+                                  "natural_key": f"{r.get('transaction_date')}|{r.get('truck_plate')}|{r.get('weight_kg')}",
+                                  "note": f"L-033: same truckload already recorded as {db_bc} — "
+                                          f"extractor-derived name {r.get('batch_code')} is a month-boundary phantom."})
+                continue
+            # same batch_code + same everything would have classified NOOP upstream; fall through.
+        elif dups:
+            flagged.append({"kind": "L033_cross_batch_loc_mismatch", "index": item.get("index"), "row": r,
+                            "reason": f"Same date/truck/weight exists as {dups[0].get('batch_code')} at "
+                                      f"block_loc={dups[0].get('block_loc')} (report says {r.get('block_loc')}) — "
+                                      f"same truckload under a different name AND location; needs a human.",
+                            "decision": "skip"})
+            continue
+
+        # L-033b — remark hint: re-map to the EXISTING pile batch it names.
+        hint = _piled_in_hint(r)
+        if hint and hint != r.get("batch_code"):
+            item.setdefault("notes", []).append(
+                f"L-033: batch re-mapped {r.get('batch_code')} → {hint} per remark 'PILED IN … BLOCK …'")
+            r["batch_code"] = hint
+
         k = (str(r.get("transaction_date"))[:10], r.get("batch_code"), norm_num(r.get("weight_kg"), 3))
         collision = [d for d in db_by_dbw.get(k, [])
                      if norm_block_loc(d.get("block_loc")) != norm_block_loc(r.get("block_loc"))]
@@ -191,9 +263,10 @@ def phase_classify(args) -> int:
                  "summary": f"{i['row'].get('weight_kg')}kg {i['row'].get('supplier')}"} for i in inserts]
                + [{"action": "UPDATE", "natural_key": c.get("db_id"),
                    "summary": f"{c.get('date')} diff={[d['field'] for d in c.get('diff', [])]}"} for c in classified.get("changed", [])]
-               + [{"action": "FLAGGED", "natural_key": f.get("index"), "summary": f.get("reason")} for f in flagged])
+               + [{"action": "FLAGGED", "natural_key": f.get("index"), "summary": f.get("reason")} for f in flagged]
+               + [{"action": "NOOP_DUP", "natural_key": d["natural_key"], "summary": d["note"]} for d in dup_noops])
 
-    _noop = classified["summary"]["noop_count"]
+    _noop = classified["summary"]["noop_count"] + len(dup_noops)
     _flag = len(flagged) + len(classified.get("malformed", []))
     oc.progress("classify",
                 f"{_noop} already recorded · {len(inserts)} new · {len(classified.get('changed', []))} changed"
@@ -203,7 +276,7 @@ def phase_classify(args) -> int:
 
     oc.emit(oc.classify_envelope(
         report_type=REPORT_TYPE, ok=True, gate_failures=[],
-        counts={"noop": classified["summary"]["noop_count"], "insert": len(inserts),
+        counts={"noop": classified["summary"]["noop_count"] + len(dup_noops), "insert": len(inserts),
                 "update": len(classified.get("changed", [])),
                 "flagged": len(flagged) + len(classified.get("malformed", []))},
         rows_preview=preview, classified_path=str(compact_path),

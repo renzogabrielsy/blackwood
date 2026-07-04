@@ -190,7 +190,7 @@ export interface ActivityItem {
   /** ISO timestamp (performed_at) */
   at: string;
   table: string;
-  operation: "INSERT" | "UPDATE" | "DELETE";
+  operation: "INSERT" | "UPDATE" | "DELETE" | "REPLACE";
   /** the human-readable audit comment */
   note: string;
   /** parsed employee name, "other" if unknown */

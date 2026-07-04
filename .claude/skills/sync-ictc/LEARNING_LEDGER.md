@@ -267,4 +267,30 @@ Surfaced by the first real in-app "Run Sync" button click. Three distinct root c
 
 ---
 
+## L-033 — Month-boundary piles create PHANTOM batch codes; (date, truck, weight) is the truth (2026-07-04)
+
+Surfaced by the A-19C `location_occupied` held row (2026-07-03 button run). The Jul-2 truck
+(MAN 3625, 21,789 kg) was **piled onto June Block 9** — the operator's remark says
+"PILED IN JUNE BLOCK 9" and the Sheet recorded it under `JUNE-26-BLK9` (already in the DB).
+The EMAIL extractor derives batch codes from the delivery's MONTH, so the July date produced a
+phantom `JULY-26-BLK9`, which then tried to occupy A-19C → collision. **Batch names lie across
+month boundaries; (date, truck_plate, weight_kg) doesn't.** Nothing was wrong with the data and
+nothing needed closing — JUNE-26-BLK9 is active and still receiving.
+
+Codified in `sync_deliveries.py` phase_classify (verified by replaying the real incident):
+- **L-033a — cross-batch duplicate → NOOP**: a NEW row matching an existing DB delivery on
+  (date, normalized truck_plate, weight_kg) at the SAME block_loc but a DIFFERENT batch_code is
+  the same truckload under a phantom name → demoted to `NOOP_DUP` ("already recorded as X"),
+  never inserted, never flagged. Same match at a DIFFERENT location → FLAGGED for a human.
+- **L-033b — "PILED IN \<MONTH\> BLOCK \<N\>" remark = authoritative batch hint**: resolve the
+  named month/block to an EXISTING batch (month-name variants tried, Dec→Jan year rollover
+  handled) and re-map the row's batch_code to it before insert. Only re-maps to a batch that
+  already exists — never invents one.
+
+Also fixed the same day: the digest activity feed crashed on the new `REPLACE` audit operation
+(`op is undefined`) — REPLACE styled + an OP_FALLBACK so unknown future operations render
+neutrally instead of crashing the home page.
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*
