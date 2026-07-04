@@ -8,6 +8,8 @@
 
 ## Python → TS sync migration (`workers/sync/**`)
 - [M2 parity harness](sync-ts-parity-harness.md) — 2026-07-04: `npm run parity` golden-master gate; frozen `classifyCase` contract; 12 fixtures/6 types; oracle+canonicalizer (TS+Py mirror); PORTING_DECISIONS deviations. [[sync-ts-parity-harness]]
+- [Flecon TS port (Wave 3 #1)](flecon-ts-port.md) — 2026-07-04: 3/3 parity; sets porter idiom (deps/runReport, classifyCase returns classifier result). MERGED-CELL trap: exceljs duplicates merged-header values vs openpyxl → local sheet.ts wrapper. [[flecon-ts-port]]
+- [rc_out TS port (Wave 3 #2)](sync-ts-rc-out-port.md) — 2026-07-04: 2/2 parity, 0 deviations; TWO hard reconcile gates (P-vs-M, O-vs-M dup, strict >500/>50kg), L-019 sub-watermark FLAGGED, batch fallback resolution; classifyCase = classify_rc_out.py result dict. [[sync-ts-rc-out-port]]
 
 ## Sync orchestrators (ICTC ingestion, `.claude/skills/sync-ictc/**`)
 - [Progress events + Gmail retry](sync-progress-and-gmail-retry.md) — 2026-07-03: `oc.progress()` streams `##SYNC_PROGRESS` on stderr (stdout stays pure JSON) + Gmail transient-EOF retry/jitter across all 6 orchestrators. [[sync-progress-and-gmail-retry]]
