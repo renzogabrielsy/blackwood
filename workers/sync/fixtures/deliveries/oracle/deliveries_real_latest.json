@@ -1,0 +1,59 @@
+{
+  "changed": [],
+  "dup_noops": [
+    {
+      "index": " num:9",
+      "natural_key": "2026-07-02|MAN 3625|21789.0",
+      "note": "L-033: same truckload already recorded as JUNE-26-BLK9 — extractor-derived name JULY-26-BLK9 is a month-boundary phantom."
+    }
+  ],
+  "flagged": [],
+  "malformed": [],
+  "new": [],
+  "noop": [
+    {
+      "index": " num:7",
+      "natural_key": [
+        "2026-07-01",
+        "JUNE-26-BLK10",
+        "D-19C",
+        " num:10870"
+      ]
+    },
+    {
+      "index": " num:6",
+      "natural_key": [
+        "2026-07-01",
+        "JUNE-26-BLK10",
+        "D-19C",
+        " num:20640"
+      ]
+    },
+    {
+      "index": " num:8",
+      "natural_key": [
+        "2026-07-02",
+        "JULY-26-BLK1",
+        "D-19B",
+        " num:12725"
+      ]
+    },
+    {
+      "index": " num:10",
+      "natural_key": [
+        "2026-07-02",
+        "JULY-26-BLK2",
+        "D-13D",
+        " num:23930"
+      ]
+    }
+  ],
+  "summary": {
+    "changed_count": " num:0",
+    "db_rows_in_window": " num:6",
+    "extracted_total": " num:5",
+    "malformed_count": " num:0",
+    "new_count": " num:1",
+    "noop_count": " num:4"
+  }
+}

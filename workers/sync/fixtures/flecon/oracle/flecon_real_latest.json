@@ -1,0 +1,318 @@
+{
+  "balance_crosscheck": {
+    "available": true,
+    "note": "INFORMATIONAL only — never gates writes. Drift = DB view balance - sheet snapshot.",
+    "rows": [
+      {
+        "code": "BEIGE_BAG_SUNDRY",
+        "db_view_balance": " num:14",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:14"
+      },
+      {
+        "code": "BW_SUNDRY_OLD_STOCK",
+        "db_view_balance": " num:2",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:2"
+      },
+      {
+        "code": "DAMAGED_BAGS",
+        "db_view_balance": " num:2",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:2"
+      },
+      {
+        "code": "ECOPACK_BEIGE",
+        "db_view_balance": " num:0",
+        "drift": " num:-100",
+        "sheet_snapshot_balance": " num:100"
+      },
+      {
+        "code": "FG_ALL_BLACK",
+        "db_view_balance": " num:81",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:81"
+      },
+      {
+        "code": "FG_BLACK_SLING_6X50",
+        "db_view_balance": " num:54",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:54"
+      },
+      {
+        "code": "FUTAMURA_550",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KOREA_500",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KOREA_550_BEIGE",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KOREA_550_POWDER",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KOREA_WHITE",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KOREA_WHITE_SUNDRY",
+        "db_view_balance": " num:491",
+        "drift": " num:-4",
+        "sheet_snapshot_balance": " num:495"
+      },
+      {
+        "code": "KURARAY_590",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KURARAY_590_NEW",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "KURARAY_RETURN",
+        "db_view_balance": " num:7",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:7"
+      },
+      {
+        "code": "MAEHATA_580",
+        "db_view_balance": " num:507",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:507"
+      },
+      {
+        "code": "OLD_STOCKS",
+        "db_view_balance": " num:30",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:30"
+      },
+      {
+        "code": "PLASTIC_LINER",
+        "db_view_balance": " num:600",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:600"
+      },
+      {
+        "code": "SMALL_MOUTH_LOCAL_WHITE",
+        "db_view_balance": " num:258",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:258"
+      },
+      {
+        "code": "TUNNER_BAG",
+        "db_view_balance": " num:500",
+        "drift": " num:0",
+        "sheet_snapshot_balance": " num:500"
+      },
+      {
+        "code": "UNUSABLE",
+        "db_view_balance": " num:0",
+        "drift": null,
+        "sheet_snapshot_balance": null
+      },
+      {
+        "code": "ZAMBOANGA_BAG",
+        "db_view_balance": " num:-83",
+        "drift": " num:-127",
+        "sheet_snapshot_balance": " num:44"
+      }
+    ]
+  },
+  "code_to_id": {
+    "BEIGE_BAG_SUNDRY": "61c8573a-8800-486c-b370-2bfe849497a8",
+    "BW_SUNDRY_OLD_STOCK": "ac038f64-9aef-4054-8566-b40d96c95de8",
+    "DAMAGED_BAGS": "f395864e-5c7b-4091-bc9e-671cd698561e",
+    "ECOPACK_BEIGE": "ee0ef3c7-afea-4ab9-b0e0-73e4256437a0",
+    "FG_ALL_BLACK": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+    "FG_BLACK_SLING_6X50": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+    "FUTAMURA_550": "98b43bd8-b69b-42db-87e1-f2d7dc2e6c06",
+    "KOREA_500": "b425153b-f3e8-4fcb-a8d4-7874c98f0288",
+    "KOREA_550_BEIGE": "78909301-2d83-457f-85f0-dd18016c9ffd",
+    "KOREA_550_POWDER": "b626b02e-6b6f-4af5-8d93-e96deb6cf499",
+    "KOREA_WHITE": "22c46041-34e5-498e-b5b8-e460735959ff",
+    "KOREA_WHITE_SUNDRY": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+    "KURARAY_590": "ef675d5f-3383-419b-afd6-f4b4aa4415c7",
+    "KURARAY_590_NEW": "fab90e6d-07fb-4a1d-b3a1-05341b7d5a01",
+    "KURARAY_RETURN": "d57aec2e-1611-403e-994c-dee7196b8b70",
+    "MAEHATA_580": "2af637e1-0a31-4f0e-833c-02aebde454a0",
+    "OLD_STOCKS": "e6a71a15-0c7a-4c45-b20c-5c391286a3c3",
+    "PLASTIC_LINER": "ad337cca-6560-4e38-a041-0f89f59ed11d",
+    "SMALL_MOUTH_LOCAL_WHITE": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+    "TUNNER_BAG": "de90c799-c01c-4cc2-be18-f1bcb7bf0335",
+    "UNUSABLE": "36e64280-f3d1-4f70-90f7-a6eb9eb65f87",
+    "ZAMBOANGA_BAG": "eaa5c491-df26-416e-8fea-fb6204afc946"
+  },
+  "column_flags": {
+    "column_map": [
+      {
+        "column_letter": "C",
+        "matched_code": "KURARAY_590",
+        "signature": "590 kls(Kuraray)",
+        "sort_order": " num:1"
+      },
+      {
+        "column_letter": "D",
+        "matched_code": "UNUSABLE",
+        "signature": "Un-usable bag",
+        "sort_order": " num:2"
+      },
+      {
+        "column_letter": "E",
+        "matched_code": "FUTAMURA_550",
+        "signature": "550 kls(FUTAMURA)",
+        "sort_order": " num:3"
+      },
+      {
+        "column_letter": "F",
+        "matched_code": "KOREA_550_BEIGE",
+        "signature": "550 KLS(KOREA) BEIGE",
+        "sort_order": " num:4"
+      },
+      {
+        "column_letter": "G",
+        "matched_code": "KOREA_500",
+        "signature": "500 kls(KOREA)",
+        "sort_order": " num:5"
+      },
+      {
+        "column_letter": "H",
+        "matched_code": "KURARAY_590_NEW",
+        "signature": "590 kls(Kuraray)brandnew",
+        "sort_order": " num:6"
+      },
+      {
+        "column_letter": "I",
+        "matched_code": "KURARAY_RETURN",
+        "signature": "kuraray(Re-turn bag)",
+        "sort_order": " num:7"
+      },
+      {
+        "column_letter": "J",
+        "matched_code": "PLASTIC_LINER",
+        "signature": "PLASTIC LINER 78x130x15 mm",
+        "sort_order": " num:8"
+      },
+      {
+        "column_letter": "K",
+        "matched_code": "ECOPACK_BEIGE",
+        "signature": "ECOPACK BEIGE 90x90x125",
+        "sort_order": " num:9"
+      },
+      {
+        "column_letter": "L",
+        "matched_code": "TUNNER_BAG",
+        "signature": "UN MARKINGS ECOPACK BEIGE TUNNER BAG",
+        "sort_order": " num:10"
+      },
+      {
+        "column_letter": "M",
+        "matched_code": "FG_BLACK_SLING_6X50",
+        "signature": "6X50 FG w/ Black Sling",
+        "sort_order": " num:11"
+      },
+      {
+        "column_letter": "N",
+        "matched_code": "FG_ALL_BLACK",
+        "signature": "FG ALL BLACK",
+        "sort_order": " num:12"
+      },
+      {
+        "column_letter": "O",
+        "matched_code": "KOREA_WHITE",
+        "signature": "KOREA (WHITE)",
+        "sort_order": " num:13"
+      },
+      {
+        "column_letter": "P",
+        "matched_code": "MAEHATA_580",
+        "signature": "8X50 580 KLS (MAEHATA)",
+        "sort_order": " num:14"
+      },
+      {
+        "column_letter": "Q",
+        "matched_code": "SMALL_MOUTH_LOCAL_WHITE",
+        "signature": "SMALL MOUTH LOCAL (WHITE)",
+        "sort_order": " num:15"
+      },
+      {
+        "column_letter": "R",
+        "matched_code": "KOREA_WHITE_SUNDRY",
+        "signature": "KOREA WHITE SUNDRY BIG OPENING",
+        "sort_order": " num:16"
+      },
+      {
+        "column_letter": "S",
+        "matched_code": "KOREA_550_POWDER",
+        "signature": "550(KOREA)Biege & white POWDER",
+        "sort_order": " num:17"
+      },
+      {
+        "column_letter": "T",
+        "matched_code": "BEIGE_BAG_SUNDRY",
+        "signature": "BEIGE BAG SUNDRY",
+        "sort_order": " num:18"
+      },
+      {
+        "column_letter": "U",
+        "matched_code": "BW_SUNDRY_OLD_STOCK",
+        "signature": "BLACK/WHITE SUNDRY OLD STOCK",
+        "sort_order": " num:19"
+      },
+      {
+        "column_letter": "V",
+        "matched_code": "ZAMBOANGA_BAG",
+        "signature": "ZAMBOANGA BAG",
+        "sort_order": " num:20"
+      },
+      {
+        "column_letter": "W",
+        "matched_code": "OLD_STOCKS",
+        "signature": "from OLD STOCKS",
+        "sort_order": " num:21"
+      },
+      {
+        "column_letter": "X",
+        "matched_code": "DAMAGED_BAGS",
+        "signature": "DAMAGED BAGS",
+        "sort_order": " num:22"
+      }
+    ],
+    "flagged": false,
+    "missing_columns": [],
+    "note": "FLAGGED, informational — these do NOT block the movements that mapped. unmapped_columns = candidate NEW bag type(s) to register in flecon_bag_types; missing_columns = registry code(s) with no column this run (removed/renamed?). The agent must surface these for the user; never auto-create a bag type.",
+    "unmapped_columns": []
+  },
+  "per_date": [],
+  "since": "2026-01-01",
+  "summary": {
+    "column_map_size": " num:22",
+    "date_changed_days": " num:0",
+    "db_movements_in_window": " num:484",
+    "duplicate_noop_days": " num:149",
+    "missing_columns": " num:0",
+    "new_days": " num:0",
+    "sheet_movements_in_window": " num:484",
+    "total_days_in_window": " num:149",
+    "unmapped_columns": " num:0"
+  },
+  "table": "flecon_bag_movements"
+}

@@ -6,6 +6,9 @@
 - [Schema / triggers / RLS](schema-triggers-rls.md) — batch_status trigger semantics + priority, RLS `TO authenticated`+`(true)` convention, blocking constraints, PostgREST 1000-row cap, CLI/type-regen workflow. [[schema-triggers-rls]]
 - [Price gating](price-gating.md) — `canViewPrices()` in lib/auth.ts is CANONICAL; null ₱ SERVER-SIDE before payload; Production is the only denied role. [[price-gating]]
 
+## Python → TS sync migration (`workers/sync/**`)
+- [M2 parity harness](sync-ts-parity-harness.md) — 2026-07-04: `npm run parity` golden-master gate; frozen `classifyCase` contract; 12 fixtures/6 types; oracle+canonicalizer (TS+Py mirror); PORTING_DECISIONS deviations. [[sync-ts-parity-harness]]
+
 ## Sync orchestrators (ICTC ingestion, `.claude/skills/sync-ictc/**`)
 - [Progress events + Gmail retry](sync-progress-and-gmail-retry.md) — 2026-07-03: `oc.progress()` streams `##SYNC_PROGRESS` on stderr (stdout stays pure JSON) + Gmail transient-EOF retry/jitter across all 6 orchestrators. [[sync-progress-and-gmail-retry]]
 - [Run Sync orchestrators](sync-orchestrators.md) — 2026-07-03: 5 two-phase orchestrators + `write_ingestion_audit` RPC (L-009 fix), SYNC_CLI_CONTRACT, ingestion_watermarks. [[sync-orchestrators]]

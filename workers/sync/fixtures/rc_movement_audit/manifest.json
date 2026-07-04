@@ -1,0 +1,14 @@
+{
+  "report_type": "rc_movement_audit",
+  "cases": [
+    {
+      "id": "rcm_real_latest",
+      "kind": "real",
+      "covers": ["reconcile-drift-math", "L-022-cross-month-summing", "synthetic-proposed-from-rc_out-sums", "read-only-no-apply"],
+      "workbooks": { "movement": "workbooks/rcm_real_latest.xlsx" },
+      "db_window": "db_window/rcm_real_latest.json",
+      "opts": { "since": "2025-06-04" },
+      "note": "Real RAW CHARCOAL MOVEMENT 2026 workbook reconciled against the rc_out daily-sums snapshot via the synthetic-proposed trick. Read-only; oracle = {reconcile, severity, ok}."
+    }
+  ]
+}

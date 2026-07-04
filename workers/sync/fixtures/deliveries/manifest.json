@@ -1,0 +1,42 @@
+{
+  "report_type": "deliveries",
+  "cases": [
+    {
+      "id": "deliveries_real_latest",
+      "kind": "real",
+      "covers": [
+        "natural-key-classify",
+        "L-021-additive-fields",
+        "batch-code-translation",
+        "NOOP-demotion"
+      ],
+      "workbooks": {
+        "primary": "workbooks/deliveries_real_latest.xlsx"
+      },
+      "db_window": "db_window/deliveries_real_latest.json",
+      "opts": {
+        "since": "2026-06-27"
+      },
+      "note": "Real RC DELIVERIES 2026 operator workbook, tail-scoped to the last window, classified against the real deliveries snapshot. No Czarina enrichment (un-enriched cost_basis path, L-008)."
+    },
+    {
+      "id": "deliveries_l033",
+      "kind": "synthetic",
+      "covers": [
+        "L-033a-cross-batch-dup-noop",
+        "L-033b-remark-remap",
+        "date-carry-forward",
+        "off-format-block_loc-warning",
+        "never-auto-create-batch"
+      ],
+      "workbooks": {
+        "primary": "workbooks/deliveries_l033.xlsx"
+      },
+      "db_window": "db_window/deliveries_l033.json",
+      "opts": {
+        "since": "2026-07-01"
+      },
+      "note": "The named A-19C L-033 replay: a July-dated A-19C truckload the DB already holds under JUNE-26-BLK9 (L-033a dup_noop), a second truck at A-19C whose 'PILED IN JUNE BLOCK 9' remark re-maps its phantom JULY code to the existing JUNE batch (L-033b), plus a date-carry-forward gap."
+    }
+  ]
+}

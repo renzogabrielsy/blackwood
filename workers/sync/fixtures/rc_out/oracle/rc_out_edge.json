@@ -1,0 +1,109 @@
+{
+  "changed": [],
+  "flagged": [
+    {
+      "index": " num:4",
+      "reason": "sub-watermark NEW: transaction_date 2025-07-04 <= watermark 2026-07-10 but no DB natural-key match. A settled date must not be inserted (suspected duplicate / incomplete compare-set). Resolve manually: confirm it is truly missing before any write.",
+      "row": {
+        "_source_row": " num:4",
+        "_source_sheet": "JULY 4",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JULY-26-BLK9",
+        "batch_code_resolved": "JULY-26-BLK9",
+        "batch_id": "bid-blk9",
+        "block_date": "2026-07-01",
+        "block_loc": "C-6A",
+        "block_no": " num:9",
+        "confidence": " num:1",
+        "day_total_kg": " num:1414",
+        "destination": "MAIN",
+        "end_bal_kg": " num:0",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": null,
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:84"
+        ],
+        "pallets_gross": [
+          " num:1498"
+        ],
+        "pallets_net": [
+          " num:1414"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:9999",
+        "supplier": null,
+        "transaction_date": "2025-07-04",
+        "warnings": [],
+        "weight_kg": " num:1414",
+        "whse_label": "C-6A"
+      }
+    }
+  ],
+  "malformed": [],
+  "new": [],
+  "noop": [],
+  "summary": {
+    "changed_count": " num:0",
+    "db_date_span": {
+      "max": null,
+      "min": null
+    },
+    "db_rows_in_window": " num:0",
+    "extract_date_span": {
+      "max": "2025-07-04",
+      "min": "2025-07-04"
+    },
+    "extracted_total": " num:2",
+    "flagged_count": " num:1",
+    "malformed_count": " num:0",
+    "new_count": " num:0",
+    "noop_count": " num:0",
+    "unmapped_count": " num:1",
+    "watermark": "2026-07-10"
+  },
+  "unmapped": [
+    {
+      "index": " num:12",
+      "reason": "No batch_id found for primary='JULY-26-BLK99' or fallbacks=[]",
+      "row": {
+        "_source_row": " num:12",
+        "_source_sheet": "JULY 4",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JULY-26-BLK99",
+        "block_date": "2026-07-01",
+        "block_loc": "A-5B",
+        "block_no": " num:99",
+        "confidence": " num:1",
+        "day_total_kg": " num:1203",
+        "destination": "MAIN",
+        "end_bal_kg": " num:0",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": null,
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:70"
+        ],
+        "pallets_gross": [
+          " num:1203"
+        ],
+        "pallets_net": [
+          " num:1203"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:9999",
+        "supplier": null,
+        "transaction_date": "2025-07-04",
+        "warnings": [],
+        "weight_kg": " num:1203",
+        "whse_label": "A-5B"
+      }
+    }
+  ]
+}

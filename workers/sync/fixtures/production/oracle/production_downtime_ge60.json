@@ -1,0 +1,190 @@
+{
+  "downtime": {
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert downtime"
+        ],
+        "record": {
+          "_source_sheet": "07-04-26",
+          "dt_hrs": " num:0",
+          "dt_mins": " num:125",
+          "dt_reason": "REPAIR | belt change; motor",
+          "production_batch": "JULY",
+          "remarks": "Time ranges: 8:00-9:00; 10:00-10:30",
+          "shift": "M",
+          "shift_hrs": " num:12",
+          "transaction_date": "2026-07-04",
+          "warnings": []
+        },
+        "resolved_shift_id": null
+      }
+    ],
+    "summary": {
+      "duplicate_noop": " num:0",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:1",
+      "new": " num:1",
+      "value_changed": " num:0"
+    },
+    "table": "production_downtime"
+  },
+  "electricity": {
+    "classifications": [],
+    "summary": {
+      "db_rows_in_window": " num:0",
+      "duplicate_noop": " num:0",
+      "extracted_total": " num:0",
+      "malformed": " num:0",
+      "new": " num:0",
+      "value_changed": " num:0"
+    },
+    "table": "electricity_readings"
+  },
+  "runs": {
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:8",
+          "_source_sheet": "07-04-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:630",
+          "shift": "M",
+          "transaction_date": "2026-07-04",
+          "ttl_kg": " num:16380",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:9",
+          "_source_sheet": "07-04-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:218",
+          "shift": "M",
+          "transaction_date": "2026-07-04",
+          "ttl_kg": " num:5668",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:2",
+        "natural_key": {
+          "customer": "KURARAY",
+          "grade": "6X50",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:11",
+          "_source_sheet": "07-04-26",
+          "confidence": " num:0.9",
+          "customer": "KURARAY",
+          "grade": "6X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:200",
+          "shift": "M",
+          "transaction_date": "2026-07-04",
+          "ttl_kg": " num:10000",
+          "warnings": [
+            "shift cell blank/absent — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      }
+    ],
+    "summary": {
+      "duplicate_noop": " num:0",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:3",
+      "new": " num:3",
+      "value_changed": " num:0"
+    },
+    "table": "production_runs"
+  },
+  "trucks": {
+    "classifications": [],
+    "summary": {
+      "db_rows_in_window": " num:0",
+      "duplicate_noop": " num:0",
+      "extracted_total": " num:0",
+      "malformed": " num:0",
+      "new": " num:0",
+      "value_changed": " num:0"
+    },
+    "table": "truck_readings"
+  },
+  "waste": {
+    "classifications": [],
+    "summary": {
+      "duplicate_noop": " num:0",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:0",
+      "new": " num:0",
+      "value_changed": " num:0"
+    },
+    "table": "production_waste"
+  }
+}

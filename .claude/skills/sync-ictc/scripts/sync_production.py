@@ -128,17 +128,20 @@ def phase_classify(args) -> int:
     else:
         ivy = {"waste": []}
 
-    # write per-section extract JSONs the classifiers expect ({"rows":[...]} or their own shape)
-    def _rows_file(name: str, rows: list) -> Path:
+    # write per-section extract JSONs under the SECTION KEY each classifier reads
+    # (classify_production_runs reads .get("runs"), downtime .get("downtime"), etc.
+    # Wrapping everything as {"rows": ...} made every classifier see [] and silently
+    # classify ZERO production rows — found by the M2 parity-oracle build 2026-07-04.)
+    def _rows_file(name: str, key: str, rows: list) -> Path:
         p = work / name
-        p.write_text(json.dumps({"rows": rows}, default=str))
+        p.write_text(json.dumps({key: rows}, default=str))
         return p
 
-    runs_ex = _rows_file("ex_runs.json", mc.get("runs", []))
-    dt_ex = _rows_file("ex_downtime.json", mc.get("downtime", []))
-    elec_ex = _rows_file("ex_electricity.json", mc.get("electricity", []))
-    truck_ex = _rows_file("ex_trucks.json", mc.get("trucks", []))
-    waste_ex = _rows_file("ex_waste.json", ivy.get("waste", []))
+    runs_ex = _rows_file("ex_runs.json", "runs", mc.get("runs", []))
+    dt_ex = _rows_file("ex_downtime.json", "downtime", mc.get("downtime", []))
+    elec_ex = _rows_file("ex_electricity.json", "electricity", mc.get("electricity", []))
+    truck_ex = _rows_file("ex_trucks.json", "trucks", mc.get("trucks", []))
+    waste_ex = _rows_file("ex_waste.json", "waste", ivy.get("waste", []))
 
     # DB window for shifts + children
     all_dates = [str(r.get("transaction_date"))[:10] for r in

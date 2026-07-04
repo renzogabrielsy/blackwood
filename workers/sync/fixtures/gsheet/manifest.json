@@ -1,0 +1,44 @@
+{
+  "report_type": "gsheet",
+  "cases": [
+    {
+      "id": "gsheet_real_latest",
+      "kind": "real",
+      "covers": [
+        "2025-scope-floor",
+        "three-tier-rc-in-matching",
+        "materiality-gate",
+        "batch_code-fallback-prefixes",
+        "sheet-wins-material"
+      ],
+      "workbooks": {
+        "primary": "workbooks/gsheet_real_latest.xlsx"
+      },
+      "db_window": "db_window/gsheet_real_latest.json",
+      "opts": {
+        "since": "2025-01-01"
+      },
+      "note": "Real link-shared Google Sheet export (RC IN + RC OUT tabs), classified against the full 2025+ deliveries/rc_out/batch snapshot. Dual-mode: oracle composes {rc_in, rc_out}."
+    },
+    {
+      "id": "gsheet_edge",
+      "kind": "synthetic",
+      "covers": [
+        "materiality-gate",
+        "null-zero-sacks-immaterial",
+        "material-remarks-change",
+        "2025-scope-floor",
+        "destination-typo-normalization",
+        "sheet-wins-material"
+      ],
+      "workbooks": {
+        "primary": "workbooks/gsheet_edge.xlsx"
+      },
+      "db_window": "db_window/gsheet_edge.json",
+      "opts": {
+        "since": "2025-01-01"
+      },
+      "note": "RC IN: an immaterial sacks null<->0 change (NOOP w/ note), a material remarks change (CHANGED/sheet-wins), an out-of-scope 2024 row (dropped), a genuine NEW row. RC OUT: a 'MAN'->'MAIN' destination typo NOOP + a new consumption."
+    }
+  ]
+}

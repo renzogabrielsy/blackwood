@@ -1,0 +1,221 @@
+{
+  "balance_crosscheck": {
+    "available": true,
+    "note": "INFORMATIONAL only — never gates writes. Drift = DB view balance - sheet snapshot.",
+    "rows": [
+      {
+        "code": "FUTAMURA_550",
+        "db_view_balance": null,
+        "drift": null,
+        "sheet_snapshot_balance": " num:514"
+      },
+      {
+        "code": "KURARAY_590",
+        "db_view_balance": null,
+        "drift": null,
+        "sheet_snapshot_balance": " num:18"
+      }
+    ]
+  },
+  "code_to_id": {
+    "FG_ALL_BLACK": "id-allblack",
+    "FG_BLACK_SLING_6X50": "id-sling",
+    "FUTAMURA_550": "id-futamura",
+    "KURARAY_590": "id-kuraray",
+    "UNUSABLE": "id-unusable"
+  },
+  "column_flags": {
+    "column_map": [
+      {
+        "column_letter": "C",
+        "matched_code": "KURARAY_590",
+        "signature": "590 kls(Kuraray)",
+        "sort_order": " num:1"
+      },
+      {
+        "column_letter": "D",
+        "matched_code": "UNUSABLE",
+        "signature": "Un-usable bag",
+        "sort_order": " num:2"
+      },
+      {
+        "column_letter": "E",
+        "matched_code": "FUTAMURA_550",
+        "signature": "550 kls(FUTAMURA)",
+        "sort_order": " num:3"
+      },
+      {
+        "column_letter": "F",
+        "matched_code": "FG_ALL_BLACK",
+        "signature": "ALL BLACK FG",
+        "sort_order": " num:4"
+      },
+      {
+        "column_letter": "G",
+        "matched_code": "FG_BLACK_SLING_6X50",
+        "signature": "BLACK SLING 6X50 FG",
+        "sort_order": " num:5"
+      },
+      {
+        "column_letter": "H",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "I",
+        "matched_code": null,
+        "signature": "MYSTERY BRAND XYZ",
+        "sort_order": null
+      },
+      {
+        "column_letter": "J",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "K",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "L",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "M",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "N",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "O",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      },
+      {
+        "column_letter": "P",
+        "matched_code": null,
+        "signature": "",
+        "sort_order": null
+      }
+    ],
+    "flagged": false,
+    "missing_columns": [],
+    "note": "FLAGGED, informational — these do NOT block the movements that mapped. unmapped_columns = candidate NEW bag type(s) to register in flecon_bag_types; missing_columns = registry code(s) with no column this run (removed/renamed?). The agent must surface these for the user; never auto-create a bag type.",
+    "unmapped_columns": []
+  },
+  "per_date": [
+    {
+      "class": "DATE_CHANGED",
+      "db_movement_count": " num:4",
+      "delta": {
+        "added": [
+          {
+            "bag_type_code": "KURARAY_590",
+            "count": " num:1",
+            "particular": "BAGGED POWDER",
+            "qty_delta": " num:-2"
+          }
+        ],
+        "removed": [
+          {
+            "bag_type_code": "KURARAY_590",
+            "count": " num:1",
+            "particular": "BAGGED POWDER",
+            "qty_delta": " num:-1"
+          }
+        ]
+      },
+      "movements": [
+        {
+          "bag_type_code": "KURARAY_590",
+          "particular": "BAGGED POWDER",
+          "qty_delta": " num:-2",
+          "transaction_date": "2026-06-10"
+        },
+        {
+          "bag_type_code": "FUTAMURA_550",
+          "particular": "BLEND RECOUNT",
+          "qty_delta": " num:7",
+          "transaction_date": "2026-06-10"
+        },
+        {
+          "bag_type_code": "KURARAY_590",
+          "particular": "BLEND RECOUNT",
+          "qty_delta": " num:5",
+          "transaction_date": "2026-06-10"
+        },
+        {
+          "bag_type_code": "UNUSABLE",
+          "particular": "RS 1 ZAMBOANGA",
+          "qty_delta": " num:-4",
+          "transaction_date": "2026-06-10"
+        }
+      ],
+      "sheet_movement_count": " num:4",
+      "transaction_date": "2026-06-10"
+    },
+    {
+      "class": "NEW",
+      "db_movement_count": " num:0",
+      "delta": {
+        "added": [
+          {
+            "bag_type_code": "FG_ALL_BLACK",
+            "count": " num:1",
+            "particular": "BAGGED FG",
+            "qty_delta": " num:-3"
+          },
+          {
+            "bag_type_code": "FG_BLACK_SLING_6X50",
+            "count": " num:1",
+            "particular": "BAGGED SLING",
+            "qty_delta": " num:-1"
+          }
+        ],
+        "removed": []
+      },
+      "movements": [
+        {
+          "bag_type_code": "FG_ALL_BLACK",
+          "particular": "BAGGED FG",
+          "qty_delta": " num:-3",
+          "transaction_date": "2026-07-01"
+        },
+        {
+          "bag_type_code": "FG_BLACK_SLING_6X50",
+          "particular": "BAGGED SLING",
+          "qty_delta": " num:-1",
+          "transaction_date": "2026-07-01"
+        }
+      ],
+      "sheet_movement_count": " num:2",
+      "transaction_date": "2026-07-01"
+    }
+  ],
+  "since": "2026-01-01",
+  "summary": {
+    "column_map_size": " num:14",
+    "date_changed_days": " num:1",
+    "db_movements_in_window": " num:4",
+    "duplicate_noop_days": " num:0",
+    "missing_columns": " num:0",
+    "new_days": " num:1",
+    "sheet_movements_in_window": " num:6",
+    "total_days_in_window": " num:2",
+    "unmapped_columns": " num:0"
+  },
+  "table": "flecon_bag_movements"
+}

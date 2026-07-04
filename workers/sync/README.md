@@ -5,8 +5,9 @@ Durable, web-native TypeScript port of the ICTC sync engine, wrapped in **DBOS**
 This is a **standalone package**, NOT part of the Next.js build. It runs on a small
 cloud host (Fly.io, scale-to-zero) and is woken by an HTTP kick from the app.
 
-> Status: **M0 (Foundations) + M1 (Shared libraries + Mail Clerk) complete.**
-> The per-report extract→classify→apply workflows are M3 (not built here).
+> Status: **M0 (Foundations) + M1 (Shared libraries + Mail Clerk) + M2 (Golden-master
+> parity harness) complete.** The per-report extract→classify→apply workflows are M3
+> (not built here) — they are built AGAINST the M2 harness (`npm run parity`).
 > Migration plan: `../../SYNC_TS_MIGRATION_PLAN.md`.
 
 ## Architecture (this milestone)
@@ -103,6 +104,86 @@ curl -X POST http://localhost:8080/kick \
   ```
   Fetches the latest xlsx for all report queries over ONE Gmail session and prints
   the manifest. Never uploads / never labels (`dryRun`).
+
+## Golden-master parity harness (M2 — `npm run parity`)
+
+The **hard gate** every Wave-3 report port must pass before cutover. The proven
+Python classify path is the **oracle**; each TS port must reproduce its output
+(canonicalized) on a fixture corpus. Any un-explained byte difference fails.
+
+```bash
+npm run parity                 # all report types
+npm run parity -- --type flecon        # one type
+npm run parity -- --verbose            # show matched deviations + all cases
+```
+
+Exit non-zero on any FAIL. A type with no TS port yet reports **MISSING** (not a
+failure) — the gate goes green as ports land.
+
+### Layout
+
+| Path | What |
+|---|---|
+| `fixtures/<type>/workbooks/*.xlsx` | real (pulled once) + synthetic edge-case workbooks |
+| `fixtures/<type>/db_window/<case>.json` | snapshot of the DB rows the classify step consumes — the harness feeds THIS to both engines, never the live DB, so parity is reproducible offline forever |
+| `fixtures/<type>/oracle/<case>.json` | canonicalized Python classify output (the golden master) |
+| `fixtures/<type>/manifest.json` | case registry: workbooks, db_window, opts, and the `covers` rule list |
+| `src/reports/types.ts` | the **frozen `classifyCase` contract** Wave-3 ports implement |
+| `test/parity/canonical.ts` | the ONE canonicalizer (mirrored in `scripts/parity_canonical.py`) |
+| `test/parity/differ.ts` / `deviations.ts` / `runner.ts` | diff + expected-deviation matcher + runner |
+| `test/parity/expected-deviations.json` | PORTING_DECISIONS #2–#5 as keyed expected diffs |
+| `scripts/build_oracle.py` | runs the Python classify path per case → oracle |
+| `scripts/build_fixtures.py` | synthesizes the edge-case workbooks (openpyxl) |
+| `scripts/snapshot_db.py` | captures a real case's DB window via `lib/db.py` (run once) |
+
+### The frozen port contract
+
+Each Wave-3 port exports, from `src/reports/<type>/index.ts`:
+
+```ts
+export const classifyCase: ClassifyCase = async (workbookPaths, dbWindow, opts) => { … }
+```
+
+It runs its own extract→classify internally, reads workbooks only from
+`workbookPaths` (role→abs path) and the DB only from `dbWindow` (never a live
+connection), and returns the **classify envelope**. The runner discovers ported
+types by the existence of that file. See `src/reports/types.ts` for the full
+contract and per-type `dbWindow` role keys.
+
+### Canonicalization (identical on both sides)
+
+`canonical.ts` (TS) and `parity_canonical.py` (oracle builder) apply the SAME
+four rules so semantically-equal outputs are byte-identical: (1) sort object keys
+recursively, (2) sort row arrays by a natural-key projection, (3) normalize
+floats to a tagged textual form (integer-valued → integer text; else round 9dp,
+strip trailing zeros — erases Python-repr vs V8 last-bit noise), (4) strip
+volatile keys (paths, timestamps, uuids, `source_row`) at any depth. **Change one,
+change the other in lockstep.**
+
+### Adding a parity case
+
+1. Put the workbook in `fixtures/<type>/workbooks/` (real, or add a builder in
+   `scripts/build_fixtures.py` and run `npm run fixtures:build`).
+2. Snapshot its DB window: `npm run fixtures:snapshot -- --type <t> --case <id> --since <YYYY-MM-DD>`
+   (real cases), or hand-author a tiny curated `db_window/<id>.json` (synthetic).
+3. Register the case in `fixtures/<type>/manifest.json` with `covers` + `opts`.
+4. `npm run build:oracle -- --type <t>` to generate the golden output.
+5. `npm run parity -- --type <t>` (reports MISSING until the port exists, then PASS/FAIL).
+
+### Recording an expected deviation
+
+When PORTING_DECISIONS rules the TS port must intentionally differ from the
+oracle, add an entry to `test/parity/expected-deviations.json` keyed by
+`rule` + `type` + `case` + `path` (a glob; `*`=one segment, `**`=any suffix),
+optionally pinning `kind`/`oracle`/`ts`. A diff matching an entry is
+**PASS-with-note**; anything else is a FAIL. An entry that never fires on a
+ported type is reported as **STALE** (prune it once the port no longer needs it).
+
+### Oracle stability
+
+Oracles are built from a static workbook + static DB-window snapshot with all
+volatile fields stripped — building twice yields byte-identical files
+(`build:oracle` then `shasum` both runs). Proven for the whole corpus.
 
 ## DBOS system database (checkpoints)
 
