@@ -11,6 +11,10 @@
  *
  * On SIGTERM/SIGINT (Fly auto-stop, deploy) we shut DBOS down cleanly.
  */
+// MUST be first: loads workers/sync/.env into process.env (local dev) before any
+// module reads a credential. No-op on Fly (secrets already in the environment).
+import "./loadEnv.js";
+
 import { launchDbos, shutdownDbos } from "./dbos.js";
 import { startKickServer } from "./server/kick.js";
 
