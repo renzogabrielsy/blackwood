@@ -9,6 +9,7 @@ import {
   Loader2,
   Lock,
   MinusCircle,
+  StopCircle,
   Terminal,
 } from 'lucide-react'
 
@@ -72,6 +73,7 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
 
   const isBusy = status === 'classifying' || status === 'applying'
   const isBad = status === 'gate-failed' || status === 'error'
+  const isStopped = status === 'stopped'
 
   // Fallback verb when no plain-English status line has arrived yet.
   const busyVerb = status === 'classifying' ? 'Classifying…' : 'Applying clean rows…'
@@ -104,6 +106,7 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
           {isBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           {status === 'done' && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
           {isBad && <AlertTriangle className="h-3.5 w-3.5 text-destructive" />}
+          {isStopped && <StopCircle className="h-3.5 w-3.5 text-muted-foreground" />}
           {status === 'idle' && <MinusCircle className="h-3.5 w-3.5 text-muted-foreground/40" />}
         </div>
       </div>
@@ -121,6 +124,13 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
             {statusLine ?? busyVerb}
           </p>
         </>
+      )}
+
+      {/* Stopped — neutral terminal line (rows already written are kept). */}
+      {isStopped && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          Stopped. Anything already written was kept.
+        </p>
       )}
 
       {/* Counts (classify) */}

@@ -133,6 +133,16 @@ Runbook (worker down? Gmail auth expired? DBOS resume semantics); Supabase Log d
 - [ ] Kick-endpoint rate-limit (deferred — the Bearer secret + idempotent workflowID make abuse low-risk; revisit if the endpoint goes public).
 - [ ] Sync-employee docs note "manual fallback, not daily driver" (deferred to the M6 decommission decision — the employees are still the ONLY path until cutover is trusted).
 
+### M5.1 — Sync-run lifecycle controls · S  ✅ **DONE (2026-07-06)**
+Stop button + graceful cancel + self-healing (startup recovery + stale-run watchdog).
+
+- [x] **Status model:** added `'cancelled'` to the `sync_run_status` enum (migration `20260706000000_sync_run_status_cancelled.sql`, applied to remote via MCP — `ALTER TYPE … ADD VALUE`, verified). `SyncRunStatus`/`TERMINAL_RUN_STATUSES`/`isTerminalRunStatus` updated; `SyncCardStatus` gains neutral `'stopped'`. `cancelled`/`stopped` render as a calm "Stopped", never error-red.
+- [x] **Worker `/cancel`** (`src/server/kick.ts`, Bearer): cancels `run:<id>` (`cancelChildren:true`) + every child (`mailclerk:<id>`, `report:<id>:<type>`) explicitly; idempotent + `200` when no workflow exists. runSync/reportWorkflow catch `DBOSWorkflowCancelledError`/`DBOSAwaitedWorkflowCancelledError` → settle `cancelled` (not `failed`); **rows already written are kept** (no rollback).
+- [x] **Startup recovery** (`recoverOrphanedRuns`) — re-starts every `queued` run from the last 24h on boot via deterministic workflowID (DBOS dedups). The root fix for a lost-kick `queued` run DBOS's own recovery can't reach.
+- [x] **Stale-run watchdog** (`sweepStaleRuns`, every 3 min, `STALE_RUN_MINUTES=15`) — auto-expires (→ `failed`) non-terminal runs with no progress for >15 min that aren't a live DBOS workflow (`getWorkflowStatus` cross-check). Never expires a run that emitted an event in the last 15 min.
+- [x] **App `cancelSyncRun(runId)`** — requirePrivileged → service-role UPDATE → `cancelled` (unsticks the UI even if the worker is unreachable) → best-effort `POST /cancel`. **Stop button** in `SyncPanelBody` (double-click-guarded via `cancelling`); `useSyncRun.stop()`; attach-to-in-flight **staleness guard** (ignore runs >20 min old / >15 min since last event).
+- [x] **Verification:** migration applied + `cancelled` accepted (MCP); `tsc --noEmit` clean (root + worker); root `npm run build` + worker build clean; **lifecycle-proof.ts** (local PG) 20/20 (cancel/recovery/watchdog/SQL); parity 12/12; worker vitest 273; reducer harness 16/16.
+
 ### M6 — Decommission decision (deliberate, later)
 Only after N clean weeks: archive the Python to `_archived/sync-python-v1/` (never delete — it is the oracle and the institutional memory). The LEARNING_LEDGER lives on — it documents *rules*, not a language.
 

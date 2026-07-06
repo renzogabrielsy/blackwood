@@ -195,14 +195,25 @@ export interface SyncProgressEvent {
   level: 'info' | 'warn'
 }
 
-/** Lifecycle status of a durable sync run (mirrors the `sync_run_status` enum). */
-export type SyncRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'partial'
+/**
+ * Lifecycle status of a durable sync run (mirrors the `sync_run_status` enum).
+ * `cancelled` is a NEUTRAL terminal state (the Stop button) — a stopped run keeps
+ * every already-written row (no rollback) and reads as "Stopped", never error-red.
+ */
+export type SyncRunStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'partial'
+  | 'cancelled'
 
 /** The terminal statuses — a run in one of these will emit no further events. */
 export const TERMINAL_RUN_STATUSES: readonly SyncRunStatus[] = [
   'succeeded',
   'failed',
   'partial',
+  'cancelled',
 ] as const
 
 export function isTerminalRunStatus(s: SyncRunStatus): boolean {
@@ -297,6 +308,9 @@ export type SyncCardStatus =
   | 'done'
   | 'gate-failed'
   | 'error'
+  /** The run was Stopped mid-flight — a NEUTRAL terminal (not error-red). Rows
+   *  already written are kept; the card just settles calmly to "Stopped". */
+  | 'stopped'
 
 /** What a single card holds after (or during) a run. */
 export interface SyncCardState {

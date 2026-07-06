@@ -7,6 +7,7 @@
 - [Price gating](price-gating.md) — `canViewPrices()` in lib/auth.ts is CANONICAL; null ₱ SERVER-SIDE before payload; Production is the only denied role. [[price-gating]]
 
 ## Python → TS sync migration (`workers/sync/**`)
+- [M5.1 lifecycle controls](sync-ts-m51-lifecycle-controls.md) — 2026-07-06: Stop button + graceful cancel + startup-recovery + stale-run watchdog; DBOS cancel error classes live under the `Error` NAMESPACE only; `ALTER TYPE … ADD VALUE` alone via MCP execute_sql (not apply_migration); ids.ts = workflow-ID SoT; lifecycle-proof.ts 20/20 on local pg. [[sync-ts-m51-lifecycle-controls]]
 - [Wave 4A runSync worker](sync-ts-wave4a-runsync-worker.md) — 2026-07-04: real runSync DBOS workflow runs all 6 ports end-to-end (gsheet→4 parallel writers→audit); write-blocking dry-run proxy (0 data rows); crash-resume PASSED; DbClient.deleteByDate added; kick `{runId,dryRun}`; env SYNC_WORKER_URL+SYNC_KICK_SECRET; LC_ALL=C for local PG. [[sync-ts-wave4a-runsync-worker]]
 - [M2 parity harness](sync-ts-parity-harness.md) — 2026-07-04: `npm run parity` golden-master gate; frozen `classifyCase` contract; 12 fixtures/6 types; oracle+canonicalizer (TS+Py mirror); PORTING_DECISIONS deviations. [[sync-ts-parity-harness]]
 - [Flecon TS port (Wave 3 #1)](flecon-ts-port.md) — 2026-07-04: 3/3 parity; sets porter idiom (deps/runReport, classifyCase returns classifier result). MERGED-CELL trap: exceljs duplicates merged-header values vs openpyxl → local sheet.ts wrapper. [[flecon-ts-port]]

@@ -162,6 +162,78 @@ export async function enqueueSyncRun(dryRun = false): Promise<EnqueueSyncRunResu
 }
 
 // ============================================================
+// cancelSyncRun — the Stop button (graceful cancel) (M5.1)
+// ============================================================
+
+export interface CancelSyncRunResult {
+  /** True if we flipped the row to 'cancelled' (or it was already terminal). */
+  ok: boolean
+  /** Whether the worker acknowledged the /cancel POST (HTTP 2xx). */
+  workerNotified: boolean
+}
+
+/**
+ * Stop an in-flight run (the Stop button). Two moves, in this order so the UI
+ * unsticks even if the worker is unreachable:
+ *
+ *   1. Service-role UPDATE sync_runs → status='cancelled', finished_at=now() WHERE
+ *      id=runId AND status IN ('queued','running'). This is the authoritative UI
+ *      signal: the Realtime UPDATE flows to every watcher and the cards settle to
+ *      "Stopped" immediately — no dependency on the worker being reachable.
+ *   2. Best-effort POST the worker's /cancel so DBOS actually preempts the running
+ *      workflow at its next step boundary (frees the machine, stops further writes).
+ *      A failed/timed-out/unconfigured /cancel is NON-fatal — the workflow will also
+ *      observe the 'cancelled' row and its own guards halt further apply work; and on
+ *      the worker's next wake the watchdog/recovery keep things consistent.
+ *
+ * NEVER rolls back already-written rows (idempotent / never-delete philosophy).
+ */
+export async function cancelSyncRun(runId: string): Promise<CancelSyncRunResult> {
+  await requirePrivileged()
+
+  // 1. Authoritative UI signal — flip the row (service role; authenticated can't write).
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('sync_runs')
+    .update({ status: 'cancelled', finished_at: new Date().toISOString() })
+    .eq('id', runId)
+    .in('status', ['queued', 'running'])
+  if (error) {
+    throw new Error(
+      `Could not stop the sync run (updating sync_runs failed).\n\n${error.message}`
+    )
+  }
+
+  // 2. Best-effort worker /cancel — never throws on failure.
+  let workerNotified = false
+  if (SYNC_WORKER_URL && SYNC_KICK_SECRET) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), KICK_TIMEOUT_MS)
+      try {
+        const res = await fetch(`${SYNC_WORKER_URL.replace(/\/$/, '')}/cancel`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${SYNC_KICK_SECRET}`,
+          },
+          body: JSON.stringify({ runId }),
+          signal: controller.signal,
+          cache: 'no-store',
+        })
+        workerNotified = res.ok
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      workerNotified = false
+    }
+  }
+
+  return { ok: true, workerNotified }
+}
+
+// ============================================================
 // Adjudication + narration (Anthropic — single completion, no tool loop)
 //
 // NOTE (Wave 4B): the old child_process transport (runSyncClassify /

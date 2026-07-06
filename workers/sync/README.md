@@ -49,8 +49,10 @@ the click just writes "sync requested"; the worker does the rest durably.
 | `src/workflows/runSync.ts` | **The real top-level Run Sync workflow** — status lifecycle + Mail Clerk + all 6 reports in panel order + result aggregation + failure isolation. |
 | `src/workflows/reportWorkflow.ts` | The per-report CHILD workflow — dispatches to each report's `runReport`, normalizes into a uniform envelope, isolates failures. |
 | `src/workflows/reportDeps.ts` | Workflow-layer ADAPTERS: Storage-download-to-tmp, Gmail labeler, progress emitter, and the **write-blocking dry-run db proxy**. Wires each report's own deps type (reports are NOT reshaped). |
-| `src/server/kick.ts` | `POST /kick` (Bearer auth) + `GET /health`. |
-| `src/index.ts` | Entrypoint: register workflows → launch DBOS → start kick server. |
+| `src/server/kick.ts` | `POST /kick` + **`POST /cancel`** (both Bearer auth) + `GET /health`. |
+| `src/server/selfHeal.ts` | **Startup recovery** of orphaned `queued` runs (`recoverOrphanedRuns`) + the periodic **stale-run watchdog** (`startStaleRunWatchdog` / `sweepStaleRuns`, `STALE_RUN_MINUTES=15`). |
+| `src/workflows/ids.ts` | The ONE source of truth for the workflow-ID scheme (`run:` / `mailclerk:` / `report:<id>:<type>`) — used by /cancel, recovery, and runSync. |
+| `src/index.ts` | Entrypoint: register workflows → launch DBOS → **recover orphaned runs** → start kick server → **start the watchdog**. |
 
 ## Setup
 
@@ -90,6 +92,36 @@ curl -X POST http://localhost:8080/kick \
 ```
 
 `GET /health` → `{ ok: true }`.
+
+### Stop a run (graceful cancel — M5.1)
+
+```bash
+curl -X POST http://localhost:8080/cancel \
+  -H "Authorization: Bearer $SYNC_KICK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"runId":"<uuid from sync_runs>"}'
+```
+
+`POST /cancel` cancels the parent workflow `run:<runId>` (`cancelChildren:true`) **and**
+every child (`mailclerk:<runId>`, `report:<runId>:<type>`) explicitly. It is idempotent
+and **safe when no workflow exists** for that runId (the never-started / queued-and-lost
+case) — it always returns `200 {ok:true}`. The workflows catch the cancellation and
+settle the run to **`cancelled`**; **rows already written are KEPT** (never rolled back).
+The app's Stop button also flips `sync_runs.status='cancelled'` directly (service role)
+so the UI unsticks even if the worker is unreachable.
+
+### Self-healing (M5.1)
+
+- **Startup recovery** — on boot, after `DBOS.launch()`, the worker re-starts every
+  `sync_runs` row still `queued` in the last 24h using its deterministic workflowID
+  (`run:<id>`). DBOS dedups, so an already-started/recovered run is never double-run.
+  This is the fix for a run stuck on `queued` because its kick was lost while the worker
+  slept — DBOS's own recovery can't help there (the workflow was never created).
+- **Stale-run watchdog** — every 3 min the worker sweeps non-terminal runs (queued|
+  running). A run whose newest `sync_run_events.at` is >`STALE_RUN_MINUTES` (15) old —
+  or which has no events and was created >15 min ago — **and** is not a live DBOS
+  workflow (cross-checked via `getWorkflowStatus`) is auto-expired to `failed` with a
+  clear message. A run that emitted an event in the last 15 min is NEVER expired.
 
 ## Tests & proofs
 
@@ -131,6 +163,22 @@ curl -X POST http://localhost:8080/kick \
   Kicks a dry run, `kill -9`s the worker mid-run, boots a FRESH worker → DBOS recovers
   `run:<id>` and drives it to completion with no re-kick. (Verified: `Recovering 2
   workflows…`, second pid finished the run, all 8 workflows SUCCESS.)
+
+- **Lifecycle-controls proof (M5.1 DoD):**
+  ```bash
+  # against a LOCAL Postgres (the sandbox can't reach Supabase on 5432):
+  DBOS_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/dbos_sys \
+  PROOF_PG_URL=postgresql://postgres@127.0.0.1:55432/postgres \
+  LC_ALL=C npx tsx scripts/lifecycle-proof.ts
+  ```
+  20 checks across four parts: **(A) graceful cancel** — a running workflow is
+  cancelled mid-sleep, the body CATCHES `DBOSWorkflowCancelledError` (→ 'cancelled',
+  not 'failed'), post-cancel work never runs, pre-cancel "applied" evidence is kept
+  (nothing rolled back), DBOS status → CANCELLED; **(B) recovery dedup** — the same
+  deterministic workflowID runs exactly once across two `startWorkflow` calls;
+  **(C) watchdog cross-check** — `getWorkflowStatus` reports PENDING while live,
+  CANCELLED after; **(D) sync_runs SQL semantics** (local PG) — stale runs expire,
+  FRESH runs don't, and the status-guard never clobbers a terminal run. ALL PASSED.
 
 ## Golden-master parity harness (M2 — `npm run parity`)
 

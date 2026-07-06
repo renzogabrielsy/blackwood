@@ -39,17 +39,48 @@ The six reports run in this fixed order every time: **gsheet first (alone)** →
 
 ## Symptom → what to do
 
+### Stopping a run mid-flight (the Stop button)
+
+While a run is in flight the app shows a **Stop** button. Clicking it:
+
+1. Flips `sync_runs.status` to **`cancelled`** immediately (so the modal settles to
+   "Stopped" even if the worker is unreachable), then
+2. Best-effort pokes the worker's **`POST /cancel`**, which cancels the DBOS parent
+   workflow `run:<runId>` and all its children. The workflow stops at its next step
+   boundary and settles `cancelled`.
+
+**A stop KEEPS every row already written — nothing is rolled back** (idempotent /
+never-delete philosophy). `cancelled` is a NEUTRAL terminal, not a failure. To stop a
+run from the CLI (e.g. the app is down):
+
+```bash
+curl -X POST https://<worker-host>/cancel \
+  -H "Authorization: Bearer $SYNC_KICK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"runId":"<the-run-id>"}'
+```
+
+`/cancel` is idempotent and safe even if no workflow exists for that runId (returns
+`200`). If the worker is asleep and you only need the UI unstuck, updating the row is
+enough: `update sync_runs set status='cancelled', finished_at=now() where id='<id>'`.
+
 ### A run is stuck on `queued` (never goes `running`)
 
 `queued` means the app wrote the row but the worker never picked it up. Almost always:
 **the worker is asleep or dead, so the kick was lost.**
 
+**The worker now self-heals this on its own.** On every boot it runs **startup
+recovery**: it re-starts every `queued` run from the last 24h using the deterministic
+workflowID (`run:<id>`), which DBOS dedups. So simply **waking the worker fixes a stuck
+`queued` run** — no manual re-kick needed. And a **stale-run watchdog** sweeps every
+3 min and auto-expires (→ `failed`) any queued/running run that has shown no progress
+for >15 min and isn't a live DBOS workflow, so a truly-orphaned run never hangs forever.
+
 1. **Check the worker is up:** `curl https://<worker-host>/health`. If it doesn't answer,
    the machine is down/asleep.
 2. **Wake it.** On Fly with scale-to-zero, any inbound request wakes the machine — a
-   `/health` curl is enough. Once it's awake, DBOS's recovery-on-start will pick up any
-   incomplete run automatically (see below). If it doesn't (the kick was truly lost
-   before the workflow was created), **re-kick** it:
+   `/health` curl is enough. On boot, **startup recovery** picks up the queued run
+   automatically. If for some reason it doesn't, **re-kick** it:
 
    ```bash
    curl -X POST https://<worker-host>/kick \
@@ -89,6 +120,17 @@ on `sync_runs` has the text.
 2. If it's a transient outage (Gmail EOF, Supabase blip): **just run it again.** Re-running
    is safe (see idempotency below).
 3. If it's a config problem (auth, missing secret): fix it, then re-run.
+
+**Auto-expired `failed`:** if `sync_runs.error` reads *"Auto-expired: no progress for
+>15 min…"*, the stale-run watchdog terminalized an orphaned run (the worker had
+restarted or the run was never really running). This is the watchdog doing its job —
+nothing was written by the expiry. Just run a fresh sync.
+
+### A run finished as `cancelled`
+
+Someone hit **Stop** (or the CLI `/cancel`). This is NOT an error — it's a deliberate,
+neutral terminal. **Every row written before the stop was kept** (no rollback). Nothing
+to do; run a fresh sync when ready.
 
 ### Gmail auth expired / "authentication failed"
 

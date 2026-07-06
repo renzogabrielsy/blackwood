@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { FlaskConical, Play, RefreshCw } from 'lucide-react'
+import { FlaskConical, Play, RefreshCw, Square } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { SYNC_REPORTS, type SyncReportType } from '@/app/(app)/sync/types'
@@ -12,6 +12,7 @@ import type { SyncRunState } from './useSyncRun'
 interface SyncPanelBodyProps {
   state: SyncRunState
   run: (opts?: { dryRun?: boolean }) => void | Promise<void>
+  stop: () => void | Promise<void>
   adjudicate: (type: SyncReportType) => void
 }
 
@@ -32,7 +33,7 @@ function formatStarted(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-export function SyncPanelBody({ state, run, adjudicate }: SyncPanelBodyProps) {
+export function SyncPanelBody({ state, run, stop, adjudicate }: SyncPanelBodyProps) {
   const idle = !state.running && !state.ran
 
   return (
@@ -71,17 +72,42 @@ export function SyncPanelBody({ state, run, adjudicate }: SyncPanelBodyProps) {
               </>
             )}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="shrink-0"
-            disabled={state.running}
-            onClick={() => void run({ dryRun: true })}
-            title="Classify only — reads the reports and shows what WOULD change, writes nothing."
-          >
-            <FlaskConical className="h-4 w-4" />
-            Dry run
-          </Button>
+          {state.running ? (
+            /* Stop the in-flight run. Kept row-side of the primary button so it's
+               always reachable; disabled while a Stop is already in flight. */
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={state.cancelling}
+              onClick={() => void stop()}
+              title="Stop this run. Anything already written is kept — nothing is rolled back."
+            >
+              {state.cancelling ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  Stopping…
+                </>
+              ) : (
+                <>
+                  <Square className="h-4 w-4" />
+                  Stop
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0"
+              disabled={state.running}
+              onClick={() => void run({ dryRun: true })}
+              title="Classify only — reads the reports and shows what WOULD change, writes nothing."
+            >
+              <FlaskConical className="h-4 w-4" />
+              Dry run
+            </Button>
+          )}
         </div>
 
         {/* Non-fatal notice (e.g. "worker asleep — queued"). */}

@@ -30,11 +30,24 @@
  * catches it); the run continues and its status becomes "partial". Only a failure in
  * the orchestration itself (Mail Clerk crash, DB unreachable) fails the whole run.
  */
-import { DBOS } from "../dbos.js";
+import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
 import { mailClerkWorkflow, type MailClerkManifest } from "./mailClerk.js";
 import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./reportWorkflow.js";
 import { DbClient } from "../lib/db.js";
 import { makeEmitter } from "../lib/progress.js";
+import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
+
+/**
+ * True if an error is a DBOS workflow-cancellation (this workflow was cancelled) or
+ * an awaited-child cancellation (a child we were awaiting was cancelled). Either way
+ * the run was STOPPED on purpose — settle it as 'cancelled', never 'failed'.
+ */
+export function isCancellation(err: unknown): boolean {
+  return (
+    err instanceof DBOSErrors.DBOSWorkflowCancelledError ||
+    err instanceof DBOSErrors.DBOSAwaitedWorkflowCancelledError
+  );
+}
 
 export interface RunSyncParams {
   runId: string;
@@ -71,7 +84,7 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
 
   // ── Stage 1: Mail Clerk (child workflow) — one Gmail session → Storage manifest.
   const manifest = await DBOS.startWorkflow(mailClerkWorkflow, {
-    workflowID: `mailclerk:${runId}`,
+    workflowID: mailClerkWorkflowId(runId),
   })({ runId, since });
   const manifestResolved = await manifest.getResult();
 
@@ -91,14 +104,14 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
 
   // ── Stage 2a: gsheet FIRST and alone (the source of truth). It self-downloads.
   const gsheetHandle = await DBOS.startWorkflow(reportWorkflow, {
-    workflowID: `report:${runId}:gsheet`,
+    workflowID: reportWorkflowId(runId, "gsheet"),
   })({ runId, reportType: "gsheet", manifest: manifestResolved, dryRun, since: params.since });
   reports.gsheet = await gsheetHandle.getResult();
 
   // ── Stage 2b: the four writers in PARALLEL (DBOS fan-out + allSettled).
   const writerHandles = await Promise.all(
     PARALLEL_WRITERS.map((rt) =>
-      DBOS.startWorkflow(reportWorkflow, { workflowID: `report:${runId}:${rt}` })({
+      DBOS.startWorkflow(reportWorkflow, { workflowID: reportWorkflowId(runId, rt) })({
         runId,
         reportType: rt,
         manifest: manifestResolved,
@@ -108,6 +121,14 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     ),
   );
   const settled = await Promise.allSettled(writerHandles.map((h) => h.getResult()));
+  // If the run was Stopped, a writer's getResult rejects with a cancellation. Surface
+  // it as a run-level cancellation (re-throw → runSyncGuarded settles 'cancelled')
+  // rather than a per-report failure — a stop halts the whole run, not one card.
+  for (const res of settled) {
+    if (res.status === "rejected" && isCancellation(res.reason)) {
+      throw res.reason;
+    }
+  }
   settled.forEach((res, i) => {
     const rt = PARALLEL_WRITERS[i];
     if (res.status === "fulfilled") {
@@ -128,7 +149,7 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
 
   // ── Stage 2c: rc_movement_audit LAST (read-only — never writes, even on a real run).
   const auditHandle = await DBOS.startWorkflow(reportWorkflow, {
-    workflowID: `report:${runId}:rc_movement_audit`,
+    workflowID: reportWorkflowId(runId, "rc_movement_audit"),
   })({ runId, reportType: "rc_movement_audit", manifest: manifestResolved, dryRun, since: params.since });
   reports.rc_movement_audit = await auditHandle.getResult();
 
@@ -200,6 +221,16 @@ async function runSyncGuarded(params: RunSyncParams): Promise<RunSyncResult> {
   try {
     return await runSyncBody(params);
   } catch (err) {
+    // A cancellation (Stop button) is NOT a crash: settle 'cancelled', keep every
+    // already-written row, and re-throw so DBOS records the terminal CANCELLED state.
+    if (isCancellation(err)) {
+      try {
+        await DBOS.runStep(() => cancelRun(params.runId), { name: "cancelRun" });
+      } catch {
+        /* best-effort terminal write */
+      }
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     try {
       await DBOS.runStep(() => failRun(params.runId, message), { name: "failRun" });
@@ -215,6 +246,20 @@ async function failRun(runId: string, message: string): Promise<void> {
   await db.finishSyncRun(runId, "failed", null, message);
   const emit = makeEmitter(db, runId, "_run");
   await emit("finalize", "The run could not complete.", 100, message, "warn");
+}
+
+/**
+ * Terminal write for a STOPPED run. Marks status 'cancelled' ONLY if the row is still
+ * non-terminal (the app action may have already flipped it to 'cancelled' for instant
+ * UI feedback — that's fine, this is a harmless no-op then). No result is written and
+ * NOTHING is rolled back: rows applied before the stop are kept by design. Emits one
+ * calm "Stopped." beat on the overall track.
+ */
+async function cancelRun(runId: string): Promise<void> {
+  const db = DbClient.fromEnv();
+  await db.cancelSyncRunIfActive(runId);
+  const emit = makeEmitter(db, runId, "_run");
+  await emit("finalize", "Stopped. Anything already written was kept.", 100, undefined, "warn");
 }
 
 export const runSyncWorkflow = DBOS.registerWorkflow(runSyncGuarded, { name: "runSyncWorkflow" });

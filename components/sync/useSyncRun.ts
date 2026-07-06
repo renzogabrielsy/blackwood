@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 import {
   adjudicateHeldRows,
+  cancelSyncRun,
   enqueueSyncRun,
   narrateSyncRun,
   type NarrateInput,
@@ -75,10 +76,21 @@ export interface SyncRunState {
   notice: string | null
   /** The top-level workflow's own progress track (from `_run` events). */
   overall: OverallProgress
+  /** True while a Stop request is in flight (disables the Stop button, prevents double-clicks). */
+  cancelling: boolean
 }
 
 /** Realtime-degrade poll cadence while a run is non-terminal (mirror the bell). */
 const POLL_MS = 3_000
+
+/**
+ * Attach-to-in-flight staleness guard (belt-and-suspenders with the worker's
+ * watchdog): on mount we only ATTACH to a run that is genuinely live. A run older
+ * than this with no recent event is treated as dead and NOT attached, so a stale row
+ * can never re-strand the UI in a spinning state.
+ */
+const ATTACH_MAX_AGE_MS = 20 * 60 * 1000 // 20 min since created
+const ATTACH_MAX_EVENT_GAP_MS = 15 * 60 * 1000 // 15 min since the newest event
 
 function initialCards(): Record<SyncReportType, SyncCardState> {
   const entries = SYNC_REPORTS.map((r) => [r.type, freshCard(r.type)])
@@ -118,6 +130,7 @@ export function useSyncRun() {
     startedAt: null,
     notice: null,
     overall: initialOverall(),
+    cancelling: false,
   }))
 
   // The run we are actively watching. Kept in a ref so the subscription effect
@@ -187,6 +200,7 @@ export function useSyncRun() {
       finalizedRef.current = runId
 
       const reports = result?.reports ?? null
+      const cancelled = status === 'cancelled'
 
       // Fold per-report results into cards + build the settled list for aggregation.
       const settled: SyncCardState[] = []
@@ -198,7 +212,15 @@ export function useSyncRun() {
           let next: SyncCardState
 
           if (rep) {
-            const cardStatus = deriveCardStatus(meta.type, rep)
+            // A report finished (or was stopped) with a per-report envelope: fold it.
+            // On a cancelled run, a report that never reached a terminal state settles
+            // to 'stopped' (neutral) rather than 'done' — but a report that DID finish
+            // keeps its real terminal status (its rows are legitimately written).
+            const derived = deriveCardStatus(meta.type, rep)
+            const cardStatus: SyncCardState['status'] =
+              cancelled && (prevCard.status === 'classifying' || prevCard.status === 'applying')
+                ? 'stopped'
+                : derived
             next = {
               ...prevCard,
               status: cardStatus,
@@ -210,12 +232,13 @@ export function useSyncRun() {
             prevCard.status === 'classifying' ||
             prevCard.status === 'applying'
           ) {
-            // No per-report result (M0/M1 manifest, or a report the worker didn't
-            // run): don't leave the card spinning — settle it to done/error by the
-            // run's own status.
+            // No per-report result (M0/M1 manifest, a report the worker didn't run,
+            // or a stop before this report produced an envelope): don't leave the card
+            // spinning — settle it by the run's own status. Cancelled → 'stopped'
+            // (neutral, rows kept), failed → 'error', otherwise → 'done'.
             next = {
               ...prevCard,
-              status: status === 'failed' ? 'error' : 'done',
+              status: cancelled ? 'stopped' : status === 'failed' ? 'error' : 'done',
               error: status === 'failed' ? errorText ?? 'The sync run failed.' : prevCard.error,
             }
           } else {
@@ -237,19 +260,30 @@ export function useSyncRun() {
           adjudicating: false,
         }))
 
+      // A cancelled run gets a calm, local summary — never an API narration and
+      // never an error toast. "Stopped" is a deliberate action, not a failure.
+      const cancelledSummary = cancelled
+        ? 'Sync stopped. Anything already written was kept — nothing was rolled back.'
+        : null
+
       setState((prev) => ({
         ...prev,
         heldGroups,
         running: false,
         runStatus: status,
-        summarizing: !result?.summary,
-        summary: result?.summary ?? null,
+        cancelling: false,
+        summarizing: !result?.summary && !cancelledSummary,
+        summary: result?.summary ?? cancelledSummary ?? null,
       }))
 
-      // Surface a run-level failure (HARD RULE — copyable, persistent).
+      // Surface a run-level failure (HARD RULE — copyable, persistent). Cancelled is
+      // NOT a failure — no toast.
       if (status === 'failed' && errorText) {
         errorToast('Sync run failed', { description: errorText })
       }
+
+      // Cancelled → local summary already set; skip narration entirely.
+      if (cancelled) return
 
       // If the worker pre-narrated, we're done. Otherwise narrate client-side.
       if (result?.summary) return
@@ -391,6 +425,30 @@ export function useSyncRun() {
       if (!mounted || !data) return
       const row = data as unknown as SyncRunRow
       if (isTerminalRunStatus(row.status)) return // nothing live to attach to
+
+      // Attach-to-in-flight STALENESS GUARD (belt-and-suspenders with the worker's
+      // watchdog): only attach to a GENUINELY-live run. A run that is too old, or has
+      // gone quiet (no recent event), is presumed dead/orphaned — attaching would
+      // re-strand the UI in a spinner. The watchdog will terminalize it worker-side.
+      const now = Date.now()
+      const createdMs = row.created_at ? new Date(row.created_at).getTime() : now
+      if (now - createdMs > ATTACH_MAX_AGE_MS) {
+        const { data: ev } = await supabase
+          .from('sync_run_events')
+          .select('at')
+          .eq('run_id', row.id)
+          .order('at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (!mounted) return
+        const lastEventMs = (ev as { at?: string } | null)?.at
+          ? new Date((ev as { at: string }).at).getTime()
+          : null
+        const stale =
+          lastEventMs === null || now - lastEventMs > ATTACH_MAX_EVENT_GAP_MS
+        if (stale) return // presumed orphaned — do not attach
+      }
+
       // Attach: reset the per-run guards and point the subscription at it.
       lastEventIdRef.current = 0
       finalizedRef.current = null
@@ -433,6 +491,7 @@ export function useSyncRun() {
         startedAt: null,
         overall: initialOverall(),
         cards: initialCards(),
+        cancelling: false,
       }))
 
       try {
@@ -451,6 +510,23 @@ export function useSyncRun() {
     },
     []
   )
+
+  // --- stop(): Stop the in-flight run (graceful cancel). -------------------
+  const stop = React.useCallback(async () => {
+    const runId = runIdRef.current
+    if (!runId) return
+    // Guard against double-clicks; the Realtime UPDATE to 'cancelled' settles the rest.
+    setState((prev) => (prev.cancelling ? prev : { ...prev, cancelling: true }))
+    try {
+      await cancelSyncRun(runId)
+      // The service-role UPDATE to 'cancelled' arrives over Realtime and drives the
+      // terminal fold-in (cards → "Stopped", running=false). Nothing else to do here.
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      errorToast('Could not stop the sync', { description: message })
+      setState((prev) => ({ ...prev, cancelling: false }))
+    }
+  }, [])
 
   const adjudicate = React.useCallback(
     async (type: SyncReportType) => {
@@ -486,7 +562,7 @@ export function useSyncRun() {
     [state.heldGroups]
   )
 
-  return { state, run, adjudicate }
+  return { state, run, stop, adjudicate }
 }
 
 // Re-exported so callers importing from this module keep working.

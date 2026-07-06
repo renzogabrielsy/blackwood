@@ -5,6 +5,12 @@
  *       Starts the run workflow in the background (DBOS.startWorkflow) with the
  *       runId as the workflow ID (idempotency key — a duplicate kick for the same
  *       runId is a no-op). Returns 202 immediately; the work continues durably.
+ *   POST /cancel { runId }   Authorization: Bearer <SYNC_KICK_SECRET>
+ *       Gracefully STOPS a run (the Stop button). Cancels the parent workflow
+ *       `run:<runId>` and every child (`mailclerk:<runId>`, `report:<runId>:<type>`)
+ *       via DBOS.cancelWorkflow. Idempotent + safe when NO workflow exists for the
+ *       runId (the never-started / queued-and-lost case) — returns 200 either way.
+ *       Rows already written are KEPT (never rolled back); the run settles 'cancelled'.
  *   GET  /health              → 200 { ok: true }
  *
  * Fly.io auto-start wakes the machine on the inbound /kick request; auto-stop lets
@@ -16,6 +22,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DBOS } from "../dbos.js";
 import { runSyncWorkflow } from "../workflows/runSync.js";
+import { childWorkflowIds, runWorkflowId } from "../workflows/ids.js";
 
 export interface KickServerOptions {
   port?: number;
@@ -84,8 +91,59 @@ async function handle(
     // Start the run workflow in the background. The runId is the workflow ID, so a
     // duplicate kick for the same runId is idempotent (DBOS dedups on workflowID).
     // `dryRun` (classify-only) threads through to every report.
-    await DBOS.startWorkflow(runSyncWorkflow, { workflowID: `run:${runId}` })({ runId, dryRun });
+    await DBOS.startWorkflow(runSyncWorkflow, { workflowID: runWorkflowId(runId) })({ runId, dryRun });
     sendJson(res, 202, { ok: true, runId, dryRun, status: "started" });
+    return;
+  }
+
+  if (method === "POST" && url === "/cancel") {
+    if (!kickSecret) {
+      sendJson(res, 500, { ok: false, error: "SYNC_KICK_SECRET not configured" });
+      return;
+    }
+    const auth = req.headers["authorization"] ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!safeEqual(token, kickSecret)) {
+      sendJson(res, 401, { ok: false, error: "unauthorized" });
+      return;
+    }
+
+    const body = await readBody(req);
+    let runId: string | undefined;
+    try {
+      runId = (JSON.parse(body || "{}") as { runId?: string }).runId;
+    } catch {
+      sendJson(res, 400, { ok: false, error: "invalid JSON body" });
+      return;
+    }
+    if (!runId || typeof runId !== "string") {
+      sendJson(res, 400, { ok: false, error: "runId (string) required" });
+      return;
+    }
+
+    // Graceful stop. Cancel the parent (cancelChildren:true reaches every descendant),
+    // then ALSO cancel each known child ID explicitly (belt-and-suspenders — covers a
+    // child not yet registered as a descendant at cancel time). cancelWorkflow on an
+    // ID that never started is a harmless no-op, so this is safe for the queued/lost
+    // case too. The workflows themselves catch the cancellation and settle 'cancelled'
+    // (rows already written are KEPT). We NEVER throw on a missing workflow.
+    const cancelOne = async (wfId: string): Promise<void> => {
+      try {
+        await DBOS.cancelWorkflow(wfId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[cancel] cancelWorkflow(${wfId}) non-fatal:`, err instanceof Error ? err.message : err);
+      }
+    };
+    try {
+      await DBOS.cancelWorkflow(runWorkflowId(runId), { cancelChildren: true });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[cancel] parent cancel non-fatal:`, err instanceof Error ? err.message : err);
+    }
+    await Promise.all(childWorkflowIds(runId).map(cancelOne));
+
+    sendJson(res, 200, { ok: true, runId, status: "cancelled" });
     return;
   }
 

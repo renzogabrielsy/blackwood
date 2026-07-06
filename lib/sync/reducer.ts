@@ -93,7 +93,11 @@ export function eventReportType(row: SyncRunEventRow): SyncReportType | null {
  */
 export function applyEventToCard(card: SyncCardState, ev: SyncProgressEvent): SyncCardState {
   const statusLine = ev.detail ? `${ev.label} · ${ev.detail}` : ev.label
-  const terminal = card.status === 'done' || card.status === 'gate-failed' || card.status === 'error'
+  const terminal =
+    card.status === 'done' ||
+    card.status === 'gate-failed' ||
+    card.status === 'error' ||
+    card.status === 'stopped'
   const status: SyncCardStatus = terminal
     ? card.status
     : ev.stage === 'apply'

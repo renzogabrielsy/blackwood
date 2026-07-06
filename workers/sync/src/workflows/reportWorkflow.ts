@@ -17,7 +17,7 @@
  * catches, emits a warn event, and returns an envelope carrying `ok:false` + the error
  * text. The parent aggregates; one failure → run status "partial", others continue.
  */
-import { DBOS } from "../dbos.js";
+import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
 import { DbClient } from "../lib/db.js";
 import type { MailClerkManifest, StoredAttachment } from "./mailClerk.js";
 import {
@@ -260,6 +260,23 @@ async function reportWorkflowBody(params: ReportWorkflowParams): Promise<ReportE
   try {
     return await DBOS.runStep(() => runOneReport(params), { name: `report:${reportType}` });
   } catch (err) {
+    // A cancellation (the run was Stopped) must NOT be swallowed into an ok:false
+    // envelope — re-throw so DBOS marks THIS child CANCELLED and the parent sees a
+    // DBOSAwaitedWorkflowCancelledError (→ run status 'cancelled'). Rows this report
+    // wrote before the stop boundary are kept (never rolled back).
+    if (
+      err instanceof DBOSErrors.DBOSWorkflowCancelledError ||
+      err instanceof DBOSErrors.DBOSAwaitedWorkflowCancelledError
+    ) {
+      try {
+        const db = DbClient.fromEnv();
+        const emit = makeReportProgress(db, runId, reportType);
+        await emit("finalize", "Stopped.", 100, undefined, "warn");
+      } catch {
+        /* observational only */
+      }
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     // Emit a warn beat so the live feed shows the failure, then carry it in the envelope.
     try {

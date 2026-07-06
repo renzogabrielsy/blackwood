@@ -91,7 +91,8 @@ export type SyncRunStatus =
   | "running"
   | "succeeded"
   | "failed"
-  | "partial";
+  | "partial"
+  | "cancelled";
 
 // ---------------------------------------------------------------------------
 // Client
@@ -415,7 +416,7 @@ export class DbClient {
 
   async finishSyncRun(
     runId: string,
-    status: Extract<SyncRunStatus, "succeeded" | "failed" | "partial">,
+    status: Extract<SyncRunStatus, "succeeded" | "failed" | "partial" | "cancelled">,
     result: Row | null,
     errorText?: string | null
   ): Promise<void> {
@@ -433,6 +434,95 @@ export class DbClient {
         `finish sync_runs failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
       );
     }
+  }
+
+  // -- self-healing helpers (M5.1 — recovery + watchdog) -------------------
+  /**
+   * Terminally mark a run 'cancelled' (the Stop button) — but ONLY if it is still
+   * non-terminal, so we never clobber a run that already succeeded/failed in a race.
+   * finished_at is stamped; result/error are left as-is (a stop keeps prior rows and
+   * whatever partial result was written). Returns true if a row was actually updated.
+   */
+  async cancelSyncRunIfActive(runId: string): Promise<boolean> {
+    const { data, error } = await this.sb
+      .from("sync_runs")
+      .update({ status: "cancelled", finished_at: new Date().toISOString() })
+      .eq("id", runId)
+      .in("status", ["queued", "running"])
+      .select("id");
+    if (error) {
+      throw new Error(
+        `cancel sync_runs failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  /**
+   * Terminally mark a run 'failed' with an error string — ONLY if still non-terminal.
+   * Used by the stale-run watchdog to auto-expire orphaned runs. Returns true if a row
+   * was updated (so the watchdog never double-reports an already-settled run).
+   */
+  async failSyncRunIfActive(runId: string, errorText: string): Promise<boolean> {
+    const { data, error } = await this.sb
+      .from("sync_runs")
+      .update({ status: "failed", error: errorText, finished_at: new Date().toISOString() })
+      .eq("id", runId)
+      .in("status", ["queued", "running"])
+      .select("id");
+    if (error) {
+      throw new Error(
+        `fail sync_runs failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  /**
+   * List runs still in a NON-terminal state (queued|running) created within the last
+   * `withinHours`. Startup recovery uses status='queued'; the watchdog reads both.
+   * Returns minimal fields: id, status, created_at.
+   */
+  async listActiveRuns(
+    opts: { statuses?: SyncRunStatus[]; withinHours?: number } = {}
+  ): Promise<Array<{ id: string; status: string; created_at: string | null }>> {
+    const statuses = opts.statuses ?? ["queued", "running"];
+    let q = this.sb
+      .from("sync_runs")
+      .select("id,status,created_at")
+      .in("status", statuses);
+    if (opts.withinHours && opts.withinHours > 0) {
+      const floor = new Date(Date.now() - opts.withinHours * 3600 * 1000).toISOString();
+      q = q.gte("created_at", floor);
+    }
+    const { data, error } = await q.order("created_at", { ascending: true });
+    if (error) {
+      throw new Error(
+        `list active sync_runs failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return (data ?? []) as Array<{ id: string; status: string; created_at: string | null }>;
+  }
+
+  /**
+   * The timestamp of the NEWEST progress event for a run, or null if it has none.
+   * The watchdog uses this to detect a stalled run (no event in > STALE_RUN_MINUTES).
+   */
+  async latestEventAt(runId: string): Promise<string | null> {
+    const { data, error } = await this.sb
+      .from("sync_run_events")
+      .select("at")
+      .eq("run_id", runId)
+      .order("at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      throw new Error(
+        `latest sync_run_events failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const val = (data as { at?: string } | null)?.at;
+    return val ?? null;
   }
 }
 

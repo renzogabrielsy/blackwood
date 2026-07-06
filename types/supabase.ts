@@ -2028,7 +2028,13 @@ export type Database = {
         | "delivery_deleted"
         | "remarks_added"
         | "audit_comment_reply"
-      sync_run_status: "queued" | "running" | "succeeded" | "failed" | "partial"
+      sync_run_status:
+        | "queued"
+        | "running"
+        | "succeeded"
+        | "failed"
+        | "partial"
+        | "cancelled"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -2174,7 +2180,14 @@ export const Constants = {
         "remarks_added",
         "audit_comment_reply",
       ],
-      sync_run_status: ["queued", "running", "succeeded", "failed", "partial"],
+      sync_run_status: [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "partial",
+        "cancelled",
+      ],
     },
   },
 } as const

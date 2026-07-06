@@ -32,7 +32,7 @@ import { useSyncRun } from './useSyncRun'
 export function SyncPanel() {
   const { open, setOpen } = useJarvis()
   const { role } = useAuth()
-  const { state, run, adjudicate } = useSyncRun()
+  const { state, run, stop, adjudicate } = useSyncRun()
 
   const privileged = PRIVILEGED_ROLES.includes(role)
 
@@ -74,7 +74,7 @@ export function SyncPanel() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-3">
-          <SyncPanelBody state={state} run={run} adjudicate={adjudicate} />
+          <SyncPanelBody state={state} run={run} stop={stop} adjudicate={adjudicate} />
         </div>
       </SheetContent>
     </Sheet>

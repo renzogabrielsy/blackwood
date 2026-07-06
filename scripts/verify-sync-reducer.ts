@@ -163,6 +163,12 @@ check('a terminal card is not un-finished by a late progress beat', () => {
   assert.equal(c.status, 'done')
   assert.equal(c.pct, 100)
 })
+check('a STOPPED card is frozen — a late beat cannot revive it', () => {
+  const stopped = { ...freshCard('deliveries'), status: 'stopped' as const, pct: 55 }
+  const c = applyEventToCard(stopped, projectEvent(evApply)!)
+  assert.equal(c.status, 'stopped')
+  assert.equal(c.pct, 88) // pct is still monotonic, but status stays 'stopped'
+})
 
 console.log('\nterminal result → card status (deriveCardStatus / gateErrorFrom):')
 const repClean: SyncRunReportResult = {

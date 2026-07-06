@@ -43,6 +43,18 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   can't kill the run.
 - **Realtime-hiccup fallback.** If the Realtime channel errors/times out, the hook
   degrades to a ~3s poll of the two tables (mirrors `notification-bell.tsx`).
+- **Stop button (M5.1 — graceful cancel).** While a run is in flight a **Stop** button
+  sits next to "Running sync…". Click → `cancelSyncRun(runId)`: a service-role UPDATE
+  flips `sync_runs.status='cancelled'` (so the UI unsticks even if the worker is
+  unreachable), then a best-effort `POST worker /cancel` so DBOS actually preempts the
+  workflow. The Realtime UPDATE folds in → cards settle to a neutral **"Stopped"**, the
+  button resets. **Rows already written are KEPT** (never rolled back). Double-clicks
+  are guarded (`cancelling` disables the button). `cancelled` is a neutral terminal —
+  no error toast, a calm local summary.
+- **Attach-to-in-flight STALENESS GUARD.** On mount the hook only attaches to a
+  GENUINELY-live run: a run older than ~20 min whose newest event is >15 min stale is
+  presumed orphaned and NOT attached (belt-and-suspenders with the worker's watchdog),
+  so a dead run can never re-strand the modal in a spinner.
 
 ## Files
 
@@ -51,6 +63,10 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`enqueueSyncRun(dryRun?)`** → `{ runId, kicked, message? }`. requirePrivileged →
     service-role INSERT into `sync_runs` → POST worker `/kick`. Best-effort kick
     (queued row survives a failed kick). The ONLY write path the click owns.
+  - **`cancelSyncRun(runId)`** → `{ ok, workerNotified }` (M5.1). requirePrivileged →
+    service-role UPDATE `sync_runs → cancelled` WHERE status IN (queued,running) →
+    best-effort `POST worker /cancel` (Bearer, 5s timeout, never throws on failure).
+    The UPDATE is the authoritative UI signal; the /cancel makes DBOS actually stop.
   - `adjudicateHeldRows(reportType, heldRows[])` → single Anthropic completion → per-row
     `apply|skip|needs-human` recommendations (advisory only). **Unchanged** (app-side).
   - `narrateSyncRun(results[])` → optional 3-sentence plain-language summary; **skips the
@@ -61,8 +77,10 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - Report catalog (`SYNC_REPORTS`, `PARALLEL_WRITERS`, `metaFor`).
   - Legacy CLI-contract shapes still used as the RESULT payload the worker writes:
     `ClassifyResult`, `ApplyResult`, `HeldRow`, `GateFailure`, …
-  - **Durable Realtime shapes (new):** `SyncRunStatus` + `TERMINAL_RUN_STATUSES` +
-    `isTerminalRunStatus`; `SyncRunRow` (a `sync_runs` row); `SyncRunEventRow` (a
+  - **Durable Realtime shapes:** `SyncRunStatus` (now includes **`cancelled`**) +
+    `TERMINAL_RUN_STATUSES` (includes `cancelled`) + `isTerminalRunStatus`;
+    `SyncCardStatus` gains **`stopped`** (neutral terminal card, not error-red);
+    `SyncRunRow` (a `sync_runs` row); `SyncRunEventRow` (a
     `sync_run_events` row); `SyncProgressEvent`/`SyncProgressStage` (projected from an
     event row — same digestible shape as before); `RUN_TRACK_REPORT_TYPE` (`'_run'`);
     **`SyncRunResult`** (the terminal `sync_runs.result` contract: `{ reports?:
@@ -76,24 +94,30 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   so closing the modal never detaches the run) + the modal `open` state.
 - `SyncPanelBody.tsx` — the reusable panel content (written ONCE, shared with the
   dormant `SyncPanel.tsx`). Run button + a **"Dry run"** secondary button
-  (classify-only; the first live full run should be a deliberate click) + the
-  **attached-run banner** ("A sync is already running (started HH:MM)") + a
-  **non-fatal notice** line (e.g. "worker asleep — queued") + the overall `_run`
-  progress line + employee cards + Held section + narration footer. Chrome-agnostic.
+  (classify-only; the first live full run should be a deliberate click) that becomes a
+  **"Stop"** button while running (M5.1 — `variant=outline`, destructive-tinted;
+  "Stopping…" while `cancelling`) + the **attached-run banner** ("A sync is already
+  running (started HH:MM)") + a **non-fatal notice** line (e.g. "worker asleep —
+  queued") + the overall `_run` progress line + employee cards + Held section +
+  narration footer. Chrome-agnostic. Takes a `stop` prop alongside `run`/`adjudicate`.
 - `SyncPanel.tsx` — DORMANT slide-out Sheet (still wraps `SyncPanelBody`; depends on
   the retired `JarvisProvider`). Do NOT re-mount without restoring it.
 - `SyncEmployeeCard.tsx` — one card per report: live progress bar (`transform:
   scaleX(pct/100)`, never `width` — compositor rule) + plain-English status line
   (`level:'warn'` tints amber without an error state), counts → applied summary /
-  gate-failed destructive state with inline error + Copy. **Unchanged** — its card
-  state is now fed from Realtime instead of SSE, but the shape is identical.
+  gate-failed destructive state with inline error + Copy. M5.1 adds a neutral
+  **`stopped`** state (StopCircle icon + "Stopped. Anything already written was kept.")
+  — calm, not error-red. Card state is fed from Realtime; the shape is otherwise stable.
 - `HeldRows.tsx` — held-row groups with per-group "Ask Claude" adjudication + per-row
   Copy. **Unchanged.**
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
-  subscribes (browser client) to `sync_run_events` INSERT (filtered by `run_id`) →
-  per-card live progress, and `sync_runs` UPDATE (filtered by `id`) → terminal
-  fold-in (per-report results → cards → held aggregation → narration). Mount-time
-  attach + poll fallback as above.
+  **`stop()`** (M5.1) calls `cancelSyncRun(currentRunId)` (guarded against
+  double-clicks via `cancelling`); subscribes (browser client) to `sync_run_events`
+  INSERT (filtered by `run_id`) → per-card live progress, and `sync_runs` UPDATE
+  (filtered by `id`) → terminal fold-in (per-report results → cards → held aggregation
+  → narration; a **`cancelled`** run settles still-busy cards to `stopped` + a calm
+  local summary, no error toast). Mount-time attach (with the staleness guard) + poll
+  fallback as above. Returns `{ state, run, stop, adjudicate }`.
 
 ### Pure reducer (`lib/sync/reducer.ts`)
 The load-bearing, framework-free transformations that turn raw Realtime rows into
