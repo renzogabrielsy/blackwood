@@ -1,11 +1,23 @@
 # Smart Held-Row Adjudicator — "Investigate like chat" · Feasibility + Implementation Plan
 
-_2026-07-06. A plan for Renzo to react to BEFORE any build. Goal: make the in-app held-row review reason like a chat session with Claude — study the data, cross-reference sources, pinpoint who's wrong, and explain it plainly — with barely any human intervention on the **analysis** (the **write** stays human-gated in v1)._
+_2026-07-06. The full implementation plan: finish the sync's durability (Fly), then build the "smart Jarvis" held-row review — an in-app agent that reasons like a chat session with Claude (studies the data, cross-references sources, pinpoints who's wrong, explains it plainly), with a chat you steer and a human-directed resolve. Barely any human intervention on the **analysis**; the **write** stays human-directed via the chat._
 
 ## Decisions locked (2026-07-06)
 
 - **Scope:** start by proving it on the **rc_out gate family** (drift + O>M), eval'd against the June-10 / May cases we solved by hand, then generalize.
 - **Write policy:** the agent **never auto-resolves on its own**. Instead there is a **chat** attached to the held row where Renzo talks to the agent about its findings, and **resolution happens through that conversation** — the agent only writes what Renzo explicitly directs, and even then through the deterministic pipeline path with a confirmation + full audit trail. (Renzo: _"there should be a chat box / button where I can talk to the claude agent about the results so we can auto-resolve from there."_)
+
+## Sequencing — ship durability first, then build the brain
+
+**Step 0 (do first, ~15 min of Renzo's `flyctl` steps): deploy the sync worker to Fly.** This closes the one open durability gap (sync runs off the laptop) and — importantly — **does not slow down anything that follows**, because of where each piece lives:
+
+| Piece | Where it runs | How you edit it AFTER the Fly deploy |
+|---|---|---|
+| Deterministic sync worker (fetch → classify → write) | **Fly** (bulletproof `min=1`, ~$2–3/mo) | edit `workers/sync/` → `flyctl deploy` (~1–2 min). Local `npm run dev` still works for iteration; deploy only when a change is ready. Auto-deploy-on-push wireable later. |
+| **The investigator / chat agent (this whole plan)** | **The Next.js app** (server-side, like Jarvis) — **NOT on Fly** | edit app code + deploy the app the way you already do. **Fly is not in this loop at all.** |
+| Progress + results + held rows | **Supabase** (tables + Realtime) | schema via MCP migrations |
+
+So the entire "smart Jarvis" build lands in the **app**, untouched by the Fly deploy. Deploying now finishes the durability chapter and costs **nothing** in future flexibility — the agent is edited exactly like any app feature, and the worker is a one-command redeploy.
 
 ## The insight
 
@@ -79,13 +91,14 @@ Next.js **server action** (like Jarvis), **on-demand** when Renzo clicks — not
 
 | Phase | Deliverable | Effort |
 |---|---|---|
+| **P0 — Ship durability (Fly)** | Deploy the sync worker to Fly (bulletproof mode already configured); set a spend cap; flip `SYNC_WORKER_URL` to the Fly URL. Renzo owns the `flyctl` steps (his account) — I hand each command pre-filled + verify health. Prereqs already done: `.env` valid, DB connection confirmed, RUNBOOK written. | S · Renzo ~15 min |
 | **P1 — Investigative toolset** | The 5 read-only tools + allow-list + price-gating + unit tests (adapt Jarvis' `tool-handlers`) | S–M |
 | **P2 — The Investigator loop** | The scoped tool-use loop + the diagnostic-playbook system prompt; bounded iterations; Sonnet default, Opus escalation | M |
 | **P3 — Chat UX** | Per-held-row **chat thread** with the investigator (reuse Jarvis chat UI); stream the opening investigation + let Renzo interrogate/steer; render cited findings + confidence | M |
 | **P4 — Human-directed resolve** | `propose_resolution` + confirm-gated `execute_resolution` routed through the deterministic write path (dismiss/apply) with provenance audit; for the rc_out slice, dismiss = zero operational write | S–M |
 | **P5 — Eval + trust** | A fixture eval over the known cases (O>M-missing-sheet, proposed-over-stated, seeded true-dup) asserting the agent reaches the right conclusion; cost/latency + write-safety budget check | S |
 
-**Total ≈ 2–3 focused sessions** for the rc_out proof slice (investigator + chat + confirm-gated resolve), then generalize per flag family. No DB schema change. No worker change (it runs app-side). Reuses the Jarvis loop + tools as the base.
+**Total ≈ 2–3 focused sessions** for the rc_out proof slice (investigator + chat + confirm-gated resolve), then generalize per flag family — **after** the ~15-min P0 Fly deploy that makes the sync itself laptop-proof. No DB schema change. No worker change (it runs app-side). Reuses the Jarvis loop + tools as the base.
 
 ## What it does NOT change
 The deterministic sync (parity 12/12), the write gate (human-approved via the employee), price gating, the fast single-shot default, and the "never auto-write held rows in v1" policy.
