@@ -7,9 +7,11 @@ import {
   safeFilename,
   globMatch,
   latestXlsx,
+  findAttachmentPart,
   type GmailSearchResult,
   type FetchedEmail,
 } from "../src/lib/gmail.js";
+import type { MessageStructureObject } from "imapflow";
 
 describe("safeFilename (fetch_gmail.safe_filename parity)", () => {
   it("strips path separators to the basename", () => {
@@ -91,5 +93,67 @@ describe("latestXlsx (orchestrator_common.latest_xlsx parity)", () => {
       emails: [em(1, ["a.pdf"])],
     };
     expect(latestXlsx(res)).toBe(null);
+  });
+});
+
+describe("findAttachmentPart (bodyStructure → attachment part number)", () => {
+  const leaf = (
+    part: string,
+    filename?: string,
+    nameParam?: string
+  ): MessageStructureObject => ({
+    part,
+    type: filename ? "application/vnd...spreadsheet" : "text/plain",
+    disposition: filename ? "attachment" : undefined,
+    dispositionParameters: filename ? { filename } : undefined,
+    parameters: nameParam ? { name: nameParam } : undefined,
+  });
+
+  it("finds the xlsx attachment part in a multipart tree", () => {
+    const structure: MessageStructureObject = {
+      type: "multipart/mixed",
+      childNodes: [
+        leaf("1"), // text body, no filename
+        leaf("2", "RC DELIVERIES JUL-02.xlsx"),
+      ],
+    };
+    const hit = findAttachmentPart(structure, ["*.xlsx", "*.xls"]);
+    expect(hit).toEqual({ part: "2", filename: "RC DELIVERIES JUL-02.xlsx" });
+  });
+
+  it("falls back to the Content-Type name param when disposition filename is absent", () => {
+    const structure: MessageStructureObject = {
+      type: "multipart/mixed",
+      childNodes: [leaf("1"), leaf("2", undefined, "waste.xls")],
+    };
+    // The name-param leaf has no disposition filename; give it a disposition too.
+    (structure.childNodes![1] as MessageStructureObject).disposition = "attachment";
+    const hit = findAttachmentPart(structure, ["*.xlsx", "*.xls"]);
+    expect(hit).toEqual({ part: "2", filename: "waste.xls" });
+  });
+
+  it("returns null when no part matches the globs", () => {
+    const structure: MessageStructureObject = {
+      type: "multipart/mixed",
+      childNodes: [leaf("1"), leaf("2", "note.pdf")],
+    };
+    expect(findAttachmentPart(structure, ["*.xlsx", "*.xls"])).toBe(null);
+  });
+
+  it("picks the FIRST matching leaf in nested multiparts", () => {
+    const structure: MessageStructureObject = {
+      type: "multipart/mixed",
+      childNodes: [
+        {
+          type: "multipart/alternative",
+          childNodes: [leaf("1.1"), leaf("1.2")],
+        },
+        leaf("2", "report.xlsx"),
+      ],
+    };
+    expect(findAttachmentPart(structure, ["*.xlsx"])).toEqual({
+      part: "2",
+      filename: "report.xlsx",
+    });
   });
 });

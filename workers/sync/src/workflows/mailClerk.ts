@@ -26,6 +26,8 @@
 import { DBOS } from "../dbos.js";
 import { GmailClient, type FetchedEmail } from "../lib/gmail.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { DbClient } from "../lib/db.js";
+import { makeEmitter } from "../lib/progress.js";
 
 export const SYNC_INBOX_BUCKET = "sync-inbox";
 
@@ -135,6 +137,56 @@ export interface MailClerkParams {
   dryRun?: boolean;
 }
 
+/**
+ * Live progress sink threaded INTO the fetch so the user sees continuous movement
+ * across the fetch stage (roughly pct 3→25 of the whole run; per-report classify/apply
+ * own 25→100 later). Same shape as lib/progress.ProgressEmitter. It is a SIDE EFFECT
+ * (writes a sync_run_events row) — safe to call inside the DBOS fetch step, never a
+ * step result. Must NEVER throw into the fetch (the emitter already swallows).
+ */
+export type MailClerkProgress = (
+  stage: "fetch",
+  label: string,
+  pct: number,
+  detail?: string,
+  level?: "info" | "warn"
+) => Promise<void>;
+
+// The fetch owns this slice of the overall run's progress bar. mailClerkBody emits
+// pct 3 (fetchStart) before this; the per-report stages take over from ~25 onward.
+const FETCH_PCT_START = 4;
+const FETCH_PCT_END = 25;
+
+/** Human-friendly report label for a MailQuery.key (plain English, no IMAP chatter). */
+function reportLabel(key: string): string {
+  switch (key) {
+    case "deliveries":
+      return "RC DELIVERIES";
+    case "deliveries_czarina":
+      return "Czarina price sheet";
+    case "rc_out":
+      return "PROPOSED DAILY REPORT";
+    case "rc_out_movement":
+      return "RC MOVEMENT";
+    case "production_mc":
+      return "Daily Production Report";
+    case "production_waste":
+      return "WASTE PRODUCTION REPORT";
+    case "flecon":
+      return "FLECON BAGGED";
+    default:
+      return key;
+  }
+}
+
+/** Bytes → a compact human size like "87 KB" / "1.2 MB". */
+function humanSize(bytes: number): string {
+  if (!bytes || bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
 function storageClient(): SupabaseClient {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -159,9 +211,22 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
     emailMeta: {},
   };
 
-  // ONE step: fetch every query's attachments over a SINGLE IMAP session.
+  // Live progress DURING the fetch (side effect — writes sync_run_events, never a
+  // step result). On a dry run there's no run row to attach to, so skip the emitter.
+  // makeEmitter's own guards keep pct monotonic and swallow any write error.
+  const onProgress: MailClerkProgress | undefined = params.dryRun
+    ? undefined
+    : (() => {
+        const db = DbClient.fromEnv();
+        const emit = makeEmitter(db, params.runId, "_run");
+        return (stage, label, pct, detail, level) => emit(stage, label, pct, detail, level);
+      })();
+
+  // ONE step: fetch every query's attachments over a SINGLE IMAP session. Progress
+  // events emitted inside are side effects, not part of the step's memoized result —
+  // a crash re-runs the whole (read-only) fetch and re-emits, which is fine.
   const fetched = await DBOS.runStep(
-    () => fetchAllOverOneSession(params.since),
+    () => fetchAllOverOneSession(params.since, onProgress),
     { name: "gmailFetchAllOneSession" }
   );
 
@@ -174,7 +239,7 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
       uid: e.uid,
       subject: e.subject,
       date: e.date,
-      hadAttachment: e.attachments.length > 0,
+      hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
     }));
 
     const latest = pickLatestXlsx(res?.emails ?? []);
@@ -210,19 +275,83 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
  * Fetch every query's matching emails+attachments over ONE Gmail session. Returns a
  * map keyed by MailQuery.key. This is the single point that touches Gmail — read-only
  * (never labels). Attachments are held in memory (Buffers) and uploaded by the caller.
+ *
+ * Emits live progress via `onProgress` as it goes (connect → per report: looking →
+ * found+downloading → downloaded N of M), so the UI moves during the whole fetch
+ * instead of freezing on "Checking Gmail…". pct climbs HONESTLY from FETCH_PCT_START
+ * toward FETCH_PCT_END keyed off the completed-report count.
+ *
+ * Speed: each report is fetched attachment-part-only (searchLatestAttachment) — just
+ * the newest xlsx part, not the full rfc822 source. If that path throws for one report
+ * (a structure/part edge case), it falls back to the full-source `search` for THAT
+ * report only and flags it `warn` — correctness beats speed.
  */
 async function fetchAllOverOneSession(
-  since: string
+  since: string,
+  onProgress?: MailClerkProgress
 ): Promise<Record<string, { query: string; emails: FetchedEmail[] }>> {
+  const emit = async (
+    label: string,
+    pct: number,
+    detail?: string,
+    level: "info" | "warn" = "info"
+  ) => {
+    if (!onProgress) return;
+    try {
+      await onProgress("fetch", label, pct, detail, level);
+    } catch {
+      /* progress is observational — never break the fetch */
+    }
+  };
+
   const gmail = GmailClient.fromEnv();
   const out: Record<string, { query: string; emails: FetchedEmail[] }> = {};
+  const queries = mailQueries();
+  const total = queries.length;
+
+  await emit("Connecting to Gmail…", FETCH_PCT_START);
   await gmail.connect();
   try {
-    for (const q of mailQueries()) {
+    let done = 0;
+    // Honest pct: FETCH_PCT_START at connect, climbing to FETCH_PCT_END as reports land.
+    const pctFor = (completed: number) =>
+      FETCH_PCT_START +
+      Math.round((FETCH_PCT_END - FETCH_PCT_START) * (completed / total));
+
+    for (const q of queries) {
       const query = q.query.replace("{since}", since);
-      // outDir=null → keep bytes in memory; the caller uploads to Storage.
-      const res = await gmail.search(query, { outDir: null, patterns: ["*.xlsx", "*.xls"] });
-      out[q.key] = { query, emails: res.emails };
+      const label = reportLabel(q.key);
+      await emit(`Looking for ${label}…`, pctFor(done));
+
+      let emails: FetchedEmail[];
+      try {
+        // FAST path — metadata-first, download only the newest xlsx part.
+        const res = await gmail.searchLatestAttachment(query, {
+          patterns: ["*.xlsx", "*.xls"],
+        });
+        emails = res.emails;
+      } catch {
+        // Fallback for THIS report — full-source parse (slower but robust).
+        await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
+        const res = await gmail.search(query, {
+          outDir: null,
+          patterns: ["*.xlsx", "*.xls"],
+        });
+        emails = res.emails;
+      }
+      out[q.key] = { query, emails };
+
+      // Report what we found (real filename + size from the chosen attachment).
+      const latest = pickLatestXlsx(emails);
+      if (latest) {
+        await emit(
+          `Found ${label} (${humanSize(latest.attachment.sizeBytes)})`,
+          pctFor(done),
+          latest.attachment.filename
+        );
+      }
+      done += 1;
+      await emit(`Downloaded ${done} of ${total} reports…`, pctFor(done));
     }
   } finally {
     await gmail.close();
@@ -270,14 +399,17 @@ export const mailClerkWorkflow = DBOS.registerWorkflow(mailClerkBody, {
  * DBOS.runStep wrapping (so it needs no launched DBOS runtime). When dryRun is
  * false it still uploads to Storage. Read-only when dryRun is true.
  */
-export async function runMailClerk(params: MailClerkParams): Promise<MailClerkManifest> {
+export async function runMailClerk(
+  params: MailClerkParams,
+  onProgress?: MailClerkProgress
+): Promise<MailClerkManifest> {
   const manifest: MailClerkManifest = {
     runId: params.runId,
     since: params.since,
     reports: {},
     emailMeta: {},
   };
-  const fetched = await fetchAllOverOneSession(params.since);
+  const fetched = await fetchAllOverOneSession(params.since, onProgress);
   const sb = params.dryRun ? null : storageClient();
 
   for (const q of mailQueries()) {
@@ -286,7 +418,7 @@ export async function runMailClerk(params: MailClerkParams): Promise<MailClerkMa
       uid: e.uid,
       subject: e.subject,
       date: e.date,
-      hadAttachment: e.attachments.length > 0,
+      hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
     }));
 
     const latest = pickLatestXlsx(res?.emails ?? []);

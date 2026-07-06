@@ -27,7 +27,7 @@
  * OAuth). The worker reads them from its env, not from ~/.config, so the Mac creds
  * file is not a runtime dependency in production.
  */
-import { ImapFlow, type FetchMessageObject } from "imapflow";
+import { ImapFlow, type FetchMessageObject, type MessageStructureObject } from "imapflow";
 import { simpleParser, type Attachment } from "mailparser";
 
 export const PROCESSED_LABEL = "Blackwood-Processed";
@@ -36,6 +36,8 @@ const IMAP_PORT = 993;
 // "[Gmail]/All Mail" lets X-GM-RAW search across every label, matching fetch_gmail.py.
 const ALL_MAIL = "[Gmail]/All Mail";
 const MAX_BYTES_PER_MESSAGE = 50 * 1024 * 1024; // 50 MB cap, mirrors the Python.
+// A genuine connect stall should ERROR quickly, not hang up to socketTimeout.
+const CONNECT_TIMEOUT_MS = 60 * 1000;
 
 export interface GmailCreds {
   user: string;
@@ -71,6 +73,14 @@ export interface FetchedEmail {
   date: string | null; // ISO
   sizeBytes: number;
   attachments: DownloadedAttachment[];
+  /**
+   * True if this email carries a matching attachment, EVEN when its bytes were not
+   * materialized. The attachment-only fast path (searchLatestAttachment) downloads
+   * only the newest email's part but detects the part on every email via bodyStructure,
+   * so this preserves the manifest's per-email hadAttachment signal without the full
+   * download. Undefined on the full-source path (there, attachments.length is exact).
+   */
+  hasMatchingAttachment?: boolean;
 }
 
 export interface GmailSearchResult {
@@ -96,7 +106,10 @@ export class GmailClient {
       auth: { user: creds.user, pass: creds.appPassword },
       // imapflow logs verbosely by default — silence to keep stdout/stderr clean.
       logger: false,
-      // Gmail can be slow on large mailboxes; give a generous socket timeout.
+      // A genuine connect stall ERRORS at 60s instead of hanging to socketTimeout.
+      connectionTimeout: CONNECT_TIMEOUT_MS,
+      // Gmail can be slow on large mailboxes; keep a generous socket timeout for the
+      // (rare) large single-message fetch — the per-report downloads are small.
       socketTimeout: 5 * 60 * 1000,
     });
   }
@@ -210,6 +223,112 @@ export class GmailClient {
   }
 
   /**
+   * FAST attachment-only variant of `search`. Instead of pulling every matching
+   * message's FULL rfc822 source (slow — the 2m40s culprit) and mailparser-parsing
+   * all of it, this:
+   *   1. fetches lightweight metadata (envelope + size + bodyStructure) for the
+   *      matching UIDs — no source bytes,
+   *   2. picks the NEWEST email carrying an xlsx/xls attachment part,
+   *   3. downloads ONLY that one part via `download(uid, part)` (imapflow decodes
+   *      base64/quoted-printable for us, so the bytes are byte-identical to what
+   *      mailparser returned from the full source).
+   *
+   * Returns the SAME { emails } shape as `search`, so pickLatestXlsx / the manifest
+   * are unchanged. Only the CHOSEN email carries a materialized attachment buffer;
+   * older emails are metadata-only (they were never used anyway — the clerk always
+   * takes the latest). On ANY per-message structure/part failure the caller can fall
+   * back to the full-source `search` for that query (correctness beats speed).
+   *
+   * @param patterns comma-list of globs, default "*.xlsx,*.xls" (case-insensitive).
+   */
+  async searchLatestAttachment(
+    gmailQuery: string,
+    opts: { patterns?: string[]; limit?: number } = {}
+  ): Promise<GmailSearchResult> {
+    if (!this.connected)
+      throw new Error("GmailClient.searchLatestAttachment called before connect()");
+    const patterns = (opts.patterns && opts.patterns.length
+      ? opts.patterns
+      : ["*.xlsx", "*.xls"]
+    ).map((p) => p.toLowerCase());
+    const limit = opts.limit ?? 50;
+
+    const lock = await this.client.getMailboxLock(ALL_MAIL);
+    try {
+      const found = await this.client.search({ gmraw: gmailQuery }, { uid: true });
+      const uids = (Array.isArray(found) ? found : []).slice().sort((a, b) => a - b);
+      if (!uids.length) {
+        return { ok: true, query: gmailQuery, emailCount: 0, emails: [] };
+      }
+      const chosen = limit && uids.length > limit ? uids.slice(-limit) : uids;
+
+      // Pass 1 — metadata only (envelope + size + bodyStructure). Cheap: no source.
+      const metas: {
+        uid: number;
+        msg: FetchMessageObject;
+        attPart: { part: string; filename: string } | null;
+      }[] = [];
+      for (const uid of chosen) {
+        const msg = (await this.client.fetchOne(
+          String(uid),
+          { uid: true, envelope: true, size: true, bodyStructure: true, threadId: true },
+          { uid: true }
+        )) as FetchMessageObject | false;
+        if (!msg) continue;
+        const attPart = msg.bodyStructure
+          ? findAttachmentPart(msg.bodyStructure, patterns)
+          : null;
+        metas.push({ uid, msg, attPart });
+      }
+
+      // Build the emails list (metadata-only), newest last (metas are UID-ascending).
+      const emails: FetchedEmail[] = metas.map(({ uid, msg, attPart }) => ({
+        uid,
+        threadId: msg.threadId ?? null,
+        subject: msg.envelope?.subject ?? "",
+        sender: formatAddress(msg.envelope?.from),
+        date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : null,
+        sizeBytes: typeof msg.size === "number" ? msg.size : 0,
+        attachments: [],
+        // Preserve the per-email hadAttachment signal without downloading every part.
+        hasMatchingAttachment: attPart != null,
+      }));
+
+      // Pass 2 — download ONLY the newest email's attachment part.
+      for (let i = metas.length - 1; i >= 0; i--) {
+        const m = metas[i];
+        if (!m.attPart) continue;
+        const size = typeof m.msg.size === "number" ? m.msg.size : 0;
+        if (size > MAX_BYTES_PER_MESSAGE) {
+          // Oversized — record the email (already in `emails`) but skip the download.
+          break;
+        }
+        const dl = await this.client.download(String(m.uid), m.attPart.part, {
+          uid: true,
+        });
+        const content = await streamToBuffer(dl.content);
+        emails[i].attachments = [
+          {
+            filename: dl.meta.filename || m.attPart.filename,
+            path: null,
+            content,
+            sizeBytes: content.length,
+            mimeType:
+              dl.meta.contentType ||
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            isInline: (dl.meta.disposition ?? "").toLowerCase().includes("inline"),
+          },
+        ];
+        break; // only the newest xlsx is needed
+      }
+
+      return { ok: true, query: gmailQuery, emailCount: emails.length, emails };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
    * Apply the Blackwood-Processed Gmail LABEL to the given UIDs (thread-scoped).
    * Uses +X-GM-LABELS via messageFlagsAdd(..., { useLabels: true }). Call this ONLY
    * when the apply had zero errors and zero unapplied non-held rows
@@ -294,6 +413,47 @@ async function saveMatchingAttachments(
     });
   }
   return out;
+}
+
+/**
+ * Walk a bodyStructure tree and return the FIRST leaf part that looks like an
+ * attachment matching one of the filename globs (case-insensitive). Returns the
+ * IMAP part number (e.g. "2") + the filename, or null if none. Mirrors the
+ * mailparser attachment-filter used by the full-source path, but off the structure
+ * so we can download just that one part.
+ */
+export function findAttachmentPart(
+  node: MessageStructureObject,
+  patterns: string[]
+): { part: string; filename: string } | null {
+  if (node.childNodes && node.childNodes.length) {
+    for (const child of node.childNodes) {
+      const hit = findAttachmentPart(child, patterns);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  // Leaf node. Its filename lives on the Content-Disposition params, or (fallback)
+  // the Content-Type "name" param.
+  const name =
+    node.dispositionParameters?.filename ??
+    node.dispositionParameters?.Filename ??
+    node.parameters?.name ??
+    node.parameters?.Name ??
+    "";
+  if (!name || !node.part) return null;
+  const lower = String(name).toLowerCase();
+  if (!patterns.some((p) => globMatch(lower, p))) return null;
+  return { part: node.part, filename: String(name) };
+}
+
+/** Buffer a Readable stream (imapflow's download().content). */
+async function streamToBuffer(stream: import("node:stream").Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 /** Port of fetch_gmail.safe_filename: basename, strip unsafe chars, cap length. */

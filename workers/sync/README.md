@@ -40,12 +40,12 @@ the click just writes "sync requested"; the worker does the rest durably.
 |---|---|
 | `src/lib/norm.ts` | EXACT ports of Python `norm_num`/`norm_int`/`norm_str`/`norm_block_loc`/`coerce_date`/`coerce_float`. **Banker's rounding** (round-half-to-even) — no `Math.round` anywhere. |
 | `src/lib/db.ts` | Supabase service client + typed wrappers (readRows/insert/insertIfAbsent/update, `write_ingestion_audit`/`stamp_ingestion_audit` RPCs, sync_runs lifecycle). Mirrors `lib/db.py`. |
-| `src/lib/gmail.ts` | imapflow + mailparser: X-GM-RAW search, download, X-GM-LABELS label, latest-xlsx pick. Single-session reuse. |
+| `src/lib/gmail.ts` | imapflow + mailparser: X-GM-RAW search, download, X-GM-LABELS label, latest-xlsx pick. Single-session reuse (60s `connectionTimeout` so a connect stall errors fast). `searchLatestAttachment` = the FAST path: metadata-first (envelope + bodyStructure, no source) then downloads ONLY the newest xlsx **part** (`findAttachmentPart` → `download(uid, part)`), not the full rfc822 source. |
 | `src/lib/xlsx.ts` | exceljs helpers matching openpyxl `data_only` semantics (formula → cached result, date cells, merges, sheet iteration). |
 | `src/lib/progress.ts` | `emitEvent` → `sync_run_events`; monotonic pct per (run,report); digestible-language rules carried verbatim; never throws. |
 | `src/dbos.ts` | DBOS config + launch/shutdown. |
 | `src/workflows/demo.ts` | The M0 crash-resume proof workflow (toy 3-step). |
-| `src/workflows/mailClerk.ts` | The PINNED Mail Clerk (one session → Storage manifest). `runMailClerk` is the DBOS-free variant for tests. |
+| `src/workflows/mailClerk.ts` | The PINNED Mail Clerk (one session → Storage manifest). Emits **live progress DURING the fetch** (pct 4→25): "Connecting to Gmail…" → per report "Looking for RC DELIVERIES…" / "Found RC DELIVERIES (85 KB)" / "Downloaded 3 of 7 reports…", real filenames+sizes, ≤2 beats/report. Fetches attachment-part-only via `searchLatestAttachment`, with a per-report fallback to the full-source path (correctness beats speed). `runMailClerk(params, onProgress?)` is the DBOS-free variant for tests. |
 | `src/workflows/runSync.ts` | **The real top-level Run Sync workflow** — status lifecycle + Mail Clerk + all 6 reports in panel order + result aggregation + failure isolation. |
 | `src/workflows/reportWorkflow.ts` | The per-report CHILD workflow — dispatches to each report's `runReport`, normalizes into a uniform envelope, isolates failures. |
 | `src/workflows/reportDeps.ts` | Workflow-layer ADAPTERS: Storage-download-to-tmp, Gmail labeler, progress emitter, and the **write-blocking dry-run db proxy**. Wires each report's own deps type (reports are NOT reshaped). |
@@ -145,7 +145,11 @@ so the UI unsticks even if the worker is unreachable.
   SINCE=2026/06/28 npm run mailclerk:live
   ```
   Fetches the latest xlsx for all report queries over ONE Gmail session and prints
-  the manifest. Never uploads / never labels (`dryRun`).
+  the manifest. Never uploads / never labels (`dryRun`). Also prints the **live
+  per-report progress lines** (a console `onProgress` logger with elapsed-time +
+  pct), so you can watch the fetch move report-by-report. With attachment-part-only
+  downloads a full 7-report fetch runs in ~65–110s (was ~2m40s pulling full message
+  sources); bytes/filenames are byte-identical to the old path.
 - **End-to-end DRY-RUN proof (M4-worker DoD):**
   ```bash
   # needs a filled .env (Gmail + Supabase service role + DBOS_DATABASE_URL + SYNC_KICK_SECRET)

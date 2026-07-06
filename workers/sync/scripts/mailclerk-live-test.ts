@@ -47,11 +47,31 @@ async function main(): Promise<void> {
   );
 
   const t0 = Date.now();
-  const manifest = await _mailClerkBodyForTest({
-    runId: `live-test-${Date.now()}`,
-    since,
-    dryRun: true, // never upload to Storage, never label
-  });
+  // Console progress logger — proves the per-report progress lines fire during fetch.
+  const onProgress = async (
+    _stage: "fetch",
+    label: string,
+    pct: number,
+    detail?: string,
+    level: "info" | "warn" = "info"
+  ): Promise<void> => {
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    const tag = level === "warn" ? "WARN" : "prog";
+    // eslint-disable-next-line no-console
+    console.log(
+      `[mailclerk-live][${tag}] +${secs}s  ${String(pct).padStart(3)}%  ${label}` +
+        (detail ? `  (${detail})` : "")
+    );
+  };
+
+  const manifest = await _mailClerkBodyForTest(
+    {
+      runId: `live-test-${Date.now()}`,
+      since,
+      dryRun: true, // never upload to Storage, never label
+    },
+    onProgress
+  );
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
   // eslint-disable-next-line no-console
