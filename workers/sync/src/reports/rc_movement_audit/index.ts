@@ -189,12 +189,39 @@ export interface RunReportDeps {
   since?: string;
 }
 
+/**
+ * A single drifted date threaded onto the audit gate failure so the app's adjudicator
+ * can NAME the exact day + both numbers. The auditor feeds the rc_out DB sums BOTH as
+ * "proposed" and as the gate input (P==O), so the meaningful comparison is the movement
+ * sheet vs the rc_out DB total. Pure kg totals — NO ₱/cost. Local shape (scope fence:
+ * this port may not import from rc_out/).
+ */
+export interface GateDriftDate {
+  date: string;
+  /** rc_out DB sum for the day. */
+  db_sum_kg?: number | null;
+  /** RC MOVEMENT (movement sheet) total kg for the day. */
+  movement_kg?: number | null;
+  /** db_sum − movement (signed disagreement). */
+  diff_kg?: number | null;
+  /** db_sum − movement excess (when the DB is materially above the sheet). */
+  excess_kg?: number | null;
+  /** e.g. "no movement entry" when the sheet has no row for the day. */
+  note?: string;
+}
+
+export interface GateFailureDetail {
+  gate: string;
+  detail: string;
+  drift_dates?: GateDriftDate[];
+}
+
 export interface RunReportResult {
   report_type: string;
   ok: boolean;
   /** The audit envelope (same shape classifyCase returns). null when no RC MOVEMENT email. */
   audit: AuditEnvelope | null;
-  gate_failures: Array<{ gate: string; detail: string }>;
+  gate_failures: GateFailureDetail[];
   counts: { noop: number; insert: number; update: number; flagged: number };
   watermark: string | null;
   audit_since: string | null;
@@ -292,6 +319,7 @@ export async function runReport(
       ? [{
           gate: "rc_movement_serious_drift",
           detail: `${audit.reconcile.summary.drift_dates} drift date(s); max_severity=serious`,
+          drift_dates: auditDriftDates(audit),
         }]
       : [],
     // counts describe DISCREPANCIES, not writes (audit_rc_movement.py:19-21):
@@ -336,6 +364,32 @@ function rcOutSumsFromRows(rows: Array<Record<string, unknown>>): RcOutSums {
   }
   const out: RcOutSums = {};
   for (const [k, v] of Object.entries(sums)) out[k] = round2(v);
+  return out;
+}
+
+/**
+ * The dates where the rc_out DB total and the movement sheet seriously disagree (the
+ * dates that drove max_severity=serious). Surfaces both totals + the gap so the app
+ * adjudicator can tell Renzo exactly which day to check. Pure kg totals, no ₱.
+ */
+function auditDriftDates(audit: AuditEnvelope): GateDriftDate[] {
+  const out: GateDriftDate[] = [];
+  for (const e of audit.reconcile.drift_dates) {
+    const missingMovement = e.proposed_sum_kg !== null && e.rc_movement_kg === null;
+    const seriousExcess =
+      e.excess_o_vs_m_kg !== null && e.excess_o_vs_m_kg > SERIOUS_DRIFT_KG;
+    const seriousGap =
+      e.drift_p_vs_m_kg !== null && Math.abs(e.drift_p_vs_m_kg) > SERIOUS_DRIFT_KG;
+    if (!missingMovement && !seriousExcess && !seriousGap) continue;
+    out.push({
+      date: e.date,
+      db_sum_kg: e.rc_out_existing_kg,
+      movement_kg: e.rc_movement_kg,
+      diff_kg: e.drift_p_vs_m_kg,
+      ...(e.excess_o_vs_m_kg !== null ? { excess_kg: e.excess_o_vs_m_kg } : {}),
+      ...(missingMovement ? { note: "no movement entry" } : {}),
+    });
+  }
   return out;
 }
 

@@ -31,8 +31,15 @@ import {
   reconcile,
   rcOutSumsFromRows,
   type RcOutSums,
+  type ReconcileReport,
 } from "./reconcile.js";
-import { applyRcOut, type RcOutCompact, type ApplyResult } from "./apply.js";
+import {
+  applyRcOut,
+  type RcOutCompact,
+  type ApplyResult,
+  type GateDriftDate,
+  type GateFailureDetail,
+} from "./apply.js";
 
 export const REPORT_TYPE = "rc_out";
 
@@ -132,7 +139,7 @@ export interface RunReportResult {
   classify: {
     report_type: string;
     ok: boolean;
-    gate_failures: Array<{ gate: string; detail: string }>;
+    gate_failures: GateFailureDetail[];
     counts: { noop: number; insert: number; update: number; flagged: number };
     watermark: string | null;
     codified_rules_applied: readonly string[];
@@ -202,7 +209,7 @@ export async function runReport(
   const proposed = extractProposed(proposedWb, year);
 
   // GATES (only when the RC MOVEMENT cross-check is present).
-  const gateFailures: Array<{ gate: string; detail: string }> = [];
+  const gateFailures: GateFailureDetail[] = [];
   if (movementAtt) {
     await emit?.("reconcile", "Cross-checking feeding totals against the movement sheet…", 42);
     const movementPath = await deps.fetchToLocalPath(movementAtt.storagePath);
@@ -215,6 +222,7 @@ export async function runReport(
       gateFailures.push({
         gate: "proposed_vs_movement_drift_500kg",
         detail: `${rep1.summary.drift_dates} drift date(s); serious >500kg — HALT, write nothing.`,
+        drift_dates: pvmDriftDates(rep1),
       });
     }
 
@@ -230,6 +238,7 @@ export async function runReport(
         gate: "db_vs_movement_duplication",
         detail:
           "rc_out DB SUM exceeds RC MOVEMENT (O>M) on a settled date — suspected duplication; HALT.",
+        drift_dates: dupDriftDates(rep2),
       });
     }
   } else {
@@ -319,6 +328,50 @@ export async function runReport(
 function firstAttachment(manifest: RcOutManifest, key: string): StoredAttachmentLike | null {
   const arr = manifest.reports?.[key];
   return arr && arr.length ? arr[0] : null;
+}
+
+const SERIOUS_DRIFT_KG = 500;
+
+/**
+ * GATE 1 detail: the daily-report-vs-movement-sheet disagreements that drove the halt.
+ * Surfaces every drifted date carrying a serious P-vs-M gap OR a missing movement entry
+ * (both are days the adjudicator should tell Renzo to check). Pure kg totals, no ₱.
+ */
+function pvmDriftDates(rep: ReconcileReport): GateDriftDate[] {
+  const out: GateDriftDate[] = [];
+  for (const e of rep.drift_dates) {
+    const missingMovement = e.proposed_sum_kg !== null && e.rc_movement_kg === null;
+    const seriousGap =
+      e.drift_p_vs_m_kg !== null && Math.abs(e.drift_p_vs_m_kg) > SERIOUS_DRIFT_KG;
+    if (!missingMovement && !seriousGap) continue;
+    out.push({
+      date: e.date,
+      proposed_kg: e.proposed_sum_kg,
+      movement_kg: e.rc_movement_kg,
+      diff_kg: e.drift_p_vs_m_kg,
+      ...(missingMovement ? { note: "no movement entry" } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * GATE 2 detail: the dates where the rc_out DB sum materially EXCEEDS the movement sheet
+ * (suspected already-saved duplicate feedings). Carries the DB sum, the movement total,
+ * and the excess. Pure kg totals, no ₱.
+ */
+function dupDriftDates(rep: ReconcileReport): GateDriftDate[] {
+  const out: GateDriftDate[] = [];
+  for (const e of rep.drift_dates) {
+    if (e.excess_o_vs_m_kg === null || e.excess_o_vs_m_kg <= SERIOUS_DRIFT_KG) continue;
+    out.push({
+      date: e.date,
+      db_sum_kg: e.rc_out_existing_kg,
+      movement_kg: e.rc_movement_kg,
+      excess_kg: e.excess_o_vs_m_kg,
+    });
+  }
+  return out;
 }
 
 /** since = watermark - N days (sync_rc_out.py: date.fromisoformat - timedelta). */

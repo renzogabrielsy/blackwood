@@ -19,12 +19,43 @@ import type { FieldDiff } from "./classify.js";
 import type { ProposedRow } from "./extract.js";
 import { type HeldRow, type HeldKind, rcOutKey } from "../held.js";
 
+/**
+ * A single drifted date threaded onto a gate failure so the app's adjudicator can
+ * NAME the exact day + both numbers instead of saying "some dates". Built in index.ts
+ * from the reconciler's `drift_dates`. NO ₱/cost field — pure kg totals.
+ *   - proposed_vs_movement_drift_500kg → {date, proposed_kg, movement_kg, diff_kg[, note]}
+ *   - db_vs_movement_duplication (O>M)  → {date, db_sum_kg, movement_kg, excess_kg}
+ */
+export interface GateDriftDate {
+  date: string;
+  /** PROPOSED (daily report) total kg for the day. */
+  proposed_kg?: number | null;
+  /** RC MOVEMENT (movement sheet) total kg for the day. */
+  movement_kg?: number | null;
+  /** proposed − movement (the disagreement), signed. */
+  diff_kg?: number | null;
+  /** rc_out DB sum for the day (O>M duplication case). */
+  db_sum_kg?: number | null;
+  /** db_sum − movement excess (O>M duplication case). */
+  excess_kg?: number | null;
+  /** e.g. "no movement entry" when the movement sheet has no row for the day. */
+  note?: string;
+}
+
+/** A gate failure, optionally carrying the specific drifted dates for the adjudicator. */
+export interface GateFailureDetail {
+  gate: string;
+  detail: string;
+  /** The specific dates that drove the halt (date + both totals). */
+  drift_dates?: GateDriftDate[];
+}
+
 /** The compact hand-off from classify → apply (sync_rc_out.py compact object). */
 export interface RcOutCompact {
   report_type: string;
   since: string;
   watermark: string | null;
-  gate_failures: Array<{ gate: string; detail: string }>;
+  gate_failures: GateFailureDetail[];
   source: { email_subject?: string | null; email_uid?: number | string | null; email_thread_id?: string | null };
   actionable: {
     new: Array<{ index: unknown; row: ProposedRow }>;
@@ -57,7 +88,7 @@ export interface ApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
-  gate_failures?: Array<{ gate: string; detail: string }>;
+  gate_failures?: GateFailureDetail[];
 }
 
 const REPORT_TYPE = "rc_out";
@@ -104,6 +135,11 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
         natural_key: g.gate,
         detail: g.detail,
         kind: "gate_failure",
+        // Thread the specific drifted dates onto the held row so the app adjudicator
+        // can name the exact day + both numbers (no ₱/cost — pure kg totals).
+        ...(g.drift_dates && g.drift_dates.length
+          ? { row: { gate: g.gate, drift_dates: g.drift_dates } }
+          : {}),
       })),
       labeled: false,
       watermark_updated: false,
