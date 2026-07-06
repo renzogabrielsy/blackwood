@@ -133,6 +133,15 @@ export function useSyncRun() {
     cancelling: false,
   }))
 
+  // Mirror the latest committed state so finalizeRun can fold report results
+  // SYNCHRONOUSLY (see the note there) instead of inside a deferred setState updater.
+  // Updated in an effect (never during render); finalizeRun runs async after commit,
+  // so the ref is current by the time it reads it.
+  const stateRef = React.useRef(state)
+  React.useEffect(() => {
+    stateRef.current = state
+  })
+
   // The run we are actively watching. Kept in a ref so the subscription effect
   // and the poll can read it without re-subscribing on every state change.
   const runIdRef = React.useRef<string | null>(null)
@@ -203,12 +212,17 @@ export function useSyncRun() {
       const cancelled = status === 'cancelled'
 
       // Fold per-report results into cards + build the settled list for aggregation.
+      // Fold SYNCHRONOUSLY from the latest committed state (stateRef). `settled` MUST be
+      // a real, populated array where heldGroups + the narration input read it below —
+      // it was previously .push()ed INSIDE a setState updater, which React defers, so it
+      // read EMPTY (→ blank held section + a false "Nothing new today" summary despite
+      // real writes/held rows).
       const settled: SyncCardState[] = []
-      setState((prev) => {
-        const cards = { ...prev.cards }
-        for (const meta of SYNC_REPORTS) {
+      const prevCards = stateRef.current.cards
+      const foldedCards = { ...prevCards }
+      for (const meta of SYNC_REPORTS) {
           const rep: SyncRunReportResult | undefined = reports?.[meta.type]
-          const prevCard = cards[meta.type]
+          const prevCard = prevCards[meta.type]
           let next: SyncCardState
 
           if (rep) {
@@ -244,11 +258,10 @@ export function useSyncRun() {
           } else {
             next = prevCard
           }
-          cards[meta.type] = next
+          foldedCards[meta.type] = next
           settled.push(next)
-        }
-        return { ...prev, cards }
-      })
+      }
+      setState((prev) => ({ ...prev, cards: foldedCards }))
 
       // Aggregate held rows into groups.
       const heldGroups: HeldGroup[] = settled
