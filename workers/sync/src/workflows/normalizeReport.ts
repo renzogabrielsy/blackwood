@@ -36,11 +36,22 @@
 // Worker-side mirror of the frontend contract (app/(app)/sync/types.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Mirror of the frontend `HeldRow`. */
+/**
+ * Mirror of the frontend `HeldRow`. The three legacy fields are always present;
+ * the three enrichment fields (kind/row/source_index, 2026-07-06) are optional and
+ * passed through verbatim so the app adjudicator gets a decision-grade payload.
+ * See src/reports/held.ts for the authoritative construction + the HeldKind enum.
+ */
 export interface HeldRow {
   reason: string;
   natural_key: string;
   detail: string;
+  /** Normalized flag category the app keys its DB lookup off of. */
+  kind?: string;
+  /** Structured KEY fields for the adjudicator + DB lookup. NEVER a ₱/cost field. */
+  row?: Record<string, unknown>;
+  /** The former row index — retained for the apply-input mapping. */
+  source_index?: string | number;
 }
 
 /** Mirror of the frontend `GateFailure`. */
@@ -185,14 +196,23 @@ function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.map(str) : [];
 }
 
-/** Coerce a raw held entry (typed reason unions, optional detail) → contract HeldRow. */
+/** Coerce a raw held entry (typed reason unions, optional detail) → contract HeldRow.
+ *  Passes the enrichment fields (kind/row/source_index) through when present. */
 function toHeldRow(h: unknown): HeldRow {
   const o = (h ?? {}) as Record<string, unknown>;
-  return {
+  const out: HeldRow = {
     reason: str(o.reason),
     natural_key: str(o.natural_key),
     detail: str(o.detail),
   };
+  if (typeof o.kind === "string") out.kind = o.kind;
+  if (o.row && typeof o.row === "object" && !Array.isArray(o.row)) {
+    out.row = o.row as Record<string, unknown>;
+  }
+  if (typeof o.source_index === "string" || typeof o.source_index === "number") {
+    out.source_index = o.source_index;
+  }
+  return out;
 }
 
 /** Coerce a raw held array (any of the ports' HeldEntry/HeldRow shapes) → HeldRow[]. */

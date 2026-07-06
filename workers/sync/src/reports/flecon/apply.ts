@@ -20,6 +20,7 @@
  * semantics (unconditional DELETE WHERE transaction_date = eq.{d}, return=minimal).
  */
 import type { FleconClassified, PerDateEntry } from "./classify.js";
+import { type HeldRow, fleconKey } from "../held.js";
 
 export interface FleconApplyDeps {
   db: {
@@ -57,17 +58,15 @@ export interface FleconApplyOpts {
   noLabel: boolean;
 }
 
-export interface HeldEntry {
-  reason: "unmapped_or_missing_columns" | "below_since_floor" | "unmapped_bag_type_code";
-  natural_key: string;
-  detail: string;
-}
+/** Retained as an alias so anything importing HeldEntry still resolves; the
+ *  canonical shape is now the shared HeldRow (with kind/row/source_index). */
+export type HeldEntry = HeldRow;
 
 export interface FleconApplyResult {
   ok: boolean;
   inserts: number;
   replaced_dates: number;
-  held: HeldEntry[];
+  held: HeldRow[];
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
@@ -92,7 +91,7 @@ export async function applyFlecon(
   const since = classified.since;
   const codeToId = classified.code_to_id ?? {};
   const perDate: PerDateEntry[] = classified.per_date ?? [];
-  const held: HeldEntry[] = [];
+  const held: HeldRow[] = [];
   const errors: string[] = [];
   let replacedDates = 0;
   let inserts = 0;
@@ -106,10 +105,15 @@ export async function applyFlecon(
   if (colFlags.flagged) {
     held.push({
       reason: "unmapped_or_missing_columns",
-      natural_key: "columns",
+      natural_key: "Unmapped / missing bag-type columns",
       detail:
         `unmapped=${JSON.stringify(colFlags.unmapped_columns)} missing=${JSON.stringify(colFlags.missing_columns)} ` +
         `— register/acknowledge before these bag types can be written.`,
+      kind: "unmapped_or_missing_columns",
+      row: {
+        unmapped_columns: colFlags.unmapped_columns ?? [],
+        missing_columns: colFlags.missing_columns ?? [],
+      },
     });
   }
 
@@ -121,8 +125,10 @@ export async function applyFlecon(
       // Bounded floor — never touch settled history.
       held.push({
         reason: "below_since_floor",
-        natural_key: d,
+        natural_key: fleconKey(d),
         detail: `${d} < since ${since}; settled history not replaced.`,
+        kind: "below_since_floor",
+        row: { transaction_date: d, since },
       });
       continue;
     }
@@ -150,8 +156,10 @@ export async function applyFlecon(
       const uniq = [...new Set(unmappedHere)].sort();
       held.push({
         reason: "unmapped_bag_type_code",
-        natural_key: d,
+        natural_key: fleconKey(d, uniq.join(", ")),
         detail: `date ${d} has unmapped codes ${JSON.stringify(uniq)} — date NOT replaced.`,
+        kind: "unmapped_bag_type_code",
+        row: { transaction_date: d, bag_type_codes: uniq },
       });
       continue;
     }

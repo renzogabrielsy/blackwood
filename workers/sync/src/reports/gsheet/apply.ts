@@ -21,6 +21,7 @@
  */
 import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
+import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
 
 export const GSHEET_FILE_ID = "1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM";
 
@@ -118,10 +119,18 @@ export interface ModeApplyResult {
   updated: number;
   updated_ids: string[];
   new_batches_created: string[];
-  flagged_resolved: Array<{ index: unknown; reason: string; detail: string }>;
-  skipped: Array<{ index: unknown; why: string }>;
+  flagged_resolved: Array<{ index: unknown; reason: string; detail: string; held?: EnrichedHeld }>;
+  skipped: Array<{ index: unknown; why: string; held?: EnrichedHeld }>;
   /** Present only when a safety gate tripped (PD-2). */
   gate_failure?: { gate: string; detail: string; indexes?: unknown[] };
+}
+
+/** The enrichment attached to a gsheet skipped/flagged entry so `applyGsheet` can
+ *  build a decision-grade contract HeldRow (human key + kind + structured row). */
+interface EnrichedHeld {
+  kind: HeldKind;
+  natural_key: string;
+  row?: Record<string, unknown>;
 }
 
 export interface GsheetApplyResult {
@@ -129,7 +138,7 @@ export interface GsheetApplyResult {
   ok: boolean;
   inserts: number;
   updates: number;
-  held: Array<{ reason: string; natural_key: string; detail?: string }>;
+  held: HeldRow[];
   labeled: boolean; // ALWAYS false — a Sheet has no Gmail thread (gsheet.md §5).
   watermark_updated: boolean;
   errors: string[];
@@ -145,6 +154,68 @@ function provenanceComment(mode: string, index: unknown, runTs: string, noteExtr
     `(file ${GSHEET_FILE_ID}, tab ${tab}, row ${index}) on ${runTs}. ` +
     `Sheet = source of truth (2025+ scope).`;
   return base + (noteExtra ? ` ${noteExtra}` : "");
+}
+
+/** Build the enriched held payload for a gsheet NEW row (either mode). No ₱/cost. */
+function enrichedNew(
+  mode: "rc_in" | "rc_out",
+  r: CompactNewRcIn | CompactNewRcOut,
+  kind: HeldKind,
+): EnrichedHeld {
+  if (mode === "rc_in") {
+    const nr = r as CompactNewRcIn;
+    return {
+      kind,
+      natural_key: deliveriesKey({
+        transaction_date: nr.date,
+        batch_code: nr.batch_code,
+        block_loc: nr.block_loc,
+        weight_kg: nr.weight_kg,
+        truck_plate: nr.truck_plate,
+      }),
+      row: {
+        transaction_date: nr.date,
+        batch_code: nr.batch_code,
+        block_loc: nr.block_loc,
+        truck_plate: nr.truck_plate,
+        weight_kg: nr.weight_kg,
+        sacks: nr.sacks,
+      },
+    };
+  }
+  const nr = r as CompactNewRcOut;
+  return {
+    kind,
+    natural_key: rcOutKey({
+      transaction_date: nr.date,
+      batch_code_resolved: nr.batch_code,
+      destination: nr.destination,
+      weight_kg: nr.weight_kg,
+    }),
+    row: {
+      transaction_date: nr.date,
+      batch_code: nr.batch_code,
+      batch_id: nr.batch_id,
+      destination: nr.destination,
+      weight_kg: nr.weight_kg,
+      production_batch: nr.production_batch,
+      block_loc: nr.block_loc,
+    },
+  };
+}
+
+/** Build the enriched held payload for a gsheet FLAGGED (cross-batch) row. No ₱/cost. */
+function enrichedFlagged(mode: "rc_in" | "rc_out", r: CompactFlagged): EnrichedHeld {
+  return {
+    kind: "cross_batch_reassignment",
+    natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} row ${String(r.index)}`,
+    row: {
+      mode,
+      flag_kind: r.flag_kind ?? null,
+      db_conflict_ids: r.db_conflict_ids ?? [],
+      db_conflict_batches: r.db_conflict_batches ?? [],
+    },
+  };
 }
 
 /**
@@ -227,6 +298,7 @@ export async function applyFromCompact(
               why:
                 `location_occupied: block_loc ${nr.block_loc} already holds an active batch; ` +
                 `new batch ${bc} not created — resolve the slot`,
+              held: enrichedNew(mode, nr, "location_occupied"),
             });
             continue;
           }
@@ -265,7 +337,11 @@ export async function applyFromCompact(
     } else {
       const nr = r as CompactNewRcOut;
       if (!nr.batch_id) {
-        skipped.push({ index: nr.index, why: "NEW rc_out without resolved batch_id" });
+        skipped.push({
+          index: nr.index,
+          why: "NEW rc_out without resolved batch_id",
+          held: enrichedNew(mode, nr, "unmapped_batch_code"),
+        });
         continue;
       }
       const payload: Record<string, unknown> = {
@@ -343,15 +419,17 @@ export async function applyFromCompact(
   // --- FLAGGED rows: ONLY per explicit decision (default skip; never delete). ---
   const flaggedResolved: ModeApplyResult["flagged_resolved"] = [];
   for (const r of actionable.flagged) {
+    const enriched = enrichedFlagged(mode, r);
     const decision = (r.decision ?? "skip").trim();
     if (decision === "skip") {
-      skipped.push({ index: r.index, why: "flagged left as skip" });
+      skipped.push({ index: r.index, why: r.reason ?? "flagged left as skip", held: enriched });
       continue;
     }
     if (decision === "insert") {
       skipped.push({
         index: r.index,
         why: "flagged decision=insert requires re-running with this row promoted to NEW — not auto-handled here",
+        held: enriched,
       });
       continue;
     }
@@ -361,21 +439,32 @@ export async function applyFromCompact(
         index: r.index,
         reason: `reassign_to:${targetId}`,
         detail: "reassignment must be applied as a reviewed single UPDATE; not auto-executed",
+        held: enriched,
       });
       continue;
     }
-    skipped.push({ index: r.index, why: `unknown flagged decision '${decision}'` });
+    skipped.push({ index: r.index, why: `unknown flagged decision '${decision}'`, held: enriched });
   }
 
   // --- UNMAPPED: never auto-create a batch. ---
   for (const r of actionable.unmapped) {
     const decision = (r.decision ?? "skip").trim();
+    const enriched: EnrichedHeld = {
+      kind: "unmapped_batch_code",
+      natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} row ${String(r.index)}`,
+      row: { mode, index: r.index },
+    };
     if (decision === "skip") {
-      skipped.push({ index: r.index, why: "unmapped left as skip — never auto-create a batch" });
+      skipped.push({
+        index: r.index,
+        why: "unmapped left as skip — never auto-create a batch",
+        held: enriched,
+      });
     } else {
       skipped.push({
         index: r.index,
         why: `unmapped decision='${decision}' requires re-classify with corrected batch_code`,
+        held: enriched,
       });
     }
   }
@@ -421,21 +510,32 @@ export async function applyGsheet(
         errors.push(`${mode} apply gate: ${res.gate_failure.gate} — ${res.gate_failure.detail}`);
         held.push({
           reason: "gate_failure",
-          natural_key: `${mode}:gate`,
+          natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} — ${res.gate_failure.gate}`,
           detail: res.gate_failure.detail,
+          kind: "gate_failure",
         });
         continue;
       }
       totalInserts += res.inserted;
       totalUpdates += res.updated;
       for (const sk of res.skipped) {
-        held.push({ reason: "skipped", natural_key: `${mode}:${sk.index}`, detail: sk.why });
+        held.push({
+          reason: "skipped",
+          natural_key: sk.held?.natural_key ?? `${mode}:${sk.index}`,
+          detail: sk.why,
+          kind: sk.held?.kind ?? "flagged",
+          ...(sk.held?.row ? { row: sk.held.row } : {}),
+          source_index: sk.index as string | number,
+        });
       }
       for (const fr of res.flagged_resolved) {
         held.push({
           reason: "flagged_needs_manual_apply",
-          natural_key: `${mode}:${fr.index}`,
+          natural_key: fr.held?.natural_key ?? `${mode}:${fr.index}`,
           detail: fr.detail,
+          kind: fr.held?.kind ?? "cross_batch_reassignment",
+          ...(fr.held?.row ? { row: fr.held.row } : {}),
+          source_index: fr.index as string | number,
         });
       }
     } catch (exc) {

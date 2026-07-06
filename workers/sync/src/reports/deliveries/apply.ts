@@ -24,6 +24,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
+import { type HeldRow, type HeldKind, deliveriesKey } from "../held.js";
 
 /** The compact hand-off from classify → apply. */
 export interface DeliveriesCompact {
@@ -38,9 +39,9 @@ export interface DeliveriesCompact {
   actionable: {
     new: Array<{ index: unknown; row: DeliveryRow; notes?: string[] }>;
     changed: Array<{ index: unknown; row: DeliveryRow; db_row: Record<string, unknown>; diff: FieldDiff[] }>;
-    flagged: Array<{ kind: string; index: unknown; reason?: string; decision?: string }>;
+    flagged: Array<{ kind: string; index: unknown; reason?: string; decision?: string; row?: DeliveryRow }>;
     dup_noops: Array<{ index: unknown; note?: string }>;
-    malformed: Array<{ reason?: string; row?: { transaction_date?: unknown } }>;
+    malformed: Array<{ reason?: string; row?: DeliveryRow }>;
   };
   batch_codes?: string[];
 }
@@ -60,13 +61,33 @@ export interface ApplyResult {
   ok: boolean;
   inserts: number;
   updates: number;
-  held: Array<{ reason: unknown; natural_key: unknown; detail?: string }>;
+  held: HeldRow[];
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
 }
 
 const REPORT_TYPE = "deliveries";
+
+/** The deliveries structured held-row payload. NEVER includes cost_basis (₱ gate). */
+function deliveriesHeldRow(r: DeliveryRow): Record<string, unknown> {
+  return {
+    transaction_date: r.transaction_date,
+    batch_code: r.batch_code ?? null,
+    block_loc: r.block_loc ?? null,
+    truck_plate: r.truck_plate ?? null,
+    weight_kg: r.weight_kg ?? null,
+    sacks: r.sacks ?? null,
+  };
+}
+
+/** Map a deliveries flagged classifier `kind` → the normalized HeldKind. */
+function deliveriesFlaggedKind(kind: string): HeldKind {
+  if (kind === "L033_cross_batch_loc_mismatch") return "cross_batch_reassignment";
+  if (kind === "L004_block_loc_correction") return "cross_batch_reassignment";
+  if (kind === "low_confidence") return "low_confidence";
+  return "flagged";
+}
 
 function prov(runTs: string, index: unknown, extra = ""): string {
   const base =
@@ -129,12 +150,15 @@ export async function applyDeliveries(
             if (isLocationCollision(bexc)) {
               held.push({
                 reason: "location_occupied",
-                natural_key: `${r.transaction_date}|${bc}|${r.block_loc ?? null}`,
+                natural_key: deliveriesKey(r),
                 detail:
                   `block_loc ${r.block_loc ?? null} already holds an active batch; ` +
                   `new batch ${bc} not created and this delivery was not written. ` +
                   `Resolve which batch owns this slot (close the prior batch or fix the ` +
                   `location) via the sync employee, then re-run.`,
+                kind: "location_occupied",
+                row: deliveriesHeldRow(r),
+                source_index: item.index as string | number,
               });
               continue;
             }
@@ -167,8 +191,11 @@ export async function applyDeliveries(
       if (res.insertedCount === 0) {
         held.push({
           reason: "already_exists",
-          natural_key: `${r.transaction_date}|${bc}`,
+          natural_key: deliveriesKey(r),
           detail: "idempotent skip (natural key already in DB)",
+          kind: "already_exists",
+          row: deliveriesHeldRow(r),
+          source_index: item.index as string | number,
         });
         continue;
       }
@@ -238,14 +265,26 @@ export async function applyDeliveries(
   // silent NOOPs (not written, not held — like the noop bucket).
   for (const f of compact.actionable.flagged ?? []) {
     if (onlyClean && (f.decision || "skip") === "skip") {
-      held.push({ reason: f.kind, natural_key: f.index, detail: f.reason });
+      const row = f.row;
+      held.push({
+        reason: f.kind,
+        natural_key: row ? deliveriesKey(row) : String(f.index ?? ""),
+        detail: f.reason ?? "requires human decision — never auto-written",
+        kind: deliveriesFlaggedKind(f.kind),
+        ...(row ? { row: deliveriesHeldRow(row) } : {}),
+        source_index: f.index as string | number,
+      });
     }
   }
   for (const m of compact.actionable.malformed ?? []) {
+    const row = m.row;
     held.push({
       reason: "malformed",
-      natural_key: m.row?.transaction_date,
-      detail: m.reason,
+      natural_key: row ? deliveriesKey(row) : "malformed row",
+      detail: m.reason ?? "malformed row held",
+      kind: "malformed",
+      ...(row ? { row: deliveriesHeldRow(row) } : {}),
+      ...(row?._source_row != null ? { source_index: row._source_row as string | number } : {}),
     });
   }
 

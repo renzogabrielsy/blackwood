@@ -279,9 +279,9 @@ export async function runReport(
     actionable: {
       new: classified.new,
       changed: classified.changed,
-      flagged: classified.flagged.map((f) => ({ index: f.index, reason: f.reason })),
-      unmapped: classified.unmapped.map((u) => ({ index: u.index, reason: u.reason })),
-      malformed: classified.malformed.map((m) => ({ reason: m.reason })),
+      flagged: classified.flagged.map((f) => ({ index: f.index, reason: f.reason, row: f.row })),
+      unmapped: classified.unmapped.map((u) => ({ index: u.index, reason: u.reason, row: u.row })),
+      malformed: classified.malformed.map((m) => ({ reason: m.reason, row: m.row })),
     },
     batch_lookup: batchLookup,
   };

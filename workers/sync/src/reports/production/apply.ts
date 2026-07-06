@@ -23,6 +23,7 @@
  */
 import type { DbClient, Row } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
+import { type HeldRow, label } from "../held.js";
 
 const WASTE_STREAMS = ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg"] as const;
 const GENERATED_COLS = ["diff_kwh", "consumption_kwh", "ttl_km"] as const;
@@ -50,12 +51,6 @@ export interface ProductionCompact {
   sections: ProductionSections;
 }
 
-export interface HeldRow {
-  reason: string;
-  natural_key: string;
-  detail: string;
-}
-
 export interface ApplyResult {
   report_type: string;
   ok: boolean;
@@ -65,6 +60,25 @@ export interface ApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
+}
+
+/** Human label for a production child record: "2026-06-30 · JUNE-26 · Morning · runs". */
+function prodKey(section: string, rec: Record<string, unknown> | undefined): string {
+  const r = rec ?? {};
+  return label([r.transaction_date, r.production_batch, r.shift, section]) || section;
+}
+
+/** The structured production held-row payload (no ₱/cost — production carries none). */
+function prodHeldRow(section: string, rec: Record<string, unknown> | undefined): Record<string, unknown> {
+  const r = rec ?? {};
+  return {
+    section,
+    transaction_date: r.transaction_date ?? null,
+    production_batch: r.production_batch ?? null,
+    shift: r.shift ?? null,
+    customer: r.customer ?? null,
+    grade: r.grade ?? null,
+  };
 }
 
 export interface ApplyDeps {
@@ -162,7 +176,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
   for (const c of runNews) {
     const sid = resolveShift(c);
     if (!sid) {
-      held.push({ reason: "unresolved_shift", natural_key: JSON.stringify(c.natural_key), detail: "run NEW without resolvable shift_id" });
+      const rec = (c.record ?? {}) as Row;
+      held.push({
+        reason: "unresolved_shift",
+        natural_key: prodKey("runs", rec),
+        detail: "run NEW without resolvable shift_id",
+        kind: "unresolved_shift",
+        row: prodHeldRow("runs", rec),
+      });
       continue;
     }
     const rec = (c.record ?? {}) as Row;
@@ -190,7 +211,13 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
           comment: prov("production_runs", runTs), snapshot: payload,
         });
       } else {
-        held.push({ reason: "already_exists", natural_key: `${payload.shift_id}|${payload.customer}|${payload.grade}`, detail: "idempotent skip" });
+        held.push({
+          reason: "already_exists",
+          natural_key: label([payload.customer, payload.grade, "runs (already recorded)"]),
+          detail: "idempotent skip",
+          kind: "already_exists",
+          row: { section: "runs", customer: payload.customer ?? null, grade: payload.grade ?? null, shift_id: payload.shift_id },
+        });
       }
     } catch (exc) {
       errors.push(`run insert ${payload.customer}/${payload.grade}: ${exc instanceof Error ? exc.message : String(exc)}`);
@@ -207,7 +234,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
       if (c.class !== "NEW") continue;
       const sid = resolveShift(c);
       if (!sid) {
-        held.push({ reason: "unresolved_shift", natural_key: secName, detail: `${secName} NEW without resolvable shift_id` });
+        const rec = (c.record ?? {}) as Row;
+        held.push({
+          reason: "unresolved_shift",
+          natural_key: prodKey(secName, rec),
+          detail: `${secName} NEW without resolvable shift_id`,
+          kind: "unresolved_shift",
+          row: prodHeldRow(secName, rec),
+        });
         continue;
       }
       const rec = (c.record ?? {}) as Row;
@@ -224,8 +258,11 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
           });
         } else {
           held.push({
-            reason: "already_exists_or_collision", natural_key: `${secName}:${sid}`,
+            reason: "already_exists_or_collision",
+            natural_key: prodKey(secName, rec),
             detail: `${secName} UNIQUE(shift_id) already present — held (L-028/L-007 collision review)`,
+            kind: "already_exists",
+            row: prodHeldRow(secName, rec),
           });
         }
       } catch (exc) {
@@ -257,7 +294,13 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
             comment: prov(table, runTs), snapshot: payload,
           });
         } else {
-          held.push({ reason: "already_exists", natural_key: table, detail: "idempotent skip" });
+          held.push({
+            reason: "already_exists",
+            natural_key: label([rec.reading_date, rec.meter ?? rec.plate_no, `${secName} (already recorded)`]) || table,
+            detail: "idempotent skip",
+            kind: "already_exists",
+            row: { section: secName, reading_date: rec.reading_date ?? null, meter: rec.meter ?? null, plate_no: rec.plate_no ?? null },
+          });
         }
       } catch (exc) {
         errors.push(`${table} insert: ${exc instanceof Error ? exc.message : String(exc)}`);
@@ -312,7 +355,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
     for (const c of sections[secName] ?? []) {
       if (c.class === "MALFORMED") {
         const reasons = (c.reasons as string[] | undefined) ?? [];
-        held.push({ reason: "malformed", natural_key: secName, detail: reasons.join("; ") || "malformed row held" });
+        const rec = (c.record ?? {}) as Row;
+        held.push({
+          reason: "malformed",
+          natural_key: prodKey(secName, rec),
+          detail: reasons.join("; ") || "malformed row held",
+          kind: "malformed",
+          row: prodHeldRow(secName, rec),
+        });
       }
     }
   }

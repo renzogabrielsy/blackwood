@@ -17,6 +17,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { FieldDiff } from "./classify.js";
 import type { ProposedRow } from "./extract.js";
+import { type HeldRow, type HeldKind, rcOutKey } from "../held.js";
 
 /** The compact hand-off from classify → apply (sync_rc_out.py compact object). */
 export interface RcOutCompact {
@@ -28,9 +29,10 @@ export interface RcOutCompact {
   actionable: {
     new: Array<{ index: unknown; row: ProposedRow }>;
     changed: Array<{ index: unknown; row: ProposedRow; db_row: Record<string, unknown>; diff: FieldDiff[] }>;
-    flagged: Array<{ index: unknown; reason?: string }>;
-    unmapped: Array<{ index: unknown; reason?: string }>;
-    malformed: Array<{ index?: unknown; reason?: string }>;
+    /** `row` carried through so held rows get a human label + structured payload. */
+    flagged: Array<{ index: unknown; reason?: string; row?: ProposedRow }>;
+    unmapped: Array<{ index: unknown; reason?: string; row?: ProposedRow }>;
+    malformed: Array<{ index?: unknown; reason?: string; row?: ProposedRow }>;
   };
   batch_lookup?: Record<string, string>;
 }
@@ -51,7 +53,7 @@ export interface ApplyResult {
   ok: boolean;
   inserts: number;
   updates: number;
-  held: Array<{ reason: string; natural_key: unknown; detail?: string }>;
+  held: HeldRow[];
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
@@ -59,6 +61,19 @@ export interface ApplyResult {
 }
 
 const REPORT_TYPE = "rc_out";
+
+/** The rc_out structured held-row payload (no ₱/cost — rc_out carries none). */
+function rcOutHeldRow(r: ProposedRow): Record<string, unknown> {
+  return {
+    transaction_date: r.transaction_date,
+    batch_code: r.batch_code_resolved ?? r.batch_code_primary ?? null,
+    batch_id: r.batch_id ?? null,
+    destination: r.destination ?? "MAIN",
+    weight_kg: r.weight_kg ?? r.day_total_kg ?? null,
+    production_batch: r.production_batch ?? null,
+    block_loc: r.block_loc ?? null,
+  };
+}
 
 function prov(runTs: string, index: unknown, extra = ""): string {
   const base =
@@ -84,7 +99,12 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
       ok: false,
       inserts: 0,
       updates: 0,
-      held: gateFailures.map((g) => ({ reason: g.gate, natural_key: null, detail: g.detail })),
+      held: gateFailures.map((g): HeldRow => ({
+        reason: g.gate,
+        natural_key: g.gate,
+        detail: g.detail,
+        kind: "gate_failure",
+      })),
       labeled: false,
       watermark_updated: false,
       errors: gateFailures.map((g) => `HARD gate tripped: ${g.gate} — nothing written.`),
@@ -107,8 +127,11 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
     if (!r.batch_id) {
       held.push({
         reason: "unresolved_batch_id",
-        natural_key: item.index,
+        natural_key: rcOutKey(r),
         detail: "NEW rc_out without resolved batch_id",
+        kind: "unresolved_batch_id",
+        row: rcOutHeldRow(r),
+        source_index: item.index as string | number,
       });
       continue;
     }
@@ -130,8 +153,11 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
       if (res.insertedCount === 0) {
         held.push({
           reason: "already_exists",
-          natural_key: item.index,
+          natural_key: rcOutKey(r),
           detail: "idempotent skip (natural key already in DB)",
+          kind: "already_exists",
+          row: rcOutHeldRow(r),
+          source_index: item.index as string | number,
         });
         continue;
       }
@@ -195,11 +221,25 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
   ];
   for (const [bucket, reason] of buckets) {
     for (const f of compact.actionable[bucket] ?? []) {
-      const item = f as { index?: unknown; reason?: string };
+      const item = f as { index?: unknown; reason?: string; row?: ProposedRow };
+      const row = item.row;
+      // Refine the kind: a "flagged" bucket entry whose classifier reason is the
+      // L-019 sub-watermark guard is the settled-date suspected-dup case; the
+      // "unmapped" bucket is always an unmapped batch_code; else malformed/flagged.
+      let kind: HeldKind;
+      if (bucket === "unmapped") kind = "unmapped_batch_code";
+      else if (bucket === "malformed") kind = "malformed";
+      else if ((item.reason ?? "").startsWith("sub-watermark NEW"))
+        kind = "sub_watermark_suspected_dup";
+      else kind = "flagged";
+
       held.push({
         reason,
-        natural_key: item.index,
+        natural_key: row ? rcOutKey(row) : String(item.index ?? ""),
         detail: item.reason ?? "requires human decision — never auto-written",
+        kind,
+        ...(row ? { row: rcOutHeldRow(row) } : {}),
+        source_index: item.index as string | number,
       });
     }
   }

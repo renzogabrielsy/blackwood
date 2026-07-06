@@ -285,7 +285,7 @@ export async function runReport(
       changed: guarded.changed,
       flagged: guarded.flagged,
       dup_noops: guarded.dup_noops,
-      malformed: guarded.malformed.map((m) => ({ reason: m.reason })),
+      malformed: guarded.malformed.map((m) => ({ reason: m.reason, row: m.row })),
     },
     batch_codes: [...batchCodes],
   };
