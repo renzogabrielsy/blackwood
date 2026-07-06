@@ -1,10 +1,15 @@
 # fly.toml — Blackwood sync worker.
 #
-# Scale-to-zero: auto_stop_machines + min_machines_running=0 means the machine sleeps
-# when idle (~$0 idle cost) and Fly AUTO-STARTS it on the inbound POST /kick request.
-# If a kick is ever lost (machine asleep, request dropped), the queued sync_runs row
-# still gets picked up by DBOS recovery the next time the worker wakes — nothing is
-# lost, it just waits (visible as "queued" in the modal).
+# BULLETPROOF mode (Renzo's choice, 2026-07-05): min_machines_running = 1 keeps ONE
+# tiny machine always awake (~$2-3/mo). This trades ~$0 idle cost for total
+# reliability: no cold-start delay on a click, and — critically — the machine can
+# NEVER be napped mid-sync (Fly judges idleness by web traffic, but our sync runs in
+# the background after the /kick returns, so scale-to-zero risked a stop mid-run).
+# A kick that's ever lost is still recovered by DBOS on the next wake — nothing is
+# lost — but with min=1 the worker is always up to receive it (no "queued" wait).
+#
+# To go cheaper later (true scale-to-zero, ~pennies, tiny mid-run-stop risk): set
+# min_machines_running = 0. One line, nothing else changes.
 #
 # Rename `app` before first deploy. Set the region near the Supabase project
 # (ap-northeast-1 / Tokyo, matching the Supabase pooler host aws-1-ap-northeast-1).
@@ -23,9 +28,10 @@ primary_region = "nrt"   # Tokyo — closest to the Supabase ap-northeast-1 proj
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"     # sleep when idle
-  auto_start_machines = true       # wake on the /kick request
-  min_machines_running = 0         # scale to zero → ~$0 idle cost
+  auto_stop_machines = "stop"      # stops only EXTRA machines; the min-1 stays up
+  auto_start_machines = true       # wake instantly on the /kick request
+  min_machines_running = 1         # BULLETPROOF: keep one tiny machine always awake
+                                   # (~$2-3/mo) — no cold start, never naps mid-sync
 
   [http_service.concurrency]
     type = "requests"
