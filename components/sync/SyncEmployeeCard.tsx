@@ -149,19 +149,23 @@ export function SyncEmployeeCard({ card }: SyncEmployeeCardProps) {
         </div>
       )}
 
-      {/* Applied summary */}
-      {apply && (apply.applied.inserts > 0 || apply.applied.updates > 0 || apply.applied.replaced_dates.length > 0) && (
-        <p className="mt-1 font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
-          applied {apply.applied.inserts} new
-          {apply.applied.updates > 0 && `, ${apply.applied.updates} updated`}
-          {apply.applied.replaced_dates.length > 0 &&
-            `, ${apply.applied.replaced_dates.length} day(s) replaced`}
-          {apply.labeled && ' · labeled'}
-        </p>
-      )}
+      {/* Applied summary — guard every field; a gate-failed/partial apply may omit
+          `applied` entirely, and replaced_dates is a NUMBER (worker + CLI contract). */}
+      {apply?.applied &&
+        (apply.applied.inserts > 0 ||
+          apply.applied.updates > 0 ||
+          apply.applied.replaced_dates > 0) && (
+          <p className="mt-1 font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
+            applied {apply.applied.inserts} new
+            {apply.applied.updates > 0 && `, ${apply.applied.updates} updated`}
+            {apply.applied.replaced_dates > 0 &&
+              `, ${apply.applied.replaced_dates} day(s) replaced`}
+            {apply.labeled && ' · labeled'}
+          </p>
+        )}
 
       {/* Held note (details live in the Held section below) */}
-      {apply && apply.held.length > 0 && (
+      {apply?.held && apply.held.length > 0 && (
         <p className="mt-1 text-[10px] text-orange-600 dark:text-orange-400">
           {apply.held.length} row{apply.held.length === 1 ? '' : 's'} held for review — see below.
         </p>

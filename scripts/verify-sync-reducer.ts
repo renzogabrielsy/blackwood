@@ -179,7 +179,7 @@ const repClean: SyncRunReportResult = {
   },
   apply: {
     report_type: 'deliveries', ok: true,
-    applied: { inserts: 3, updates: 1, replaced_dates: [] },
+    applied: { inserts: 3, updates: 1, replaced_dates: 0 },
     held: [], labeled: true, watermark_updated: true, errors: [],
   },
 }
@@ -201,7 +201,7 @@ const repHeld: SyncRunReportResult = {
   },
   apply: {
     report_type: 'production', ok: true,
-    applied: { inserts: 9, updates: 0, replaced_dates: [] },
+    applied: { inserts: 9, updates: 0, replaced_dates: 0 },
     held: [{ reason: 'unmapped_batch', natural_key: '2026-07-03|WASTE|AYAG', detail: 'no such batch' }],
     labeled: false, watermark_updated: true, errors: [],
   },

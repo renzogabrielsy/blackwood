@@ -292,10 +292,10 @@ export function useSyncRun() {
         report_type: c.type,
         ok: c.status !== 'error' && c.status !== 'gate-failed',
         gate_failures: c.classify?.gate_failures.length ?? (c.status === 'gate-failed' ? 1 : 0),
-        inserts: c.apply?.applied.inserts ?? 0,
-        updates: c.apply?.applied.updates ?? 0,
+        inserts: c.apply?.applied?.inserts ?? 0,
+        updates: c.apply?.applied?.updates ?? 0,
         flagged: c.classify?.counts.flagged ?? 0,
-        held: c.apply?.held.length ?? 0,
+        held: c.apply?.held?.length ?? 0,
       }))
 
       try {

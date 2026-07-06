@@ -140,7 +140,9 @@ export interface ClassifyResult {
 export interface ApplyApplied {
   inserts: number
   updates: number
-  replaced_dates: string[]
+  /** COUNT of dates whose rows were replaced (flecon REPLACE-BY-DATE). A number,
+   *  matching the worker + SYNC_CLI_CONTRACT — not an array. */
+  replaced_dates: number
 }
 
 export interface HeldRow {
@@ -152,7 +154,9 @@ export interface HeldRow {
 export interface ApplyResult {
   report_type: string
   ok: boolean
-  applied: ApplyApplied
+  /** May be ABSENT on a gate-failure / errored apply envelope (nothing applied).
+   *  Consumers MUST guard `apply?.applied` before reading counts. */
+  applied?: ApplyApplied
   held: HeldRow[]
   labeled: boolean
   watermark_updated: boolean
