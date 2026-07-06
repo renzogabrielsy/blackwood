@@ -86,12 +86,47 @@ Deterministic writer. `--input` is the `classified_path` from classify (optional
   "report_type": "<type>",
   "ok": true,                                  // false ⇒ at least one write error (see errors)
   "applied": { "inserts": 0, "updates": 0, "replaced_dates": 0 },
-  "held": [                                    // rows deliberately NOT written
-    { "reason": "unmapped_batch_code", "natural_key": 42, "detail": "…" }
-    // reasons include: unmapped_batch_code, unmapped_bag_type_code, malformed,
-    // already_exists (idempotent skip), and location_occupied — a NEW batch whose
-    // block_loc already holds an active batch (23505 on idx_unique_active_batch_per_location).
-    // A location collision is HELD (human resolves the slot), never a hard error (L-032).
+  "held": [                                    // rows deliberately NOT written — ENRICHED (2026-07-06)
+    {
+      "reason": "flagged",                      // legacy per-report reason (back-compat)
+      "natural_key": "2026-06-30 · JUNE-26-FEED5 · MAIN · 5,820 kg", // HUMAN label (never an index)
+      "detail": "sub-watermark NEW: … confirm it is truly missing before any write.",
+      "kind": "sub_watermark_suspected_dup",    // NORMALIZED flag category (the enum below)
+      "row": {                                  // KEY fields for a human + a DB lookup — NEVER a ₱/cost field
+        "transaction_date": "2026-06-30", "batch_code": "JUNE-26-FEED5",
+        "batch_id": "…", "destination": "MAIN", "weight_kg": 5820,
+        "production_batch": null, "block_loc": null
+      },
+      "source_index": 8                         // the FORMER index (retained for apply-input mapping)
+    }
+    // `kind` ∈ { sub_watermark_suspected_dup, cross_batch_reassignment, unmapped_batch_code,
+    //   unmapped_bag_type_code, location_occupied, malformed, low_confidence, already_exists,
+    //   gate_failure, unmapped_or_missing_columns, below_since_floor, unresolved_shift,
+    //   unresolved_batch_id, flagged, other }. Worker SoT: workers/sync/src/reports/held.ts
+    //   (per-report apply.ts attaches kind/natural_key/row at held-construction — WHICH rows
+    //   are held is unchanged). App mirror: app/(app)/sync/types.ts (HeldRow, HeldKind).
+    //   location_occupied = a NEW batch whose block_loc already holds an active batch (23505 on
+    //   idx_unique_active_batch_per_location) — HELD (human resolves the slot), never a hard error (L-032).
+    //   `row` NEVER carries cost_basis / avg_cost / any *_price (price gating — held rows are
+    //   write decisions, not cost views).
+    //
+    //   gate_failure SPECIFICS (2026-07-06): a "kind":"gate_failure" held row carries the
+    //   drifted dates on `row.drift_dates` so the app advisor can NAME the exact days + both
+    //   numbers (no more "some dates"). Threaded by the worker from the reconciler
+    //   (rc_out/rc_movement_audit index.ts). Two flavors, both ₱-free (pure kg totals):
+    //     proposed_vs_movement_drift_500kg → [{ "date":"2026-06-10", "proposed_kg":71144,
+    //         "movement_kg":57401, "diff_kg":13743 }, { "date":"2026-06-12",
+    //         "proposed_kg":82375, "movement_kg":null, "note":"no movement entry" }]
+    //     db_vs_movement_duplication (O>M) → [{ "date":"2026-06-30", "db_sum_kg":63820,
+    //         "movement_kg":58000, "excess_kg":5820 }]
+    //   The app renders the proposed_vs_movement_drift flavor into a plain day-by-day
+    //   evidence line with NO DB call (the numbers are already on the row).
+    //   O>M SELF-DIAGNOSIS (2026-07-06): the db_vs_movement_duplication flavor does NOT
+    //   assume duplication. The app issues ONE read-only rc_out query per flagged date
+    //   (filter transaction_date, limit 50, NO ₱/cost column) and diagnoses: exact-duplicate
+    //   rows present → DB double-entry ("remove the extra rows"); none → the movement sheet
+    //   is MISSING feedings ("the database looks correct — check the movement sheet").
+    //   (adjudication.ts::lookupEvidence, kind 'gate_failure').
   ],
   "labeled": false,                            // Gmail thread labeled Blackwood-Processed?
   "watermark_updated": true,                   // ingestion_watermarks row upserted?

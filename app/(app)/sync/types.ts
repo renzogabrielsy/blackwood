@@ -145,10 +145,44 @@ export interface ApplyApplied {
   replaced_dates: number
 }
 
+/**
+ * The normalized held-flag categories (worker-side src/reports/held.ts is the SoT).
+ * The app adjudicator switches its targeted, read-only DB lookup on `kind`.
+ */
+export type HeldKind =
+  | 'sub_watermark_suspected_dup'
+  | 'cross_batch_reassignment'
+  | 'unmapped_batch_code'
+  | 'unmapped_bag_type_code'
+  | 'location_occupied'
+  | 'malformed'
+  | 'low_confidence'
+  | 'already_exists'
+  | 'gate_failure'
+  | 'unmapped_or_missing_columns'
+  | 'below_since_floor'
+  | 'unresolved_shift'
+  | 'unresolved_batch_id'
+  | 'flagged'
+  | 'other'
+
+/**
+ * One held row. The three legacy fields are always present; the enrichment fields
+ * (kind/row/source_index, 2026-07-06) are optional and carry a decision-grade
+ * payload for "Ask Claude". `natural_key` is a HUMAN label (never a raw index) and
+ * doubles as the stable per-row key the recommendation map re-keys by. `row` NEVER
+ * contains a ₱/cost field (price gating). Worker mirror: normalizeReport.ts.
+ */
 export interface HeldRow {
   reason: string
   natural_key: string
   detail: string
+  /** Normalized flag category — keys the adjudicator's DB lookup. */
+  kind?: HeldKind
+  /** Structured KEY fields for the adjudicator + DB lookup. NEVER a ₱/cost field. */
+  row?: Record<string, unknown>
+  /** The former row index — retained for the apply-input mapping. */
+  source_index?: string | number
 }
 
 export interface ApplyResult {
@@ -298,6 +332,10 @@ export interface HeldRowRecommendation {
   natural_key: string
   verdict: AdjudicationVerdict
   reason: string
+  /** A short summary of the read-only DB finding that grounds the verdict (e.g.
+   *  "identical 2026-06-30 MAIN 5,820kg row already in DB (id abc)"). Optional —
+   *  absent for kinds with no lookup (malformed / low_confidence). */
+  evidence?: string
 }
 
 // ============================================================

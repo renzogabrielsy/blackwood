@@ -11,6 +11,12 @@ import {
   type HeldRowRecommendation,
   type SyncReportType,
 } from './types'
+import {
+  ADJUDICATOR_SYSTEM,
+  type AdminLike,
+  buildAdjudicationPrompt,
+  lookupEvidence,
+} from './adjudication'
 
 // ============================================================
 // Config — durable worker kick (Wave 4B)
@@ -244,35 +250,15 @@ export async function cancelSyncRun(runId: string): Promise<CancelSyncRunResult>
 // rows with the service client — see `scripts/dev-fake-run.md`.
 // ============================================================
 
-const ADJUDICATOR_SYSTEM = `You are the Blackwood daily-sync ADJUDICATOR.
-
-You are given rows a deterministic Python pipeline HELD back from an automatic
-apply because they need judgment (unmapped batch codes, reassignments, meter
-rollovers, drift beyond tolerance, malformed rows). For each held row, recommend
-exactly one verdict:
-
-- "apply"        — safe to write as-is; the hold was over-cautious.
-- "skip"         — do not write; it is noise, a duplicate, or a source error to fix upstream.
-- "needs-human"  — genuinely ambiguous; Renzo must decide (default when unsure).
-
-Codified rules that constrain you:
-- NEVER recommend "apply" for a row that would auto-create a batch that does not exist.
-- NEVER recommend "apply" for a flagged reassignment or a settled-date (sub-watermark) insert.
-- A meter reading lower than the prior reading is usually a rollover — "needs-human".
-- Drift beyond a HARD gate (e.g. rc_out >500 kg) is "needs-human", never "apply".
-- When in doubt, "needs-human". You are advisory only; nothing you say is auto-applied.
-
-Respond with ONLY a JSON array, no prose, no code fence:
-[{"natural_key": "<key>", "verdict": "apply"|"skip"|"needs-human", "reason": "<one short sentence>"}]
-Include exactly one object per held row, echoing its natural_key.`
-
 /**
  * Ask the model for per-row RECOMMENDATIONS on held rows. Advisory only — the
  * caller shows these next to each row; applying a held row stays a manual /
  * sync-employee job in v1 (the apply contract has no single-row path yet).
  *
- * Single completion, no tool loop. Falls back to "needs-human" for every row if
- * the model returns unparseable output.
+ * When invoked, this now (A) runs a targeted, read-only DB lookup per row keyed by
+ * `kind` — the missing evidence — and (B) builds a context-rich prompt carrying the
+ * human key, the structured row, the DB finding, and a short rule meaning. Single
+ * completion, no tool loop. Falls back to "needs-human" for every row on any error.
  */
 export async function adjudicateHeldRows(
   reportType: SyncReportType,
@@ -280,27 +266,31 @@ export async function adjudicateHeldRows(
 ): Promise<HeldRowRecommendation[]> {
   await requirePrivileged()
 
+  if (heldRows.length === 0) return []
+
+  // 1. Gather read-only DB evidence per row (small, bounded, cost-free queries).
+  // Cast to the minimal AdminLike so lookupEvidence stays server-import-free and
+  // testable (and to break the client's deep generic type instantiation).
+  const admin = createAdminClient() as unknown as AdminLike
+  const evidence = await Promise.all(
+    heldRows.map((r) => lookupEvidence(admin, reportType, r))
+  )
+
   const fallback = (): HeldRowRecommendation[] =>
-    heldRows.map((r) => ({
+    heldRows.map((r, i) => ({
       natural_key: r.natural_key,
       verdict: 'needs-human' as const,
       reason: 'Could not auto-adjudicate — review manually.',
+      ...(evidence[i] ? { evidence: evidence[i]! } : {}),
     }))
 
-  if (heldRows.length === 0) return []
-
-  const userContent = [
-    `Report type: ${reportType}`,
-    'Held rows:',
-    ...heldRows.map(
-      (r, i) => `${i + 1}. natural_key=${r.natural_key} | reason=${r.reason} | detail=${r.detail}`
-    ),
-  ].join('\n')
+  // 2. Build the context-rich prompt: human key + structured row + rule meaning + DB finding.
+  const userContent = buildAdjudicationPrompt(reportType, heldRows, evidence)
 
   try {
     const response = await anthropic.messages.create({
       model: JARVIS_MODEL,
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: [
         { type: 'text', text: ADJUDICATOR_SYSTEM, cache_control: { type: 'ephemeral' } },
       ],
@@ -327,14 +317,15 @@ export async function adjudicateHeldRows(
       }
     }
 
-    return heldRows.map(
-      (r) =>
-        byKey.get(r.natural_key) ?? {
-          natural_key: r.natural_key,
-          verdict: 'needs-human' as const,
-          reason: 'No recommendation returned — review manually.',
-        }
-    )
+    return heldRows.map((r, i) => {
+      const rec = byKey.get(r.natural_key) ?? {
+        natural_key: r.natural_key,
+        verdict: 'needs-human' as const,
+        reason: 'No recommendation returned — review manually.',
+      }
+      // Attach the DB finding so the UI can show WHY.
+      return evidence[i] ? { ...rec, evidence: evidence[i]! } : rec
+    })
   } catch {
     return fallback()
   }

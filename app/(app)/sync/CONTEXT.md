@@ -67,12 +67,57 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     service-role UPDATE `sync_runs → cancelled` WHERE status IN (queued,running) →
     best-effort `POST worker /cancel` (Bearer, 5s timeout, never throws on failure).
     The UPDATE is the authoritative UI signal; the /cancel makes DBOS actually stop.
-  - `adjudicateHeldRows(reportType, heldRows[])` → single Anthropic completion → per-row
-    `apply|skip|needs-human` recommendations (advisory only). **Unchanged** (app-side).
+  - `adjudicateHeldRows(reportType, heldRows[])` → per-row `apply|skip|needs-human`
+    recommendations (advisory only — applying still goes through the sync employee).
+    **CONTEXT-RICH (2026-07-06):** on "Ask Claude" it (1) runs a targeted, read-only DB
+    lookup per row keyed by `HeldRow.kind` via `createAdminClient()` — the missing
+    evidence (rc_out dup check; deliveries/gsheet collision fetch; near-code batch
+    candidates; occupying batch + status; flecon bag-type candidates), then (2) builds a
+    prompt with the human key + structured `row` + rule meaning + DB finding + a rewritten
+    ADVISORY `ADJUDICATOR_SYSTEM`, and (3) returns a richer `HeldRowRecommendation` with an
+    optional **`evidence`** string (the DB finding, surfaced in the UI). The pure core
+    (lookups + prompt + system prompt + KIND_MEANING) lives in **`adjudication.ts`**
+    (no `'use server'`, no server-only imports) so it is unit-testable with a mocked admin
+    client — see `scripts/verify-adjudication.ts`. **Price gating:** no lookup EVER selects
+    a ₱/cost column.
+    **PLAIN + SPECIFIC (2026-07-06):** `ADJUDICATOR_SYSTEM` was rewritten for plant-floor
+    language — it **bans** the engineer words `gate / gate failure / upstream / DB SUM /
+    settled date / HALT / watermark / envelope / natural key / idempotent`, and requires
+    every recommendation to NAME the exact dates + both numbers and end with a concrete next
+    step. To feed those specifics, a **gate-failure held row now carries `row.drift_dates`**
+    (threaded by the worker from the reconciler — see the rc_out/rc_movement_audit index.ts
+    ports): each entry is `{date, proposed_kg, movement_kg, diff_kg}` (daily-report-vs-sheet
+    drift) or `{date, db_sum_kg, movement_kg, excess_kg}` (DB-vs-sheet duplication, the O>M
+    gate), plus an optional `note:"no movement entry"`. **No ₱/cost fields.** For the
+    **P-vs-M drift** flavor `lookupEvidence` renders a day-by-day plain-English line **with no
+    DB call** (the numbers are already on the row), e.g. "…June 10 — the daily report shows
+    71,144 kg fed but the movement sheet shows 57,401 kg (13,743 kg more than the sheet);
+    June 12 — … no entry at all."
+    **O>M SELF-DIAGNOSIS (2026-07-06):** the `db_vs_movement_duplication` gate's message
+    assumes duplication, but that is often wrong (the movement sheet may just be *missing*
+    feedings). So for a gate-failure row whose drift dates carry `db_sum_kg`/`excess_kg`,
+    `lookupEvidence` now issues **one read-only `rc_out` query per flagged date** (filtered on
+    `transaction_date`, `.limit(50)`, joins `batches(batch_code)` for a human label, **NO ₱/cost
+    column**) and DIAGNOSES: exact-duplicate rows present (same date+batch+dest+weight ≥2×) →
+    "the database has duplicate feedings … appears N times … remove the extra rows" (DB-issue
+    lean); no duplicates → "M distinct feedings totaling … no duplicate rows exist, so the
+    movement sheet is most likely MISSING feedings … the database looks correct — check the
+    movement sheet, not the database" (movement-sheet-gap lean). `ADJUDICATOR_SYSTEM` teaches
+    the O>M verdict is usually **skip** but the reason must reflect the diagnosis — never a
+    blanket "suspected duplication". Reproduced from the real June-10 case (5 distinct
+    feedings, movement short 13,743 kg → sheet gap, DB correct).
   - `narrateSyncRun(results[])` → optional 3-sentence plain-language summary; **skips the
     API call** (zero tokens) when every report is clean. **Unchanged** (app-side).
   - RETIRED: `runSyncClassify` / `runSyncApply` (child_process spawn) + the SYNC_MOCK
     plumbing. Classify/apply now run in the worker.
+- `adjudication.ts` — the PURE, server-import-free adjudication core: `ADJUDICATOR_SYSTEM`
+  (plain, jargon-banning — see above), `KIND_MEANING` (a short plain-English meaning per
+  `HeldKind`, de-jargoned 2026-07-06), `lookupEvidence(admin, reportType, held)` (the
+  per-kind read-only DB lookup; `AdminLike` is a minimal structural client type so a spy can
+  stand in; `kind:'gate_failure'` renders `row.drift_dates` — P-vs-M drift with NO DB call,
+  O>M `db_vs_movement_duplication` with one read-only per-date `rc_out` query to self-diagnose
+  DB-double-entry vs movement-sheet gap), the exported `GateDriftDate` type, and
+  `buildAdjudicationPrompt(...)`. Imported by `actions.ts`.
 - `types.ts` — the shared contract types. Import-safe from both server and client:
   - Report catalog (`SYNC_REPORTS`, `PARALLEL_WRITERS`, `metaFor`).
   - Legacy CLI-contract shapes still used as the RESULT payload the worker writes:
@@ -121,7 +166,10 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   **`stopped`** state (StopCircle icon + "Stopped. Anything already written was kept.")
   — calm, not error-red. Card state is fed from Realtime; the shape is otherwise stable.
 - `HeldRows.tsx` — held-row groups with per-group "Ask Claude" adjudication + per-row
-  Copy. **Unchanged.**
+  Copy. **2026-07-06:** each row's tag now renders a human `KIND_LABEL` phrase
+  (`gate_failure` → "Totals don't match — nothing saved", `sub_watermark_suspected_dup` →
+  "Possible duplicate feeding", `unmapped_batch_code` → "Unknown batch code", …) instead of
+  the raw kind; the raw kind stays on the badge's `title` (tooltip) for debugging.
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
   **`stop()`** (M5.1) calls `cancelSyncRun(currentRunId)` (guarded against
   double-clicks via `cancelling`); subscribes (browser client) to `sync_run_events`
@@ -194,7 +242,9 @@ Documented in the root `.env.example`. The worker's own env is in `workers/sync/
 - **Clean days cost ~0 model tokens.** `narrateSyncRun` returns a local string when
   nothing changed.
 - **Held rows are advisory in v1.** "Ask Claude" returns recommendations; applying a
-  held row stays a Claude-Code / sync-employee job.
+  held row stays a Claude-Code / sync-employee job. Each held row now carries a HUMAN
+  `natural_key` (never an index), a normalized `kind`, and a structured `row` — and
+  "Ask Claude" backs each verdict with a read-only DB lookup surfaced as `evidence`.
 - **Every failure is copyable.** Gate failures + run-level failures render an inline
   block with the full detail + Copy AND fire `errorToast()` (HARD RULE).
 - **Role gate.** `enqueueSyncRun` calls `requirePrivileged()` (effective role via
