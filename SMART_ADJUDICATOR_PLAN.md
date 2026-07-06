@@ -2,6 +2,11 @@
 
 _2026-07-06. A plan for Renzo to react to BEFORE any build. Goal: make the in-app held-row review reason like a chat session with Claude — study the data, cross-reference sources, pinpoint who's wrong, and explain it plainly — with barely any human intervention on the **analysis** (the **write** stays human-gated in v1)._
 
+## Decisions locked (2026-07-06)
+
+- **Scope:** start by proving it on the **rc_out gate family** (drift + O>M), eval'd against the June-10 / May cases we solved by hand, then generalize.
+- **Write policy:** the agent **never auto-resolves on its own**. Instead there is a **chat** attached to the held row where Renzo talks to the agent about its findings, and **resolution happens through that conversation** — the agent only writes what Renzo explicitly directs, and even then through the deterministic pipeline path with a confirmation + full audit trail. (Renzo: _"there should be a chat box / button where I can talk to the claude agent about the results so we can auto-resolve from there."_)
+
 ## The insight
 
 What made the chat diagnoses good was **not the model being clever in a vacuum** — it was **agency + tools**. On the June-10 O>M case I: queried `rc_out` for the date, checked for duplicate rows, saw there were none, compared the DB total to the movement total, noticed the 13,743 kg gap equalled two specific real feedings, and concluded "the movement sheet is missing entries, the DB is correct." That's a **loop**: form a hypothesis → run a tool to test it → revise → conclude.
@@ -46,6 +51,20 @@ Every tool is **SELECT/READ ONLY**. The agent **cannot write, apply, skip, or de
 - **Add "Investigate deeply"** per held row (or per flagged report). Clicking runs the Investigator and **streams its work** — the checks it ran and what it found — ending in the detailed verdict. Essentially a focused, on-rails version of a chat investigation, in the modal.
 - Advisory only in v1: it produces the writeup; applying still goes through the sync employee.
 
+### B2. The chat + human-directed resolution (Renzo's refinement)
+The investigation isn't a dead-end report — it's the **opening turn of a conversation**. Each held row (and each flagged report) gets a **chat thread** with the investigator, so Renzo can interrogate and steer it exactly like our sessions:
+- *"why do you think the movement sheet is wrong and not the DB?"* → it re-queries / re-explains.
+- *"also check June 12"* → it investigates the new date.
+- *"ok, this is a movement-sheet gap — dismiss it"* → it **resolves the row as Renzo directs.**
+
+**The resolution (the only write) is strictly human-directed and safe:**
+- The agent has a `propose_resolution(action)` step and a separate `execute_resolution` that fires **only after Renzo explicitly confirms in the chat** — never on the agent's own initiative.
+- It routes through the **same deterministic write path** the sync employee uses (per-report apply / dismiss), so audit rows (`write_ingestion_audit` / provenance = "resolved via chat by <user>"), price gating, and the never-delete/never-auto-create rules all still hold.
+- For the **rc_out gate slice specifically**, "resolve" is almost always **acknowledge & dismiss** (the flags are known source-sheet discrepancies — the DB is already correct), which writes **nothing** to operational tables — the safest possible first slice. Riskier `apply` writes (per-row types) come later, each gated the same way.
+- Every chat-directed action is **logged** (who, what, why) so there's a full trail of any human-directed resolution.
+
+This is essentially a **scoped Jarvis chat** — same loop + tools — pointed at one held row, with a confirm-gated resolve action on top of the read-only investigation.
+
 ### C. Where it runs
 Next.js **server action** (like Jarvis), **on-demand** when Renzo clicks — not the worker (the worker is the deterministic sync; this is interactive investigation). PRIVILEGED-gated; the deterministic single-shot lookup remains the fallback if the agent errors.
 
@@ -62,10 +81,11 @@ Next.js **server action** (like Jarvis), **on-demand** when Renzo clicks — not
 |---|---|---|
 | **P1 — Investigative toolset** | The 5 read-only tools + allow-list + price-gating + unit tests (adapt Jarvis' `tool-handlers`) | S–M |
 | **P2 — The Investigator loop** | The scoped tool-use loop + the diagnostic-playbook system prompt; bounded iterations; Sonnet default, Opus escalation | M |
-| **P3 — UX** | "Investigate deeply" action; stream the investigation + render the cited verdict + confidence in the held panel | S–M |
-| **P4 — Eval + trust** | A fixture eval harness over the known cases (O>M-missing-sheet, proposed-over-stated, seeded true-dup, unmapped-batch) asserting the agent reaches the right conclusion; cost/latency budget check | S |
+| **P3 — Chat UX** | Per-held-row **chat thread** with the investigator (reuse Jarvis chat UI); stream the opening investigation + let Renzo interrogate/steer; render cited findings + confidence | M |
+| **P4 — Human-directed resolve** | `propose_resolution` + confirm-gated `execute_resolution` routed through the deterministic write path (dismiss/apply) with provenance audit; for the rc_out slice, dismiss = zero operational write | S–M |
+| **P5 — Eval + trust** | A fixture eval over the known cases (O>M-missing-sheet, proposed-over-stated, seeded true-dup) asserting the agent reaches the right conclusion; cost/latency + write-safety budget check | S |
 
-**Total ≈ 2–3 focused sessions.** No DB schema change. No worker change (it runs app-side). Reuses the Jarvis loop + tools as the base.
+**Total ≈ 2–3 focused sessions** for the rc_out proof slice (investigator + chat + confirm-gated resolve), then generalize per flag family. No DB schema change. No worker change (it runs app-side). Reuses the Jarvis loop + tools as the base.
 
 ## What it does NOT change
 The deterministic sync (parity 12/12), the write gate (human-approved via the employee), price gating, the fast single-shot default, and the "never auto-write held rows in v1" policy.
