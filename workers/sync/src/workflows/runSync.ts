@@ -33,9 +33,17 @@
 import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
 import { mailClerkWorkflow, type MailClerkManifest } from "./mailClerk.js";
 import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./reportWorkflow.js";
+import { failedReportResult } from "./normalizeReport.js";
 import { DbClient } from "../lib/db.js";
 import { makeEmitter } from "../lib/progress.js";
 import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
+
+/** True if a per-report envelope carries any failure (either phase ok:false). */
+function reportFailed(r: ReportEnvelope): boolean {
+  const classifyBad = r.classify != null && r.classify.ok === false;
+  const applyBad = r.apply != null && r.apply.ok === false;
+  return classifyBad || applyBad;
+}
 
 /**
  * True if an error is a DBOS workflow-cancellation (this workflow was cancelled) or
@@ -135,15 +143,12 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
       reports[rt] = res.value;
     } else {
       // reportWorkflow already isolates report-level throws; an allSettled reject here
-      // means the workflow machinery itself failed — record it as a failed report.
-      reports[rt] = {
-        report_type: rt,
-        ok: false,
-        counts: { noop: 0, insert: 0, update: 0, flagged: 0 },
-        gate_failures: [],
-        watermark: null,
-        error: res.reason instanceof Error ? res.reason.message : String(res.reason),
-      };
+      // means the workflow machinery itself failed — record it as a contract-shaped
+      // failed report so the card renders an error, not a missing-field crash.
+      reports[rt] = failedReportResult(
+        rt,
+        res.reason instanceof Error ? res.reason.message : String(res.reason),
+      );
     }
   });
 
@@ -151,10 +156,13 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   const auditHandle = await DBOS.startWorkflow(reportWorkflow, {
     workflowID: reportWorkflowId(runId, "rc_movement_audit"),
   })({ runId, reportType: "rc_movement_audit", manifest: manifestResolved, dryRun, since: params.since });
-  reports.rc_movement_audit = await auditHandle.getResult();
+  // KEY IT AS `rc_movement` — the panel/reducer card key (types.ts SYNC_REPORTS), NOT the
+  // worker's internal `rc_movement_audit` type. The events already use `rc_movement_audit`
+  // as the report_type; those route to the `rc_movement` card too (reportWorkflowId maps).
+  reports.rc_movement = await auditHandle.getResult();
 
-  // ── Aggregate: any report ok:false (or carrying an error) → the run is "partial".
-  const anyFailed = Object.values(reports).some((r) => !r.ok || r.error);
+  // ── Aggregate: any report failing either phase → the run is "partial".
+  const anyFailed = Object.values(reports).some(reportFailed);
   const status: "succeeded" | "partial" = anyFailed ? "partial" : "succeeded";
 
   const result: RunSyncResult = {

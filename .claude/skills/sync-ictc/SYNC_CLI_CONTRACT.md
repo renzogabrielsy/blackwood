@@ -99,6 +99,15 @@ Deterministic writer. `--input` is the `classified_path` from classify (optional
 }
 ```
 
+> **Durable-worker parity (2026-07-06):** the DBOS worker writes this EXACT apply
+> envelope into `sync_runs.result.reports[<type>].apply` (alongside a sibling
+> `classify` block), so the in-app panel reads the same JSON the CLI produced. The
+> `applied` object is ALWAYS present (default zeros) even on a gate-failure/error
+> apply, and `held` is always the ROWS (never a count). The read-only auditor +
+> dryRun write `apply: null`. Mapping lives in
+> `workers/sync/src/workflows/normalizeReport.ts`; the auditor's result is re-keyed
+> from `rc_movement_audit` to the panel card `rc_movement`.
+
 ### `--only-clean` (the button's default)
 Apply ONLY rows that pass **every codified mechanical rule**. Any FLAGGED / UNMAPPED / MALFORMED /
 uncertain row goes to `held` — it never blocks the clean rows and is **NEVER** auto-written.

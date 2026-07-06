@@ -28,6 +28,11 @@ import {
   makeFleconFetcher,
   makeReportProgress,
 } from "./reportDeps.js";
+import {
+  toReportResult,
+  failedReportResult,
+  type SyncRunReportResult,
+} from "./normalizeReport.js";
 
 import { runReport as runDeliveries } from "../reports/deliveries/index.js";
 import { runReport as runRcOut } from "../reports/rc_out/index.js";
@@ -57,28 +62,23 @@ export interface ReportWorkflowParams {
   since?: string;
 }
 
-/** The uniform envelope every report contributes to the run result. */
-export interface ReportEnvelope {
-  report_type: string;
-  ok: boolean;
-  /** Classify counts (noop/insert/update/flagged) — present for all reports. */
-  counts: { noop: number; insert: number; update: number; flagged: number };
-  /** Hard-gate failures (rc_out drift/dup gates; rc_movement serious drift). */
-  gate_failures: Array<{ gate: string; detail: string }>;
-  /** Apply outcome summary (0/absent in dryRun or read-only). */
-  apply?: {
-    inserts: number;
-    updates: number;
-    held: number;
-    labeled: boolean;
-    watermark_updated: boolean;
-    errors: string[];
-  };
-  watermark: string | null;
-  /** Populated only when the report threw — failure isolation carries it here. */
-  error?: string;
-  /** Extra per-report detail (e.g. rc_movement severity, gsheet per_mode). */
-  detail?: Record<string, unknown>;
+/**
+ * The uniform envelope every report contributes to the run result. This is now the
+ * SAME shape the FRONTEND reads (app/(app)/sync/types.ts::SyncRunReportResult):
+ * `{ classify, apply }` with a NESTED `apply.applied` and the FULL `apply.held` ROWS.
+ * Reconciled here so the worker and the app describe the identical JSON — see
+ * normalizeReport.ts. (Formerly a flat, held-collapsed-to-count shape — the bug.)
+ */
+export type ReportEnvelope = SyncRunReportResult;
+
+/**
+ * Map the worker's internal report type → the PANEL CARD KEY (app/(app)/sync/types.ts
+ * SYNC_REPORTS). The only divergence is the read-only auditor: worker `rc_movement_audit`
+ * → panel `rc_movement`. Progress EVENTS and the result envelope must both use the panel
+ * key, or the reducer (`VALID_REPORT_TYPES`) drops them and the card never populates.
+ */
+export function panelCardKey(reportType: RunReportType): string {
+  return reportType === "rc_movement_audit" ? "rc_movement" : reportType;
 }
 
 /** Build a report's manifest slice `{reports: {key: [att]}}` from the full manifest. */
@@ -96,7 +96,9 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
   const { runId, reportType, manifest, dryRun } = params;
   const realDb = DbClient.fromEnv();
   const db = dryRun ? makeDryRunDb(realDb) : realDb;
-  const progress = makeReportProgress(realDb, runId, reportType);
+  // Emit progress under the PANEL CARD KEY so the reducer routes it to the right card
+  // (the auditor's worker type `rc_movement_audit` maps to the `rc_movement` card).
+  const progress = makeReportProgress(realDb, runId, panelCardKey(reportType));
   const fetchToLocalPath = makeStorageFetcher();
   const labeler = makeLabeler(dryRun);
   const runTs = new Date().toISOString();
@@ -109,14 +111,11 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         slice(manifest, ["deliveries", "deliveries_czarina"]),
         params.since ? { since: params.since } : {},
       );
-      return {
-        report_type: "deliveries",
-        ok: r.classify.ok,
-        counts: r.classify.counts,
-        gate_failures: r.classify.gate_failures,
-        apply: applySummary(r.apply),
-        watermark: r.classify.watermark,
-      };
+      return toReportResult({
+        reportType: "deliveries",
+        classify: r.classify,
+        apply: dryRun ? null : r.apply,
+      });
     }
     case "rc_out": {
       const r = await runRcOut(
@@ -125,14 +124,11 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         slice(manifest, ["rc_out", "rc_out_movement"]),
         params.since ? { since: params.since } : {},
       );
-      return {
-        report_type: "rc_out",
-        ok: r.classify.ok,
-        counts: r.classify.counts,
-        gate_failures: r.classify.gate_failures,
-        apply: applySummary(r.apply),
-        watermark: r.classify.watermark,
-      };
+      return toReportResult({
+        reportType: "rc_out",
+        classify: r.classify,
+        apply: dryRun ? null : r.apply,
+      });
     }
     case "production": {
       const r = await runProduction(
@@ -141,15 +137,12 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         slice(manifest, ["production", "production_waste"]),
         params.since ? { since: params.since } : {},
       );
-      return {
-        report_type: "production",
-        ok: r.classify.ok,
-        counts: r.classify.counts,
-        gate_failures: [],
-        apply: applySummary(r.apply),
-        watermark: r.classify.watermark,
-        detail: { per_section: r.classify.per_section },
-      };
+      return toReportResult({
+        reportType: "production",
+        classify: r.classify,
+        apply: dryRun ? null : r.apply,
+        classifyExtra: { per_section: r.classify.per_section },
+      });
     }
     case "flecon": {
       // flecon's deps are its own shape: db needs deleteByDate (on DbClient now) +
@@ -165,30 +158,28 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         runId,
         { noLabel: dryRun },
       );
-      const s = r.classified?.summary;
-      return {
-        report_type: "flecon",
-        ok: r.ok,
-        counts: {
-          noop: s?.duplicate_noop_days ?? 0,
-          insert: s?.new_days ?? 0,
-          update: s?.date_changed_days ?? 0,
-          flagged: r.classified?.column_flags.flagged ? 1 : 0,
+      const s = r.classified?.summary as
+        | { duplicate_noop_days?: number; new_days?: number; date_changed_days?: number }
+        | undefined;
+      // flecon's classify is its own shape; synthesize the contract classify counts
+      // (REPLACE-BY-DATE: new/changed/noop are DAY-level). apply carries replaced_dates.
+      return toReportResult({
+        reportType: "flecon",
+        classify: {
+          report_type: "flecon",
+          ok: r.ok,
+          gate_failures: [],
+          counts: {
+            noop: s?.duplicate_noop_days ?? 0,
+            insert: s?.new_days ?? 0,
+            update: s?.date_changed_days ?? 0,
+            flagged: r.classified?.column_flags.flagged ? 1 : 0,
+          },
+          watermark: null,
         },
-        gate_failures: [],
-        apply: r.apply
-          ? {
-              inserts: r.apply.inserts,
-              updates: 0,
-              held: r.apply.held.length,
-              labeled: r.apply.labeled,
-              watermark_updated: r.apply.watermark_updated,
-              errors: r.apply.errors,
-            }
-          : undefined,
-        watermark: null,
-        detail: r.note ? { note: r.note } : undefined,
-      };
+        apply: dryRun ? null : r.apply,
+        classifyExtra: r.note ? { note: r.note } : undefined,
+      });
     }
     case "gsheet": {
       // gsheet downloads the Sheet itself (no manifest file). Its deps: db + progress
@@ -199,32 +190,33 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         {},
         params.since ? { since: params.since } : {},
       );
-      return {
-        report_type: "gsheet",
-        ok: r.classify.ok,
-        counts: r.classify.counts,
-        gate_failures: [],
-        apply: applySummary(r.apply),
-        watermark: r.classify.watermark,
-        detail: { per_mode: r.classify.per_mode },
-      };
+      return toReportResult({
+        reportType: "gsheet",
+        classify: r.classify,
+        apply: dryRun ? null : r.apply,
+        classifyExtra: { per_mode: r.classify.per_mode },
+      });
     }
     case "rc_movement_audit": {
       // Read-only auditor: NO apply, NEVER writes/labels (even in a real run). It only
-      // needs db (reads rc_out sums) + fetchToLocalPath + progress.
+      // needs db (reads rc_out sums) + fetchToLocalPath + progress. apply is ALWAYS null.
       const r = await runRcMovementAudit(
         { db, fetchToLocalPath, progress, since: params.since },
         runId,
         slice(manifest, ["rc_out_movement"]),
       );
-      return {
-        report_type: "rc_movement_audit",
-        ok: r.ok,
-        counts: r.counts,
-        gate_failures: r.gate_failures,
-        watermark: r.watermark,
-        detail: { severity: r.severity, audit_since: r.audit_since, note: r.note },
-      };
+      return toReportResult({
+        reportType: "rc_movement_audit",
+        classify: {
+          report_type: "rc_movement_audit",
+          ok: r.ok,
+          gate_failures: r.gate_failures,
+          counts: r.counts,
+          watermark: r.watermark,
+        },
+        apply: null, // read-only auditor — no apply, ever.
+        classifyExtra: { severity: r.severity, audit_since: r.audit_since, note: r.note },
+      });
     }
     default: {
       const exhaustive: never = reportType;
@@ -233,30 +225,14 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
   }
 }
 
-function applySummary(apply: {
-  inserts?: number;
-  updates?: number;
-  held?: unknown[];
-  labeled?: boolean;
-  watermark_updated?: boolean;
-  errors?: string[];
-}): ReportEnvelope["apply"] {
-  return {
-    inserts: apply.inserts ?? 0,
-    updates: apply.updates ?? 0,
-    held: Array.isArray(apply.held) ? apply.held.length : 0,
-    labeled: Boolean(apply.labeled),
-    watermark_updated: Boolean(apply.watermark_updated),
-    errors: apply.errors ?? [],
-  };
-}
-
 /**
  * The child-workflow body. Wraps runOneReport in a DBOS step and provides failure
  * isolation: a thrown report becomes an ok:false envelope, never a crashed run.
  */
 async function reportWorkflowBody(params: ReportWorkflowParams): Promise<ReportEnvelope> {
   const { runId, reportType } = params;
+  // Progress + failure beats emit under the PANEL CARD KEY (auditor → rc_movement card).
+  const cardKey = panelCardKey(reportType);
   try {
     return await DBOS.runStep(() => runOneReport(params), { name: `report:${reportType}` });
   } catch (err) {
@@ -270,7 +246,7 @@ async function reportWorkflowBody(params: ReportWorkflowParams): Promise<ReportE
     ) {
       try {
         const db = DbClient.fromEnv();
-        const emit = makeReportProgress(db, runId, reportType);
+        const emit = makeReportProgress(db, runId, cardKey);
         await emit("finalize", "Stopped.", 100, undefined, "warn");
       } catch {
         /* observational only */
@@ -281,19 +257,15 @@ async function reportWorkflowBody(params: ReportWorkflowParams): Promise<ReportE
     // Emit a warn beat so the live feed shows the failure, then carry it in the envelope.
     try {
       const db = DbClient.fromEnv();
-      const emit = makeReportProgress(db, runId, reportType);
+      const emit = makeReportProgress(db, runId, cardKey);
       await emit("finalize", "This report hit a problem — the rest of the run continues.", 100, message, "warn");
     } catch {
       /* progress is observational — never let it mask the real error */
     }
-    return {
-      report_type: reportType,
-      ok: false,
-      counts: { noop: 0, insert: 0, update: 0, flagged: 0 },
-      gate_failures: [],
-      watermark: null,
-      error: message,
-    };
+    // Contract-shaped failure result (classify ok:false + apply with zeroed applied)
+    // so the card renders an error state — never a missing-field crash. Key it to the
+    // panel card so the reducer folds it into the right card.
+    return failedReportResult(cardKey, message);
   }
 }
 

@@ -87,6 +87,18 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     Partial<Record<SyncReportType, SyncRunReportResult>>, summary? }`, where each
     `SyncRunReportResult` carries the SAME `ClassifyResult`/`ApplyResult` the old CLI
     produced — so downstream aggregation + `HeldRows` are untouched).
+    - **Worker ↔ frontend shape reconciliation (2026-07-06 fix):** the DBOS worker now
+      emits this EXACT shape per report. `workers/sync/src/workflows/normalizeReport.ts`
+      is the assembly-boundary normalizer that maps each report's flat `runReport()` apply
+      return into the nested contract: `apply.applied = {inserts, updates, replaced_dates}`
+      is ALWAYS present (default zeros, even on a gate-failure/error apply), and
+      `apply.held` is the FULL `HeldRow[]` ROWS (was collapsed to a count — the bug).
+      Read-only auditor + dryRun → `apply: null`. The worker also RE-KEYS the auditor's
+      result + progress events from its internal `rc_movement_audit` type to the panel card
+      key `rc_movement` (`panelCardKey()` in `reportWorkflow.ts`), or the reducer's
+      `VALID_REPORT_TYPES` would drop them. Round-trip proof: worker side
+      `workers/sync/test/workflows/normalizeReport.test.ts`; app side
+      `scripts/verify-sync-reducer.ts` (drives `lib/sync/reducer.ts` with the emitted shape).
 
 ### Client (`components/sync/`)
 - `SyncLauncher.tsx` — the live entry point. Compact zinc "Run Sync" button in the

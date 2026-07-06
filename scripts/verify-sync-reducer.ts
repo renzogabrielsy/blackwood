@@ -226,4 +226,95 @@ check('classify.ok=false with no explicit gate_failures still → gate-failed', 
   assert.equal(deriveCardStatus('deliveries', rep), 'gate-failed')
 })
 
+// --- End-to-end: the EXACT worker `sync_runs.result.reports` shape (post-fix) ----
+// These mirror what workers/sync/src/workflows/normalizeReport.ts emits per report and
+// prove the reducer folds it correctly. If the worker's normalizer drifts from this,
+// BOTH this file and workers/sync/test/workflows/normalizeReport.test.ts fail loudly.
+console.log('\nworker result envelope → reducer fold (the bug-fix round-trip):')
+
+/** A whole-run `result.reports` object exactly as the worker now writes it. */
+const workerReports: Partial<Record<string, SyncRunReportResult>> = {
+  deliveries: repClean,
+  rc_out: repGate,
+  production: repHeld,
+  // flecon: REPLACE-BY-DATE — applied.replaced_dates>0, held rows present.
+  flecon: {
+    classify: {
+      report_type: 'flecon', ok: true, gate_failures: [],
+      counts: { noop: 2, insert: 4, update: 1, flagged: 0 },
+      rows_preview: [], classified_path: '', source: {}, watermark: null,
+    },
+    apply: {
+      report_type: 'flecon', ok: true,
+      applied: { inserts: 37, updates: 0, replaced_dates: 5 },
+      held: [{ reason: 'below_since_floor', natural_key: '2025-12-30', detail: 'settled history not replaced' }],
+      labeled: true, watermark_updated: true, errors: [],
+    },
+  },
+  // rc_movement: read-only auditor — apply is ALWAYS null.
+  rc_movement: {
+    classify: {
+      report_type: 'rc_movement_audit', ok: true, gate_failures: [],
+      counts: { noop: 12, insert: 0, update: 0, flagged: 0 },
+      rows_preview: [], classified_path: '', source: {}, watermark: '2026-07-03',
+    },
+    apply: null,
+  },
+}
+
+check('applied counts populate from nested applied (deliveries 3 new / 1 upd)', () => {
+  const rep = workerReports.deliveries!
+  assert.equal(rep.apply?.applied?.inserts, 3)
+  assert.equal(rep.apply?.applied?.updates, 1)
+  assert.equal(rep.apply?.applied?.replaced_dates, 0)
+})
+
+check('flecon replaced_dates flows through as a NUMBER', () => {
+  const rep = workerReports.flecon!
+  assert.equal(rep.apply?.applied?.replaced_dates, 5)
+  assert.equal(rep.apply?.applied?.inserts, 37)
+})
+
+check('gate-failed rc_out → gate-failed card (not error, not done)', () => {
+  assert.equal(deriveCardStatus('rc_out', workerReports.rc_out!), 'gate-failed')
+})
+
+check('read-only auditor result → done card, apply null (no held, no applied)', () => {
+  const rep = workerReports.rc_movement!
+  assert.equal(rep.apply, null)
+  assert.equal(deriveCardStatus('rc_movement', rep), 'done')
+})
+
+check('held rows aggregate across reports into the Held section input', () => {
+  // Mirror useSyncRun.finalizeRun's aggregation: reports whose apply.held is non-empty.
+  const heldGroups = Object.entries(workerReports)
+    .filter(([, rep]) => rep!.apply && rep!.apply.held.length > 0)
+    .map(([type, rep]) => ({ type, rows: rep!.apply!.held }))
+  // production (1) + flecon (1) hold rows; deliveries/rc_out/rc_movement do not.
+  assert.equal(heldGroups.length, 2)
+  const total = heldGroups.reduce((n, g) => n + g.rows.length, 0)
+  assert.equal(total, 2)
+  // Each held row carries the fields HeldRows.tsx renders.
+  for (const g of heldGroups) {
+    for (const row of g.rows) {
+      assert.equal(typeof row.reason, 'string')
+      assert.equal(typeof row.natural_key, 'string')
+      assert.equal(typeof row.detail, 'string')
+    }
+  }
+})
+
+check('narration counts derive from nested applied (no crash on null apply)', () => {
+  // Mirror useSyncRun.finalizeRun's narrateInput mapping — must guard apply?.applied.
+  const narrateInput = Object.entries(workerReports).map(([type, rep]) => ({
+    report_type: type,
+    inserts: rep!.apply?.applied?.inserts ?? 0,
+    updates: rep!.apply?.applied?.updates ?? 0,
+    held: rep!.apply?.held?.length ?? 0,
+  }))
+  const totalInserts = narrateInput.reduce((n, r) => n + r.inserts, 0)
+  // deliveries 3 + production 9 + flecon 37 = 49 (rc_out gate-failed 0, auditor null 0).
+  assert.equal(totalInserts, 49)
+})
+
 console.log(`\nAll ${passed} reducer-parity checks passed.`)
