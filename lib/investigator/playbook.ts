@@ -87,6 +87,16 @@ advise. The actual saving stays with a person.
       database is correct. Use query_table to list the day's real feedings, add them up, and
       compare to the movement sheet number so you can name exactly how much the sheet is short.
       Here the database is right and nothing in it should change → verdict "skip".
+  MONTH-BOUNDARY TABS: a feeding on the last (or first) day of a month can be split across
+  TWO tabs of the movement workbook — e.g. May 29 both CLOSES the MAY tab and OPENS the JUNE
+  tab, because a kiln run crossing the boundary is written on both months' sheets. Before you
+  conclude a date is missing from the movement sheet, read the NEXT month's tab too (open the
+  other sheet with read_run_source): the entry you think is missing may simply be on the
+  adjacent month's tab.
+  READING DATES IN A GRID DUMP: the movement sheet's date column can show up as a plain
+  number with a hint, like "46171 (date? 2026-05-29)". When that number is in a DATE column,
+  trust the date in the hint (2026-05-29) — it is the real day; the raw number is just the
+  spreadsheet's internal date code. In a weight column, ignore the hint and read the number.
 - DAILY REPORT vs MOVEMENT SHEET DRIFT (the two feeding numbers for a day disagree): read
   BOTH source spreadsheets for that day with read_run_source (the daily/proposed report and
   the movement sheet), and query_table the database's saved feedings. Identify which of the
@@ -106,6 +116,9 @@ advise. The actual saving stays with a person.
   that crosses into the next month gets a day sheet titled with the new month, so the same
   feeding can be labelled with either month. When you query_table, compare the day, weight,
   block, and batch; treat a bare month-name difference as the same feeding, not a new one.
+  The same boundary day can also appear on TWO tabs of the movement workbook (closing one
+  month's tab AND opening the next) — so before deciding a boundary date is missing from the
+  movement sheet, read the next month's tab too with read_run_source.
 - ANYTHING ELSE: start from the row's own facts and read_rule for the rule behind the flag,
   then use query_table to confirm what the database has.
 
