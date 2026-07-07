@@ -151,15 +151,32 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`chatOnCase(caseId, message)`** → `{ok, error?}`. requirePrivileged; validates the message
     (non-empty, <4000 chars); **rejects (ok:false) while the case is `investigating`** (a run is in
     flight). Inserts the user message row, replays the FULL `sync_case_messages` transcript into
-    Anthropic `MessageParam[]` (`foldHistory`, mirroring `jarvis/actions.ts::buildAnthropicMessages`
-    — system rows skipped, assistant rows carry text + `tool_use` blocks, tool rows fold into a user
-    turn as `tool_result` blocks), then drives the **same `runToolLoop`** as the investigation but in
+    Anthropic `MessageParam[]` via **`case-history.ts`** (`foldHistory` mirrors
+    `jarvis/actions.ts::buildAnthropicMessages` — system rows skipped, assistant rows carry text +
+    `tool_use` blocks, tool rows fold into a user turn as `tool_result` blocks; then
+    **`sanitizeAnthropicHistory`** repairs the tool_use/tool_result pairing — see below), then drives
+    the **same `runToolLoop`** as the investigation but in
     CHAT MODE: system = `buildInvestigatorSystem()` + `buildChatAddendum()`, tools = the 5 read-only
     investigator tools + `submit_verdict`. If the model re-submits a verdict (only when its
     conclusion changed) → update `case.verdict` + `status='investigated'`; otherwise just persist the
     reply + touch `updated_at`. READ-ONLY like the investigation (no operational write — the resolve
     write is P5). If the case has no transcript yet, it leads with `buildCaseBriefing`. Service-role
     writes; every turn persists to `sync_case_messages` (the review page watches over Realtime).
+- `case-history.ts` (**PURE, no `'use server'`**) — the transcript→Anthropic-messages layer split
+  out of `case-chat.ts` (which, being `'use server'`, may only export async server actions), the same
+  split discipline `adjudication.ts` uses against `actions.ts`. Two exported functions:
+  **`foldHistory(rows)`** (folds stored rows into `MessageParam[]`) and
+  **`sanitizeAnthropicHistory(messages)`** — repairs the tool_use/tool_result pairing invariant the
+  Anthropic API enforces: for every assistant `tool_use` with no answering `tool_result` in the next
+  turn, it injects/extends a user turn with a synthetic `{tool_result, content:'[result not
+  recorded]'}`; it also drops orphan `tool_result` blocks whose id was never opened. This is the
+  **migration-free heal for the case-chat 400 bug** — existing DB transcripts contain a dangling
+  terminal `submit_verdict` assistant turn (persisted before the 2026-07-07 write-time fix in
+  `loop.ts`), and error-truncated runs can produce the same shape; the sanitizer makes replay valid
+  regardless. PURE + does not mutate its input → tested network-free by
+  `scripts/verify-investigator-loop.ts` (6 sanitizer checks). Live-proven by the throwaway
+  `scripts/smoke-case-chat-400.ts` (deleted after use): both a fresh-investigation chat and a
+  manually-seeded pre-fix-shaped transcript chat succeed with the fix.
 - `resolve.ts` (`'use server'`) — **HUMAN-DIRECTED RESOLUTION (P5)**. The only write path
   for a case. The investigator NEVER writes; a resolution fires only when the reviewer clicks
   Confirm on an agent-prepared proposal (or Quick Dismiss):

@@ -44,74 +44,13 @@ import {
 } from '@/lib/investigator/resolution'
 import type { Json } from '@/types/supabase'
 
+import { foldHistory, sanitizeAnthropicHistory } from './case-history'
+
 const MAX_MESSAGE_LEN = 4000
 
 export interface ChatOnCaseResult {
   ok: boolean
   error?: string
-}
-
-/**
- * A stored sync_case_messages row folded into an Anthropic MessageParam[].
- * Mirrors app/(app)/jarvis/actions.ts::buildAnthropicMessages:
- *   - 'user'      → a plain user turn
- *   - 'assistant' → an assistant turn (text + any tool_use blocks from tool_calls)
- *   - 'tool'      → a user turn carrying tool_result blocks (the SDK multi-turn shape)
- *   - 'system'    → skipped (start-notes / nudges are not conversation content)
- */
-function foldHistory(
-  rows: Array<{
-    role: string
-    content: string
-    tool_calls: unknown
-    tool_results: unknown
-  }>,
-): Anthropic.MessageParam[] {
-  const params: Anthropic.MessageParam[] = []
-
-  for (const row of rows) {
-    if (row.role === 'user') {
-      if (row.content) params.push({ role: 'user', content: row.content })
-    } else if (row.role === 'assistant') {
-      const content: Anthropic.ContentBlockParam[] = []
-      if (row.content) content.push({ type: 'text', text: row.content })
-
-      const toolCalls = row.tool_calls as Array<{
-        id: string
-        name: string
-        input: unknown
-      }> | null
-      if (Array.isArray(toolCalls)) {
-        for (const tc of toolCalls) {
-          content.push({
-            type: 'tool_use',
-            id: tc.id,
-            name: tc.name,
-            input: tc.input as Record<string, unknown>,
-          })
-        }
-      }
-      if (content.length > 0) params.push({ role: 'assistant', content })
-    } else if (row.role === 'tool') {
-      const toolResults = row.tool_results as Array<{
-        tool_use_id: string
-        content: string
-      }> | null
-      if (Array.isArray(toolResults) && toolResults.length > 0) {
-        params.push({
-          role: 'user',
-          content: toolResults.map((tr) => ({
-            type: 'tool_result' as const,
-            tool_use_id: tr.tool_use_id,
-            content: tr.content,
-          })),
-        })
-      }
-    }
-    // 'system' rows are infrastructure notes — not conversation content.
-  }
-
-  return params
 }
 
 /**
@@ -173,7 +112,7 @@ export async function chatOnCase(caseId: string, message: string): Promise<ChatO
     // 4. Seed the Anthropic messages. If the case was never investigated (empty
     //    transcript), lead with the case briefing so the model has the full context;
     //    otherwise replay the stored transcript (which already opens with the briefing).
-    const messages: Anthropic.MessageParam[] = foldHistory(rows)
+    const messages: Anthropic.MessageParam[] = sanitizeAnthropicHistory(foldHistory(rows))
     if (messages.length === 0) {
       const rulingRel = theCase.sync_case_rulings as
         | { verdict_summary?: string }

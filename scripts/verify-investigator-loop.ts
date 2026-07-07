@@ -16,6 +16,8 @@
  */
 import assert from 'node:assert/strict'
 
+import type Anthropic from '@anthropic-ai/sdk'
+
 import {
   buildInvestigatorSystem,
   buildCaseBriefing,
@@ -33,6 +35,7 @@ import {
   MAX_ITERATIONS,
   MAX_TOOL_CALLS,
 } from '../lib/investigator/loop'
+import { sanitizeAnthropicHistory } from '../app/(app)/sync/case-history'
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -292,6 +295,118 @@ async function main() {
   check('budget constants match spec (8 iterations, 16 tool calls)', () => {
     assert.equal(MAX_ITERATIONS, 8)
     assert.equal(MAX_TOOL_CALLS, 16)
+  })
+
+  // ── sanitizeAnthropicHistory: the tool_use/tool_result pairing repair ─────────
+  // This is the heal for the case-chat 400 bug: a stored transcript whose assistant
+  // turn carries a tool_use (e.g. terminal submit_verdict) with NO following
+  // tool_result must be repaired before the API replays it.
+  const asstToolUse = (ids: string[]): Anthropic.MessageParam => ({
+    role: 'assistant',
+    content: [
+      { type: 'text', text: 'thinking' },
+      ...ids.map((id) => ({ type: 'tool_use' as const, id, name: 'submit_verdict', input: {} })),
+    ],
+  })
+  const userToolResult = (ids: string[]): Anthropic.MessageParam => ({
+    role: 'user',
+    content: ids.map((id) => ({ type: 'tool_result' as const, tool_use_id: id, content: 'ok' })),
+  })
+  const plainUser = (text: string): Anthropic.MessageParam => ({ role: 'user', content: text })
+
+  // Extract the tool_use / tool_result ids of a message (test-local helpers).
+  const toolUseIdsOf = (m: Anthropic.MessageParam): string[] =>
+    m.role === 'assistant' && Array.isArray(m.content)
+      ? m.content.filter((b) => (b as { type?: string }).type === 'tool_use').map((b) => (b as { id: string }).id)
+      : []
+  const toolResultIdsOf = (m: Anthropic.MessageParam): string[] =>
+    m.role === 'user' && Array.isArray(m.content)
+      ? m.content
+          .filter((b) => typeof b === 'object' && (b as { type?: string }).type === 'tool_result')
+          .map((b) => (b as { tool_use_id: string }).tool_use_id)
+      : []
+
+  /** Assert every assistant tool_use id is answered by the very next message. */
+  function assertWellPaired(msgs: Anthropic.MessageParam[]) {
+    for (let i = 0; i < msgs.length; i++) {
+      const opened = toolUseIdsOf(msgs[i])
+      if (opened.length === 0) continue
+      const answered = new Set(toolResultIdsOf(msgs[i + 1]))
+      for (const id of opened) {
+        assert.ok(answered.has(id), `tool_use ${id} at index ${i} is not answered by the next turn`)
+      }
+    }
+  }
+
+  check('sanitize: dangling tool_use at END of history gets a synthetic result', () => {
+    const input: Anthropic.MessageParam[] = [
+      plainUser('briefing'),
+      asstToolUse(['toolu_END']),
+    ]
+    const out = sanitizeAnthropicHistory(input)
+    assertWellPaired(out)
+    // A user tool_result turn was appended answering toolu_END.
+    assert.equal(out.length, 3)
+    assert.deepEqual(toolResultIdsOf(out[2]), ['toolu_END'])
+  })
+
+  check('sanitize: dangling tool_use MID-history gets a result injected BEFORE the next turn', () => {
+    const input: Anthropic.MessageParam[] = [
+      plainUser('briefing'),
+      asstToolUse(['toolu_MID']), // dangling
+      plainUser('why do you think that?'), // a plain user turn, NOT a tool_result
+    ]
+    const out = sanitizeAnthropicHistory(input)
+    assertWellPaired(out)
+    // The synthetic tool_result turn is inserted at index 2, before the plain user turn.
+    assert.deepEqual(toolResultIdsOf(out[2]), ['toolu_MID'])
+    assert.equal(out[3].role, 'user')
+    assert.equal(out[3].content, 'why do you think that?')
+  })
+
+  check('sanitize: fully-paired history passes through byte-identical', () => {
+    const input: Anthropic.MessageParam[] = [
+      plainUser('briefing'),
+      asstToolUse(['toolu_A']),
+      userToolResult(['toolu_A']),
+      { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+    ]
+    const out = sanitizeAnthropicHistory(input)
+    assert.deepEqual(out, input)
+  })
+
+  check('sanitize: orphan tool_result (no matching tool_use) is dropped', () => {
+    const input: Anthropic.MessageParam[] = [
+      plainUser('briefing'),
+      // A user turn carrying a tool_result whose id was never opened by the prior turn.
+      userToolResult(['toolu_ORPHAN']),
+      plainUser('next'),
+    ]
+    const out = sanitizeAnthropicHistory(input)
+    // The orphan-only user turn is dropped entirely (no valid blocks remain).
+    assert.equal(out.length, 2)
+    assert.equal(out[0].content, 'briefing')
+    assert.equal(out[1].content, 'next')
+  })
+
+  check('sanitize: multiple tool_use in one turn with PARTIAL results → only missing injected', () => {
+    const input: Anthropic.MessageParam[] = [
+      plainUser('briefing'),
+      asstToolUse(['toolu_1', 'toolu_2', 'toolu_3']),
+      userToolResult(['toolu_2']), // only #2 answered
+    ]
+    const out = sanitizeAnthropicHistory(input)
+    assertWellPaired(out)
+    // The next user turn now answers all three, with 1 + 3 injected alongside the existing 2.
+    const answered = toolResultIdsOf(out[2])
+    assert.deepEqual([...answered].sort(), ['toolu_1', 'toolu_2', 'toolu_3'])
+  })
+
+  check('sanitize: does NOT mutate the input array', () => {
+    const input: Anthropic.MessageParam[] = [plainUser('briefing'), asstToolUse(['toolu_X'])]
+    const before = JSON.stringify(input)
+    sanitizeAnthropicHistory(input)
+    assert.equal(JSON.stringify(input), before)
   })
 
   console.log(`\n  ✓ ${passed} assertions passed\n`)

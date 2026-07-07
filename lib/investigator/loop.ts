@@ -316,6 +316,25 @@ export async function runToolLoop(params: {
           pos++,
         ),
       )
+      // Persist a synthetic tool_result for EVERY tool_use on this terminal turn
+      // (submit_verdict + any sibling calls the model bundled with it). Without
+      // this the stored transcript ends with an assistant tool_use that has no
+      // following tool_result — which foldHistory replays verbatim, and the
+      // Anthropic API rejects (400: tool_use without tool_result). The verdict
+      // call gets an "ok" note; any sibling gets a neutral placeholder.
+      await persist(
+        buildToolRow(
+          caseId,
+          toolUseBlocks.map((b) => ({
+            tool_use_id: b.id,
+            content:
+              b.id === verdictCall.id
+                ? JSON.stringify({ ok: true, note: 'verdict recorded' })
+                : JSON.stringify({ ok: true, note: 'not executed — investigation ended' }),
+          })),
+          pos++,
+        ),
+      )
       break
     }
 
