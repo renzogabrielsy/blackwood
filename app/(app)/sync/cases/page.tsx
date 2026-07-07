@@ -12,7 +12,11 @@ export const metadata = {
 
 export const dynamic = 'force-dynamic'
 
-export default async function SyncCasesPage() {
+export default async function SyncCasesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ run?: string | string[] }>
+}) {
   const supabase = await createClient()
   const {
     data: { user },
@@ -24,6 +28,10 @@ export default async function SyncCasesPage() {
   if (!PRIVILEGED_ROLES.includes(role)) {
     redirect('/inventory')
   }
+
+  const sp = await searchParams
+  const rawRun = Array.isArray(sp.run) ? sp.run[0] : sp.run
+  const initialRunId = rawRun && rawRun.trim() ? rawRun.trim() : null
 
   // Fetch open cases. Wrap so the client always renders even if the action throws.
   let initialCases: WireCase[] = []
@@ -40,7 +48,9 @@ export default async function SyncCasesPage() {
       row: r.row,
       status: r.status,
       occurrence_count: r.occurrence_count,
+      last_run_id: r.last_run_id,
       last_seen_at: r.last_seen_at,
+      created_at: r.created_at,
       known_ruling_id: r.known_ruling_id,
       known_ruling_summary: r.known_ruling_summary,
       verdict: r.verdict,
@@ -51,7 +61,11 @@ export default async function SyncCasesPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-muted/10">
-      <CasesClient initialCases={initialCases} initialError={initialError} />
+      <CasesClient
+        initialCases={initialCases}
+        initialError={initialError}
+        initialRunId={initialRunId}
+      />
     </div>
   )
 }

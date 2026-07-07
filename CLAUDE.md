@@ -101,6 +101,8 @@ No test framework is configured.
 
 **Path alias:** `@/*` maps to project root.
 
+**Client/server module boundary trap:** a client-safe pure module (e.g. `components/sync/cases/grouping.ts`) must NEVER import from a server-heavy sibling — even for a single constant. Importing `lib/investigator/triage.ts` for `TRIAGE_KIND` drags the Anthropic SDK + admin client into the client bundle and breaks `npm run build`. Duplicate the constant locally and add a verify-script assertion that the copies match (see `scripts/verify-case-grouping.ts`).
+
 **Two-layer data flow:**
 - **Platform layer (widgets):** Widget → data-agnostic interface (`ChartConfig`, `KPIData`) → adapter fills interface → widget renders. Widget has zero knowledge of Supabase, charcoal, or any domain.
 - **Domain layer (inventory modules):** User Action → Client Component → Server Action → Supabase → `revalidatePath()` → Re-render. This is the tenant-specific CRUD layer.

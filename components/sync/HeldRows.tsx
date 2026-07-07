@@ -2,10 +2,9 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { ArrowRight, Copy, HandHelping, Loader2, Sparkles } from 'lucide-react'
+import { Copy, HandHelping, Sparkles } from 'lucide-react'
 
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   metaFor,
@@ -45,7 +44,8 @@ function heldTagLabel(row: HeldRow): string {
 
 interface HeldRowsProps {
   groups: HeldGroup[]
-  onAdjudicate: (type: HeldGroup['type']) => void
+  /** The current run id — threads into the "Ask Claude → Sync Review" doorway link. */
+  runId: string | null
 }
 
 const VERDICT_STYLE: Record<AdjudicationVerdict, string> = {
@@ -67,10 +67,12 @@ function copyRow(row: HeldRow) {
   })
 }
 
-export function HeldRows({ groups, onAdjudicate }: HeldRowsProps) {
+export function HeldRows({ groups, runId }: HeldRowsProps) {
   if (groups.length === 0) return null
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0)
+  // The doorway: land on this run's triage chat (or the run's cases) in Sync Review.
+  const reviewHref = runId ? `/sync/cases?run=${encodeURIComponent(runId)}` : '/sync/cases'
 
   return (
     <div className="animate-fade-up border-t border-border px-3 py-2.5">
@@ -83,9 +85,9 @@ export function HeldRows({ groups, onAdjudicate }: HeldRowsProps) {
       </div>
 
       <p className="mb-2 text-[10px] leading-snug text-muted-foreground">
-        These rows need judgment and were <span className="font-medium">not written</span>. Ask
-        Claude for a recommendation, then apply via the sync employee in Claude Code — the app
-        does not write held rows in v1.
+        These rows need judgment and were <span className="font-medium">not written</span>. The
+        glance below is a quick read; open <span className="font-medium">Sync Review</span> to see
+        the full investigation, the run summary, and resolve them there.
       </p>
 
       <div className="space-y-2.5">
@@ -98,29 +100,16 @@ export function HeldRows({ groups, onAdjudicate }: HeldRowsProps) {
             <div key={group.type} className="rounded-md border border-border bg-card/50 p-2">
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <span className="text-[11px] font-medium text-foreground">{meta.label}</span>
-                <div className="flex items-center gap-1.5">
-                  <Link
-                    href="/sync/cases"
-                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
-                  >
-                    Open in Sync Review
-                    <ArrowRight className="h-3 w-3" />
-                  </Link>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={group.adjudicating}
-                    onClick={() => onAdjudicate(group.type)}
-                  >
-                    {group.adjudicating ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3 w-3" />
-                    )}
-                    {group.recommendations ? 'Re-ask Claude' : 'Ask Claude'}
-                  </Button>
-                </div>
+                {/* The doorway: a run-scoped deep link into Sync Review (the full
+                    investigation + run triage chat + resolve). Replaces the old
+                    in-modal single-shot "Ask Claude" adjudication button. */}
+                <Link
+                  href={reviewHref}
+                  className="inline-flex items-center gap-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-foreground transition-all duration-150 hover:bg-muted"
+                >
+                  <Sparkles className="h-3 w-3 text-primary" />
+                  Ask Claude → Sync Review
+                </Link>
               </div>
 
               <ul className="space-y-1.5">

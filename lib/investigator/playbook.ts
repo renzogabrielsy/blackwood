@@ -189,6 +189,42 @@ it and are waiting for the reviewer to press Confirm. If the tool returns an err
 this kind of flag can't be saved), tell the reviewer that reason in plain words.`
 }
 
+/**
+ * The run-triage chat addendum (v1.1). Appended to buildInvestigatorSystem() when the
+ * reviewer is chatting on a run_triage case (the WHOLE run, not one flag). Same
+ * identity + read-only boundary + plain language; it reframes the conversation as
+ * being about the entire run and enables the GROUP dismiss tool.
+ */
+export function buildTriageChatAddendum(): string {
+  return `
+
+── YOU ARE NOW DISCUSSING A WHOLE SYNC RUN ──
+This conversation is about an ENTIRE daily sync run, not a single flag. The run's flags
+have been grouped by shared root cause and you wrote the summary. Everything above still
+holds — you are read-only, you write in plain plant language, and you CANNOT write / save
+/ apply / skip / delete anything.
+
+- Answer the reviewer's questions about the run and its groups. If he asks you to check a
+  date, a batch, or a sheet, use your tools to actually check it, then reply with the exact
+  numbers.
+- Keep replies tight and specific — name the dates, the kg, the batch codes.
+
+── DISMISSING A GROUP (propose_group_resolution) ──
+When the reviewer DIRECTS a group dismissal in plain words — "dismiss the movement-sheet
+group", "set all of those aside" — call propose_group_resolution with the ids of the flags
+in that group. You are NOT saving anything: it only prepares the group dismissal for the
+reviewer to confirm with one button.
+
+- Group action is DISMISS-ONLY. There is no group "save" — if the reviewer wants a row
+  saved, that is done one flag at a time (open that single flag and apply it there).
+- NEVER include a flag the reviewer has expressed ANY doubt about. When in doubt, leave it
+  out and dismiss only the flags he is sure about.
+- Never include the triage summary itself in a group — only the individual flags.
+- After you call it, NEVER say the dismissal is done. Say you have prepared it and are
+  waiting for the reviewer to press Confirm. If the tool returns an error, relay its reason
+  plainly.`
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The case briefing — the FIRST user message.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -287,6 +323,79 @@ export function buildCaseBriefing(c: CaseBriefInput): string {
   lines.push('')
   lines.push(
     'Investigate with your tools, then call submit_verdict. Name exact dates and kg numbers, and cite every number.',
+  )
+  return lines.join('\n')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The run-triage briefing — the run chat's opening context (v1.1).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One sibling flag of the run, as the triage briefing renders it. Loose so a partial
+ *  DB row (or a test row) never throws. */
+export interface TriageSiblingBrief {
+  id: string
+  report_type?: string | null
+  kind?: string | null
+  natural_key?: string | null
+  status?: string | null
+  /** The persisted investigation verdict jsonb (or null). */
+  verdict?: unknown
+}
+
+/** The subset of a run_triage case the briefing renders. */
+export interface TriageBriefInput {
+  /** The triage case's natural_key (carries the run date + short id). */
+  run_label?: string | null
+  /** The run's already-written summary (verdict.summary), if any. */
+  summary?: string | null
+}
+
+/** Pull "verdict (confidence): summary" off a persisted verdict jsonb, or null. */
+function briefVerdictLine(verdict: unknown): string | null {
+  if (!verdict || typeof verdict !== 'object') return null
+  const v = verdict as Record<string, unknown>
+  const label = typeof v.verdict === 'string' ? v.verdict : null
+  const conf = typeof v.confidence === 'string' ? v.confidence : null
+  const summary = typeof v.summary === 'string' ? v.summary : null
+  if (!label && !summary) return null
+  const head = label ? `${label}${conf ? ` (${conf})` : ''}` : ''
+  return [head, summary].filter(Boolean).join(' — ')
+}
+
+/**
+ * Build the run-triage chat's opening user turn: the run label, the run summary, and a
+ * one-line-per-flag list (id + report/kind + status + verdict) so the model has the
+ * whole run in view when the reviewer starts talking. PURE — no I/O.
+ */
+export function buildTriageBriefing(
+  triage: TriageBriefInput,
+  siblings: TriageSiblingBrief[],
+): string {
+  const lines: string[] = []
+  lines.push('You are looking at a WHOLE daily sync run.')
+  lines.push('')
+  if (triage.run_label) lines.push(triage.run_label)
+  if (triage.summary) {
+    lines.push('')
+    lines.push(`Run summary: ${triage.summary}`)
+  }
+  lines.push('')
+  lines.push(`The run's flags (${siblings.length}):`)
+  for (const s of siblings) {
+    const parts: string[] = [`  • ${s.id}`]
+    const meta = [s.report_type, s.kind].filter(Boolean).join('/')
+    if (meta) parts.push(`[${meta}]`)
+    if (s.status) parts.push(`status ${s.status}`)
+    if (s.natural_key) parts.push(`— ${s.natural_key}`)
+    lines.push(parts.join(' '))
+    const vl = briefVerdictLine(s.verdict)
+    if (vl) lines.push(`      investigation said: ${vl}`)
+  }
+  lines.push('')
+  lines.push(
+    'Answer the reviewer about this run. If he directs a group dismissal, call ' +
+      'propose_group_resolution with the flag ids in that group.',
   )
   return lines.join('\n')
 }

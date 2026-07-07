@@ -131,7 +131,11 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`listOpenCases()`** → every `status != 'resolved'` case, newest-seen first, with the
     pre-annotating ruling's `verdict_summary` joined via the `known_ruling_id` FK. **P4:** now also
     selects `verdict` (the persisted investigation verdict jsonb) so the review page can render the
-    verdict badge without a second fetch.
+    verdict badge without a second fetch. **v1.1:** already selects `last_run_id` + `created_at`
+    (used by the review page's per-run grouping) — no query change needed for T2.
+  - **Deep link:** `cases/page.tsx` (`force-dynamic`) reads `searchParams.run` and threads it to
+    `CasesClient` as `initialRunId`; the client fans that run out (`ensureCasesForRun`, idempotent)
+    then preselects the run's triage/first case and scrolls its section into view.
   - **`getCaseWithMessages(caseId)`** → `{case, messages}` (messages ordered by `position`).
   - **`investigateCase(caseId, {escalate?, force?})`** → `InvestigationOutcome`
     (`{status:'done'|'skipped'|'error', verdict?, error?}`) — the **Smart-Adjudicator P3**
@@ -139,12 +143,19 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     run on Opus 4.8 (the "re-investigate / escalate" button); `force` → re-run even if already
     investigated / known-ruled. The loop is single-flight (a concurrent call / already-done /
     known-ruling case returns `skipped` with no token spend).
-  - **`autoInvestigateRun(runId)`** → `{cases, investigated, skipped, errors}` — the **P3
+  - **`autoInvestigateRun(runId)`** → `{cases, investigated, skipped, errors, triage}` — the **P3
     auto-trigger**. Calls `ensureCasesForRun`, then auto-investigates each returned case that is
     `status='open'` AND `known_ruling_id IS NULL` via a **concurrency-2 promise pool**.
     Idempotent by construction (the loop's single-flight guard). Fired fire-and-forget from
     `useSyncRun.finalizeRun` when a run finishes with held rows — verdicts persist to the case,
-    so they're waiting even if the modal was closed.
+    so they're waiting even if the modal was closed. **v1.1 (Run Triage):** after the investigation
+    pool settles it now `await runTriage(runId)` (`lib/investigator/triage.ts`) and returns the
+    outcome under the NEW `triage` field (`{status:'done'|'skipped'|'error', caseId?}` — `skipped`
+    for a clean run). Triage never throws (a failure is reported, not raised — the investigations
+    already landed).
+  - **`triageRun(runId)`** (v1.1) → `RunTriageOutcome`. requirePrivileged; the standalone
+    "re-triage" server action — forces a fresh synthesis over the run's current cases, replacing the
+    triage case's verdict/row (idempotent by fingerprint upsert).
 - `case-chat.ts` (`'use server'`) — the **human-in-the-loop CHAT continuation** (Smart-Adjudicator
   **P4**). After the opening auto-investigation writes a cited verdict, the case becomes a
   conversation Renzo steers:
@@ -162,6 +173,13 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     reply + touch `updated_at`. READ-ONLY like the investigation (no operational write — the resolve
     write is P5). If the case has no transcript yet, it leads with `buildCaseBriefing`. Service-role
     writes; every turn persists to `sync_case_messages` (the review page watches over Realtime).
+    **v1.1 (Run Triage) — `run_triage` branch:** when the case's `kind` is `run_triage`, the chat is
+    about the WHOLE run. It seeds `buildTriageBriefing` (run label + summary + one line per sibling
+    flag) instead of the case briefing, uses `buildInvestigatorSystem() + buildTriageChatAddendum()`,
+    and injects `PROPOSE_GROUP_RESOLUTION_TOOL` (dismiss-only) instead of `PROPOSE_RESOLUTION_TOOL` —
+    the group tool's `executeProposeGroup` is bound to a `GroupResolutionContext` built from the run
+    family (the triage case's `row.case_ids` minus already-resolved). Other kinds keep the single-case
+    chat path unchanged.
 - `case-history.ts` (**PURE, no `'use server'`**) — the transcript→Anthropic-messages layer split
   out of `case-chat.ts` (which, being `'use server'`, may only export async server actions), the same
   split discipline `adjudication.ts` uses against `actions.ts`. Two exported functions:
@@ -198,6 +216,24 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`quickDismiss(caseId, reason)`** → the actions-bar one-click dismiss (required "why"),
     synthesizes a dismiss ruling directly (same ruling+message+status writes, provenance
     "Resolved (dismiss) via case chat by <email>"). Human-directed by definition.
+  - **ONE shared dismissal path (v1.1 refactor):** the internal `dismissOneCase(admin, caseRow,
+    summary, reasoning, ruledBy, email, systemMessage)` is the SINGLE per-case dismissal write
+    (ruling under THAT case's fingerprint → resolved + known_ruling_id → system message, NO
+    operational write). `quickDismiss`, the dismiss branch of `executeResolutionInternal`, group
+    dismiss, and bulk dismiss all route through it (external behavior of the existing actions
+    unchanged).
+  - **`executeGroupResolution(triageCaseId, proposalMessageId)`** (v1.1) → `{ok, resolved, errors[],
+    triageResolved?}`. requirePrivileged; re-reads the `propose_group_resolution` proposal FROM THE
+    DB message row; guards double-execution via `findOpenGroupProposal`; re-checks
+    `checkGroupEligibility` against the run family (the triage case's `row.case_ids` minus already
+    resolved). Dismisses each listed case INDIVIDUALLY (one ledger ruling per case under its own
+    fingerprint) — sequential, collects per-case errors, does NOT roll back successes (each dismissal
+    is status-guarded + idempotent). Writes a system note on EACH case + one on the triage case
+    listing the count. If every non-triage case of the run is then resolved, resolves the triage case
+    too ("all flags in this run resolved").
+  - **`bulkDismissCases(caseIds, reason)`** (v1.1) → same `{ok, resolved, errors[]}` — the review
+    page's multi-select path; per-case `dismissOneCase` writes, provenance "bulk-dismissed by
+    <email>"; refuses a `run_triage` case (dismiss its flags, not the summary).
   - Never deletes. Price gating: apply payloads carry NO ₱ (rc_out has no cost column;
     `deliveries.cost_basis` forced 0 by the writer per L-008). All revalidate `/sync/cases`.
 - `case-chat.ts` — **now also exposes `propose_resolution`** (chat mode ONLY, NOT the investigation
@@ -274,11 +310,42 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   the confirm/decline/quick-dismiss handlers (Realtime repaints the thread on resolve), and mounts
   the dialog; `CaseDetail` renders the `ResolutionCard`, the Quick Dismiss button, and a
   "Resolved — <summary>" header line for resolved cases.
-- `HeldRows.tsx` — held-row groups with per-group "Ask Claude" adjudication + per-row
-  Copy. **2026-07-06:** each row's tag now renders a human `KIND_LABEL` phrase
-  (`gate_failure` → "Totals don't match — nothing saved", `sub_watermark_suspected_dup` →
-  "Possible duplicate feeding", `unmapped_batch_code` → "Unknown batch code", …) instead of
-  the raw kind; the raw kind stays on the badge's `title` (tooltip) for debugging.
+  - **v1.1 (Run Triage) — the review page is now GROUPED BY RUN.** `CasesClient` takes a new
+    `initialRunId` (the `?run=<runId>` deep-link target) and passes the case list to the new
+    **`cases/RunGroupedList.tsx`** (LEFT panel, replaces the retired flat `cases/CaseList.tsx`).
+    RunGroupedList sections cases per run (newest first, via the pure `grouping.ts`), renders each
+    run's **`cases/TriageSummaryCard.tsx`** on top (plain summary + cluster chips tinted by
+    suggested_action — dismiss=emerald, needs-attention=amber; "Discuss this run" selects the
+    triage case → run chat; a chip toggles a per-run cluster filter over the section's table), and
+    the run's non-triage cases as the dense table beneath (triage cases NEVER render as a row).
+    Each selectable row carries a compact bulk-select checkbox; a **selection bar** (animate-fade-up,
+    glass) offers "Dismiss N selected…" → the multi-mode `QuickDismissDialog` → `bulkDismissCases`.
+    Status filters (All/Open/Investigated/Known + show-resolved) apply across all sections.
+    `CaseDetail` now also renders **`cases/GroupResolutionCard.tsx`** when the selected case is a
+    triage case with an OPEN `propose_group_resolution` (detected client-side via
+    `findOpenGroupProposal`): "Dismiss N flags" badge + the listed member cases → Confirm
+    (`executeGroupResolution`) / Decline (`cancelProposal`). The Quick Dismiss button is hidden on a
+    triage case (dismiss its flags, not the summary). All errors → `errorToast()`.
+- `cases/grouping.ts` (**PURE, client-safe + node-safe, no React / no server imports**) — the
+  load-bearing review-page transformations, factored out so they unit-drive under
+  `scripts/verify-case-grouping.ts`: `groupCasesByRun` (per-run sections, newest run first, no-run
+  bucket last, triage case pulled OUT of table rows + surfaced as `section.triage`),
+  `filterRowsByCluster` (cluster-chip toggle), `preselectForRun` (the `?run=` fallback chain:
+  run absent/not-found → null · has triage → triage case id · else first row · empty → null),
+  `isBulkSelectable` (not triage + not resolved), `toTriageView`/`isTriageCase`, and a LOCAL
+  `TRIAGE_KIND = 'run_triage'` copy (redeclared, NOT imported from `lib/investigator/triage.ts`,
+  so this client-bundled module never pulls the Anthropic SDK / admin client into the browser
+  bundle — the verify script asserts the two constants agree).
+- `HeldRows.tsx` — held-row groups (in the sync MODAL). Each row's tag renders a human `KIND_LABEL`
+  phrase (`gate_failure` → "Totals don't match — nothing saved", …); the raw kind stays on the
+  badge's `title` (tooltip) for debugging. **v1.1 (Run Triage) — the per-group button is now a
+  DOORWAY:** the old in-modal single-shot "Ask Claude" adjudication button + the separate "Open in
+  Sync Review →" link are BOTH replaced by ONE **"Ask Claude → Sync Review"** Link deep-linking to
+  `/sync/cases?run=<runId>` (the run id threads in via a new `runId` prop, sourced from
+  `state.runId` through `SyncPanelBody`). The auto quick-recommendation glance rendering (verdict
+  chip + Claude/DB lines per row) is UNCHANGED — it stays as the in-modal glance layer. The old
+  `onAdjudicate` prop was dropped from `HeldRows`/`SyncPanelBody`/`SyncLauncher`/`SyncPanel`
+  (`useSyncRun` still exposes `adjudicate`, now unused by the modal chrome).
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
   **`stop()`** (M5.1) calls `cancelSyncRun(currentRunId)` (guarded against
   double-clicks via `cancelling`); subscribes (browser client) to `sync_run_events`
@@ -351,6 +418,30 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   provenance-stamped audit row (confirmed via MCP — the local service-role key can't SELECT
   `audit_logs`), the ruling + resolved case + system trail all landed, and dismiss wrote 0
   operational rows (ruling + status only). Everything deleted after.
+- `scripts/verify-triage.ts` (v1.1 Run Triage) — `npx tsx scripts/verify-triage.ts` runs 25
+  framework-free assertions over the triage layer's PURE pieces: `parseTriage` validation + REPAIR
+  (unknown id dropped, missing id → singleton needs-attention cluster, duplicate deduped, empty
+  cluster dropped, malformed input still partitions), `triageFingerprint` stability + distinctness,
+  `parseGroupProposal`/`checkGroupEligibility` (dismiss-only; non-triage/resolved/out-of-family/
+  already-resolved/triage-id-in-group all refused; clean group ok), `findOpenGroupProposal`
+  (lone/declined/resolved/latest-wins/ignores single propose_resolution), and `buildTriageBriefing`
+  rendering. No DB. **Live-smoke (throwaway `scripts/smoke-triage.ts`, deleted after use, 2026-07-07):**
+  seeded a fake run + 3 tiny cases (2 shared root cause, 1 distinct) → `runTriage` produced a clean
+  2+1 partition + jargon-free summary; a simulated `propose_group_resolution` + the group dismissal
+  path resolved both clustered cases with individual ledger rulings + system messages, left the
+  distinct case untouched, cleaned to 0 orphans.
+- `scripts/verify-case-grouping.ts` (v1.1 Run Triage, T2) — `npx tsx scripts/verify-case-grouping.ts`
+  runs 17 framework-free assertions over the PURE review-page spine (`components/sync/cases/
+  grouping.ts`): the local `TRIAGE_KIND` agrees with the server source of truth, run-grouping order
+  (newest run first, no-run bucket last), triage case excluded from table rows + surfaced as the
+  card, a fresh triage keeping its run on top, cluster-chip filtering, the `?run=` preselect
+  fallback chain (absent/not-found → null · triage → triage id · else first row), bulk-selection
+  eligibility (triage/resolved not selectable), and `toTriageView` robustness. No DB, no browser.
+  **Data-path proof (throwaway, deleted after use, 2026-07-07):** a seed script inserted a fake run
+  + 3 held cases + a run_triage case (2 clusters) via service role, drove the EXACT page
+  transformation (grouping, cluster filter, `?run=` preselect, bulk eligibility) over the real rows,
+  asserted the shape, and cleaned to 0 orphans (auth/login wall blocks a live screenshot on
+  `/sync/cases`, same as P4).
 - `scripts/verify-case-fingerprint.ts` — `npx tsx scripts/verify-case-fingerprint.ts`
   runs 5 framework-free assertions over the case-persistence spine's PURE pieces
   (`lib/sync/fingerprint.ts` + `lib/sync/cases-fold.ts`): fingerprint stability, key-order
@@ -398,6 +489,12 @@ Three DB tables applied to remote (2026-07-06); `sync_held_cases` + `sync_case_m
   `occurrence_count`, `last_seen_at`, `status`
   (`open|investigating|investigated|resolved`), `known_ruling_id` (→`sync_case_rulings`,
   pre-annotation), `verdict` (jsonb, P3 writes it), `created_at`/`updated_at`.
+  **v1.1 (Run Triage) reuses this table — NO migration.** A run's triage is a SYNTHETIC case row:
+  `kind='run_triage'` (the column is unconstrained TEXT), `report_type='run'`,
+  `fingerprint=triageFingerprint(runId)`, `row={clusters, case_ids}`,
+  `verdict={verdict:'needs-human', confidence:'high', summary, …}`, `status='investigated'`
+  (CHECK-allowed). Its chat thread + Realtime + review-page rendering are the SAME case machinery;
+  `lib/investigator/triage.ts::runTriage` upserts it (idempotent by the `fingerprint` UNIQUE).
 - **`sync_case_messages`** — the per-case chat + investigation transcript (mirrors
   `jarvis_messages`): `case_id` (→cases, ON DELETE CASCADE), `role`
   (`user|assistant|tool|system`), `content`, `tool_calls`/`tool_results` (jsonb), `position`,

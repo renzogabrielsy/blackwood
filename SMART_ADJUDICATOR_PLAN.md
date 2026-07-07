@@ -119,6 +119,19 @@ Next.js **server action** (like Jarvis), **on-demand** when Renzo clicks — not
 
 **Total ≈ 3–4 focused sessions** for the rc_out proof slice (persistence + investigator + review page + full resolve), then generalize per flag family. Requires a DB migration (cases/messages/rulings — app tables only, the worker schema is untouched). No worker change (investigator runs app-side); the only worker-adjacent touch is fanning run results into cases, which can live app-side off the existing Realtime completion event. Reuses the Jarvis loop + tools as the base.
 
+## v1.1 — Run Triage layer (LOCKED 2026-07-07 PM, approved "plan then execute go")
+
+Renzo's friction after the first real incident (5 flags = 1 root cause = 5 separate cases to read and dismiss): the per-case model is the right foundation but lacks the **run-level conversation**. Industry pattern adopted (Sentry/PagerDuty/data-observability convergence): group by root cause, triage summary first, bulk resolution, one conversation per run.
+
+**Locked design:**
+1. **Triage case per run.** When `autoInvestigateRun` finishes a run's investigations, a **synthesis pass** (one Sonnet call, no tools — input = every case's briefing + verdict) clusters the run's cases by root cause and writes a run summary. Persisted as a **synthetic case row** (`kind: 'run_triage'`, fingerprint = hash of run id, clusters in `row` jsonb, summary in `verdict`) — deliberately reusing the ENTIRE existing case machinery (messages thread, Realtime, chat loop, review page) instead of new tables. Zero-flag runs get no triage case.
+2. **Run-level chat** = `chatOnCase` on the triage case. Its briefing embeds the run context + all sibling case verdicts; same 5 read-only tools; NEW chat-mode tool `propose_group_resolution` `{action:'dismiss', case_ids, summary, reasoning}` (**dismiss-only for groups in v1** — applies stay per-case) → confirm card → `executeGroupResolution` dismisses every listed case (one ruling per case so each fingerprint enters the ledger individually), all confirm-gated exactly like single resolution.
+3. **Review page groups by run**: section per run (newest first) with the triage summary card on top (clusters as chips → filter), the per-case table beneath; triage case opens the run chat. Multi-case bulk-dismiss also available from selection (routes through the same group action).
+4. **Modal "Ask Claude" → doorway**: the held-rows button deep-links to `/sync/cases?run=<runId>` landing on that run's triage chat (in-modal quick recommendations stay as the glance layer).
+5. **Explicitly deferred:** auto-resolution of ledger-matched known issues (v2, after the ledger earns trust); group `apply`.
+
+Phases: **T1** backend (synthesis + trigger + group resolution + verify additions + live smoke) → **T2** frontend (run grouping, triage card, run chat deep-link, group confirm card, modal button) → **T3** gates + docs + commit.
+
 ## What it does NOT change
 The deterministic sync (parity 12/12), the write gate (human-approved via the employee), price gating, the fast single-shot default, and the "never auto-write held rows in v1" policy.
 

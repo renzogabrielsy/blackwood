@@ -189,6 +189,170 @@ export function executePropose(input: unknown, ctx: ResolutionCaseContext): stri
 }
 
 // ============================================================================
+// GROUP resolution (v1.1 Run Triage) — dismiss-only, chat-mode on a triage case.
+// ============================================================================
+
+/** The validated group-dismiss proposal (parsed from propose_group_resolution). */
+export interface GroupResolutionProposal {
+  /** dismiss-ONLY in v1 (apply/edit_apply are per-case). */
+  action: 'dismiss'
+  case_ids: string[]
+  summary: string
+  reasoning: string
+}
+
+/**
+ * The minimal facts executeProposeGroup needs to check a group proposal. `caseKind`
+ * gates the tool to a triage case; `runCaseIds` is the authoritative set of the run's
+ * sibling case ids (the triage case's row.case_ids); `resolvedIds` is the subset
+ * already resolved (a group must not re-dismiss those).
+ */
+export interface GroupResolutionContext {
+  /** The kind of the case the tool is being called FROM (must be 'run_triage'). */
+  caseKind: string
+  status: string
+  /** Every case id that belongs to this run family (from the triage case's row). */
+  runCaseIds: string[]
+  /** The subset of runCaseIds that are already resolved. */
+  resolvedIds: string[]
+  /** The triage case's OWN id (may never be a member of the group). */
+  triageCaseId: string
+}
+
+/** The propose_group_resolution tool definition (chat-mode, run_triage cases only). */
+export const PROPOSE_GROUP_RESOLUTION_TOOL: Anthropic.Tool = {
+  name: 'propose_group_resolution',
+  description:
+    'Propose dismissing a WHOLE GROUP of flags at once, when the reviewer has directed it in ' +
+    'plain words ("dismiss the movement-sheet group", "set all of those aside"). This does NOT ' +
+    'save anything — it lays out exactly which flags will be set aside so the reviewer can confirm ' +
+    'with one button.\n\n' +
+    'Only "dismiss" is available for groups: dismissing sets each flag aside with NO change to any ' +
+    'operational data (the common outcome when the database is already correct and several source ' +
+    'sheets were short for the same reason). If the reviewer wants to SAVE a row, that is done one ' +
+    'flag at a time — never as a group.\n\n' +
+    'case_ids: the ids of every flag in the group. NEVER include a flag the reviewer has doubts ' +
+    'about, and never include the triage summary itself. summary: one or two plain sentences the ' +
+    'reviewer can confirm. reasoning: why these all share one cause and can be set aside together.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['dismiss'] },
+      case_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Every case id in the group to dismiss.',
+      },
+      summary: { type: 'string', description: 'One or two plain sentences the reviewer can confirm.' },
+      reasoning: { type: 'string', description: 'Why these all share one cause and can be set aside together.' },
+    },
+    required: ['action', 'case_ids', 'summary', 'reasoning'],
+  },
+}
+
+/** Parse the model's group tool input into a GroupResolutionProposal, or null. */
+export function parseGroupProposal(input: unknown): GroupResolutionProposal | null {
+  if (!input || typeof input !== 'object') return null
+  const o = input as Record<string, unknown>
+
+  if (o.action !== 'dismiss') return null // dismiss-only in v1
+
+  if (!Array.isArray(o.case_ids) || o.case_ids.length === 0) return null
+  const case_ids: string[] = []
+  for (const id of o.case_ids) {
+    if (typeof id !== 'string' || !id.trim()) return null
+    case_ids.push(id.trim())
+  }
+
+  const summary = o.summary
+  if (typeof summary !== 'string' || summary.trim().length === 0) return null
+  const reasoning = o.reasoning
+  if (typeof reasoning !== 'string' || reasoning.trim().length === 0) return null
+
+  return { action: 'dismiss', case_ids, summary: summary.trim(), reasoning: reasoning.trim() }
+}
+
+/**
+ * The single group-eligibility gate — shared by the tool executor AND
+ * executeGroupResolution (defense in depth). Encodes the locked semantics:
+ *   - the tool is ONLY usable from a triage (run_triage) case;
+ *   - a resolved triage case can't drive a group resolution;
+ *   - every case_id must belong to the run family (the triage case's row.case_ids);
+ *   - no case_id may be the triage case itself;
+ *   - no case_id may already be resolved.
+ */
+export function checkGroupEligibility(
+  proposal: GroupResolutionProposal,
+  ctx: GroupResolutionContext,
+): EligibilityResult {
+  if (ctx.caseKind !== 'run_triage') {
+    return {
+      ok: false,
+      error:
+        'Group dismiss is only available from a run triage summary — on a single flag, dismiss or save it on its own.',
+    }
+  }
+  if (ctx.status === 'resolved') {
+    return { ok: false, error: 'This run triage is already resolved — there is nothing left to do.' }
+  }
+
+  const runSet = new Set(ctx.runCaseIds)
+  const resolvedSet = new Set(ctx.resolvedIds)
+
+  for (const id of proposal.case_ids) {
+    if (id === ctx.triageCaseId) {
+      return { ok: false, error: 'The triage summary itself cannot be part of a group — list only the individual flags.' }
+    }
+    if (!runSet.has(id)) {
+      return {
+        ok: false,
+        error: `One of the flags is not part of this run (${id}). Only flags from this run can be dismissed together.`,
+      }
+    }
+    if (resolvedSet.has(id)) {
+      return {
+        ok: false,
+        error: `One of the flags is already resolved (${id}). Leave it out and dismiss the rest.`,
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
+ * The executor for propose_group_resolution (chat mode). Does NO write: validates the
+ * group proposal against the triage case + run family and echoes it back as a JSON
+ * string the model relays. The actual dismissals happen only on an explicit human
+ * confirm (executeGroupResolution, resolve.ts). Never throws.
+ */
+export function executeProposeGroup(input: unknown, ctx: GroupResolutionContext): string {
+  const proposal = parseGroupProposal(input)
+  if (!proposal) {
+    return JSON.stringify({
+      ok: false,
+      error:
+        'The group proposal was malformed. action must be dismiss; case_ids must be a non-empty list of flag ids; summary and reasoning are required.',
+    })
+  }
+
+  const elig = checkGroupEligibility(proposal, ctx)
+  if (!elig.ok) return JSON.stringify({ ok: false, error: elig.error })
+
+  return JSON.stringify({
+    ok: true,
+    group_proposal_echo: {
+      action: proposal.action,
+      case_ids: proposal.case_ids,
+      summary: proposal.summary,
+      reasoning: proposal.reasoning,
+    },
+    note:
+      'Nothing has been saved. Tell the reviewer you have prepared this group dismissal and are waiting for them to confirm with the button.',
+  })
+}
+
+// ============================================================================
 // Open-proposal detection (PURE) — used by resolve.ts + the UI to decide whether
 // an actionable resolution card should show. Exported for the verify script.
 // ============================================================================
@@ -211,20 +375,28 @@ export interface OpenProposal {
   tool_use_id: string
 }
 
-/** Extract a propose_resolution tool_use block from an assistant row's tool_calls. */
-function findProposeCall(
+/** Extract a named tool_use block from an assistant row's tool_calls. */
+function findToolCall(
   toolCalls: unknown,
+  toolName: string,
 ): { id: string; input: unknown } | null {
   if (!Array.isArray(toolCalls)) return null
   for (const tc of toolCalls) {
     if (tc && typeof tc === 'object') {
       const o = tc as Record<string, unknown>
-      if (o.name === 'propose_resolution') {
+      if (o.name === toolName) {
         return { id: String(o.id ?? ''), input: o.input }
       }
     }
   }
   return null
+}
+
+/** Extract a propose_resolution tool_use block from an assistant row's tool_calls. */
+function findProposeCall(
+  toolCalls: unknown,
+): { id: string; input: unknown } | null {
+  return findToolCall(toolCalls, 'propose_resolution')
 }
 
 /** True when a system row records a declined proposal at `position`. */
@@ -262,6 +434,45 @@ export function findOpenProposal(
   if (!latest) return null
 
   // Any decline row AFTER the proposal's position closes it.
+  for (const row of rows) {
+    if (row.position > latest.position && isDeclineRow(row)) return null
+  }
+
+  return latest
+}
+
+/** The latest open (un-actioned) GROUP proposal found while scanning a transcript. */
+export interface OpenGroupProposal {
+  proposal: GroupResolutionProposal
+  /** The position of the assistant message that carried the propose_group_resolution call. */
+  position: number
+  /** The tool_use id of the propose_group_resolution call (for tracing). */
+  tool_use_id: string
+}
+
+/**
+ * Decide whether a triage case has an OPEN, actionable GROUP resolution proposal.
+ * Mirrors findOpenProposal for the propose_group_resolution tool name: the LATEST
+ * propose_group_resolution with no later decline row, and not on a resolved case.
+ * PURE — no DB.
+ */
+export function findOpenGroupProposal(
+  rows: ProposalScanRow[],
+  caseStatus: string,
+): OpenGroupProposal | null {
+  if (caseStatus === 'resolved') return null
+
+  let latest: OpenGroupProposal | null = null
+  for (const row of rows) {
+    if (row.role !== 'assistant') continue
+    const call = findToolCall(row.tool_calls, 'propose_group_resolution')
+    if (!call) continue
+    const proposal = parseGroupProposal(call.input)
+    if (!proposal) continue
+    latest = { proposal, position: row.position, tool_use_id: call.id }
+  }
+  if (!latest) return null
+
   for (const row of rows) {
     if (row.position > latest.position && isDeclineRow(row)) return null
   }

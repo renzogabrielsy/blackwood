@@ -61,6 +61,16 @@ function stableStringify(value: unknown): string {
 }
 
 /**
+ * The shared canonical content hash: canonicalize (sort keys recursively) → stable
+ * JSON → sha256 hex. `caseFingerprint` (held rows) and `triageFingerprint`
+ * (lib/investigator/triage.ts, per-run) both build ON this so the hashing discipline
+ * lives in ONE place. Exported so no caller re-implements canonicalization + sha256.
+ */
+export function canonicalHash(value: unknown): string {
+  return createHash('sha256').update(stableStringify(value)).digest('hex')
+}
+
+/**
  * Reduce one drift date to only its PRESENT numeric fields, each rounded to an
  * integer, keeping `note` if set. Rounding means sub-kg jitter doesn't spawn a new
  * case, but a real change (a different diff) does.
@@ -113,5 +123,5 @@ export function caseFingerprint(reportType: SyncReportType, held: HeldRow): stri
     }
   }
 
-  return createHash('sha256').update(stableStringify(canonical)).digest('hex')
+  return canonicalHash(canonical)
 }

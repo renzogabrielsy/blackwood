@@ -1,31 +1,45 @@
 'use client'
 
 import * as React from 'react'
-import { Inbox } from 'lucide-react'
+import { Inbox, XCircle } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 import { errorToast } from '@/lib/toast'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
-import { getCaseWithMessages, investigateCase } from '@/app/(app)/sync/cases'
+import { ensureCasesForRun, getCaseWithMessages, investigateCase } from '@/app/(app)/sync/cases'
 import { chatOnCase } from '@/app/(app)/sync/case-chat'
-import { executeResolution, cancelProposal, quickDismiss } from '@/app/(app)/sync/resolve'
-import { findOpenProposal, type ProposalScanRow } from '@/lib/investigator/resolution'
+import {
+  bulkDismissCases,
+  cancelProposal,
+  executeGroupResolution,
+  executeResolution,
+  quickDismiss,
+} from '@/app/(app)/sync/resolve'
+import {
+  findOpenGroupProposal,
+  findOpenProposal,
+  type ProposalScanRow,
+} from '@/lib/investigator/resolution'
 
-import { CaseList, type CaseFilter, type CaseListRow } from './CaseList'
+import { RunGroupedList, type CaseFilter, type RunListCase } from './RunGroupedList'
 import { CaseDetail, type CaseDetailRow } from './CaseDetail'
+import type { GroupMemberCase } from './GroupResolutionCard'
 import type { ThreadMessage } from './CaseThread'
 import { QuickDismissDialog } from './QuickDismissDialog'
+import { groupCasesByRun, isBulkSelectable, preselectForRun } from './grouping'
 
 /** A held-case row as it arrives on the wire (list + Realtime share this shape). */
-export interface WireCase extends CaseListRow {
+export interface WireCase extends RunListCase {
   reason: string | null
   detail: string | null
-  row: unknown
 }
 
 interface CasesClientProps {
   initialCases: WireCase[]
   initialError: string | null
+  /** The `?run=<runId>` deep-link target (preselect that run's triage / first case). */
+  initialRunId: string | null
 }
 
 /** Normalize a raw sync_held_cases Realtime row into our WireCase shape. */
@@ -40,7 +54,9 @@ function toWireCase(raw: Record<string, unknown>, prev?: WireCase): WireCase {
     row: raw.row ?? null,
     status: String(raw.status ?? 'open'),
     occurrence_count: Number(raw.occurrence_count ?? 1),
+    last_run_id: (raw.last_run_id as string | null) ?? prev?.last_run_id ?? null,
     last_seen_at: String(raw.last_seen_at ?? new Date().toISOString()),
+    created_at: (raw.created_at as string | null) ?? prev?.created_at ?? null,
     known_ruling_id: (raw.known_ruling_id as string | null) ?? null,
     // Realtime rows don't carry the joined ruling summary — preserve the prior one.
     known_ruling_summary: prev?.known_ruling_summary ?? null,
@@ -59,17 +75,23 @@ function toThreadMessage(raw: Record<string, unknown>): ThreadMessage {
   }
 }
 
-export function CasesClient({ initialCases, initialError }: CasesClientProps) {
+export function CasesClient({ initialCases, initialError, initialRunId }: CasesClientProps) {
   const [cases, setCases] = React.useState<WireCase[]>(initialCases)
-  const [selectedId, setSelectedId] = React.useState<string | null>(
-    initialCases[0]?.id ?? null,
-  )
+  const [selectedId, setSelectedId] = React.useState<string | null>(initialCases[0]?.id ?? null)
   const [messages, setMessages] = React.useState<ThreadMessage[]>([])
   const [chatPending, setChatPending] = React.useState(false)
   const [filter, setFilter] = React.useState<CaseFilter>('all')
   const [showResolved, setShowResolved] = React.useState(false)
   const [resolvePending, setResolvePending] = React.useState(false)
   const [quickDismissOpen, setQuickDismissOpen] = React.useState(false)
+
+  // Per-run active cluster filter (runId → the chip's case_ids, or null/absent).
+  const [clusterFilter, setClusterFilter] = React.useState<Record<string, string[] | null>>({})
+  // Multi-select for bulk dismiss.
+  const [selectedForBulk, setSelectedForBulk] = React.useState<Set<string>>(new Set())
+  const [bulkDismissOpen, setBulkDismissOpen] = React.useState(false)
+  // The deep-link run to scroll into view (cleared once handled once).
+  const [scrollToRunId, setScrollToRunId] = React.useState<string | null>(initialRunId)
 
   const selectedIdRef = React.useRef<string | null>(selectedId)
   React.useEffect(() => {
@@ -79,6 +101,27 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
   React.useEffect(() => {
     if (initialError) errorToast('Could not load review cases', { description: initialError })
   }, [initialError])
+
+  // ── Deep link: on mount, ensure the run's cases exist, then preselect + scroll. ──
+  const didDeepLink = React.useRef(false)
+  React.useEffect(() => {
+    if (didDeepLink.current || !initialRunId) return
+    didDeepLink.current = true
+    // Best-effort: fan the run out (idempotent) so a fresh triage/case exists even if
+    // the modal never opened the review page. Then preselect from the current cases.
+    void (async () => {
+      try {
+        await ensureCasesForRun(initialRunId)
+      } catch {
+        /* non-fatal — the page still renders whatever cases already exist */
+      }
+    })()
+    const sections = groupCasesByRun(cases)
+    const target = preselectForRun(sections, initialRunId)
+    if (target) setSelectedId(target)
+    setScrollToRunId(initialRunId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRunId])
 
   const selectedCase = React.useMemo<CaseDetailRow | null>(() => {
     const c = cases.find((x) => x.id === selectedId)
@@ -100,12 +143,11 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
   }, [cases, selectedId])
 
   const busy = selectedCase?.status === 'investigating'
+  const isTriageSelected = selectedCase?.kind === 'run_triage'
 
-  // ── The open resolution proposal (P5): the latest un-actioned propose_resolution ──
-  // Computed from the live transcript. We also resolve the message id (for the
-  // executeResolution / cancelProposal calls, which take proposalMessageId).
+  // ── The open SINGLE resolution proposal (P5) — non-triage cases only. ──
   const openProposal = React.useMemo(() => {
-    if (!selectedCase || selectedCase.status === 'resolved') return null
+    if (!selectedCase || selectedCase.status === 'resolved' || isTriageSelected) return null
     const scan: ProposalScanRow[] = messages.map((m) => ({
       role: m.role,
       content: m.content,
@@ -114,7 +156,7 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
       position: m.position,
     }))
     return findOpenProposal(scan, selectedCase.status)
-  }, [messages, selectedCase])
+  }, [messages, selectedCase, isTriageSelected])
 
   const openProposalMessageId = React.useMemo(() => {
     if (!openProposal) return null
@@ -122,11 +164,40 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     return msg?.id ?? null
   }, [openProposal, messages])
 
+  // ── The open GROUP resolution proposal (v1.1) — triage cases only. ──
+  const openGroupProposal = React.useMemo(() => {
+    if (!selectedCase || selectedCase.status === 'resolved' || !isTriageSelected) return null
+    const scan: ProposalScanRow[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      tool_results: m.tool_results,
+      position: m.position,
+    }))
+    return findOpenGroupProposal(scan, selectedCase.status)
+  }, [messages, selectedCase, isTriageSelected])
+
+  const openGroupProposalMessageId = React.useMemo(() => {
+    if (!openGroupProposal) return null
+    const msg = messages.find((m) => m.position === openGroupProposal.position)
+    return msg?.id ?? null
+  }, [openGroupProposal, messages])
+
+  // The run family's cases (to render the group card's member rows), keyed off the
+  // selected triage case's run.
+  const groupMembers = React.useMemo<GroupMemberCase[]>(() => {
+    if (!isTriageSelected || !selectedCase) return []
+    const runId = cases.find((c) => c.id === selectedCase.id)?.last_run_id
+    if (!runId) return []
+    return cases
+      .filter((c) => c.last_run_id === runId && c.kind !== 'run_triage')
+      .map((c) => ({ id: c.id, natural_key: c.natural_key, kind: c.kind }))
+  }, [cases, selectedCase, isTriageSelected])
+
   // ── Load the selected case's transcript (server), then Realtime keeps it live ──
   const loadMessages = React.useCallback(async (caseId: string) => {
     try {
       const { messages: msgs } = await getCaseWithMessages(caseId)
-      // Only apply if still the selected case (avoid a stale async overwrite).
       if (selectedIdRef.current !== caseId) return
       setMessages(
         (msgs ?? []).map((m) => ({
@@ -152,7 +223,7 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     void loadMessages(selectedId)
   }, [selectedId, loadMessages])
 
-  // ── Realtime: whole-table UPDATE on sync_held_cases → refresh the list rows ──
+  // ── Realtime: whole-table changes on sync_held_cases → refresh the list rows ──
   React.useEffect(() => {
     const supabase = createClient()
     const channel = supabase
@@ -214,17 +285,48 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     }
   }, [selectedId])
 
+  // ── Cluster chip filter (per run). ──
+  const onToggleCluster = React.useCallback((runId: string, caseIds: string[] | null) => {
+    setClusterFilter((prev) => ({ ...prev, [runId]: caseIds }))
+  }, [])
+
+  // ── Bulk selection. Prune ids that become non-selectable (resolved/removed). ──
+  const onToggleBulk = React.useCallback((id: string, on: boolean) => {
+    setSelectedForBulk((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+
+  React.useEffect(() => {
+    setSelectedForBulk((prev) => {
+      if (prev.size === 0) return prev
+      const stillValid = new Set(
+        cases.filter((c) => isBulkSelectable(c)).map((c) => c.id),
+      )
+      let changed = false
+      const next = new Set<string>()
+      for (const id of prev) {
+        if (stillValid.has(id)) next.add(id)
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [cases])
+
+  const clearBulk = React.useCallback(() => setSelectedForBulk(new Set()), [])
+
   // ── Actions: fire-and-forget (Realtime drives the UI back). ──
   const runInvestigate = React.useCallback(
     (caseId: string, opts?: { escalate?: boolean; force?: boolean }) => {
-      // Optimistically flip to 'investigating' so the buttons disable immediately.
       setCases((prev) =>
         prev.map((c) => (c.id === caseId ? { ...c, status: 'investigating' } : c)),
       )
       void investigateCase(caseId, opts).catch((err) => {
         const message = err instanceof Error ? err.message : String(err)
         errorToast('Investigation failed', { description: message })
-        // Reset the optimistic flip; Realtime will correct if the server did flip it.
         setCases((prev) =>
           prev.map((c) => (c.id === caseId && c.status === 'investigating' ? { ...c, status: 'open' } : c)),
         )
@@ -236,11 +338,9 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
   const onInvestigate = React.useCallback(() => {
     if (selectedId) runInvestigate(selectedId)
   }, [selectedId, runInvestigate])
-
   const onReinvestigate = React.useCallback(() => {
     if (selectedId) runInvestigate(selectedId, { force: true })
   }, [selectedId, runInvestigate])
-
   const onEscalate = React.useCallback(() => {
     if (selectedId) runInvestigate(selectedId, { escalate: true, force: true })
   }, [selectedId, runInvestigate])
@@ -249,7 +349,6 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     async (text: string) => {
       const caseId = selectedIdRef.current
       if (!caseId) return
-      // Optimistic user bubble (Realtime will paint the persisted copy + reply).
       const optimistic: ThreadMessage = {
         id: `optimistic-${Date.now()}`,
         role: 'user',
@@ -265,7 +364,6 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
         if (!res.ok) {
           errorToast('Could not send your message', { description: res.error ?? 'Unknown error' })
         }
-        // Reconcile with the persisted transcript (drops the optimistic dupe).
         await loadMessages(caseId)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -278,20 +376,17 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     [loadMessages],
   )
 
-  // ── P5: confirm / decline a proposal, and quick-dismiss. Realtime repaints. ──
+  // ── P5: confirm / decline a single proposal, and quick-dismiss. ──
   const onConfirmResolution = React.useCallback(async () => {
     const caseId = selectedIdRef.current
     if (!caseId || !openProposalMessageId) return
     setResolvePending(true)
     try {
       const res = await executeResolution(caseId, openProposalMessageId)
-      if (!res.ok) {
-        errorToast('Could not apply the resolution', { description: res.error ?? 'Unknown error' })
-      }
+      if (!res.ok) errorToast('Could not apply the resolution', { description: res.error ?? 'Unknown error' })
       await loadMessages(caseId)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      errorToast('Could not apply the resolution', { description: message })
+      errorToast('Could not apply the resolution', { description: err instanceof Error ? err.message : String(err) })
     } finally {
       setResolvePending(false)
     }
@@ -303,17 +398,50 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     setResolvePending(true)
     try {
       const res = await cancelProposal(caseId, openProposalMessageId)
-      if (!res.ok) {
-        errorToast('Could not decline the proposal', { description: res.error ?? 'Unknown error' })
-      }
+      if (!res.ok) errorToast('Could not decline the proposal', { description: res.error ?? 'Unknown error' })
       await loadMessages(caseId)
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      errorToast('Could not decline the proposal', { description: message })
+      errorToast('Could not decline the proposal', { description: err instanceof Error ? err.message : String(err) })
     } finally {
       setResolvePending(false)
     }
   }, [openProposalMessageId, loadMessages])
+
+  // ── v1.1: confirm / decline a GROUP proposal (triage case). ──
+  const onConfirmGroupResolution = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openGroupProposalMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await executeGroupResolution(caseId, openGroupProposalMessageId)
+      if (!res.ok) {
+        const first = res.errors[0]?.error ?? 'Unknown error'
+        errorToast('Could not dismiss the group', {
+          description: res.errors.length > 1 ? `${first} (+${res.errors.length - 1} more)` : first,
+        })
+      }
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not dismiss the group', { description: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openGroupProposalMessageId, loadMessages])
+
+  const onDeclineGroupResolution = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openGroupProposalMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await cancelProposal(caseId, openGroupProposalMessageId)
+      if (!res.ok) errorToast('Could not decline the group', { description: res.error ?? 'Unknown error' })
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not decline the group', { description: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openGroupProposalMessageId, loadMessages])
 
   const onQuickDismissSubmit = React.useCallback(
     async (reason: string) => {
@@ -322,15 +450,11 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
       setResolvePending(true)
       try {
         const res = await quickDismiss(caseId, reason)
-        if (!res.ok) {
-          errorToast('Could not dismiss the case', { description: res.error ?? 'Unknown error' })
-        } else {
-          setQuickDismissOpen(false)
-        }
+        if (!res.ok) errorToast('Could not dismiss the case', { description: res.error ?? 'Unknown error' })
+        else setQuickDismissOpen(false)
         await loadMessages(caseId)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        errorToast('Could not dismiss the case', { description: message })
+        errorToast('Could not dismiss the case', { description: err instanceof Error ? err.message : String(err) })
       } finally {
         setResolvePending(false)
       }
@@ -338,50 +462,116 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
     [loadMessages],
   )
 
-  return (
-    <div className="flex h-full min-h-0 flex-1">
-      {/* Left: case list */}
-      <div className="flex w-[380px] shrink-0 flex-col border-r border-border">
-        <CaseList
-          cases={cases}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          filter={filter}
-          onFilterChange={setFilter}
-          showResolved={showResolved}
-          onToggleResolved={setShowResolved}
-        />
-      </div>
+  // ── Bulk dismiss (multi-select). ──
+  const onBulkDismissSubmit = React.useCallback(
+    async (reason: string) => {
+      const ids = Array.from(selectedForBulk)
+      if (ids.length === 0) return
+      setResolvePending(true)
+      try {
+        const res = await bulkDismissCases(ids, reason)
+        if (!res.ok) {
+          const first = res.errors[0]?.error ?? 'Unknown error'
+          errorToast('Could not dismiss the selected cases', {
+            description: res.errors.length > 1 ? `${first} (+${res.errors.length - 1} more)` : first,
+          })
+        } else {
+          setBulkDismissOpen(false)
+          clearBulk()
+        }
+      } catch (err) {
+        errorToast('Could not dismiss the selected cases', { description: err instanceof Error ? err.message : String(err) })
+      } finally {
+        setResolvePending(false)
+      }
+    },
+    [selectedForBulk, clearBulk],
+  )
 
-      {/* Right: detail / chat */}
-      <div className="min-w-0 flex-1">
-        {selectedCase ? (
-          <CaseDetail
-            key={selectedCase.id}
-            theCase={selectedCase}
-            messages={messages}
-            busy={!!busy}
-            onInvestigate={onInvestigate}
-            onReinvestigate={onReinvestigate}
-            onEscalate={onEscalate}
-            onSend={onSend}
-            chatPending={chatPending}
-            openProposal={openProposal}
-            onConfirmResolution={onConfirmResolution}
-            onDeclineResolution={onDeclineResolution}
-            resolvePending={resolvePending}
-            onQuickDismiss={() => setQuickDismissOpen(true)}
+  const bulkCount = selectedForBulk.size
+
+  return (
+    <div className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1">
+        {/* Left: run-grouped case list */}
+        <div className="flex w-[400px] shrink-0 flex-col border-r border-border">
+          <RunGroupedList
+            cases={cases}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            filter={filter}
+            onFilterChange={setFilter}
+            showResolved={showResolved}
+            onToggleResolved={setShowResolved}
+            clusterFilter={clusterFilter}
+            onToggleCluster={onToggleCluster}
+            selectedForBulk={selectedForBulk}
+            onToggleBulk={onToggleBulk}
+            scrollToRunId={scrollToRunId}
           />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-            <Inbox className="h-6 w-6 text-muted-foreground/60" />
-            <p className="text-sm font-medium text-foreground">Nothing needs review</p>
-            <p className="max-w-xs text-xs text-muted-foreground">
-              Held rows from a sync land here as cases. When one shows up, select it to see the
-              investigation and chat with the investigator.
-            </p>
-          </div>
-        )}
+
+          {/* Selection bar (bulk dismiss). */}
+          {bulkCount > 0 && (
+            <div className="animate-fade-up flex items-center gap-2 border-t border-border bg-background/95 px-2 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+              <span className="text-[11px] font-medium text-foreground">
+                {bulkCount} selected
+              </span>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={clearBulk}
+              >
+                Clear
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                className="ml-auto"
+                disabled={resolvePending}
+                onClick={() => setBulkDismissOpen(true)}
+              >
+                <XCircle className="h-3 w-3" />
+                Dismiss {bulkCount} selected…
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Right: detail / chat */}
+        <div className="min-w-0 flex-1">
+          {selectedCase ? (
+            <CaseDetail
+              key={selectedCase.id}
+              theCase={selectedCase}
+              messages={messages}
+              busy={!!busy}
+              onInvestigate={onInvestigate}
+              onReinvestigate={onReinvestigate}
+              onEscalate={onEscalate}
+              onSend={onSend}
+              chatPending={chatPending}
+              openProposal={openProposal}
+              onConfirmResolution={onConfirmResolution}
+              onDeclineResolution={onDeclineResolution}
+              resolvePending={resolvePending}
+              onQuickDismiss={() => setQuickDismissOpen(true)}
+              openGroupProposal={openGroupProposal}
+              groupMembers={groupMembers}
+              onConfirmGroupResolution={onConfirmGroupResolution}
+              onDeclineGroupResolution={onDeclineGroupResolution}
+            />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+              <Inbox className="h-6 w-6 text-muted-foreground/60" />
+              <p className="text-sm font-medium text-foreground">Nothing needs review</p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                Held rows from a sync land here as cases, grouped by run. When one shows up, select it
+                to see the investigation and chat with the investigator.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       <QuickDismissDialog
@@ -389,6 +579,13 @@ export function CasesClient({ initialCases, initialError }: CasesClientProps) {
         onOpenChange={setQuickDismissOpen}
         onSubmit={onQuickDismissSubmit}
         pending={resolvePending}
+      />
+      <QuickDismissDialog
+        open={bulkDismissOpen}
+        onOpenChange={setBulkDismissOpen}
+        onSubmit={onBulkDismissSubmit}
+        pending={resolvePending}
+        count={bulkCount}
       />
     </div>
   )

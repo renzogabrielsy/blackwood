@@ -4,7 +4,7 @@ import * as React from 'react'
 import { FlaskConical, Play, RefreshCw, Square } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { SYNC_REPORTS, type SyncReportType } from '@/app/(app)/sync/types'
+import { SYNC_REPORTS } from '@/app/(app)/sync/types'
 import { SyncEmployeeCard } from './SyncEmployeeCard'
 import { HeldRows } from './HeldRows'
 import type { SyncRunState } from './useSyncRun'
@@ -13,7 +13,6 @@ interface SyncPanelBodyProps {
   state: SyncRunState
   run: (opts?: { dryRun?: boolean }) => void | Promise<void>
   stop: () => void | Promise<void>
-  adjudicate: (type: SyncReportType) => void
 }
 
 /**
@@ -33,7 +32,7 @@ function formatStarted(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
 }
 
-export function SyncPanelBody({ state, run, stop, adjudicate }: SyncPanelBodyProps) {
+export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
   const idle = !state.running && !state.ran
 
   return (
@@ -140,7 +139,7 @@ export function SyncPanelBody({ state, run, stop, adjudicate }: SyncPanelBodyPro
         ))}
 
         {/* Held rows */}
-        <HeldRows groups={state.heldGroups} onAdjudicate={adjudicate} />
+        <HeldRows groups={state.heldGroups} runId={state.runId} />
       </div>
 
       {/* Summary footer */}

@@ -25,6 +25,7 @@ import {
   type InvestigationOutcome,
   type RunInvestigationOpts,
 } from '@/lib/investigator/loop'
+import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
 import type { Database, Json } from '@/types/supabase'
 
 import type { SyncRunResult, SyncRunStatus } from './types'
@@ -287,6 +288,8 @@ export interface AutoInvestigateResult {
   skipped: number
   /** Cases whose investigation errored. */
   errors: number
+  /** The run-triage synthesis outcome (v1.1). 'skipped' when the run had zero flags. */
+  triage: RunTriageOutcome
 }
 
 /**
@@ -336,5 +339,22 @@ export async function autoInvestigateRun(runId: string): Promise<AutoInvestigate
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker()))
 
-  return { cases: ensured.caseIds.length, investigated, skipped, errors }
+  // After the investigation pool settles, synthesize the run-level triage (v1.1).
+  // Reads every non-triage case of the run (now carrying fresh verdicts) and clusters
+  // them by root cause. Skipped for a clean run (zero cases). Never throws — a triage
+  // failure is surfaced in the outcome, not raised (the investigations already landed).
+  const triage = await runTriage(runId)
+
+  return { cases: ensured.caseIds.length, investigated, skipped, errors, triage }
+}
+
+/**
+ * Re-triage a run on demand (the "re-triage" button). requirePrivileged; forces a
+ * fresh synthesis pass over the run's current cases, replacing the triage case's
+ * verdict/row and appending a fresh system note (idempotent by fingerprint upsert).
+ * Skipped for a run with zero non-triage cases.
+ */
+export async function triageRun(runId: string): Promise<RunTriageOutcome> {
+  await requirePrivileged()
+  return runTriage(runId)
 }

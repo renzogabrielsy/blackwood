@@ -29,7 +29,7 @@ import { useSyncRun } from './useSyncRun'
  */
 export function SyncLauncher() {
   const { role } = useAuth()
-  const { state, run, stop, adjudicate } = useSyncRun()
+  const { state, run, stop } = useSyncRun()
   const [open, setOpen] = React.useState(false)
 
   // Run Sync is Owner/Admin/Dev only — never render the launcher for others.
@@ -80,7 +80,7 @@ export function SyncLauncher() {
           </DialogHeader>
 
           <div className="px-3 pb-3">
-            <SyncPanelBody state={state} run={run} stop={stop} adjudicate={adjudicate} />
+            <SyncPanelBody state={state} run={run} stop={stop} />
           </div>
         </DialogContent>
       </Dialog>

@@ -27,7 +27,10 @@ import {
   buildInvestigatorSystem,
   buildChatAddendum,
   buildCaseBriefing,
+  buildTriageBriefing,
+  buildTriageChatAddendum,
   type CaseBriefInput,
+  type TriageSiblingBrief,
 } from '@/lib/investigator/playbook'
 import {
   runToolLoop,
@@ -39,9 +42,13 @@ import {
 import { createInvestigatorTools } from '@/lib/investigator/tools'
 import {
   PROPOSE_RESOLUTION_TOOL,
+  PROPOSE_GROUP_RESOLUTION_TOOL,
   executePropose,
+  executeProposeGroup,
   type ResolutionCaseContext,
+  type GroupResolutionContext,
 } from '@/lib/investigator/resolution'
+import { TRIAGE_KIND } from '@/lib/investigator/triage'
 import type { Json } from '@/types/supabase'
 
 import { foldHistory, sanitizeAnthropicHistory } from './case-history'
@@ -76,7 +83,7 @@ export async function chatOnCase(caseId: string, message: string): Promise<ChatO
   const { data: theCase, error: caseErr } = await admin
     .from('sync_held_cases')
     .select(
-      'id, report_type, kind, natural_key, reason, detail, row, status, occurrence_count, last_run_id, known_ruling_id, sync_case_rulings!sync_held_cases_known_ruling_id_fkey(verdict_summary)',
+      'id, report_type, kind, natural_key, reason, detail, row, status, occurrence_count, last_run_id, known_ruling_id, verdict, sync_case_rulings!sync_held_cases_known_ruling_id_fkey(verdict_summary)',
     )
     .eq('id', caseId)
     .maybeSingle()
@@ -112,27 +119,46 @@ export async function chatOnCase(caseId: string, message: string): Promise<ChatO
     // 4. Seed the Anthropic messages. If the case was never investigated (empty
     //    transcript), lead with the case briefing so the model has the full context;
     //    otherwise replay the stored transcript (which already opens with the briefing).
+    const isTriage = theCase.kind === TRIAGE_KIND
+
     const messages: Anthropic.MessageParam[] = sanitizeAnthropicHistory(foldHistory(rows))
     if (messages.length === 0) {
-      const rulingRel = theCase.sync_case_rulings as
-        | { verdict_summary?: string }
-        | { verdict_summary?: string }[]
-        | null
-      const knownSummary = Array.isArray(rulingRel)
-        ? rulingRel[0]?.verdict_summary ?? null
-        : rulingRel?.verdict_summary ?? null
-      const briefInput: CaseBriefInput = {
-        report_type: theCase.report_type,
-        kind: theCase.kind,
-        natural_key: theCase.natural_key,
-        reason: theCase.reason,
-        detail: theCase.detail,
-        row: theCase.row,
-        occurrence_count: theCase.occurrence_count,
-        known_ruling_id: theCase.known_ruling_id,
-        known_ruling_summary: knownSummary,
+      let briefing: string
+      if (isTriage) {
+        // A run-triage case's chat opens on the WHOLE run. Load the run's sibling flags.
+        const { data: siblingRows } = await admin
+          .from('sync_held_cases')
+          .select('id, report_type, kind, natural_key, status, verdict')
+          .eq('last_run_id', theCase.last_run_id)
+          .neq('kind', TRIAGE_KIND)
+          .order('created_at', { ascending: true })
+        const siblings: TriageSiblingBrief[] = (siblingRows ?? []) as TriageSiblingBrief[]
+        const verdict = theCase.verdict as { summary?: string } | null
+        briefing = buildTriageBriefing(
+          { run_label: theCase.natural_key, summary: verdict?.summary ?? null },
+          siblings,
+        )
+      } else {
+        const rulingRel = theCase.sync_case_rulings as
+          | { verdict_summary?: string }
+          | { verdict_summary?: string }[]
+          | null
+        const knownSummary = Array.isArray(rulingRel)
+          ? rulingRel[0]?.verdict_summary ?? null
+          : rulingRel?.verdict_summary ?? null
+        const briefInput: CaseBriefInput = {
+          report_type: theCase.report_type,
+          kind: theCase.kind,
+          natural_key: theCase.natural_key,
+          reason: theCase.reason,
+          detail: theCase.detail,
+          row: theCase.row,
+          occurrence_count: theCase.occurrence_count,
+          known_ruling_id: theCase.known_ruling_id,
+          known_ruling_summary: knownSummary,
+        }
+        briefing = buildCaseBriefing(briefInput)
       }
-      const briefing = buildCaseBriefing(briefInput)
       await persist(buildUserRow(caseId, briefing, pos++))
       messages.push({ role: 'user', content: briefing })
     }
@@ -156,14 +182,52 @@ export async function chatOnCase(caseId: string, message: string): Promise<ChatO
       kind: theCase.kind,
       status: theCase.status,
     }
-    const tools = {
-      definitions: [...investigatorTools.definitions, PROPOSE_RESOLUTION_TOOL],
-      execute: async (name: string, args: Record<string, unknown>): Promise<string> => {
-        if (name === 'propose_resolution') return executePropose(args, caseCtx)
-        return investigatorTools.execute(name, args)
-      },
+
+    // For a run_triage case, the chat is about the whole run: expose the GROUP dismiss
+    // tool (dismiss-only) instead of the single propose_resolution, and use the triage
+    // addendum. The group tool's eligibility is checked against the run family (the
+    // triage case's row.case_ids) minus already-resolved cases.
+    let tools: {
+      definitions: Anthropic.Tool[]
+      execute: (name: string, args: Record<string, unknown>) => Promise<string>
     }
-    const system = buildInvestigatorSystem() + buildChatAddendum()
+    let system: string
+    if (isTriage) {
+      const runCaseIds = (() => {
+        const r = theCase.row as { case_ids?: unknown } | null
+        return Array.isArray(r?.case_ids) ? (r!.case_ids.filter((x) => typeof x === 'string') as string[]) : []
+      })()
+      const { data: familyRows } = await admin
+        .from('sync_held_cases')
+        .select('id, status')
+        .eq('last_run_id', theCase.last_run_id)
+        .neq('kind', TRIAGE_KIND)
+      const resolvedIds = (familyRows ?? []).filter((r) => r.status === 'resolved').map((r) => r.id)
+      const groupCtx: GroupResolutionContext = {
+        caseKind: theCase.kind,
+        status: theCase.status,
+        runCaseIds,
+        resolvedIds,
+        triageCaseId: caseId,
+      }
+      tools = {
+        definitions: [...investigatorTools.definitions, PROPOSE_GROUP_RESOLUTION_TOOL],
+        execute: async (name: string, args: Record<string, unknown>): Promise<string> => {
+          if (name === 'propose_group_resolution') return executeProposeGroup(args, groupCtx)
+          return investigatorTools.execute(name, args)
+        },
+      }
+      system = buildInvestigatorSystem() + buildTriageChatAddendum()
+    } else {
+      tools = {
+        definitions: [...investigatorTools.definitions, PROPOSE_RESOLUTION_TOOL],
+        execute: async (name: string, args: Record<string, unknown>): Promise<string> => {
+          if (name === 'propose_resolution') return executePropose(args, caseCtx)
+          return investigatorTools.execute(name, args)
+        },
+      }
+      system = buildInvestigatorSystem() + buildChatAddendum()
+    }
 
     const loop = await runToolLoop({
       caseId,

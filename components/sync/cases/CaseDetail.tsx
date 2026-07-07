@@ -13,7 +13,7 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { OpenProposal } from '@/lib/investigator/resolution'
+import type { OpenGroupProposal, OpenProposal } from '@/lib/investigator/resolution'
 import {
   asVerdict,
   CONFIDENCE_CLASS,
@@ -25,6 +25,7 @@ import {
 import { CaseThread, type ThreadMessage } from './CaseThread'
 import { CaseChatInput } from './CaseChatInput'
 import { ResolutionCard } from './ResolutionCard'
+import { GroupResolutionCard, type GroupMemberCase } from './GroupResolutionCard'
 
 /** The full case row the detail pane renders (superset of the list row). */
 export interface CaseDetailRow {
@@ -59,6 +60,12 @@ interface CaseDetailProps {
   /** True while a resolve/decline/quick-dismiss server action is in flight. */
   resolvePending: boolean
   onQuickDismiss: () => void
+  /** The open GROUP resolution proposal (v1.1), or null — only for a triage case. */
+  openGroupProposal: OpenGroupProposal | null
+  /** The run family's cases (to render the group card's member rows). */
+  groupMembers: GroupMemberCase[]
+  onConfirmGroupResolution: () => Promise<void>
+  onDeclineGroupResolution: () => Promise<void>
 }
 
 interface DriftDate {
@@ -200,6 +207,10 @@ export function CaseDetail({
   onDeclineResolution,
   resolvePending,
   onQuickDismiss,
+  openGroupProposal,
+  groupMembers,
+  onConfirmGroupResolution,
+  onDeclineGroupResolution,
 }: CaseDetailProps) {
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const chip = STATUS_CHIP[theCase.status] ?? {
@@ -278,6 +289,17 @@ export function CaseDetail({
           />
         )}
 
+        {/* v1.1 — the confirm-gated GROUP resolution card (triage case, dismiss-only). */}
+        {openGroupProposal && !isResolved && (
+          <GroupResolutionCard
+            open={openGroupProposal}
+            members={groupMembers}
+            onConfirm={onConfirmGroupResolution}
+            onDecline={onDeclineGroupResolution}
+            pending={resolvePending}
+          />
+        )}
+
         {/* Thread */}
         {messages.length > 0 ? (
           <div className="animate-fade-up pt-1">
@@ -332,7 +354,7 @@ export function CaseDetail({
               Quick Dismiss: a one-click, human-directed dismiss (zero operational
               write) for any unresolved, non-investigating case. Apply / edit-then-apply
               come from the agent's propose_resolution → the ResolutionCard above. */}
-          {!isResolved && (
+          {!isResolved && theCase.kind !== 'run_triage' && (
             <Button
               size="sm"
               variant="ghost"
