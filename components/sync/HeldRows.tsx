@@ -1,7 +1,8 @@
 'use client'
 
 import * as React from 'react'
-import { Copy, HandHelping, Loader2, Sparkles } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowRight, Copy, HandHelping, Loader2, Sparkles } from 'lucide-react'
 
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -97,20 +98,29 @@ export function HeldRows({ groups, onAdjudicate }: HeldRowsProps) {
             <div key={group.type} className="rounded-md border border-border bg-card/50 p-2">
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <span className="text-[11px] font-medium text-foreground">{meta.label}</span>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={group.adjudicating}
-                  onClick={() => onAdjudicate(group.type)}
-                >
-                  {group.adjudicating ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3 w-3" />
-                  )}
-                  {group.recommendations ? 'Re-ask Claude' : 'Ask Claude'}
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    href="/sync/cases"
+                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Open in Sync Review
+                    <ArrowRight className="h-3 w-3" />
+                  </Link>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={group.adjudicating}
+                    onClick={() => onAdjudicate(group.type)}
+                  >
+                    {group.adjudicating ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3 w-3" />
+                    )}
+                    {group.recommendations ? 'Re-ask Claude' : 'Ask Claude'}
+                  </Button>
+                </div>
               </div>
 
               <ul className="space-y-1.5">

@@ -12,6 +12,31 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.1"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       audit_comments: {
@@ -966,6 +991,180 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      sync_case_messages: {
+        Row: {
+          case_id: string
+          content: string
+          created_at: string
+          id: string
+          position: number
+          role: string
+          tool_calls: Json | null
+          tool_results: Json | null
+        }
+        Insert: {
+          case_id: string
+          content?: string
+          created_at?: string
+          id?: string
+          position: number
+          role: string
+          tool_calls?: Json | null
+          tool_results?: Json | null
+        }
+        Update: {
+          case_id?: string
+          content?: string
+          created_at?: string
+          id?: string
+          position?: number
+          role?: string
+          tool_calls?: Json | null
+          tool_results?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_case_messages_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "sync_held_cases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sync_case_rulings: {
+        Row: {
+          action: string
+          case_id: string | null
+          created_at: string
+          fingerprint: string
+          id: string
+          reasoning: string | null
+          ruled_by: string | null
+          ruled_by_email: string | null
+          verdict_summary: string
+        }
+        Insert: {
+          action: string
+          case_id?: string | null
+          created_at?: string
+          fingerprint: string
+          id?: string
+          reasoning?: string | null
+          ruled_by?: string | null
+          ruled_by_email?: string | null
+          verdict_summary: string
+        }
+        Update: {
+          action?: string
+          case_id?: string | null
+          created_at?: string
+          fingerprint?: string
+          id?: string
+          reasoning?: string | null
+          ruled_by?: string | null
+          ruled_by_email?: string | null
+          verdict_summary?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_case_rulings_case_id_fkey"
+            columns: ["case_id"]
+            isOneToOne: false
+            referencedRelation: "sync_held_cases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sync_case_rulings_ruled_by_fkey"
+            columns: ["ruled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sync_held_cases: {
+        Row: {
+          created_at: string
+          detail: string | null
+          fingerprint: string
+          first_run_id: string
+          id: string
+          kind: string
+          known_ruling_id: string | null
+          last_run_id: string
+          last_seen_at: string
+          natural_key: string
+          occurrence_count: number
+          reason: string | null
+          report_type: string
+          row: Json | null
+          status: string
+          updated_at: string
+          verdict: Json | null
+        }
+        Insert: {
+          created_at?: string
+          detail?: string | null
+          fingerprint: string
+          first_run_id: string
+          id?: string
+          kind: string
+          known_ruling_id?: string | null
+          last_run_id: string
+          last_seen_at?: string
+          natural_key: string
+          occurrence_count?: number
+          reason?: string | null
+          report_type: string
+          row?: Json | null
+          status?: string
+          updated_at?: string
+          verdict?: Json | null
+        }
+        Update: {
+          created_at?: string
+          detail?: string | null
+          fingerprint?: string
+          first_run_id?: string
+          id?: string
+          kind?: string
+          known_ruling_id?: string | null
+          last_run_id?: string
+          last_seen_at?: string
+          natural_key?: string
+          occurrence_count?: number
+          reason?: string | null
+          report_type?: string
+          row?: Json | null
+          status?: string
+          updated_at?: string
+          verdict?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_held_cases_first_run_id_fkey"
+            columns: ["first_run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sync_held_cases_known_ruling_id_fkey"
+            columns: ["known_ruling_id"]
+            isOneToOne: false
+            referencedRelation: "sync_case_rulings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sync_held_cases_last_run_id_fkey"
+            columns: ["last_run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -2160,6 +2359,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       batch_status: [

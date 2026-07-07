@@ -2,7 +2,7 @@
 
 > **Living document.** Update this file whenever a task is completed, a phase starts, or scope changes.
 > Both Claude and Antigravity agents must read this file before starting any work session.
-> Last updated: **2026-07-03**
+> Last updated: **2026-07-07**
 
 ---
 
@@ -10,6 +10,7 @@
 
 | Date | Item |
 |---|---|
+| 2026-07-07 | **Smart Held-Row Adjudicator P1–P6 (all app-side, no worker/schema coupling)** — held sync rows are now persistent **cases** with an auto-running AI **investigator**, a per-case **chat**, human-confirmed **resolution**, and a **known-issues ledger**. P1: `sync_held_cases`/`sync_case_messages`/`sync_case_rulings` tables (migration `20260706120000`), `caseFingerprint()`, idempotent `ensureCasesForRun()`. P2: 5 read-only tools in `lib/investigator/` (allow-listed, price-gated, 31 checks). P3: `runInvestigation()` tool-loop (Sonnet default / Opus 4.8 escalation, transcript persisted live, cited verdicts), auto-triggered from the sync modal when a run lands with held rows. P4: **Sync Review** page at `/sync/cases` (case list + verdict card + live thread + chat with the investigator). P5: confirm-gated resolve — dismiss / apply / edit-then-apply via `propose_resolution` → human Confirm → `executeResolution` (writers for rc_out + deliveries, provenance audit, never-delete; gate flags = dismiss-only in v1). P6: permanent trust harness `scripts/eval-investigator.ts` — **5/5** (June-10 → "movement sheet missing", May 15/28 → "proposed over-stated", seeded true-dup → "needs-human", ledger re-match, write-safety). Suite: 6 verify scripts / 124 assertions + eval, build clean. **Deferred:** Fly deploy (P-Fly), `override_gate` resolution, apply-writers for production/flecon. |
 | 2026-07-03 | **Jarvis → one-click Sync Button (`c2c9629`)** — the daily ICTC sync now runs from the app: floating button opens a **Daily Sync panel** (chat unmounted, code kept); one click = gsheet first → 4 email writers parallel → auditor last; rows passing the **codified rules auto-apply**, uncertain rows are **held** (never block, never auto-write); Claude API (Sonnet) only narrates + recommends on held rows — **clean days cost zero tokens**. Backend: `write_ingestion_audit` RPC closes L-009 (service_role can now write audit rows); 5 NEW deterministic orchestrators (`sync_deliveries/rc_out/production/flecon.py`, `audit_rc_movement.py`) + `orchestrator_common.py`; `sync_gsheet.py` dual-CLI (legacy employee path intact); `ingestion_watermarks` adopted; production tables' missing service_role grants fixed. Contract: `SYNC_CLI_CONTRACT.md`; analysis: `SYNC_EFFICIENCY_AUDIT.md` (~67.5k fixed tokens/agent-run today; clean runs need zero model decisions). **v1 limits:** held-row apply stays manual (via sync employee); panel needs app running on the Mac (Gmail creds + Python are local). **Not yet done:** the agent-def slimming refactors from the efficiency report (§7). |
 | 2026-07-03 | **Code-audit remediation, phases 0–5 EXECUTED** — the audit that was aborted on 2026-07-02 was completed as a verified plan (`CODE_AUDIT_PLAN.md`) and then executed same-day in 5 commits on `dev`: **Phase 0 security** (digest ₱/kg series gated for Production, Jarvis tool results scrub `avg_cost`/`cost_basis`, server-side PRIVILEGED_ROLES gate on all 4 delete actions); **Phase 1 docs** (CLAUDE.md widget→digest reality + schema regen, ~12 CONTEXT/NAVBAR/NOTIFICATIONS drift fixes, new `components/digest/CONTEXT.md`); **Phase 2 dedupe** (canonical `fetchAllRows` paginate helper, 5 inline price-gates → `roleCanViewPrices()`, block-loc validation deduped, formatters unified, `UserRole` single-sourced, table-settings actions moved out of the rc-in tenant module, 5 dead files + Next.js logo SVG deleted — net −178 lines); **Phase 3 perf** (`fn_bulk_update_deliveries`/`_usage` = atomic bulk edits with identical audit trails, jspdf → lazy ~442KB chunk; rc_out full-history load documented as needs-product-decision); **Phase 4 DB hardening, 8 verified migrations** (RLS on 7 bare tables, 26 views → security_invoker, 12 functions search_path-pinned, anon fully revoked incl. cenapro; advisors **217 → 115, all ERRORs = 0**; remaining 115 documented as intentional). **Phase 5** = viewing-modes proposal (`handoffs/2026-07-03-viewing-modes-proposal.md`). **Deferred:** DUP-3 FrozenMatrix merge, PERF-2 file splitting (own sessions). **Manual step for Renzo:** Dashboard → Auth → enable leaked-password protection. **Caution:** MCP-applied migrations have different remote-history version prefixes than the on-disk files — `supabase migration repair` before any raw `db push`. |
 | 2026-07-03 | **FLECON Bag Inventory module (new) + digest Open Blocks redesign + code-audit kickoff** — On `dev` (UNCOMMITTED). New **Bagging Manager** = 5th ICTC sync employee: tables `flecon_bag_types`/`_opening_balances`/`_movements` + `view_flecon_bag_balance` (4 migrations `20260702*`), **header-signature column matching** (resilient to sheet reorder/rename, flags unmapped columns for the user to register — never auto-creates), replace-by-date idempotency, `extract_/classify_flecon_bags.py` + `bagging-manager.md` + `FLECON_BAGGING_DESIGN.md`; **Excel-mirror frozen matrix** UI at `/inventory/flecon-bags` (22 bag columns, click-to-edit nicknames, fill-width + scroll) + digest **Bag-Inventory** band; **backfilled 481 movements / 148 dates / 22 columns**. Fixed a missing table-GRANT "permission denied for table flecon_bag_movements" error (`20260702010000_flecon_grants.sql`). **Digest Open Blocks** cards: lab row condensed, weighted ₱/kg moved to top, new per-delivery ledger. Ran 2 daily syncs → DB current through **Jul 1**; recorded **L-028** (month-transition waste = new-batch opening waste → own shift). **Open issues:** 3 FLECON columns don't reconcile with the operator snapshot (Zamboanga −79 vs sheet +48 = extraction sign bug; Korea White Sundry −4; Ecopack Beige opening gap 0 vs 100); **nothing committed**; **code audit requested but NOT run** (multi-agent fan-out over-spawned → aborted; run it INLINE next, no `general-purpose` agents). See `handoffs/2026-07-03-flecon-bag-inventory-and-audit-kickoff.md`. Learnings: agents with the Agent tool spawn nested placeholders → use `Explore`/`Plan` or do it inline; `audit_logs` INSERT via PostgREST 403s (write via MCP, L-009). |
@@ -63,22 +64,17 @@
 
 ## Current Sprint
 
-**Focus:** Widget Resizing Refinement
-**Started:** 2026-02-19
-**Goal:** All widgets handle resizing as gracefully as `ChartWidget` — text scales, elements reflow, nothing clips at any size tier.
+**Focus:** Smart Adjudicator hardening + sync durability
+**Started:** 2026-07-07
+**Goal:** The adjudicator (shipped P1–P6, see Recent Completions) proves itself on real daily runs; the sync worker moves off the laptop.
 
 ### Tasks
-- [ ] Audit current resizing behavior across all 4 widgets
-- [x] Refine `KPIStripWidget` — chip variants (flow/progress/ratio/default), pinned xs/sm, period selector, settings popover
-- [x] Live Supabase prefs sync — `user_dashboard_prefs` table, `loadDashboardPrefs` / `saveDashboardPrefs` server actions, 1500ms debounce, `serverPrefs` prop seeds grid on hydration (Supabase-primary, localStorage-cache)
-- [x] Multi-profile localStorage store — `lib/dashboard/profile-store.ts`, `bw_v1` key, migration from legacy `bw_d6_prefs`
-- [x] Sticky KPI Bar — Pin/PinOff, second sticky header row, `prePinLayout` snapshot, mobile guard, `animate-kpi-enter`/`animate-kpi-exit`
-- [x] `WidgetError` component — amber error state with one-click diagnostic clipboard copy
-- [x] Calendar-year chart model — replaced fiscal-year (FY prefix, Mar–Feb) with plain calendar years (Jan–Dec)
-- [x] Refine `QualityScatterWidget` → replaced with `SpecialChartWidget` (scatter/pie/donut, generic field system)
-- [x] Refine `WarehouseOccupancyWidget` — progress bars, stats collapse at small sizes, tier-based label/footer adaptation
-- [ ] Review `WidgetShell` — consider adding `fontScale` to `WidgetSizeContext`
-- [ ] Manual QA across desktop, tablet (820px), mobile (393px) viewports
+- [ ] **P-Fly: deploy the sync worker to Fly** (`workers/sync/RUNBOOK.md`, ~15 min of Renzo's `flyctl` steps; bulletproof `min=1` already configured)
+- [ ] First real-run shakedown of the adjudicator: run a daily sync, watch auto-investigation land on `/sync/cases`, resolve through the chat
+- [ ] Re-run `npx tsx scripts/eval-investigator.ts` after any playbook/model change (the trust gate)
+- [ ] Later: `override_gate` resolution semantics (schema already accepts it), apply-writers for production/flecon rows, generalize the playbook beyond the rc_out gate family
+
+> _The February "Widget Resizing Refinement" sprint below-the-fold history was superseded when the widget dashboard was archived to `_archived/dashboard-v1/` — see phase sections below for the historical record._
 
 ---
 
@@ -218,6 +214,7 @@ These are ideas and features that may be prioritized into a future phase:
 
 | Date | Change |
 |---|---|
+| 2026-07-07 | Smart Held-Row Adjudicator P1–P6 shipped (cases + investigator + review page/chat + confirm-gated resolve + eval harness, 5/5). Current Sprint refreshed (was the stale Feb widget sprint) to adjudicator shakedown + Fly deploy. |
 | 2026-03-02 | Tenant config modularity (Phase A): created `lib/widgets/adapters/tenant-config.ts` with `TenantFieldConfig`, `TenantChartConfig`, `CHARCOAL_FIELD_CONFIG`, `CHARCOAL_CHART_CONFIG`. Refactored `charcoal-special.ts` and `charcoal-chart.ts` to import field/series/preset definitions from `tenant-config.ts` instead of defining inline. Extracted `migrateLegacyPrefs()` from `DashboardGrid.tsx` into `lib/dashboard/migrate-prefs.ts` — all migration/normalization logic in a standalone pure function. Refined `WarehouseOccupancyWidget` responsive sizing: xs/sm width shows minimal labels + compact bars, md shows partial stats, lg/xl shows full stats; footer adapts. Build: zero TypeScript errors. |
 | 2026-02-19 | Sticky KPI Bar: `stickyKpi` pref, Pin/PinOff buttons, second header row with `WidgetSizeContext.Provider`, sentinel IntersectionObserver for shadow-on-scroll, mobile guard, `animate-kpi-enter`/`animate-kpi-exit` keyframes. Build: zero TypeScript errors. |
 | 2026-02-19 | KPI Strip full customization: new chip variants (flow/progress/ratio), threshold coloring, sparklines, MoM comparison, period selector, settings popover (visibility + reorder + density). `chips.tsx` + `settings-popover.tsx` created. `KPIStripWidget` refactored. `DashboardGrid` wired with `kpiSettings` persistence + `liveKpiData` state. `app/(app)/actions.ts` created with `fetchKpiData` server action. `charcoalKpiAdapter.fetchWithPeriod()` added with 6-query build logic. Build: zero TypeScript errors. |

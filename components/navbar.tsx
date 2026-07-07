@@ -68,6 +68,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: exact('/settings'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Your profile and sign-out' },
     { test: exact('/admin'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' },
     { test: exact('/review-queue'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' },
+    { test: prefix('/sync/cases'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Sync Review', pageDescription: 'Held-row cases & investigations' },
 ];
 
 function getBreadcrumb(pathname: string): Breadcrumb | null {

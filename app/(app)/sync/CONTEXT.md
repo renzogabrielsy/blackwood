@@ -108,8 +108,87 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     feedings, movement short 13,743 kg → sheet gap, DB correct).
   - `narrateSyncRun(results[])` → optional 3-sentence plain-language summary; **skips the
     API call** (zero tokens) when every report is clean. **Unchanged** (app-side).
+  - **`requirePrivileged()` now lives in `lib/sync/privileged.ts`** (extracted 2026-07-06,
+    Smart-Adjudicator P1) and is IMPORTED here — the local copy was deleted so `actions.ts`
+    and `cases.ts` share ONE Owner/Admin/Dev enforcement point (no drift). Same body:
+    getUser → getUserRole (respects the impersonation cookie) → PRIVILEGED_ROLES gate,
+    returns the user id, fails closed.
   - RETIRED: `runSyncClassify` / `runSyncApply` (child_process spawn) + the SYNC_MOCK
     plumbing. Classify/apply now run in the worker.
+- `cases.ts` (`'use server'`) — the **case-persistence fan-out** (Smart-Adjudicator P1). Turns
+  a terminal run's held rows into durable `sync_held_cases` rows so they survive past the modal:
+  - **`ensureCasesForRun(runId)`** → `{created, refreshed, knownMatched, caseIds}`.
+    requirePrivileged → service-role load of the run → no-op unless status is terminal
+    (`succeeded|failed|partial`) AND `result.reports` exists → `collectHeldRows` →
+    `caseFingerprint` per row → **IDEMPOTENT upsert-by-fingerprint** (safe to call repeatedly;
+    the modal AND the review page both call it). Existing case → refresh `last_run_id`/
+    `last_seen_at`, bump `occurrence_count` ONLY when the runId differs from the case's
+    `last_run_id` (no double-count on repeat calls for the SAME run); a `resolved` case that
+    recurs in a NEWER run stays resolved (quiet-but-visible, never auto-reopened). New case →
+    check `sync_case_rulings` for the latest matching fingerprint and pre-annotate
+    `known_ruling_id` (status stays `open` — pre-annotated, not silenced). All reads/writes use
+    `createAdminClient()` (service role) — these tables are service-role-write only.
+  - **`listOpenCases()`** → every `status != 'resolved'` case, newest-seen first, with the
+    pre-annotating ruling's `verdict_summary` joined via the `known_ruling_id` FK. **P4:** now also
+    selects `verdict` (the persisted investigation verdict jsonb) so the review page can render the
+    verdict badge without a second fetch.
+  - **`getCaseWithMessages(caseId)`** → `{case, messages}` (messages ordered by `position`).
+  - **`investigateCase(caseId, {escalate?, force?})`** → `InvestigationOutcome`
+    (`{status:'done'|'skipped'|'error', verdict?, error?}`) — the **Smart-Adjudicator P3**
+    privileged wrapper around `runInvestigation` (`lib/investigator/loop.ts`). `escalate` →
+    run on Opus 4.8 (the "re-investigate / escalate" button); `force` → re-run even if already
+    investigated / known-ruled. The loop is single-flight (a concurrent call / already-done /
+    known-ruling case returns `skipped` with no token spend).
+  - **`autoInvestigateRun(runId)`** → `{cases, investigated, skipped, errors}` — the **P3
+    auto-trigger**. Calls `ensureCasesForRun`, then auto-investigates each returned case that is
+    `status='open'` AND `known_ruling_id IS NULL` via a **concurrency-2 promise pool**.
+    Idempotent by construction (the loop's single-flight guard). Fired fire-and-forget from
+    `useSyncRun.finalizeRun` when a run finishes with held rows — verdicts persist to the case,
+    so they're waiting even if the modal was closed.
+- `case-chat.ts` (`'use server'`) — the **human-in-the-loop CHAT continuation** (Smart-Adjudicator
+  **P4**). After the opening auto-investigation writes a cited verdict, the case becomes a
+  conversation Renzo steers:
+  - **`chatOnCase(caseId, message)`** → `{ok, error?}`. requirePrivileged; validates the message
+    (non-empty, <4000 chars); **rejects (ok:false) while the case is `investigating`** (a run is in
+    flight). Inserts the user message row, replays the FULL `sync_case_messages` transcript into
+    Anthropic `MessageParam[]` (`foldHistory`, mirroring `jarvis/actions.ts::buildAnthropicMessages`
+    — system rows skipped, assistant rows carry text + `tool_use` blocks, tool rows fold into a user
+    turn as `tool_result` blocks), then drives the **same `runToolLoop`** as the investigation but in
+    CHAT MODE: system = `buildInvestigatorSystem()` + `buildChatAddendum()`, tools = the 5 read-only
+    investigator tools + `submit_verdict`. If the model re-submits a verdict (only when its
+    conclusion changed) → update `case.verdict` + `status='investigated'`; otherwise just persist the
+    reply + touch `updated_at`. READ-ONLY like the investigation (no operational write — the resolve
+    write is P5). If the case has no transcript yet, it leads with `buildCaseBriefing`. Service-role
+    writes; every turn persists to `sync_case_messages` (the review page watches over Realtime).
+- `resolve.ts` (`'use server'`) — **HUMAN-DIRECTED RESOLUTION (P5)**. The only write path
+  for a case. The investigator NEVER writes; a resolution fires only when the reviewer clicks
+  Confirm on an agent-prepared proposal (or Quick Dismiss):
+  - **`executeResolution(caseId, proposalMessageId)`** → `{ok, error?, ruling_id?}`.
+    requirePrivileged → load the case (must not be `resolved`/`investigating`) → load the named
+    message row (must belong to the case + carry a `propose_resolution` tool_use) → **re-read the
+    proposal FROM THE DB ROW** (never a client payload) → double-execution guard (the proposal must
+    still be the OPEN one via `findOpenProposal`, else refuse) → `executeResolutionInternal`.
+  - **`executeResolutionInternal(admin, caseRow, proposal, ruledBy, ruledByEmail)`** — the
+    client-injectable core (the live-smoke drives it bypassing requirePrivileged). Re-checks
+    eligibility (defense in depth), dispatches the write (dismiss = NO operational write;
+    apply/edit_apply → the `lib/sync/apply-writers.ts` registry), inserts a `sync_case_rulings`
+    row, flips the case to `resolved` + `known_ruling_id`, and appends a system message trail
+    ("Resolved (<action>) by <email>: <summary>" + for applies "Wrote 1 row to <table>, id <id>").
+    Provenance stamped everywhere: "Resolved (<action>) via case chat by <email>".
+  - **`cancelProposal(caseId, proposalMessageId)`** → inserts a "Proposal declined by <email>"
+    system row (no other effect) so the UI clears the card server-side (an open proposal is the
+    LATEST `propose_resolution` with no later ruling AND no later decline row).
+  - **`quickDismiss(caseId, reason)`** → the actions-bar one-click dismiss (required "why"),
+    synthesizes a dismiss ruling directly (same ruling+message+status writes, provenance
+    "Resolved (dismiss) via case chat by <email>"). Human-directed by definition.
+  - Never deletes. Price gating: apply payloads carry NO ₱ (rc_out has no cost column;
+    `deliveries.cost_basis` forced 0 by the writer per L-008). All revalidate `/sync/cases`.
+- `case-chat.ts` — **now also exposes `propose_resolution`** (chat mode ONLY, NOT the investigation
+  loop). The chat's tool surface = the 5 read-only investigator tools + `submit_verdict` +
+  `PROPOSE_RESOLUTION_TOOL`; the extra dispatch routes `propose_resolution` to `executePropose`
+  (WRITE-FREE — validates eligibility against the case + echoes the proposal back). The write itself
+  is `resolve.ts`, fired by a human Confirm click. `buildChatAddendum()` gained the RESOLVING
+  section teaching when to call it.
 - `adjudication.ts` — the PURE, server-import-free adjudication core: `ADJUDICATOR_SYSTEM`
   (plain, jargon-banning — see above), `KIND_MEANING` (a short plain-English meaning per
   `HeldKind`, de-jargoned 2026-07-06), `lookupEvidence(admin, reportType, held)` (the
@@ -165,6 +244,19 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   gate-failed destructive state with inline error + Copy. M5.1 adds a neutral
   **`stopped`** state (StopCircle icon + "Stopped. Anything already written was kept.")
   — calm, not error-red. Card state is fed from Realtime; the shape is otherwise stable.
+- `cases/ResolutionCard.tsx` (**P5**) — the confirm-gated resolution card rendered in the
+  thread when a case has an OPEN proposal: action badge (Dismiss / Apply row / Apply edited row),
+  plain summary, for edit_apply a font-mono field:value table of the EXACT row to write with
+  old→new highlighting for changed fields, a destructive-styled Confirm (for applies) + Decline.
+  Confirm → `executeResolution`; Decline → `cancelProposal`; both disabled while in flight;
+  errors go through `errorToast()` (persist + Copy).
+- `cases/QuickDismissDialog.tsx` (**P5**) — the actions-bar Quick Dismiss dialog (canonical glass
+  `DialogContent`) with a required "why" textarea → `quickDismiss(caseId, reason)`.
+- `cases/CaseDetail.tsx` / `cases/CasesClient.tsx` — the P5 slot is filled: `CasesClient` computes
+  the open proposal from the live transcript (`findOpenProposal`) + resolves its message id, owns
+  the confirm/decline/quick-dismiss handlers (Realtime repaints the thread on resolve), and mounts
+  the dialog; `CaseDetail` renders the `ResolutionCard`, the Quick Dismiss button, and a
+  "Resolved — <summary>" header line for resolved cases.
 - `HeldRows.tsx` — held-row groups with per-group "Ask Claude" adjudication + per-row
   Copy. **2026-07-06:** each row's tag now renders a human `KIND_LABEL` phrase
   (`gate_failure` → "Totals don't match — nothing saved", `sub_watermark_suspected_dup` →
@@ -176,7 +268,10 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   INSERT (filtered by `run_id`) → per-card live progress, and `sync_runs` UPDATE
   (filtered by `id`) → terminal fold-in (per-report results → cards → held aggregation
   → narration; a **`cancelled`** run settles still-busy cards to `stopped` + a calm
-  local summary, no error toast). Mount-time attach (with the staleness guard) + poll
+  local summary, no error toast). **P3 (2026-07-06):** after the held-row fold, when a
+  non-cancelled run produced held rows, `finalizeRun` fires **`autoInvestigateRun(runId)`
+  fire-and-forget** (`void … .catch(()=>{})`, never awaited so the modal never blocks) —
+  the background investigator so cited verdicts are waiting on the review page (P4). Mount-time attach (with the staleness guard) + poll
   fallback as above. Returns `{ state, run, stop, adjudicate }`.
 
 ### Pure reducer (`lib/sync/reducer.ts`)
@@ -188,34 +283,118 @@ machine: idle→classifying, `apply` stage→applying, monotonic pct, terminal c
 frozen), `deriveCardStatus`/`gateErrorFrom` (terminal result → card status + copyable
 gate string).
 
+### Pure case-persistence helpers (Smart-Adjudicator P1, `lib/sync/`)
+Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerprint.ts`:
+- `lib/sync/fingerprint.ts` — **`caseFingerprint(reportType, held)`** → sha256 hex of a
+  CANONICAL JSON (keys sorted recursively, so insertion order never changes the hash). For
+  `kind:'gate_failure'` the payload INCLUDES the per-date drift numbers (rounded to integers,
+  dates sorted) → a changed discrepancy re-alarms as a NEW fingerprint; sub-kg jitter rounds
+  to the same hash. For every other kind the payload is `(reportType, kind, natural_key)` only
+  → stable row identity even if incidental `row` fields change.
+- `lib/sync/cases-fold.ts` — **`collectHeldRows(result)`** → flattens
+  `result.reports[type].apply.held` across all reports into `{reportType, held}[]`, guarding
+  absent `reports` / `apply:null` / missing `held`. Pure, no supabase import.
+- `lib/sync/privileged.ts` — **`requirePrivileged()`**, the shared Owner/Admin/Dev guard
+  extracted from `actions.ts` (imported by both `actions.ts` and `cases.ts`).
+- `lib/sync/apply-writers.ts` (Smart-Adjudicator **P5**) — the **writer registry** for apply /
+  edit-then-apply. `APPLY_WRITERS: Record<reportType, writer>` (v1 = **rc_out** + **deliveries**);
+  `hasApplyWriter(type)`. Each writer validates the row (the PURE, client-free `validateRcOutRow` /
+  `validateDeliveriesRow` are exported so `verify-resolution.ts` drives them without a client),
+  resolves the batch to a UNIQUE existing batch (exact→ilike; 0 or 2+ candidates → plain error
+  listing them — **NEVER auto-creates a batch**), inserts, and audits: **rc_out** via
+  `write_ingestion_audit` (no audit trigger), **deliveries** via `set_audit_comment` + its own audit
+  trigger (the review-queue pattern). `deliveries.cost_basis` forced 0 (L-008). Every other report
+  type → refused. No ₱ ever enters a payload.
+- `lib/investigator/resolution.ts` (**P5**, client-safe) — `PROPOSE_RESOLUTION_TOOL` +
+  `executePropose` (chat-mode tool, WRITE-FREE), `parseProposal`, `checkEligibility` (dismiss = any
+  unresolved case; apply/edit_apply = per-row holds with a writer, NOT `gate_failure`; edit_apply
+  needs `edited_row`; resolved case → refused — enforced in BOTH the tool executor and
+  `executeResolution`), and the PURE `findOpenProposal(rows, status)` (the open-proposal detector
+  the UI + `executeResolution` share).
+
 ### Dev testing WITHOUT the worker
 - `scripts/dev-fake-run.ts` (+ `scripts/dev-fake-run.md`) — inserts a fake
   `sync_runs` row + a sequence of `sync_run_events` + a terminal `result.reports`
   via the service client. The logged-in browser animates the modal exactly as a real
   run would. This REPLACES the retired `SYNC_MOCK=1` path.
-- `scripts/verify-sync-reducer.ts` — `npx tsx scripts/verify-sync-reducer.ts` runs 15
+- `scripts/verify-sync-reducer.ts` — `npx tsx scripts/verify-sync-reducer.ts` runs 22
   framework-free assertions driving `lib/sync/reducer.ts` with recorded Realtime
   payload shapes (event projection, routing, the card state machine, terminal-result
   → card status). Proves the wiring without a browser or the worker.
+- `scripts/verify-resolution.ts` — `npx tsx scripts/verify-resolution.ts` runs 28
+  framework-free assertions over the P5 resolve pieces: `parseProposal` accept/reject,
+  `checkEligibility` (dismiss any unresolved · apply/edit_apply on gate_failure or a
+  writer-less report or a resolved case → refused · edit_apply needs edited_row · rc_out/
+  deliveries allowed), `validateRcOutRow`/`validateDeliveriesRow` (missing weight/date/
+  destination/batch → plain error; good row → ok, no cost surfaced), `findOpenProposal`
+  (open / declined-closed / resolved-closed / latest-wins), and provenance composition.
+  No DB. **Live-smoke (2026-07-07, throwaway, cleaned to 0 orphans):** seeded a synthetic
+  run + rc_out apply case + a dismiss case + a `propose_resolution` message, drove
+  `executeResolutionInternal` → the rc_out row inserted, `write_ingestion_audit` wrote the
+  provenance-stamped audit row (confirmed via MCP — the local service-role key can't SELECT
+  `audit_logs`), the ruling + resolved case + system trail all landed, and dismiss wrote 0
+  operational rows (ruling + status only). Everything deleted after.
+- `scripts/verify-case-fingerprint.ts` — `npx tsx scripts/verify-case-fingerprint.ts`
+  runs 5 framework-free assertions over the case-persistence spine's PURE pieces
+  (`lib/sync/fingerprint.ts` + `lib/sync/cases-fold.ts`): fingerprint stability, key-order
+  independence (canonicalization), gate-failure numbers re-alarm while sub-kg jitter does
+  not, non-gate row-payload changes preserve identity, and `collectHeldRows` folds a
+  realistic `SyncRunResult` (guarding `apply:null` + no-held reports). No DB.
+- `scripts/eval-investigator.ts` (**Smart-Adjudicator P6** — the LIVE trust harness, NOT
+  throwaway) — `npx tsx scripts/eval-investigator.ts [--case <name>] [--keep]`. Seeds
+  SYNTHETIC fake `sync_runs` + cases and drives the REAL `runInvestigation()` against the
+  known cases we solved by hand, asserting the RIGHT verdict, then ALWAYS cleans up (a
+  `finally`, so a failed assertion still cleans; `--keep` leaves rows + prints their ids).
+  5 cases: `june10-o-gt-m` (O>M, movement sheet missing → skip), `may-proposed-overstated`
+  (proposed report over-states on 2 dates → skip), `seeded-true-dup` (two identical 2020-01-02
+  rc_out rows → NOT skip / needs-human — proves it does NOT rubber-stamp "DB is right"),
+  `ledger-rematch` (no model call — occurrence-bump + pre-annotation + changed-numbers
+  re-alarm, reproducing `ensureCasesForRun`'s fingerprint upsert), `write-safety` (before/after
+  operational COUNT(*) unchanged + the investigation tool set has no write-like tool and no
+  `propose_resolution`). Isolation = synthetic `2020-01-02` date + `production_batch='EVAL-DUP'`
+  + fake-run marker `result.summary='[eval-investigator synthetic run]'` — safe to re-run on
+  the production DB (never touches real 2025/2026 rows beyond SELECTs; leaves 0 orphans).
+  Costs ~3 Sonnet investigations (cents). Landed a minimal `playbook.ts` fix — the O>M
+  duplicate branch now rules `needs-human` (delete a row), never `skip`; skip stays for the
+  no-duplicate case. Full detail in `lib/investigator/CONTEXT.md` → "P6".
 
 ## Data
 
-Two DB tables (migration `supabase/migrations/20260704000000_sync_runs_and_events.sql`,
-applied to remote; both in the `supabase_realtime` publication; `types/supabase.ts`
-regenerated so `sync_runs`/`sync_run_events` are typed):
+### Durable run ledger (migration `20260704000000_sync_runs_and_events.sql`)
+Two DB tables applied to remote; both in the `supabase_realtime` publication; `types/supabase.ts`
+regenerated so `sync_runs`/`sync_run_events` are typed:
 
 - **`sync_runs`** — one row per click. `id`, `requested_by`, `status`
-  (`sync_run_status`: queued/running/succeeded/failed/partial), `started_at`,
+  (`sync_run_status`: queued/running/succeeded/failed/partial/cancelled), `started_at`,
   `finished_at`, `result` (jsonb = `SyncRunResult`), `error`, `created_at`.
 - **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
   (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
   `level`, `at`.
 
-**RLS / grants (verified on remote):** authenticated = **SELECT only** (base GRANT +
-a `using(true)` select policy on each table); **no INSERT/UPDATE policy or grant** —
-the worker writes with the service role (bypasses RLS), and `enqueueSyncRun` uses
-`createAdminClient()` (service role) to INSERT the queued row. Proven: authenticated
-SELECT succeeds (the subscription's read path); authenticated INSERT is denied.
+### Smart-Adjudicator case files (migration `20260706120000_smart_adjudicator_cases.sql`)
+Three DB tables applied to remote (2026-07-06); `sync_held_cases` + `sync_case_messages` in the
+`supabase_realtime` publication; `types/supabase.ts` regenerated. Fanned out by `cases.ts`:
+
+- **`sync_held_cases`** — one durable case per DISTINCT held-row discrepancy, deduped by a
+  UNIQUE `fingerprint`. `id`, `fingerprint`, `report_type`, `kind`, `natural_key`, `reason`,
+  `detail`, `row` (jsonb, no ₱/cost), `first_run_id`/`last_run_id` (→`sync_runs`),
+  `occurrence_count`, `last_seen_at`, `status`
+  (`open|investigating|investigated|resolved`), `known_ruling_id` (→`sync_case_rulings`,
+  pre-annotation), `verdict` (jsonb, P3 writes it), `created_at`/`updated_at`.
+- **`sync_case_messages`** — the per-case chat + investigation transcript (mirrors
+  `jarvis_messages`): `case_id` (→cases, ON DELETE CASCADE), `role`
+  (`user|assistant|tool|system`), `content`, `tool_calls`/`tool_results` (jsonb), `position`,
+  UNIQUE `(case_id, position)`.
+- **`sync_case_rulings`** — the append-only known-issues ledger keyed by `fingerprint`:
+  `case_id`, `action` (`dismiss|apply|edit_apply|override_gate`), `verdict_summary`,
+  `reasoning`, `ruled_by` (→`profiles`), `ruled_by_email`, `created_at`. (The
+  `known_ruling_id`↔`case_id` circular FK is resolved by an ALTER after both tables exist.)
+
+**RLS / grants (verified on remote):** for ALL FIVE tables, authenticated = **SELECT only**
+(base GRANT + a `using(true)` select policy per table); **no INSERT/UPDATE policy or grant** —
+the worker/`enqueueSyncRun`/`ensureCasesForRun` write with the service role via
+`createAdminClient()` (bypasses RLS). Proven: authenticated SELECT succeeds (the subscription's
+read path); authenticated INSERT is denied.
 
 Also consumes the Anthropic API (`lib/anthropic/client.ts`) for adjudication +
 narration (unchanged).

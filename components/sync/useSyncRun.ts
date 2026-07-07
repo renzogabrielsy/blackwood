@@ -12,6 +12,7 @@ import {
   narrateSyncRun,
   type NarrateInput,
 } from '@/app/(app)/sync/actions'
+import { autoInvestigateRun } from '@/app/(app)/sync/cases'
 import {
   SYNC_REPORTS,
   isTerminalRunStatus,
@@ -272,6 +273,16 @@ export function useSyncRun() {
           recommendations: null,
           adjudicating: false,
         }))
+
+      // P3 auto-trigger: the moment a run finishes WITH held rows, kick off the
+      // background investigator for every fresh case (fire-and-forget). It fans the
+      // run out into cases and runs the loop; verdicts surface over Realtime (P4).
+      // Never awaited — the modal must not block — and any failure is swallowed
+      // (the review page still lets Renzo investigate on demand). Skip when there are
+      // no held rows to avoid a pointless call.
+      if (!cancelled && heldGroups.length > 0) {
+        void autoInvestigateRun(runId).catch(() => {})
+      }
 
       // A cancelled run gets a calm, local summary — never an API narration and
       // never an error toast. "Stopped" is a deliberate action, not a failure.

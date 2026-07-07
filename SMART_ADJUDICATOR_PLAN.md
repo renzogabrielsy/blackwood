@@ -1,11 +1,29 @@
 # Smart Held-Row Adjudicator — "Investigate like chat" · Feasibility + Implementation Plan
 
+> **STATUS 2026-07-07: P1–P6 BUILT, VERIFIED, EVAL'D (5/5).** See `handoffs/2026-07-07-smart-adjudicator-built.md` for what shipped and the deltas vs this plan (gate flags are dismiss-only in v1 — no `override_gate` wiring yet; apply-writers exist for rc_out + deliveries only). P-Fly remains deferred.
+
 _2026-07-06. The full implementation plan: finish the sync's durability (Fly), then build the "smart Jarvis" held-row review — an in-app agent that reasons like a chat session with Claude (studies the data, cross-references sources, pinpoints who's wrong, explains it plainly), with a chat you steer and a human-directed resolve. Barely any human intervention on the **analysis**; the **write** stays human-directed via the chat._
 
 ## Decisions locked (2026-07-06)
 
 - **Scope:** start by proving it on the **rc_out gate family** (drift + O>M), eval'd against the June-10 / May cases we solved by hand, then generalize.
 - **Write policy:** the agent **never auto-resolves on its own**. Instead there is a **chat** attached to the held row where Renzo talks to the agent about its findings, and **resolution happens through that conversation** — the agent only writes what Renzo explicitly directs, and even then through the deterministic pipeline path with a confirmation + full audit trail. (Renzo: _"there should be a chat box / button where I can talk to the claude agent about the results so we can auto-resolve from there."_)
+
+## Functional spec — LOCKED v2 (2026-07-06 PM, supersedes conflicting text below)
+
+Renzo answered the four open functional questions. These now define the v1 target:
+
+1. **Trigger = AUTO-INVESTIGATE.** The moment a sync finishes with held rows / gate failures, the investigator runs on **every** flag in the background (Sonnet). By the time Renzo opens the panel, full cited verdicts are already waiting — zero clicks. The "Investigate" button becomes "re-investigate / escalate to Opus." Cost is bounded: a normal run has 0–5 flags; hard cap on iterations per flag still applies.
+2. **Memory = KNOWN-ISSUES LEDGER.** Every ruling is persisted with a **fingerprint** of the discrepancy (flag kind + report + date + the stable numbers). When a later sync raises the *same* discrepancy, it surfaces as **"known issue — ruled `<verdict>` on `<date>` by `<user>`"**: quiet-but-visible (never fully silenced), pre-annotated with the prior ruling, and it **re-alarms loudly if the numbers change** (a changed discrepancy is a new discrepancy). This kills the "re-dismiss June-10 every day" loop without hiding anything.
+3. **Home base = PERSISTENT REVIEW PAGE + modal.** Held flags, their investigations, chat threads, and rulings are **saved to the DB** and live on a dedicated review surface until resolved — close the modal, come back tomorrow, the case file and conversation are intact. The Run Sync modal keeps showing the same flags for the in-the-moment look and links into the page. An unresolved-count badge surfaces open cases. (This **supersedes** the "No DB schema change" claim below — persistence needs new tables: cases, case messages, rulings/ledger.)
+4. **Resolve actions in v1 = dismiss + apply + edit-then-apply (ALL confirm-gated through the chat, ALL via the deterministic write path with provenance audit):**
+   - **Acknowledge & dismiss** — zero operational write; ruling + reasoning logged (the whole rc_out gate slice in practice).
+   - **Apply the held row** — for per-row holds: after explicit confirmation in chat, writes the row through the same deterministic apply path the sync employee uses. For **report-level gate failures**, the apply-equivalent is **"override gate & run the report's writes"** — same confirm gate, explicitly labeled as an override in the audit trail. _(Default assumption — flag to Renzo if this override semantic feels wrong.)_
+   - **Edit-then-apply** — Renzo corrects a value in chat ("the weight should be 5,200"); the agent echoes the exact edited row back for confirmation, then applies it through the same path. Edited values pass the same validation the sync applies.
+   - **Explicitly OUT of v1:** first-class "draft the operator message" button (skipped by Renzo — the chat can always be asked to compose one ad-hoc, so nothing is lost).
+   - Never-delete / never-auto-create-batches / price gating all still hold. The agent still cannot write **anything** without an explicit per-action confirmation.
+5. **Models:** Sonnet is the investigator default (lookup work); Opus **effort high** only on explicit escalation — matching the project-wide "Opus-high for coding, Sonnet for lookups" rule.
+6. **Sequencing change (2026-07-06 PM):** the **Fly deploy (P0) is DEFERRED** — Renzo chose to nail and build the adjudicator first. The worker keeps running locally via `npm run dev` until then. Nothing in this build depends on Fly.
 
 ## Sequencing — ship durability first, then build the brain
 
@@ -87,18 +105,19 @@ Next.js **server action** (like Jarvis), **on-demand** when Renzo clicks — not
 - **Scope discipline.** "As smart as chat" is open-ended; we bound it to **held-row adjudication**, not a general agent. No write tools, ever, in this surface.
 - **Human sign-off stays (v1).** You get near-zero-intervention *analysis*; the *write* remains gated. A future v2 could let a high-confidence verdict auto-resolve the safe, unambiguous cases (e.g. a proven duplicate → skip) — but that's a separate, riskier decision to make only after the analysis has earned trust.
 
-## Phased implementation
+## Phased implementation (v2 — Fly deferred, spec locked 2026-07-06 PM)
 
 | Phase | Deliverable | Effort |
 |---|---|---|
-| **P0 — Ship durability (Fly)** | Deploy the sync worker to Fly (bulletproof mode already configured); set a spend cap; flip `SYNC_WORKER_URL` to the Fly URL. Renzo owns the `flyctl` steps (his account) — I hand each command pre-filled + verify health. Prereqs already done: `.env` valid, DB connection confirmed, RUNBOOK written. | S · Renzo ~15 min |
-| **P1 — Investigative toolset** | The 5 read-only tools + allow-list + price-gating + unit tests (adapt Jarvis' `tool-handlers`) | S–M |
-| **P2 — The Investigator loop** | The scoped tool-use loop + the diagnostic-playbook system prompt; bounded iterations; Sonnet default, Opus escalation | M |
-| **P3 — Chat UX** | Per-held-row **chat thread** with the investigator (reuse Jarvis chat UI); stream the opening investigation + let Renzo interrogate/steer; render cited findings + confidence | M |
-| **P4 — Human-directed resolve** | `propose_resolution` + confirm-gated `execute_resolution` routed through the deterministic write path (dismiss/apply) with provenance audit; for the rc_out slice, dismiss = zero operational write | S–M |
-| **P5 — Eval + trust** | A fixture eval over the known cases (O>M-missing-sheet, proposed-over-stated, seeded true-dup) asserting the agent reaches the right conclusion; cost/latency + write-safety budget check | S |
+| **P1 — Case persistence (the spine)** | New tables: `sync_held_cases` (one per flag: fingerprint, run ref, kind, structured row, status open/resolved), `sync_case_messages` (the chat thread + investigation transcript), `sync_case_rulings` (the known-issues ledger: fingerprint → verdict, who, when, reasoning). Migration + types + fingerprint function. Sync completion fans held rows/gate failures out into cases; re-occurrences match the ledger by fingerprint and arrive pre-annotated ("known issue — ruled X on date"). | M |
+| **P2 — Investigative toolset** | The 5 read-only tools + allow-list + price-gating + unit tests (adapt Jarvis' `tool-handlers`) | S–M |
+| **P3 — The Investigator loop + AUTO-TRIGGER** | The scoped tool-use loop + diagnostic-playbook system prompt; bounded iterations; Sonnet default, Opus-high on explicit escalation. **Auto-runs on every new case when a sync completes** (skipping ledger-matched known issues — they reuse the prior verdict); verdicts persist to the case, so they're waiting even if the modal was closed. | M |
+| **P4 — Review page + chat UX** | The persistent review surface listing open cases (badge = unresolved count), each opening a chat thread with the investigator (reuse Jarvis chat UI); stream re-investigations; render cited findings + confidence; the Run Sync modal links each held row to its case. | M |
+| **P5 — Human-directed resolve (dismiss / apply / edit-then-apply)** | `propose_resolution` + confirm-gated `execute_resolution` through the deterministic write path with provenance audit. Dismiss = zero operational write. Apply = per-row deterministic apply; gate failures get "override gate & run writes," labeled as override. Edit-then-apply = agent echoes the exact edited row for confirmation, validates like the sync, then applies. Every action logged (who/what/why). | M–L |
+| **P6 — Eval + trust** | Fixture eval over the known cases (O>M-missing-sheet, proposed-over-stated, seeded true-dup) asserting the right conclusion; a ledger-match eval (same flag re-raised → pre-annotated, changed numbers → re-alarms); cost/latency + write-safety budget check. | S |
+| **P-Fly (deferred)** | Deploy the sync worker to Fly per `workers/sync/RUNBOOK.md` (bulletproof mode configured, env verified). Renzo owns the `flyctl` steps; ~15 min. Independent of everything above. | S · Renzo ~15 min |
 
-**Total ≈ 2–3 focused sessions** for the rc_out proof slice (investigator + chat + confirm-gated resolve), then generalize per flag family — **after** the ~15-min P0 Fly deploy that makes the sync itself laptop-proof. No DB schema change. No worker change (it runs app-side). Reuses the Jarvis loop + tools as the base.
+**Total ≈ 3–4 focused sessions** for the rc_out proof slice (persistence + investigator + review page + full resolve), then generalize per flag family. Requires a DB migration (cases/messages/rulings — app tables only, the worker schema is untouched). No worker change (investigator runs app-side); the only worker-adjacent touch is fanning run results into cases, which can live app-side off the existing Realtime completion event. Reuses the Jarvis loop + tools as the base.
 
 ## What it does NOT change
 The deterministic sync (parity 12/12), the write gate (human-approved via the employee), price gating, the fast single-shot default, and the "never auto-write held rows in v1" policy.

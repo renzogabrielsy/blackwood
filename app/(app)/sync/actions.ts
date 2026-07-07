@@ -1,10 +1,8 @@
 'use server'
 
 import { anthropic, JARVIS_MODEL } from '@/lib/anthropic/client'
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { getUserRole } from '@/lib/auth'
-import { PRIVILEGED_ROLES } from '@/types/auth'
+import { requirePrivileged } from '@/lib/sync/privileged'
 
 import {
   type HeldRow,
@@ -35,31 +33,10 @@ const SYNC_KICK_SECRET = process.env.SYNC_KICK_SECRET ?? ''
 const KICK_TIMEOUT_MS = 5_000
 
 // ============================================================
-// Auth guard (mirrors the SEC-3 pattern in rc-in/actions.ts)
+// Auth guard — the shared Owner/Admin/Dev boundary now lives in
+// lib/sync/privileged.ts (requirePrivileged), imported above and shared with
+// cases.ts so there is a single enforcement point.
 // ============================================================
-
-/**
- * Every action in this file is privileged: only Owner/Admin/Dev may run a sync
- * or adjudicate held rows. Derives the EFFECTIVE role via getUserRole() so the
- * dev-impersonation cookie is respected (an Owner "viewing as Production" is
- * denied). Fails closed — throws if unauthenticated or under-privileged.
- *
- * Returns the authenticated user id so the caller can stamp `requested_by`.
- */
-async function requirePrivileged(): Promise<string> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    throw new Error('Not authenticated')
-  }
-  const role = await getUserRole(user.id)
-  if (!PRIVILEGED_ROLES.includes(role)) {
-    throw new Error('Not authorized — Run Sync is restricted to Owner / Admin / Dev.')
-  }
-  return user.id
-}
 
 // ============================================================
 // enqueueSyncRun — the durable-worker entry point (Wave 4B)
