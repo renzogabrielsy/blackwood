@@ -67,6 +67,7 @@ Cenapro · Cebu               ← uppercase tenant label
   Production
   Flec Inventory
 ─────────────  (privileged only)
+  Sync Review
   Review Queue
   Admin Panel
 ```
@@ -76,11 +77,11 @@ Cenapro · Cebu               ← uppercase tenant label
 - **Deliveries / Usage** are NOT separate routes — they deep-link into the `/inventory` logs page's tab via the `?tab=` URL param (the tab state lives in the URL; see [inventory/CONTEXT.md](../app/(app)/inventory/CONTEXT.md)).
 - **Blocking / Movement** ARE standalone routes (`/inventory/blocking`, `/inventory/rc-movement`).
 - The nesting is done inline (mini `DropdownMenuLabel` + indented `DropdownMenuItem`s via `pl-5`) for scannability — everything is visible at once, no flyout.
-- Review Queue + Admin Panel appear only for `PRIVILEGED_ROLES` (Owner/Admin/Dev) under a separator.
+- Sync Review + Review Queue + Admin Panel appear only for `PRIVILEGED_ROLES` (Owner/Admin/Dev) under a separator.
 
 ## Role-Based Visibility
 - **Dev Role Switcher (Shield icon):** visible only if `dbRole` ∈ Owner/Admin/Dev. Dropdown lists all 5 roles + the "logged in as" reset.
-- **Review Queue / Admin Panel menu items:** visible only if current `role` ∈ Owner/Admin/Dev.
+- **Sync Review / Review Queue / Admin Panel menu items:** visible only if current `role` ∈ Owner/Admin/Dev.
 
 ## Styling
 - Always dark: `bg-zinc-800 dark:bg-zinc-700` (one shade lighter in dark mode for contrast against the `zinc-950` body)

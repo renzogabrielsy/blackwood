@@ -232,6 +232,9 @@ export function Navbar() {
                                 <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem asChild>
+                                        <Link href="/sync/cases">Sync Review</Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild>
                                         <Link href="/review-queue">Review Queue</Link>
                                     </DropdownMenuItem>
                                     <DropdownMenuItem asChild>
