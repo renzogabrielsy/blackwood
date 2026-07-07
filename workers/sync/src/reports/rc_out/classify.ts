@@ -35,6 +35,20 @@ interface FlaggedItem { index: unknown; row: ProposedRow; reason: string; }
 interface UnmappedItem { index: unknown; row: ProposedRow; reason: string; }
 interface MalformedItem { row: ProposedRow; reason: string; }
 
+/**
+ * An informational (non-holding) note surfaced to the run's output. Emitted when a
+ * sub-watermark row is NOOP'd via the 5-hard-field match but the production-run label
+ * (production_batch) differs — a benign month-boundary label variance (rc_out L-034).
+ * Carries no ₱/cost — pure identity + kg. See classifyRcOut sub-watermark branch.
+ */
+export interface SoftWarning {
+  kind: string;
+  index: unknown;
+  natural_key: [string, string, string];
+  db_id: unknown;
+  message: string;
+}
+
 export interface ClassifyResult {
   summary: {
     extracted_total: number;
@@ -55,6 +69,8 @@ export interface ClassifyResult {
   flagged: FlaggedItem[];
   unmapped: UnmappedItem[];
   malformed: MalformedItem[];
+  /** Informational, non-holding notes (e.g. month-boundary label variance, L-034). */
+  soft_warnings: SoftWarning[];
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +205,7 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
   const classifiedUnmapped: UnmappedItem[] = [];
   const classifiedMalformed: MalformedItem[] = [];
   const classifiedFlagged: FlaggedItem[] = [];
+  const classifiedSoftWarnings: SoftWarning[] = [];
 
   for (const exRow of extractedRows) {
     // Required-field check (classify_rc_out.py:208-214).
@@ -225,9 +242,18 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
     const matches = dbIndex.get(keyStr(key)) ?? [];
 
     if (!matches.length) {
-      // SUB-WATERMARK WRITE GUARD (L-019, classify_rc_out.py:242-254): a settled-date
-      // NEW (transaction_date <= watermark) is FLAGGED, never inserted. String
-      // comparison on zero-padded ISO dates (rc_out.md porting trap).
+      // SUB-WATERMARK WRITE GUARD (L-019): a settled-date NEW (transaction_date <=
+      // watermark) with NO natural-key match is FLAGGED, never inserted. String comparison
+      // on zero-padded ISO dates (rc_out.md porting trap).
+      //
+      // L-034 note: the month-boundary false-flag (a settled row present in the DB but
+      // labeled differently) is NOT resolved here — reaching this branch means the DB row
+      // is genuinely ABSENT from the compare-set. That was the recurring bug: an
+      // asymmetric compare window (since = watermark−3d) that never reached the workbook's
+      // oldest sheet rows. The fix lives in the ORCHESTRATOR (index.ts / sync_rc_out.py),
+      // which now widens the compare-set floor to min(extract_min, watermark−3d) so the
+      // saved copy IS in `matches` → the label variance is handled in the matches branch
+      // below. A row that still reaches HERE is a real miss and is correctly held.
       if (watermark !== null && exRow.transaction_date <= watermark) {
         classifiedFlagged.push({
           index: exRow._source_row,
@@ -244,11 +270,34 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
     } else {
       const dbRow = matches[0];
       const diffs = fieldDifferences(exRow, dbRow);
+      // L-034: a diff list whose ONLY entry is production_batch is a month-boundary run
+      // label variance on an already-saved row (calendar-month vs run-header-month label).
+      // Both labels are defensible; the record is already correct. Demote to NOOP + a SOFT
+      // WARNING — never a VALUE_CHANGED (which would needlessly flip the DB label each run).
+      const onlyLabelDiff = diffs.length === 1 && diffs[0].field === "production_batch";
       if (!diffs.length) {
         classifiedNoop.push({
           index: exRow._source_row,
           natural_key: key,
           db_id: dbRow.id,
+        });
+      } else if (onlyLabelDiff) {
+        classifiedNoop.push({
+          index: exRow._source_row,
+          natural_key: key,
+          db_id: dbRow.id,
+        });
+        classifiedSoftWarnings.push({
+          kind: "sub_watermark_suspected_dup",
+          index: exRow._source_row,
+          natural_key: key,
+          db_id: dbRow.id,
+          message:
+            `label differs, but record is already saved — no action needed ` +
+            `(${exRow.transaction_date}, ${destination}, ` +
+            `${normNum(pyOr(exRow.weight_kg, exRow.day_total_kg), 3)}kg: ` +
+            `production_batch '${exRow.production_batch}' vs DB '${dbRow.production_batch ?? ""}'; ` +
+            `month-boundary run label variance).`,
         });
       } else {
         classifiedChanged.push({ index: exRow._source_row, row: exRow, db_row: dbRow, diff: diffs });
@@ -292,6 +341,7 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
     flagged: classifiedFlagged,
     unmapped: classifiedUnmapped,
     malformed: classifiedMalformed,
+    soft_warnings: classifiedSoftWarnings,
   };
 }
 
@@ -302,6 +352,7 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
+
 
 function keyStr(key: [string, string, string]): string {
   //   separator can't appear in ISO dates / uuids / "MAIN".

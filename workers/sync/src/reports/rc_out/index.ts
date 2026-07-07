@@ -143,6 +143,9 @@ export interface RunReportResult {
     counts: { noop: number; insert: number; update: number; flagged: number };
     watermark: string | null;
     codified_rules_applied: readonly string[];
+    /** Informational, non-holding notes (month-boundary label variance, L-034). The
+     *  reportWorkflow threads these into classifyExtra so they survive normalizeReport. */
+    soft_warnings: string[];
   };
   apply: ApplyResult;
 }
@@ -194,6 +197,7 @@ export async function runReport(
         counts: { noop: 0, insert: 0, update: 0, flagged: 0 },
         watermark,
         codified_rules_applied: CODIFIED_RULES,
+        soft_warnings: [],
       },
       apply: emptyApply,
     };
@@ -254,8 +258,17 @@ export async function runReport(
     const code = b.batch_code;
     if (code) batchLookup[String(code)] = String(b.id);
   }
+  // L-034 (compare-set window): the JULY workbook permanently carries its "JUNE 30"
+  // sheet, so the extractor yields rows OLDER than `since` (= watermark − 3d). Fetching
+  // the dedup compare-set at the `since` floor leaves those settled rows compared against
+  // a snapshot that CANNOT contain their saved copy → a recurring false sub-watermark
+  // hold every run. Widen the floor to cover the OLDEST extracted row's date so every
+  // incoming row is compared against its own settled DB copy. Bounded (never earlier than
+  // the extract's own min), so this does not read the whole table.
+  const extractMin = minExtractDate(proposed.rows);
+  const compareSince = extractMin && extractMin < since ? extractMin : since;
   const dbRows = (await db.readRows("rc_out", {
-    sinceDate: since,
+    sinceDate: compareSince,
     columns: ["id", "transaction_date", "batch_id", "production_batch", "destination", "weight_kg", "block_loc", "remarks"],
   })) as RcOutDbRow[];
 
@@ -273,6 +286,14 @@ export async function runReport(
     `${s.noop_count} already recorded · ${s.new_count} new · ${s.changed_count} changed`,
     90,
   );
+
+  // L-034: surface month-boundary label-variance soft warnings on the live feed as an
+  // informational (warn-level, non-holding) beat — the row is already saved, so this is
+  // "no action needed", never a hold. The strings also ride the classify block below.
+  const softWarnings = classified.soft_warnings.map((w) => w.message);
+  for (const msg of softWarnings) {
+    await emit?.("classify", msg, 90, undefined, "warn");
+  }
 
   // Build the compact hand-off and run apply.
   const compact: RcOutCompact = {
@@ -316,6 +337,7 @@ export async function runReport(
       },
       watermark,
       codified_rules_applied: CODIFIED_RULES,
+      soft_warnings: softWarnings,
     },
     apply,
   };
@@ -328,6 +350,17 @@ export async function runReport(
 function firstAttachment(manifest: RcOutManifest, key: string): StoredAttachmentLike | null {
   const arr = manifest.reports?.[key];
   return arr && arr.length ? arr[0] : null;
+}
+
+/** Min transaction_date (lexicographic over zero-padded ISO) across extracted rows;
+ *  null when there are none. Used to widen the dedup compare-set floor (L-034). */
+function minExtractDate(rows: Array<{ transaction_date?: string | null }>): string | null {
+  let m: string | null = null;
+  for (const r of rows) {
+    const d = r.transaction_date;
+    if (d && (m === null || d < m)) m = d;
+  }
+  return m;
 }
 
 const SERIOUS_DRIFT_KG = 500;

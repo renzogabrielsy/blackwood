@@ -128,6 +128,11 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         reportType: "rc_out",
         classify: r.classify,
         apply: dryRun ? null : r.apply,
+        // L-034 month-boundary label-variance notes: carry them on the classify block so
+        // they reach the app (normalizeClassify preserves extra keys; reducer ignores it).
+        classifyExtra: r.classify.soft_warnings.length
+          ? { soft_warnings: r.classify.soft_warnings }
+          : undefined,
       });
     }
     case "production": {

@@ -46,6 +46,7 @@
   "malformed": [],
   "new": [],
   "noop": [],
+  "soft_warnings": [],
   "summary": {
     "changed_count": " num:0",
     "db_date_span": {

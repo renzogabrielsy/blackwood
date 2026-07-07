@@ -16,6 +16,13 @@ _2026-07-04, orchestrator rulings on the ambiguities the spec pass flagged. Thes
 ## Deviation log discipline
 Rulings #2–#5 make the TS intentionally differ from the oracle. The parity harness (Wave 2) must model these as **expected differences** (a small `expected-deviations.json` keyed by rule id + case), so parity stays a hard gate everywhere else. Any parity diff NOT covered by that file is a porter bug, full stop.
 
+## Post-port business-rule changes (NOT deviations — both engines changed in lockstep)
+_These are real behavior changes applied IDENTICALLY to the Python oracle AND the TS port, so parity stays green with NO `expected-deviations.json` entry. Distinct from rulings #2–#5, which make TS diverge FROM the oracle. When you change a rule for real, change BOTH sides and rebuild the oracle (`npm run build:oracle --type <t>`) — do NOT reach for a deviation._
+
+| L-rule | Change | Files (both sides) |
+|---|---|---|
+| **L-034** (2026-07-07, rc_out) | Month-boundary false-flag fix, two parts: (1) widen the rc_out dedup compare-set floor to `min(min(extracted date), watermark−3d)` so the workbook's oldest sheet rows are compared against their saved DB copies (the asymmetric `watermark−3d` window false-flagged 5 already-saved June-30 rows); (2) when a natural-key MATCH's ONLY diff is `production_batch`, NOOP + emit a `soft_warnings[]` note, never a VALUE_CHANGED or a hold. Oracle rebuilt (both fixtures carry `soft_warnings: []`; parity 12/12). | window: `sync_rc_out.py` + `src/reports/rc_out/index.ts`; classify: `classify_rc_out.py` + `src/reports/rc_out/classify.ts` |
+
 ## Also binding (from the plan, restated for porters)
 - All rounding through `norm.ts` (round-half-to-even); `Math.round` is lint-banned.
 - Fetch queries, thresholds, natural keys: VERBATIM from the specs — no "improvements."

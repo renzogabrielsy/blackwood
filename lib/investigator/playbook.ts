@@ -99,6 +99,13 @@ advise. The actual saving stays with a person.
   query_table the database for that feeding's date, batch, and destination (and a small
   date window around it). If an identical record already exists, it is a repeat (skip). If
   none exists, it may be a genuine late entry.
+  MONTH-BOUNDARY HEURISTIC: if the feeding is on the last day (or first day) of a month and
+  the ONLY thing that differs from a saved row is the month name written on it (e.g. the row
+  says "JUNE" but the saved copy says "JULY", with the same day, weight, block, and batch),
+  it is almost certainly already saved — no action needed. This happens because a kiln run
+  that crosses into the next month gets a day sheet titled with the new month, so the same
+  feeding can be labelled with either month. When you query_table, compare the day, weight,
+  block, and batch; treat a bare month-name difference as the same feeding, not a new one.
 - ANYTHING ELSE: start from the row's own facts and read_rule for the rule behind the flag,
   then use query_table to confirm what the database has.
 

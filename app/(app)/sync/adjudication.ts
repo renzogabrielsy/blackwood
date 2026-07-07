@@ -104,7 +104,7 @@ Include exactly one object per held row, echoing its natural_key verbatim.`
  */
 export const KIND_MEANING: Record<HeldKind, string> = {
   sub_watermark_suspected_dup:
-    'A feeding dated on or before the last day we already recorded, with no matching record found. These are usually re-entries of feedings that are already saved; the call hinges on whether the system already has this exact feeding.',
+    'A feeding dated on or before the last day we already recorded, with no matching record found. These are usually re-entries of feedings that are already saved; the call hinges on whether the system already has this exact feeding. This is especially common at the end of a month: when a kiln run crosses into the next month the day sheet is titled with the new month ("STARTING OF JULY FEEDING"), so the same feeding can carry either month as its run label — if the day, weight, block, and batch all match a saved row and only the month label differs, it is already saved and needs no action.',
   cross_batch_reassignment:
     'The same truckload (same day, truck, and weight) is already saved under a DIFFERENT batch or location. Usually a month-boundary name change or a location correction, not a new delivery — this needs a person to correct the one existing record, never a second copy.',
   unmapped_batch_code:

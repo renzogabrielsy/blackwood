@@ -14,6 +14,18 @@ Outcomes per row:
   - UNMAPPED         : batch_code couldn't be resolved to a batch_id in the DB -> needs manual lookup
   - MALFORMED        : missing required field (date / weight) -> skip with reason
 
+MONTH-BOUNDARY LABEL VARIANCE (L-034, see LEARNING_LEDGER):
+  On a month boundary the June-30 sheet can be titled "STARTING OF JULY FEEDING", so the
+  same saved feeding carries either production_batch label (calendar month "JUNE" on the
+  last-day row vs the run's header month "JULY" recorded in the DB). When a natural-key
+  MATCH's ONLY differing field is production_batch, that is this benign variance: it is
+  demoted to a NOOP + a SOFT WARNING ("label differs, but record is already saved — no
+  action needed"), never a VALUE_CHANGED (which would needlessly flip the DB label each
+  run). Soft warnings ride the `soft_warnings` output list; they are informational only.
+  The precondition is that the DB copy is in the compare-set — see the COMPARE-SET WINDOW
+  note; the orchestrator (sync_rc_out.py) widens the floor so the oldest extracted sheet
+  rows are always compared against their saved copies.
+
 Equality rules:
   - weight_kg: numeric tolerance 0.001
   - remarks: case-insensitive trim, null == empty
@@ -202,6 +214,7 @@ def main() -> int:
     classified_unmapped = []
     classified_malformed = []
     classified_flagged = []  # sub-watermark rows that classified as NEW — never auto-insert
+    classified_soft_warnings = []  # month-boundary label variance (L-034) — NOOP'd, informational
 
     for ex_row in extracted_rows:
         # Required field check
@@ -239,6 +252,15 @@ def main() -> int:
             # before the watermark, the DB comparison set was likely incomplete OR this
             # is a genuine miss — either way it is NOT safe to auto-insert (that is the
             # exact path that doubled May 29–Jun 16). Route to FLAGGED for human review.
+            # L-034 note: the month-boundary false-flag (a settled row present in the DB
+            # but labeled differently) is NOT resolved here — reaching this branch means
+            # the DB row is genuinely ABSENT from the compare-set. That was the recurring
+            # bug: an asymmetric compare window (since = watermark−3d) that never reached
+            # the workbook's oldest sheet rows. The fix lives in the ORCHESTRATOR
+            # (sync_rc_out.py), which now widens the compare-set floor to
+            # min(extract_min, watermark−3d) so the saved copy IS in `matches` → the label
+            # variance is handled in the matches branch below. A row that still reaches
+            # HERE is a real miss and is correctly held.
             if watermark is not None and ex_row["transaction_date"] <= watermark:
                 classified_flagged.append({
                     "index": ex_row.get("_source_row"),
@@ -255,11 +277,37 @@ def main() -> int:
         else:
             db_row = matches[0]
             diffs = field_differences(ex_row, db_row)
+            # L-034: a diff list whose ONLY entry is production_batch is a month-boundary
+            # run label variance on an already-saved row (calendar-month vs run-header-month
+            # label). Both labels are defensible; the record is already correct. Demote to
+            # NOOP + a SOFT WARNING — never a VALUE_CHANGED (which would needlessly flip the
+            # DB label each run).
+            only_label_diff = len(diffs) == 1 and diffs[0]["field"] == "production_batch"
             if not diffs:
                 classified_noop.append({
                     "index": ex_row.get("_source_row"),
                     "natural_key": list(key),
                     "db_id": db_row.get("id"),
+                })
+            elif only_label_diff:
+                classified_noop.append({
+                    "index": ex_row.get("_source_row"),
+                    "natural_key": list(key),
+                    "db_id": db_row.get("id"),
+                })
+                e_w2 = norm_num(ex_row.get("weight_kg") or ex_row.get("day_total_kg"), 3)
+                classified_soft_warnings.append({
+                    "kind": "sub_watermark_suspected_dup",
+                    "index": ex_row.get("_source_row"),
+                    "natural_key": list(key),
+                    "db_id": db_row.get("id"),
+                    "message": (
+                        f"label differs, but record is already saved — no action "
+                        f"needed ({ex_row['transaction_date']}, {destination}, "
+                        f"{e_w2}kg: production_batch '{ex_row.get('production_batch')}' "
+                        f"vs DB '{db_row.get('production_batch') or ''}'; "
+                        f"month-boundary run label variance)."
+                    ),
                 })
             else:
                 classified_changed.append({
@@ -297,6 +345,7 @@ def main() -> int:
         "flagged": classified_flagged,
         "unmapped": classified_unmapped,
         "malformed": classified_malformed,
+        "soft_warnings": classified_soft_warnings,
     }
     output_path.write_text(json.dumps(result, indent=2, default=str))
 

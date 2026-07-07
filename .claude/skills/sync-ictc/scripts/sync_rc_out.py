@@ -154,7 +154,18 @@ def phase_classify(args) -> int:
     lookup_path = work / "batch_lookup.json"
     lookup_path.write_text(json.dumps(lookup, default=str))
 
-    db_rows = db.read_rows("rc_out", since_date=since, columns=RC_OUT_COLS)
+    # L-034 (compare-set window): the JULY workbook permanently carries its "JUNE 30"
+    # sheet, so the extractor yields rows OLDER than `since` (= watermark − 3d). Fetching
+    # the dedup compare-set at the `since` floor leaves those settled rows compared against
+    # a snapshot that CANNOT contain their saved copy → a recurring false sub-watermark
+    # hold every run. Widen the floor to cover the OLDEST extracted row's date so every
+    # incoming row is compared against its own settled DB copy. Bounded (never earlier than
+    # the extract's own min), so this does not read the whole table.
+    extract_dates = [r["transaction_date"] for r in proposed.get("rows", [])
+                     if r.get("transaction_date")]
+    extract_min = min(extract_dates) if extract_dates else None
+    compare_since = extract_min if (extract_min and extract_min < since) else since
+    db_rows = db.read_rows("rc_out", since_date=compare_since, columns=RC_OUT_COLS)
     db_path = work / "db_rows.json"
     db_path.write_text(json.dumps(db_rows, default=str))
 
