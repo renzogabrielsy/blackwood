@@ -119,15 +119,24 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   a terminal run's held rows into durable `sync_held_cases` rows so they survive past the modal:
   - **`ensureCasesForRun(runId)`** → `{created, refreshed, knownMatched, caseIds}`.
     requirePrivileged → service-role load of the run → no-op unless status is terminal
-    (`succeeded|failed|partial`) AND `result.reports` exists → `collectHeldRows` →
-    `caseFingerprint` per row → **IDEMPOTENT upsert-by-fingerprint** (safe to call repeatedly;
-    the modal AND the review page both call it). Existing case → refresh `last_run_id`/
+    (`succeeded|failed|partial`) AND (`result.reports` OR `result.reconciliation` exists).
+    Folds TWO case sources through ONE idempotent upsert-by-fingerprint spine (`upsertCase`):
+    **(a) held rows** — `collectHeldRows` → `caseFingerprint` per row; **(b) R2 SHADOW
+    source_diffs** — `collectSourceDiffs(result)` (the worker's `result.reconciliation.rc_out.diffs`)
+    → `sourceDiffFingerprint` per diff → `sync_held_cases` rows `kind='source_diff'`,
+    `report_type='rc_out'`, `natural_key`=`sourceDiffNaturalKey(diff)` (e.g.
+    `MAR-26-BLK5 @ D-11B · 2026-06-10 · weight`), `row`=the full `SourceDiff` (sources[] +
+    competing values + advisory `recommended`). **IDEMPOTENT** (safe to call repeatedly; the
+    modal AND the review page both call it). Existing case → refresh `last_run_id`/
     `last_seen_at`, bump `occurrence_count` ONLY when the runId differs from the case's
     `last_run_id` (no double-count on repeat calls for the SAME run); a `resolved` case that
     recurs in a NEWER run stays resolved (quiet-but-visible, never auto-reopened). New case →
     check `sync_case_rulings` for the latest matching fingerprint and pre-annotate
     `known_ruling_id` (status stays `open` — pre-annotated, not silenced). All reads/writes use
     `createAdminClient()` (service role) — these tables are service-role-write only.
+    `source_diff` cases ride the EXISTING run-triage + investigator + Sync Review rails (generic
+    case detail; the dedicated per-field PICK/`resolveDiff` control is R3 — for now the
+    investigator can discuss them and they can be dismissed).
   - **`listOpenCases()`** → every `status != 'resolved'` case, newest-seen first, with the
     pre-annotating ruling's `verdict_summary` joined via the `known_ruling_id` FK. **P4:** now also
     selects `verdict` (the persisted investigation verdict jsonb) so the review page can render the
@@ -368,16 +377,22 @@ frozen), `deriveCardStatus`/`gateErrorFrom` (terminal result → card status + c
 gate string).
 
 ### Pure case-persistence helpers (Smart-Adjudicator P1, `lib/sync/`)
-Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerprint.ts`:
+Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerprint.ts` +
+`scripts/verify-source-diff-fold.ts`:
 - `lib/sync/fingerprint.ts` — **`caseFingerprint(reportType, held)`** → sha256 hex of a
   CANONICAL JSON (keys sorted recursively, so insertion order never changes the hash). For
   `kind:'gate_failure'` the payload INCLUDES the per-date drift numbers (rounded to integers,
   dates sorted) → a changed discrepancy re-alarms as a NEW fingerprint; sub-kg jitter rounds
   to the same hash. For every other kind the payload is `(reportType, kind, natural_key)` only
-  → stable row identity even if incidental `row` fields change.
+  → stable row identity even if incidental `row` fields change. **R2:**
+  **`sourceDiffFingerprint(diff)`** → sha256 of `{kind:'source_diff', table, natural_key, field,
+  SORTED competing (source,value) pairs}` (weights rounded to integer kg — jitter doesn't
+  re-alarm, a changed competing value does); **`sourceDiffNaturalKey(diff)`** → the human label.
 - `lib/sync/cases-fold.ts` — **`collectHeldRows(result)`** → flattens
   `result.reports[type].apply.held` across all reports into `{reportType, held}[]`, guarding
-  absent `reports` / `apply:null` / missing `held`. Pure, no supabase import.
+  absent `reports` / `apply:null` / missing `held`. **R2:** **`collectSourceDiffs(result)`** →
+  `result.reconciliation.rc_out.diffs ?? []` (guards the absent channel on pre-R2 runs). Pure,
+  no supabase import.
 - `lib/sync/privileged.ts` — **`requirePrivileged()`**, the shared Owner/Admin/Dev guard
   extracted from `actions.ts` (imported by both `actions.ts` and `cases.ts`).
 - `lib/sync/apply-writers.ts` (Smart-Adjudicator **P5**) — the **writer registry** for apply /
@@ -448,6 +463,12 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   independence (canonicalization), gate-failure numbers re-alarm while sub-kg jitter does
   not, non-gate row-payload changes preserve identity, and `collectHeldRows` folds a
   realistic `SyncRunResult` (guarding `apply:null` + no-held reports). No DB.
+- `scripts/verify-source-diff-fold.ts` — `npx tsx scripts/verify-source-diff-fold.ts` runs 5
+  framework-free assertions over the R2 SHADOW fan-out's PURE pieces (`sourceDiffFingerprint` +
+  `sourceDiffNaturalKey` in `lib/sync/fingerprint.ts`, `collectSourceDiffs` in
+  `lib/sync/cases-fold.ts`): fingerprint stability, source-order independence, a changed
+  competing value re-alarms while sub-kg jitter does not, the human label, and the fold guarding
+  an absent/empty reconciliation channel. No DB.
 - `scripts/eval-investigator.ts` (**Smart-Adjudicator P6** — the LIVE trust harness, NOT
   throwaway) — `npx tsx scripts/eval-investigator.ts [--case <name>] [--keep]`. Seeds
   SYNTHETIC fake `sync_runs` + cases and drives the REAL `runInvestigation()` against the
@@ -474,7 +495,11 @@ regenerated so `sync_runs`/`sync_run_events` are typed:
 
 - **`sync_runs`** — one row per click. `id`, `requested_by`, `status`
   (`sync_run_status`: queued/running/succeeded/failed/partial/cancelled), `started_at`,
-  `finished_at`, `result` (jsonb = `SyncRunResult`), `error`, `created_at`.
+  `finished_at`, `result` (jsonb = `SyncRunResult`), `error`, `created_at`. **R2:** the worker
+  additively attaches `result.reconciliation = { rc_out: { diffs: SourceDiff[], agreements } }`
+  (the SHADOW multi-source reconciliation channel — sits alongside `reports`, observational only;
+  `worker: runSync.ts::reconcileRcOutShadow`). App-side mirror types (`SourceDiff` /
+  `SourceOpinion` / `ReconciliationChannel`) live in `app/(app)/sync/types.ts`.
 - **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
   (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
   `level`, `at`.

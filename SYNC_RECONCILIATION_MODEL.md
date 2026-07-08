@@ -22,6 +22,9 @@ Each report's extractor produces, per natural key, a **source record**: the exac
 A source record that fails its own consistency check is not dropped — it's carried with a `self_consistent: false` mark, which becomes a tie-breaker the reconciler and the operator can see ("the Google Sheet value fails its own balance check; the proposed report's passes").
 
 ### Stage 2 — Reconcile (cross-source, per natural key + field)
+
+**Granularity (LOCKED in R1, 2026-07-07):** rc_out reconciles at the fine key `(transaction_date, batch, block_loc, destination)` on the **SUM of weight across legs** — the physically meaningful "how much did this batch/block get today," robust to sources splitting legs differently. **Sources join at different grains:** the proposed report and Google Sheet compete at the fine key; the **RC MOVEMENT sheet is coarser — a per-DATE grand total only** (no per-block detail), so it participates one level up as a **date-level corroboration witness**: for a fine disagreement on date D, the engine rolls each fine source's whole-day rc_out total and checks which matches the movement day total. That rollup match is the L-037 discriminator (proposed's day total reconciles to movement; gsheet's over-stated total does not).
+
 For each natural key, gather every source that has an opinion on it, field by field. Per field, one of:
 - **Agree** (all present sources equal, within tolerance) → **accept**, queue for the clean apply.
 - **Single-source** (only one source has it) → accept, tagged single-source (visible, low-friction).
@@ -61,6 +64,16 @@ A run resolves to exactly one of:
 | **R3 — Sync Review pick UI** | The case detail renders competing source values with a "use this" control per field; wire to a `resolveDiff` action through the deterministic write path. Investigator pre-recommendation shown. | Reuses P4/P5. |
 | **R4 — Retire Sheet-wins + generalize** | Remove gsheet-sync's authoritative overwrite; route gsheet rc_out/rc_in through reconciliation. Then extend sources per report (deliveries: proposed + gsheet + Czarina pricing; production; flecon). | The real cutover. |
 | **R5 — Trust phase (optional, later)** | Only after the ledger has demonstrably agreed with the operator's picks for weeks: allow a *proven-identical, previously-ruled* diff to auto-apply the remembered pick. Explicitly deferred. | Mirrors the adjudicator's deferred auto-resolve. |
+
+## Known gaps to close BEFORE the R4 cutover (found in R2)
+
+R2 runs in shadow (observation only), so these are safe today but MUST be resolved before reconciliation drives writes:
+
+1. **FEED blocks are invisible to the fine key.** The proposed extractor emits `block_loc = null` for FEED blocks (e.g. JUNE-26-FEED2/FEED3), so they can't form `(date, batch, block, dest)` and are **skipped** by reconciliation in R2. Consequence: of the real L-037 diffs, only the standard-block one (MARCH-26-BLK5) is caught from live extracts; the FEED-block over-statements are not. **R4 fix:** for null-block feed rows, key on `(date, batch, dest)` (the feed batch_code is itself the discriminator) — or accept date-level reconciliation for feed. Decide before cutover.
+2. **Batch-code alignment is best-effort.** R2 aligns sources with `canonicalBatchKey` (smallest uppercased alias over primary+fallbacks). A batch whose conventions don't share an alias set splits into two single-source Agreements (silently no diff) rather than a false diff — safe for shadow, wrong for a write gate. **R4 fix:** resolve to `batch_id` before reconciling, not code-string alignment.
+3. **gsheet is re-downloaded in the shadow step** (`reports/gsheet/download.ts` fetches bytes but does not persist to Storage, despite a runSync comment implying otherwise). Harmless now (one extra GET/run). **R4:** capture the gsheet extract once and route it through reconciliation instead of re-downloading.
+
+**Also settled in R2 (orchestration reality):** the three sources do NOT co-locate — each report is an isolated crash-safe DBOS child workflow that returns only a normalized envelope, never raw rows. Reconciliation therefore re-derives sources in its own durable step. A normal run routinely has only a SUBSET of witnesses present (gsheet always; proposed + movement depend on that day's emails arriving) — the engine drops absent witnesses gracefully, but R4's write policy must define behavior when a field has only ONE witness that day (currently: single-source Agreement → would auto-apply; confirm that's desired per field, or require ≥2 witnesses for certain fields).
 
 ## What it does NOT change
 Deterministic extraction + parity harness (each source still golden-tested), the confirm-gated write path, price gating, never-delete / never-auto-create-batches, and the "human approves every write" posture. Reconciliation makes the *disagreement* visible; it never makes the *decision*.

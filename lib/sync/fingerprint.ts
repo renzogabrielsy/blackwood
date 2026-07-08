@@ -19,7 +19,7 @@
  */
 import { createHash } from 'node:crypto'
 
-import type { HeldRow, SyncReportType } from '../../app/(app)/sync/types'
+import type { HeldRow, SourceDiff, SyncReportType } from '../../app/(app)/sync/types'
 
 /**
  * The gate-failure drift shape threaded onto `row.drift_dates` by the worker.
@@ -123,5 +123,57 @@ export function caseFingerprint(reportType: SyncReportType, held: HeldRow): stri
     }
   }
 
+  return canonicalHash(canonical)
+}
+
+// ============================================================================
+// R2 — source_diff fingerprint + human label
+// ============================================================================
+
+/**
+ * A stable, human-readable label for a `source_diff` case. Example:
+ *   "MAR-26-BLK5 @ D-11B · 2026-06-10 · weight"
+ * Used as the case's `natural_key` (the operator-facing identity + the recurrence key).
+ */
+export function sourceDiffNaturalKey(diff: SourceDiff): string {
+  const k = diff.naturalKey
+  const batch = k.batch ?? '(no batch)'
+  const block = k.block_loc ?? '(no block)'
+  const dest = k.destination && k.destination !== 'MAIN' ? ` → ${k.destination}` : ''
+  const field = diff.field === 'weight_kg' ? 'weight' : diff.field
+  return `${batch} @ ${block}${dest} · ${k.transaction_date} · ${field}`
+}
+
+/**
+ * The stable content hash for a `source_diff` discrepancy. Folds in the natural key +
+ * field + the SORTED set of competing (source, value) pairs — so the SAME disagreement
+ * (same key, same competing numbers) is recognized as one recurring case, but a CHANGED
+ * disagreement (a different competing value next run) re-alarms as a new case. Weight
+ * values are rounded to the integer kg so sub-kg jitter does not spawn a new case
+ * (mirrors the gate-failure drift discipline in `caseFingerprint`).
+ */
+export function sourceDiffFingerprint(diff: SourceDiff): string {
+  const competing = diff.sources
+    .map((s) => ({
+      source: s.source,
+      value:
+        typeof s.value === 'number' && Number.isFinite(s.value) ? Math.round(s.value) : s.value,
+    }))
+    // Sort by source so arrival order never changes the hash.
+    .sort((a, b) => a.source.localeCompare(b.source))
+
+  const k = diff.naturalKey
+  const canonical = {
+    kind: 'source_diff',
+    table: diff.table,
+    natural_key: {
+      transaction_date: k.transaction_date,
+      batch: k.batch,
+      block_loc: k.block_loc,
+      destination: k.destination,
+    },
+    field: diff.field,
+    competing,
+  }
   return canonicalHash(canonical)
 }

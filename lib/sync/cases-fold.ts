@@ -8,7 +8,12 @@
  * supabase import: the fan-out action (cases.ts) calls this then fingerprints +
  * upserts each entry, but this step is testable with no DB.
  */
-import type { HeldRow, SyncReportType, SyncRunResult } from '../../app/(app)/sync/types'
+import type {
+  HeldRow,
+  SourceDiff,
+  SyncReportType,
+  SyncRunResult,
+} from '../../app/(app)/sync/types'
 
 export interface CollectedHeld {
   reportType: SyncReportType
@@ -33,4 +38,14 @@ export function collectHeldRows(result: SyncRunResult): CollectedHeld[] {
     }
   }
   return out
+}
+
+/**
+ * Flatten the R2 SHADOW reconciliation diffs from a run result. Diffs live only in
+ * `result.reconciliation.rc_out.diffs` (additive channel — absent on pre-R2 runs, on
+ * runs with nothing to compare, and when the shadow stage failed). Every level guarded.
+ * Pure — the fan-out (cases.ts) fingerprints + upserts each one.
+ */
+export function collectSourceDiffs(result: SyncRunResult): SourceDiff[] {
+  return result.reconciliation?.rc_out?.diffs ?? []
 }

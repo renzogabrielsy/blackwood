@@ -316,10 +316,70 @@ export interface SyncRunReportResult {
 export interface SyncRunResult {
   /** Per-report terminal results, keyed by report type. Absent in M0/M1. */
   reports?: Partial<Record<SyncReportType, SyncRunReportResult>>
+  /**
+   * R2 SHADOW: multi-source reconciliation output (the worker's additive
+   * `result.reconciliation` channel). Present only when the shadow reconcile stage
+   * ran and had something to compare. Its `rc_out.diffs` fan out into `source_diff`
+   * cases (app/(app)/sync/cases.ts). Sits ALONGSIDE `reports` — observational only.
+   */
+  reconciliation?: ReconciliationChannel
   /** Optional pre-narrated summary (else the app narrates client-side). */
   summary?: string | null
   /** Anything else the worker attaches (manifest, counts) — inspected loosely. */
   [key: string]: unknown
+}
+
+// ============================================================
+// Multi-source reconciliation (R1/R2) — app-side MIRROR of the worker types
+// (workers/sync/src/reconcile/types.ts + rcOutStage.ts). Kept local so the app
+// never imports from the worker package (separate module graph). MUST stay in
+// lockstep with the worker's SourceDiff / SourceOpinion / RcOutNaturalKey shapes.
+// ============================================================
+
+/** The rc_out reconciliation witnesses. */
+export type RcOutSource = 'proposed' | 'gsheet' | 'movement'
+
+/** Natural key at the reconciliation granularity (fine records set batch+block). */
+export interface RcOutNaturalKey {
+  transaction_date: string
+  batch: string | null
+  block_loc: string | null
+  destination: string | null
+}
+
+/** One competing value inside a diff, with provenance + self-consistency + backers. */
+export interface SourceOpinion {
+  source: RcOutSource
+  value: number | string | null
+  provenance: string
+  selfConsistent: boolean
+  corroboratedBy: RcOutSource[]
+}
+
+/** Advisory winner hint — NEVER a decision (the human still picks in Sync Review). */
+export interface Recommendation {
+  source: RcOutSource
+  why: string
+}
+
+/** A field where present sources disagree — one `source_diff` case per diff. */
+export interface SourceDiff {
+  naturalKey: RcOutNaturalKey
+  field: string
+  table: 'rc_out'
+  sources: SourceOpinion[]
+  recommended?: Recommendation
+}
+
+/** The reconciliation output for one table (extensible per table in later phases). */
+export interface TableReconciliation {
+  diffs: SourceDiff[]
+  agreements: number
+}
+
+/** The top-level `result.reconciliation` channel. */
+export interface ReconciliationChannel {
+  rc_out: TableReconciliation
 }
 
 // ============================================================

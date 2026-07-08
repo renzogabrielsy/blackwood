@@ -18,8 +18,12 @@
  */
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePrivileged } from '@/lib/sync/privileged'
-import { caseFingerprint } from '@/lib/sync/fingerprint'
-import { collectHeldRows } from '@/lib/sync/cases-fold'
+import {
+  caseFingerprint,
+  sourceDiffFingerprint,
+  sourceDiffNaturalKey,
+} from '@/lib/sync/fingerprint'
+import { collectHeldRows, collectSourceDiffs } from '@/lib/sync/cases-fold'
 import {
   runInvestigation,
   type InvestigationOutcome,
@@ -28,7 +32,7 @@ import {
 import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
 import type { Database, Json } from '@/types/supabase'
 
-import type { SyncRunResult, SyncRunStatus } from './types'
+import type { SourceDiff, SyncRunResult, SyncRunStatus } from './types'
 
 type CaseInsert = Database['public']['Tables']['sync_held_cases']['Insert']
 type CaseUpdate = Database['public']['Tables']['sync_held_cases']['Update']
@@ -66,11 +70,14 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
   if (!TERMINAL_FANOUT_STATUSES.includes(run.status as SyncRunStatus)) return empty
 
   const result = (run.result ?? null) as SyncRunResult | null
-  if (!result || !result.reports) return empty
+  // A run with NO per-report `reports` AND no reconciliation channel has nothing to fan
+  // out. (Pre-R2 runs / M0/M1 manifests still short-circuit here.)
+  if (!result || (!result.reports && !result.reconciliation)) return empty
 
-  // 2. Flatten held rows and fingerprint each.
-  const collected = collectHeldRows(result)
-  if (!collected.length) return empty
+  // 2. Flatten the two case sources: held rows (per report) + R2 source_diffs.
+  const collected = result.reports ? collectHeldRows(result) : []
+  const diffs = collectSourceDiffs(result)
+  if (!collected.length && !diffs.length) return empty
 
   let created = 0
   let refreshed = 0
@@ -78,8 +85,21 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
   const caseIds: string[] = []
   const now = new Date().toISOString()
 
-  for (const { reportType, held } of collected) {
-    const fingerprint = caseFingerprint(reportType, held)
+  /**
+   * Upsert ONE case by fingerprint (the idempotent spine shared by held rows and
+   * source_diffs): refresh an existing case (bumping occurrence only on a NEW run) or
+   * insert a fresh one, pre-annotated from the rulings ledger. Mutates the tallies above.
+   */
+  async function upsertCase(fields: {
+    fingerprint: string
+    report_type: string
+    kind: string
+    natural_key: string
+    reason: string | null
+    detail: string | null
+    row: Json
+  }): Promise<void> {
+    const { fingerprint } = fields
 
     // 3a. Does a case for this fingerprint already exist?
     const { data: existing, error: exErr } = await admin
@@ -110,7 +130,7 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
       if (upErr) throw new Error(`case refresh failed for ${existing.id}: ${upErr.message}`)
       refreshed++
       caseIds.push(existing.id)
-      continue
+      return
     }
 
     // 3b. NOT EXISTS → check the rulings ledger for a matching known issue.
@@ -127,12 +147,12 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
 
     const insert: CaseInsert = {
       fingerprint,
-      report_type: reportType,
-      kind: held.kind ?? 'other',
-      natural_key: held.natural_key,
-      reason: held.reason ?? null,
-      detail: held.detail ?? null,
-      row: (held.row ?? null) as Json,
+      report_type: fields.report_type,
+      kind: fields.kind,
+      natural_key: fields.natural_key,
+      reason: fields.reason,
+      detail: fields.detail,
+      row: fields.row,
       first_run_id: runId,
       last_run_id: runId,
       occurrence_count: 1,
@@ -153,7 +173,53 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
     caseIds.push(inserted.id)
   }
 
+  // 3. Fold held rows.
+  for (const { reportType, held } of collected) {
+    await upsertCase({
+      fingerprint: caseFingerprint(reportType, held),
+      report_type: reportType,
+      kind: held.kind ?? 'other',
+      natural_key: held.natural_key,
+      reason: held.reason ?? null,
+      detail: held.detail ?? null,
+      row: (held.row ?? null) as Json,
+    })
+  }
+
+  // 4. Fold R2 SHADOW source_diffs (kind='source_diff', report_type='rc_out'). These
+  // ride the SAME rails as held cases — run-triage clusters them and the generic case
+  // detail renders them (the per-field PICK control is R3). Idempotent by fingerprint.
+  for (const diff of diffs) {
+    await upsertCase({
+      fingerprint: sourceDiffFingerprint(diff),
+      report_type: diff.table, // 'rc_out'
+      kind: 'source_diff',
+      natural_key: sourceDiffNaturalKey(diff),
+      reason: sourceDiffReason(diff),
+      detail: sourceDiffDetail(diff),
+      row: diff as unknown as Json,
+    })
+  }
+
   return { created, refreshed, knownMatched, caseIds }
+}
+
+/** Plain one-line reason for a source_diff case (no ₱ — weights only). */
+function sourceDiffReason(diff: SourceDiff): string {
+  const srcs = diff.sources.map((s) => s.source).sort().join(' vs ')
+  const field = diff.field === 'weight_kg' ? 'weight' : diff.field
+  return `sources disagree on ${field} (${srcs})`
+}
+
+/** Plain detail listing each source's competing value + the advisory recommendation. */
+function sourceDiffDetail(diff: SourceDiff): string {
+  const unit = diff.field === 'weight_kg' ? ' kg' : ''
+  const parts = diff.sources.map((s) => {
+    const v = typeof s.value === 'number' ? s.value.toLocaleString('en-US') : String(s.value)
+    return `${s.source} ${v}${unit}`
+  })
+  const rec = diff.recommended ? ` — recommended: ${diff.recommended.source} (advisory only)` : ''
+  return parts.join(' vs ') + rec
 }
 
 /** One open case joined with its known ruling's plain-language summary (if any). */

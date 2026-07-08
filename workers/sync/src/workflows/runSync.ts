@@ -30,13 +30,21 @@
  * catches it); the run continues and its status becomes "partial". Only a failure in
  * the orchestration itself (Mail Clerk crash, DB unreachable) fails the whole run.
  */
+import { readFile } from "node:fs/promises";
+
 import { DBOS, Error as DBOSErrors } from "@dbos-inc/dbos-sdk";
-import { mailClerkWorkflow, type MailClerkManifest } from "./mailClerk.js";
+import { mailClerkWorkflow, type MailClerkManifest, type StoredAttachment } from "./mailClerk.js";
 import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./reportWorkflow.js";
 import { failedReportResult } from "./normalizeReport.js";
+import { makeStorageFetcher } from "./reportDeps.js";
 import { DbClient } from "../lib/db.js";
 import { makeEmitter } from "../lib/progress.js";
+import { loadWorkbook } from "../lib/xlsx.js";
 import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
+import { extractProposed, extractMovement } from "../reports/rc_out/extract.js";
+import { extractGsheet } from "../reports/gsheet/extract.js";
+import { downloadGsheet, GSHEET_EXPORT_URL, type FetchLike } from "../reports/gsheet/download.js";
+import { reconcileRcOutStage, type ReconciliationChannel } from "../reconcile/rcOutStage.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -72,6 +80,15 @@ export interface RunSyncResult {
   reportsWithFiles: number;
   /** Per-report classify/apply envelopes, keyed by report_type. */
   reports: Record<string, ReportEnvelope>;
+  /**
+   * R2 SHADOW: multi-source reconciliation output. Additive + observational — it
+   * surfaces cross-source disagreements as `source_diff` cases (app fan-out) and
+   * NEVER changes any write behavior. Absent when the reconcile stage found nothing
+   * to compare or failed (shadow failures never fail the run). Sits ALONGSIDE
+   * `reports`, so normalizeReport (which shapes per-report envelopes only) leaves it
+   * untouched — it survives the assembly boundary as-is.
+   */
+  reconciliation?: ReconciliationChannel;
   /** Aggregate — the run's final disposition. */
   status: "succeeded" | "partial";
 }
@@ -161,6 +178,16 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // as the report_type; those route to the `rc_movement` card too (reportWorkflowId maps).
   reports.rc_movement = await auditHandle.getResult();
 
+  // ── Stage 3: SHADOW reconciliation (R2) — rc_out only, additive, no writes.
+  // Re-extracts the same three witnesses the reports read (proposed + movement from
+  // Storage, gsheet re-download), buckets them into R1 SourceRecords, and captures the
+  // disagreements. Wrapped so ANY failure degrades to an absent channel — a shadow
+  // observer must never fail a run or change a write. See reconcile/rcOutStage.ts.
+  const reconciliation = await DBOS.runStep(
+    () => reconcileRcOutShadow(runId, manifestResolved, since),
+    { name: "reconcile:rc_out" },
+  );
+
   // ── Aggregate: any report failing either phase → the run is "partial".
   const anyFailed = Object.values(reports).some(reportFailed);
   const status: "succeeded" | "partial" = anyFailed ? "partial" : "succeeded";
@@ -171,6 +198,7 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     manifest: manifestResolved,
     reportsWithFiles,
     reports,
+    ...(reconciliation ? { reconciliation } : {}),
     status,
   };
 
@@ -210,6 +238,87 @@ async function finishRun(
         ? "Dry run complete — nothing was written."
         : "Done";
   await emit("finalize", label, 100, undefined, status === "partial" ? "warn" : "info");
+}
+
+/** First stored attachment for a manifest key, or null. */
+function firstAtt(manifest: MailClerkManifest, key: string): StoredAttachment | null {
+  const arr = manifest.reports[key];
+  return arr && arr.length ? arr[0] : null;
+}
+
+/**
+ * SHADOW reconcile step (R2). Re-extracts the three rc_out witnesses and runs the R1
+ * engine over them, returning ONLY diffs + an agreement count — it applies nothing and
+ * changes no write path. Every extraction is independently guarded; a source that is
+ * missing or unreadable simply contributes no records. The whole body is wrapped so a
+ * failure returns `null` (channel absent) and NEVER propagates — a shadow observer must
+ * not break the run.
+ *
+ * Re-extraction (rather than threading rows out of the isolated report child-workflows)
+ * is the minimal shadow-safe wiring: it touches ZERO report classify/apply/extract code
+ * and is crash-safe (it re-derives from durable Storage + the Sheet inside its own DBOS
+ * step). Cost: one extra Sheet download + two Storage reads per run. See rcOutStage.ts.
+ */
+async function reconcileRcOutShadow(
+  runId: string,
+  manifest: MailClerkManifest,
+  since: string,
+): Promise<ReconciliationChannel | null> {
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+    const fetchToLocalPath = makeStorageFetcher();
+    const year = parseInt(since.slice(0, 4), 10) || new Date().getUTCFullYear();
+
+    // PROPOSED (fine source) — from the Mail Clerk Storage manifest.
+    let proposed: ReturnType<typeof extractProposed>["rows"] = [];
+    const proposedAtt = firstAtt(manifest, "rc_out");
+    if (proposedAtt) {
+      try {
+        const path = await fetchToLocalPath(proposedAtt.storagePath);
+        proposed = extractProposed(await loadWorkbook(await readFile(path)), year).rows;
+      } catch {
+        /* absent/unreadable proposed → no proposed records (shadow) */
+      }
+    }
+
+    // RC MOVEMENT (date-level witness) — from the Storage manifest.
+    let movementByDate: Record<string, number> = {};
+    const movementAtt = firstAtt(manifest, "rc_out_movement");
+    if (movementAtt) {
+      try {
+        const path = await fetchToLocalPath(movementAtt.storagePath);
+        movementByDate = extractMovement(await loadWorkbook(await readFile(path))).date_to_fed_kls;
+      } catch {
+        /* absent/unreadable movement → no corroboration witness (shadow) */
+      }
+    }
+
+    // Google Sheet RC OUT (fine source) — re-downloaded (it self-downloads in its own
+    // report; there is no Storage copy). A network failure just drops this witness.
+    let gsheetRcOut: ReturnType<typeof extractGsheet>["rc_out"]["rows"] = [];
+    try {
+      const buf = await downloadGsheet(globalThis.fetch as unknown as FetchLike, GSHEET_EXPORT_URL);
+      gsheetRcOut = extractGsheet(await loadWorkbook(buf)).rc_out.rows;
+    } catch {
+      /* Sheet unreachable → no gsheet records (shadow) */
+    }
+
+    const rc_out = reconcileRcOutStage({ proposed, gsheetRcOut, movementByDate });
+    await emit(
+      "reconcile",
+      rc_out.diffs.length > 0
+        ? `Cross-checked sources — ${rc_out.diffs.length} disagreement(s) to review`
+        : "Cross-checked sources — all agree",
+      96,
+      undefined,
+      rc_out.diffs.length > 0 ? "warn" : "info",
+    );
+    return { rc_out };
+  } catch {
+    // Shadow observer: a failure here must never fail the run or change a write.
+    return null;
+  }
 }
 
 function defaultSince(): string {
