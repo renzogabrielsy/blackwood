@@ -120,7 +120,7 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`ensureCasesForRun(runId)`** → `{created, refreshed, knownMatched, caseIds}`.
     requirePrivileged → service-role load of the run → no-op unless status is terminal
     (`succeeded|failed|partial`) AND (`result.reports` OR `result.reconciliation` exists).
-    Folds FOUR case sources through ONE idempotent upsert-by-fingerprint spine (`upsertCase`):
+    Folds FIVE case sources through ONE idempotent upsert-by-fingerprint spine (`upsertCase`):
     **(a) held rows** — `collectHeldRows` → `caseFingerprint` per row; **(b) R2 SHADOW
     source_diffs** — `collectSourceDiffs(result)` (the worker's `result.reconciliation.rc_out.diffs`)
     → `sourceDiffFingerprint` per diff → `sync_held_cases` rows `kind='source_diff'`,
@@ -133,7 +133,13 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     `heldOverdue[]`) → `singleSourceOverdueFingerprint` → `kind='single_source_overdue'` (a lone
     witness whose 2nd source is overdue; the value-independent fingerprint self-clears when the 2nd
     witness arrives). **`pending` facts are NOT folded** — they are a self-clearing telemetry count
-    only (`result.reconciliation.rc_out.pending`). **IDEMPOTENT** (safe to call repeatedly; the
+    only (`result.reconciliation.rc_out.pending`). **(e) RB `block_diff`** —
+    `collectBlockDiffs(result)` (the worker's `result.reconciliation.blocking.blockDiffs` — the
+    Sheet Blocking tab vs the computed `view_blocking_grid`) → `blockDiffFingerprint` →
+    `kind='block_diff'`, `report_type='blocking'`, `natural_key`=`blockDiffNaturalKey`
+    (`A-9C · balance`, `D-11B · batch`, `B-3A · multi-batch`, `GRAND TOTAL · blocking`), `row`=the
+    full `BlockDiff`; a read-only cross-check with no bespoke resolver (dismiss/investigate;
+    `query_table` allows `view_blocking_grid`). **IDEMPOTENT** (safe to call repeatedly; the
     modal AND the review page both call it). Existing case → refresh `last_run_id`/
     `last_seen_at`, bump `occurrence_count` ONLY when the runId differs from the case's
     `last_run_id` (no double-count on repeat calls for the SAME run); a `resolved` case that
@@ -455,13 +461,19 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   **`singleSourceOverdueFingerprint(o)`** → sha256 of `{kind:'single_source_overdue', table,
   natural_key, field, source}` (value-INDEPENDENT — the missing-witness identity, self-clears when
   the 2nd source arrives). Plus `unresolvedBatchNaturalKey` / `singleSourceOverdueNaturalKey` labels.
+  **RB:** **`blockDiffFingerprint(d)`** → sha256 of `{kind:'block_diff', table:'blocking', subkind,
+  block_loc, rounded sheet/computed kg (+ competing batches for `batch_mismatch` / count for
+  `multi_batch`)}` (a changed balance/batch re-alarms; sub-kg jitter does not; a grand_total diff
+  has no block_loc → one case per run); **`blockDiffNaturalKey(d)`** → the human label.
 - `lib/sync/cases-fold.ts` — **`collectHeldRows(result)`** → flattens
   `result.reports[type].apply.held` across all reports into `{reportType, held}[]`, guarding
   absent `reports` / `apply:null` / missing `held`. **R2:** **`collectSourceDiffs(result)`** →
   `result.reconciliation.rc_out.diffs ?? []` (guards the absent channel on pre-R2 runs). **R4a:**
   **`collectUnresolvedBatches(result)`** / **`collectSingleSourceOverdue(result)`** →
   `result.reconciliation.rc_out.unresolvedBatches ?? []` / `.heldOverdue ?? []` (optional additive
-  fields — absent on pre-R4a runs). Pure, no supabase import.
+  fields — absent on pre-R4a runs). **RB:** **`collectBlockDiffs(result)`** →
+  `result.reconciliation.blocking.blockDiffs ?? []` (optional channel — absent on pre-RB runs / no
+  Blocking tab). Pure, no supabase import.
 - `lib/sync/privileged.ts` — **`requirePrivileged()`**, the shared Owner/Admin/Dev guard
   extracted from `actions.ts` (imported by both `actions.ts` and `cases.ts`).
 - `lib/sync/apply-writers.ts` (Smart-Adjudicator **P5**) — the **writer registry** for apply /
@@ -576,9 +588,12 @@ regenerated so `sync_runs`/`sync_run_events` are typed:
   (the SHADOW multi-source reconciliation channel — sits alongside `reports`, observational only;
   `worker: runSync.ts::reconcileRcOutShadow`). **R4a:** the `rc_out` channel now also carries
   `{ pending: number, heldOverdue: SingleSourceOverdue[], unresolvedBatches: UnresolvedBatch[] }`
-  (single-witness split + batch-resolution failures). App-side mirror types (`SourceDiff` /
-  `SourceOpinion` / `ReconciliationChannel` / `UnresolvedBatch` / `SingleSourceOverdue`) live in
-  `app/(app)/sync/types.ts`.
+  (single-witness split + batch-resolution failures). **RB:** the channel now ALSO carries an
+  optional `blocking: { blockDiffs: BlockDiff[], totals }` (the Sheet Blocking tab vs the computed
+  `view_blocking_grid`; `worker: runSync.ts::reconcileBlockBalanceShadow`, read-only). Both
+  `reconciliation.rc_out` and `.blocking` are OPTIONAL. App-side mirror types (`SourceDiff` /
+  `SourceOpinion` / `ReconciliationChannel` / `UnresolvedBatch` / `SingleSourceOverdue` /
+  `BlockDiff` / `BlockReconciliation`) live in `app/(app)/sync/types.ts`.
 - **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
   (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
   `level`, `at`.

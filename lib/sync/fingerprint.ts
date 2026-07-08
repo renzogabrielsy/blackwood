@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto'
 
 import type {
+  BlockDiff,
   HeldRow,
   SingleSourceOverdue,
   SourceDiff,
@@ -207,6 +208,62 @@ export function unresolvedBatchFingerprint(u: UnresolvedBatch): string {
     batch_code: u.batch_code,
     candidates: [...u.candidates].sort(),
   })
+}
+
+// ============================================================================
+// RB — block_diff fingerprint + human label (the block-balance cross-check)
+// ============================================================================
+
+/** Short label for a block_diff kind (used in the human natural key). */
+function blockDiffKindLabel(kind: BlockDiff['kind']): string {
+  switch (kind) {
+    case 'balance':
+      return 'balance'
+    case 'batch_mismatch':
+      return 'batch'
+    case 'multi_batch':
+      return 'multi-batch'
+    case 'grand_total':
+      return 'grand total'
+  }
+}
+
+/**
+ * A stable, human-readable label for a `block_diff` case. Per-block kinds read
+ * "A-9C · balance"; the single grand-total diff reads "GRAND TOTAL · blocking".
+ */
+export function blockDiffNaturalKey(d: BlockDiff): string {
+  if (d.kind === 'grand_total') return 'GRAND TOTAL · blocking'
+  return `${d.block_loc ?? '(no block)'} · ${blockDiffKindLabel(d.kind)}`
+}
+
+/**
+ * The stable content hash for a `block_diff`. Folds in the kind + block_loc + the ROUNDED
+ * competing values so the SAME disagreement recurs as one case, but a CHANGED one (a
+ * different balance / batch next run) re-alarms. Balances round to integer kg so sub-kg
+ * jitter doesn't spawn a new case (mirrors the source_diff discipline). A grand_total diff
+ * has no block_loc → one case per run, keyed on the rounded totals.
+ */
+export function blockDiffFingerprint(d: BlockDiff): string {
+  const round = (v: number | null | undefined) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null
+
+  const canonical: Record<string, unknown> = {
+    kind: 'block_diff',
+    table: 'blocking',
+    subkind: d.kind,
+    block_loc: d.block_loc,
+    sheet_kg: round(d.sheet_kg),
+    computed_kg: round(d.computed_kg),
+  }
+  if (d.kind === 'batch_mismatch') {
+    canonical.sheet_batch = d.sheet_batch ?? null
+    canonical.computed_batch = d.computed_batch ?? null
+  }
+  if (d.kind === 'multi_batch') {
+    canonical.active_batch_count = d.active_batch_count ?? null
+  }
+  return canonicalHash(canonical)
 }
 
 /** Human label for a `single_source_overdue` case. */

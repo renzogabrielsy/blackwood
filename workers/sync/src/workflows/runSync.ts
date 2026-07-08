@@ -43,8 +43,14 @@ import { loadWorkbook } from "../lib/xlsx.js";
 import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
 import { extractProposed, extractMovement } from "../reports/rc_out/extract.js";
 import { extractGsheet } from "../reports/gsheet/extract.js";
+import { extractBlockingTab } from "../reports/gsheet/blocking.js";
 import { downloadGsheet, GSHEET_EXPORT_URL, type FetchLike } from "../reports/gsheet/download.js";
 import { reconcileRcOutStage, type ReconciliationChannel } from "../reconcile/rcOutStage.js";
+import {
+  reconcileBlockBalance,
+  type BlockReconciliation,
+  type ComputedBlock,
+} from "../reconcile/blockBalance.js";
 import { rcOutReconcileCutover } from "../lib/env.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
@@ -187,10 +193,26 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // a gsheet↔proposed disagreement in-window becomes a `source_diff` / `single_source_overdue`
   // case here rather than a silent overwrite. Wrapped so ANY failure degrades to an absent
   // channel — this step must never fail a run or change a write. See reconcile/rcOutStage.ts.
-  const reconciliation = await DBOS.runStep(
+  const rcOutRecon = await DBOS.runStep(
     () => reconcileRcOutShadow(runId, manifestResolved, since),
     { name: "reconcile:rc_out" },
   );
+
+  // ── Stage 3b: RB block-balance cross-check — orthogonal, read-only. Extracts the Sheet
+  // Blocking tab (previously never read) + reads the computed view_blocking_grid and
+  // compares per-block + grand-total (SYNC_RECONCILIATION_MODEL.md RB). Produces
+  // `block_diff` descriptors only — it writes NOTHING and never fails a run. Absent
+  // channel on any failure or when the Sheet has no Blocking tab this run.
+  const blockingRecon = await DBOS.runStep(
+    () => reconcileBlockBalanceShadow(runId),
+    { name: "reconcile:blocking" },
+  );
+
+  // Merge the two orthogonal reconciliation channels (either may be absent).
+  const reconciliation: ReconciliationChannel | undefined =
+    rcOutRecon || blockingRecon
+      ? { ...(rcOutRecon ?? {}), ...(blockingRecon ? { blocking: blockingRecon } : {}) }
+      : undefined;
 
   // ── Aggregate: any report failing either phase → the run is "partial".
   const anyFailed = Object.values(reports).some(reportFailed);
@@ -363,6 +385,87 @@ async function reconcileRcOutShadow(
     return { rc_out };
   } catch {
     // Shadow observer: a failure here must never fail the run or change a write.
+    return null;
+  }
+}
+
+/**
+ * SHADOW block-balance cross-check (RB). Re-downloads the Sheet, extracts the **Blocking**
+ * tab (`reports/gsheet/blocking.ts`), reads the computed `view_blocking_grid` + `batches`
+ * (for the one-active-batch B3 count) over REST, and runs the pure engine
+ * (`reconcile/blockBalance.ts`). Returns ONLY `block_diff` descriptors + totals — it writes
+ * NOTHING to inventory tables and is fully guarded (any failure → null channel). If the
+ * Sheet has no Blocking tab this run, or the Sheet has no occupied blocks, it skips
+ * gracefully (null). Read-only, so no cutover fail-safe is needed.
+ */
+async function reconcileBlockBalanceShadow(
+  runId: string,
+): Promise<BlockReconciliation | null> {
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+
+    // Sheet side — re-download + extract the Blocking tab (self-contained; no Storage copy).
+    let sheetBlocks: ReturnType<typeof extractBlockingTab>["blocks"] = [];
+    let statedGrandTotalKg: number | null = null;
+    try {
+      const buf = await downloadGsheet(globalThis.fetch as unknown as FetchLike, GSHEET_EXPORT_URL);
+      const wb = await loadWorkbook(buf);
+      const sheet = wb.sheet("Blocking");
+      if (!sheet) return null; // no Blocking tab this run → nothing to cross-check
+      const ex = extractBlockingTab(sheet);
+      sheetBlocks = ex.blocks;
+      statedGrandTotalKg = ex.statedGrandTotalKg;
+    } catch {
+      return null; // Sheet unreachable / unreadable → skip (shadow)
+    }
+    if (sheetBlocks.length === 0) return null; // empty grid → nothing to compare
+
+    // Computed side — the app's derived grid + a per-block active-batch count for B3.
+    let computedBlocks: ComputedBlock[] = [];
+    try {
+      const viewRows = await db.readRows("view_blocking_grid", {
+        columns: ["block_loc", "batch_code", "balance"],
+        sinceColumn: null,
+      });
+      const batchRows = await db.readRows("batches", {
+        columns: ["location_ref", "status"],
+        sinceColumn: null,
+      });
+      const activeCount = new Map<string, number>();
+      for (const b of batchRows) {
+        const loc = b.location_ref ? String(b.location_ref).trim().toUpperCase() : "";
+        if (!loc) continue;
+        if (String(b.status ?? "") === "CLOSED") continue;
+        activeCount.set(loc, (activeCount.get(loc) ?? 0) + 1);
+      }
+      computedBlocks = viewRows.map((r) => {
+        const loc = String(r.block_loc ?? "").trim().toUpperCase();
+        return {
+          block_loc: loc,
+          batch_code: r.batch_code ? String(r.batch_code) : null,
+          balance_kg: r.balance == null ? null : Number(r.balance),
+          activeBatchCount: activeCount.get(loc) ?? 1,
+        };
+      });
+    } catch {
+      return null; // view/batches unreadable → skip (shadow)
+    }
+
+    const recon = reconcileBlockBalance(sheetBlocks, computedBlocks, { sheetStatedTotalKg: statedGrandTotalKg });
+    const n = recon.blockDiffs.length;
+    await emit(
+      "reconcile",
+      n > 0
+        ? `Blocking cross-check — ${n} block(s) to review`
+        : "Blocking cross-check — the Sheet and the app agree",
+      98,
+      undefined,
+      n > 0 ? "warn" : "info",
+    );
+    return recon;
+  } catch {
+    // Read-only shadow observer: a failure here must never fail the run.
     return null;
   }
 }

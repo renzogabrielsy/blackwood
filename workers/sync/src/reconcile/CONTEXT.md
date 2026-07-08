@@ -24,9 +24,13 @@ proposed-span (see the R4b section). Anchored on the **L-037** incident.
   engine: `bucketProposed` / `bucketGsheetRcOut` / `movementSourceRecords` /
   `buildRcOutSourceRecords` / `reconcileRcOutStage`. Buckets each source at the fine key,
   sums `weight_kg`, sets `selfConsistent`, runs `reconcileRcOut`. Also `canonicalBatchKey`
-  (aligns month-prefix conventions) and the `ReconciliationChannel` result type. No I/O.
+  (aligns month-prefix conventions) and the `ReconciliationChannel` result type (now
+  `{ rc_out?, blocking? }` — both optional, so RB can ride alongside rc_out).
+- `blockBalance.ts` — **RB engine (block-balance cross-check).** See the RB section below.
 - Tests: `../../test/reconcile/rcOut.test.ts` (engine; L-037 golden + edges),
-  `../../test/reconcile/rcOutStage.test.ts` (bucketing → engine; L-037 through synthetic extracts).
+  `../../test/reconcile/rcOutStage.test.ts` (bucketing → engine; L-037 through synthetic extracts),
+  `../../test/reconcile/blockBalance.test.ts` (RB engine; two-level check + L-037 conceptual),
+  `../../test/reports/gsheet/blocking.test.ts` (the Sheet Blocking-tab extractor).
 
 ## Granularity decision (the core R1 call)
 **Fine reconciliation key = `(transaction_date, batch, block_loc, destination)`**, reconciled
@@ -205,6 +209,65 @@ re-reads it, applies each step under `write_ingestion_audit` provenance, and rec
 "Sheet-wins" from re-clobbering it. **Why `SourceLegRow` exists** (`types.ts`): a fine `weight_kg`
 opinion is the SUM across feeding legs, so R3 needs the underlying legs, not just the sum, to know
 which leg to edit/insert/zero. movement (date-level) has no per-block legs → empty `rows`.
+
+## RB — block-balance cross-check (shipped 2026-07-08, SHADOW / read-only)
+
+An **INDEPENDENT, ORTHOGONAL** net — NOT same-fact reconciliation. It compares the
+operator's hand-kept **Sheet Blocking tab** (never read before RB) against the app's
+**computed** `view_blocking_grid` (balance = ΣRC_IN − ΣRC_OUT). Because the computed side is
+derived from BOTH transaction reports, it ties RC IN and RC OUT together and is anchored
+OUTSIDE the transaction data — it would have caught L-037 from a different angle (a block's
+operator balance vs its DB-derived balance). **Read-only: produces `block_diff` descriptors,
+writes NOTHING to inventory tables.** A real fix corrects the underlying rc_in/rc_out via the
+existing paths — there is NO bespoke block resolver (RB v1: a `block_diff` case can be
+dismissed or investigated; the investigator's `query_table` already allows `view_blocking_grid`).
+
+**The real Sheet Blocking tab (investigated 2026-07-08 against the live workbook).** Tab name
+`"Blocking"`, 971 rows × 33 cols. It is a **2-D visual grid** mirroring the physical warehouse,
+NOT a flat table:
+- **col A** ("INVENTORY TONS") holds the whole-inventory grand total in **TONS** a few rows
+  down (e.g. `10289.082`); ×1000 = kg. (It is literally the sum of the grid, so it doubles as
+  an extraction-completeness anchor — our Sheet sum must equal it.)
+- The grid is a stack of **11 bands** (one per physical warehouse row: WHSE A rows A/B/C, B
+  rows A/B, C rows A/B, D rows A/B/C/D). Each band is **6 stacked rows**: `LABEL` (col 7 = the
+  row letter; cols 8..27 = block_loc strings `A-1A..A-20A`; a **PCA/PCB** mini-grid extends at
+  cols 31..33), then `BLOCK` (batch_code per block), `BALANCE` (kg — a SUMIFS over the Sheet's
+  OWN RC IN/RC OUT tabs, so a per-block diff = the Sheet's transaction data diverges from the
+  DB), then `BD`/`ASH`/`MC` (lab, not reconciled). block_loc + batch + balance for one block
+  share the same **COLUMN**; vacant slots have a loc header but no cached formula result → null
+  → skipped. Live snapshot: 167 occupied blocks, Σ balances = 10,289,082 kg = A4 exactly.
+
+**Files.**
+- `../reports/gsheet/blocking.ts` — `extractBlockingTab(sheet)` → `{ blocks: SheetBlock[],
+  statedGrandTotalKg, warnings, source_rows }`. A LABEL row is any row with ≥1 block_loc-shaped
+  string at/after col 8; batch = row+1, balance = row+2, same column. Exact-scrape, no
+  cross-record math. Handles standard + PCA/PCB columns uniformly. `BLOCK_LOC_REGEX` mirrors
+  (does not import) the unexported one in `extract.ts`.
+- `blockBalance.ts` — `reconcileBlockBalance(sheet, computed, opts)` → `{ blockDiffs, totals }`.
+  PURE (no DB/imports). Two-level check: **B1** per-block balance (tol `blockBalanceTolKg`
+  **=1 kg**, the fine net), **B2** grand total Σsheet vs Σcomputed (tol `grandTotalTolKg`
+  **=100 kg**, the coarse backstop), **B3** multi_batch (computed `activeBatchCount ≥ 2`),
+  **B4** batch identity (alias-aware, `MARCH-…≡MAR-…` via a local `MONTH_CANONICAL` mirroring
+  extract.ts). **Why both B1 + B2:** a weight mis-attributed between two blocks nets to zero in
+  the total (B2 silent) but shows per-block (B1 fires) — proven in the test. block_loc is
+  normalized trim+UPPERCASE on both sides. A **negative computed balance alone is a soft-warn,
+  NOT a diff** (Ruleset O7 — usually a late delivery); but a *disagreement* with the Sheet on
+  that block still is. A block present on only one side → a presence `balance` diff.
+
+**Shadow wiring** (`../workflows/runSync.ts::reconcileBlockBalanceShadow`, a DBOS step after the
+rc_out shadow): re-downloads the Sheet, extracts the Blocking tab, reads `view_blocking_grid`
+(balance + batch_code) and `batches` (per-loc non-CLOSED count for B3) over REST, runs the
+engine, and returns the `BlockReconciliation`. Fully guarded → **absent channel on any failure
+or no Blocking tab; never fails a run and never writes.** runSync merges it into
+`result.reconciliation.blocking` (alongside `rc_out`).
+
+**App fan-out** (`app/(app)/sync/cases.ts`): `collectBlockDiffs` folds `blockDiffs` into
+`sync_held_cases` rows `kind='block_diff'`, `report_type='blocking'`, `natural_key` =
+`blockDiffNaturalKey` (`"A-9C · balance"`, `"D-11B · batch"`, `"GRAND TOTAL · blocking"`),
+`row` = the full `BlockDiff`, fingerprint = `blockDiffFingerprint` (canonicalHash of
+`{kind, block_loc, rounded sheet/computed kg (+ competing batches / count)}`; a grand_total diff
+→ one case per run). Rides the EXISTING triage + Sync Review + investigator rails. Verify:
+`scripts/verify-block-diff-fold.ts`.
 
 ## See also
 - `SYNC_RECONCILIATION_MODEL.md` (owner: Renzo) — the phased plan (R1–R5).

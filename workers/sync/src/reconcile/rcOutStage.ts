@@ -25,6 +25,7 @@ import type { ProposedRow } from "../reports/rc_out/extract.js";
 import type { RowDict } from "../reports/gsheet/deductions.js";
 import type { BatchLookup } from "../reports/rc_out/classify.js";
 import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
+import type { BlockReconciliation } from "./blockBalance.js";
 import {
   LAG_DAYS,
   type Agreement,
@@ -78,9 +79,13 @@ export interface RcOutReconciliation {
   unresolvedBatches: UnresolvedBatch[];
 }
 
-/** The top-level reconciliation channel on the run result (extensible per table). */
+/** The top-level reconciliation channel on the run result (extensible per table).
+ *  `rc_out` is the same-fact rc_out reconciliation (R1–R4b). `blocking` is the RB
+ *  block-balance cross-check (`./blockBalance.ts`) — an ORTHOGONAL, read-only net.
+ *  Both are OPTIONAL: a run may carry either, both, or (on failure) neither. */
 export interface ReconciliationChannel {
-  rc_out: RcOutReconciliation;
+  rc_out?: RcOutReconciliation;
+  blocking?: BlockReconciliation;
 }
 
 const MAIN = "MAIN";

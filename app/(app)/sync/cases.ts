@@ -19,6 +19,8 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePrivileged } from '@/lib/sync/privileged'
 import {
+  blockDiffFingerprint,
+  blockDiffNaturalKey,
   caseFingerprint,
   singleSourceOverdueFingerprint,
   singleSourceOverdueNaturalKey,
@@ -28,6 +30,7 @@ import {
   unresolvedBatchNaturalKey,
 } from '@/lib/sync/fingerprint'
 import {
+  collectBlockDiffs,
   collectHeldRows,
   collectSingleSourceOverdue,
   collectSourceDiffs,
@@ -42,6 +45,7 @@ import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
 import type { Database, Json } from '@/types/supabase'
 
 import type {
+  BlockDiff,
   SingleSourceOverdue,
   SourceDiff,
   SyncRunResult,
@@ -96,7 +100,15 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
   const diffs = collectSourceDiffs(result)
   const unresolvedBatches = collectUnresolvedBatches(result)
   const overdue = collectSingleSourceOverdue(result)
-  if (!collected.length && !diffs.length && !unresolvedBatches.length && !overdue.length) return empty
+  const blockDiffs = collectBlockDiffs(result)
+  if (
+    !collected.length &&
+    !diffs.length &&
+    !unresolvedBatches.length &&
+    !overdue.length &&
+    !blockDiffs.length
+  )
+    return empty
 
   let created = 0
   let refreshed = 0
@@ -248,7 +260,45 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
     })
   }
 
+  // 7. Fold RB block_diff descriptors (kind='block_diff', report_type='blocking') — the
+  //    Sheet Blocking tab vs the computed view_blocking_grid (per-block + grand total). A
+  //    read-only cross-check; a real fix corrects the underlying rc_in/rc_out (no bespoke
+  //    resolver). The investigator's query_table already allows view_blocking_grid, so it can
+  //    help explain a block_diff. Idempotent by fingerprint.
+  for (const bd of blockDiffs) {
+    await upsertCase({
+      fingerprint: blockDiffFingerprint(bd),
+      report_type: 'blocking',
+      kind: 'block_diff',
+      natural_key: blockDiffNaturalKey(bd),
+      reason: blockDiffReason(bd),
+      detail: blockDiffDetail(bd),
+      row: bd as unknown as Json,
+    })
+  }
+
   return { created, refreshed, knownMatched, caseIds }
+}
+
+/** Plain one-line reason for a `block_diff` case (no ₱ — balances/identity only). */
+function blockDiffReason(d: BlockDiff): string {
+  switch (d.kind) {
+    case 'balance':
+      return d.block_loc
+        ? `Sheet and app disagree on block ${d.block_loc}'s balance`
+        : 'Sheet and app disagree on a block balance'
+    case 'batch_mismatch':
+      return `Block ${d.block_loc} holds a different batch in the Sheet vs the app`
+    case 'multi_batch':
+      return `Block ${d.block_loc} has ${d.active_batch_count ?? 'multiple'} active batches in the app`
+    case 'grand_total':
+      return 'Total inventory disagrees between the Sheet and the app'
+  }
+}
+
+/** Plain detail — reuse the engine's already-plain explanation verbatim. */
+function blockDiffDetail(d: BlockDiff): string {
+  return d.detail
 }
 
 /** Plain one-line reason for an `unresolved_batch` case (no ₱ — identity + kg only). */

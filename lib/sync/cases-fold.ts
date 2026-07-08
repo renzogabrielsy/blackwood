@@ -9,6 +9,7 @@
  * upserts each entry, but this step is testable with no DB.
  */
 import type {
+  BlockDiff,
   HeldRow,
   SingleSourceOverdue,
   SourceDiff,
@@ -68,4 +69,14 @@ export function collectUnresolvedBatches(result: SyncRunResult): UnresolvedBatch
  */
 export function collectSingleSourceOverdue(result: SyncRunResult): SingleSourceOverdue[] {
   return result.reconciliation?.rc_out?.heldOverdue ?? []
+}
+
+/**
+ * Flatten the RB `block_diff` descriptors (the Sheet Blocking tab vs the computed
+ * view_blocking_grid). Lives only in `result.reconciliation.blocking.blockDiffs` (optional
+ * additive channel — absent on pre-RB runs, on runs with no Blocking tab, and when the
+ * shadow stage failed). Every level guarded. Pure — cases.ts fingerprints + upserts each.
+ */
+export function collectBlockDiffs(result: SyncRunResult): BlockDiff[] {
+  return result.reconciliation?.blocking?.blockDiffs ?? []
 }

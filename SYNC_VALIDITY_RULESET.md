@@ -54,6 +54,8 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 
 > **Why both B1 and B2:** if weight is mis-attributed between two blocks the errors cancel and the grand total still matches — only the per-block check catches it. "All blocks match AND the total matches" = genuinely balanced.
 
+**Sheet Blocking tab structure (RB, verified against the live workbook 2026-07-07):** tab name `"Blocking"` — a 2-D visual grid mirroring the warehouse (NOT a flat table), 11 bands (one per warehouse row A/B/C…), each band 6 stacked rows: `LABEL` (block_loc strings `A-1A`… at cols 8+, plus a PCA/PCB mini-grid at cols 31–33), `BLOCK` (batch_code), `BALANCE` (kg — a SUMIFS over the Sheet's OWN RC IN/RC OUT tabs), then `BD`/`ASH`/`MC` (lab, not reconciled). Grand total lives in col A ("INVENTORY TONS") in **tons** (×1000 = kg) and is the grid's own sum — so it's an extraction-completeness anchor, and the genuinely *independent* B2 check is **Σsheet-blocks vs Σcomputed** (not vs the stated total). Live snapshot when built: 167 occupied blocks, Σ = 10,289,082 kg (== the stated total exactly), no dups, no negatives. RB tolerances: per-block `1 kg`, grand-total `100 kg`.
+
 ## Production (production_shifts/runs/downtime/waste + electricity + trucks) — SINGLE-SOURCE, ruleset-gated auto-write
 
 | # | Rule | Source | On violation |

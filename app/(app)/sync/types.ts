@@ -436,9 +436,56 @@ export interface TableReconciliation {
   unresolvedBatches?: UnresolvedBatch[]
 }
 
-/** The top-level `result.reconciliation` channel. */
+// ============================================================
+// RB — block-balance cross-check (app-side MIRROR of the worker's
+// reconcile/blockBalance.ts). An ORTHOGONAL, read-only net: the Sheet Blocking tab vs
+// the computed view_blocking_grid. Kept local (the app never imports the worker package).
+// MUST stay in lockstep with the worker's BlockDiff / BlockTotals / BlockReconciliation.
+// ============================================================
+
+/** The four block_diff shapes. */
+export type BlockDiffKind = 'balance' | 'batch_mismatch' | 'multi_batch' | 'grand_total'
+
+/** One block-level (or grand-total) disagreement between the Sheet and the app. NEVER a ₱. */
+export interface BlockDiff {
+  kind: BlockDiffKind
+  /** The block; null ONLY for the single grand_total diff. */
+  block_loc: string | null
+  sheet_kg: number | null
+  computed_kg: number | null
+  delta: number | null
+  sheet_batch?: string | null
+  computed_batch?: string | null
+  active_batch_count?: number
+  /** Plain-language explanation (rendered as the case detail). */
+  detail: string
+}
+
+export interface BlockTotals {
+  sheetSumKg: number
+  computedSumKg: number
+  sheetStatedTotalKg: number | null
+  delta: number
+  sheetBlocks: number
+  computedBlocks: number
+  comparedBlocks: number
+  negativeComputedBlocks: string[]
+}
+
+/** The RB reconciliation channel for the Blocking cross-check. */
+export interface BlockReconciliation {
+  blockDiffs: BlockDiff[]
+  totals: BlockTotals
+}
+
+/**
+ * The top-level `result.reconciliation` channel. Both members are OPTIONAL: a run may
+ * carry the rc_out same-fact reconciliation, the RB blocking cross-check, both, or (on a
+ * shadow-stage failure) neither. The collect* folds guard each with optional chaining.
+ */
 export interface ReconciliationChannel {
-  rc_out: TableReconciliation
+  rc_out?: TableReconciliation
+  blocking?: BlockReconciliation
 }
 
 // ============================================================
