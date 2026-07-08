@@ -154,13 +154,23 @@ export type SingleSourceDisposition = "pending" | "held_overdue";
 export const LAG_DAYS = 2;
 
 /**
- * Outer eligibility bound (days). A single-witness fact OLDER than this — relative to the run
- * date — is treated as SETTLED history and is NOT classified pending/overdue: its second
- * witness came and went in a prior run. This is the anti-flood guard: the gsheet extract
- * carries the ENTIRE sheet history, so without this bound every ancient gsheet-only row would
- * emit a `held_overdue` case every run. Tunable; R4b must confirm the horizon.
+ * DEPRECATED (R4a stopgap, superseded by R4b). The R4a shadow used a FIXED N-day lookback
+ * from the run date as the outer "settled history" bound. R4b REPLACES it with a window
+ * tied to the PROPOSED extract's real date span (see `WINDOW_BUFFER_DAYS` +
+ * `reconcileRcOut`): the Sheet carries all history but a second witness can only exist where
+ * the proposed report reaches, so the proposed span IS the actionable window. The engine no
+ * longer reads this constant; it is retained only for back-reference. Do not reintroduce a
+ * fixed lookback — that is the very thing that would re-create "Sheet-wins under a new name".
  */
 export const RECONCILE_WINDOW_DAYS = 14;
+
+/**
+ * R4b — buffer (days) added on EACH side of the proposed extract's date span to form the
+ * reconciliation window. The proposed report reports ~yesterday, so today's Sheet-only rows
+ * sit just past the proposed max; a small buffer keeps them inside the window (→ `pending`)
+ * instead of prematurely "settled". 2 = the normal 1-day proposed lag + slack. Tunable.
+ */
+export const WINDOW_BUFFER_DAYS = 2;
 
 /**
  * A source's batch that could not resolve to EXACTLY ONE batch_id (Refinement 4). Zero
@@ -232,6 +242,10 @@ export interface ReconcileOptions {
   runDate?: string;
   /** Overdue threshold in days. Default LAG_DAYS. */
   lagDays?: number;
-  /** Outer eligibility window in days. Default RECONCILE_WINDOW_DAYS. */
-  windowDays?: number;
+  /**
+   * R4b — buffer (days) on each side of the PROPOSED extract's date span that forms the
+   * actionable window. Default WINDOW_BUFFER_DAYS. (Replaces the R4a fixed `windowDays`
+   * lookback, which was removed — the window is now derived from the proposed span itself.)
+   */
+  windowBufferDays?: number;
 }

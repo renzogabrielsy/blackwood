@@ -16,7 +16,7 @@
  */
 import {
   LAG_DAYS,
-  RECONCILE_WINDOW_DAYS,
+  WINDOW_BUFFER_DAYS,
   type Agreement,
   type ReconcileOptions,
   type ReconcileResult,
@@ -27,6 +27,14 @@ import {
   type SourceOpinion,
   type SourceRecord,
 } from "./types.js";
+
+/** The reconciliation window (R4b): the PROPOSED extract's date span, buffered on each side.
+ *  `null` = no proposed extract this run → the window is EMPTY and single-witness facts are
+ *  acted on for NOTHING (leaving Sheet-only history untouched — the anti-clobber rule). */
+interface ReconcileWindow {
+  minDate: string;
+  maxDate: string;
+}
 
 const DEFAULTS = {
   weightTolKg: 1,
@@ -60,21 +68,31 @@ function daysBetweenISO(a: string, b: string): number {
 }
 
 /**
- * R4a — classify a single-witness fact's recency (Refinement 3). Returns undefined (no
- * disposition) when there is no runDate, the dates don't parse, or the fact is SETTLED history
- * (older than the eligibility window — its second witness came and went in a prior run).
- * Otherwise: pending inside the lag window, held_overdue beyond it.
+ * R4b — classify a single-witness fact's recency (Refinement 3) against the PROPOSED-span
+ * window. Returns undefined (no disposition — the fact is SETTLED / untouched) when:
+ *   - there is no runDate (back-compat: the engine behaves as R1/R2), or
+ *   - the window is EMPTY (no proposed extract this run → act on nothing), or
+ *   - the fact's date is OUTSIDE [minProposed − buffer, maxProposed + buffer] — the only span
+ *     where a second witness could exist; outside it the Sheet value was reconciled when it
+ *     was fresh and must be left alone (the L-037 clobber is re-created if we touch it).
+ * Inside the window: `pending` within the lag (second source merely not-yet-arrived, self-
+ * clears next run) else `held_overdue` (the second source is genuinely overdue → a case).
  */
 function classifySingleSource(
   date: string,
   runDate: string | undefined,
   lagDays: number,
-  windowDays: number,
+  window: ReconcileWindow | null,
+  bufferDays: number,
 ): { disposition: SingleSourceDisposition; ageDays: number } | undefined {
   if (!runDate) return undefined;
+  if (!window) return undefined; // empty window — no proposed extract → nothing acted upon
+  const fromMin = daysBetweenISO(window.minDate, date); // date − minProposed
+  const toMax = daysBetweenISO(date, window.maxDate); // maxProposed − date
+  if (!Number.isFinite(fromMin) || !Number.isFinite(toMax)) return undefined;
+  if (fromMin < -bufferDays || toMax < -bufferDays) return undefined; // outside span → settled
   const age = daysBetweenISO(date, runDate); // runDate − factDate
   if (!Number.isFinite(age)) return undefined;
-  if (age > windowDays) return undefined; // settled history — not this run's concern
   const disposition: SingleSourceDisposition = age <= lagDays ? "pending" : "held_overdue";
   return { disposition, ageDays: age };
 }
@@ -104,9 +122,25 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
   const movementTotalField = opts.movementTotalField ?? DEFAULTS.movementTotalField;
   const runDate = opts.runDate;
   const lagDays = opts.lagDays ?? LAG_DAYS;
-  const windowDays = opts.windowDays ?? RECONCILE_WINDOW_DAYS;
+  const bufferDays = opts.windowBufferDays ?? WINDOW_BUFFER_DAYS;
 
   const fine = records.filter(isFine);
+
+  // ── R4b reconciliation window = the PROPOSED extract's real date span ─────────
+  // The Google Sheet carries the ENTIRE history; the proposed report carries ~one day. A
+  // second witness can only exist inside the proposed span, so that span (buffered) is the
+  // ONLY range where a single Sheet witness is actionable. No proposed records → null window
+  // → nothing is acted on (Sheet-only history stays untouched: the anti-clobber rule).
+  let window: ReconcileWindow | null = null;
+  for (const r of fine) {
+    if (r.source !== "proposed") continue;
+    const d = r.naturalKey.transaction_date;
+    if (window === null) window = { minDate: d, maxDate: d };
+    else {
+      if (d < window.minDate) window.minDate = d;
+      if (d > window.maxDate) window.maxDate = d;
+    }
+  }
 
   // ── Date-level corroboration index (from movement) ────────────────────────
   // date -> movement grand total (kg). Movement is single-source; if a date somehow
@@ -181,7 +215,7 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
           sources: [present[0].rec.source],
           singleSource: true,
         };
-        const disp = classifySingleSource(key.transaction_date, runDate, lagDays, windowDays);
+        const disp = classifySingleSource(key.transaction_date, runDate, lagDays, window, bufferDays);
         if (disp) {
           agreement.disposition = disp.disposition;
           agreement.ageDays = disp.ageDays;

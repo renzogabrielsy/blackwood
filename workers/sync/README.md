@@ -74,6 +74,22 @@ cp .env.example .env      # fill in the secrets (see below)
   Settings → Database — not in this repo).
 - `SYNC_KICK_SECRET` — shared secret for `POST /kick` (`openssl rand -hex 32`).
 
+### Optional env — feature flags
+
+- `SYNC_RCOUT_RECONCILE_CUTOVER` — **R4b rc_out cutover. DEFAULT ON** (unset = ON;
+  reader in `src/lib/env.ts`). **ON:** gsheet-sync does **not** write `rc_out` (neither
+  Sheet-wins UPDATEs nor NEW inserts — the gate is at the `applyGsheet` boundary in
+  `src/reports/gsheet/apply.ts`, and the rc_out **mode is skipped whole**). The **PROPOSED
+  report** (`rc-out-manager`) is the **sole rc_out writer**; multi-source reconciliation
+  (`src/reconcile/`) is the flagging authority — a gsheet↔proposed disagreement **in the
+  proposed-span window** becomes a `source_diff` / `single_source_overdue` case in Sync
+  Review instead of a silent overwrite. This makes the **L-037 clobber structurally
+  impossible.** **OFF** (`off`/`false`/`0`/`no`) = exact prior "Sheet-wins rc_out" behavior —
+  a one-line production revert. **`rc_in`/deliveries writes are unchanged in both states.**
+  Fail-safe: with the cutover ON, if the `batch_code→batch_id` lookup is empty/unbuildable,
+  the reconcile step **skips rc_out flagging for that run and emits one diagnostic** rather
+  than flooding `unresolved_batch` cases (proposed's own writes are unaffected).
+
 ## Run
 
 ```bash

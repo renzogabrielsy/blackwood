@@ -11,7 +11,9 @@ key + field, and emits **agreements** (auto-appliable) vs **`source_diff` descri
 R1 is **pure + deterministic**: no DB, no writes, no worker wiring. R2 persists diffs as
 `source_diff` cases; **R3a** (shipped 2026-07-08, app-side) resolves them — a reviewer PICKS which
 source is authoritative and the pick becomes per-leg `rc_out` writes + a `pick_source` ruling (see
-below); R3b (frontend) renders the pick UI. Anchored on the **L-037** incident.
+below); R3b (frontend) renders the pick UI. **R4b** (shipped 2026-07-08) is the CUTOVER — gsheet
+stops writing `rc_out`, this layer becomes the flagging authority, and the window is now the
+proposed-span (see the R4b section). Anchored on the **L-037** incident.
 
 ## Files
 - `types.ts` — `SourceRecord` (input), `Agreement` / `SourceDiff` / `SourceOpinion` /
@@ -133,8 +135,10 @@ now reconcile too, not just standard-block BLK5.
 **Deliverable 3 — pending vs held (Refinement 3).** The engine takes a `runDate` (threaded from
 the run row — NEVER Date.now() in a DBOS step) and tags each SINGLE-witness fact:
 `pending` (age ≤ `LAG_DAYS` = 2 → self-clears next run, NO case) vs `held_overdue` (age > LAG_DAYS
-→ a case). An outer `RECONCILE_WINDOW_DAYS` = 14 guard drops DEEP history (older than the window)
-as settled — WITHOUT it, gsheet's full-history extract would flood `held_overdue` every run.
+→ a case). An outer window guard drops DEEP history (outside the window) as settled — WITHOUT it,
+gsheet's full-history extract would flood `held_overdue` every run. **(R4a shipped this as a fixed
+`RECONCILE_WINDOW_DAYS` = 14 lookback; R4b REPLACED it with the proposed-span window — see the R4b
+section below.)**
 Multi-source agreements never carry a disposition; movement is date-level only and does NOT make a
 fact single-witnessed. The stage splits these into a `pending` count (telemetry) + `heldOverdue[]`.
 
@@ -150,6 +154,43 @@ independent so it self-clears when the 2nd witness arrives). `pending` = a count
 `DbClient.getSyncRunCreatedAt(runId)` (a fixed stored value → replay-safe), threading both into
 `reconcileRcOutStage`. Both are guarded — an empty lookup means every batch is `unresolved_batch`;
 a missing runDate means single-source facts get no disposition. Neither can fail the run (shadow).
+
+## R4b — retire Sheet-wins for rc_out (shipped 2026-07-08, the FIRST live-write change)
+
+The cutover. gsheet-sync **stops writing `rc_out`**; the PROPOSED report becomes the sole
+rc_out writer and this reconciliation layer is the flagging authority. This is a **subtraction**,
+not a rewrite. Gated behind `SYNC_RCOUT_RECONCILE_CUTOVER` (`src/lib/env.ts`), **DEFAULT ON**.
+
+**What was disabled (surgical).** In `../reports/gsheet/apply.ts::applyGsheet`, the mode loop now
+skips the `rc_out` mode **whole** when the cutover is ON — no NEW inserts, no Sheet-wins
+`VALUE_CHANGED` UPDATEs, no held rows (`per_mode.rc_out.cutover_skipped = true`, telemetry only).
+The single flag check lives at that ONE boundary; `applyFromCompact` is unchanged. **`rc_in`
+falls through untouched** — the gate is `if (mode === "rc_out" && cutoverRcOut)`, so deliveries
+writes are byte-identical in both flag states. OFF = the exact prior path (the `continue` is never
+hit), which is what keeps the old rc_out apply behavior available as a one-line revert.
+
+**Window policy (LOCKED — replaces the R4a fixed 14-day stopgap).** The actionable window is now
+the **PROPOSED extract's real date span** (`min..max transaction_date` among proposed fine
+records) **± `WINDOW_BUFFER_DAYS` (=2)** — computed inside `reconcileRcOut` from the records
+themselves (pure). Rationale: the Sheet carries ALL history but a second witness can only exist
+where the proposed report reaches, so the proposed span IS the only range where a lone Sheet
+witness is actionable. **No proposed extract this run → empty window → nothing is acted on** (a
+lone recent Sheet row is NEVER auto-dispositioned — that would be Sheet-wins under a new name /
+re-create L-037). Inside the window the pending/held split is unchanged (age ≤ `LAG_DAYS` →
+pending, else held_overdue). `RECONCILE_WINDOW_DAYS`/`ReconcileOptions.windowDays` are retired
+(the const is kept deprecated for back-reference; the option was removed, replaced by
+`windowBufferDays`). `classifySingleSource` now takes the `ReconcileWindow | null` + buffer.
+
+**Fail-safe (cutover ON only).** `workflows/runSync.ts::reconcileRcOutShadow` tracks whether the
+`batch_code→batch_id` lookup built successfully (`batchLookupOk`). With the cutover ON, an
+empty/failed lookup would make every fine row unresolvable and flood `unresolved_batch` cases, so
+the step **skips rc_out reconciliation for that run and emits ONE `reconcile` diagnostic** (never
+a flood, never a mismap). Proposed's own writes are unaffected (it has its own resolver). With the
+cutover OFF the R4a shadow behavior is preserved (an empty lookup just yields unresolved markers).
+
+**Unchanged:** the channel shape (`{ diffs, agreements, pending, heldOverdue, unresolvedBatches }`),
+the app fan-out (`app/(app)/sync/cases.ts`), R3a pick-source resolution, and classify/parity
+(the cutover is APPLY-only; parity is CLASSIFY-only → 12/12 untouched).
 
 ## R3a — pick-source resolution (shipped 2026-07-08, app-side)
 Lives entirely in the app (`app/(app)/sync/diff-plan.ts` PURE + `resolve.ts` `'use server'`), NOT in

@@ -23,9 +23,11 @@ import {
 import type { RowDict } from "../../src/reports/gsheet/deductions.js";
 import {
   applyFromCompact,
+  applyGsheet,
   type ModeCompact,
   type CompactChanged,
   type CompactNewRcIn,
+  type CompactNewRcOut,
 } from "../../src/reports/gsheet/apply.js";
 
 const SINCE = "2025-01-01";
@@ -346,5 +348,144 @@ describe("apply — safety gates return a proper envelope (PD #2)", () => {
     );
     expect(res.ok).toBe(true);
     expect(res.inserted).toBe(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4b CUTOVER — gsheet stops writing rc_out; the clobber (L-037) is impossible.
+// applyGsheet is the write boundary; the flag gates ONLY the rc_out mode.
+// ---------------------------------------------------------------------------
+describe("apply — R4b rc_out cutover (SYNC_RCOUT_RECONCILE_CUTOVER)", () => {
+  /** DbClient stub recording every insert/update per table, no network. */
+  function recordingDb() {
+    const inserts: Array<{ table: string; rows: unknown[] }> = [];
+    const updates: Array<{ table: string; filters: unknown; patch: unknown }> = [];
+    const db = {
+      async insert(table: string, rows: unknown[]) {
+        inserts.push({ table, rows });
+        return rows.map((_, i) => ({ id: `${table}-new-${i}` }));
+      },
+      async update(table: string, filters: unknown, patch: unknown) {
+        updates.push({ table, filters, patch });
+        return [{ id: "u" }];
+      },
+      async selectOne() {
+        return { batch_code: "JUNE-26-BLK1" }; // batch exists → no batch insert
+      },
+      async stampIngestionAudit() {
+        return true;
+      },
+      async writeIngestionAudit() {
+        return { id: "a" };
+      },
+      async upsertIngestionWatermark() {
+        return true;
+      },
+    };
+    return { db: db as never, inserts, updates };
+  }
+
+  const rcInNew = (): CompactNewRcIn => ({
+    kind: "NEW",
+    index: 8,
+    date: "2026-06-10",
+    batch_code: "JUNE-26-BLK1",
+    block_loc: "A-1A",
+    weight_kg: 10_000,
+    supplier: "ACME",
+    truck_plate: "ABC 111",
+    sacks: 100,
+    remarks: null,
+    lab_results: null,
+    confidence: 1,
+    true_weight_kg: null,
+    deduction_note: null,
+  });
+
+  const rcOutNew = (): CompactNewRcOut => ({
+    kind: "NEW",
+    index: 3,
+    date: "2026-06-10",
+    batch_code: "MARCH-26-BLK5",
+    batch_id: "id-blk5",
+    destination: "MAIN",
+    weight_kg: 42_558, // the over-stated gsheet value — must NEVER be written under cutover
+    production_batch: "JUNE",
+    block_loc: "D-11B",
+    remarks: null,
+    confidence: 1,
+  });
+
+  // L-037: proposed wrote 20,932; the Sheet says 42,558. This CHANGED row is gsheet's
+  // Sheet-wins overwrite that produced the clobber. Under the cutover it must NOT fire.
+  const rcOutChanged = (): CompactChanged => ({
+    kind: "VALUE_CHANGED",
+    index: 5,
+    db_id: "rc-row-1",
+    date: "2026-06-10",
+    batch_code: "MARCH-26-BLK5",
+    destination: "MAIN",
+    diff: [{ field: "weight_kg", db: 20_932, sheet: 42_558 }],
+  });
+
+  const modes = (): Record<"rc_in" | "rc_out", ModeCompact> => ({
+    rc_in: {
+      mode: "rc_in",
+      since: SINCE,
+      actionable: { new: [rcInNew()], changed: [], flagged: [], unmapped: [], malformed: [] },
+    },
+    rc_out: {
+      mode: "rc_out",
+      since: SINCE,
+      actionable: { new: [rcOutNew()], changed: [rcOutChanged()], flagged: [], unmapped: [], malformed: [] },
+    },
+  });
+
+  it("cutover ON: ZERO rc_out writes; the proposed 20,932 stands; rc_in still writes", async () => {
+    const { db, inserts, updates } = recordingDb();
+    const res = await applyGsheet(modes(), { db, cutoverRcOut: true });
+
+    // No rc_out row is inserted OR updated — the Sheet's 42,558 never reaches the DB.
+    expect(inserts.some((i) => i.table === "rc_out")).toBe(false);
+    expect(updates.some((u) => u.table === "rc_out")).toBe(false);
+    // The clobber is impossible: the proposed-written value is untouched by gsheet.
+    expect(res.per_mode.rc_out.cutover_skipped).toBe(true);
+    expect(res.per_mode.rc_out.inserted).toBe(0);
+    expect(res.per_mode.rc_out.updated).toBe(0);
+
+    // rc_in is UNAFFECTED — the delivery is still written.
+    expect(inserts.some((i) => i.table === "deliveries")).toBe(true);
+    expect(res.per_mode.rc_in.inserted).toBe(1);
+    expect(res.ok).toBe(true);
+  });
+
+  it("cutover OFF: prior gsheet rc_out apply is byte-identical (insert + Sheet-wins update)", async () => {
+    const { db, inserts, updates } = recordingDb();
+    const res = await applyGsheet(modes(), { db, cutoverRcOut: false });
+
+    // NEW rc_out inserted, CHANGED rc_out updated to the Sheet value (the historical behavior).
+    expect(inserts.filter((i) => i.table === "rc_out")).toHaveLength(1);
+    const rcOutUpd = updates.filter((u) => u.table === "rc_out");
+    expect(rcOutUpd).toHaveLength(1);
+    expect(rcOutUpd[0].patch).toEqual({ weight_kg: 42_558 });
+    expect(res.per_mode.rc_out.cutover_skipped).toBeUndefined();
+    expect(res.per_mode.rc_out.inserted).toBe(1);
+    expect(res.per_mode.rc_out.updated).toBe(1);
+
+    // rc_in is UNAFFECTED in this state too.
+    expect(inserts.some((i) => i.table === "deliveries")).toBe(true);
+    expect(res.per_mode.rc_in.inserted).toBe(1);
+  });
+
+  it("rc_in writes are identical whether the cutover is ON or OFF", async () => {
+    const on = recordingDb();
+    await applyGsheet(modes(), { db: on.db, cutoverRcOut: true });
+    const off = recordingDb();
+    await applyGsheet(modes(), { db: off.db, cutoverRcOut: false });
+
+    const deliv = (x: typeof on) => x.inserts.filter((i) => i.table === "deliveries");
+    expect(deliv(on)).toHaveLength(1);
+    expect(deliv(off)).toHaveLength(1);
+    expect(deliv(on)[0].rows).toEqual(deliv(off)[0].rows);
   });
 });

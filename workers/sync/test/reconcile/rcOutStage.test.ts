@@ -300,26 +300,32 @@ describe("reconcileRcOutStage — R4a Deliverable 2 (FEED-block keying)", () => 
   });
 });
 
-describe("reconcileRcOutStage — R4a Deliverable 3 (pending vs held_overdue)", () => {
-  /** A single-witness (gsheet-only) fact on a given date, with a resolvable batch. */
-  function singleWitnessInput(date: string, runDate: string) {
+describe("reconcileRcOutStage — R4b Deliverable 3 (pending vs held_overdue, proposed-span window)", () => {
+  // R4b: the window is the PROPOSED extract's date span (± buffer). We anchor it with a
+  // proposed+gsheet AGREEMENT on `anchorDate` (multi-source → carries no disposition) and put
+  // the lone gsheet fact under test at `date`.
+  function singleWitnessInput(date: string, runDate: string, anchorDate = date) {
     const g = gRow("MAR-26-BLK5", ["MARCH-26-BLK5"], "D-11B", 5_000);
     g.transaction_date = date;
-    return { proposed: [], gsheetRcOut: [g], movementByDate: {}, batchLookup: LOOKUP, runDate };
+    // window anchor: proposed leg + matching gsheet row on anchorDate (they agree → no case).
+    const pa = pLeg("APRIL-26-BLK1", ["APR-26-BLK1"], "A-1A", 20_000, 10_000, 10_000);
+    pa.transaction_date = anchorDate;
+    pa.block_date = anchorDate;
+    const ga = gRow("APR-26-BLK1", ["APRIL-26-BLK1"], "A-1A", 10_000);
+    ga.transaction_date = anchorDate;
+    return { proposed: [pa], gsheetRcOut: [ga, g], movementByDate: {}, batchLookup: LOOKUP, runDate };
   }
 
-  it("a RECENT single-witness fact is `pending` — telemetry only, NO case", () => {
-    const runDate = "2026-06-11";
-    // fact date 2026-06-10 → age 1 day (<= LAG_DAYS 2) → pending.
-    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", runDate));
+  it("a RECENT single-witness fact inside the proposed span is `pending` — telemetry only, NO case", () => {
+    // fact date 2026-06-10, anchor 2026-06-10 → window covers it; age 1 (<= LAG_DAYS 2) → pending.
+    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", "2026-06-11"));
     expect(res.pending).toBe(1);
     expect(res.heldOverdue).toHaveLength(0);
   });
 
-  it("an OLD single-witness fact (inside the window) is `held_overdue` — a case", () => {
-    const runDate = "2026-06-15";
-    // fact date 2026-06-10 → age 5 days (> LAG_DAYS 2, <= 14) → held_overdue.
-    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", runDate));
+  it("an OLD single-witness fact (inside the proposed span) is `held_overdue` — a case", () => {
+    // fact date 2026-06-10, anchor 2026-06-10, runDate 2026-06-15 → age 5 (> LAG_DAYS) → overdue.
+    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", "2026-06-15"));
     expect(res.pending).toBe(0);
     expect(res.heldOverdue).toHaveLength(1);
     const o = res.heldOverdue[0];
@@ -329,12 +335,28 @@ describe("reconcileRcOutStage — R4a Deliverable 3 (pending vs held_overdue)", 
     expect(o.naturalKey.batch).toBe("id-blk5");
   });
 
-  it("a DEEP-history single-witness fact (older than the window) is neither pending nor a case", () => {
-    const runDate = "2026-07-08";
-    // fact date 2026-06-10 → age 28 days (> RECONCILE_WINDOW_DAYS 14) → settled, not classified.
-    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", runDate));
+  it("a lone Sheet fact OUTSIDE the proposed span is neither pending nor a case (settled)", () => {
+    // proposed only reaches 2026-07-05; the 06-10 Sheet fact is outside [07-03..07-07] → settled.
+    const res = reconcileRcOutStage(singleWitnessInput("2026-06-10", "2026-07-08", "2026-07-05"));
     expect(res.pending).toBe(0);
     expect(res.heldOverdue).toHaveLength(0);
+  });
+
+  it("NO proposed extract this run → EMPTY window → a recent lone Sheet fact gets NO disposition (anti-clobber)", () => {
+    // The load-bearing R4b guarantee: without a proposed second witness present, a lone recent
+    // Sheet row is NEVER auto-acted-on — otherwise the cutover would re-create Sheet-wins/L-037.
+    const g = gRow("MAR-26-BLK5", ["MARCH-26-BLK5"], "D-11B", 5_000);
+    g.transaction_date = "2026-06-10";
+    const res = reconcileRcOutStage({
+      proposed: [],
+      gsheetRcOut: [g],
+      movementByDate: {},
+      batchLookup: LOOKUP,
+      runDate: "2026-06-11",
+    });
+    expect(res.pending).toBe(0);
+    expect(res.heldOverdue).toHaveLength(0);
+    expect(res.agreements).toBeGreaterThanOrEqual(1); // still counted as an agreement, just not acted on
   });
 
   it("without a runDate, single-witness facts get no disposition (back-compat)", () => {

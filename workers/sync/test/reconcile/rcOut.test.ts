@@ -268,38 +268,65 @@ describe("reconcileRcOut — FEED (null block) fine records reconcile", () => {
   });
 });
 
-describe("reconcileRcOut — single-witness disposition (Deliverable 3)", () => {
+describe("reconcileRcOut — single-witness disposition (R4b proposed-span window)", () => {
+  // R4b: the actionable window is the PROPOSED extract's date span (± buffer). To exercise a
+  // single-witness gsheet fact we anchor the window with a proposed+gsheet AGREEMENT on a
+  // date (multi-source → itself carries NO disposition), then vary the lone gsheet fact.
+  function anchor(date: string) {
+    return [proposed(date, "id-anchor", "A-1A", 9_000), gsheet(date, "id-anchor", "A-1A", 9_000)];
+  }
+  const soleGsheet = (date: string, w = 5_000) => gsheet(date, "id-blk5", "D-11B", w);
+  const findBlk5 = (agreements: ReturnType<typeof reconcileRcOut>["agreements"]) =>
+    agreements.find((x) => x.field === "weight_kg" && x.naturalKey.batch === "id-blk5")!;
+
   it("no runDate → single-source agreement has no disposition (back-compat)", () => {
-    const { agreements } = reconcileRcOut([gsheet(D, "id-blk5", "D-11B", 5_000)]);
-    const a = agreements.find((x) => x.field === "weight_kg")!;
+    const { agreements } = reconcileRcOut([soleGsheet(D)]);
+    const a = findBlk5(agreements);
     expect(a.singleSource).toBe(true);
     expect(a.disposition).toBeUndefined();
   });
 
-  it("recent single-witness → pending (age <= LAG_DAYS)", () => {
-    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+  it("no proposed extract this run → EMPTY window → recent lone Sheet fact gets NO disposition (anti-clobber)", () => {
+    // The load-bearing R4b rule: a lone recent Sheet witness with no proposed second witness
+    // present is NEVER auto-acted-on (that would be Sheet-wins under a new name / L-037).
+    const { agreements } = reconcileRcOut([soleGsheet("2026-06-10")], { runDate: "2026-06-11" });
+    expect(findBlk5(agreements).disposition).toBeUndefined();
+  });
+
+  it("recent single-witness INSIDE the proposed span → pending (age <= LAG_DAYS)", () => {
+    const { agreements } = reconcileRcOut([...anchor("2026-06-10"), soleGsheet("2026-06-10")], {
       runDate: "2026-06-11",
     });
-    const a = agreements.find((x) => x.field === "weight_kg")!;
+    const a = findBlk5(agreements);
     expect(a.disposition).toBe("pending");
     expect(a.ageDays).toBe(1);
   });
 
-  it("old single-witness inside the window → held_overdue (LAG_DAYS < age <= window)", () => {
-    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+  it("old single-witness INSIDE the proposed span → held_overdue (LAG_DAYS < age)", () => {
+    const { agreements } = reconcileRcOut([...anchor("2026-06-10"), soleGsheet("2026-06-10")], {
       runDate: "2026-06-15",
     });
-    const a = agreements.find((x) => x.field === "weight_kg")!;
+    const a = findBlk5(agreements);
     expect(a.disposition).toBe("held_overdue");
     expect(a.ageDays).toBe(5);
   });
 
-  it("deep-history single-witness (older than the window) → no disposition", () => {
-    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+  it("a lone Sheet fact OUTSIDE the proposed span → settled, no disposition (window follows proposed, not a fixed lookback)", () => {
+    // Proposed only reaches 2026-07-05; the old 06-10 Sheet row is outside [07-03..07-07] →
+    // settled/untouched even though it is only 28 days old (R4a's fixed 14-day would also have
+    // settled it, but R4b settles it because it's outside the PROPOSED span, not by a day count).
+    const { agreements } = reconcileRcOut([...anchor("2026-07-05"), soleGsheet("2026-06-10")], {
       runDate: "2026-07-08",
     });
-    const a = agreements.find((x) => x.field === "weight_kg")!;
-    expect(a.disposition).toBeUndefined();
+    expect(findBlk5(agreements).disposition).toBeUndefined();
+  });
+
+  it("a lone Sheet fact just past the proposed max but inside the buffer → still actionable (pending)", () => {
+    // proposed max = 06-10; fact on 06-11 (today) is +1 day, within the 2-day buffer → pending.
+    const { agreements } = reconcileRcOut([...anchor("2026-06-10"), soleGsheet("2026-06-11")], {
+      runDate: "2026-06-11",
+    });
+    expect(findBlk5(agreements).disposition).toBe("pending");
   });
 
   it("multi-source agreements never carry a disposition", () => {

@@ -21,6 +21,7 @@
  */
 import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
+import { rcOutReconcileCutover } from "../../lib/env.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
 
 export const GSHEET_FILE_ID = "1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM";
@@ -107,6 +108,13 @@ export interface ApplyDeps {
   db: DbClient;
   progress?: ProgressEmitter;
   runTs?: string;
+  /**
+   * R4b cutover override. When true, gsheet does NOT write `rc_out` (the rc_out mode is
+   * skipped whole at the apply boundary — see `applyGsheet`). When omitted, `applyGsheet`
+   * resolves it from `SYNC_RCOUT_RECONCILE_CUTOVER` (default ON). rc_in is UNAFFECTED.
+   * `applyFromCompact` ignores this field — the gate lives at the `applyGsheet` boundary.
+   */
+  cutoverRcOut?: boolean;
 }
 
 /** Result of applying ONE mode. Mirrors the Python legacy result dict, plus an
@@ -123,6 +131,12 @@ export interface ModeApplyResult {
   skipped: Array<{ index: unknown; why: string; held?: EnrichedHeld }>;
   /** Present only when a safety gate tripped (PD-2). */
   gate_failure?: { gate: string; detail: string; indexes?: unknown[] };
+  /**
+   * R4b — set true when this mode was SKIPPED WHOLE by the rc_out cutover (gsheet no
+   * longer writes rc_out; the PROPOSED report is the sole writer). Telemetry only —
+   * nothing applied, no held rows, ok stays true. Never set for rc_in.
+   */
+  cutover_skipped?: boolean;
 }
 
 /** The enrichment attached to a gsheet skipped/flagged entry so `applyGsheet` can
@@ -490,6 +504,9 @@ export async function applyGsheet(
   deps: ApplyDeps,
 ): Promise<GsheetApplyResult> {
   const emit = deps.progress;
+  // R4b cutover — resolved ONCE, here at the apply boundary (not scattered). When ON
+  // (default), the rc_out mode is skipped whole below so gsheet never touches rc_out.
+  const cutoverRcOut = deps.cutoverRcOut ?? rcOutReconcileCutover();
   let totalInserts = 0;
   let totalUpdates = 0;
   const held: GsheetApplyResult["held"] = [];
@@ -501,6 +518,32 @@ export async function applyGsheet(
     const mode = modeList[i];
     const compact = modes[mode];
     if (!compact) continue;
+
+    // ── R4b cutover: gsheet STOPS writing rc_out (the L-037 clobber fix). Skip the
+    // rc_out mode WHOLE — no NEW inserts, no Sheet-wins UPDATEs, no held rows. The
+    // PROPOSED report is the sole rc_out writer; reconciliation is the flagging
+    // authority for gsheet↔proposed disagreements. rc_in falls through UNCHANGED.
+    if (mode === "rc_out" && cutoverRcOut) {
+      perMode[mode] = {
+        ok: true,
+        mode,
+        inserted: 0,
+        inserted_ids: [],
+        updated: 0,
+        updated_ids: [],
+        new_batches_created: [],
+        flagged_resolved: [],
+        skipped: [],
+        cutover_skipped: true,
+      };
+      await emit?.(
+        "apply",
+        "RC OUT: reconciliation owns rc_out now — gsheet skips writing it (R4b cutover).",
+        15 + Math.trunc((70 * i) / modeList.length),
+      );
+      continue;
+    }
+
     await emit?.("apply", `Writing ${mode === "rc_in" ? "deliveries (RC IN)" : "feedings (RC OUT)"}…`, 15 + Math.trunc((70 * i) / modeList.length));
     try {
       const res = await applyFromCompact(compact, deps);

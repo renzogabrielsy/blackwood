@@ -45,6 +45,7 @@ import { extractProposed, extractMovement } from "../reports/rc_out/extract.js";
 import { extractGsheet } from "../reports/gsheet/extract.js";
 import { downloadGsheet, GSHEET_EXPORT_URL, type FetchLike } from "../reports/gsheet/download.js";
 import { reconcileRcOutStage, type ReconciliationChannel } from "../reconcile/rcOutStage.js";
+import { rcOutReconcileCutover } from "../lib/env.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -178,11 +179,14 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // as the report_type; those route to the `rc_movement` card too (reportWorkflowId maps).
   reports.rc_movement = await auditHandle.getResult();
 
-  // ── Stage 3: SHADOW reconciliation (R2) — rc_out only, additive, no writes.
+  // ── Stage 3: reconciliation — rc_out only, additive, no writes of its own.
   // Re-extracts the same three witnesses the reports read (proposed + movement from
   // Storage, gsheet re-download), buckets them into R1 SourceRecords, and captures the
-  // disagreements. Wrapped so ANY failure degrades to an absent channel — a shadow
-  // observer must never fail a run or change a write. See reconcile/rcOutStage.ts.
+  // disagreements. It still WRITES nothing itself (proposed remains the rc_out writer), but
+  // under the R4b cutover it is the FLAGGING AUTHORITY: gsheet no longer clobbers rc_out, so
+  // a gsheet↔proposed disagreement in-window becomes a `source_diff` / `single_source_overdue`
+  // case here rather than a silent overwrite. Wrapped so ANY failure degrades to an absent
+  // channel — this step must never fail a run or change a write. See reconcile/rcOutStage.ts.
   const reconciliation = await DBOS.runStep(
     () => reconcileRcOutShadow(runId, manifestResolved, since),
     { name: "reconcile:rc_out" },
@@ -305,17 +309,35 @@ async function reconcileRcOutShadow(
     }
 
     // R4a Deliverable 1 — batch_code → batch_id map the reconciler resolves against (same shape
-    // the rc_out report builds). Guarded: an empty lookup just means every batch is unresolvable
-    // (→ unresolved_batch cases), never a crash.
+    // the rc_out report builds). Guarded: a failure leaves the lookup empty (tracked below).
     const batchLookup: Record<string, string> = {};
+    let batchLookupOk = false;
     try {
       const batchRows = await db.readRows("batches", { columns: ["batch_code", "id"], sinceColumn: null });
       for (const b of batchRows) {
         const code = b.batch_code;
         if (code) batchLookup[String(code)] = String(b.id);
       }
+      batchLookupOk = Object.keys(batchLookup).length > 0;
     } catch {
-      /* no batch lookup → every fine batch unresolvable (shadow) */
+      /* no batch lookup → handled by the fail-safe below (cutover) or flood (shadow) */
+    }
+
+    // R4b FAIL-SAFE — with the cutover ON, an empty/failed batch lookup would make EVERY fine
+    // row unresolvable and flood thousands of `unresolved_batch` cases. Since gsheet no longer
+    // writes rc_out (the PROPOSED report is the sole writer and has its OWN batch resolver), the
+    // safe degradation is to SKIP rc_out reconciliation flagging for this run and emit ONE
+    // diagnostic — never a flood, never a mismap. (When the cutover is OFF we keep the R4a
+    // shadow behavior: an empty lookup simply produces unresolved_batch markers as before.)
+    if (rcOutReconcileCutover() && !batchLookupOk) {
+      await emit(
+        "reconcile",
+        "Skipped the RC OUT cross-check this run — batch directory was unavailable (fail-safe).",
+        96,
+        "batch_code→batch_id lookup empty/failed; rc_out reconciliation flagging skipped to avoid mismapping. Proposed-report writes are unaffected.",
+        "warn",
+      );
+      return null;
     }
 
     // R4a Deliverable 3 — the run's calendar date (YYYY-MM-DD) for the pending/held split.
