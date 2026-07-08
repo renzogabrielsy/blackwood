@@ -12,8 +12,10 @@ import { chatOnCase } from '@/app/(app)/sync/case-chat'
 import {
   bulkDismissCases,
   cancelProposal,
+  executeDiffResolution,
   executeGroupResolution,
   executeResolution,
+  proposePickSource,
   quickDismiss,
 } from '@/app/(app)/sync/resolve'
 import {
@@ -21,10 +23,13 @@ import {
   findOpenProposal,
   type ProposalScanRow,
 } from '@/lib/investigator/resolution'
+import { findOpenPickSourcePlan, type PickSourceScanRow } from '@/app/(app)/sync/diff-plan'
+import type { RcOutSource } from '@/app/(app)/sync/types'
 
 import { RunGroupedList, type CaseFilter, type RunListCase } from './RunGroupedList'
 import { CaseDetail, type CaseDetailRow } from './CaseDetail'
 import type { GroupMemberCase } from './GroupResolutionCard'
+import { asSourceDiff, type OpenPickPlan } from './SourceDiffCard'
 import type { ThreadMessage } from './CaseThread'
 import { QuickDismissDialog } from './QuickDismissDialog'
 import { groupCasesByRun, isBulkSelectable, preselectForRun } from './grouping'
@@ -182,6 +187,41 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
     const msg = messages.find((m) => m.position === openGroupProposal.position)
     return msg?.id ?? null
   }, [openGroupProposal, messages])
+
+  // ── R3b: the source_diff pick flow — the SourceDiff + the open pick plan. ──
+  const isSourceDiffSelected = selectedCase?.kind === 'source_diff'
+
+  const sourceDiff = React.useMemo(() => {
+    if (!selectedCase || !isSourceDiffSelected) return null
+    return asSourceDiff(selectedCase.row)
+  }, [selectedCase, isSourceDiffSelected])
+
+  const openPickPlan = React.useMemo<OpenPickPlan | null>(() => {
+    if (!selectedCase || selectedCase.status === 'resolved' || !isSourceDiffSelected) return null
+    const scan: PickSourceScanRow[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      position: m.position,
+    }))
+    const open = findOpenPickSourcePlan(scan, selectedCase.status)
+    if (!open) return null
+    return { source: open.input.source, plan: open.input.plan }
+  }, [messages, selectedCase, isSourceDiffSelected])
+
+  const openPickMessageId = React.useMemo(() => {
+    if (!selectedCase || selectedCase.status === 'resolved' || !isSourceDiffSelected) return null
+    const scan: PickSourceScanRow[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      position: m.position,
+    }))
+    const open = findOpenPickSourcePlan(scan, selectedCase.status)
+    if (!open) return null
+    const msg = messages.find((m) => m.position === open.position)
+    return msg?.id ?? null
+  }, [messages, selectedCase, isSourceDiffSelected])
 
   // The run family's cases (to render the group card's member rows), keyed off the
   // selected triage case's run.
@@ -443,6 +483,66 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
     }
   }, [openGroupProposalMessageId, loadMessages])
 
+  // ── R3b: propose / confirm / decline a source_diff pick. ──
+  const onProposePickSource = React.useCallback(
+    async (source: RcOutSource) => {
+      const caseId = selectedIdRef.current
+      if (!caseId) return
+      setResolvePending(true)
+      try {
+        const res = await proposePickSource(caseId, source)
+        if (!res.ok) {
+          errorToast('Could not prepare the pick', { description: res.error ?? 'Unknown error' })
+        }
+        // The proposal is persisted as an assistant message — reload so the confirm card
+        // renders from the transcript (Realtime also drives this; the reload makes it snappy).
+        await loadMessages(caseId)
+      } catch (err) {
+        errorToast('Could not prepare the pick', {
+          description: err instanceof Error ? err.message : String(err),
+        })
+        await loadMessages(caseId)
+      } finally {
+        setResolvePending(false)
+      }
+    },
+    [loadMessages],
+  )
+
+  const onConfirmDiffResolution = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openPickMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await executeDiffResolution(caseId, openPickMessageId)
+      if (!res.ok) errorToast('Could not apply the pick', { description: res.error ?? 'Unknown error' })
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not apply the pick', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openPickMessageId, loadMessages])
+
+  const onDeclineDiffResolution = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openPickMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await cancelProposal(caseId, openPickMessageId)
+      if (!res.ok) errorToast('Could not decline the pick', { description: res.error ?? 'Unknown error' })
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not decline the pick', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openPickMessageId, loadMessages])
+
   const onQuickDismissSubmit = React.useCallback(
     async (reason: string) => {
       const caseId = selectedIdRef.current
@@ -560,6 +660,11 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
               groupMembers={groupMembers}
               onConfirmGroupResolution={onConfirmGroupResolution}
               onDeclineGroupResolution={onDeclineGroupResolution}
+              sourceDiff={sourceDiff}
+              openPickPlan={openPickPlan}
+              onProposePickSource={onProposePickSource}
+              onConfirmDiffResolution={onConfirmDiffResolution}
+              onDeclineDiffResolution={onDeclineDiffResolution}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">

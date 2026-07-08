@@ -9,7 +9,9 @@ key + field, and emits **agreements** (auto-appliable) vs **`source_diff` descri
 (human-arbitrated). It NEVER picks a winner — a recommendation is advisory only.
 
 R1 is **pure + deterministic**: no DB, no writes, no worker wiring. R2 persists diffs as
-`source_diff` cases; R3 renders the pick UI. Anchored on the **L-037** incident.
+`source_diff` cases; **R3a** (shipped 2026-07-08, app-side) resolves them — a reviewer PICKS which
+source is authoritative and the pick becomes per-leg `rc_out` writes + a `pick_source` ruling (see
+below); R3b (frontend) renders the pick UI. Anchored on the **L-037** incident.
 
 ## Files
 - `types.ts` — `SourceRecord` (input), `Agreement` / `SourceDiff` / `SourceOpinion` /
@@ -107,6 +109,20 @@ EXISTING run-triage + Sync Review automatically (generic case detail; the per-fi
 they cannot form a fine key and are **skipped** by `bucketProposed` — only standard blocks reconcile.
 (2) The gsheet re-download is a second snapshot of the Sheet (negligible skew within one run;
 observational anyway). R4's cutover routes gsheet THROUGH reconciliation, capturing the extract once.
+
+## R3a — pick-source resolution (shipped 2026-07-08, app-side)
+Lives entirely in the app (`app/(app)/sync/diff-plan.ts` PURE + `resolve.ts` `'use server'`), NOT in
+this worker package — the worker only EMITS the `SourceDiff` (its `SourceOpinion.rows` carry the raw
+per-leg rows R3 needs). A reviewer picks WHICH source is authoritative for a natural key;
+`computeDiffWritePlan` translates that into a per-leg `rc_out` write plan (EDIT-preferred: greedy
+equal-weight noop matching → the clean L-037 1-1 remainder is one edit; source-only legs → insert;
+DB-only legs → soft-remove weight→0, never delete; anything messy → `ambiguous`, routes the human to
+the P5 edit-then-apply fallback). `proposePickSource` persists the plan (no write); `executeDiffResolution`
+re-reads it, applies each step under `write_ingestion_audit` provenance, and records a
+`sync_case_rulings` `action='pick_source'` row — the durable human correction R4 will consult to stop
+"Sheet-wins" from re-clobbering it. **Why `SourceLegRow` exists** (`types.ts`): a fine `weight_kg`
+opinion is the SUM across feeding legs, so R3 needs the underlying legs, not just the sum, to know
+which leg to edit/insert/zero. movement (date-level) has no per-block legs → empty `rows`.
 
 ## See also
 - `SYNC_RECONCILIATION_MODEL.md` (owner: Renzo) — the phased plan (R1–R5).

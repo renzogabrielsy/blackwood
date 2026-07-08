@@ -147,6 +147,28 @@ describe("reconcileRcOutStage — L-037 through the bucketing stage", () => {
     const { diffs } = reconcileRcOutStage(l037Input());
     expect(diffs.some((d) => d.naturalKey.batch === "APR-26-BLK1")).toBe(false);
   });
+
+  it("each opinion carries the raw per-leg rows that summed to its value (R3 write-plan input)", () => {
+    const { diffs } = reconcileRcOutStage(l037Input());
+    const blk5 = diffs.find((d) => d.naturalKey.batch === "MAR-26-BLK5")!;
+
+    const prop = blk5.sources.find((s) => s.source === "proposed")!;
+    const sheet = blk5.sources.find((s) => s.source === "gsheet")!;
+
+    // proposed's legs: 10,813 + 20,932 (true) → sum 31,745.
+    expect(prop.rows.map((r) => r.weight_kg).sort((a, b) => a - b)).toEqual([10_813, 20_932]);
+    // gsheet's legs: 10,813 + 31,745 (the cross-block cumulative) → sum 42,558.
+    expect(sheet.rows.map((r) => r.weight_kg).sort((a, b) => a - b)).toEqual([10_813, 31_745]);
+
+    // Legs carry the natural-key context a write plan needs (never a ₱/cost field).
+    for (const leg of prop.rows) {
+      expect(leg.block_loc).toBe("D-11B");
+      expect(leg.destination).toBe("MAIN");
+      expect(leg.transaction_date).toBe(D);
+      expect(leg.batch_code).toBeTruthy();
+      expect(leg).not.toHaveProperty("cost_basis");
+    }
+  });
 });
 
 describe("bucketProposed — self-consistency + FEED skip", () => {

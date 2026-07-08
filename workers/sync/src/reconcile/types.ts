@@ -35,6 +35,31 @@ export interface RcOutNaturalKey {
 }
 
 /**
+ * One raw per-LEG row that contributed to a source's summed opinion at a natural key.
+ *
+ * A source's fine `weight_kg` opinion is the SUM across the feeding legs at that key
+ * (L-037 leg-splitting robustness). R3 (the pick-source resolution, app/(app)/sync/
+ * diff-plan.ts) needs those underlying legs — not just the sum — to translate "pick
+ * source S" into the right per-leg DB writes (EDIT a mismatched leg / INSERT a missing
+ * one / soft-remove an over-stated one). So each SourceRecord (and each SourceOpinion)
+ * carries the legs that summed to it. movement has no per-block legs → empty.
+ *
+ * NEVER carries a ₱/cost field (price gating) — rc_out has none anyway.
+ */
+export interface SourceLegRow {
+  transaction_date: string;
+  /** The source's raw batch code for this leg (resolved to batch_id at write time). */
+  batch_code: string | null;
+  /** Pre-resolved batch id when the source already carries it (proposed post-classify). */
+  batch_id?: string;
+  block_loc: string | null;
+  destination: string;
+  weight_kg: number;
+  production_batch?: string | null;
+  remarks?: string | null;
+}
+
+/**
  * One source's opinion about ONE natural key, as fed into the reconciler. The extractor
  * layer (Stage 1) builds these — exactly what the source literally states, per key, plus
  * its own self-consistency verdict. The reconciler treats `fields` generically so more
@@ -48,6 +73,12 @@ export interface SourceRecord {
   naturalKey: RcOutNaturalKey;
   /** Field values this source states for this key. A field is an "opinion" iff present and non-null. */
   fields: Record<string, number | string | null>;
+  /**
+   * The raw per-leg rows that summed to this record's `weight_kg` opinion. Carried
+   * through to the `SourceDiff` so R3 can compute a per-leg write plan. Optional /
+   * empty for a movement (date-level) record, which has no per-block legs.
+   */
+  rows?: SourceLegRow[];
   /**
    * Did this record pass its OWN internal-consistency check? For a proposed record this is
    * the L-037 balance guard (every leg's STRT − END == DAY TOTAL, and same-slot continuity).
@@ -69,6 +100,11 @@ export interface SourceOpinion {
   selfConsistent: boolean;
   /** Other independent sources whose evidence backs THIS value (direct match or movement rollup). */
   corroboratedBy: RcOutSource[];
+  /**
+   * The raw per-leg rows that summed to this opinion's `value` — the write-plan input
+   * for R3's pick-source resolution. Empty for a movement opinion (no per-block legs).
+   */
+  rows: SourceLegRow[];
 }
 
 /** A field where all present sources agree (or only one source has an opinion). Auto-appliable. */

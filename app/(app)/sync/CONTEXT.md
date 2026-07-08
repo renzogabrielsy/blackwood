@@ -135,8 +135,9 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     `known_ruling_id` (status stays `open` — pre-annotated, not silenced). All reads/writes use
     `createAdminClient()` (service role) — these tables are service-role-write only.
     `source_diff` cases ride the EXISTING run-triage + investigator + Sync Review rails (generic
-    case detail; the dedicated per-field PICK/`resolveDiff` control is R3 — for now the
-    investigator can discuss them and they can be dismissed).
+    case detail) AND, as of **R3a**, carry a dedicated pick-source resolution path
+    (`proposePickSource` / `executeDiffResolution` in `resolve.ts` + the pure planner
+    `diff-plan.ts`) — see the resolve.ts section below.
   - **`listOpenCases()`** → every `status != 'resolved'` case, newest-seen first, with the
     pre-annotating ruling's `verdict_summary` joined via the `known_ruling_id` FK. **P4:** now also
     selects `verdict` (the persisted investigation verdict jsonb) so the review page can render the
@@ -243,8 +244,39 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`bulkDismissCases(caseIds, reason)`** (v1.1) → same `{ok, resolved, errors[]}` — the review
     page's multi-select path; per-case `dismissOneCase` writes, provenance "bulk-dismissed by
     <email>"; refuses a `run_triage` case (dismiss its flags, not the summary).
+  - **R3a — PICK-SOURCE resolution of a `source_diff` case** (the Reconciliation Model's Stage-3
+    human arbitration; `PickSourceResult = {ok, error?, proposal_message_id?, ruling_id?, plan?}`):
+    - **`proposePickSource(caseId, source)`** → validates the case is an UNRESOLVED `source_diff`
+      and `source` ∈ the diff's competing sources; reads the LIVE `rc_out` legs at the natural key
+      (`transaction_date` + `block_loc` + `destination`); computes the pure per-leg write plan
+      (`diff-plan.ts::computeDiffWritePlan` over the DB legs + the chosen `SourceOpinion.rows`);
+      **persists it as an assistant message carrying one `propose_pick_source` tool_use** (mirrors
+      `propose_resolution` so `findOpenPickSourcePlan`-detection + `sanitizeAnthropicHistory` replay
+      both work). Writes NOTHING to `rc_out`. Returns the plan + proposal message id.
+    - **`executeDiffResolution(caseId, proposalRef)`** → requirePrivileged; RE-READS the plan FROM
+      THE PERSISTED PROPOSAL (never client input); double-execution guard via `findOpenPickSourcePlan`;
+      if `plan.ambiguous` → NO write, returns an error routing the UI to the **P5 edit-then-apply**
+      fallback; else applies each step (EDIT/`remove` = direct `rc_out` UPDATE + `write_ingestion_audit`
+      — the `remove` op only soft-zeroes a weight, never deletes; INSERT via the deterministic
+      `apply-writers.ts` rc_out writer) each stamped with provenance `source_diff resolved via Sync
+      Review by <email>: picked <source> — <field> for <label>`. Records a **`sync_case_rulings` row
+      `action='pick_source'`** (summary names the picked source + the authoritative value), flips the
+      case `resolved` + `known_ruling_id`, appends a system trail, revalidates `/sync/cases`.
+    - **R4 tie-in:** the `pick_source` ruling is a durable HUMAN CORRECTION — until R4 retires
+      "Sheet-wins", a later gsheet run may re-overwrite the row; R4 consults this ruling to STOP that
+      clobbering (see the `20260708120000_sync_case_ruling_pick_source.sql` comment + L-037).
   - Never deletes. Price gating: apply payloads carry NO ₱ (rc_out has no cost column;
     `deliveries.cost_basis` forced 0 by the writer per L-008). All revalidate `/sync/cases`.
+- `diff-plan.ts` (PURE, no `'use server'`, imports only `./types` → client-import-safe for R3b) —
+  the R3a write-plan + persisted-proposal core. `computeDiffWritePlan({source, dbRows, sourceRows})`
+  → `DiffWritePlan {source, ambiguous, suggestion?, steps: DiffPlanStep[], currentSumKg, chosenSumKg,
+  resultingSumKg, hasChanges}`. EDIT-preferred: greedy equal-weight `noop` matching, then the clean
+  L-037 1-1 remainder → one `edit`; source-only extra legs → `insert`; DB-only extra legs →
+  soft-`remove` (weight→0, kept); anything else (unequal counts, no clean map) → `ambiguous:true`,
+  no steps, a `suggestion` routing to P5 edit-then-apply. Also the PURE proposal helpers the UI +
+  action share: `PICK_SOURCE_TOOL`, `PickSourceProposalInput`, `parsePickSourceInput`,
+  `findOpenPickSourcePlan(rows, caseStatus)`, `diffResolutionProvenance(...)`,
+  `pickSourceRulingSummary(...)`. Exercised end-to-end by `scripts/verify-resolve-diff.ts`.
 - `case-chat.ts` — **now also exposes `propose_resolution`** (chat mode ONLY, NOT the investigation
   loop). The chat's tool surface = the 5 read-only investigator tools + `submit_verdict` +
   `PROPOSE_RESOLUTION_TOOL`; the extra dispatch routes `propose_resolution` to `executePropose`
@@ -335,6 +367,29 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     `findOpenGroupProposal`): "Dismiss N flags" badge + the listed member cases → Confirm
     (`executeGroupResolution`) / Decline (`cancelProposal`). The Quick Dismiss button is hidden on a
     triage case (dismiss its flags, not the summary). All errors → `errorToast()`.
+  - **R3b (the source_diff pick UI) — the arbitration half of the Reconciliation Model, in the app.**
+    When the selected case is `kind='source_diff'`, `CaseDetail` renders the new
+    **`cases/SourceDiffCard.tsx`** ABOVE the generic verdict card (the generic `ResolutionCard` /
+    `findOpenProposal` slot stays null for these — pick-source is a separate rail). The card shows:
+    (1) a dense Excel-standard **comparison table** — one row per `SourceOpinion` (source label,
+    value in kg font-mono right-aligned, self-consistent OK/Fails chip, a "corroborated by …" chip
+    when `corroboratedBy` is non-empty, and provenance truncated `max-w-[200px]` + Tooltip). The
+    `recommended.source` row carries an **emerald ring + "Recommended" badge**, with `recommended.why`
+    as a one-line advisory note ("Recommended — you decide"). (2) A per-source **"Use this" button**
+    → `onProposePickSource(source)` → `proposePickSource` (writes nothing; persists the plan as an
+    assistant `propose_pick_source` message). (3) On a pick, the returned **`DiffWritePlan`** renders
+    inline as a **confirm card** (`PickPlanConfirm`, ResolutionCard's visual language): a steps table
+    (op badge · feeding · before→after kg font-mono) + `currentSumKg → resultingSumKg`; when
+    `plan.hasChanges===false` it reads "picking this records the decision; no feeding changes."
+    Confirm → `executeDiffResolution(caseId, proposal_message_id)`; Decline → `cancelProposal`. If
+    `plan.ambiguous`, NO Confirm is shown — the card routes the reviewer to edit-then-apply in the
+    chat below (P5). **Open-plan restore:** `CasesClient` computes `openPickPlan` + its message id via
+    the PURE **`findOpenPickSourcePlan`** (from `diff-plan.ts`, client-safe) over the live transcript,
+    so a pending un-confirmed pick re-renders after a reload; a persisted proposal + a `loadMessages`
+    refresh after each action (Realtime also repaints) drive the confirm card — no local plan state to
+    lose. The chat + Quick Dismiss stay available (a source_diff can also just be dismissed). All
+    errors → `errorToast()` (persist + Copy). Client/server boundary: SourceDiffCard imports ONLY pure
+    types from `diff-plan.ts` — NEVER `lib/investigator/resolution.ts` (`npm run build` is the gate).
 - `cases/grouping.ts` (**PURE, client-safe + node-safe, no React / no server imports**) — the
   load-bearing review-page transformations, factored out so they unit-drive under
   `scripts/verify-case-grouping.ts`: `groupCasesByRun` (per-run sections, newest run first, no-run
@@ -469,6 +524,13 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `lib/sync/cases-fold.ts`): fingerprint stability, source-order independence, a changed
   competing value re-alarms while sub-kg jitter does not, the human label, and the fold guarding
   an absent/empty reconciliation channel. No DB.
+- `scripts/verify-resolve-diff.ts` (**R3a**) — `npx tsx scripts/verify-resolve-diff.ts` runs 8
+  framework-free assertions over the PICK-SOURCE core (`app/(app)/sync/diff-plan.ts`): the L-037
+  clean case (one edit 31,745→20,932, result 31,745, not ambiguous), an equal-count value-diff, an
+  ambiguous unequal-count with no clean weight match (no steps), insert-missing-leg, DB-already-equal
+  (all noops), soft-remove of an over-stated leg (weight→0, kept), the exact provenance + `pick_source`
+  ruling-summary strings, and the `parsePickSourceInput` / `findOpenPickSourcePlan` round-trip (a
+  later decline closes it). No DB.
 - `scripts/eval-investigator.ts` (**Smart-Adjudicator P6** — the LIVE trust harness, NOT
   throwaway) — `npx tsx scripts/eval-investigator.ts [--case <name>] [--keep]`. Seeds
   SYNTHETIC fake `sync_runs` + cases and drives the REAL `runInvestigation()` against the

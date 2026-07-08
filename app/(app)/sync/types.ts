@@ -347,6 +347,22 @@ export interface RcOutNaturalKey {
   destination: string | null
 }
 
+/**
+ * One raw per-LEG row that summed to a source's opinion at a natural key — R3's
+ * pick-source write-plan input (app/(app)/sync/diff-plan.ts). Mirror of the worker's
+ * reconcile/types.ts::SourceLegRow. NEVER carries a ₱/cost field (rc_out has none).
+ */
+export interface SourceLegRow {
+  transaction_date: string
+  batch_code: string | null
+  batch_id?: string
+  block_loc: string | null
+  destination: string
+  weight_kg: number
+  production_batch?: string | null
+  remarks?: string | null
+}
+
 /** One competing value inside a diff, with provenance + self-consistency + backers. */
 export interface SourceOpinion {
   source: RcOutSource
@@ -354,6 +370,8 @@ export interface SourceOpinion {
   provenance: string
   selfConsistent: boolean
   corroboratedBy: RcOutSource[]
+  /** The raw legs that summed to `value` — R3's per-leg write-plan input. Empty for movement. */
+  rows: SourceLegRow[]
 }
 
 /** Advisory winner hint — NEVER a decision (the human still picks in Sync Review). */

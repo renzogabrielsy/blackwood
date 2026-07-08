@@ -27,6 +27,7 @@ import { revalidatePath } from 'next/cache'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePrivileged } from '@/lib/sync/privileged'
+import type { Json } from '@/types/supabase'
 import {
   parseProposal,
   parseGroupProposal,
@@ -39,6 +40,21 @@ import {
   type GroupResolutionProposal,
 } from '@/lib/investigator/resolution'
 import { APPLY_WRITERS } from '@/lib/sync/apply-writers'
+import { sourceDiffNaturalKey } from '@/lib/sync/fingerprint'
+import {
+  computeDiffWritePlan,
+  diffResolutionProvenance,
+  pickSourceRulingSummary,
+  findOpenPickSourcePlan,
+  parsePickSourceInput,
+  PICK_SOURCE_TOOL,
+  type DbRcOutRow,
+  type DiffWritePlan,
+  type DiffPlanStep,
+  type PickSourceProposalInput,
+} from './diff-plan'
+import type { RcOutSource, SourceDiff, SourceLegRow } from './types'
+import { randomUUID } from 'node:crypto'
 
 type AdminClient = ReturnType<typeof createAdminClient>
 
@@ -648,4 +664,386 @@ function extractRunCaseIds(row: unknown): string[] {
 async function resolveEmail(admin: AdminClient, userId: string): Promise<string> {
   const { data } = await admin.from('profiles').select('email').eq('id', userId).maybeSingle()
   return (data?.email as string | undefined) ?? userId
+}
+
+// ============================================================================
+// R3a — PICK-SOURCE resolution of a `source_diff` case (the Sync Reconciliation
+// Model's Stage-3 human arbitration). The reviewer picks WHICH source's value is
+// authoritative for a natural key; we translate that into a per-leg rc_out write plan
+// (diff-plan.ts) and, on an explicit confirm, apply it under a full audit trail + a
+// `pick_source` ruling. NEVER auto-picks; NEVER hard-deletes; a `remove` step only
+// zeroes a weight, and only ever inside a confirmed + audited plan here.
+// ============================================================================
+
+export interface PickSourceResult {
+  ok: boolean
+  error?: string
+  /** The persisted proposal message id — the `proposalRef` for executeDiffResolution. */
+  proposal_message_id?: string
+  /** The new ruling id (execute only). */
+  ruling_id?: string
+  /** The computed plan — the confirm UI renders exactly what picking this source changes. */
+  plan?: DiffWritePlan
+}
+
+/** The subset of a source_diff case row the pick-source path needs. */
+interface DiffCaseRow {
+  id: string
+  report_type: string
+  kind: string
+  status: string
+  fingerprint: string
+  natural_key: string
+  row: unknown
+}
+
+const DIFF_CASE_COLS = 'id, report_type, kind, status, fingerprint, natural_key, row'
+
+/**
+ * PROPOSE picking `source` as authoritative for a source_diff case. Validates the case
+ * is an unresolved source_diff and `source` is one of the diff's competing sources;
+ * reads the LIVE rc_out legs at the natural key; computes the pure write plan
+ * (computeDiffWritePlan); and PERSISTS it as an assistant message carrying one
+ * propose_pick_source tool_use (mirrors P5 propose_resolution so findOpen*-detection +
+ * sanitize replay both work). Writes NOTHING to rc_out. Returns the plan + the proposal
+ * message id for the confirm step.
+ */
+export async function proposePickSource(
+  caseId: string,
+  source: RcOutSource,
+): Promise<PickSourceResult> {
+  await requirePrivileged()
+  const admin = createAdminClient()
+
+  // 1. Load + validate the case.
+  const { data: theCase, error: caseErr } = await admin
+    .from('sync_held_cases')
+    .select(DIFF_CASE_COLS)
+    .eq('id', caseId)
+    .maybeSingle()
+  if (caseErr) return { ok: false, error: `Could not load the case: ${caseErr.message}` }
+  if (!theCase) return { ok: false, error: 'Case not found.' }
+  const c = theCase as DiffCaseRow
+  if (c.kind !== 'source_diff') {
+    return { ok: false, error: 'This is not a source-disagreement case — pick-source only applies to a source_diff.' }
+  }
+  if (c.status === 'resolved') return { ok: false, error: 'This case is already resolved.' }
+  if (c.status === 'investigating') {
+    return { ok: false, error: 'The investigator is still working on this case — wait for it to finish.' }
+  }
+
+  // 2. Parse the SourceDiff off the case row + validate the picked source.
+  const diff = c.row as SourceDiff | null
+  if (!diff || !Array.isArray(diff.sources)) {
+    return { ok: false, error: 'This case has no reconciliation detail to resolve.' }
+  }
+  const opinion = diff.sources.find((s) => s.source === source)
+  if (!opinion) {
+    const avail = diff.sources.map((s) => s.source).join(', ')
+    return { ok: false, error: `"${source}" is not one of the sources in this disagreement (${avail}).` }
+  }
+
+  // 3. Read the LIVE rc_out legs at the natural key (date + block + destination — the
+  //    physical grain that identifies a block's feedings on a day; a batch mismatch just
+  //    makes the plan AMBIGUOUS, which is safe). source_diff keys always carry a block.
+  const key = diff.naturalKey
+  if (!key.block_loc) {
+    return { ok: false, error: 'This disagreement has no block location, so its feeding legs cannot be located to rewrite.' }
+  }
+  const dest = key.destination ?? 'MAIN'
+  const { data: liveRows, error: liveErr } = await admin
+    .from('rc_out')
+    .select('id, transaction_date, batch_id, block_loc, destination, weight_kg, production_batch, remarks')
+    .eq('transaction_date', key.transaction_date)
+    .eq('block_loc', key.block_loc)
+    .eq('destination', dest)
+  if (liveErr) return { ok: false, error: `Could not read the current feedings: ${liveErr.message}` }
+
+  const dbRows: DbRcOutRow[] = (liveRows ?? []).map((r) => ({
+    id: r.id as string,
+    transaction_date: r.transaction_date as string,
+    batch_id: (r.batch_id as string | null) ?? null,
+    block_loc: (r.block_loc as string | null) ?? null,
+    destination: (r.destination as string | null) ?? null,
+    weight_kg: Number(r.weight_kg ?? 0),
+    production_batch: (r.production_batch as string | null) ?? null,
+    remarks: (r.remarks as string | null) ?? null,
+  }))
+
+  // 4. Compute the pure per-leg write plan.
+  const plan = computeDiffWritePlan({ source, dbRows, sourceRows: opinion.rows ?? [] })
+
+  // 5. Persist the proposal (assistant row + one propose_pick_source tool_use).
+  const input: PickSourceProposalInput = {
+    source,
+    field: diff.field,
+    naturalKeyLabel: c.natural_key,
+    plan,
+  }
+  const toolUseId = `pick_${randomUUID()}`
+  const pos = await nextMessagePosition(admin, caseId)
+  const { data: msg, error: insErr } = await admin
+    .from('sync_case_messages')
+    .insert({
+      case_id: caseId,
+      role: 'assistant',
+      content: pickProposalNarration(input),
+      tool_calls: [{ id: toolUseId, name: PICK_SOURCE_TOOL, input }] as unknown as Json,
+      tool_results: null,
+      position: pos,
+    })
+    .select('id')
+    .single()
+  if (insErr) return { ok: false, error: `Could not save the proposal: ${insErr.message}` }
+
+  return { ok: true, proposal_message_id: msg.id as string, plan }
+}
+
+/**
+ * EXECUTE a pick-source resolution the reviewer confirmed. requirePrivileged; re-reads
+ * the plan FROM THE PERSISTED PROPOSAL (never a client payload); guards it is still the
+ * OPEN proposal; then:
+ *   - ambiguous plan → NO write, returns an error routing the UI to P5 edit-then-apply;
+ *   - else applies each step (EDIT-preferred; INSERT via the deterministic rc_out writer;
+ *     `remove` = soft-zero) each stamped with write_ingestion_audit provenance.
+ * Records a `pick_source` sync_case_rulings row, flips the case resolved + pins the
+ * ruling, and appends a system trail. revalidates the review page.
+ *
+ * NOTE — this write is a HUMAN CORRECTION. Until R4 retires "Sheet-wins", a later gsheet
+ * run may re-overwrite it; the `pick_source` ruling recorded here is exactly what R4
+ * consults to STOP that clobbering (see the migration comment + LEARNING_LEDGER L-037).
+ */
+export async function executeDiffResolution(
+  caseId: string,
+  proposalRef: string,
+): Promise<PickSourceResult> {
+  const userId = await requirePrivileged()
+  const admin = createAdminClient()
+  const email = await resolveEmail(admin, userId)
+
+  // 1. Load the case.
+  const { data: theCase, error: caseErr } = await admin
+    .from('sync_held_cases')
+    .select(DIFF_CASE_COLS)
+    .eq('id', caseId)
+    .maybeSingle()
+  if (caseErr) return { ok: false, error: `Could not load the case: ${caseErr.message}` }
+  if (!theCase) return { ok: false, error: 'Case not found.' }
+  const c = theCase as DiffCaseRow
+  if (c.kind !== 'source_diff') return { ok: false, error: 'This is not a source-disagreement case.' }
+  if (c.status === 'resolved') return { ok: false, error: 'This case is already resolved.' }
+  if (c.status === 'investigating') {
+    return { ok: false, error: 'The investigator is still working on this case — wait for it to finish.' }
+  }
+
+  // 2. Load the proposal message + re-read the plan from the DB (never client input).
+  const { data: msg, error: msgErr } = await admin
+    .from('sync_case_messages')
+    .select('id, case_id, tool_calls, position')
+    .eq('id', proposalRef)
+    .maybeSingle()
+  if (msgErr) return { ok: false, error: `Could not load the proposal: ${msgErr.message}` }
+  if (!msg || msg.case_id !== caseId) return { ok: false, error: 'That proposal does not belong to this case.' }
+
+  const input = extractPickSourceProposal(msg.tool_calls)
+  if (!input) return { ok: false, error: 'That message does not contain a pick-source proposal.' }
+
+  // 3. Guard double-execution: it must still be the OPEN pick-source proposal.
+  const { data: history, error: histErr } = await admin
+    .from('sync_case_messages')
+    .select('role, content, tool_calls, position')
+    .eq('case_id', caseId)
+    .order('position', { ascending: true })
+  if (histErr) return { ok: false, error: `Could not verify the proposal: ${histErr.message}` }
+  const open = findOpenPickSourcePlan(history ?? [], c.status)
+  if (!open || open.position !== msg.position) {
+    return {
+      ok: false,
+      error: 'This proposal is no longer the current one (it was superseded, declined, or already resolved).',
+    }
+  }
+
+  const plan = input.plan
+
+  // AMBIGUOUS → no write; route to P5 edit-then-apply.
+  if (plan.ambiguous) {
+    return {
+      ok: false,
+      error:
+        (plan.suggestion ?? 'The feedings do not line up cleanly with the chosen source.') +
+        ' Use edit-then-apply on the individual feedings instead — this pick cannot be applied automatically.',
+    }
+  }
+
+  const provenance = diffResolutionProvenance({
+    email,
+    source: input.source,
+    field: input.field,
+    naturalKeyLabel: input.naturalKeyLabel,
+  })
+
+  // 4. Apply each plan step (EDIT-preferred; soft-remove/insert only inside this
+  //    confirmed + audited plan).
+  let applied = 0
+  for (const step of plan.steps) {
+    try {
+      const did = await applyDiffStep(admin, step, provenance)
+      if (did) applied++
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      return { ok: false, error: `Applying the plan failed on a ${step.op} step: ${m}` }
+    }
+  }
+
+  // 5. Ledger row (action 'pick_source').
+  const summary = pickSourceRulingSummary({
+    source: input.source,
+    field: input.field,
+    naturalKeyLabel: input.naturalKeyLabel,
+    plan,
+  })
+  const { data: ruling, error: rulingErr } = await admin
+    .from('sync_case_rulings')
+    .insert({
+      fingerprint: c.fingerprint,
+      case_id: c.id,
+      action: 'pick_source',
+      verdict_summary: summary,
+      reasoning: `${provenance}. Applied ${applied} change(s); the block/day now totals ${plan.chosenSumKg} kg.`,
+      ruled_by: userId,
+      ruled_by_email: email,
+    })
+    .select('id')
+    .single()
+  if (rulingErr) return { ok: false, error: `Recording the ruling failed: ${rulingErr.message}` }
+  const rulingId = ruling.id as string
+
+  // 6. Flip the case to resolved + pin the ruling.
+  const { error: updErr } = await admin
+    .from('sync_held_cases')
+    .update({ status: 'resolved', known_ruling_id: rulingId, updated_at: new Date().toISOString() })
+    .eq('id', c.id)
+  if (updErr) return { ok: false, error: `Marking the case resolved failed: ${updErr.message}` }
+
+  // 7. System-message trail.
+  const pos = await nextMessagePosition(admin, caseId)
+  await admin.from('sync_case_messages').insert({
+    case_id: caseId,
+    role: 'system',
+    content: `${summary} (${applied} change(s) applied by ${email})`,
+    tool_calls: null,
+    tool_results: null,
+    position: pos,
+  })
+
+  revalidatePath('/sync/cases')
+  return { ok: true, ruling_id: rulingId, plan }
+}
+
+/**
+ * Apply ONE plan step to rc_out under a full audit stamp. Returns true when it wrote
+ * (noop → false). EDIT/`remove` are direct UPDATEs (the trigger fn_update_blackwood_state
+ * recomputes the batch balance); INSERT routes through the deterministic rc_out writer
+ * (batch resolution + its own audit). rc_out has no audit trigger, so EDIT/remove write
+ * their own write_ingestion_audit row. NEVER hard-deletes.
+ */
+async function applyDiffStep(
+  admin: AdminClient,
+  step: DiffPlanStep,
+  provenance: string,
+): Promise<boolean> {
+  if (step.op === 'noop') return false
+
+  if (step.op === 'edit' || step.op === 'remove') {
+    if (!step.db_id) throw new Error(`${step.op} step is missing its db row id`)
+    const newWeight = step.op === 'remove' ? 0 : step.to_weight_kg ?? 0
+
+    const { data: before, error: befErr } = await admin
+      .from('rc_out')
+      .select('weight_kg')
+      .eq('id', step.db_id)
+      .maybeSingle()
+    if (befErr) throw new Error(befErr.message)
+    if (!before) throw new Error(`the feeding (id ${step.db_id}) no longer exists`)
+
+    const { error: updErr } = await admin
+      .from('rc_out')
+      .update({ weight_kg: newWeight })
+      .eq('id', step.db_id)
+    if (updErr) throw new Error(updErr.message)
+
+    const comment =
+      step.op === 'remove'
+        ? `${provenance} (soft-remove: over-stated leg zeroed, row kept — never deleted)`
+        : provenance
+    const { error: auditErr } = await admin.rpc('write_ingestion_audit', {
+      p_table_name: 'rc_out',
+      p_record_id: step.db_id,
+      p_operation: 'UPDATE',
+      p_diff: { weight_kg: { from: Number(before.weight_kg ?? 0), to: newWeight } } as unknown as Json,
+      p_snapshot: null,
+      p_comment: comment,
+    })
+    if (auditErr) throw new Error(`wrote the feeding but the audit log failed: ${auditErr.message}`)
+    return true
+  }
+
+  if (step.op === 'insert') {
+    const leg = step.leg
+    if (!leg) throw new Error('insert step is missing its source leg')
+    const writer = APPLY_WRITERS['rc_out']
+    if (!writer) throw new Error('no rc_out writer is registered')
+    await writer(
+      {
+        transaction_date: leg.transaction_date,
+        weight_kg: step.to_weight_kg ?? leg.weight_kg,
+        destination: leg.destination,
+        batch_code: leg.batch_code,
+        production_batch: leg.production_batch ?? null,
+        block_loc: leg.block_loc,
+        remarks: leg.remarks ?? null,
+      },
+      admin,
+      provenance,
+    )
+    return true
+  }
+
+  return false
+}
+
+/** Pull a propose_pick_source proposal out of an assistant row's tool_calls jsonb. */
+function extractPickSourceProposal(toolCalls: unknown): PickSourceProposalInput | null {
+  if (!Array.isArray(toolCalls)) return null
+  for (const tc of toolCalls) {
+    if (tc && typeof tc === 'object') {
+      const o = tc as Record<string, unknown>
+      if (o.name === PICK_SOURCE_TOOL) return parsePickSourceInput(o.input)
+    }
+  }
+  return null
+}
+
+/** Plain-language narration stored on the proposal's assistant message. */
+function pickProposalNarration(input: PickSourceProposalInput): string {
+  const { plan, source, naturalKeyLabel } = input
+  if (plan.ambiguous) {
+    return (
+      `Prepared a resolution for ${naturalKeyLabel}: make ${source} authoritative. The current feedings ` +
+      `do not line up one-to-one with ${source}, so this cannot be applied automatically — ` +
+      `${plan.suggestion ?? 'fix the rows with edit-then-apply.'} Nothing has been saved.`
+    )
+  }
+  const changes = plan.steps.filter((s) => s.op !== 'noop')
+  if (changes.length === 0) {
+    return (
+      `Prepared a resolution for ${naturalKeyLabel}: ${source} already matches the database exactly — ` +
+      `confirming records the decision without changing any feeding.`
+    )
+  }
+  const lines = changes.map((s) => `• ${s.describe}`).join('\n')
+  return (
+    `Prepared a resolution for ${naturalKeyLabel}: make ${source} authoritative. This will:\n${lines}\n` +
+    `Nothing has been saved yet — confirm to apply.`
+  )
 }

@@ -29,10 +29,19 @@ export const KIND_LABEL: Record<HeldKind, string> = {
   other: 'Set aside for review',
 }
 
+/**
+ * Human phrases for kinds outside the HeldKind set (synthetic case kinds). Kept separate
+ * from KIND_LABEL (typed to HeldKind) so the map stays exhaustive.
+ */
+const EXTRA_KIND_LABEL: Record<string, string> = {
+  source_diff: 'Sources disagree',
+  run_triage: 'Run summary',
+}
+
 /** Human phrase for a kind string (tolerant of unknown/legacy kinds). */
 export function kindLabel(kind: string | null | undefined): string {
   if (!kind) return 'Set aside for review'
-  return KIND_LABEL[kind as HeldKind] ?? kind
+  return KIND_LABEL[kind as HeldKind] ?? EXTRA_KIND_LABEL[kind] ?? kind
 }
 
 export type Verdict = 'apply' | 'skip' | 'needs-human'

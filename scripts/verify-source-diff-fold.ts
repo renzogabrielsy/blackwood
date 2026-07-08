@@ -49,6 +49,7 @@ function blk5Diff(): SourceDiff {
         provenance: 'PROPOSED DAILY REPORT 2026-06-10 MAR-26-BLK5 @ D-11B',
         selfConsistent: true,
         corroboratedBy: ['movement'],
+        rows: [],
       },
       {
         source: 'gsheet',
@@ -56,6 +57,7 @@ function blk5Diff(): SourceDiff {
         provenance: 'Google Sheet RC OUT 2026-06-10 MAR-26-BLK5 @ D-11B',
         selfConsistent: true,
         corroboratedBy: [],
+        rows: [],
       },
     ],
     recommended: { source: 'proposed', why: 'movement corroborates; gsheet uncorroborated' },

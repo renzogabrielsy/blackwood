@@ -26,6 +26,8 @@ import { CaseThread, type ThreadMessage } from './CaseThread'
 import { CaseChatInput } from './CaseChatInput'
 import { ResolutionCard } from './ResolutionCard'
 import { GroupResolutionCard, type GroupMemberCase } from './GroupResolutionCard'
+import { SourceDiffCard, type OpenPickPlan } from './SourceDiffCard'
+import type { RcOutSource, SourceDiff } from '@/app/(app)/sync/types'
 
 /** The full case row the detail pane renders (superset of the list row). */
 export interface CaseDetailRow {
@@ -66,6 +68,16 @@ interface CaseDetailProps {
   groupMembers: GroupMemberCase[]
   onConfirmGroupResolution: () => Promise<void>
   onDeclineGroupResolution: () => Promise<void>
+  /** R3b — the parsed SourceDiff for a `source_diff` case, or null. */
+  sourceDiff: SourceDiff | null
+  /** R3b — the open, un-confirmed pick plan (restored from the transcript), or null. */
+  openPickPlan: OpenPickPlan | null
+  /** R3b — propose picking a source (→ proposePickSource). */
+  onProposePickSource: (source: RcOutSource) => Promise<void>
+  /** R3b — confirm the open pick plan (→ executeDiffResolution). */
+  onConfirmDiffResolution: () => Promise<void>
+  /** R3b — decline the open pick plan (→ cancelProposal). */
+  onDeclineDiffResolution: () => Promise<void>
 }
 
 interface DriftDate {
@@ -211,6 +223,11 @@ export function CaseDetail({
   groupMembers,
   onConfirmGroupResolution,
   onDeclineGroupResolution,
+  sourceDiff,
+  openPickPlan,
+  onProposePickSource,
+  onConfirmDiffResolution,
+  onDeclineDiffResolution,
 }: CaseDetailProps) {
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const chip = STATUS_CHIP[theCase.status] ?? {
@@ -221,6 +238,7 @@ export function CaseDetail({
   const hasVerdict = asVerdict(theCase.verdict) != null
   const neverInvestigated = theCase.status === 'open' && messages.length === 0 && !hasVerdict
   const isResolved = theCase.status === 'resolved'
+  const isSourceDiff = theCase.kind === 'source_diff'
 
   // Keep the thread pinned to the newest message as it streams in.
   React.useEffect(() => {
@@ -275,6 +293,21 @@ export function CaseDetail({
           )}
           {drift.length > 0 && <DriftTable drift={drift} />}
         </div>
+
+        {/* R3b — the pick-source card for a source_diff case (above the generic verdict). */}
+        {isSourceDiff && sourceDiff && (
+          <SourceDiffCard
+            diff={sourceDiff}
+            naturalKeyLabel={theCase.natural_key}
+            openPlan={openPickPlan}
+            onPick={onProposePickSource}
+            onConfirm={onConfirmDiffResolution}
+            onDecline={onDeclineDiffResolution}
+            pending={resolvePending}
+            busy={busy}
+            isResolved={isResolved}
+          />
+        )}
 
         {hasVerdict && <VerdictCard verdict={theCase.verdict} />}
 

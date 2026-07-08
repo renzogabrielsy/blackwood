@@ -178,6 +178,9 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
           provenance: rec.provenance,
           selfConsistent: rec.selfConsistent,
           corroboratedBy,
+          // Carry the raw legs through so R3's pick-source resolution can turn the
+          // chosen sum into per-leg DB writes (edit / insert / soft-remove).
+          rows: rec.rows ?? [],
         };
       });
 

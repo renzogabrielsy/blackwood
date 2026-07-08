@@ -24,7 +24,7 @@
 import type { ProposedRow } from "../reports/rc_out/extract.js";
 import type { RowDict } from "../reports/gsheet/deductions.js";
 import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
-import type { ReconcileResult, SourceDiff, SourceRecord } from "./types.js";
+import type { ReconcileResult, SourceDiff, SourceLegRow, SourceRecord } from "./types.js";
 
 /** The rows the stage buckets. All three are OPTIONAL — a source absent from a run
  *  (no PROPOSED email, no MOVEMENT email) simply contributes no records. */
@@ -125,10 +125,22 @@ export function bucketProposed(rows: readonly ProposedRow[]): SourceRecord[] {
       day_total_kg: r.day_total_kg,
     }));
     const sc = proposedLegsSelfConsistent(legs);
+    // The raw legs the sum is built from — R3's per-leg write-plan input.
+    const rows: SourceLegRow[] = b.rows.map((r) => ({
+      transaction_date: r.transaction_date,
+      batch_code: r.batch_code_resolved ?? r.batch_code_primary ?? null,
+      batch_id: r.batch_id,
+      block_loc: r.block_loc,
+      destination: r.destination || MAIN,
+      weight_kg: r.weight_kg ?? 0,
+      production_batch: r.production_batch,
+      remarks: r.remarks,
+    }));
     const rec: SourceRecord = {
       source: "proposed",
       naturalKey: { transaction_date: b.date, batch: b.batch, block_loc: b.block, destination: b.dest },
       fields: { weight_kg: sum },
+      rows,
       selfConsistent: sc.selfConsistent,
       provenance:
         `PROPOSED DAILY REPORT ${b.date} ${b.batch} @ ${b.block} — ` +
@@ -158,10 +170,22 @@ export function bucketGsheetRcOut(rows: readonly RowDict[]): SourceRecord[] {
 
   return buckets.map((b) => {
     const sum = round2(b.rows.reduce((acc, r) => acc + ((r.weight_kg as number | null) ?? 0), 0));
+    // The raw gsheet legs the sum is built from — R3's per-leg write-plan input.
+    const rows: SourceLegRow[] = b.rows.map((r) => ({
+      transaction_date: (r.transaction_date as string | null) ?? b.date,
+      batch_code:
+        (r.batch_code_primary as string | null | undefined) ?? null,
+      block_loc: (r.block_loc as string | null) ?? null,
+      destination: (r.destination as string | null) || MAIN,
+      weight_kg: (r.weight_kg as number | null) ?? 0,
+      production_batch: (r.production_batch as string | null) ?? null,
+      remarks: (r.remarks as string | null) ?? null,
+    }));
     return {
       source: "gsheet",
       naturalKey: { transaction_date: b.date, batch: b.batch, block_loc: b.block, destination: b.dest },
       fields: { weight_kg: sum },
+      rows,
       selfConsistent: true,
       provenance: `Google Sheet RC OUT ${b.date} ${b.batch} @ ${b.block} = ${sum} kg`,
     } satisfies SourceRecord;
