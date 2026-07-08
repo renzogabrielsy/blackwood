@@ -34,7 +34,7 @@ const DEFAULTS = {
 
 /** Canonical string for a fine natural key. Components can't contain the separator. */
 function fineKeyStr(k: RcOutNaturalKey): string {
-  return [k.transaction_date, k.batch ?? "", k.block_loc ?? "", k.destination ?? "MAIN"].join("");
+  return [k.transaction_date, k.batch ?? "", k.block_loc ?? "", k.destination ?? "MAIN"].join("\u0001");
 }
 
 /** A record is FINE (reconciled) when it names a batch + block and is not the movement witness. */
@@ -83,7 +83,7 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
   // (source, date) -> summed weight across all that source's fine keys on that date.
   // This is each witness's whole-day rc_out picture, checked against the movement total.
   const dailyRollup = new Map<string, number>();
-  const rollupKey = (s: RcOutSource, date: string) => `${s}${date}`;
+  const rollupKey = (s: RcOutSource, date: string) => `${s}\u0001${date}`;
   for (const r of fine) {
     const v = opinionValue(r, weightField);
     if (typeof v !== "number") continue;
