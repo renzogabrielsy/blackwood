@@ -356,8 +356,11 @@ def _proposed_section(ws, R, *, whse, block_date, block_no, gross, pallet, net,
                       day_total, status=None, remarks=None):
     """Write one 7-row PROPOSED block section starting at row R (mirrors the real
     geometry: col A labels, col B pallet values, col K/L/M stats)."""
+    # STRT/END must satisfy the L-037 balance-integrity invariant (STRT - END == DAY
+    # TOTAL) so the synthetic section is not held as a suspected cross-block cumulative.
+    # STRT = day_total, END = 0 mirrors a fully-consumed block (STRT - END = day_total).
     ws.cell(R + 0, 1, "WHSE #"); ws.cell(R + 0, 2, whse)
-    ws.cell(R + 0, 11, "STRT. BAL"); ws.cell(R + 0, 12, 9999)
+    ws.cell(R + 0, 11, "STRT. BAL"); ws.cell(R + 0, 12, day_total)
     if status is not None:
         ws.cell(R + 0, 13, status)
     ws.cell(R + 1, 1, "BLOCK DATE"); ws.cell(R + 1, 2, block_date)

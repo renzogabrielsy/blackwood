@@ -110,6 +110,60 @@ def resolve_batch_id(row: dict, batch_lookup: dict[str, str]) -> tuple[str | Non
     return None, None
 
 
+# ---------------------------------------------------------------------------
+# L-037 balance-integrity guard — balances become VALIDATION, not scraped data.
+# ---------------------------------------------------------------------------
+BALANCE_TOL_KG = 1.0  # real reports: STRT-END == DAY TOTAL to the exact integer.
+
+
+def balance_integrity(row: dict, prev: dict | None) -> str | None:
+    """L-037 — hold a row when its scraped DAY TOTAL (the feeding weight) cannot be
+    trusted:
+      (a) within-block: STRT - END must equal DAY TOTAL. A mismatch means the DAY TOTAL
+          cell is NOT this block's own feeding (June-10: a cross-block cumulative —
+          day-opening minus THIS leg's end — written into a continuation leg's DAY TOTAL).
+      (b) continuity: a section's STRT must continue the immediately-prior section's END
+          when both describe the SAME physical slot (whse_label, block_no) on the SAME day
+          (a re-feed of the same slot — the two-leg case). A break is the "discrepancy
+          between previous and latest entry" the operator wants surfaced.
+    Returns a hold reason, or None when the balances validate. The pallet-Net sum is NOT a
+    trigger — real reports list pallets only partially (pathway/SUNDRY zones carry none), so
+    a net-sum gate would false-hold constantly. Only fires when the needed balances are BOTH
+    present — a blank STRT/END (e.g. a FEED section with no END) is never held.
+    """
+    strt = norm_num(row.get("strt_bal_kg"), 3)
+    end = norm_num(row.get("end_bal_kg"), 3)
+    day = norm_num(row.get("weight_kg") or row.get("day_total_kg"), 3)
+
+    # (a) within-block STRT - END vs DAY TOTAL.
+    if strt is not None and end is not None and day is not None:
+        se = round(strt - end, 3)
+        if abs(se - day) > BALANCE_TOL_KG:
+            return (
+                f"block balance integrity: STRT {strt} - END {end} = {se} kg but DAY TOTAL = {day} kg "
+                f"(delta {round(se - day, 3)}). The scraped DAY TOTAL disagrees with the block's own STRT/END — "
+                f"suspected cross-block cumulative (L-037). Held for manual review."
+            )
+
+    # (b) same-slot, same-day continuity against the immediately-prior section.
+    if prev is not None and strt is not None:
+        same_slot = (
+            row.get("transaction_date") == prev.get("transaction_date")
+            and norm_str(row.get("whse_label")) == norm_str(prev.get("whse_label"))
+            and row.get("block_no") == prev.get("block_no")
+        )
+        if same_slot:
+            p_end = norm_num(prev.get("end_bal_kg"), 3)
+            if p_end is not None and abs(strt - p_end) > BALANCE_TOL_KG:
+                return (
+                    f"slot continuity: STRT {strt} != the previous same-slot END {p_end} for "
+                    f"{row.get('whse_label')} #{row.get('block_no')} on {row.get('transaction_date')} "
+                    f"(delta {round(strt - p_end, 3)}). Discrepancy between consecutive feedings of this "
+                    f"slot (L-037). Held for manual review."
+                )
+    return None
+
+
 def field_differences(extracted: dict, db_row: dict) -> list[dict]:
     """Return list of {field, emailValue, dbValue}."""
     diffs = []
@@ -216,7 +270,8 @@ def main() -> int:
     classified_flagged = []  # sub-watermark rows that classified as NEW — never auto-insert
     classified_soft_warnings = []  # month-boundary label variance (L-034) — NOOP'd, informational
 
-    for ex_row in extracted_rows:
+    for idx, ex_row in enumerate(extracted_rows):
+        prev_row = extracted_rows[idx - 1] if idx > 0 else None
         # Required field check
         if not ex_row.get("transaction_date"):
             classified_malformed.append({"row": ex_row, "reason": "missing transaction_date"})
@@ -242,6 +297,20 @@ def main() -> int:
         # Enrich extracted with resolved batch info
         ex_row["batch_id"] = batch_id
         ex_row["batch_code_resolved"] = batch_code_used
+
+        # L-037 balance-integrity guard: HOLD (never write) a row whose scraped DAY TOTAL
+        # disagrees with the block's own STRT/END or breaks same-slot continuity. Runs
+        # BEFORE the natural-key routing so a corrupt cumulative can neither be inserted as
+        # NEW nor overwrite a corrected DB row as VALUE_CHANGED.
+        balance_reason = balance_integrity(ex_row, prev_row)
+        if balance_reason is not None:
+            classified_flagged.append({
+                "index": ex_row.get("_source_row"),
+                "row": ex_row,
+                "reason": balance_reason,
+            })
+            continue
+
         destination = ex_row.get("destination") or "MAIN"
         key = make_natural_key(ex_row["transaction_date"], batch_id, destination)
         matches = db_index.get(key, [])

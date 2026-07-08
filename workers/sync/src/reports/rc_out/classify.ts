@@ -158,6 +158,75 @@ function numEq(a: number | null, b: number | null): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// L-037 balance-integrity guard — balances become VALIDATION, not scraped data.
+// ---------------------------------------------------------------------------
+
+/** kg tolerance for the balance checks. Real reports have STRT−END == DAY TOTAL to
+ *  the exact integer (verified across the full May+July corpus, dSE=0 everywhere),
+ *  so 1 kg absorbs trivial rounding without masking a real gap (June-10 was 10,813 kg). */
+const BALANCE_TOL_KG = 1.0;
+
+/** Plain 3dp round for the human-readable hold reason (never a comparison path). */
+function r3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/**
+ * L-037 — hold a row when its scraped DAY TOTAL (the feeding weight) cannot be trusted:
+ *   (a) within-block: STRT − END must equal DAY TOTAL. A mismatch means the DAY TOTAL
+ *       cell is NOT this block's own feeding (the June-10 signature: the operator wrote a
+ *       cross-block cumulative — day-opening minus THIS leg's end — into a continuation
+ *       leg's DAY TOTAL). The extractor scrapes DAY TOTAL faithfully; this guard is what
+ *       stops a bad cumulative from being stored (or from overwriting a corrected DB row).
+ *   (b) continuity: a section's opening STRT must continue the immediately-prior section's
+ *       END when both describe the SAME physical slot on the SAME day (a re-feed of the
+ *       same (whse_label, block_no) — the two-leg case). A break is the "discrepancy
+ *       between previous and latest entry" the operator wants surfaced.
+ *
+ * Returns a hold reason, or null when the balances validate. The pallet-Net sum is
+ * deliberately NOT a trigger — real reports list pallets only partially (pathway/SUNDRY
+ * zones carry none), so a net-sum gate would false-hold constantly (verified on the
+ * corpus). Only fires when the needed balances are BOTH present — a blank STRT/END cell
+ * (e.g. a FEED section with no END) cannot be validated and is never held.
+ */
+function balanceIntegrity(row: ProposedRow, prev: ProposedRow | null): string | null {
+  const strt = normNum(row.strt_bal_kg, 3);
+  const end = normNum(row.end_bal_kg, 3);
+  const day = normNum(pyOr(row.weight_kg, row.day_total_kg), 3);
+
+  // (a) within-block STRT − END vs DAY TOTAL.
+  if (strt !== null && end !== null && day !== null) {
+    const se = r3(strt - end);
+    if (Math.abs(se - day) > BALANCE_TOL_KG) {
+      return (
+        `block balance integrity: STRT ${strt} - END ${end} = ${se} kg but DAY TOTAL = ${day} kg ` +
+        `(delta ${r3(se - day)}). The scraped DAY TOTAL disagrees with the block's own STRT/END — ` +
+        `suspected cross-block cumulative (L-037). Held for manual review.`
+      );
+    }
+  }
+
+  // (b) same-slot, same-day continuity against the immediately-prior section.
+  if (prev !== null && strt !== null) {
+    const sameSlot =
+      row.transaction_date === prev.transaction_date &&
+      normStr(row.whse_label) === normStr(prev.whse_label) &&
+      row.block_no === prev.block_no;
+    if (sameSlot) {
+      const pEnd = normNum(prev.end_bal_kg, 3);
+      if (pEnd !== null && Math.abs(strt - pEnd) > BALANCE_TOL_KG) {
+        return (
+          `slot continuity: STRT ${strt} != the previous same-slot END ${pEnd} for ` +
+          `${row.whse_label} #${row.block_no} on ${row.transaction_date} (delta ${r3(strt - pEnd)}). ` +
+          `Discrepancy between consecutive feedings of this slot (L-037). Held for manual review.`
+        );
+      }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Main classify — classify_rc_out.py:151-327 (offline: consumes snapshots, no DB).
 // ---------------------------------------------------------------------------
 
@@ -207,7 +276,9 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
   const classifiedFlagged: FlaggedItem[] = [];
   const classifiedSoftWarnings: SoftWarning[] = [];
 
-  for (const exRow of extractedRows) {
+  for (let idx = 0; idx < extractedRows.length; idx++) {
+    const exRow = extractedRows[idx];
+    const prevRow = idx > 0 ? extractedRows[idx - 1] : null;
     // Required-field check (classify_rc_out.py:208-214).
     if (!exRow.transaction_date) {
       classifiedMalformed.push({ row: exRow, reason: "missing transaction_date" });
@@ -237,6 +308,17 @@ export function classifyRcOut(inputs: ClassifyInputs): ClassifyResult {
     // enriched batch_id/batch_code_resolved appear in the echoed new/changed/flagged row.
     exRow.batch_id = batchId;
     exRow.batch_code_resolved = batchCodeUsed as string;
+
+    // L-037 balance-integrity guard: HOLD (never write) a row whose scraped DAY TOTAL
+    // disagrees with the block's own STRT/END or breaks same-slot continuity. This runs
+    // BEFORE the natural-key routing so a corrupt cumulative can neither be inserted as
+    // NEW nor overwrite a corrected DB row as VALUE_CHANGED.
+    const balanceReason = balanceIntegrity(exRow, prevRow);
+    if (balanceReason !== null) {
+      classifiedFlagged.push({ index: exRow._source_row, row: exRow, reason: balanceReason });
+      continue;
+    }
+
     const destination = exRow.destination || "MAIN";
     const key = makeNaturalKey(exRow.transaction_date, batchId, destination);
     const matches = dbIndex.get(keyStr(key)) ?? [];

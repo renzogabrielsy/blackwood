@@ -12,9 +12,12 @@
  */
 import { describe, it, expect } from "vitest";
 
+import ExcelJS from "exceljs";
+
 import { reconcile } from "../../src/reports/rc_out/reconcile.js";
 import { classifyRcOut } from "../../src/reports/rc_out/classify.js";
-import type { ProposedRow } from "../../src/reports/rc_out/extract.js";
+import { extractProposed, type ProposedRow } from "../../src/reports/rc_out/extract.js";
+import { loadWorkbook } from "../../src/lib/xlsx.js";
 
 // A minimal well-formed extracted PROPOSED row.
 function mkRow(over: Partial<ProposedRow>): ProposedRow {
@@ -28,9 +31,12 @@ function mkRow(over: Partial<ProposedRow>): ProposedRow {
     batch_code_primary: "JULY-26-BLK9",
     batch_code_fallbacks: [],
     supplier: null,
-    strt_bal_kg: 9999,
+    // Balances default to null so the L-037 balance-integrity guard is INERT for tests
+    // targeting other rules (a null STRT/END is never validated). The L-037 suite below
+    // supplies explicit, balance-consistent (or deliberately broken) STRT/END values.
+    strt_bal_kg: null,
     day_total_kg: 1414,
-    end_bal_kg: 0,
+    end_bal_kg: null,
     weight_kg: 1414,
     destination: "MAIN",
     production_batch: "JUL",
@@ -441,5 +447,220 @@ describe("classify — malformed zero weight", () => {
     });
     expect(res.summary.malformed_count).toBe(1);
     expect(res.malformed[0].reason).toBe("missing or zero weight");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-037 — balances become VALIDATION, not scraped data.
+//
+// The June-10 production bug: MARCH-26-BLK5 at D-11B was fed in TWO consecutive legs on
+// one sheet. Leg 1 DAY TOTAL 10,813 (STRT 65,763 → END 54,950). Leg 2 DAY TOTAL 20,932
+// (STRT 54,950 → END 34,018). The DB stored 10,813 and 31,745 — leg 2 got a CROSS-BLOCK
+// cumulative (65,763 − 34,018 = day-opening minus leg-2's end), over-stating the feeding.
+// The extractor reads each block's own DAY TOTAL scoped to that block; the guard is the
+// validation layer that HOLDS a row whose scraped DAY TOTAL disagrees with the block's own
+// STRT/END, or whose STRT breaks continuity from the prior same-slot leg.
+// ---------------------------------------------------------------------------
+describe("classify — L-037 balance-integrity guard", () => {
+  const batchLookup = { "MARCH-26-BLK5": "bid-blk5" };
+
+  // The correct two-leg day — each leg's DAY TOTAL agrees with its own STRT − END.
+  const leg1 = () =>
+    mkRow({
+      transaction_date: "2026-06-10",
+      whse_label: "D-11B",
+      block_loc: "D-11B",
+      block_date: "2026-03-01",
+      block_no: 5,
+      batch_code_primary: "MARCH-26-BLK5",
+      batch_code_fallbacks: [],
+      strt_bal_kg: 65763,
+      end_bal_kg: 54950,
+      day_total_kg: 10813,
+      weight_kg: 10813,
+      production_batch: "JUNE",
+      _source_row: 8,
+    });
+  const leg2 = (over: Partial<ProposedRow> = {}) =>
+    mkRow({
+      transaction_date: "2026-06-10",
+      whse_label: "D-11B",
+      block_loc: "D-11B",
+      block_date: "2026-03-01",
+      block_no: 5,
+      batch_code_primary: "MARCH-26-BLK5",
+      batch_code_fallbacks: [],
+      strt_bal_kg: 54950,
+      end_bal_kg: 34018,
+      day_total_kg: 20932,
+      weight_kg: 20932,
+      production_batch: "JUNE",
+      _source_row: 12,
+      ...over,
+    });
+
+  it("two consistent legs are BOTH accepted (weights 10,813 and 20,932 — never 31,745)", () => {
+    const res = classifyRcOut({
+      extractedRows: [leg1(), leg2()],
+      batchLookup,
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.flagged_count).toBe(0);
+    expect(res.summary.new_count).toBe(2);
+    const weights = res.new.map((n) => n.row.weight_kg);
+    expect(weights).toEqual([10813, 20932]);
+    expect(weights).not.toContain(31745);
+  });
+
+  it("HOLDS leg 2 when its DAY TOTAL is a cross-block cumulative (31,745 vs STRT−END 20,932)", () => {
+    // The exact June-10 corruption: leg 2's DAY TOTAL cell carries 31,745 (= 65,763 − 34,018),
+    // but its own STRT 54,950 − END 34,018 = 20,932. The guard flags it, never inserts.
+    const res = classifyRcOut({
+      extractedRows: [leg1(), leg2({ day_total_kg: 31745, weight_kg: 31745 })],
+      batchLookup,
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.new_count).toBe(1); // leg 1 still clean → NEW
+    expect(res.summary.flagged_count).toBe(1);
+    expect(res.flagged[0].reason).toContain("balance integrity");
+    expect(res.flagged[0].reason).toContain("cross-block cumulative");
+    expect(res.flagged[0].row.weight_kg).toBe(31745);
+  });
+
+  it("HOLDS on a slot-continuity break (leg 2 STRT ≠ leg 1 END) even when leg 2 is internally consistent", () => {
+    // leg 2 opens at 50,000 (≠ leg 1's END 54,950) but is internally consistent
+    // (50,000 − 29,068 = 20,932), so only the continuity check catches it.
+    const res = classifyRcOut({
+      extractedRows: [leg1(), leg2({ strt_bal_kg: 50000, end_bal_kg: 29068 })],
+      batchLookup,
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.flagged_count).toBe(1);
+    expect(res.summary.new_count).toBe(1);
+    expect(res.flagged[0].reason).toContain("slot continuity");
+  });
+
+  it("continuity does NOT fire across DIFFERENT slots (different whse) even if STRT ≠ prior END", () => {
+    const other = leg2({
+      whse_label: "A-7C",
+      block_loc: "A-7C",
+      block_no: 4,
+      batch_code_primary: "MARCH-26-BLK5", // same code, different physical slot
+      strt_bal_kg: 99999, // ≠ leg1 END, but a different slot → not compared
+      end_bal_kg: 79067, // 99999 − 79067 = 20932 (internally consistent)
+    });
+    const res = classifyRcOut({
+      extractedRows: [leg1(), other],
+      batchLookup,
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.flagged_count).toBe(0);
+    expect(res.summary.new_count).toBe(2);
+  });
+
+  it("the guard prevents a corrupt DAY TOTAL from OVERWRITING a corrected DB row (no VALUE_CHANGED)", () => {
+    // The DB already holds the CORRECT 20,932 (hand-corrected). The sheet still carries the
+    // corrupt 31,745. Without the guard this is a VALUE_CHANGED that would re-corrupt the DB;
+    // with the guard it is HELD instead.
+    const dbRow = {
+      id: "rcout-corrected",
+      transaction_date: "2026-06-10",
+      batch_id: "bid-blk5",
+      destination: "MAIN",
+      weight_kg: 20932,
+      block_loc: "D-11B",
+      production_batch: "JUNE",
+      remarks: null,
+    };
+    const res = classifyRcOut({
+      extractedRows: [leg2({ day_total_kg: 31745, weight_kg: 31745 })],
+      batchLookup,
+      dbRows: [dbRow],
+      watermark: null,
+    });
+    expect(res.summary.changed_count).toBe(0);
+    expect(res.summary.flagged_count).toBe(1);
+    expect(res.flagged[0].reason).toContain("balance integrity");
+  });
+
+  it("is INERT when STRT/END are absent (a blank-balance section is never held)", () => {
+    const res = classifyRcOut({
+      extractedRows: [leg2({ strt_bal_kg: null, end_bal_kg: null, day_total_kg: 31745, weight_kg: 31745 })],
+      batchLookup,
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.flagged_count).toBe(0);
+    expect(res.summary.new_count).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// L-037 EXTRACTOR regression — a two-leg sheet must yield each leg's OWN DAY TOTAL.
+// This is the end-to-end proof that the extractor scopes DAY TOTAL to its block and
+// never reaches into a previous block's balance (the source of the 31,745 cumulative).
+// ---------------------------------------------------------------------------
+describe("extract — two-leg same-batch same-day sheet", () => {
+  // Geometry mirrors the real PROPOSED sections: col A labels, whse in col B, block date
+  // and block no in col B (R+1/R+2), STRT/DAY/END stats in col 12.
+  function writeSection(
+    ws: ExcelJS.Worksheet,
+    R: number,
+    s: { whse: string; blockDate: Date; blockNo: string; strt: number; day: number; end: number },
+  ): void {
+    ws.getRow(R + 0).getCell(1).value = "WHSE #";
+    ws.getRow(R + 0).getCell(2).value = s.whse;
+    ws.getRow(R + 0).getCell(11).value = "STRT. BAL";
+    ws.getRow(R + 0).getCell(12).value = s.strt;
+    ws.getRow(R + 1).getCell(1).value = "BLOCK DATE";
+    ws.getRow(R + 1).getCell(2).value = s.blockDate;
+    ws.getRow(R + 1).getCell(11).value = "DAY TOTAL";
+    ws.getRow(R + 1).getCell(12).value = s.day;
+    ws.getRow(R + 2).getCell(1).value = "BLOCK NO.";
+    ws.getRow(R + 2).getCell(2).value = s.blockNo;
+    ws.getRow(R + 2).getCell(11).value = "END BAL.";
+    ws.getRow(R + 2).getCell(12).value = s.end;
+    ws.getRow(R + 3).getCell(1).value = "Gross weight";
+  }
+
+  async function buildTwoLegWorkbook(leg2Day: number) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("JUNE 10");
+    const bd = new Date(Date.UTC(2026, 2, 1)); // 2026-03-01 → MARCH-26-BLK5
+    writeSection(ws, 4, { whse: "D-11B", blockDate: bd, blockNo: "# 5", strt: 65763, day: 10813, end: 54950 });
+    writeSection(ws, 12, { whse: "D-11B", blockDate: bd, blockNo: "# 5", strt: 54950, day: leg2Day, end: 34018 });
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    return loadWorkbook(buf);
+  }
+
+  it("reads each leg's OWN DAY TOTAL — [10,813, 20,932], NEVER [10,813, 31,745]", async () => {
+    const wb = await buildTwoLegWorkbook(20932);
+    const { rows } = extractProposed(wb, 2026);
+    expect(rows.map((r) => r.weight_kg)).toEqual([10813, 20932]);
+    expect(rows.map((r) => r.day_total_kg)).toEqual([10813, 20932]);
+    // Both legs carry their own scoped balances (the guard validates these downstream).
+    expect(rows[1].strt_bal_kg).toBe(54950);
+    expect(rows[1].end_bal_kg).toBe(34018);
+    expect(rows.map((r) => r.batch_code_primary)).toEqual(["MARCH-26-BLK5", "MARCH-26-BLK5"]);
+  });
+
+  it("even when leg 2's DAY TOTAL cell is a cumulative, the extractor scrapes THAT cell verbatim (the guard, not the extractor, holds it)", async () => {
+    // Proves the extractor does NOT silently 'fix' the number — it faithfully reports the
+    // sheet's DAY TOTAL (31,745). classify's L-037 guard is what catches the STRT−END mismatch.
+    const wb = await buildTwoLegWorkbook(31745);
+    const { rows } = extractProposed(wb, 2026);
+    expect(rows[1].weight_kg).toBe(31745);
+    const res = classifyRcOut({
+      extractedRows: rows,
+      batchLookup: { "MARCH-26-BLK5": "bid-blk5" },
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.flagged_count).toBe(1);
+    expect(res.flagged[0].reason).toContain("cross-block cumulative");
   });
 });

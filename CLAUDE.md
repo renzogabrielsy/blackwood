@@ -197,6 +197,15 @@ The project is linked to Supabase. Common commands (see `/supabase` workflow for
 - **Never calculate weighted averages or inventory balances in TypeScript** — trust the DB. Aggregations, running totals, and derived state belong in SQL views or triggers, not client code.
 - **RLS posture (Phase-4 hardened, 2026-07-03):** RLS is enabled on every public table; the model is **single-org** — `authenticated` = org member = broad read + write (policies are intentionally permissive `USING/WITH CHECK (true)`). The **server actions + `canViewPrices()` are the enforcement layer** (roles, price boundary, delete gates), NOT row-level predicates. Do **not** add per-role row restrictions to the core tables. The Python sync writes with the **service-role key (bypasses RLS)**, so RLS never blocks ingestion. **Reporting views are `security_invoker`** — if you add a view, grant `SELECT` to `authenticated` AND ensure every underlying table has a permissive SELECT policy, or the view throws "permission denied" (the flecon-L trap). **`anon` has no data access** (all anon table/view SELECT + function EXECUTE revoked); `is_admin` is the one function `authenticated` must keep EXECUTE on (RLS policies call it). New functions: `SET search_path = public` and `REVOKE EXECUTE … FROM PUBLIC` (grant back only the roles that call it).
 
+## Sync Integrity — Multi-Source Reconciliation (canonical, 2026-07-07)
+
+**No ingest source is authoritative.** The daily sync pulls the same facts from several sources (the Google Sheet, the PROPOSED DAILY REPORT, the RC MOVEMENT sheet, delivery emails, Czarina pricing). None of them is "the source of truth" — each is a fallible witness. Two hard rules govern how they combine:
+
+1. **Extraction must be exact.** An extractor's only job is to capture what its source *literally says*, per natural key, with no interpretation and no cross-record math. Each source additionally reports its own internal-consistency signals (e.g. rc_out's `STRT − END == DAY TOTAL` check) so the reconciler knows which witness to trust when they disagree.
+2. **Disagreements are never auto-resolved — the human arbitrates them in the app.** When two sources give different values for the same field, the sync does **not** pick a winner (the retired "Sheet-wins" policy did exactly that and silently overwrote correct data — see `LEARNING_LEDGER.md` L-037). Instead the disagreement becomes a **diff case** surfaced in **Sync Review** (`/sync/cases`), where the operator picks which value to keep. The pick writes deterministically with a full provenance audit and feeds the known-issues ledger.
+
+**Every sync run therefore ends in exactly one of two states:** (a) **CLEAN** — all sources reconciled, everything applied; or (b) **DIFFS PENDING** — a list of field-level disagreements awaiting a human pick. Never a silent auto-overwrite. The full architecture (extract → reconcile → diff-case → arbitrate) is specified in **`SYNC_RECONCILIATION_MODEL.md`**; it reuses the adjudicator's case/Sync-Review/resolve machinery wholesale.
+
 ## UI Design System — The "Excel Standard"
 
 All data tables must feel like dense spreadsheets:
