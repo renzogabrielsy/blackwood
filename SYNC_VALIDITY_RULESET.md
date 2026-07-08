@@ -5,7 +5,7 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 - **Reconciled reports** (`RC IN`, `RC OUT`, `Blocking` — the three with a Google Sheet tab): a fact auto-writes only when ≥2 sources agree; disagreements go to a human. See the reconciliation model.
 - **Single-source reports** (`Production`, `Flecon`): there is no second witness, so a fact auto-writes **as long as it passes the validity rules below**. A rule violation is the *only* thing that stops it for a human — as a `rule_violation` case naming the broken rule.
 
-> **These rules are INFERRED from our sync history (the L-rules + schema constraints + the incidents we've lived through). Renzo: please confirm / correct each. Rules marked ⚠️ are my best guess and most need your eyes.** This file is the living ruleset — it grows the way the L-ledger does.
+> **Governing principle (Renzo, 2026-07-07):** gate HARD only on things that corrupt inventory math — weights, balances, batch identity. Do NOT hold a row over things that don't affect the balance (cosmetic lab-quality values, or a negative balance that's usually just a delivery not entered yet). The ⚠️ items are now resolved — see **Decisions** at the bottom. Remaining rules are inferred from the L-rules + schema; flag any that are too strict or too loose.
 
 ## Universal rules (every report, every row)
 
@@ -28,14 +28,14 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 | O4 | `production_batch` label difference **alone** on a matched row = soft warning, not a change | L-034 (month-boundary run label) | soft warning, auto-NOOP |
 | O5 | Compare-set window must cover the oldest extracted row | L-034 | (classify rule) |
 | O6 | Day total reconciles to the movement sheet | cross-check | informational (the movement witness) |
-| O7 ⚠️ | A feed must not drive a block's balance **negative** | physical impossibility | held (ties to Blocking B1) |
+| O7 | A feed that would drive a block **negative** = **soft warning, still writes** — usually a late RC IN (delivery not yet entered), not a bad feed; O2/O3 + reconciliation catch genuine RC OUT errors | Renzo 2026-07-07 | soft warning, no hold |
 
 ## RC IN / deliveries — reconciled (RC IN tab + deliveries email) + Czarina pricing (single-source)
 
 | # | Rule | Source | On violation |
 |---|---|---|---|
 | I1 | `weight_kg > 0`; `sacks >= 0` | sanity | held |
-| I2 ⚠️ | Lab results, if present, within plausible ranges (mc/ash/bd/grit/vm/fc) | quality sanity | ⚠️ ranges TBD → soft warning |
+| I2 | Lab results are **not validated** — display-only quality metrics, never affect inventory math; a wrong value is cosmetic (shows on the grid/digest, corrupts nothing) | Renzo 2026-07-07 | none |
 | I3 | `cost_basis` is single-source (Czarina); missing → `0` placeholder | L-008 | placeholder, price-gated |
 | I4 | `true_weight_kg` / `deduction_note` are display-only — never enter any balance/view/trigger | schema note | (enforced by not using them) |
 | I5 | Upsert by `batch_code` (dedup) | schema | — |
@@ -46,7 +46,7 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 
 | # | Rule | Source | On violation |
 |---|---|---|---|
-| B1 | **Per-block:** each block's `ΣIN − ΣOUT` == the Sheet's block balance (tol) AND is `>= 0` | the core cross-check | `block_diff` case |
+| B1 | **Per-block:** each block's `ΣIN − ΣOUT` == the Sheet's block balance (tol) | the core cross-check | `block_diff` case |
 | B2 | **Grand total:** `Σ all blocks` == the overall total | catches errors that net to zero between blocks | `block_diff` case |
 | B3 | 1 `block_loc` = 1 active (non-CLOSED) batch | Blocking rules | `block_diff` case |
 | B4 | Batch identity per block matches the Sheet's Blocking tab | mapping cross-check | `block_diff` case |
@@ -61,7 +61,7 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 | P1 | Grade ∈ `{3X50, 6X50, 8X50, 2X6, 4X8}` | L-027 (three-gate grade check) | MALFORMED → held |
 | P2 | Upsert the parent shift `(transaction_date, production_batch, shift)` before its children | schema FK | held |
 | P3 | Combine duplicate `(shift, customer, grade)` run rows before insert (sum kg + sacks) | L-026 | auto-combine, note in remarks |
-| P4 ⚠️ | `dt_mins < 60` (hours carried in `dt_hrs`) | DB constraint | held / split |
+| P4 | `dt_mins` ∈ [0, 60) — **DB-enforced** CHECK (verified live; real max is 57) | DB constraint `production_downtime_dt_mins_check` | DB rejects; extract splits hrs/mins |
 | P5 | Month-boundary second same-date waste row = the NEW batch's shift, not the outgoing one | L-028 | file under new shift |
 | P6 | Electricity natural key `(reading_date, meter)`; `consumption_kwh >= 0`; `diff_kwh` computed | schema | held |
 | P7 | Trucks natural key `(reading_date, plate_no)`; `end_km >= start_km` | schema | held |
@@ -77,8 +77,11 @@ _2026-07-07. Companion to `SYNC_RECONCILIATION_MODEL.md`. Two write policies gov
 | F4 | Balance cross-check is **informational, never a write gate** | flecon design | (no hold) |
 | F5 | Bag counts are integers `>= 0` in magnitude | sanity | held |
 
-## Open questions for Renzo (the ⚠️ rows + these)
-1. **O7 / B1 negative-balance:** hard-block a feed that would drive a block negative, or flag-and-allow? (Physically impossible, but the *data* sometimes lags.)
-2. **I2 lab ranges:** what are the real plausible min/max for mc/ash/bd_astm/bd_jis/grit/vm/fc?
-3. **P4 dt_mins:** confirm the 60-minute cap and how an over-60 value should split.
-4. Anything here that's **too strict** (would hold rows you'd want auto-written) or **too loose** (would auto-write something you'd want to see)?
+## Decisions (2026-07-07, Renzo)
+1. **Negative balance (O7):** soft-warning, still writes — never holds. It's usually a late delivery, not a bad feed; the real RC OUT errors are caught upstream by O2/O3 + reconciliation. (The Blocking cross-check B1 still surfaces a `block_diff` if the DB and Sheet disagree — that's a separate, useful signal, and a review case, not a sync-halt.)
+2. **Lab results (I2):** not validated at all — display-only, never affect inventory. A garbled reading is cosmetic.
+3. **dt_mins (P4):** already DB-enforced (`< 60`); real data maxes at 57. No new rule needed.
+4. **Governing principle:** hard gate only on inventory-math corruption (weights, balances, batch identity); everything cosmetic or timing-related is soft-warn-and-write or ignored.
+
+## Still open (lower priority — flag when you spot them)
+- Anything in the **"stop and show me"** hold list that's too strict (would hold a row you'd want written) or too loose (would wave through something you'd want to see). React whenever a real run shows you one.
