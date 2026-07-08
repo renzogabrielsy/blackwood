@@ -206,6 +206,8 @@ The project is linked to Supabase. Common commands (see `/supabase` workflow for
 
 **Every sync run therefore ends in exactly one of two states:** (a) **CLEAN** — all sources reconciled, everything applied; or (b) **DIFFS PENDING** — a list of field-level disagreements awaiting a human pick. Never a silent auto-overwrite. The full architecture (extract → reconcile → diff-case → arbitrate) is specified in **`SYNC_RECONCILIATION_MODEL.md`**; it reuses the adjudicator's case/Sync-Review/resolve machinery wholesale.
 
+**Scope:** cross-source reconciliation applies to the THREE reports with a Google Sheet tab — **RC IN, RC OUT, Blocking** (Blocking is derived from RC IN − RC OUT and cross-checked against the Sheet, at both per-block and grand-total level). **Production and Flecon are single-source** and auto-write when they pass the validity rules in **`SYNC_VALIDITY_RULESET.md`**, stopping only on a rule violation. A lone witness whose second source is merely *not yet arrived* (the proposed report reports yesterday) is a self-clearing `pending`, not a review case.
+
 ## UI Design System — The "Excel Standard"
 
 All data tables must feel like dense spreadsheets:

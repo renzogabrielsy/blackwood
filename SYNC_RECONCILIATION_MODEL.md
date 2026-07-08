@@ -9,6 +9,17 @@ _2026-07-07. The governing model for how Blackwood's daily sync combines multipl
 3. **Agreements auto-apply; disagreements are arbitrated by the human — in the app.** When sources agree on a field, it writes. When they disagree, the sync **never picks a winner** — it raises a **diff case** the operator resolves in Sync Review.
 4. **Every run ends CLEAN or DIFFS-PENDING.** Never a silent overwrite.
 
+## Refinements locked with Renzo (2026-07-07 PM)
+
+Six clarifications from the design review that reshape the scope and close the pitfalls found so far:
+
+1. **Reconciliation applies to only THREE reports — RC IN, RC OUT, Blocking** (the ones with a Google Sheet tab overlapping an email). **Production and Flecon are single-source**: they **auto-write as long as they pass a validity ruleset** (`SYNC_VALIDITY_RULESET.md`), and only stop for a human on a *rule violation* (a `rule_violation` case naming the broken rule). This is the answer to the single-witness-friction problem — inherently single-source reports are never "held forever," they're rule-gated.
+2. **Blocking is a two-level balance check, not one number.** Per-block (`ΣIN − ΣOUT` == the Sheet's block figure, and `>= 0`) AND grand-total (all blocks sum correctly). They catch different errors: a weight mis-attributed *between* two blocks nets to zero in the total but shows up per-block. "Every block matches AND the total matches" = genuinely balanced. Blocking is also the **integration check** that ties RC IN and RC OUT together (it's derived from both), so it catches inconsistencies *between* those two reports that same-fact reconciliation can't.
+3. **Pending vs Held (kills the single-witness friction).** Because the proposed report reports *yesterday*, a normal sync has yesterday's data double-witnessed (email + Sheet → writes) and today's data single-witnessed (Sheet only). A lone witness where the **second source is merely not-yet-arrived** is a **`pending` state that auto-clears next run** when the corroborating source shows up — NOT a human-review case. Only a genuine disagreement, or an *overdue/missing* expected source, escalates to a held case. So the rolling 1-day hold is invisible.
+4. **Fix the silent miss with `batch_id`, and make "unresolvable" loud.** Cross-source alignment resolves each source's batch to a `batch_id` (not code-string matching). A batch that **can't** resolve to exactly one id → a **case, never a silent single-source pass** (this removes the "silent" from the silent miss). A read-only Claude call may *suggest* the likely match on genuinely ambiguous alignments — advisory, deterministic-first.
+5. **Ambiguous diffs get an explainer, not a dead-end.** When a diff maps cleanly into the pick harness → the deterministic pick UI (no model). When it's outside the pick UI's scope (unequal legs, tangled mapping) → a **one-shot Haiku/Sonnet explainer** (not a chatbot) states plainly what's tangled, rendered with the **Copy button** (existing error-toast rule) so its output pastes straight into a debugging chat. Reuses the investigator infra in a bounded mode; Haiku default, Sonnet on escalation.
+6. **Feed check scope:** the FEED-block balance/leg check needs **RC OUT + proposed report only** (feed is an rc_out concept). The three reconciled reports run in **independent lanes** (each vs its own sources) — NOT one joint match — with Blocking as the invariant that connects RC IN and RC OUT.
+
 ## Why this is mostly already built
 
 The adjudicator work (P1–P6 + Run Triage) gave us the entire *arbitration* half: persistent cases, a review page grouped by run, per-case chat with a read-only investigator, confirm-gated resolution with provenance audit, and a known-issues ledger. **Diff cases are just a new `kind` of case.** What's genuinely new is the *reconciliation* half: extracting every source into a comparable shape and detecting field-level disagreements before any write.
@@ -27,8 +38,10 @@ A source record that fails its own consistency check is not dropped — it's car
 
 For each natural key, gather every source that has an opinion on it, field by field. Per field, one of:
 - **Agree** (all present sources equal, within tolerance) → **accept**, queue for the clean apply.
-- **Single-source** (only one source has it) → accept, tagged single-source (visible, low-friction).
+- **Single-source, second witness expected but not yet arrived** → **`pending`** — auto-clears next run when the corroborating source shows up (see Refinement 3). NOT a review case.
+- **Single-source, second witness overdue/missing** → held case (a real signal).
 - **Disagree** → **diff**: emit a `source_diff` case. No auto-pick, ever — even when one source corroborates another (corroboration becomes a *recommendation*, never a decision).
+- **Batch won't resolve to one `batch_id`** → case, never a silent pass (Refinement 4).
 
 Reconciliation runs as a new worker stage after all report extractions, before any write. It is pure and deterministic.
 
@@ -62,7 +75,12 @@ A run resolves to exactly one of:
 | **R1 — Reconciliation layer (rc_out first)** | A pure worker stage that takes the extracted source records for rc_out from proposed + gsheet + movement, compares per natural key + field, and emits agreements vs `source_diff` descriptors. Self-consistency signals (incl. the L-037 balance guard) feed it. Unit-tested against the real L-037 case (proposed 20,932 vs gsheet 31,745 → one diff, movement corroborates proposed). | No writes yet; pure + golden-tested. |
 | **R2 — `source_diff` cases + fan-out** | Persist diffs as `source_diff` cases (fingerprint, sources payload); the run-completion fan-out (`ensureCasesForRun`) includes them; triage clusters them. | Reuses P1/T1. |
 | **R3 — Sync Review pick UI** | The case detail renders competing source values with a "use this" control per field; wire to a `resolveDiff` action through the deterministic write path. Investigator pre-recommendation shown. | Reuses P4/P5. |
-| **R4 — Retire Sheet-wins + generalize** | Remove gsheet-sync's authoritative overwrite; route gsheet rc_out/rc_in through reconciliation. Then extend sources per report (deliveries: proposed + gsheet + Czarina pricing; production; flecon). | The real cutover. |
+| **R4a — Close the R4 prerequisites** | Before any cutover: `batch_id` resolution (Refinement 4), FEED-block keying (`(date,batch,dest)`), capture gsheet extract once, and the `pending` vs `held` split (Refinement 3). | Prereqs; no write change yet. |
+| **R4b — Retire Sheet-wins (rc_out)** | Remove gsheet-sync's authoritative overwrite for rc_out; reconciliation drives rc_out writes (agreements apply, diffs → cases, pending auto-clears). This is the clobber fix — the manual June correction stops being at risk. | The real cutover, rc_out only. |
+| **RB — Block-balance cross-check** | Read the Sheet Blocking tab (already downloaded, currently ignored) + `view_blocking_grid`; two-level check (Refinement 2) → `block_diff` cases. The highest-leverage net (independent of the transaction data). | New source of truth-checking. |
+| **RC-IN — Extend reconciliation to RC IN** | deliveries: Sheet RC IN + deliveries email; pricing stays single-source. Same cutover shape as R4b. | After rc_out proves out. |
+| **RS — Single-source rulesets** | Production + Flecon auto-write gated by `SYNC_VALIDITY_RULESET.md`; a rule violation → `rule_violation` case. (Refinement 1.) | No reconciliation — rule-gated. |
+| **R-EXPLAIN — Ambiguous-diff explainer** | The Haiku/Sonnet one-shot explainer + Copy-export for diffs outside the pick UI's scope. (Refinement 5.) | Bounded reuse of the investigator. |
 | **R5 — Trust phase (optional, later)** | Only after the ledger has demonstrably agreed with the operator's picks for weeks: allow a *proven-identical, previously-ruled* diff to auto-apply the remembered pick. Explicitly deferred. | Mirrors the adjudicator's deferred auto-resolve. |
 
 ## Known gaps to close BEFORE the R4 cutover (found in R2)
@@ -77,3 +95,6 @@ R2 runs in shadow (observation only), so these are safe today but MUST be resolv
 
 ## What it does NOT change
 Deterministic extraction + parity harness (each source still golden-tested), the confirm-gated write path, price gating, never-delete / never-auto-create-batches, and the "human approves every write" posture. Reconciliation makes the *disagreement* visible; it never makes the *decision*.
+
+## See also
+- **`SYNC_VALIDITY_RULESET.md`** — the per-report validity rules that gate single-source auto-writes (Production, Flecon) and the self-consistency checks for the reconciled reports. Inferred from our sync history; awaiting Renzo's confirmation on the ⚠️ rows.
