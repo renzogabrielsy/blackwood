@@ -10,9 +10,11 @@
  */
 import type {
   HeldRow,
+  SingleSourceOverdue,
   SourceDiff,
   SyncReportType,
   SyncRunResult,
+  UnresolvedBatch,
 } from '../../app/(app)/sync/types'
 
 export interface CollectedHeld {
@@ -48,4 +50,22 @@ export function collectHeldRows(result: SyncRunResult): CollectedHeld[] {
  */
 export function collectSourceDiffs(result: SyncRunResult): SourceDiff[] {
   return result.reconciliation?.rc_out?.diffs ?? []
+}
+
+/**
+ * Flatten the R4a `unresolved_batch` markers (batches that could not resolve to one batch_id).
+ * Lives only in `result.reconciliation.rc_out.unresolvedBatches` (optional additive field —
+ * absent on pre-R4a runs). Every level guarded. Pure — cases.ts fingerprints + upserts each.
+ */
+export function collectUnresolvedBatches(result: SyncRunResult): UnresolvedBatch[] {
+  return result.reconciliation?.rc_out?.unresolvedBatches ?? []
+}
+
+/**
+ * Flatten the R4a `single_source_overdue` facts (a lone witness whose second source is overdue).
+ * `pending` facts are NOT here — they are a telemetry count only. Lives in
+ * `result.reconciliation.rc_out.heldOverdue` (optional additive field). Pure.
+ */
+export function collectSingleSourceOverdue(result: SyncRunResult): SingleSourceOverdue[] {
+  return result.reconciliation?.rc_out?.heldOverdue ?? []
 }

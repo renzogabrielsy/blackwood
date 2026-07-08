@@ -19,7 +19,13 @@
  */
 import { createHash } from 'node:crypto'
 
-import type { HeldRow, SourceDiff, SyncReportType } from '../../app/(app)/sync/types'
+import type {
+  HeldRow,
+  SingleSourceOverdue,
+  SourceDiff,
+  SyncReportType,
+  UnresolvedBatch,
+} from '../../app/(app)/sync/types'
 
 /**
  * The gate-failure drift shape threaded onto `row.drift_dates` by the worker.
@@ -176,4 +182,61 @@ export function sourceDiffFingerprint(diff: SourceDiff): string {
     competing,
   }
   return canonicalHash(canonical)
+}
+
+// ============================================================================
+// R4a — unresolved_batch + single_source_overdue fingerprints + human labels
+// ============================================================================
+
+/** Human label for an `unresolved_batch` case: the stated code + date. */
+export function unresolvedBatchNaturalKey(u: UnresolvedBatch): string {
+  return `${u.batch_code} · ${u.transaction_date}`
+}
+
+/**
+ * Stable content hash for an `unresolved_batch` case. Keyed on (batch_code, date) + the SORTED
+ * candidate id set — so the same unresolvable code recurs as ONE case, but a code that starts
+ * resolving to a DIFFERENT candidate set re-alarms. Identity-based (no weight): the row keeps
+ * re-appearing until a human maps/creates the batch (mirrors the unmapped-batch discipline).
+ */
+export function unresolvedBatchFingerprint(u: UnresolvedBatch): string {
+  return canonicalHash({
+    kind: 'unresolved_batch',
+    table: 'rc_out',
+    transaction_date: u.transaction_date,
+    batch_code: u.batch_code,
+    candidates: [...u.candidates].sort(),
+  })
+}
+
+/** Human label for a `single_source_overdue` case. */
+export function singleSourceOverdueNaturalKey(o: SingleSourceOverdue): string {
+  const k = o.naturalKey
+  const batch = k.batch ?? '(no batch)'
+  const block = k.block_loc ?? '(feed)'
+  const field = o.field === 'weight_kg' ? 'weight' : o.field
+  return `${batch} @ ${block} · ${k.transaction_date} · ${field} (only ${o.source})`
+}
+
+/**
+ * Stable content hash for a `single_source_overdue` case. Keyed on the natural key + field +
+ * the lone source — IDENTITY, not the value: the concern is "only one witness and it's overdue,"
+ * which persists regardless of the exact number, and it self-clears when the second witness
+ * finally arrives (the fact becomes multi-source → no overdue emitted). Same discipline as the
+ * non-gate `caseFingerprint` branch.
+ */
+export function singleSourceOverdueFingerprint(o: SingleSourceOverdue): string {
+  const k = o.naturalKey
+  return canonicalHash({
+    kind: 'single_source_overdue',
+    table: o.table,
+    natural_key: {
+      transaction_date: k.transaction_date,
+      batch: k.batch,
+      block_loc: k.block_loc,
+      destination: k.destination,
+    },
+    field: o.field,
+    source: o.source,
+  })
 }

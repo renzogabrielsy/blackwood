@@ -76,7 +76,7 @@ A run resolves to exactly one of:
 | **R2 — `source_diff` cases + fan-out** | Persist diffs as `source_diff` cases (fingerprint, sources payload); the run-completion fan-out (`ensureCasesForRun`) includes them; triage clusters them. | Reuses P1/T1. |
 | **R3 — Sync Review pick UI** | The case detail renders competing source values with a "use this" control per field; wire to a `resolveDiff` action through the deterministic write path. Investigator pre-recommendation shown. | Reuses P4/P5. |
 | **R4a — Close the R4 prerequisites** | Before any cutover: `batch_id` resolution (Refinement 4), FEED-block keying (`(date,batch,dest)`), capture gsheet extract once, and the `pending` vs `held` split (Refinement 3). | Prereqs; no write change yet. |
-| **R4b — Retire Sheet-wins (rc_out)** | Remove gsheet-sync's authoritative overwrite for rc_out; reconciliation drives rc_out writes (agreements apply, diffs → cases, pending auto-clears). This is the clobber fix — the manual June correction stops being at risk. | The real cutover, rc_out only. |
+| **R4b — Retire Sheet-wins (rc_out)** | Remove gsheet-sync's authoritative overwrite for rc_out; reconciliation drives rc_out writes (agreements apply, diffs → cases, pending auto-clears). This is the clobber fix — the manual June correction stops being at risk. See **R4b design (below)** — the window/single-witness policy is load-bearing. | The real cutover, rc_out only. |
 | **RB — Block-balance cross-check** | Read the Sheet Blocking tab (already downloaded, currently ignored) + `view_blocking_grid`; two-level check (Refinement 2) → `block_diff` cases. The highest-leverage net (independent of the transaction data). | New source of truth-checking. |
 | **RC-IN — Extend reconciliation to RC IN** | deliveries: Sheet RC IN + deliveries email; pricing stays single-source. Same cutover shape as R4b. | After rc_out proves out. |
 | **RS — Single-source rulesets** | Production + Flecon auto-write gated by `SYNC_VALIDITY_RULESET.md`; a rule violation → `rule_violation` case. (Refinement 1.) | No reconciliation — rule-gated. |
@@ -92,6 +92,20 @@ R2 runs in shadow (observation only), so these are safe today but MUST be resolv
 3. **gsheet is re-downloaded in the shadow step** (`reports/gsheet/download.ts` fetches bytes but does not persist to Storage, despite a runSync comment implying otherwise). Harmless now (one extra GET/run). **R4:** capture the gsheet extract once and route it through reconciliation instead of re-downloading.
 
 **Also settled in R2 (orchestration reality):** the three sources do NOT co-locate — each report is an isolated crash-safe DBOS child workflow that returns only a normalized envelope, never raw rows. Reconciliation therefore re-derives sources in its own durable step. A normal run routinely has only a SUBSET of witnesses present (gsheet always; proposed + movement depend on that day's emails arriving) — the engine drops absent witnesses gracefully, but R4's write policy must define behavior when a field has only ONE witness that day (currently: single-source Agreement → would auto-apply; confirm that's desired per field, or require ≥2 witnesses for certain fields).
+
+## R4b design — the window / single-witness policy (LOCKED from R4a findings, 2026-07-07)
+
+R4a exposed the one thing that will make-or-break the cutover, and it's subtle:
+
+**In a single run, the Google Sheet carries the ENTIRE history; the proposed report carries ~ONE day.** So for almost every date, the *only* witness present in a run is the Sheet. If R4b auto-applied single-witness Sheet values, that would be **Sheet-wins under a new name — it re-creates the exact L-037 clobber.** Therefore:
+
+1. **Reconciliation only ACTS on a bounded recent window** — the date span the proposed extract actually covers (+ a small buffer), because that is the only window where a second witness can exist. R4a ships a shadow-safe stopgap (`RECONCILE_WINDOW_DAYS = 14`); **R4b must replace the fixed number with a bound tied to the proposed extract's real span.**
+2. **Outside the window, Sheet-only data is SETTLED** — it was reconciled when it was fresh (its proposed report was present in an earlier run). R4b must **leave it untouched** — never re-write it just because the Sheet still lists it. (This is the L-034 compare-window lesson resurfacing one layer up.)
+3. **A lone Sheet witness INSIDE the window = pending/hold, never auto-apply.** Only a genuine ≥2-source agreement auto-writes. A single witness (even recent) waits for its second source (pending) or becomes a case when overdue.
+4. **Ambiguous batch (2+ candidates) needs its own resolution path** — it's a batch-mapping decision, not a value pick, so it can't ride the `source_diff` pick harness as-is. R4b (or the explainer phase) needs a small "which batch did you mean" resolution.
+5. **A missing batch lookup must degrade safely at cutover** — in shadow an empty lookup just floods `unresolved_batch` cases; when reconciliation drives writes, a missing lookup must *block that report's writes* (fail safe), not silently mismap.
+
+**Net R4b rule:** auto-write only ≥2-source agreements inside the proposed window; everything else is pending, a case, or settled-and-untouched. That is what ends the clobber without re-introducing it.
 
 ## What it does NOT change
 Deterministic extraction + parity harness (each source still golden-tested), the confirm-gated write path, price gating, never-delete / never-auto-create-batches, and the "human approves every write" posture. Reconciliation makes the *disagreement* visible; it never makes the *decision*.

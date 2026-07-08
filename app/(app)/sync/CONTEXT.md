@@ -120,13 +120,20 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   - **`ensureCasesForRun(runId)`** → `{created, refreshed, knownMatched, caseIds}`.
     requirePrivileged → service-role load of the run → no-op unless status is terminal
     (`succeeded|failed|partial`) AND (`result.reports` OR `result.reconciliation` exists).
-    Folds TWO case sources through ONE idempotent upsert-by-fingerprint spine (`upsertCase`):
+    Folds FOUR case sources through ONE idempotent upsert-by-fingerprint spine (`upsertCase`):
     **(a) held rows** — `collectHeldRows` → `caseFingerprint` per row; **(b) R2 SHADOW
     source_diffs** — `collectSourceDiffs(result)` (the worker's `result.reconciliation.rc_out.diffs`)
     → `sourceDiffFingerprint` per diff → `sync_held_cases` rows `kind='source_diff'`,
     `report_type='rc_out'`, `natural_key`=`sourceDiffNaturalKey(diff)` (e.g.
     `MAR-26-BLK5 @ D-11B · 2026-06-10 · weight`), `row`=the full `SourceDiff` (sources[] +
-    competing values + advisory `recommended`). **IDEMPOTENT** (safe to call repeatedly; the
+    competing values + advisory `recommended`); **(c) R4a `unresolved_batch`** —
+    `collectUnresolvedBatches(result)` → `unresolvedBatchFingerprint` → `kind='unresolved_batch'`,
+    `natural_key`=`code · date` (the batch could not resolve to one batch_id — 0 or 2+ candidates);
+    **(d) R4a `single_source_overdue`** — `collectSingleSourceOverdue(result)` (the worker's
+    `heldOverdue[]`) → `singleSourceOverdueFingerprint` → `kind='single_source_overdue'` (a lone
+    witness whose 2nd source is overdue; the value-independent fingerprint self-clears when the 2nd
+    witness arrives). **`pending` facts are NOT folded** — they are a self-clearing telemetry count
+    only (`result.reconciliation.rc_out.pending`). **IDEMPOTENT** (safe to call repeatedly; the
     modal AND the review page both call it). Existing case → refresh `last_run_id`/
     `last_seen_at`, bump `occurrence_count` ONLY when the runId differs from the case's
     `last_run_id` (no double-count on repeat calls for the SAME run); a `resolved` case that
@@ -443,11 +450,18 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   **`sourceDiffFingerprint(diff)`** → sha256 of `{kind:'source_diff', table, natural_key, field,
   SORTED competing (source,value) pairs}` (weights rounded to integer kg — jitter doesn't
   re-alarm, a changed competing value does); **`sourceDiffNaturalKey(diff)`** → the human label.
+  **R4a:** **`unresolvedBatchFingerprint(u)`** → sha256 of `{kind:'unresolved_batch', table,
+  transaction_date, batch_code, SORTED candidates}` (identity + candidate set; value-free);
+  **`singleSourceOverdueFingerprint(o)`** → sha256 of `{kind:'single_source_overdue', table,
+  natural_key, field, source}` (value-INDEPENDENT — the missing-witness identity, self-clears when
+  the 2nd source arrives). Plus `unresolvedBatchNaturalKey` / `singleSourceOverdueNaturalKey` labels.
 - `lib/sync/cases-fold.ts` — **`collectHeldRows(result)`** → flattens
   `result.reports[type].apply.held` across all reports into `{reportType, held}[]`, guarding
   absent `reports` / `apply:null` / missing `held`. **R2:** **`collectSourceDiffs(result)`** →
-  `result.reconciliation.rc_out.diffs ?? []` (guards the absent channel on pre-R2 runs). Pure,
-  no supabase import.
+  `result.reconciliation.rc_out.diffs ?? []` (guards the absent channel on pre-R2 runs). **R4a:**
+  **`collectUnresolvedBatches(result)`** / **`collectSingleSourceOverdue(result)`** →
+  `result.reconciliation.rc_out.unresolvedBatches ?? []` / `.heldOverdue ?? []` (optional additive
+  fields — absent on pre-R4a runs). Pure, no supabase import.
 - `lib/sync/privileged.ts` — **`requirePrivileged()`**, the shared Owner/Admin/Dev guard
   extracted from `actions.ts` (imported by both `actions.ts` and `cases.ts`).
 - `lib/sync/apply-writers.ts` (Smart-Adjudicator **P5**) — the **writer registry** for apply /
@@ -560,8 +574,11 @@ regenerated so `sync_runs`/`sync_run_events` are typed:
   `finished_at`, `result` (jsonb = `SyncRunResult`), `error`, `created_at`. **R2:** the worker
   additively attaches `result.reconciliation = { rc_out: { diffs: SourceDiff[], agreements } }`
   (the SHADOW multi-source reconciliation channel — sits alongside `reports`, observational only;
-  `worker: runSync.ts::reconcileRcOutShadow`). App-side mirror types (`SourceDiff` /
-  `SourceOpinion` / `ReconciliationChannel`) live in `app/(app)/sync/types.ts`.
+  `worker: runSync.ts::reconcileRcOutShadow`). **R4a:** the `rc_out` channel now also carries
+  `{ pending: number, heldOverdue: SingleSourceOverdue[], unresolvedBatches: UnresolvedBatch[] }`
+  (single-witness split + batch-resolution failures). App-side mirror types (`SourceDiff` /
+  `SourceOpinion` / `ReconciliationChannel` / `UnresolvedBatch` / `SingleSourceOverdue`) live in
+  `app/(app)/sync/types.ts`.
 - **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
   (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
   `level`, `at`.

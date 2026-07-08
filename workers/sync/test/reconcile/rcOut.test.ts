@@ -231,3 +231,83 @@ describe("proposedLegsSelfConsistent", () => {
     expect(r.selfConsistent).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R4a — FEED (null block) fine records + single-witness disposition
+// ---------------------------------------------------------------------------
+
+/** A FEED SourceRecord: block_loc null, batch is the discriminator (Deliverable 2). */
+function feedRec(source: "proposed" | "gsheet", date: string, batch: string, weight: number): SourceRecord {
+  return {
+    source,
+    naturalKey: { transaction_date: date, batch, block_loc: null, destination: "MAIN" },
+    fields: { weight_kg: weight },
+    selfConsistent: true,
+    provenance: `${source} ${date} ${batch} (FEED)`,
+  };
+}
+
+describe("reconcileRcOut — FEED (null block) fine records reconcile", () => {
+  it("two null-block records for the same batch align and diff on weight", () => {
+    const { diffs } = reconcileRcOut([
+      feedRec("proposed", D, "id-feed2", 5_930),
+      feedRec("gsheet", D, "id-feed2", 8_860),
+    ]);
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0].naturalKey.block_loc).toBeNull();
+    expect(diffs[0].naturalKey.batch).toBe("id-feed2");
+  });
+
+  it("agreeing null-block records are a clean agreement", () => {
+    const { diffs, agreements } = reconcileRcOut([
+      feedRec("proposed", D, "id-feed2", 5_930),
+      feedRec("gsheet", D, "id-feed2", 5_930),
+    ]);
+    expect(diffs).toHaveLength(0);
+    expect(agreements.some((a) => a.naturalKey.block_loc === null && !a.singleSource)).toBe(true);
+  });
+});
+
+describe("reconcileRcOut — single-witness disposition (Deliverable 3)", () => {
+  it("no runDate → single-source agreement has no disposition (back-compat)", () => {
+    const { agreements } = reconcileRcOut([gsheet(D, "id-blk5", "D-11B", 5_000)]);
+    const a = agreements.find((x) => x.field === "weight_kg")!;
+    expect(a.singleSource).toBe(true);
+    expect(a.disposition).toBeUndefined();
+  });
+
+  it("recent single-witness → pending (age <= LAG_DAYS)", () => {
+    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+      runDate: "2026-06-11",
+    });
+    const a = agreements.find((x) => x.field === "weight_kg")!;
+    expect(a.disposition).toBe("pending");
+    expect(a.ageDays).toBe(1);
+  });
+
+  it("old single-witness inside the window → held_overdue (LAG_DAYS < age <= window)", () => {
+    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+      runDate: "2026-06-15",
+    });
+    const a = agreements.find((x) => x.field === "weight_kg")!;
+    expect(a.disposition).toBe("held_overdue");
+    expect(a.ageDays).toBe(5);
+  });
+
+  it("deep-history single-witness (older than the window) → no disposition", () => {
+    const { agreements } = reconcileRcOut([gsheet("2026-06-10", "id-blk5", "D-11B", 5_000)], {
+      runDate: "2026-07-08",
+    });
+    const a = agreements.find((x) => x.field === "weight_kg")!;
+    expect(a.disposition).toBeUndefined();
+  });
+
+  it("multi-source agreements never carry a disposition", () => {
+    const { agreements } = reconcileRcOut(
+      [gsheet("2026-06-10", "id-blk5", "D-11B", 5_000), proposed("2026-06-10", "id-blk5", "D-11B", 5_000)],
+      { runDate: "2026-06-15" },
+    );
+    const a = agreements.find((x) => x.field === "weight_kg" && !x.singleSource)!;
+    expect(a.disposition).toBeUndefined();
+  });
+});

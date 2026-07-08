@@ -18,11 +18,24 @@
 import assert from 'node:assert/strict'
 
 import {
+  singleSourceOverdueFingerprint,
+  singleSourceOverdueNaturalKey,
   sourceDiffFingerprint,
   sourceDiffNaturalKey,
+  unresolvedBatchFingerprint,
+  unresolvedBatchNaturalKey,
 } from '../lib/sync/fingerprint'
-import { collectSourceDiffs } from '../lib/sync/cases-fold'
-import type { SourceDiff, SyncRunResult } from '../app/(app)/sync/types'
+import {
+  collectSingleSourceOverdue,
+  collectSourceDiffs,
+  collectUnresolvedBatches,
+} from '../lib/sync/cases-fold'
+import type {
+  SingleSourceOverdue,
+  SourceDiff,
+  SyncRunResult,
+  UnresolvedBatch,
+} from '../app/(app)/sync/types'
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -133,6 +146,125 @@ check('collectSourceDiffs folds the channel, guarding absent + empty', () => {
   )
   // Totally empty result → [].
   assert.deepEqual(collectSourceDiffs({} as SyncRunResult), [])
+})
+
+// ============================================================================
+// R4a — unresolved_batch + single_source_overdue fold kinds
+// ============================================================================
+
+/** A batch that resolved to NO id (0 candidates). */
+function unresolved(): UnresolvedBatch {
+  return {
+    transaction_date: '2026-06-10',
+    batch_code: 'JULY-26-BLK9',
+    candidates: [],
+    block_loc: 'D-9A',
+    destination: 'MAIN',
+    weight_kg: 5_000,
+    sources: ['proposed'],
+  }
+}
+
+/** A gsheet-only fact whose second witness is 5 days overdue. */
+function overdue(): SingleSourceOverdue {
+  return {
+    naturalKey: {
+      transaction_date: '2026-06-10',
+      batch: 'id-blk5',
+      block_loc: 'D-11B',
+      destination: 'MAIN',
+    },
+    field: 'weight_kg',
+    table: 'rc_out',
+    source: 'gsheet',
+    value: 5_000,
+    provenance: 'gsheet 2026-06-10 batch id-blk5 @ D-11B = 5000',
+    ageDays: 5,
+    lagDays: 2,
+  }
+}
+
+check('unresolvedBatch fingerprint is stable + candidate-set aware', () => {
+  const a = unresolvedBatchFingerprint(unresolved())
+  assert.equal(a, unresolvedBatchFingerprint(unresolved()))
+  assert.match(a, /^[0-9a-f]{64}$/)
+
+  // A DIFFERENT candidate set (now ambiguous) → NEW hash (re-alarm).
+  const ambiguous = unresolved()
+  ambiguous.candidates = ['id-a', 'id-b']
+  assert.notEqual(a, unresolvedBatchFingerprint(ambiguous))
+
+  // Candidate ORDER does not change the hash (sorted inside).
+  const reordered = unresolved()
+  reordered.candidates = ['id-b', 'id-a']
+  const ordered = unresolved()
+  ordered.candidates = ['id-a', 'id-b']
+  assert.equal(unresolvedBatchFingerprint(reordered), unresolvedBatchFingerprint(ordered))
+
+  // Weight is NOT in the fingerprint (identity, not payload).
+  const heavier = unresolved()
+  heavier.weight_kg = 9_999
+  assert.equal(a, unresolvedBatchFingerprint(heavier))
+})
+
+check('unresolvedBatch natural key renders the code + date', () => {
+  assert.equal(unresolvedBatchNaturalKey(unresolved()), 'JULY-26-BLK9 · 2026-06-10')
+})
+
+check('singleSourceOverdue fingerprint is identity-based (value-independent)', () => {
+  const a = singleSourceOverdueFingerprint(overdue())
+  assert.equal(a, singleSourceOverdueFingerprint(overdue()))
+  assert.match(a, /^[0-9a-f]{64}$/)
+
+  // A CHANGED value does NOT re-alarm (the concern is the missing witness, not the number).
+  const other = overdue()
+  other.value = 6_000
+  assert.equal(a, singleSourceOverdueFingerprint(other))
+
+  // A different SOURCE, key, or field IS a different case.
+  const diffSource = overdue()
+  diffSource.source = 'proposed'
+  assert.notEqual(a, singleSourceOverdueFingerprint(diffSource))
+  const diffKey = overdue()
+  diffKey.naturalKey.block_loc = 'D-12B'
+  assert.notEqual(a, singleSourceOverdueFingerprint(diffKey))
+})
+
+check('singleSourceOverdue natural key names the batch, date, field, and lone source', () => {
+  assert.equal(
+    singleSourceOverdueNaturalKey(overdue()),
+    'id-blk5 @ D-11B · 2026-06-10 · weight (only gsheet)',
+  )
+  // A feed fact (null block) reads "(feed)".
+  const feed = overdue()
+  feed.naturalKey.block_loc = null
+  assert.equal(singleSourceOverdueNaturalKey(feed), 'id-blk5 @ (feed) · 2026-06-10 · weight (only gsheet)')
+})
+
+check('collectUnresolvedBatches + collectSingleSourceOverdue fold the channel, guarding absent', () => {
+  const full: SyncRunResult = {
+    reports: {},
+    reconciliation: {
+      rc_out: {
+        diffs: [],
+        agreements: 2,
+        pending: 3,
+        heldOverdue: [overdue()],
+        unresolvedBatches: [unresolved()],
+      },
+    },
+  }
+  assert.equal(collectUnresolvedBatches(full).length, 1)
+  assert.equal(collectSingleSourceOverdue(full).length, 1)
+
+  // Pre-R4a channel (fields absent) → [] for both.
+  const preR4a: SyncRunResult = { reconciliation: { rc_out: { diffs: [], agreements: 0 } } }
+  assert.deepEqual(collectUnresolvedBatches(preR4a), [])
+  assert.deepEqual(collectSingleSourceOverdue(preR4a), [])
+
+  // No reconciliation channel at all → [].
+  assert.deepEqual(collectUnresolvedBatches({ reports: {} } as SyncRunResult), [])
+  assert.deepEqual(collectSingleSourceOverdue({} as SyncRunResult), [])
 })
 
 console.log(`\nAll ${passed} source-diff-fold checks passed.`)

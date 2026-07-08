@@ -397,6 +397,25 @@ export class DbClient {
     return { id: (data as { id: string }).id };
   }
 
+  /**
+   * The run's created_at ISO timestamp. R4a reconciliation reads this to derive the run's
+   * calendar date (YYYY-MM-DD) deterministically — a fixed stored value, never Date.now()
+   * inside a DBOS step. Returns null if the run has no created_at.
+   */
+  async getSyncRunCreatedAt(runId: string): Promise<string | null> {
+    const { data, error } = await this.sb
+      .from("sync_runs")
+      .select("created_at")
+      .eq("id", runId)
+      .single();
+    if (error) {
+      throw new Error(
+        `read sync_runs created_at failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return (data as { created_at: string | null }).created_at ?? null;
+  }
+
   async setSyncRunStatus(
     runId: string,
     status: SyncRunStatus,

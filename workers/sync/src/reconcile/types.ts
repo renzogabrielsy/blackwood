@@ -117,12 +117,87 @@ export interface Agreement {
   sources: RcOutSource[];
   /** True when only ONE source had an opinion (accepted, but visibly low-corroboration). */
   singleSource: boolean;
+  /**
+   * R4a — for a SINGLE-source fact, its recency disposition (pending vs held_overdue).
+   * Set ONLY when the engine was given a `runDate` AND the fact is inside the eligibility
+   * window. Multi-source agreements never carry a disposition; a single-source fact that is
+   * settled history (older than the window) also carries none. Undefined when runDate absent.
+   */
+  disposition?: SingleSourceDisposition;
+  /** runDate − transaction_date, in whole days. Present iff `disposition` is set. */
+  ageDays?: number;
 }
 
 /** Advisory winner hint. NEVER a decision — the human still picks in Sync Review. */
 export interface Recommendation {
   source: RcOutSource;
   why: string;
+}
+
+// ---------------------------------------------------------------------------
+// R4a — single-witness disposition + unresolved-batch marker (cutover prereqs).
+// ---------------------------------------------------------------------------
+
+/**
+ * The recency disposition of a SINGLE-witness fact (Refinement 3, SYNC_RECONCILIATION_MODEL.md).
+ *  - `pending`      — the second expected source just hasn't arrived yet (the fact is recent).
+ *                     Self-clears next run when the corroborating source shows up. NO case.
+ *  - `held_overdue` — single witness but the fact is older than the lag window (the second
+ *                     source should have arrived). A real missing-witness signal → a case.
+ */
+export type SingleSourceDisposition = "pending" | "held_overdue";
+
+/**
+ * Days a single-witness fact may go un-corroborated before it is "overdue". The PROPOSED
+ * report reports ~yesterday, so a 1-day lag is normal; 2 = that lag + a buffer. Named + tunable.
+ */
+export const LAG_DAYS = 2;
+
+/**
+ * Outer eligibility bound (days). A single-witness fact OLDER than this — relative to the run
+ * date — is treated as SETTLED history and is NOT classified pending/overdue: its second
+ * witness came and went in a prior run. This is the anti-flood guard: the gsheet extract
+ * carries the ENTIRE sheet history, so without this bound every ancient gsheet-only row would
+ * emit a `held_overdue` case every run. Tunable; R4b must confirm the horizon.
+ */
+export const RECONCILE_WINDOW_DAYS = 14;
+
+/**
+ * A source's batch that could not resolve to EXACTLY ONE batch_id (Refinement 4). Zero
+ * candidates = the code matches no batch; 2+ = the code + its fallbacks map to DIFFERENT
+ * batches (ambiguous). Either way it must NOT silently become a single-source Agreement — it
+ * surfaces as an `unresolved_batch` case so a human maps/creates the batch. NEVER a ₱ field.
+ */
+export interface UnresolvedBatch {
+  transaction_date: string;
+  /** The batch code the source(s) stated that failed to resolve to one batch_id. */
+  batch_code: string;
+  /** Distinct batch_ids the code + its fallbacks resolved to: 0 (no match) or 2+ (ambiguous). */
+  candidates: string[];
+  block_loc: string | null;
+  destination: string;
+  /** Summed weight across the rows carrying this unresolvable batch (context only). */
+  weight_kg: number;
+  /** Which witnesses stated this unresolvable batch. */
+  sources: RcOutSource[];
+}
+
+/**
+ * A single-witness fact whose second source is OVERDUE (older than the lag window, inside the
+ * eligibility window). Surfaced as a `single_source_overdue` case. Distinct from a `pending`
+ * fact (recent, no case) and from a multi-source Agreement. NEVER carries a ₱/cost field.
+ */
+export interface SingleSourceOverdue {
+  naturalKey: RcOutNaturalKey;
+  field: string;
+  table: ReconcileTable;
+  source: RcOutSource;
+  value: number | string | null;
+  provenance: string;
+  /** runDate − transaction_date, in whole days (> lagDays by construction). */
+  ageDays: number;
+  /** The lag threshold in effect for this run (for the human message). */
+  lagDays: number;
 }
 
 /** A field where present sources disagree. Emitted as a `source_diff` case in R2. No auto-pick. */
@@ -148,4 +223,15 @@ export interface ReconcileOptions {
   weightField?: string;
   /** The movement record's day-total field. Default "raw_charcoal_fed_kls". */
   movementTotalField?: string;
+  /**
+   * R4a — the sync run's calendar date (YYYY-MM-DD). Threaded from the run row — NEVER
+   * Date.now() inside a DBOS step (a step must be deterministic on replay). Drives the
+   * single-witness pending vs held_overdue split. When absent, single-source facts get no
+   * disposition (back-compat: the engine behaves exactly as R1/R2).
+   */
+  runDate?: string;
+  /** Overdue threshold in days. Default LAG_DAYS. */
+  lagDays?: number;
+  /** Outer eligibility window in days. Default RECONCILE_WINDOW_DAYS. */
+  windowDays?: number;
 }

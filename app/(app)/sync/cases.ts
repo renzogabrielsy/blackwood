@@ -20,10 +20,19 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePrivileged } from '@/lib/sync/privileged'
 import {
   caseFingerprint,
+  singleSourceOverdueFingerprint,
+  singleSourceOverdueNaturalKey,
   sourceDiffFingerprint,
   sourceDiffNaturalKey,
+  unresolvedBatchFingerprint,
+  unresolvedBatchNaturalKey,
 } from '@/lib/sync/fingerprint'
-import { collectHeldRows, collectSourceDiffs } from '@/lib/sync/cases-fold'
+import {
+  collectHeldRows,
+  collectSingleSourceOverdue,
+  collectSourceDiffs,
+  collectUnresolvedBatches,
+} from '@/lib/sync/cases-fold'
 import {
   runInvestigation,
   type InvestigationOutcome,
@@ -32,7 +41,13 @@ import {
 import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
 import type { Database, Json } from '@/types/supabase'
 
-import type { SourceDiff, SyncRunResult, SyncRunStatus } from './types'
+import type {
+  SingleSourceOverdue,
+  SourceDiff,
+  SyncRunResult,
+  SyncRunStatus,
+  UnresolvedBatch,
+} from './types'
 
 type CaseInsert = Database['public']['Tables']['sync_held_cases']['Insert']
 type CaseUpdate = Database['public']['Tables']['sync_held_cases']['Update']
@@ -74,10 +89,14 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
   // out. (Pre-R2 runs / M0/M1 manifests still short-circuit here.)
   if (!result || (!result.reports && !result.reconciliation)) return empty
 
-  // 2. Flatten the two case sources: held rows (per report) + R2 source_diffs.
+  // 2. Flatten the case sources: held rows (per report) + R2 source_diffs + R4a markers
+  //    (unresolved batches + single-source-overdue facts). `pending` facts are NOT folded —
+  //    they are a self-clearing telemetry count only (Deliverable 3/4).
   const collected = result.reports ? collectHeldRows(result) : []
   const diffs = collectSourceDiffs(result)
-  if (!collected.length && !diffs.length) return empty
+  const unresolvedBatches = collectUnresolvedBatches(result)
+  const overdue = collectSingleSourceOverdue(result)
+  if (!collected.length && !diffs.length && !unresolvedBatches.length && !overdue.length) return empty
 
   let created = 0
   let refreshed = 0
@@ -201,7 +220,64 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
     })
   }
 
+  // 5. Fold R4a unresolved-batch markers (kind='unresolved_batch') — a batch that could not
+  //    resolve to exactly one batch_id (Deliverable 1/4). Idempotent by fingerprint.
+  for (const u of unresolvedBatches) {
+    await upsertCase({
+      fingerprint: unresolvedBatchFingerprint(u),
+      report_type: 'rc_out',
+      kind: 'unresolved_batch',
+      natural_key: unresolvedBatchNaturalKey(u),
+      reason: unresolvedBatchReason(u),
+      detail: unresolvedBatchDetail(u),
+      row: u as unknown as Json,
+    })
+  }
+
+  // 6. Fold R4a single-source-overdue facts (kind='single_source_overdue') — a lone witness
+  //    whose second source is overdue (Deliverable 3/4). Idempotent by fingerprint.
+  for (const o of overdue) {
+    await upsertCase({
+      fingerprint: singleSourceOverdueFingerprint(o),
+      report_type: o.table,
+      kind: 'single_source_overdue',
+      natural_key: singleSourceOverdueNaturalKey(o),
+      reason: singleSourceOverdueReason(o),
+      detail: singleSourceOverdueDetail(o),
+      row: o as unknown as Json,
+    })
+  }
+
   return { created, refreshed, knownMatched, caseIds }
+}
+
+/** Plain one-line reason for an `unresolved_batch` case (no ₱ — identity + kg only). */
+function unresolvedBatchReason(u: UnresolvedBatch): string {
+  const kind =
+    u.candidates.length === 0
+      ? 'no matching batch in the database'
+      : `${u.candidates.length} possible batches (ambiguous)`
+  return `batch code '${u.batch_code}' cannot be resolved — ${kind}`
+}
+
+/** Plain detail: date, weight context, which sources stated it, and the candidate ids (if any). */
+function unresolvedBatchDetail(u: UnresolvedBatch): string {
+  const srcs = [...u.sources].sort().join(', ')
+  const cand = u.candidates.length ? `candidates: ${u.candidates.join(', ')}` : 'no candidate batch found'
+  const w = typeof u.weight_kg === 'number' ? u.weight_kg.toLocaleString('en-US') : String(u.weight_kg)
+  return `${u.transaction_date} · ${w} kg · stated by ${srcs}; ${cand} — map or create the batch before it can reconcile`
+}
+
+/** Plain one-line reason for a `single_source_overdue` case. */
+function singleSourceOverdueReason(o: SingleSourceOverdue): string {
+  return `only ${o.source} reported this — a corroborating source is ${o.ageDays} day(s) overdue`
+}
+
+/** Plain detail: the lone source's value and how long the second witness has been missing. */
+function singleSourceOverdueDetail(o: SingleSourceOverdue): string {
+  const v = typeof o.value === 'number' ? o.value.toLocaleString('en-US') : String(o.value)
+  const unit = o.field === 'weight_kg' ? ' kg' : ''
+  return `${o.source} states ${v}${unit}; no corroborating source after ${o.ageDays} day(s) (lag ${o.lagDays})`
 }
 
 /** Plain one-line reason for a source_diff case (no ₱ — weights only). */

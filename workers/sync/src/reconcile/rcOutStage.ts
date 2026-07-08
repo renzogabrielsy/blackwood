@@ -23,10 +23,20 @@
  */
 import type { ProposedRow } from "../reports/rc_out/extract.js";
 import type { RowDict } from "../reports/gsheet/deductions.js";
+import type { BatchLookup } from "../reports/rc_out/classify.js";
 import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
-import type { ReconcileResult, SourceDiff, SourceLegRow, SourceRecord } from "./types.js";
+import {
+  LAG_DAYS,
+  type Agreement,
+  type ReconcileResult,
+  type SingleSourceOverdue,
+  type SourceDiff,
+  type SourceLegRow,
+  type SourceRecord,
+  type UnresolvedBatch,
+} from "./types.js";
 
-/** The rows the stage buckets. All three are OPTIONAL — a source absent from a run
+/** The rows the stage buckets. All three extracts are OPTIONAL — a source absent from a run
  *  (no PROPOSED email, no MOVEMENT email) simply contributes no records. */
 export interface RcOutReconcileInput {
   /** Raw PROPOSED DAILY REPORT block-sections (one row per block-section = one leg). */
@@ -35,14 +45,37 @@ export interface RcOutReconcileInput {
   gsheetRcOut?: RowDict[];
   /** RC MOVEMENT per-date grand totals (extractMovement(...).date_to_fed_kls). */
   movementByDate?: Record<string, number>;
+  /**
+   * R4a — batch_code → batch_id map (the rc_out report's `dbWindow.batch_lookup`). Sources are
+   * now aligned by RESOLVED batch_id, not code strings, so two conventions that map to the same
+   * batch align (no silent miss) and a code that can't resolve surfaces as a case (Deliverable
+   * 1). When empty, every fine row is unresolvable (0 candidates) → all become `unresolved_batch`.
+   */
+  batchLookup?: BatchLookup;
+  /**
+   * R4a — the sync run's calendar date (YYYY-MM-DD), threaded from the run row. Drives the
+   * single-witness pending vs held_overdue split (Deliverable 3). Absent → no disposition.
+   */
+  runDate?: string;
+  /** Overdue threshold in days. Default LAG_DAYS. */
+  lagDays?: number;
 }
 
 /** The additive result channel written to `sync_runs.result.reconciliation.rc_out`. */
 export interface RcOutReconciliation {
   /** The field-level disagreements to surface as `source_diff` cases. */
   diffs: SourceDiff[];
-  /** Count of agreements (auto-appliable in R4; telemetry only in R2). */
+  /** Count of agreements (auto-appliable in R4b; telemetry only in shadow). */
   agreements: number;
+  /**
+   * R4a — count of single-witness facts INSIDE the lag window (self-clear next run when the
+   * second source arrives). Telemetry ONLY — no case (Deliverable 3/4).
+   */
+  pending: number;
+  /** R4a — single-witness facts OLDER than the lag window → `single_source_overdue` cases. */
+  heldOverdue: SingleSourceOverdue[];
+  /** R4a — batches that could not resolve to one batch_id → `unresolved_batch` cases. */
+  unresolvedBatches: UnresolvedBatch[];
 }
 
 /** The top-level reconciliation channel on the run result (extensible per table). */
@@ -73,51 +106,149 @@ export function canonicalBatchKey(
   return cands[0];
 }
 
-interface Bucket<T> {
-  date: string;
-  batch: string;
-  block: string;
-  dest: string;
-  rows: T[];
+/**
+ * R4a Deliverable 1 — resolve a source's batch identity to a batch_id via the SAME
+ * primary-then-fallbacks lookup the rc_out classify path uses. This MIRRORS (does not import —
+ * that fn is `ProposedRow`-typed and unexported) `reports/rc_out/classify.ts::resolveBatchId`,
+ * the exact idiom already mirrored by `proposedLegsSelfConsistent` for the balance guard. Key
+ * match is EXACT (no normalize), matching the classify resolver.
+ *
+ * It ALSO detects ambiguity the write-path resolver hides: it returns the DISTINCT set of
+ * batch_ids that ANY of {primary, ...fallbacks} map to. Exactly one → resolved. Zero (no code
+ * matched) or 2+ (codes point at DIFFERENT batches) → UNRESOLVED — the caller must emit an
+ * `unresolved_batch` marker, never a silent single-source Agreement (Refinement 4).
+ */
+export function resolveBatchCandidates(
+  primary: string | null | undefined,
+  fallbacks: readonly string[] = [],
+  lookup: BatchLookup = {},
+): { batchId: string | null; candidates: string[] } {
+  const codes = [primary, ...fallbacks].filter(
+    (c): c is string => typeof c === "string" && c.trim().length > 0,
+  );
+  const ids = new Set<string>();
+  for (const code of codes) {
+    if (code in lookup) ids.add(lookup[code]);
+  }
+  const candidates = [...ids];
+  return { batchId: candidates.length === 1 ? candidates[0] : null, candidates };
 }
 
-/** Group rows by the fine key, skipping any row that cannot form one. */
-function bucketBy<T>(
-  rows: readonly T[],
-  keyOf: (r: T) => { date: string | null; batch: string | null; block: string | null; dest: string } | null,
-): Bucket<T>[] {
-  const map = new Map<string, Bucket<T>>();
-  for (const r of rows) {
-    const k = keyOf(r);
-    if (!k || k.date === null || k.batch === null || k.block === null) continue;
-    const ks = [k.date, k.batch, k.block, k.dest].join("\u0000");
-    const b = map.get(ks);
-    if (b) b.rows.push(r);
-    else map.set(ks, { date: k.date, batch: k.batch, block: k.block, dest: k.dest, rows: [r] });
-  }
-  return [...map.values()];
+/** Fine-bucket key separator + FEED sentinel (null block). Built with String.fromCharCode so the
+ *  SOURCE file carries NO raw control byte AND no \uXXXX escape (component values can't contain a
+ *  NUL) — the null delimiter is created only at runtime. */
+const SEP = String.fromCharCode(0);
+const FEED_SENTINEL = String.fromCharCode(0) + "FEED";
+
+/** Canonical fine-bucket key. R4a: a null block (FEED) keys on (date, batch_id, dest) — the
+ *  feed batch is its own discriminator (Deliverable 2); standard blocks keep their block_loc. */
+function fineBucketKey(date: string, batchId: string, block: string | null, dest: string): string {
+  return [date, batchId, block ?? FEED_SENTINEL, dest].join(SEP);
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Merge an UnresolvedBatch into a map keyed by (date, batch_code) — collapsing the same
+ *  unresolvable code across legs AND across sources into ONE marker (→ one case). */
+function mergeUnresolvedInto(map: Map<string, UnresolvedBatch>, u: UnresolvedBatch): void {
+  const k = u.transaction_date + SEP + u.batch_code;
+  const e = map.get(k);
+  if (!e) {
+    map.set(k, { ...u, candidates: [...u.candidates], sources: [...u.sources] });
+    return;
+  }
+  e.weight_kg = round2(e.weight_kg + u.weight_kg);
+  for (const c of u.candidates) if (!e.candidates.includes(c)) e.candidates.push(c);
+  for (const s of u.sources) if (!e.sources.includes(s)) e.sources.push(s);
+  if (e.block_loc === null && u.block_loc !== null) e.block_loc = u.block_loc;
+}
+
+/** A fine bucket keyed by RESOLVED batch_id; block MAY be null (FEED). */
+interface FineBucket<T> {
+  date: string;
+  batchId: string;
+  block: string | null;
+  dest: string;
+  rows: T[];
+}
+
 /**
- * Bucket PROPOSED block-sections into fine SourceRecords. Each block-section is a leg;
- * a bucket sums `weight_kg` across its legs (L-037 leg-splitting robustness) and derives
- * `selfConsistent` from the L-037 balance rule over those legs' STRT/END/DAY TOTAL.
- * FEED blocks (block_loc null) cannot form a fine key and are skipped — a known R2 limit
- * (documented in ./CONTEXT.md; R4 broadens the key).
+ * R4a Deliverable 1+2 — resolve each row's batch to a batch_id and bucket the RESOLVED rows by
+ * the fine key `(date, batch_id, block, dest)` (block null = FEED). Rows whose batch can't
+ * resolve to exactly one id are collected as UnresolvedBatch markers, never a silent
+ * single-source pass. Rows with NO batch code at all cannot form ANY key and are skipped (an
+ * extraction gap, not an `unresolved_batch`).
  */
-export function bucketProposed(rows: readonly ProposedRow[]): SourceRecord[] {
-  const buckets = bucketBy(rows, (r) => ({
+function resolveAndBucket<T>(
+  source: "proposed" | "gsheet",
+  rows: readonly T[],
+  lookup: BatchLookup,
+  fieldsOf: (r: T) => {
+    date: string | null;
+    primary: string | null;
+    fallbacks: string[];
+    block: string | null;
+    dest: string;
+    weight: number;
+  },
+): { buckets: FineBucket<T>[]; unresolved: UnresolvedBatch[] } {
+  const bucketMap = new Map<string, FineBucket<T>>();
+  const unresolvedMap = new Map<string, UnresolvedBatch>();
+
+  for (const r of rows) {
+    const f = fieldsOf(r);
+    if (!f.date) continue;
+    const codes = [f.primary, ...f.fallbacks].filter(
+      (c): c is string => typeof c === "string" && c.trim().length > 0,
+    );
+    if (codes.length === 0) continue; // no batch stated → cannot form any key (as R2)
+
+    const { batchId, candidates } = resolveBatchCandidates(f.primary, f.fallbacks, lookup);
+    if (batchId === null) {
+      mergeUnresolvedInto(unresolvedMap, {
+        transaction_date: f.date,
+        batch_code: f.primary ?? codes[0],
+        candidates,
+        block_loc: f.block,
+        destination: f.dest,
+        weight_kg: f.weight,
+        sources: [source],
+      });
+      continue;
+    }
+
+    const ks = fineBucketKey(f.date, batchId, f.block, f.dest);
+    const b = bucketMap.get(ks);
+    if (b) b.rows.push(r);
+    else bucketMap.set(ks, { date: f.date, batchId, block: f.block, dest: f.dest, rows: [r] });
+  }
+
+  return { buckets: [...bucketMap.values()], unresolved: [...unresolvedMap.values()] };
+}
+
+/**
+ * Bucket PROPOSED block-sections into fine SourceRecords keyed by RESOLVED batch_id. A bucket
+ * sums `weight_kg` across its legs (L-037 leg-splitting robustness) and derives `selfConsistent`
+ * from the L-037 balance rule over those legs' STRT/END/DAY TOTAL. FEED rows (block_loc null)
+ * now reconcile too — keyed on (date, batch_id, dest) (R4a Deliverable 2). Returns the records
+ * plus any UnresolvedBatch markers (Deliverable 1).
+ */
+export function bucketProposed(
+  rows: readonly ProposedRow[],
+  lookup: BatchLookup = {},
+): { records: SourceRecord[]; unresolved: UnresolvedBatch[] } {
+  const { buckets, unresolved } = resolveAndBucket("proposed", rows, lookup, (r) => ({
     date: r.transaction_date ?? null,
-    batch: canonicalBatchKey(r.batch_code_primary, r.batch_code_fallbacks),
+    primary: r.batch_code_primary ?? null,
+    fallbacks: r.batch_code_fallbacks ?? [],
     block: r.block_loc ?? null,
     dest: r.destination || MAIN,
+    weight: r.weight_kg ?? 0,
   }));
 
-  return buckets.map((b) => {
+  const records = buckets.map((b) => {
     const sum = round2(b.rows.reduce((acc, r) => acc + (r.weight_kg ?? 0), 0));
     const legs = b.rows.map((r) => ({
       strt_bal_kg: r.strt_bal_kg,
@@ -125,71 +256,78 @@ export function bucketProposed(rows: readonly ProposedRow[]): SourceRecord[] {
       day_total_kg: r.day_total_kg,
     }));
     const sc = proposedLegsSelfConsistent(legs);
-    // The raw legs the sum is built from — R3's per-leg write-plan input.
-    const rows: SourceLegRow[] = b.rows.map((r) => ({
+    // The raw legs the sum is built from — R3's per-leg write-plan input. batch_id is the
+    // RESOLVED id (shadow re-extract does not run classify, so use the reconciler's resolution).
+    const legRows: SourceLegRow[] = b.rows.map((r) => ({
       transaction_date: r.transaction_date,
       batch_code: r.batch_code_resolved ?? r.batch_code_primary ?? null,
-      batch_id: r.batch_id,
+      batch_id: b.batchId,
       block_loc: r.block_loc,
       destination: r.destination || MAIN,
       weight_kg: r.weight_kg ?? 0,
       production_batch: r.production_batch,
       remarks: r.remarks,
     }));
+    const blkLabel = b.block ? " @ " + b.block : " (FEED)";
     const rec: SourceRecord = {
       source: "proposed",
-      naturalKey: { transaction_date: b.date, batch: b.batch, block_loc: b.block, destination: b.dest },
+      naturalKey: { transaction_date: b.date, batch: b.batchId, block_loc: b.block, destination: b.dest },
       fields: { weight_kg: sum },
-      rows,
+      rows: legRows,
       selfConsistent: sc.selfConsistent,
       provenance:
-        `PROPOSED DAILY REPORT ${b.date} ${b.batch} @ ${b.block} — ` +
+        `PROPOSED DAILY REPORT ${b.date} batch ${b.batchId}${blkLabel} — ` +
         `${b.rows.length} leg(s) summed to ${sum} kg`,
     };
     if (sc.note) rec.selfConsistencyNote = sc.note;
     return rec;
   });
+
+  return { records, unresolved };
 }
 
 /**
- * Bucket Google Sheet RC OUT rows into fine SourceRecords. gsheet has NO balance
- * columns, so `selfConsistent` is true by default (it cannot fail a check it lacks —
- * ./types.ts). Rows sum per fine key exactly like proposed.
+ * Bucket Google Sheet RC OUT rows into fine SourceRecords keyed by RESOLVED batch_id. gsheet has
+ * NO balance columns, so `selfConsistent` is true by default (it cannot fail a check it lacks —
+ * ./types.ts). Rows sum per fine key exactly like proposed; FEED rows (null block) reconcile too.
  */
-export function bucketGsheetRcOut(rows: readonly RowDict[]): SourceRecord[] {
-  const buckets = bucketBy(rows, (r) => {
-    const date = (r.transaction_date as string | null) ?? null;
-    const batch = canonicalBatchKey(
-      r.batch_code_primary as string | null | undefined,
-      (r.batch_code_fallbacks as string[] | undefined) ?? [],
-    );
-    const block = (r.block_loc as string | null) ?? null;
-    const dest = (r.destination as string | null) || MAIN;
-    return { date, batch, block, dest };
-  });
+export function bucketGsheetRcOut(
+  rows: readonly RowDict[],
+  lookup: BatchLookup = {},
+): { records: SourceRecord[]; unresolved: UnresolvedBatch[] } {
+  const { buckets, unresolved } = resolveAndBucket("gsheet", rows, lookup, (r) => ({
+    date: (r.transaction_date as string | null) ?? null,
+    primary: (r.batch_code_primary as string | null | undefined) ?? null,
+    fallbacks: (r.batch_code_fallbacks as string[] | undefined) ?? [],
+    block: (r.block_loc as string | null) ?? null,
+    dest: (r.destination as string | null) || MAIN,
+    weight: (r.weight_kg as number | null) ?? 0,
+  }));
 
-  return buckets.map((b) => {
+  const records = buckets.map((b) => {
     const sum = round2(b.rows.reduce((acc, r) => acc + ((r.weight_kg as number | null) ?? 0), 0));
-    // The raw gsheet legs the sum is built from — R3's per-leg write-plan input.
-    const rows: SourceLegRow[] = b.rows.map((r) => ({
+    const legRows: SourceLegRow[] = b.rows.map((r) => ({
       transaction_date: (r.transaction_date as string | null) ?? b.date,
-      batch_code:
-        (r.batch_code_primary as string | null | undefined) ?? null,
+      batch_code: (r.batch_code_primary as string | null | undefined) ?? null,
+      batch_id: b.batchId,
       block_loc: (r.block_loc as string | null) ?? null,
       destination: (r.destination as string | null) || MAIN,
       weight_kg: (r.weight_kg as number | null) ?? 0,
       production_batch: (r.production_batch as string | null) ?? null,
       remarks: (r.remarks as string | null) ?? null,
     }));
+    const blkLabel = b.block ? " @ " + b.block : " (FEED)";
     return {
       source: "gsheet",
-      naturalKey: { transaction_date: b.date, batch: b.batch, block_loc: b.block, destination: b.dest },
+      naturalKey: { transaction_date: b.date, batch: b.batchId, block_loc: b.block, destination: b.dest },
       fields: { weight_kg: sum },
-      rows,
+      rows: legRows,
       selfConsistent: true,
-      provenance: `Google Sheet RC OUT ${b.date} ${b.batch} @ ${b.block} = ${sum} kg`,
+      provenance: `Google Sheet RC OUT ${b.date} batch ${b.batchId}${blkLabel} = ${sum} kg`,
     } satisfies SourceRecord;
   });
+
+  return { records, unresolved };
 }
 
 /** One date-level movement SourceRecord per date (the corroboration witness). */
@@ -203,21 +341,74 @@ export function movementSourceRecords(byDate: Record<string, number> = {}): Sour
   }));
 }
 
-/** Build the full SourceRecord set for a run from the three real extracts. */
-export function buildRcOutSourceRecords(input: RcOutReconcileInput): SourceRecord[] {
-  return [
-    ...bucketProposed(input.proposed ?? []),
-    ...bucketGsheetRcOut(input.gsheetRcOut ?? []),
-    ...movementSourceRecords(input.movementByDate ?? {}),
-  ];
+/**
+ * Build the SourceRecord set for a run from the three real extracts, plus the cross-source
+ * UnresolvedBatch markers. proposed + gsheet resolve to batch_id (R4a); their unresolved markers
+ * are merged by (date, batch_code) so one unresolvable code is ONE marker regardless of source.
+ */
+export function buildRcOutSourceRecords(
+  input: RcOutReconcileInput,
+): { records: SourceRecord[]; unresolved: UnresolvedBatch[] } {
+  const lookup = input.batchLookup ?? {};
+  const p = bucketProposed(input.proposed ?? [], lookup);
+  const g = bucketGsheetRcOut(input.gsheetRcOut ?? [], lookup);
+  const m = movementSourceRecords(input.movementByDate ?? {});
+
+  const merged = new Map<string, UnresolvedBatch>();
+  for (const u of [...p.unresolved, ...g.unresolved]) mergeUnresolvedInto(merged, u);
+
+  return { records: [...p.records, ...g.records, ...m], unresolved: [...merged.values()] };
+}
+
+/** Provenance line for a single-source overdue fact (the Agreement carries no provenance). */
+function singleSourceProvenance(a: Agreement): string {
+  const k = a.naturalKey;
+  const blk = k.block_loc ? " @ " + k.block_loc : " (FEED)";
+  const v = typeof a.value === "number" ? String(a.value) : String(a.value);
+  return `${a.sources[0]} ${k.transaction_date} batch ${k.batch ?? "?"}${blk} = ${v}`;
 }
 
 /**
- * The stage entrypoint: bucket the three real extracts, run the R1 engine, and return
- * the additive channel. Pure — the runSync wrapper handles extraction + persistence.
+ * The stage entrypoint: bucket the three real extracts, run the R1 engine (threading runDate for
+ * the pending/held split), and return the additive channel. Pure — the runSync wrapper handles
+ * extraction + persistence. Splits single-source agreements into a `pending` count (telemetry,
+ * NO case) vs `heldOverdue` facts (→ `single_source_overdue` cases), and surfaces batch-resolution
+ * failures as `unresolvedBatches` (→ `unresolved_batch` cases). Multi-source agreements + diffs
+ * are unchanged.
  */
 export function reconcileRcOutStage(input: RcOutReconcileInput): RcOutReconciliation {
-  const records = buildRcOutSourceRecords(input);
-  const result: ReconcileResult = reconcileRcOut(records);
-  return { diffs: result.diffs, agreements: result.agreements.length };
+  const { records, unresolved } = buildRcOutSourceRecords(input);
+  const result: ReconcileResult = reconcileRcOut(records, {
+    runDate: input.runDate,
+    lagDays: input.lagDays,
+  });
+
+  let pending = 0;
+  const heldOverdue: SingleSourceOverdue[] = [];
+  for (const a of result.agreements) {
+    if (!a.singleSource) continue;
+    if (a.disposition === "pending") {
+      pending++;
+    } else if (a.disposition === "held_overdue") {
+      heldOverdue.push({
+        naturalKey: a.naturalKey,
+        field: a.field,
+        table: "rc_out",
+        source: a.sources[0],
+        value: a.value,
+        provenance: singleSourceProvenance(a),
+        ageDays: a.ageDays ?? 0,
+        lagDays: input.lagDays ?? LAG_DAYS,
+      });
+    }
+    // disposition undefined → settled history (or no runDate): neither pending nor a case.
+  }
+
+  return {
+    diffs: result.diffs,
+    agreements: result.agreements.length,
+    pending,
+    heldOverdue,
+    unresolvedBatches: unresolved,
+  };
 }

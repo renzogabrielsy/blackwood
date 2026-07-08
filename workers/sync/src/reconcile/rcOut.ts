@@ -14,15 +14,18 @@
  * different legs — see L-037). The RC MOVEMENT sheet is per-DATE only, so it is consumed as a
  * date-level CORROBORATION witness, never a fine competitor. See ./CONTEXT.md.
  */
-import type {
-  Agreement,
-  ReconcileOptions,
-  ReconcileResult,
-  RcOutNaturalKey,
-  RcOutSource,
-  SourceDiff,
-  SourceOpinion,
-  SourceRecord,
+import {
+  LAG_DAYS,
+  RECONCILE_WINDOW_DAYS,
+  type Agreement,
+  type ReconcileOptions,
+  type ReconcileResult,
+  type RcOutNaturalKey,
+  type RcOutSource,
+  type SingleSourceDisposition,
+  type SourceDiff,
+  type SourceOpinion,
+  type SourceRecord,
 } from "./types.js";
 
 const DEFAULTS = {
@@ -37,9 +40,43 @@ function fineKeyStr(k: RcOutNaturalKey): string {
   return [k.transaction_date, k.batch ?? "", k.block_loc ?? "", k.destination ?? "MAIN"].join("\u0001");
 }
 
-/** A record is FINE (reconciled) when it names a batch + block and is not the movement witness. */
+/**
+ * A record is FINE (reconciled) when it names a batch and is not the movement witness.
+ * R4a: block_loc MAY be null — a FEED row (block_loc null) keys on (date, batch, dest), the
+ * feed batch being its own discriminator (Deliverable 2). Only movement (date-level, batch
+ * null) is excluded. `batch` here is a resolved batch_id (Deliverable 1).
+ */
 function isFine(r: SourceRecord): boolean {
-  return r.source !== "movement" && r.naturalKey.batch !== null && r.naturalKey.block_loc !== null;
+  return r.source !== "movement" && r.naturalKey.batch !== null;
+}
+
+/** Whole-day difference b − a for two YYYY-MM-DD strings at UTC midnight. NaN if unparseable.
+ *  Pure — parses the two given dates only; NEVER reads the wall clock. */
+function daysBetweenISO(a: string, b: string): number {
+  const ta = Date.parse(`${a}T00:00:00Z`);
+  const tb = Date.parse(`${b}T00:00:00Z`);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return NaN;
+  return Math.round((tb - ta) / 86_400_000);
+}
+
+/**
+ * R4a — classify a single-witness fact's recency (Refinement 3). Returns undefined (no
+ * disposition) when there is no runDate, the dates don't parse, or the fact is SETTLED history
+ * (older than the eligibility window — its second witness came and went in a prior run).
+ * Otherwise: pending inside the lag window, held_overdue beyond it.
+ */
+function classifySingleSource(
+  date: string,
+  runDate: string | undefined,
+  lagDays: number,
+  windowDays: number,
+): { disposition: SingleSourceDisposition; ageDays: number } | undefined {
+  if (!runDate) return undefined;
+  const age = daysBetweenISO(date, runDate); // runDate − factDate
+  if (!Number.isFinite(age)) return undefined;
+  if (age > windowDays) return undefined; // settled history — not this run's concern
+  const disposition: SingleSourceDisposition = age <= lagDays ? "pending" : "held_overdue";
+  return { disposition, ageDays: age };
 }
 
 /** Numeric equality within tolerance; non-finite → never equal. */
@@ -65,6 +102,9 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
   const rollupTol = opts.dayRollupTolKg ?? DEFAULTS.dayRollupTolKg;
   const weightField = opts.weightField ?? DEFAULTS.weightField;
   const movementTotalField = opts.movementTotalField ?? DEFAULTS.movementTotalField;
+  const runDate = opts.runDate;
+  const lagDays = opts.lagDays ?? LAG_DAYS;
+  const windowDays = opts.windowDays ?? RECONCILE_WINDOW_DAYS;
 
   const fine = records.filter(isFine);
 
@@ -130,16 +170,23 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
       }
       if (present.length === 0) continue;
 
-      // Single-source → accept, tagged.
+      // Single-source → accept, tagged. R4a: attach a recency disposition (pending vs
+      // held_overdue) when a runDate was supplied — the shadow signal for Refinement 3.
       if (present.length === 1) {
-        agreements.push({
+        const agreement: Agreement = {
           naturalKey: key,
           field,
           table: "rc_out",
           value: present[0].value,
           sources: [present[0].rec.source],
           singleSource: true,
-        });
+        };
+        const disp = classifySingleSource(key.transaction_date, runDate, lagDays, windowDays);
+        if (disp) {
+          agreement.disposition = disp.disposition;
+          agreement.ageDays = disp.ageDays;
+        }
+        agreements.push(agreement);
         continue;
       }
 

@@ -105,10 +105,51 @@ full `SourceDiff`, fingerprint = `sourceDiffFingerprint` (hash of `{natural_key,
 competing values}`; weights rounded to integer kg so jitter doesn't re-alarm). They flow through the
 EXISTING run-triage + Sync Review automatically (generic case detail; the per-field PICK control is R3).
 
-**Known R2 limits (for R4):** (1) FEED blocks have `block_loc = null` in the proposed extractor, so
-they cannot form a fine key and are **skipped** by `bucketProposed` — only standard blocks reconcile.
-(2) The gsheet re-download is a second snapshot of the Sheet (negligible skew within one run;
-observational anyway). R4's cutover routes gsheet THROUGH reconciliation, capturing the extract once.
+**Known R2 limits (mostly CLOSED in R4a below):** (1) FEED blocks skipped — **FIXED in R4a**
+(null block now keys on `(date, batch_id, dest)`). (2) code-string alignment — **FIXED in R4a**
+(batch_id resolution). (3) The gsheet re-download is a second snapshot of the Sheet (negligible
+skew within one run; observational anyway) — R4b's cutover routes gsheet THROUGH reconciliation,
+capturing the extract once.
+
+## R4a — cutover prerequisites (shipped 2026-07-08, still SHADOW)
+Four prereqs before R4b retires Sheet-wins. **No write/apply/Sheet-wins behavior changed** —
+this makes reconciliation smarter and more visible only. Parity stays 12/12.
+
+**Deliverable 1 — batch_id alignment (Refinement 4).** `rcOutStage.ts::resolveBatchCandidates`
+resolves each source's `(primary + fallbacks)` to a batch_id via a `batch_code → batch_id`
+lookup — MIRRORING (not importing — it's `ProposedRow`-typed + unexported)
+`reports/rc_out/classify.ts::resolveBatchId`. The fine key's `batch` is now the RESOLVED
+batch_id, so two conventions (`MARCH-…` / `MAR-…`) that map to the same id align (no silent
+miss). It ALSO detects ambiguity the write-path resolver hides: it returns the DISTINCT set of
+ids any code maps to — **exactly one → resolved; 0 (no match) or 2+ (codes → different batches)
+→ UNRESOLVED**, emitted as an `UnresolvedBatch` marker, never a silent single-source pass. The
+`canonicalBatchKey` alias helper is retained (tested) but SUPERSEDED for keying.
+
+**Deliverable 2 — FEED-block keying.** A row with `block_loc = null` (FEED) now keys on
+`(date, batch_id, dest)` — the feed batch is its own discriminator. `isFine` no longer requires a
+non-null block; only movement (batch null) is excluded. The June-10 FEED2/FEED3 over-statements
+now reconcile too, not just standard-block BLK5.
+
+**Deliverable 3 — pending vs held (Refinement 3).** The engine takes a `runDate` (threaded from
+the run row — NEVER Date.now() in a DBOS step) and tags each SINGLE-witness fact:
+`pending` (age ≤ `LAG_DAYS` = 2 → self-clears next run, NO case) vs `held_overdue` (age > LAG_DAYS
+→ a case). An outer `RECONCILE_WINDOW_DAYS` = 14 guard drops DEEP history (older than the window)
+as settled — WITHOUT it, gsheet's full-history extract would flood `held_overdue` every run.
+Multi-source agreements never carry a disposition; movement is date-level only and does NOT make a
+fact single-witnessed. The stage splits these into a `pending` count (telemetry) + `heldOverdue[]`.
+
+**Deliverable 4 — fan-out.** The channel now carries `{ diffs, agreements, pending, heldOverdue,
+unresolvedBatches }`. App fan-out (`app/(app)/sync/cases.ts`) folds `unresolvedBatches` →
+`kind='unresolved_batch'` cases (fingerprint = code+date+sorted-candidates; identity-based) and
+`heldOverdue` → `kind='single_source_overdue'` cases (fingerprint = key+field+source, value-
+independent so it self-clears when the 2nd witness arrives). `pending` = a count only, no case.
+`source_diff` is unchanged. All ride the existing triage + Sync Review rails.
+
+**Wiring** (`workflows/runSync.ts::reconcileRcOutShadow`): the shadow step now also builds the
+`batch_code → batch_id` lookup (from `batches`, guarded) and reads `runDate` via
+`DbClient.getSyncRunCreatedAt(runId)` (a fixed stored value → replay-safe), threading both into
+`reconcileRcOutStage`. Both are guarded — an empty lookup means every batch is `unresolved_batch`;
+a missing runDate means single-source facts get no disposition. Neither can fail the run (shadow).
 
 ## R3a — pick-source resolution (shipped 2026-07-08, app-side)
 Lives entirely in the app (`app/(app)/sync/diff-plan.ts` PURE + `resolve.ts` `'use server'`), NOT in

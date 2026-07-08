@@ -389,10 +389,51 @@ export interface SourceDiff {
   recommended?: Recommendation
 }
 
-/** The reconciliation output for one table (extensible per table in later phases). */
+/**
+ * R4a — a batch that could not resolve to exactly ONE batch_id (Deliverable 1). Mirror of the
+ * worker's reconcile/types.ts::UnresolvedBatch. Surfaces as an `unresolved_batch` case. NEVER a ₱.
+ */
+export interface UnresolvedBatch {
+  transaction_date: string
+  batch_code: string
+  /** Distinct batch_ids the code + fallbacks resolved to: 0 (no match) or 2+ (ambiguous). */
+  candidates: string[]
+  block_loc: string | null
+  destination: string
+  weight_kg: number
+  sources: RcOutSource[]
+}
+
+/**
+ * R4a — a single-witness fact whose second source is OVERDUE (Deliverable 3). Mirror of the
+ * worker's reconcile/types.ts::SingleSourceOverdue. Surfaces as a `single_source_overdue` case.
+ * A `pending` fact (recent, self-clears) never becomes one of these — it is a count only.
+ */
+export interface SingleSourceOverdue {
+  naturalKey: RcOutNaturalKey
+  field: string
+  table: 'rc_out'
+  source: RcOutSource
+  value: number | string | null
+  provenance: string
+  ageDays: number
+  lagDays: number
+}
+
+/**
+ * The reconciliation output for one table (extensible per table in later phases). The R4a
+ * fields are OPTIONAL here (defensive: a pre-R4a run's channel omits them) but the worker
+ * always populates them.
+ */
 export interface TableReconciliation {
   diffs: SourceDiff[]
   agreements: number
+  /** R4a — count of single-witness facts within the lag window (self-clear next run). No case. */
+  pending?: number
+  /** R4a — single-witness facts older than the lag window → `single_source_overdue` cases. */
+  heldOverdue?: SingleSourceOverdue[]
+  /** R4a — batches that could not resolve to one batch_id → `unresolved_batch` cases. */
+  unresolvedBatches?: UnresolvedBatch[]
 }
 
 /** The top-level `result.reconciliation` channel. */

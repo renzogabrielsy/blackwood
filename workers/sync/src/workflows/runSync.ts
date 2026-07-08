@@ -304,15 +304,39 @@ async function reconcileRcOutShadow(
       /* Sheet unreachable → no gsheet records (shadow) */
     }
 
-    const rc_out = reconcileRcOutStage({ proposed, gsheetRcOut, movementByDate });
+    // R4a Deliverable 1 — batch_code → batch_id map the reconciler resolves against (same shape
+    // the rc_out report builds). Guarded: an empty lookup just means every batch is unresolvable
+    // (→ unresolved_batch cases), never a crash.
+    const batchLookup: Record<string, string> = {};
+    try {
+      const batchRows = await db.readRows("batches", { columns: ["batch_code", "id"], sinceColumn: null });
+      for (const b of batchRows) {
+        const code = b.batch_code;
+        if (code) batchLookup[String(code)] = String(b.id);
+      }
+    } catch {
+      /* no batch lookup → every fine batch unresolvable (shadow) */
+    }
+
+    // R4a Deliverable 3 — the run's calendar date (YYYY-MM-DD) for the pending/held split.
+    // Read from the run row (a fixed stored value → deterministic on replay); NEVER Date.now().
+    let runDate: string | undefined;
+    try {
+      runDate = (await db.getSyncRunCreatedAt(runId))?.slice(0, 10) ?? undefined;
+    } catch {
+      /* no runDate → single-source facts get no pending/held disposition (shadow) */
+    }
+
+    const rc_out = reconcileRcOutStage({ proposed, gsheetRcOut, movementByDate, batchLookup, runDate });
+    const flags = rc_out.diffs.length + rc_out.heldOverdue.length + rc_out.unresolvedBatches.length;
     await emit(
       "reconcile",
-      rc_out.diffs.length > 0
-        ? `Cross-checked sources — ${rc_out.diffs.length} disagreement(s) to review`
+      flags > 0
+        ? `Cross-checked sources — ${flags} item(s) to review`
         : "Cross-checked sources — all agree",
       96,
       undefined,
-      rc_out.diffs.length > 0 ? "warn" : "info",
+      flags > 0 ? "warn" : "info",
     );
     return { rc_out };
   } catch {
