@@ -28,6 +28,7 @@ import {
   type CompactChanged,
   type CompactNewRcIn,
   type CompactNewRcOut,
+  type CompactUnmapped,
 } from "../../src/reports/gsheet/apply.js";
 
 const SINCE = "2025-01-01";
@@ -487,5 +488,76 @@ describe("apply — R4b rc_out cutover (SYNC_RCOUT_RECONCILE_CUTOVER)", () => {
     expect(deliv(on)).toHaveLength(1);
     expect(deliv(off)).toHaveLength(1);
     expect(deliv(on)[0].rows).toEqual(deliv(off)[0].rows);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 2 — an UNMAPPED held row NAMES the offending batch_code (natural_key + payload).
+// ---------------------------------------------------------------------------
+describe("apply — UNMAPPED held row carries batch_code (Fix 2)", () => {
+  function stubDb() {
+    return {
+      async selectOne() {
+        return null;
+      },
+      async insert() {
+        return [{ id: "x" }];
+      },
+      async update() {
+        return [{ id: "u" }];
+      },
+      async stampIngestionAudit() {
+        return true;
+      },
+      async writeIngestionAudit() {
+        return { id: "a" };
+      },
+      async upsertIngestionWatermark() {
+        return true;
+      },
+    } as never;
+  }
+
+  const unmapped: CompactUnmapped = {
+    kind: "UNMAPPED",
+    index: 1220,
+    decision: "skip",
+    batch_code: "JULY-26-BLK4",
+    date: "2026-07-26",
+    block_loc: "B-4A",
+    weight_kg: 21_789,
+    supplier: "ACME",
+    truck_plate: "MAN 3625",
+  };
+
+  const modes = (): Record<"rc_in" | "rc_out", ModeCompact> => ({
+    rc_in: {
+      mode: "rc_in",
+      since: SINCE,
+      actionable: { new: [], changed: [], flagged: [], unmapped: [unmapped], malformed: [] },
+    },
+    rc_out: {
+      mode: "rc_out",
+      since: SINCE,
+      actionable: { new: [], changed: [], flagged: [], unmapped: [], malformed: [] },
+    },
+  });
+
+  it("names the code in natural_key AND carries it (+ key fields) in the row payload", async () => {
+    const res = await applyGsheet(modes(), { db: stubDb(), cutoverRcOut: true });
+
+    const holds = res.held.filter((h) => h.kind === "unmapped_batch_code");
+    expect(holds).toHaveLength(1);
+    const h = holds[0];
+    // WHAT didn't match — not just WHERE.
+    expect(h.natural_key).toBe("RC IN row 1220 · JULY-26-BLK4");
+    expect(h.row?.batch_code).toBe("JULY-26-BLK4");
+    // The natural-key fields the post-writers re-resolve pass needs are carried too.
+    expect(h.row?.mode).toBe("rc_in");
+    expect(h.row?.transaction_date).toBe("2026-07-26");
+    expect(h.row?.block_loc).toBe("B-4A");
+    expect(h.row?.weight_kg).toBe(21_789);
+    // Cost-free by construction (price gating).
+    expect(h.row).not.toHaveProperty("cost_basis");
   });
 });

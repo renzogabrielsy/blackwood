@@ -90,6 +90,22 @@ export interface CompactUnmapped {
   kind: "UNMAPPED";
   index: unknown;
   decision?: string;
+  /**
+   * Fix 2 + Fix 1 (creation-race holds): the OFFENDING batch code + the natural-key
+   * fields, carried through so (a) the held alert NAMES what didn't match, not just
+   * where, and (b) the post-writers re-resolve pass (workflows/creationRaceHolds.ts)
+   * can re-resolve the code + DB-verify the row. NEVER a ₱/cost field.
+   */
+  batch_code?: string | null;
+  date?: string | null;
+  block_loc?: string | null;
+  weight_kg?: number | null;
+  // rc_in natural-key extras.
+  supplier?: string | null;
+  truck_plate?: string | null;
+  // rc_out natural-key extras.
+  destination?: string | null;
+  production_batch?: string | null;
 }
 
 export interface ModeCompact {
@@ -463,10 +479,25 @@ export async function applyFromCompact(
   // --- UNMAPPED: never auto-create a batch. ---
   for (const r of actionable.unmapped) {
     const decision = (r.decision ?? "skip").trim();
+    // Fix 2: NAME the offending batch_code in the alert (was just "RC IN row N").
+    const codeLabel = r.batch_code ? ` · ${r.batch_code}` : "";
+    // Fix 1: carry the natural-key fields so the post-writers re-resolve pass can
+    // re-resolve the code + DB-verify the row. All cost-free.
+    const enrichedRow: Record<string, unknown> = {
+      mode,
+      index: r.index,
+      batch_code: r.batch_code ?? null,
+      transaction_date: r.date ?? null,
+      block_loc: r.block_loc ?? null,
+      weight_kg: r.weight_kg ?? null,
+      ...(mode === "rc_in"
+        ? { supplier: r.supplier ?? null, truck_plate: r.truck_plate ?? null }
+        : { destination: r.destination ?? null, production_batch: r.production_batch ?? null }),
+    };
     const enriched: EnrichedHeld = {
       kind: "unmapped_batch_code",
-      natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} row ${String(r.index)}`,
-      row: { mode, index: r.index },
+      natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} row ${String(r.index)}${codeLabel}`,
+      row: enrichedRow,
     };
     if (decision === "skip") {
       skipped.push({

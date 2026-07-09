@@ -269,7 +269,7 @@ function buildCompact(
       new: bundle.new.map((i) => (mode === "rc_in" ? compactNewRcIn(i) : compactNewRcOut(i))),
       changed: bundle.changed.map((i) => compactChanged(i, mode)),
       flagged: bundle.flagged.map((i) => compactFlagged(i)),
-      unmapped: bundle.unmapped.map((i) => compactUnmapped(i)),
+      unmapped: bundle.unmapped.map((i) => compactUnmapped(i, mode)),
       malformed: bundle.malformed.slice(),
     },
   };
@@ -349,12 +349,26 @@ function compactFlagged(item: Record<string, unknown>): CompactFlagged {
   };
 }
 
-function compactUnmapped(item: Record<string, unknown>): CompactUnmapped {
-  return {
+function compactUnmapped(item: Record<string, unknown>, mode: "rc_in" | "rc_out"): CompactUnmapped {
+  const r = asRow(item);
+  const base: CompactUnmapped = {
     kind: "UNMAPPED",
     index: item.index ?? null,
     decision: "skip",
+    // Fix 2 + Fix 1: carry the offending code (primary) + the natural-key fields.
+    batch_code: (r.batch_code_primary as string | null) ?? null,
+    date: (r.transaction_date as string | null) ?? null,
+    block_loc: (r.block_loc as string | null) ?? null,
+    weight_kg: (r.weight_kg as number | null) ?? null,
   };
+  if (mode === "rc_in") {
+    base.supplier = (r.supplier as string | null) ?? null;
+    base.truck_plate = (r.truck_plate as string | null) ?? null;
+  } else {
+    base.destination = (r.destination as string | null) ?? null;
+    base.production_batch = (r.production_batch as string | null) ?? null;
+  }
+  return base;
 }
 
 // Re-export the constants for callers/tests.

@@ -52,6 +52,12 @@ import {
   type ComputedBlock,
 } from "../reconcile/blockBalance.js";
 import { rcOutReconcileCutover } from "../lib/env.js";
+import {
+  reResolveCreationRaceHolds,
+  type CreationRaceOutcome,
+  type HeldRowLike,
+  type RecordExistsFn,
+} from "./creationRaceHolds.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -176,6 +182,23 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     }
   });
 
+  // ── Stage 2b′: post-writers re-resolve pass — auto-clear the creation-race false holds.
+  // gsheet classified BEFORE the parallel writers ran, so a BRAND-NEW batch created by the
+  // deliveries/rc_out writer ~1s later left gsheet holding the row `unmapped_batch_code` — a
+  // pure timing artifact (the batch + its row now exist). Reload the FRESH batch lookup,
+  // re-resolve each such hold, and DROP the ones whose record a sibling already wrote. This
+  // pass is READ-ONLY (no operational writes) — it only removes confirmed-redundant holds from
+  // the assembled result so the app fan-out (ensureCasesForRun) never opens a case for them.
+  // Guarded end-to-end (any failure leaves the holds as-is; never fails the run). See
+  // workflows/creationRaceHolds.ts. dryRun → gsheet apply is null → no-op.
+  const raceOutcome = await DBOS.runStep(
+    () => resolveCreationRaceHolds(runId, reports.gsheet?.apply?.held ?? null),
+    { name: "resolve:creation_race_holds" },
+  );
+  if (raceOutcome.newHeld && reports.gsheet?.apply) {
+    reports.gsheet.apply.held = raceOutcome.newHeld;
+  }
+
   // ── Stage 2c: rc_movement_audit LAST (read-only — never writes, even on a real run).
   const auditHandle = await DBOS.startWorkflow(reportWorkflow, {
     workflowID: reportWorkflowId(runId, "rc_movement_audit"),
@@ -270,6 +293,105 @@ async function finishRun(
 function firstAtt(manifest: MailClerkManifest, key: string): StoredAttachment | null {
   const arr = manifest.reports[key];
   return arr && arr.length ? arr[0] : null;
+}
+
+/**
+ * Fix 1 STEP — the post-writers creation-race re-resolve pass. Reloads a FRESH
+ * batch_code → batch_id lookup (now including batches the parallel writers created this
+ * run), re-resolves every gsheet `unmapped_batch_code` hold, and returns the rebuilt
+ * held array + telemetry. READ-ONLY: the only DB touches are the batch lookup + the
+ * per-row existence probe. Guarded — any failure returns a no-op outcome (holds kept
+ * as-is), NEVER fails the run. Deterministic on replay: the workflow re-hydrates the
+ * returned outcome from the checkpoint and re-applies the (deterministic) assignment.
+ */
+async function resolveCreationRaceHolds(
+  runId: string,
+  gsheetHeld: readonly HeldRowLike[] | null,
+): Promise<CreationRaceOutcome> {
+  const noop: CreationRaceOutcome = { autoCleared: 0, reclassified: 0, keptUnmapped: 0 };
+  if (!gsheetHeld || gsheetHeld.length === 0) return noop;
+  if (!gsheetHeld.some((h) => h.kind === "unmapped_batch_code")) return noop;
+
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+
+    // FRESH batch_code → batch_id lookup — includes batches the writers just created.
+    const batchLookup: Record<string, string> = {};
+    const batchRows = await db.readRows("batches", {
+      columns: ["batch_code", "id"],
+      sinceColumn: null,
+    });
+    for (const b of batchRows) {
+      if (b.batch_code) batchLookup[String(b.batch_code)] = String(b.id);
+    }
+
+    const recordExists: RecordExistsFn = (a) =>
+      creationRaceRecordExists(db, a.mode, a.resolvedCode, a.resolvedId, a.row);
+    const outcome = await reResolveCreationRaceHolds(gsheetHeld, batchLookup, recordExists);
+
+    if (outcome.autoCleared > 0 || outcome.reclassified > 0) {
+      await emit(
+        "reconcile",
+        `Re-checked new-batch holds — cleared ${outcome.autoCleared} timing false-alarm(s)` +
+          (outcome.reclassified ? `, ${outcome.reclassified} now need a write` : ""),
+        95,
+        undefined,
+        outcome.reclassified > 0 ? "warn" : "info",
+      );
+    }
+    return outcome;
+  } catch {
+    // Read-only self-heal — a failure must never fail the run or change a write.
+    return noop;
+  }
+}
+
+/**
+ * READ-ONLY existence probe for the creation-race pass: did a sibling writer already
+ * write THIS held row's record? rc_in → a `deliveries` row on (date, resolved batch_code,
+ * block, weight±1kg); rc_out → an `rc_out` row on (date, resolved batch_id, dest,
+ * weight±1kg). Weight is matched within 1 kg to tolerate per-block/per-truck aggregation.
+ */
+async function creationRaceRecordExists(
+  db: DbClient,
+  mode: string | null,
+  resolvedCode: string,
+  resolvedId: string,
+  row: Record<string, unknown>,
+): Promise<boolean> {
+  const date = (row.transaction_date as string | null) ?? null;
+  if (!date) return false;
+  const w = row.weight_kg == null ? null : Number(row.weight_kg);
+  const wOk = (rw: number | null): boolean => w === null || rw === null || Math.abs(rw - w) <= 1.0;
+
+  if (mode === "rc_in") {
+    const block = row.block_loc ? String(row.block_loc).trim().toUpperCase() : null;
+    const rows = await db.readRows("deliveries", {
+      sinceColumn: null,
+      columns: ["transaction_date", "batch_code", "block_loc", "weight_kg"],
+      extraFilters: { transaction_date: `eq.${date}`, batch_code: `eq.${resolvedCode}` },
+    });
+    return rows.some((r) => {
+      const rb = r.block_loc ? String(r.block_loc).trim().toUpperCase() : null;
+      const rw = r.weight_kg == null ? null : Number(r.weight_kg);
+      const blockOk = block === null || rb === block;
+      return blockOk && wOk(rw);
+    });
+  }
+
+  // rc_out (also covers a null/unknown mode — rc_out is the fine-key table).
+  const dest = (row.destination as string | null) || "MAIN";
+  const rows = await db.readRows("rc_out", {
+    sinceColumn: null,
+    columns: ["transaction_date", "batch_id", "destination", "weight_kg"],
+    extraFilters: { transaction_date: `eq.${date}`, batch_id: `eq.${resolvedId}` },
+  });
+  return rows.some((r) => {
+    const rd = (r.destination as string | null) || "MAIN";
+    const rw = r.weight_kg == null ? null : Number(r.weight_kg);
+    return rd === dest && wOk(rw);
+  });
 }
 
 /**

@@ -269,6 +269,50 @@ or no Blocking tab; never fails a run and never writes.** runSync merges it into
 → one case per run). Rides the EXISTING triage + Sync Review + investigator rails. Verify:
 `scripts/verify-block-diff-fold.ts`.
 
+## Creation-race hold auto-clear (shipped 2026-07-09, read-only)
+
+Not part of this engine, but reconciliation-adjacent and wired in the SAME
+`workflows/runSync.ts` orchestration — documented here so the two live together.
+
+**The race.** runSync runs gsheet FIRST and alone, THEN deliveries / rc_out / production /
+flecon as parallel writers. gsheet's classify checks the `batches` table per row; for a
+BRAND-NEW batch it finds nothing yet → correctly refuses to auto-create → holds the row
+`unmapped_batch_code`. But ~1s later in the SAME run the delivery-email writer ingests the
+same physical delivery and CREATES that batch (upsert-by-code). So the hold is a **false
+alarm** — the batch (and its row) exist by the run's end (real case: run a30744ad, RC IN row
+1220, batch `JULY-26-BLK4`, created by the deliveries writer 1.4s later).
+
+**Fix 2 (naming the code).** `../reports/gsheet/apply.ts` (the UNMAPPED loop) + the
+`compactUnmapped` builder in `../reports/gsheet/index.ts` now carry the offending
+`batch_code` (primary) + the natural-key fields (date/block/weight, + supplier/truck for
+rc_in, dest/production_batch for rc_out — **cost-free**) onto the held row. The alert reads
+`"RC IN row 1220 · JULY-26-BLK4"` and the `row` payload carries `batch_code` — so Sync Review
+says WHAT didn't match, not just where. Applies to BOTH rc_in and rc_out unmapped holds.
+
+**Fix 1 (the pass).** `../workflows/creationRaceHolds.ts` (pure core
+`reResolveCreationRaceHolds`) + `runSync.ts` Stage 2b′ (`resolveCreationRaceHolds` step +
+the read-only `creationRaceRecordExists` probe). AFTER the parallel writers finish, it
+reloads a FRESH `batch_code → batch_id` lookup (now including sibling-created batches) and
+re-resolves each gsheet `unmapped_batch_code` hold (primary + regenerated `batchCodeFallbacks`):
+- **resolves + record exists** (rc_in: a `deliveries` row on date/batch/block/weight±1kg;
+  rc_out: an `rc_out` row on date/batch_id/dest/weight±1kg) → **AUTO-CLEAR** (drop the hold;
+  counted `auto_cleared`). The run's `result.reports.gsheet.apply.held` is rebuilt WITHOUT it,
+  so `ensureCasesForRun` never opens a case.
+- **resolves but no record** → KEEP, reclassify `reason`/`detail` + a `row.batch_now_exists`
+  marker (never auto-write — a policy call). `kind` STAYS `unmapped_batch_code` (the frontend
+  `KIND_LABEL` is an exhaustive `Record<HeldKind,…>` in components/, so a new kind would break
+  its build; `natural_key` is unchanged → the case fingerprint is stable).
+- **still unresolved** → keep as `unmapped_batch_code` (the real human case).
+
+READ-ONLY (no operational writes), never mutates its input, guarded end-to-end (any failure →
+holds kept as-is, never fails the run). Deterministic on replay (the step returns the rebuilt
+array + telemetry; the workflow re-applies the assignment). Proof:
+`test/workflows/creationRaceHolds.test.ts` (auto-clear incl. fallback-alias, keep-genuine,
+reclassify, mixed sets) + `test/reports/gsheet.test.ts` (Fix 2 named held row). **Only gsheet
+has this race** — the 4 writers ingest a report ONCE per run and create their own batches, so
+they never hold on a batch a *sibling* creates; and under the R4b cutover gsheet no longer
+emits rc_out holds at all (the rc_out branch here is dormant-but-correct).
+
 ## See also
 - `SYNC_RECONCILIATION_MODEL.md` (owner: Renzo) — the phased plan (R1–R5).
 - `../reports/rc_out/classify.ts::balanceIntegrity` — the L-037 self-consistency source.
