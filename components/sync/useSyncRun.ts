@@ -39,6 +39,7 @@ import {
   isRunTrack,
   projectEvent,
 } from '@/lib/sync/reducer'
+import { flattenRunFindings } from '@/lib/sync/findings'
 
 /** Held-row group shown in the Held section, keyed by report type. */
 export interface HeldGroup {
@@ -61,6 +62,14 @@ export interface SyncRunState {
   running: boolean
   cards: Record<SyncReportType, SyncCardState>
   heldGroups: HeldGroup[]
+  /**
+   * The raw terminal `sync_runs.result` payload of the watched run (null before a run
+   * finishes / on a manifest-only or cancelled run). The panel flattens this with
+   * `flattenRunFindings` to show EVERYTHING flagged — held rows PLUS every reconciliation
+   * channel (source diffs, overdue single-source facts, unresolved batches, block diffs) —
+   * not just `apply.held` (the old keyhole that showed 1 of 10).
+   */
+  result: SyncRunResult | null
   summary: string | null
   summarizing: boolean
   /** Set true once a run has completed (or been attached to) at least once. */
@@ -122,6 +131,7 @@ export function useSyncRun() {
     running: false,
     cards: initialCards(),
     heldGroups: [],
+    result: null,
     summary: null,
     summarizing: false,
     ran: false,
@@ -274,13 +284,19 @@ export function useSyncRun() {
           adjudicating: false,
         }))
 
-      // P3 auto-trigger: the moment a run finishes WITH held rows, kick off the
+      // The HONEST count: every flagged thing across held rows AND all reconciliation
+      // channels (source diffs, overdue single-source facts, unresolved batches, block
+      // diffs). This is what the panel renders and what decides whether to fan out cases —
+      // NOT `heldGroups` alone (a run can flag block/reconciliation issues with zero held
+      // rows; the old `heldGroups.length > 0` trigger missed them entirely).
+      const findings = result ? flattenRunFindings(result) : []
+
+      // P3 auto-trigger: the moment a run finishes WITH anything flagged, kick off the
       // background investigator for every fresh case (fire-and-forget). It fans the
       // run out into cases and runs the loop; verdicts surface over Realtime (P4).
       // Never awaited — the modal must not block — and any failure is swallowed
-      // (the review page still lets Renzo investigate on demand). Skip when there are
-      // no held rows to avoid a pointless call.
-      if (!cancelled && heldGroups.length > 0) {
+      // (the review page still lets Renzo investigate on demand). Skip a clean run.
+      if (!cancelled && findings.length > 0) {
         void autoInvestigateRun(runId).catch(() => {})
       }
 
@@ -293,6 +309,7 @@ export function useSyncRun() {
       setState((prev) => ({
         ...prev,
         heldGroups,
+        result,
         running: false,
         runStatus: status,
         cancelling: false,
@@ -486,6 +503,7 @@ export function useSyncRun() {
         startedAt: row.started_at ?? row.created_at,
         cards: initialCards(),
         heldGroups: [],
+        result: null,
         summary: null,
         overall: initialOverall(),
       }))
@@ -510,6 +528,7 @@ export function useSyncRun() {
         summary: null,
         summarizing: false,
         heldGroups: [],
+        result: null,
         notice: null,
         runStatus: 'queued',
         startedAt: null,

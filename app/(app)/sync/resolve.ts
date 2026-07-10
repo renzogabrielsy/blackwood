@@ -53,7 +53,17 @@ import {
   type DiffPlanStep,
   type PickSourceProposalInput,
 } from './diff-plan'
-import type { RcOutSource, SourceDiff, SourceLegRow } from './types'
+import {
+  CREATE_BATCH_TOOL,
+  buildCreateBatchPlan,
+  createBatchProvenance,
+  createBatchRulingSummary,
+  findOpenCreateBatchPlan,
+  parseCreateBatchInput,
+  type CreateBatchPlan,
+  type CreateBatchProposalInput,
+} from '@/lib/sync/create-batch-plan'
+import type { RcOutSource, SourceDiff, SourceLegRow, SyncReportType } from './types'
 import { randomUUID } from 'node:crypto'
 
 type AdminClient = ReturnType<typeof createAdminClient>
@@ -1046,4 +1056,355 @@ function pickProposalNarration(input: PickSourceProposalInput): string {
     `Prepared a resolution for ${naturalKeyLabel}: make ${source} authoritative. This will:\n${lines}\n` +
     `Nothing has been saved yet — confirm to apply.`
   )
+}
+
+// ============================================================================
+// CREATE-BATCH resolution of an `unmapped_batch_code` / `unresolved_batch` case.
+// The ONE human-confirmed exception to "never auto-create a batch": the reviewer
+// clicks "create this batch", which INSERTS the batch and re-attempts the skipped
+// row(s) through the SAME deterministic apply-writers path the sync uses. Mirrors the
+// R3a pick-source rails: a PURE plan (create-batch-plan.ts) + a persisted proposal +
+// a confirm-gated executor that re-reads the plan from the DB. NEVER deletes; audited.
+// ============================================================================
+
+/** The case kinds a create-batch resolution applies to. */
+const CREATE_BATCH_KINDS = ['unmapped_batch_code', 'unresolved_batch']
+
+export interface CreateBatchResult {
+  ok: boolean
+  error?: string
+  /** The persisted proposal message id — the `proposalRef` for executeCreateBatch. */
+  proposal_message_id?: string
+  /** The new ruling id (execute only). */
+  ruling_id?: string
+  /** True when the batch was inserted (false = it already existed → skip-create). */
+  created_batch?: boolean
+  /** The batch id (created or pre-existing). */
+  batch_id?: string
+  /** How many skipped rows were written through the deterministic writer. */
+  rows_written?: number
+  /** Non-fatal notes (e.g. "the row could not be written — it will land next sync: <why>"). */
+  warnings?: string[]
+  /** The computed plan — the confirm UI renders exactly what creating this batch does. */
+  plan?: CreateBatchPlan
+}
+
+/** The subset of a case row the create-batch path needs. */
+interface BatchCaseRow {
+  id: string
+  report_type: string
+  kind: string
+  status: string
+  fingerprint: string
+  natural_key: string
+  row: unknown
+}
+
+const BATCH_CASE_COLS = 'id, report_type, kind, status, fingerprint, natural_key, row'
+
+/**
+ * PROPOSE creating the batch a case references. Validates the case is an unresolved
+ * `unmapped_batch_code` / `unresolved_batch`; builds the PURE plan (fields + writer lane +
+ * the skipped row); checks (read-only) whether the batch already exists so the narration is
+ * honest; and PERSISTS the plan as an assistant message carrying one propose_create_batch
+ * tool_use (mirrors pick-source so findOpen*-detection + sanitize replay both work). Writes
+ * NOTHING operational. Returns the plan + the proposal message id for the confirm step.
+ */
+export async function proposeCreateBatch(caseId: string): Promise<CreateBatchResult> {
+  await requirePrivileged()
+  const admin = createAdminClient()
+
+  const { data: theCase, error: caseErr } = await admin
+    .from('sync_held_cases')
+    .select(BATCH_CASE_COLS)
+    .eq('id', caseId)
+    .maybeSingle()
+  if (caseErr) return { ok: false, error: `Could not load the case: ${caseErr.message}` }
+  if (!theCase) return { ok: false, error: 'Case not found.' }
+  const c = theCase as BatchCaseRow
+  if (!CREATE_BATCH_KINDS.includes(c.kind)) {
+    return {
+      ok: false,
+      error: 'Creating a batch only applies to an unmapped / unresolved batch flag.',
+    }
+  }
+  if (c.status === 'resolved') return { ok: false, error: 'This case is already resolved.' }
+  if (c.status === 'investigating') {
+    return { ok: false, error: 'The investigator is still working on this case — wait for it to finish.' }
+  }
+
+  const plan = buildCreateBatchPlan({
+    kind: c.kind,
+    reportType: c.report_type as SyncReportType,
+    row: c.row,
+  })
+  if (!plan) {
+    return { ok: false, error: 'This flag does not name a batch code, so no batch can be created from it.' }
+  }
+
+  // Read-only: does the batch already exist? (Honest narration; the executor re-checks.)
+  const { data: existing } = await admin
+    .from('batches')
+    .select('id')
+    .eq('batch_code', plan.batch_code)
+    .maybeSingle()
+  const alreadyExists = Boolean(existing)
+
+  const input: CreateBatchProposalInput = {
+    batch_code: plan.batch_code,
+    naturalKeyLabel: c.natural_key,
+    plan,
+  }
+  const toolUseId = `createbatch_${randomUUID()}`
+  const pos = await nextMessagePosition(admin, caseId)
+  const { data: msg, error: insErr } = await admin
+    .from('sync_case_messages')
+    .insert({
+      case_id: caseId,
+      role: 'assistant',
+      content: createBatchNarration(input, alreadyExists),
+      tool_calls: [{ id: toolUseId, name: CREATE_BATCH_TOOL, input }] as unknown as Json,
+      tool_results: null,
+      position: pos,
+    })
+    .select('id')
+    .single()
+  if (insErr) return { ok: false, error: `Could not save the proposal: ${insErr.message}` }
+
+  return { ok: true, proposal_message_id: msg.id as string, plan }
+}
+
+/**
+ * EXECUTE a create-batch resolution the reviewer confirmed. requirePrivileged; re-reads the
+ * plan FROM THE PERSISTED PROPOSAL (never a client payload); guards it is still the OPEN
+ * proposal; then:
+ *   1. INSERT the batch if its code doesn't exist yet (skip-create if it does — idempotent,
+ *      race-safe on the batch_code UNIQUE), audited via write_ingestion_audit.
+ *   2. Re-attempt the skipped row through the deterministic apply-writers path (deliveries
+ *      for RC IN, rc_out for RC OUT). A row-write failure is NON-FATAL — the batch is the
+ *      primary win; the row lands on the next sync. Partial is reported in `warnings`.
+ *   3. Record a `create_batch` sync_case_rulings row, flip the case resolved + pin the
+ *      ruling, append a system trail. revalidates /sync/cases.
+ *
+ * NEVER deletes. NEVER carries ₱ (rc_out has none; deliveries.cost_basis forced 0 by the writer).
+ */
+export async function executeCreateBatch(
+  caseId: string,
+  proposalRef: string,
+): Promise<CreateBatchResult> {
+  const userId = await requirePrivileged()
+  const admin = createAdminClient()
+  const email = await resolveEmail(admin, userId)
+
+  // 1. Load + validate the case.
+  const { data: theCase, error: caseErr } = await admin
+    .from('sync_held_cases')
+    .select(BATCH_CASE_COLS)
+    .eq('id', caseId)
+    .maybeSingle()
+  if (caseErr) return { ok: false, error: `Could not load the case: ${caseErr.message}` }
+  if (!theCase) return { ok: false, error: 'Case not found.' }
+  const c = theCase as BatchCaseRow
+  if (!CREATE_BATCH_KINDS.includes(c.kind)) {
+    return { ok: false, error: 'Creating a batch only applies to an unmapped / unresolved batch flag.' }
+  }
+  if (c.status === 'resolved') return { ok: false, error: 'This case is already resolved.' }
+  if (c.status === 'investigating') {
+    return { ok: false, error: 'The investigator is still working on this case — wait for it to finish.' }
+  }
+
+  // 2. Load the proposal message + re-read the plan from the DB (never client input).
+  const { data: msg, error: msgErr } = await admin
+    .from('sync_case_messages')
+    .select('id, case_id, tool_calls, position')
+    .eq('id', proposalRef)
+    .maybeSingle()
+  if (msgErr) return { ok: false, error: `Could not load the proposal: ${msgErr.message}` }
+  if (!msg || msg.case_id !== caseId) return { ok: false, error: 'That proposal does not belong to this case.' }
+
+  const input = extractCreateBatchProposal(msg.tool_calls)
+  if (!input) return { ok: false, error: 'That message does not contain a create-batch proposal.' }
+
+  // 3. Guard double-execution: it must still be the OPEN create-batch proposal.
+  const { data: history, error: histErr } = await admin
+    .from('sync_case_messages')
+    .select('role, content, tool_calls, position')
+    .eq('case_id', caseId)
+    .order('position', { ascending: true })
+  if (histErr) return { ok: false, error: `Could not verify the proposal: ${histErr.message}` }
+  const open = findOpenCreateBatchPlan(history ?? [], c.status)
+  if (!open || open.position !== msg.position) {
+    return {
+      ok: false,
+      error: 'This proposal is no longer the current one (it was superseded, declined, or already resolved).',
+    }
+  }
+
+  const plan = input.plan
+  const provenance = createBatchProvenance(email, plan.batch_code)
+  const warnings: string[] = []
+
+  // 4. Create-or-skip the batch (race-safe on the batch_code UNIQUE).
+  let batchId: string
+  let createdBatch = false
+  try {
+    const ensured = await ensureBatchExists(admin, plan, provenance)
+    batchId = ensured.batchId
+    createdBatch = ensured.created
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e)
+    return { ok: false, error: `Could not create the batch: ${m}` }
+  }
+
+  // 5. Re-attempt the skipped row through the deterministic writer (non-fatal on failure).
+  let rowsWritten = 0
+  if (!plan.ambiguous && plan.writerLane && plan.unblock) {
+    const writer = APPLY_WRITERS[plan.writerLane]
+    if (!writer) {
+      warnings.push(`No writer is registered for ${plan.writerLane} — the row will write on the next sync.`)
+    } else {
+      try {
+        await writer(plan.unblock, admin, provenance)
+        rowsWritten++
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e)
+        warnings.push(`The batch was created but its row could not be written yet (it will land on the next sync): ${m}`)
+      }
+    }
+  } else if (plan.ambiguous) {
+    warnings.push(plan.note ?? 'The batch was created; the row will write on the next sync.')
+  }
+
+  // 6. Ledger row (action 'create_batch').
+  const summary = createBatchRulingSummary({ batchCode: plan.batch_code, created: createdBatch, rowsWritten })
+  const reasoning = `${provenance}.${warnings.length ? ' ' + warnings.join(' ') : ''}`
+  const { data: ruling, error: rulingErr } = await admin
+    .from('sync_case_rulings')
+    .insert({
+      fingerprint: c.fingerprint,
+      case_id: c.id,
+      action: 'create_batch',
+      verdict_summary: summary,
+      reasoning,
+      ruled_by: userId,
+      ruled_by_email: email,
+    })
+    .select('id')
+    .single()
+  if (rulingErr) return { ok: false, error: `Recording the ruling failed: ${rulingErr.message}` }
+  const rulingId = ruling.id as string
+
+  // 7. Flip the case to resolved + pin the ruling.
+  const { error: updErr } = await admin
+    .from('sync_held_cases')
+    .update({ status: 'resolved', known_ruling_id: rulingId, updated_at: new Date().toISOString() })
+    .eq('id', c.id)
+  if (updErr) return { ok: false, error: `Marking the case resolved failed: ${updErr.message}` }
+
+  // 8. System-message trail.
+  const pos = await nextMessagePosition(admin, caseId)
+  await admin.from('sync_case_messages').insert({
+    case_id: caseId,
+    role: 'system',
+    content: `${summary} (by ${email})${warnings.length ? ' — ' + warnings.join(' ') : ''}`,
+    tool_calls: null,
+    tool_results: null,
+    position: pos,
+  })
+
+  revalidatePath('/sync/cases')
+  return {
+    ok: true,
+    ruling_id: rulingId,
+    created_batch: createdBatch,
+    batch_id: batchId,
+    rows_written: rowsWritten,
+    warnings: warnings.length ? warnings : undefined,
+    plan,
+  }
+}
+
+/**
+ * INSERT the batch if its code doesn't exist yet, else return the existing id (skip-create).
+ * Race-safe: if a concurrent create wins the batch_code UNIQUE between our SELECT and INSERT,
+ * we re-read and treat it as pre-existing. The INSERT is audited via write_ingestion_audit
+ * (batches has no audit trigger). NEVER deletes.
+ */
+async function ensureBatchExists(
+  admin: AdminClient,
+  plan: CreateBatchPlan,
+  provenance: string,
+): Promise<{ batchId: string; created: boolean }> {
+  const { data: existing, error: exErr } = await admin
+    .from('batches')
+    .select('id')
+    .eq('batch_code', plan.batch_code)
+    .maybeSingle()
+  if (exErr) throw new Error(exErr.message)
+  if (existing) return { batchId: existing.id as string, created: false }
+
+  const insertPayload = {
+    batch_code: plan.fields.batch_code,
+    location_ref: plan.fields.location_ref,
+    status: plan.fields.status as never,
+    current_weight: plan.fields.current_weight,
+    avg_cost: plan.fields.avg_cost,
+  }
+  const { data: inserted, error: insErr } = await admin
+    .from('batches')
+    .insert(insertPayload)
+    .select('id')
+    .single()
+  if (insErr) {
+    // Lost the race on the batch_code UNIQUE → re-read + treat as pre-existing.
+    const { data: after } = await admin
+      .from('batches')
+      .select('id')
+      .eq('batch_code', plan.batch_code)
+      .maybeSingle()
+    if (after) return { batchId: after.id as string, created: false }
+    throw new Error(insErr.message)
+  }
+
+  const batchId = inserted.id as string
+  // batches has no audit trigger → use the service-role ingestion audit writer.
+  const { error: auditErr } = await admin.rpc('write_ingestion_audit', {
+    p_table_name: 'batches',
+    p_record_id: batchId,
+    p_operation: 'INSERT',
+    p_diff: null,
+    p_snapshot: insertPayload as unknown as Json,
+    p_comment: provenance,
+  })
+  if (auditErr) throw new Error(`Created the batch but the audit log failed: ${auditErr.message}`)
+  return { batchId, created: true }
+}
+
+/** Pull a propose_create_batch proposal out of an assistant row's tool_calls jsonb. */
+function extractCreateBatchProposal(toolCalls: unknown): CreateBatchProposalInput | null {
+  if (!Array.isArray(toolCalls)) return null
+  for (const tc of toolCalls) {
+    if (tc && typeof tc === 'object') {
+      const o = tc as Record<string, unknown>
+      if (o.name === CREATE_BATCH_TOOL) return parseCreateBatchInput(o.input)
+    }
+  }
+  return null
+}
+
+/** Plain-language narration stored on the create-batch proposal's assistant message. */
+function createBatchNarration(input: CreateBatchProposalInput, alreadyExists: boolean): string {
+  const { plan, naturalKeyLabel } = input
+  const loc = plan.isFeed
+    ? `a FEED batch (no block — filed under "${plan.fields.location_ref}")`
+    : `block ${plan.fields.location_ref}`
+  const head = alreadyExists
+    ? `Batch "${plan.batch_code}" already exists — confirming will re-attempt the skipped row and record the decision.`
+    : `Prepared to create batch "${plan.batch_code}" as ${loc}, starting empty (its balance is computed from deliveries and feedings).`
+  const rowLine = plan.ambiguous
+    ? ' There is no clean row to re-attempt from this flag — the row will write on the next sync.'
+    : plan.writerLane === 'deliveries'
+      ? ' It will also add the skipped delivery (RC IN) that referenced this batch.'
+      : ' It will also add the skipped feeding (RC OUT) that referenced this batch.'
+  return `${head}${rowLine} Nothing has been saved yet — confirm to apply.`
 }

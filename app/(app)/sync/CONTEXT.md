@@ -278,6 +278,27 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     - **R4 tie-in:** the `pick_source` ruling is a durable HUMAN CORRECTION — until R4 retires
       "Sheet-wins", a later gsheet run may re-overwrite the row; R4 consults this ruling to STOP that
       clobbering (see the `20260708120000_sync_case_ruling_pick_source.sql` comment + L-037).
+  - **CREATE-BATCH resolution of an `unmapped_batch_code` / `unresolved_batch` case** (the ONE
+    human-confirmed exception to "never auto-create a batch" — a genuinely-new batch like
+    `JULY-26-FEED1` recurs every run because nothing creates it; `CreateBatchResult = {ok, error?,
+    proposal_message_id?, ruling_id?, created_batch?, batch_id?, rows_written?, warnings?, plan?}`):
+    - **`proposeCreateBatch(caseId)`** → validates the case is an unresolved unmapped/unresolved-batch
+      flag; builds the PURE plan (`create-batch-plan.ts::buildCreateBatchPlan` — derived batch fields,
+      writer lane, the skipped row); read-only checks whether the batch already exists (honest
+      narration); **persists it as an assistant message carrying one `propose_create_batch` tool_use**
+      (mirrors pick-source so `findOpenCreateBatchPlan`-detection + sanitize replay work). Writes
+      NOTHING. Returns the plan + proposal message id.
+    - **`executeCreateBatch(caseId, proposalRef)`** → requirePrivileged; RE-READS the plan FROM THE
+      PERSISTED PROPOSAL; double-execution guard via `findOpenCreateBatchPlan`; then (1) INSERT the
+      batch if its code doesn't exist (else skip-create — idempotent, race-safe on the `batch_code`
+      UNIQUE; audited via `write_ingestion_audit` — batches has NO audit trigger), (2) re-attempt the
+      skipped row through the deterministic `apply-writers.ts` path (deliveries for RC IN, rc_out for
+      RC OUT) — a row-write failure is **NON-FATAL** (the batch is the primary win; the row lands next
+      sync; captured in `warnings`), (3) record a **`sync_case_rulings` row `action='create_batch'`**
+      (summary via `createBatchRulingSummary`), flip the case `resolved` + `known_ruling_id`, append a
+      system trail, revalidate `/sync/cases`. Provenance: `batch "<code>" created + row written via
+      Sync Review by <email>`. `ambiguous` plan (no clean writable row) → create the batch only.
+      FEED batches (block_loc null) create with `location_ref='FEED'`.
   - Never deletes. Price gating: apply payloads carry NO ₱ (rc_out has no cost column;
     `deliveries.cost_basis` forced 0 by the writer per L-008). All revalidate `/sync/cases`.
 - `diff-plan.ts` (PURE, no `'use server'`, imports only `./types` → client-import-safe for R3b) —
@@ -341,8 +362,12 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   **"Stop"** button while running (M5.1 — `variant=outline`, destructive-tinted;
   "Stopping…" while `cancelling`) + the **attached-run banner** ("A sync is already
   running (started HH:MM)") + a **non-fatal notice** line (e.g. "worker asleep —
-  queued") + the overall `_run` progress line + employee cards + Held section +
+  queued") + the overall `_run` progress line + employee cards + the **findings view** +
   narration footer. Chrome-agnostic. Takes a `stop` prop alongside `run`/`adjudicate`.
+  **HONEST FINDINGS (2026-07-10):** it now computes `flattenRunFindings(state.result)`
+  (memoized) and passes the flat `RunFinding[]` to `HeldRows` — NOT `state.heldGroups`.
+  This is the keyhole fix: the panel shows EVERYTHING a run flagged (held rows + every
+  reconciliation channel), not just `apply.held`.
 - `SyncPanel.tsx` — DORMANT slide-out Sheet (still wraps `SyncPanelBody`; depends on
   the retired `JarvisProvider`). Do NOT re-mount without restoring it.
 - `SyncEmployeeCard.tsx` — one card per report: live progress bar (`transform:
@@ -403,6 +428,31 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     lose. The chat + Quick Dismiss stay available (a source_diff can also just be dismissed). All
     errors → `errorToast()` (persist + Copy). Client/server boundary: SourceDiffCard imports ONLY pure
     types from `diff-plan.ts` — NEVER `lib/investigator/resolution.ts` (`npm run build` is the gate).
+  - **FULL-DETAIL RENDERERS for the reconciliation kinds (2026-07-10)** — `CaseDetail` renders
+    **`cases/FindingDetailCards.tsx`** (`<CaseFindingDetail kind row />`) ABOVE the generic verdict
+    card for the kinds that previously fell back to the bare verdict. Each reads the case `row` and
+    shows source + actual data (font-mono, the two sides of a comparison) + the exact row/block + a
+    plain why: **`block_diff`** — block_loc, a Sheet-vs-App-vs-Δ balance table (grand_total shows the
+    two inventory totals), plus batch-identity fields for batch_mismatch/multi_batch + the `detail`;
+    **`single_source_overdue`** — the lone source, the value, the date+batch+block, days overdue, and
+    plainly "only <source> has this; the second report never arrived to confirm it"; **`unmapped_batch_code` /
+    `unresolved_batch`** — the batch code, the row (date/supplier/weight/block/reported-by), possible-match
+    count, and plainly "this batch doesn't exist yet" (or "matches N batches — ambiguous"). Presentation-only,
+    imports ONLY contract types.
+  - **CREATE-BATCH resolution UI (2026-07-10)** — for an `unmapped_batch_code` / `unresolved_batch`
+    case, `CaseDetail` renders **`cases/CreateBatchCard.tsx`** (below the finding detail). It shows the
+    derived batch (code + `location_ref` — "FEED" badge for a feed batch — + status + starting weight +
+    "unpriced") and the row it will write (`plan.unblock` — writer lane + identity fields; ambiguous →
+    "creates the batch; the row(s) write on the next sync"). The plan is a CLIENT-SIDE **preview** from
+    the PURE `buildCreateBatchPlan({kind, reportType, row})` until a proposal is open, then it renders
+    the persisted proposal's plan. **"Create this batch"** → `onCreateBatch` → `proposeCreateBatch(caseId)`
+    (writes nothing; persists a `propose_create_batch` assistant message); on an open proposal the same
+    readout becomes a confirm card — **Confirm** → `executeCreateBatch(caseId, proposal_message_id)` (on
+    success a toast of `created_batch`/`rows_written`/`warnings`; Realtime resolves the case) — **Decline**
+    → `cancelProposal`. `CasesClient` restores a pending proposal on reload via the PURE
+    **`findOpenCreateBatchPlan`** over the transcript (mirrors the pick-source restore). Chat + Quick
+    Dismiss stay available. All errors → `errorToast()`. Client/server boundary: CreateBatchCard imports
+    ONLY `CreateBatchPlan` + `FEED_LOCATION_REF` from `create-batch-plan.ts` — never a server module.
 - `cases/grouping.ts` (**PURE, client-safe + node-safe, no React / no server imports**) — the
   load-bearing review-page transformations, factored out so they unit-drive under
   `scripts/verify-case-grouping.ts`: `groupCasesByRun` (per-run sections, newest run first, no-run
@@ -413,26 +463,35 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   `TRIAGE_KIND = 'run_triage'` copy (redeclared, NOT imported from `lib/investigator/triage.ts`,
   so this client-bundled module never pulls the Anthropic SDK / admin client into the browser
   bundle — the verify script asserts the two constants agree).
-- `HeldRows.tsx` — held-row groups (in the sync MODAL). Each row's tag renders a human `KIND_LABEL`
-  phrase (`gate_failure` → "Totals don't match — nothing saved", …); the raw kind stays on the
-  badge's `title` (tooltip) for debugging. **v1.1 (Run Triage) — the per-group button is now a
-  DOORWAY:** the old in-modal single-shot "Ask Claude" adjudication button + the separate "Open in
-  Sync Review →" link are BOTH replaced by ONE **"Ask Claude → Sync Review"** Link deep-linking to
-  `/sync/cases?run=<runId>` (the run id threads in via a new `runId` prop, sourced from
-  `state.runId` through `SyncPanelBody`). The auto quick-recommendation glance rendering (verdict
-  chip + Claude/DB lines per row) is UNCHANGED — it stays as the in-modal glance layer. The old
-  `onAdjudicate` prop was dropped from `HeldRows`/`SyncPanelBody`/`SyncLauncher`/`SyncPanel`
-  (`useSyncRun` still exposes `adjudicate`, now unused by the modal chrome).
+- `HeldRows.tsx` — **the panel's HONEST "needs review" list (rewritten 2026-07-10).** Was
+  "held-row groups" reading only `apply.held` — a run that flagged TEN things showed ONE (the other
+  nine lived in `result.reconciliation`). It now takes **`findings: RunFinding[]`** (the flattened
+  `flattenRunFindings(state.result)`, computed in `SyncPanelBody`) + `runId`, and renders:
+  (1) an **honest count header** — "N things need review" (`findings.length`, the true total);
+  (2) a **by-kind breakdown chip row** ("3 overdue · 4 block · 1 unknown batch") via a compact
+  `SHORT_KIND` map over `summarizeFindings().byKind`;
+  (3) findings **grouped by `source`** (which file — the fastest way to pinpoint; groups ordered by
+  their loudest finding), each a dense Excel-standard card: a severity dot + the `title`, the
+  `kindLabel` badge + `location` (font-mono), font-mono **data chips** (batch/date/block/weight, or
+  the two sides of a diff, or sheet-vs-app-vs-Δ for a block diff), and the plain `reason`; a per-card
+  Copy button (everything copyable). Each source group keeps the **"Ask Claude → Sync Review"**
+  doorway Link (`/sync/cases?run=<runId>`). Zero findings → renders null (the existing clean state).
+  The old per-kind `KIND_LABEL` map + the recommendation-glance layer are retired here (the plain
+  labels now live on each `RunFinding.kindLabel`, built in `lib/sync/findings.ts`).
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
   **`stop()`** (M5.1) calls `cancelSyncRun(currentRunId)` (guarded against
   double-clicks via `cancelling`); subscribes (browser client) to `sync_run_events`
   INSERT (filtered by `run_id`) → per-card live progress, and `sync_runs` UPDATE
   (filtered by `id`) → terminal fold-in (per-report results → cards → held aggregation
   → narration; a **`cancelled`** run settles still-busy cards to `stopped` + a calm
-  local summary, no error toast). **P3 (2026-07-06):** after the held-row fold, when a
-  non-cancelled run produced held rows, `finalizeRun` fires **`autoInvestigateRun(runId)`
-  fire-and-forget** (`void … .catch(()=>{})`, never awaited so the modal never blocks) —
-  the background investigator so cited verdicts are waiting on the review page (P4). Mount-time attach (with the staleness guard) + poll
+  local summary, no error toast). **HONEST FINDINGS (2026-07-10):** `SyncRunState` gained
+  **`result: SyncRunResult | null`** (the raw terminal payload, stored on fold-in, reset on a fresh
+  run / attach) so `SyncPanelBody` can flatten the FULL findings list. The **`autoInvestigateRun`
+  trigger now fires on `flattenRunFindings(result).length > 0`** (was `heldGroups.length > 0`) — so a
+  run with reconciliation/block issues but ZERO held rows still fans out cases + investigates.
+  **P3 (2026-07-06):** `finalizeRun` fires **`autoInvestigateRun(runId)` fire-and-forget** (`void …
+  .catch(()=>{})`, never awaited so the modal never blocks) — the background investigator so cited
+  verdicts are waiting on the review page (P4). Mount-time attach (with the staleness guard) + poll
   fallback as above. Returns `{ state, run, stop, adjudicate }`.
 
 ### Pure reducer (`lib/sync/reducer.ts`)
@@ -474,6 +533,25 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   fields — absent on pre-R4a runs). **RB:** **`collectBlockDiffs(result)`** →
   `result.reconciliation.blocking.blockDiffs ?? []` (optional channel — absent on pre-RB runs / no
   Blocking tab). Pure, no supabase import.
+- `lib/sync/findings.ts` (**PURE, CLIENT-SAFE — imports ONLY `types` + `cases-fold`; NO server
+  imports, NO `node:crypto`**) — the honest READ model for the panel. **`flattenRunFindings(result)`**
+  → `RunFinding[]`: merges INTO ONE array every `reports[*].apply.held[]` PLUS the whole
+  `reconciliation` channel (`rc_out.diffs` → source_diff, `.heldOverdue` → single_source_overdue,
+  `.unresolvedBatches` → unresolved_batch, `blocking.blockDiffs` → block_diff incl. the grand_total).
+  Each `RunFinding = {key, kind, kindLabel (plain phrase), source (plain "Google Sheet — RC IN" /
+  "Blocking cross-check" / …), title, location, data (the ACTUAL values — weights/batch/date, NO ₱),
+  reason, severity: 'info'|'attention'|'high'}`. **`summarizeFindings(findings)`** → `{total, byKind}`.
+  Fixes the panel keyhole: a run that flagged 10 things but showed 1 (the other 9 lived in
+  `reconciliation`). Pure/exhaustive/never-throws → `scripts/verify-findings.ts`.
+- `lib/sync/create-batch-plan.ts` (**PURE, CLIENT-SAFE — imports ONLY `types`**) — the create-batch
+  core (mirrors `diff-plan.ts`'s pick-source split). `buildCreateBatchPlan({kind, reportType, row})`
+  → `CreateBatchPlan {batch_code, fields (location_ref: block or 'FEED', status STORED, current_weight
+  0, avg_cost null), isFeed, writerLane: 'deliveries'|'rc_out'|null, unblock (the skipped row, no ₱),
+  ambiguous, note?}`. `deriveBatchFields`, `readBatchCaseInput` (handles both the UnresolvedBatch row
+  and the held `row`; a minimal `{mode,index}` row → null), `pickWriterLane` (unresolved_batch→rc_out;
+  deliveries→deliveries; rc_out→rc_out; gsheet→row.mode). Plus the PURE proposal helpers the action +
+  a UI share: `CREATE_BATCH_TOOL`, `parseCreateBatchInput`, `findOpenCreateBatchPlan(rows, status)`,
+  `createBatchProvenance`, `createBatchRulingSummary`. Exercised by `scripts/verify-create-batch.ts`.
 - `lib/sync/privileged.ts` — **`requirePrivileged()`**, the shared Owner/Admin/Dev guard
   extracted from `actions.ts` (imported by both `actions.ts` and `cases.ts`).
 - `lib/sync/apply-writers.ts` (Smart-Adjudicator **P5**) — the **writer registry** for apply /
@@ -557,6 +635,17 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   (all noops), soft-remove of an over-stated leg (weight→0, kept), the exact provenance + `pick_source`
   ruling-summary strings, and the `parsePickSourceInput` / `findOpenPickSourcePlan` round-trip (a
   later decline closes it). No DB.
+- `scripts/verify-findings.ts` — `npx tsx scripts/verify-findings.ts` runs 7 framework-free
+  assertions over `lib/sync/findings.ts`: the real-run fixture (1 unmapped held + 3 overdue + 3 block
+  balance + 1 grand_total + 1 unresolved = **9** findings) flattens with the right per-kind breakdown
+  (proving the panel keyhole fix — was showing 1), each channel's kind/source/plain data, a source_diff
+  also flattens (all 5 channels), and empty/manifest-only → `[]`. No DB.
+- `scripts/verify-create-batch.ts` — `npx tsx scripts/verify-create-batch.ts` runs 8 framework-free
+  assertions over `lib/sync/create-batch-plan.ts`: FEED (null/blank block) → `location_ref='FEED'` +
+  `isFeed`, field defaults (STORED/0/null), writer-lane resolution (unresolved_batch→rc_out,
+  deliveries→deliveries, gsheet mode→lane, writer-less→ambiguous), a minimal `{mode,index}` row → no
+  plan, the ruling-summary shapes (created×rows), provenance, and the `parseCreateBatchInput` /
+  `findOpenCreateBatchPlan` round-trip (decline closes). No DB.
 - `scripts/eval-investigator.ts` (**Smart-Adjudicator P6** — the LIVE trust harness, NOT
   throwaway) — `npx tsx scripts/eval-investigator.ts [--case <name>] [--keep]`. Seeds
   SYNTHETIC fake `sync_runs` + cases and drives the REAL `runInvestigation()` against the
@@ -619,7 +708,8 @@ Three DB tables applied to remote (2026-07-06); `sync_held_cases` + `sync_case_m
   (`user|assistant|tool|system`), `content`, `tool_calls`/`tool_results` (jsonb), `position`,
   UNIQUE `(case_id, position)`.
 - **`sync_case_rulings`** — the append-only known-issues ledger keyed by `fingerprint`:
-  `case_id`, `action` (`dismiss|apply|edit_apply|override_gate`), `verdict_summary`,
+  `case_id`, `action` (`dismiss|apply|edit_apply|override_gate|pick_source|create_batch` — the
+  `create_batch` value added by `20260710120000_sync_case_ruling_create_batch.sql`), `verdict_summary`,
   `reasoning`, `ruled_by` (→`profiles`), `ruled_by_email`, `created_at`. (The
   `known_ruling_id`↔`case_id` circular FK is resolved by an ALTER after both tables exist.)
 

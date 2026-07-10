@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import { Inbox, XCircle } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
@@ -12,9 +13,11 @@ import { chatOnCase } from '@/app/(app)/sync/case-chat'
 import {
   bulkDismissCases,
   cancelProposal,
+  executeCreateBatch,
   executeDiffResolution,
   executeGroupResolution,
   executeResolution,
+  proposeCreateBatch,
   proposePickSource,
   quickDismiss,
 } from '@/app/(app)/sync/resolve'
@@ -24,6 +27,11 @@ import {
   type ProposalScanRow,
 } from '@/lib/investigator/resolution'
 import { findOpenPickSourcePlan, type PickSourceScanRow } from '@/app/(app)/sync/diff-plan'
+import {
+  findOpenCreateBatchPlan,
+  type CreateBatchPlan,
+  type CreateBatchScanRow,
+} from '@/lib/sync/create-batch-plan'
 import type { RcOutSource } from '@/app/(app)/sync/types'
 
 import { RunGroupedList, type CaseFilter, type RunListCase } from './RunGroupedList'
@@ -222,6 +230,32 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
     const msg = messages.find((m) => m.position === open.position)
     return msg?.id ?? null
   }, [messages, selectedCase, isSourceDiffSelected])
+
+  // ── Create-batch: the open, persisted create-batch proposal for a batch case. ──
+  const isBatchCaseSelected =
+    selectedCase?.kind === 'unmapped_batch_code' || selectedCase?.kind === 'unresolved_batch'
+
+  const openCreateBatch = React.useMemo(() => {
+    if (!selectedCase || selectedCase.status === 'resolved' || !isBatchCaseSelected) return null
+    const scan: CreateBatchScanRow[] = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      tool_calls: m.tool_calls,
+      position: m.position,
+    }))
+    return findOpenCreateBatchPlan(scan, selectedCase.status)
+  }, [messages, selectedCase, isBatchCaseSelected])
+
+  const openCreateBatchPlan = React.useMemo<CreateBatchPlan | null>(
+    () => openCreateBatch?.input.plan ?? null,
+    [openCreateBatch],
+  )
+
+  const openCreateBatchMessageId = React.useMemo(() => {
+    if (!openCreateBatch) return null
+    const msg = messages.find((m) => m.position === openCreateBatch.position)
+    return msg?.id ?? null
+  }, [openCreateBatch, messages])
 
   // The run family's cases (to render the group card's member rows), keyed off the
   // selected triage case's run.
@@ -543,6 +577,74 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
     }
   }, [openPickMessageId, loadMessages])
 
+  // ── Create-batch: propose / confirm / decline. ──
+  const onCreateBatch = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId) return
+    setResolvePending(true)
+    try {
+      const res = await proposeCreateBatch(caseId)
+      if (!res.ok) {
+        errorToast('Could not prepare the batch', { description: res.error ?? 'Unknown error' })
+      }
+      // The proposal is persisted as an assistant message — reload so the confirm card
+      // renders from the transcript (Realtime also drives this; the reload makes it snappy).
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not prepare the batch', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+      await loadMessages(caseId)
+    } finally {
+      setResolvePending(false)
+    }
+  }, [loadMessages])
+
+  const onConfirmCreateBatch = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openCreateBatchMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await executeCreateBatch(caseId, openCreateBatchMessageId)
+      if (!res.ok) {
+        errorToast('Could not create the batch', { description: res.error ?? 'Unknown error' })
+      } else {
+        const created = res.created_batch ? 'Created' : 'Reused existing'
+        const rows = res.rows_written ?? 0
+        const rowPart = rows > 0 ? ` and wrote ${rows} row${rows === 1 ? '' : 's'}` : ''
+        toast.success(`${created} batch${rowPart}`, {
+          description:
+            res.warnings && res.warnings.length > 0 ? res.warnings.join(' · ') : undefined,
+          duration: 6000,
+        })
+      }
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not create the batch', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openCreateBatchMessageId, loadMessages])
+
+  const onDeclineCreateBatch = React.useCallback(async () => {
+    const caseId = selectedIdRef.current
+    if (!caseId || !openCreateBatchMessageId) return
+    setResolvePending(true)
+    try {
+      const res = await cancelProposal(caseId, openCreateBatchMessageId)
+      if (!res.ok) errorToast('Could not decline the batch', { description: res.error ?? 'Unknown error' })
+      await loadMessages(caseId)
+    } catch (err) {
+      errorToast('Could not decline the batch', {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setResolvePending(false)
+    }
+  }, [openCreateBatchMessageId, loadMessages])
+
   const onQuickDismissSubmit = React.useCallback(
     async (reason: string) => {
       const caseId = selectedIdRef.current
@@ -665,6 +767,10 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
               onProposePickSource={onProposePickSource}
               onConfirmDiffResolution={onConfirmDiffResolution}
               onDeclineDiffResolution={onDeclineDiffResolution}
+              openCreateBatchPlan={openCreateBatchPlan}
+              onCreateBatch={onCreateBatch}
+              onConfirmCreateBatch={onConfirmCreateBatch}
+              onDeclineCreateBatch={onDeclineCreateBatch}
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">

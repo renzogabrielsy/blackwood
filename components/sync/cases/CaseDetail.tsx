@@ -27,7 +27,10 @@ import { CaseChatInput } from './CaseChatInput'
 import { ResolutionCard } from './ResolutionCard'
 import { GroupResolutionCard, type GroupMemberCase } from './GroupResolutionCard'
 import { SourceDiffCard, type OpenPickPlan } from './SourceDiffCard'
-import type { RcOutSource, SourceDiff } from '@/app/(app)/sync/types'
+import { CaseFindingDetail } from './FindingDetailCards'
+import { CreateBatchCard } from './CreateBatchCard'
+import { buildCreateBatchPlan, type CreateBatchPlan } from '@/lib/sync/create-batch-plan'
+import type { RcOutSource, SourceDiff, SyncReportType } from '@/app/(app)/sync/types'
 
 /** The full case row the detail pane renders (superset of the list row). */
 export interface CaseDetailRow {
@@ -78,6 +81,14 @@ interface CaseDetailProps {
   onConfirmDiffResolution: () => Promise<void>
   /** R3b — decline the open pick plan (→ cancelProposal). */
   onDeclineDiffResolution: () => Promise<void>
+  /** Create-batch — the open, persisted create-batch proposal's plan (restored), or null. */
+  openCreateBatchPlan: CreateBatchPlan | null
+  /** Create-batch — propose creating the batch (→ proposeCreateBatch). */
+  onCreateBatch: () => Promise<void>
+  /** Create-batch — confirm the open proposal (→ executeCreateBatch). */
+  onConfirmCreateBatch: () => Promise<void>
+  /** Create-batch — decline the open proposal (→ cancelProposal). */
+  onDeclineCreateBatch: () => Promise<void>
 }
 
 interface DriftDate {
@@ -228,6 +239,10 @@ export function CaseDetail({
   onProposePickSource,
   onConfirmDiffResolution,
   onDeclineDiffResolution,
+  openCreateBatchPlan,
+  onCreateBatch,
+  onConfirmCreateBatch,
+  onDeclineCreateBatch,
 }: CaseDetailProps) {
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const chip = STATUS_CHIP[theCase.status] ?? {
@@ -239,6 +254,21 @@ export function CaseDetail({
   const neverInvestigated = theCase.status === 'open' && messages.length === 0 && !hasVerdict
   const isResolved = theCase.status === 'resolved'
   const isSourceDiff = theCase.kind === 'source_diff'
+  const isBatchCase =
+    theCase.kind === 'unmapped_batch_code' || theCase.kind === 'unresolved_batch'
+
+  // The create-batch plan to render: the OPEN persisted proposal's plan (confirm mode), else a
+  // client-computed PREVIEW (create mode) so the reviewer sees exactly what will be inserted
+  // before proposing. buildCreateBatchPlan is PURE + client-safe (imports only types).
+  const createBatchPlan: CreateBatchPlan | null = React.useMemo(() => {
+    if (!isBatchCase) return null
+    if (openCreateBatchPlan) return openCreateBatchPlan
+    return buildCreateBatchPlan({
+      kind: theCase.kind,
+      reportType: theCase.report_type as SyncReportType,
+      row: theCase.row,
+    })
+  }, [isBatchCase, openCreateBatchPlan, theCase.kind, theCase.report_type, theCase.row])
 
   // Keep the thread pinned to the newest message as it streams in.
   React.useEffect(() => {
@@ -303,6 +333,23 @@ export function CaseDetail({
             onPick={onProposePickSource}
             onConfirm={onConfirmDiffResolution}
             onDecline={onDeclineDiffResolution}
+            pending={resolvePending}
+            busy={busy}
+            isResolved={isResolved}
+          />
+        )}
+
+        {/* First-class detail for the reconciliation kinds (block/overdue/unmapped-batch). */}
+        <CaseFindingDetail kind={theCase.kind} row={theCase.row} />
+
+        {/* Create-batch resolution for an unmapped / unresolved batch flag. */}
+        {isBatchCase && createBatchPlan && (
+          <CreateBatchCard
+            plan={createBatchPlan}
+            hasOpenProposal={!!openCreateBatchPlan}
+            onCreate={onCreateBatch}
+            onConfirm={onConfirmCreateBatch}
+            onDecline={onDeclineCreateBatch}
             pending={resolvePending}
             busy={busy}
             isResolved={isResolved}

@@ -5,6 +5,7 @@ import { FlaskConical, Play, RefreshCw, Square } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { SYNC_REPORTS } from '@/app/(app)/sync/types'
+import { flattenRunFindings } from '@/lib/sync/findings'
 import { SyncEmployeeCard } from './SyncEmployeeCard'
 import { HeldRows } from './HeldRows'
 import type { SyncRunState } from './useSyncRun'
@@ -34,6 +35,13 @@ function formatStarted(iso: string): string {
 
 export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
   const idle = !state.running && !state.ran
+
+  // The HONEST list: every flagged item across held rows AND all reconciliation channels.
+  // Was `state.heldGroups` (held rows only — the keyhole that showed 1 of 10).
+  const findings = React.useMemo(
+    () => (state.result ? flattenRunFindings(state.result) : []),
+    [state.result],
+  )
 
   return (
     <div className="flex flex-col gap-0">
@@ -138,8 +146,8 @@ export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
           <SyncEmployeeCard key={meta.type} card={state.cards[meta.type]} />
         ))}
 
-        {/* Held rows */}
-        <HeldRows groups={state.heldGroups} runId={state.runId} />
+        {/* Everything the run flagged (held rows + all reconciliation channels). */}
+        <HeldRows findings={findings} runId={state.runId} />
       </div>
 
       {/* Summary footer */}
