@@ -18,6 +18,13 @@ import { reconcile } from "../../src/reports/rc_out/reconcile.js";
 import { classifyRcOut } from "../../src/reports/rc_out/classify.js";
 import { extractProposed, type ProposedRow } from "../../src/reports/rc_out/extract.js";
 import { loadWorkbook } from "../../src/lib/xlsx.js";
+import { splitPvmDrift, dupDriftDates } from "../../src/reports/rc_out/index.js";
+import {
+  applyRcOut,
+  type RcOutCompact,
+  type QuarantinedDate,
+} from "../../src/reports/rc_out/apply.js";
+import type { DbClient, Row } from "../../src/lib/db.js";
 
 // A minimal well-formed extracted PROPOSED row.
 function mkRow(over: Partial<ProposedRow>): ProposedRow {
@@ -662,5 +669,313 @@ describe("extract — two-leg same-batch same-day sheet", () => {
     });
     expect(res.summary.flagged_count).toBe(1);
     expect(res.flagged[0].reason).toContain("cross-block cumulative");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Date-scoped quarantine (2026-07-11) — the run 83d17774 forensics fix.
+//
+// The HARD gates used to be a run-wide halt: ANY drifted date (even stale ones deep in
+// the PROPOSED workbook's history) blocked apply from writing EVERY row, including
+// today's clean feedings (the July 8-9 incident). This suite locks:
+//   (a) GATE 1's witness-corroboration downgrade — a drifted date whose DB sum already
+//       matches the movement sheet is NOT quarantined (informational only).
+//   (b) A drifted date the DB does NOT corroborate (absent or also-disagreeing) IS
+//       quarantined.
+//   (c) GATE 2's duplication detail is isolated to REAL O-vs-M excess — never tripped
+//       by a P-vs-M drift riding along in the same reconcile pass (the "no detail" bug).
+//   (d) apply.ts only holds actionable rows on quarantined dates; every other date
+//       writes normally, and the run still ends CLEAN/DIFFS-PENDING (not a silent
+//       overwrite, not a blanket halt).
+// ---------------------------------------------------------------------------
+describe("GATE 1 quarantine — witness-corroboration downgrade", () => {
+  it("(a) a serious P-vs-M drift where the DB already matches the movement sheet is NOT quarantined — attention only", () => {
+    // The exact 83d17774 forensics: proposed 29,024 vs movement 28,087 on a settled date,
+    // but rc_out DB SUM for that date already equals 28,087 (the movement total exactly).
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-05-15", weight_kg: 29024 }] },
+      { date_to_fed_kls: { "2026-05-15": 28087 } },
+      null,
+      50,
+      500,
+    );
+    const { quarantine, attention } = splitPvmDrift(rep, { "2026-05-15": 28087 }, 50);
+    expect(quarantine).toHaveLength(0);
+    expect(attention).toHaveLength(1);
+    expect(attention[0]).toContain("2026-05-15");
+    expect(attention[0]).toContain("informational");
+  });
+
+  it("(a) the second 83d17774 date (2026-05-28, proposed 59,142 vs movement 56,393, DB==56,393) is also NOT quarantined", () => {
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-05-28", weight_kg: 59142 }] },
+      { date_to_fed_kls: { "2026-05-28": 56393 } },
+      null,
+      50,
+      500,
+    );
+    const { quarantine, attention } = splitPvmDrift(rep, { "2026-05-28": 56393 }, 50);
+    expect(quarantine).toHaveLength(0);
+    expect(attention).toHaveLength(1);
+  });
+
+  it("(b) a serious P-vs-M drift with NO DB row for that date IS quarantined (no corroboration possible)", () => {
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-07-01", weight_kg: 5000 }] },
+      { date_to_fed_kls: { "2026-07-01": 1000 } },
+      null,
+      50,
+      500,
+    );
+    const { quarantine, attention } = splitPvmDrift(rep, {}, 50);
+    expect(quarantine).toHaveLength(1);
+    expect(quarantine[0]).toMatchObject({
+      date: "2026-07-01",
+      proposed_kg: 5000,
+      movement_kg: 1000,
+      diff_kg: 4000,
+    });
+    expect(attention).toHaveLength(0);
+  });
+
+  it("(b) a serious P-vs-M drift where the DB ALSO disagrees with movement (beyond tolerance) IS quarantined", () => {
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-07-02", weight_kg: 5000 }] },
+      { date_to_fed_kls: { "2026-07-02": 1000 } },
+      null,
+      50,
+      500,
+    );
+    // DB sum (4800) is within 50kg of proposed (5000) but NOT within 50kg of movement
+    // (1000) — the corroboration test is DB-vs-MOVEMENT, not DB-vs-PROPOSED.
+    const { quarantine } = splitPvmDrift(rep, { "2026-07-02": 4800 }, 50);
+    expect(quarantine).toHaveLength(1);
+  });
+
+  it("a missing movement entry is ALWAYS quarantined — no second witness to corroborate against", () => {
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-07-03", weight_kg: 5000 }] },
+      { date_to_fed_kls: {} },
+      null,
+      50,
+      500,
+    );
+    const { quarantine, attention } = splitPvmDrift(rep, { "2026-07-03": 5000 }, 50);
+    expect(quarantine).toHaveLength(1);
+    expect(quarantine[0].note).toBe("no movement entry");
+    expect(attention).toHaveLength(0);
+  });
+
+  it("a tolerable (non-serious) P-vs-M drift is neither quarantined nor an attention note", () => {
+    const rep = reconcile(
+      { rows: [{ transaction_date: "2026-07-04", weight_kg: 1100 }] },
+      { date_to_fed_kls: { "2026-07-04": 1000 } }, // diff=100, >50 tolerance but <=500 serious
+      null,
+      50,
+      500,
+    );
+    const { quarantine, attention } = splitPvmDrift(rep, { "2026-07-04": 1000 }, 50);
+    expect(quarantine).toHaveLength(0);
+    expect(attention).toHaveLength(0);
+  });
+});
+
+describe("GATE 2 quarantine — isolated from P-vs-M bleed-through", () => {
+  it("(c) a P-vs-M-only drift date produces ZERO duplication entries (the 'no detail' bug)", () => {
+    // Same shape as the 83d17774 forensics: PROPOSED disagrees with MOVEMENT, but the DB
+    // sum for the date equals MOVEMENT exactly — genuinely NOT a duplication case. Before
+    // this fix, GATE 2 reran the SAME reconcile pass and its severity>=2 check (bumped by
+    // the P-vs-M drift alone) tripped the gate while dupDriftDates() returned [] — a held
+    // row with no date/amounts (undiagnosable).
+    const rep2 = reconcile(
+      { rows: [{ transaction_date: "2026-05-28", weight_kg: 59142 }] },
+      { date_to_fed_kls: { "2026-05-28": 56393 } },
+      { "2026-05-28": 56393 }, // O == M exactly → zero excess
+      50,
+      500,
+    );
+    expect(dupDriftDates(rep2)).toHaveLength(0);
+  });
+
+  it("(c) a genuine O>M excess date carries full {date, db_sum_kg, movement_kg, excess_kg} detail", () => {
+    const rep2 = reconcile(
+      { rows: [] },
+      { date_to_fed_kls: { "2026-06-16": 1000 } },
+      { "2026-06-16": 2000 }, // O exceeds M by 1000 > 500 serious threshold
+      50,
+      500,
+    );
+    const dup = dupDriftDates(rep2);
+    expect(dup).toHaveLength(1);
+    expect(dup[0]).toMatchObject({
+      date: "2026-06-16",
+      db_sum_kg: 2000,
+      movement_kg: 1000,
+      excess_kg: 1000,
+    });
+  });
+
+  it("O-vs-M excess at exactly 500kg does NOT trip (boundary is strict >)", () => {
+    const rep2 = reconcile(
+      { rows: [] },
+      { date_to_fed_kls: { "2026-06-17": 1000 } },
+      { "2026-06-17": 1500 },
+      50,
+      500,
+    );
+    expect(dupDriftDates(rep2)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// apply.ts — partition-level quarantine: only actionable rows on a quarantined date are
+// held; every other date writes normally, and the run never silently overwrites.
+// ---------------------------------------------------------------------------
+describe("apply — date-scoped quarantine (partition-level, not a run-wide halt)", () => {
+  function mkDb(hooks: { onInsert?: (table: string, rows: Row[]) => void } = {}): DbClient {
+    const stub: Partial<DbClient> = {
+      insertIfAbsent: async (table, rows) => {
+        hooks.onInsert?.(table, rows);
+        return {
+          inserted: [{ ...rows[0], id: `NEW-${Math.random().toString(36).slice(2, 8)}` }],
+          skipped: [],
+          insertedCount: 1,
+          skippedCount: 0,
+        };
+      },
+      update: async () => [],
+      writeIngestionAudit: async () => ({ id: "AUDIT-1" }),
+      upsertIngestionWatermark: async () => true,
+    };
+    return stub as DbClient;
+  }
+
+  function newItem(date: string): { index: unknown; row: ProposedRow } {
+    return {
+      index: `${date}-idx`,
+      row: mkRow({
+        transaction_date: date,
+        batch_id: "bid-blk9",
+        batch_code_resolved: "JULY-26-BLK9",
+      }),
+    };
+  }
+
+  function baseCompact(over: Partial<RcOutCompact> = {}): RcOutCompact {
+    return {
+      report_type: "rc_out",
+      since: "2026-07-01",
+      watermark: null,
+      gate_failures: [],
+      quarantined_dates: [],
+      source: { email_subject: null, email_uid: 1, email_thread_id: null },
+      actionable: { new: [], changed: [], flagged: [], unmapped: [], malformed: [] },
+      batch_lookup: {},
+      ...over,
+    };
+  }
+
+  it("(d) writes NEW rows on clean dates even while another date is quarantined — no run-wide halt", async () => {
+    const inserted: Row[] = [];
+    const db = mkDb({ onInsert: (_t, rows) => inserted.push(rows[0]) });
+    const q: QuarantinedDate = {
+      date: "2026-05-15",
+      gate: "proposed_vs_movement_drift_500kg",
+      detail: { date: "2026-05-15", proposed_kg: 29024, movement_kg: 28087, diff_kg: 937 },
+    };
+    const compact = baseCompact({
+      quarantined_dates: [q],
+      actionable: {
+        new: [newItem("2026-05-15"), newItem("2026-07-08"), newItem("2026-07-09")],
+        changed: [],
+        flagged: [],
+        unmapped: [],
+        malformed: [],
+      },
+    });
+
+    const res = await applyRcOut(compact, { db });
+
+    // The July 8-9 forensics scenario: today's clean feedings write despite the stale
+    // May-15 drift.
+    expect(res.inserts).toBe(2);
+    expect(inserted.map((r) => r.transaction_date).sort()).toEqual(["2026-07-08", "2026-07-09"]);
+
+    const gateHolds = res.held.filter((h) => h.kind === "gate_failure");
+    expect(gateHolds).toHaveLength(1);
+    expect(gateHolds[0].row?.transaction_date).toBe("2026-05-15");
+    expect(gateHolds[0].row?.drift_dates).toEqual([q.detail]);
+
+    // A quarantine hold is NOT a write failure — labeling/watermark can still proceed
+    // (same precedent as flagged/unmapped/malformed holds).
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  });
+
+  it("a quarantined date with ZERO actionable rows this run still emits ONE summary held entry (visibility never lost)", async () => {
+    const db = mkDb();
+    const q: QuarantinedDate = {
+      date: "2026-06-16",
+      gate: "db_vs_movement_duplication",
+      detail: { date: "2026-06-16", db_sum_kg: 2000, movement_kg: 1000, excess_kg: 1000 },
+    };
+    const compact = baseCompact({ quarantined_dates: [q] });
+
+    const res = await applyRcOut(compact, { db });
+
+    expect(res.inserts).toBe(0);
+    expect(res.held).toHaveLength(1);
+    expect(res.held[0].kind).toBe("gate_failure");
+    expect(res.held[0].reason).toBe("db_vs_movement_duplication");
+    expect(res.held[0].row?.drift_dates).toEqual([q.detail]);
+  });
+
+  it("(e) two gates quarantining the SAME date accumulate into one held row with both details", async () => {
+    const db = mkDb();
+    const q1: QuarantinedDate = {
+      date: "2026-05-20",
+      gate: "proposed_vs_movement_drift_500kg",
+      detail: { date: "2026-05-20", proposed_kg: 5000, movement_kg: 1000, diff_kg: 4000 },
+    };
+    const q2: QuarantinedDate = {
+      date: "2026-05-20",
+      gate: "db_vs_movement_duplication",
+      detail: { date: "2026-05-20", db_sum_kg: 2000, movement_kg: 1000, excess_kg: 1000 },
+    };
+    const compact = baseCompact({
+      quarantined_dates: [q1, q2],
+      actionable: { new: [newItem("2026-05-20")], changed: [], flagged: [], unmapped: [], malformed: [] },
+    });
+
+    const res = await applyRcOut(compact, { db });
+
+    expect(res.inserts).toBe(0);
+    const gateHolds = res.held.filter((h) => h.kind === "gate_failure");
+    expect(gateHolds).toHaveLength(1);
+    expect(gateHolds[0].row?.drift_dates).toEqual([q1.detail, q2.detail]);
+    expect(gateHolds[0].reason).toContain("proposed_vs_movement_drift_500kg");
+    expect(gateHolds[0].reason).toContain("db_vs_movement_duplication");
+  });
+
+  it("(d) an all-clean run (no quarantined dates) writes everything — unchanged from before this fix", async () => {
+    const inserted: Row[] = [];
+    const db = mkDb({ onInsert: (_t, rows) => inserted.push(rows[0]) });
+    const compact = baseCompact({
+      actionable: {
+        new: [newItem("2026-07-08"), newItem("2026-07-09")],
+        changed: [],
+        flagged: [],
+        unmapped: [],
+        malformed: [],
+      },
+    });
+
+    const res = await applyRcOut(compact, { db });
+
+    expect(res.inserts).toBe(2);
+    expect(inserted).toHaveLength(2);
+    expect(res.held).toHaveLength(0);
+    expect(res.ok).toBe(true);
+    expect(res.errors).toEqual([]);
   });
 });

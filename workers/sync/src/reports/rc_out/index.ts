@@ -39,7 +39,9 @@ import {
   type ApplyResult,
   type GateDriftDate,
   type GateFailureDetail,
+  type QuarantinedDate,
 } from "./apply.js";
+import { fmtKg } from "../held.js";
 
 export const REPORT_TYPE = "rc_out";
 
@@ -50,7 +52,7 @@ const CODIFIED_RULES = [
   "rc_out-drift-gate-500kg",
   "rc_out-db-duplication-gate",
   "batch_code-fallback-prefixes",
-  "never-auto-create-batch",
+  "auto-create-pattern-valid-batch", // 2026-07-11 — reverses the old never-auto-create rule
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -155,8 +157,12 @@ export interface RunReportResult {
  * durable run for the worker). Computes `since`/`watermark` from the live DB, extracts
  * PROPOSED + (optional) RC MOVEMENT, runs the TWO HARD GATES, classifies, and applies.
  *
- * Gate semantics (rc_out.md §1/§4): if either gate trips (severity >= 2), the classify
- * envelope still carries the full classification but ok:false and apply writes nothing.
+ * Gate semantics (rc_out.md "Gates & quarantine", 2026-07-11): a gate trip is DATE-SCOPED
+ * quarantine, not a run-wide halt. Each gate identifies the specific transaction_date(s)
+ * genuinely at risk (the DB is absent or ALSO disagrees with the movement-sheet witness);
+ * apply holds only the actionable rows on those dates and writes every other date
+ * normally. `classify.ok` is false whenever ANY date was quarantined (informs
+ * CLEAN-vs-DIFFS-PENDING), but that no longer implies "nothing was written."
  */
 export async function runReport(
   deps: RunReportDeps,
@@ -188,6 +194,7 @@ export async function runReport(
       labeled: false,
       watermark_updated: false,
       errors: [],
+      auto_created_batches: [],
     };
     return {
       classify: {
@@ -212,38 +219,65 @@ export async function runReport(
   const proposedWb = await loadWorkbook(await readFile(primaryPath));
   const proposed = extractProposed(proposedWb, year);
 
-  // GATES (only when the RC MOVEMENT cross-check is present).
+  // GATES (only when the RC MOVEMENT cross-check is present). Date-scoped quarantine
+  // (not a run-wide halt): a gate trip marks ONLY the affected transaction_date(s) as
+  // unsafe to write; apply still writes NEW/CHANGED rows for every clean date. See the
+  // "Gates & quarantine" section of specs/rc_out.md.
   const gateFailures: GateFailureDetail[] = [];
+  const quarantinedDates = new Map<string, QuarantinedDate[]>();
+  const gateSoftWarnings: string[] = [];
   if (movementAtt) {
     await emit?.("reconcile", "Cross-checking feeding totals against the movement sheet…", 42);
     const movementPath = await deps.fetchToLocalPath(movementAtt.storagePath);
     const movementWb = await loadWorkbook(await readFile(movementPath));
     const movement = extractMovement(movementWb);
 
-    // GATE 1 — PROPOSED vs RC MOVEMENT (no sums): severity >= 2 halts.
-    const rep1 = reconcile({ rows: proposed.rows }, movement, null, 50, 500);
-    if (rep1.severity >= 2) {
-      gateFailures.push({
-        gate: "proposed_vs_movement_drift_500kg",
-        detail: `${rep1.summary.drift_dates} drift date(s); serious >500kg — HALT, write nothing.`,
-        drift_dates: pvmDriftDates(rep1),
-      });
-    }
-
-    // GATE 2 — DB-vs-RC-MOVEMENT duplication (WITH sums): O>M halts.
+    // DB sums fetched ONCE — feed both GATE 2 (O-vs-M excess) and GATE 1's witness-
+    // corroboration check (does the DB already match the movement sheet on a date
+    // PROPOSED disagrees with?).
     const dbSumRows = await db.readRows("rc_out", {
       sinceDate: since,
       columns: ["transaction_date", "weight_kg"],
     });
-    const sums: RcOutSums = rcOutSumsFromRows(dbSumRows);
-    const rep2 = reconcile({ rows: proposed.rows }, movement, sums, 50, 500);
-    if (rep2.severity >= 2) {
+    const dbSums: RcOutSums = rcOutSumsFromRows(dbSumRows);
+
+    // GATE 1 — PROPOSED vs RC MOVEMENT. Run WITHOUT sums so this gate's own severity
+    // stays free of O-vs-M bleed-through (that is GATE 2's job — see below). A serious
+    // drift date is quarantined UNLESS the DB itself already matches the movement sheet
+    // (a second witness corroborates the DB — the disagreement is stale PROPOSED history,
+    // not a write risk).
+    const rep1 = reconcile({ rows: proposed.rows }, movement, null, TOLERANCE_KG, SERIOUS_DRIFT_KG);
+    const pvm = splitPvmDrift(rep1, dbSums, TOLERANCE_KG);
+    gateSoftWarnings.push(...pvm.attention);
+    if (pvm.quarantine.length) {
+      gateFailures.push({
+        gate: "proposed_vs_movement_drift_500kg",
+        detail:
+          `${pvm.quarantine.length} date(s) with a serious PROPOSED-vs-MOVEMENT drift the ` +
+          `DB does not corroborate — quarantined; other dates still written.`,
+        drift_dates: pvm.quarantine,
+      });
+      for (const d of pvm.quarantine) {
+        addQuarantine(quarantinedDates, d.date, "proposed_vs_movement_drift_500kg", d);
+      }
+    }
+
+    // GATE 2 — DB-vs-RC-MOVEMENT duplication. Isolated to REAL O-vs-M excess entries
+    // only (dupDriftDates filters on excess_o_vs_m_kg — never tripped by a P-vs-M drift
+    // riding along in the same reconcile pass, which used to leave this gate's held row
+    // with no per-date detail whenever the trip was actually a GATE-1-shaped disagreement).
+    const rep2 = reconcile({ rows: proposed.rows }, movement, dbSums, TOLERANCE_KG, SERIOUS_DRIFT_KG);
+    const dup = dupDriftDates(rep2);
+    if (dup.length) {
       gateFailures.push({
         gate: "db_vs_movement_duplication",
         detail:
-          "rc_out DB SUM exceeds RC MOVEMENT (O>M) on a settled date — suspected duplication; HALT.",
-        drift_dates: dupDriftDates(rep2),
+          "rc_out DB SUM exceeds RC MOVEMENT (O>M) on a settled date — suspected duplication; date(s) quarantined.",
+        drift_dates: dup,
       });
+      for (const d of dup) {
+        addQuarantine(quarantinedDates, d.date, "db_vs_movement_duplication", d);
+      }
     }
   } else {
     await emit?.("reconcile", "No movement cross-check available — proceeding without drift gates.", 42, undefined, "warn");
@@ -287,10 +321,11 @@ export async function runReport(
     90,
   );
 
-  // L-034: surface month-boundary label-variance soft warnings on the live feed as an
-  // informational (warn-level, non-holding) beat — the row is already saved, so this is
-  // "no action needed", never a hold. The strings also ride the classify block below.
-  const softWarnings = classified.soft_warnings.map((w) => w.message);
+  // L-034 month-boundary label-variance notes + GATE-1 witness-corroboration attention
+  // notes (item 2 above) both ride the SAME informational, non-holding channel: they
+  // surface on the live feed as a `warn`-level beat and travel in the classify block's
+  // `soft_warnings` so they reach the app without gating anything.
+  const softWarnings = [...classified.soft_warnings.map((w) => w.message), ...gateSoftWarnings];
   for (const msg of softWarnings) {
     await emit?.("classify", msg, 90, undefined, "warn");
   }
@@ -301,6 +336,7 @@ export async function runReport(
     since,
     watermark,
     gate_failures: gateFailures,
+    quarantined_dates: Array.from(quarantinedDates.values()).flat(),
     source: {
       email_subject: primaryAtt.emailSubject ?? null,
       email_uid: primaryAtt.emailUid,
@@ -364,28 +400,80 @@ function minExtractDate(rows: Array<{ transaction_date?: string | null }>): stri
 }
 
 const SERIOUS_DRIFT_KG = 500;
+const TOLERANCE_KG = 50;
+
+/** Add one quarantine record for `date`, keyed off a Map so multiple gates tripping the
+ *  same date accumulate rather than overwrite. */
+function addQuarantine(
+  map: Map<string, QuarantinedDate[]>,
+  date: string,
+  gate: string,
+  detail: GateDriftDate,
+): void {
+  const entry: QuarantinedDate = { date, gate, detail };
+  const list = map.get(date);
+  if (list) list.push(entry);
+  else map.set(date, [entry]);
+}
 
 /**
- * GATE 1 detail: the daily-report-vs-movement-sheet disagreements that drove the halt.
- * Surfaces every drifted date carrying a serious P-vs-M gap OR a missing movement entry
- * (both are days the adjudicator should tell Renzo to check). Pure kg totals, no ₱.
+ * GATE 1 split — for each date with a serious PROPOSED-vs-MOVEMENT gap (or no movement
+ * entry at all), decide whether it is safe to write:
+ *   - `quarantine`: the DB is absent for the date, OR the DB's own sum for the date ALSO
+ *     disagrees with the movement sheet (beyond `toleranceKg`) — writing here risks
+ *     propagating a bad value, so the date is held back.
+ *   - `attention`: the DB's sum for the date already matches the movement sheet within
+ *     tolerance. A second witness (the DB itself) corroborates the DB, so the PROPOSED
+ *     disagreement is stale report history (old day-tabs the workbook still carries),
+ *     never a write risk. Downgraded to an informational, non-blocking note.
+ * A missing movement entry can never be corroborated (no second witness to compare
+ * against) — always quarantined, matching the prior conservative behavior.
  */
-function pvmDriftDates(rep: ReconcileReport): GateDriftDate[] {
-  const out: GateDriftDate[] = [];
+export function splitPvmDrift(
+  rep: ReconcileReport,
+  dbSums: RcOutSums,
+  toleranceKg: number,
+): { quarantine: GateDriftDate[]; attention: string[] } {
+  const quarantine: GateDriftDate[] = [];
+  const attention: string[] = [];
   for (const e of rep.drift_dates) {
     const missingMovement = e.proposed_sum_kg !== null && e.rc_movement_kg === null;
     const seriousGap =
       e.drift_p_vs_m_kg !== null && Math.abs(e.drift_p_vs_m_kg) > SERIOUS_DRIFT_KG;
     if (!missingMovement && !seriousGap) continue;
-    out.push({
+
+    if (missingMovement) {
+      quarantine.push({
+        date: e.date,
+        proposed_kg: e.proposed_sum_kg,
+        movement_kg: e.rc_movement_kg,
+        diff_kg: e.drift_p_vs_m_kg,
+        note: "no movement entry",
+      });
+      continue;
+    }
+
+    const dbKg = Object.prototype.hasOwnProperty.call(dbSums, e.date) ? dbSums[e.date] : null;
+    const mKg = e.rc_movement_kg;
+    const corroborated = dbKg !== null && mKg !== null && Math.abs(dbKg - mKg) <= toleranceKg;
+    if (corroborated) {
+      attention.push(
+        `Proposed history disagrees with the movement sheet on ${e.date} ` +
+          `(proposed ${fmtKg(e.proposed_sum_kg)} kg vs movement ${fmtKg(mKg)} kg), but the ` +
+          `database already matches the movement sheet (${fmtKg(dbKg)} kg) — informational, ` +
+          `no action needed.`,
+      );
+      continue;
+    }
+
+    quarantine.push({
       date: e.date,
       proposed_kg: e.proposed_sum_kg,
       movement_kg: e.rc_movement_kg,
       diff_kg: e.drift_p_vs_m_kg,
-      ...(missingMovement ? { note: "no movement entry" } : {}),
     });
   }
-  return out;
+  return { quarantine, attention };
 }
 
 /**
@@ -393,7 +481,7 @@ function pvmDriftDates(rep: ReconcileReport): GateDriftDate[] {
  * (suspected already-saved duplicate feedings). Carries the DB sum, the movement total,
  * and the excess. Pure kg totals, no ₱.
  */
-function dupDriftDates(rep: ReconcileReport): GateDriftDate[] {
+export function dupDriftDates(rep: ReconcileReport): GateDriftDate[] {
   const out: GateDriftDate[] = [];
   for (const e of rep.drift_dates) {
     if (e.excess_o_vs_m_kg === null || e.excess_o_vs_m_kg <= SERIOUS_DRIFT_KG) continue;

@@ -20,13 +20,26 @@ Read SHARED.md first.
 8. **Classify**: builds `batch_lookup.json` (`{batch_code: id}` for ALL batches, no date filter — `since_column=None`), fetches `rc_out` DB rows over the compare-set window, runs `classify_rc_out.py` passing `--watermark {watermark}` IF a watermark exists (omitted only for a fresh/empty table — a genuine first-run backfill). **L-034: the compare-set window is `min(min(extracted transaction_date), since)`, NOT plain `since`** — the extractor yields the workbook's oldest sheet rows (older than `since = watermark − 3d`), so fetching at `since` would leave those settled rows without their saved DB copies and false-flag them as sub-watermark. Widening to the extract's own min guarantees every incoming row is compared against its saved copy. Bounded, so it never reads the whole table.
 9. `gate_tripped = bool(gate_failures)`. **Even when a gate trips, the classify envelope is STILL emitted with the full classification** (for review) — only `ok` is set `false`. The apply phase is what actually refuses to write (see Gates section below).
 
-### Apply phase (`phase_apply`, sync_rc_out.py:226-327)
+### Apply phase — PYTHON REFERENCE (`phase_apply`, sync_rc_out.py:226-327), frozen/historical
+
+This describes `sync_rc_out.py` as originally ported — the Python script is no longer the
+live writer (the TS worker is) and this behavior is now **superseded** by the date-scoped
+quarantine model below (`## Gates & quarantine`). Kept verbatim as the historical ground
+truth for what was ported and why it changed.
 
 1. **First check**: if `compact["gate_failures"]` is non-empty, apply writes NOTHING — emits `ok:false`, `held` = one entry per gate (`reason: gate name`), `errors` = one string per gate, returns exit code 1. This re-check happens INSIDE apply, independent of whatever `--only-clean`/`--input` was passed — the gate state travels with the classified file.
 2. NEW rows → `insert_if_absent("rc_out", ..., natural_key=(transaction_date, batch_id, destination))`, then `insert_manual_audit` (rc_out has NO audit trigger).
 3. VALUE_CHANGED rows → `db.update(...)` then `insert_manual_audit` (operation UPDATE, unconditional — no trigger-stamp attempt since rc_out never has a trigger).
 4. `flagged`/`unmapped`/`malformed` → always `held`, never written.
 5. Label + watermark only if `not errors`.
+
+**This run-wide "any gate trip halts EVERYTHING" behavior was a real production incident**
+(run `83d17774-bfdf-47f1-b705-184076f4b823`, 2026-07-11): the PROPOSED workbook carries weeks
+of old day-tabs, the gates run over that ENTIRE span, and a stale drift on a long-settled date
+(2026-05-15, 2026-05-28 — both already correctly saved, DB exactly equal to the movement
+sheet) blocked TODAY's clean feedings (2026-07-08/09) from being written at all. See
+`## Gates & quarantine` below for the fix — the TS worker (`src/reports/rc_out/{index,apply}.ts`)
+no longer has this behavior.
 
 ---
 
@@ -132,6 +145,13 @@ Beyond the L-034 production_batch-only demotion above, no materiality/immaterial
 
 ## 4. Gates & reconciliation
 
+**Consequence deviation (TS worker, 2026-07-11):** everything in this section describes
+*detection* — how each gate decides a date is drifted/duplicated — and that is unchanged
+between the Python reference and the TS worker (`src/reports/rc_out/index.ts`). What changed
+is the **consequence** of a trip: the Python reference (and the original TS port) treated ANY
+trip as a run-wide halt (apply writes nothing at all). The TS worker now applies the trip
+**per transaction_date** — see `## 4a. Gates & quarantine` below, right after this section.
+
 ### HARD gates (both must be green for `ok:true`)
 
 1. **`proposed_vs_movement_drift_500kg`**: `reconcile_rc_movement.py` run WITHOUT `--rc-out-sums-json`, comparing PROPOSED sums vs RC MOVEMENT `date_to_fed_kls` per date. `serious_drift_kg=500` (hardcoded in `sync_rc_out.py:66`, passed as CLI arg — NOT the reconciler's own default of 500.0, though they happen to match). `tolerance_kg=50`. Trips (returns exit code `2`) if `abs(P - M) > 500` for ANY date OR `abs(P - O) > 500` (PROPOSED vs EXISTING rc_out, only relevant on a re-run) for any date, where `O` here is NOT populated in this first pass (no `--rc-out-sums-json` given) so `p_vs_o_drift` never fires in GATE 1.
@@ -155,11 +175,104 @@ Covered above (§3, FLAGGED kind 1) — implemented INSIDE `classify_rc_out.py`,
 
 ---
 
+## 4a. Gates & quarantine — TS WORKER (current behavior, 2026-07-11)
+
+**APPLY-ONLY deviation** — nothing here touches `classify.ts` or the classify parity oracle
+(the parity harness stays 12/12 unaffected; reconciliation has always been orchestrator-level,
+per the header note in `reconcile.ts`). This section supersedes the Python "Apply phase"
+narrative above for the live TS worker (`src/reports/rc_out/index.ts` + `apply.ts`).
+
+### The incident
+
+Run `83d17774-bfdf-47f1-b705-184076f4b823` (2026-07-11): the PROPOSED workbook that arrives
+each day carries every day-tab the operator has ever filled in, including weeks-old ones. Both
+HARD gates walk the ENTIRE span present in that workbook, not just the new dates. Two stale
+dates tripped GATE 1 (`proposed_vs_movement_drift_500kg`):
+
+| date | proposed (report) | movement (sheet) | rc_out DB SUM |
+|---|---|---|---|
+| 2026-05-15 | 29,024 kg | 28,087 kg | **28,087 kg** (already correct) |
+| 2026-05-28 | 59,142 kg | 56,393 kg | **56,393 kg** (already correct) |
+
+Both dates were **already correctly saved** — the DB exactly matches the movement sheet, the
+disagreement is purely in the PROPOSED report's own stale history. Under the old "any trip
+halts the whole run" rule, this blocked the 2026-07-08/09 feedings — TODAY's clean data —
+from being written at all. Separately, GATE 2 (`db_vs_movement_duplication`) reran the exact
+same P-vs-M-inclusive reconcile pass and could trip on the SAME P-vs-M drift (not a genuine
+O-vs-M duplication); its held row then carried an EMPTY `drift_dates` array (the isolated
+O-vs-M filter found nothing), so the finding named no date and no numbers — undiagnosable from
+the Sync Review panel.
+
+### The fix — date-scoped quarantine (industry-standard partition-level quarantine)
+
+A gate trip now marks ONLY the specific `transaction_date`(s) it found genuinely at risk. Every
+other date in the same run classifies and writes exactly as if the gate had never tripped.
+"Genuinely at risk" is decided per gate:
+
+1. **GATE 1 (`proposed_vs_movement_drift_500kg`) — witness-corroboration downgrade.** For each
+   date with a serious P-vs-M gap, the worker ALSO looks up the DB's own sum for that date
+   (`RcOutSums`, already fetched for GATE 2). If `abs(DB − movement) <= 50kg`, the DB is
+   **corroborated by a second witness** (the movement sheet) and is not at risk — the date is
+   NOT quarantined; instead an **attention-level, non-blocking note** is emitted (the same
+   `soft_warnings[]` channel L-034 uses) reading roughly *"Proposed history disagrees with the
+   movement sheet on 2026-05-15 (proposed 29,024 kg vs movement 28,087 kg), but the database
+   already matches the movement sheet (28,087 kg) — informational, no action needed."* Only
+   quarantine when the DB is ABSENT for that date or ALSO disagrees with movement beyond
+   tolerance — i.e. only when writing could actually propagate a bad value. A date with NO
+   movement entry at all (no second witness to compare against) is always quarantined — it
+   cannot be corroborated either way (`src/reports/rc_out/index.ts::splitPvmDrift`).
+2. **GATE 2 (`db_vs_movement_duplication`) — isolated to REAL O-vs-M excess.** The held-row
+   detail is built from `dupDriftDates()`, which filters strictly on `excess_o_vs_m_kg >
+   500kg` — a P-vs-M drift riding along in the same reconcile pass (GATE 2 reuses the identical
+   engine, now WITH `rc_out_sums` supplied) can no longer trip this gate or appear in its
+   detail. Every `db_vs_movement_duplication` finding now ALWAYS carries the full per-date
+   shape `{date, db_sum_kg, movement_kg, excess_kg}` — never an empty `drift_dates[]`. This
+   gate remains a genuine quarantine (unconditionally) — a settled-date DB excess over the
+   movement sheet is dangerous to build on regardless of corroboration.
+3. **Apply-time enforcement.** `applyRcOut` builds a `transaction_date → QuarantinedDate[]`
+   lookup from `compact.quarantined_dates`. A classified NEW or CHANGED row whose date is in
+   that lookup is held (`kind: "gate_failure"`, `row.drift_dates` = the specific date's drift
+   detail) instead of written; every row on any OTHER date inserts/updates normally — GATE
+   trips no longer early-return before the write loops even start. A quarantined date with NO
+   actionable row this run (nothing needed writing there today) still emits ONE summary held
+   entry so the finding is never silently lost just because this run's workbook didn't happen
+   to touch it.
+4. **A quarantine hold is NOT a write error.** It does not block labeling the source email as
+   processed or advancing `ingestion_watermarks` — same precedent as `flagged`/`unmapped`/
+   `malformed` holds. The email genuinely was processed; some rows just need a human decision.
+   This preserves the platform-wide invariant (`CLAUDE.md` → "Sync Integrity") that every run
+   ends **CLEAN** or **DIFFS-PENDING**, never a silent overwrite and never an indefinite freeze.
+5. **Watermark interaction.** `rc_out`'s "watermark" is `MAX(transaction_date)` recomputed live
+   from the table each run (`db.dataWatermark("rc_out")`), not a separately tracked cursor —
+   there is no mechanism by which a quarantined OLD date could be "skipped past and lost." If a
+   quarantined date is already before the current watermark, it was already settled before this
+   run (as both 83d17774 dates were); if it is a NEW date, its rows simply stay held until a
+   human resolves the case, and the next run recomputes the watermark fresh from whatever DID
+   get written.
+
+Implementation: `src/reports/rc_out/index.ts` (`splitPvmDrift`, `dupDriftDates`, gate
+composition) and `src/reports/rc_out/apply.ts` (`QuarantinedDate`, per-row quarantine checks in
+both write loops, the unclaimed-date summary pass). Tests: `test/reports/rc_out.test.ts`
+("GATE 1 quarantine", "GATE 2 quarantine", "apply — date-scoped quarantine" describe blocks).
+
+---
+
 ## 5. Apply spec
+
+**TS worker note (2026-07-11):** this section describes the Python reference's write order,
+which used a run-wide gate re-check (step 1 below) that HALTED everything on any trip. The
+live TS worker (`src/reports/rc_out/apply.ts`) replaces step 1 with a **per-row quarantine
+check** — see `## 4a. Gates & quarantine` above for the full current behavior. Steps 2-4 are
+unchanged (byte-identical write/audit mechanics) except that a quarantined-date row is now
+held (`kind: "gate_failure"`) at the point it would otherwise have inserted/updated, rather
+than the whole run refusing to reach the write loop.
 
 ### Write order
 
-1. Gate re-check (halts everything if `gate_failures` non-empty — see §1).
+1. **Python reference (superseded):** Gate re-check (halts everything if `gate_failures`
+   non-empty — see §1). **TS worker (current):** per-row quarantine check — a row whose
+   `transaction_date` is in `compact.quarantined_dates` is held; every other row proceeds to
+   step 2/3 normally (`## 4a. Gates & quarantine`).
 2. NEW rows → `insert_if_absent("rc_out", ..., natural_key=(transaction_date, batch_id, destination))` → `insert_manual_audit` (operation INSERT).
 3. VALUE_CHANGED → `db.update(...)` → `insert_manual_audit` (operation UPDATE).
 4. flagged/unmapped/malformed → `held`, reasons `"flagged"` / `"unmapped_batch_code"` / `"malformed"` respectively.
