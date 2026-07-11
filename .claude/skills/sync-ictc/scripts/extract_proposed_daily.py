@@ -71,6 +71,13 @@ MONTH_NAME_TO_NUM = {
 SHEET_NAME_RE = re.compile(r"^([A-Z]+)\s+(\d{1,2})\s*$", re.IGNORECASE)
 BLOCK_NO_RE = re.compile(r"^\s*#\s*(\d+)\s*$")
 
+# FEED-section WHSE-label detector (2026-07-11 fix, both engines in lockstep — see
+# PORTING_DECISIONS.md "Post-port business-rule changes"). Whole-word match on FEED or
+# FEEDING, case-insensitive: catches "FEEDING AREA" (legacy template) AND "FOR FEEDING"
+# (the operator's current template). Conservative — a real block label like "A-16D" or
+# "16A NEAR PATHWAY" contains no FEED/FEEDING word and does not match.
+FEED_LABEL_RE = re.compile(r"\bFEED(?:ING)?\b")
+
 WEIGHT_KG_MIN = 0
 WEIGHT_KG_MAX = 200_000  # daily totals can be large
 
@@ -259,8 +266,10 @@ def extract_block_section(
     if not (WEIGHT_KG_MIN < day_total < WEIGHT_KG_MAX):
         warnings.append(f"DAY TOTAL {day_total} outside plausible range")
 
-    # FEED vs standard block detection
-    is_feed = bool(whse and "FEEDING AREA" in whse.upper())
+    # FEED vs standard block detection (2026-07-11 fix — was a "FEEDING AREA"-only
+    # substring match that missed the newer "FOR FEEDING" section header; see
+    # FEED_LABEL_RE above).
+    is_feed = bool(whse and FEED_LABEL_RE.search(whse.upper()))
 
     block_date = coerce_date(block_date_raw)
     block_no = parse_block_no(block_no_raw)

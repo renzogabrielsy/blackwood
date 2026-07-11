@@ -47,6 +47,14 @@ const SHEET_NAME_RE = /^([A-Za-z]+)\s+(\d{1,2})\s*$/;
 /** extract_proposed_daily.py:72 — BLOCK_NO_RE. */
 const BLOCK_NO_RE = /^\s*#\s*(\d+)\s*$/;
 
+/**
+ * FEED-section WHSE-label detector (2026-07-11 fix, extract_proposed_daily.py:263 mirror).
+ * Whole-word match on FEED or FEEDING, case-insensitive — catches "FEEDING AREA" (legacy
+ * template) AND "FOR FEEDING" (the operator's current template) while staying conservative:
+ * a real block label like "A-16D" or "16A NEAR PATHWAY" contains no FEED/FEEDING word.
+ */
+const FEED_LABEL_RE = /\bFEED(?:ING)?\b/;
+
 const WEIGHT_KG_MIN = 0;
 const WEIGHT_KG_MAX = 200_000; // extract_proposed_daily.py:74-75
 
@@ -281,8 +289,15 @@ function extractBlockSection(
     warnings.push(`DAY TOTAL ${pyRepr(dayTotal)} outside plausible range`);
   }
 
-  // FEED vs standard block (extract_proposed_daily.py:263) — substring, case-insensitive.
-  const isFeed = whse.toUpperCase().includes("FEEDING AREA");
+  // FEED vs standard block (extract_proposed_daily.py:263) — case-insensitive WHOLE-WORD
+  // match on FEED/FEEDING (2026-07-11 fix, both engines in lockstep, see PORTING_DECISIONS.md
+  // "Post-port business-rule changes"). The original substring check only matched the exact
+  // phrase "FEEDING AREA" and MISSED the operator's newer section header "FOR FEEDING" (JULY
+  // 8/9 2026 day-tabs), mis-deriving the section as a numbered block ("JULY-26-BLK1", a real
+  // unrelated batch) instead of a FEED batch ("JULY-26-FEED1") — draining the wrong batch by
+  // 19,605 kg and closing it in error. \b word boundaries keep this conservative: a real block
+  // label like "A-16D" or "16A NEAR PATHWAY" contains no FEED/FEEDING word and does not match.
+  const isFeed = FEED_LABEL_RE.test(whse.toUpperCase());
 
   const blockDate = coerceCalDate(blockDateRaw);
   const blockNo = parseBlockNo(blockNoRaw);

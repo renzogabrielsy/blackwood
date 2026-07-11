@@ -673,6 +673,161 @@ describe("extract — two-leg same-batch same-day sheet", () => {
 });
 
 // ---------------------------------------------------------------------------
+// FEED-label detection regression (2026-07-11 production incident).
+//
+// The JULY 8/9 2026 PROPOSED DAILY REPORT day-tabs' section #1 uses the WHSE header
+// "FOR FEEDING" (STRT/DAY/END/REMARKS geometry copied verbatim from the real workbook,
+// runId 789775c4-2b61-498a-9a54-9c5a01484a89, rc_out storage path). The OLD detector
+// (`whse.toUpperCase().includes("FEEDING AREA")`) only matched the exact legacy phrase
+// "FEEDING AREA" and missed "FOR FEEDING" entirely, so this section extracted as a
+// STANDARD block ("JULY-26-BLK1") instead of a FEED batch ("JULY-26-FEED1") — draining
+// an unrelated real batch (D-19B) by 19,605 kg and closing it by mistake. The fix
+// (FEED_LABEL_RE, a whole-word FEED/FEEDING match) must both recognize "FOR FEEDING"
+// AND still leave real block labels alone.
+// ---------------------------------------------------------------------------
+describe("extract — FEED-label detection (\"FOR FEEDING\" WHSE header)", () => {
+  // Geometry matches the real workbook exactly (see extractBlockSection: whse=col2,
+  // STRT/DAY/END=col12 at R/R+1/R+2, REMARKS=col12 at R+3, pallet gross/count/net at
+  // col2 rows R+3/R+4/R+5).
+  function writeFeedSection(
+    ws: ExcelJS.Worksheet,
+    R: number,
+    s: {
+      whse: string;
+      blockDate: Date;
+      blockNo: string;
+      strt: number;
+      day: number;
+      end: number | null;
+      remarks: string;
+      grossKg: number;
+    },
+  ): void {
+    ws.getRow(R + 0).getCell(1).value = "WHSE #";
+    ws.getRow(R + 0).getCell(2).value = s.whse;
+    ws.getRow(R + 0).getCell(11).value = "STRT. BAL";
+    ws.getRow(R + 0).getCell(12).value = s.strt;
+    ws.getRow(R + 1).getCell(1).value = "BLOCK DATE";
+    ws.getRow(R + 1).getCell(2).value = s.blockDate;
+    ws.getRow(R + 1).getCell(11).value = "DAY TOTAL";
+    ws.getRow(R + 1).getCell(12).value = s.day;
+    ws.getRow(R + 2).getCell(1).value = "BLOCK NO.";
+    ws.getRow(R + 2).getCell(2).value = s.blockNo;
+    ws.getRow(R + 2).getCell(11).value = "END BAL.";
+    ws.getRow(R + 2).getCell(12).value = s.end;
+    ws.getRow(R + 3).getCell(1).value = "Gross weight";
+    ws.getRow(R + 3).getCell(2).value = s.grossKg;
+    ws.getRow(R + 3).getCell(11).value = "REMARKS";
+    ws.getRow(R + 3).getCell(12).value = s.remarks;
+    ws.getRow(R + 4).getCell(1).value = "Pallet";
+    ws.getRow(R + 4).getCell(2).value = 0;
+    ws.getRow(R + 5).getCell(1).value = "Net";
+    ws.getRow(R + 5).getCell(2).value = s.grossKg;
+  }
+
+  async function buildFeedWorkbook(sheetName: string, over: Partial<Parameters<typeof writeFeedSection>[2]>) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(sheetName);
+    writeFeedSection(ws, 43, {
+      whse: "FOR FEEDING",
+      blockDate: new Date(Date.UTC(2026, 6, 1)), // 2026-07-01
+      blockNo: "# 1",
+      strt: 19605,
+      day: 3000,
+      end: 16605,
+      remarks: "FOR FEEDING",
+      grossKg: 3000,
+      ...over,
+    });
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    return loadWorkbook(buf);
+  }
+
+  it('JULY 8 section: WHSE "FOR FEEDING" → is_feed=true, block_loc=null, FEED-prefixed derived code', async () => {
+    const wb = await buildFeedWorkbook("JULY 8", {});
+    const { rows } = extractProposed(wb, 2026);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.whse_label).toBe("FOR FEEDING");
+    expect(row.is_feed).toBe(true);
+    expect(row.block_loc).toBeNull();
+    // July: PRIMARY_MONTH_PREFIX and FALLBACK_MONTH_PREFIX are both "JULY" → no fallback list.
+    expect(row.batch_code_primary).toBe("JULY-26-FEED1");
+    expect(row.batch_code_fallbacks).toEqual([]);
+    expect(row.weight_kg).toBe(3000);
+    // "FOR FEEDING" remarks is a pure status marker — dropped, not preserved.
+    expect(row.remarks).toBeNull();
+  });
+
+  it('JULY 9 section: WHSE "FOR FEEDING" with a "DONE" close → still FEED1, remarks normalized to CLOSED', async () => {
+    const wb = await buildFeedWorkbook("JULY 9", {
+      strt: 16605,
+      day: 16605,
+      end: null,
+      remarks: "DONE",
+      grossKg: 16605,
+    });
+    const { rows } = extractProposed(wb, 2026);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.is_feed).toBe(true);
+    expect(row.block_loc).toBeNull();
+    expect(row.batch_code_primary).toBe("JULY-26-FEED1");
+    expect(row.weight_kg).toBe(16605);
+    expect(row.is_closing).toBe(true);
+    expect(row.remarks).toBe("CLOSED");
+  });
+
+  it("does NOT mis-detect a real block label as FEED (conservative word-boundary match)", async () => {
+    for (const whse of ["A-16D", "16A NEAR PATHWAY", "A-5B"]) {
+      const wb = await buildFeedWorkbook("JULY 8", { whse, blockNo: "# 9" });
+      const { rows } = extractProposed(wb, 2026);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].is_feed).toBe(false);
+      expect(rows[0].block_loc).toBe(whse);
+      expect(rows[0].batch_code_primary).toBe("JULY-26-BLK9");
+    }
+  });
+
+  it('still recognizes the legacy "FEEDING AREA" label (no regression on the pre-2026-07 template)', async () => {
+    const wb = await buildFeedWorkbook("JULY 8", { whse: "FEEDING AREA" });
+    const { rows } = extractProposed(wb, 2026);
+    expect(rows[0].is_feed).toBe(true);
+    expect(rows[0].block_loc).toBeNull();
+    expect(rows[0].batch_code_primary).toBe("JULY-26-FEED1");
+  });
+
+  it("end-to-end classify: the FEED-derived code resolves to the FEED batch, never the coincidental BLK1 batch", () => {
+    const feedRow = mkRow({
+      transaction_date: "2026-07-08",
+      whse_label: "FOR FEEDING",
+      block_loc: null,
+      block_date: "2026-07-01",
+      block_no: 1,
+      is_feed: true,
+      batch_code_primary: "JULY-26-FEED1",
+      batch_code_fallbacks: [],
+      day_total_kg: 3000,
+      weight_kg: 3000,
+      remarks: null,
+      _source_row: 43,
+    });
+    const res = classifyRcOut({
+      extractedRows: [feedRow],
+      // Both a FEED batch and an UNRELATED numbered-block batch exist in the lookup —
+      // proves the resolved code, not a coincidental collision, drives the write.
+      batchLookup: { "JULY-26-FEED1": "bid-feed1", "JULY-26-BLK1": "bid-blk1-unrelated" },
+      dbRows: [],
+      watermark: null,
+    });
+    expect(res.summary.new_count).toBe(1);
+    expect(res.new[0].row.batch_id).toBe("bid-feed1");
+    expect(res.new[0].row.batch_id).not.toBe("bid-blk1-unrelated");
+    expect(res.new[0].row.block_loc).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Date-scoped quarantine (2026-07-11) — the run 83d17774 forensics fix.
 //
 // The HARD gates used to be a run-wide halt: ANY drifted date (even stale ones deep in
