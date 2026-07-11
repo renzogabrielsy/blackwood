@@ -28,6 +28,7 @@ import {
   isPatternValidBatchCode,
   autoCreateAuditComment,
   autoCreateMessage,
+  displayLocationRef,
   type AutoCreatedBatchNote,
 } from "../../lib/batchAutoCreate.js";
 
@@ -638,7 +639,7 @@ export async function applyFromCompact(
           });
           autoCreatedBatches.push({
             batch_code: outcome.resolvedCode,
-            location_ref: outcome.fields.location_ref,
+            location_ref: displayLocationRef(outcome.fields.location_ref),
             mode,
             transaction_date: r.date ?? null,
             block_loc: r.block_loc ?? null,
@@ -648,7 +649,7 @@ export async function applyFromCompact(
             "apply",
             autoCreateMessage({
               batchCode: outcome.resolvedCode,
-              locationRef: outcome.fields.location_ref,
+              locationRef: displayLocationRef(outcome.fields.location_ref),
               source: `Google Sheet ${mode === "rc_in" ? "RC IN" : "RC OUT"}`,
               sourceRow: (r.index as string | number | null) ?? null,
             }),

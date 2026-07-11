@@ -64,10 +64,21 @@ describe("deriveBatchFields", () => {
     });
   });
 
-  it("falls back to the FEED location_ref when block_loc is null/blank", () => {
-    expect(deriveBatchFields("JULY-26-FEED1", null).location_ref).toBe("FEED");
-    expect(deriveBatchFields("JULY-26-FEED1", "").location_ref).toBe("FEED");
-    expect(deriveBatchFields("JULY-26-FEED1", "   ").location_ref).toBe("FEED");
+  it("falls back to '' (BUG B fix, 2026-07-11) when block_loc is null/blank — never the literal 'FEED' sentinel, which 23514s chk_location_ref_format", () => {
+    expect(deriveBatchFields("JULY-26-FEED1", null).location_ref).toBe("");
+    expect(deriveBatchFields("JULY-26-FEED1", "").location_ref).toBe("");
+    expect(deriveBatchFields("JULY-26-FEED1", "   ").location_ref).toBe("");
+  });
+
+  it("falls back to '' when block_loc doesn't match chk_location_ref_format (free-text block labels)", () => {
+    expect(deriveBatchFields("JULY-26-BLK1", "FOR FEEDING").location_ref).toBe("");
+    expect(deriveBatchFields("JULY-26-BLK2", "16A NEAR PATHWAY").location_ref).toBe("");
+  });
+
+  it("passes through every valid chk_location_ref_format prefix verbatim", () => {
+    for (const code of ["A-9C", "B-1A", "C-12A", "D-3B", "F-1A", "PCA-1B", "PCB-2D"]) {
+      expect(deriveBatchFields("X", code).location_ref).toBe(code);
+    }
   });
 });
 

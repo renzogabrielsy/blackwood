@@ -117,7 +117,9 @@ describe("rc_out apply — UNMAPPED auto-create (PROPOSED DAILY REPORT)", () => 
     expect(calls.upsertBatchIfAbsent).toHaveLength(1);
     expect(calls.upsertBatchIfAbsent[0]).toMatchObject({
       batch_code: "JULY-26-FEED2",
-      location_ref: "FEED", // no block_loc (a FEED row) → the template's FEED marker
+      // no block_loc (a FEED row) → '' (BUG B, 2026-07-11): the STORED value must satisfy
+      // chk_location_ref_format, which the literal 'FEED' sentinel would 23514.
+      location_ref: "",
       status: "STORED",
       current_weight: 0,
       avg_cost: null,
@@ -127,7 +129,8 @@ describe("rc_out apply — UNMAPPED auto-create (PROPOSED DAILY REPORT)", () => 
     // Batch-creation audit log (requirement 3).
     expect(calls.writeIngestionAudit.some((a) => a.tableName === "batches" && a.operation === "INSERT")).toBe(true);
     expect(calls.writeIngestionAudit.some((a) => a.tableName === "rc_out" && a.operation === "INSERT")).toBe(true);
-    // Info finding / run-visibility (requirement 4).
+    // Info finding / run-visibility (requirement 4). The DISPLAY note still labels a
+    // no-block batch "FEED" (displayLocationRef) even though the stored value is ''.
     expect(res.auto_created_batches).toEqual([
       {
         batch_code: "JULY-26-FEED2",

@@ -200,12 +200,16 @@ describe("gsheet apply — UNMAPPED auto-create (RC OUT)", () => {
     expect(calls.upsertBatchIfAbsent).toHaveLength(1);
     expect(calls.upsertBatchIfAbsent[0]).toMatchObject({
       batch_code: "JULY-26-FEED2",
-      location_ref: "FEED", // no block_loc → the FEED marker (template default)
+      // no block_loc → '' (BUG B, 2026-07-11): the STORED value must satisfy
+      // chk_location_ref_format; the literal 'FEED' sentinel would 23514.
+      location_ref: "",
       avg_cost: null,
     });
     expect(calls.insertRcOut).toHaveLength(1);
     expect(res.auto_created_batches).toHaveLength(1);
     expect(res.auto_created_batches[0].mode).toBe("rc_out");
+    // The DISPLAY note still labels a no-block batch "FEED" (displayLocationRef).
+    expect(res.auto_created_batches[0].location_ref).toBe("FEED");
   });
 });
 

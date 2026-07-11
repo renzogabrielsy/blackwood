@@ -32,6 +32,7 @@ import {
   isPatternValidBatchCode,
   autoCreateAuditComment,
   autoCreateMessage,
+  displayLocationRef,
   type AutoCreatedBatchNote,
 } from "../../lib/batchAutoCreate.js";
 
@@ -427,7 +428,7 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
           });
           const note: AutoCreatedBatchNote = {
             batch_code: outcome.resolvedCode,
-            location_ref: outcome.fields.location_ref,
+            location_ref: displayLocationRef(outcome.fields.location_ref),
             transaction_date: row.transaction_date ?? null,
             block_loc: row.block_loc ?? null,
             source_row: (item.index as string | number) ?? null,
@@ -437,7 +438,7 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
             "apply",
             autoCreateMessage({
               batchCode: outcome.resolvedCode,
-              locationRef: outcome.fields.location_ref,
+              locationRef: displayLocationRef(outcome.fields.location_ref),
               source: "the Proposed Daily Report (RC OUT)",
               sourceRow: (item.index as string | number) ?? null,
             }),

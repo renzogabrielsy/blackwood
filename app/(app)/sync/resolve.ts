@@ -55,6 +55,7 @@ import {
 } from './diff-plan'
 import {
   CREATE_BATCH_TOOL,
+  FEED_LOCATION_REF,
   buildCreateBatchPlan,
   createBatchProvenance,
   createBatchRulingSummary,
@@ -1395,8 +1396,10 @@ function extractCreateBatchProposal(toolCalls: unknown): CreateBatchProposalInpu
 /** Plain-language narration stored on the create-batch proposal's assistant message. */
 function createBatchNarration(input: CreateBatchProposalInput, alreadyExists: boolean): string {
   const { plan, naturalKeyLabel } = input
+  // plan.fields.location_ref is '' for a FEED batch (BUG B, 2026-07-11) — FEED_LOCATION_REF
+  // is a display-only label, never the actual stored value.
   const loc = plan.isFeed
-    ? `a FEED batch (no block — filed under "${plan.fields.location_ref}")`
+    ? `a FEED batch (no block — filed under "${FEED_LOCATION_REF}")`
     : `block ${plan.fields.location_ref}`
   const head = alreadyExists
     ? `Batch "${plan.batch_code}" already exists — confirming will re-attempt the skipped row and record the decision.`

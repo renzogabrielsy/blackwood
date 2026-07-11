@@ -298,7 +298,11 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
       (summary via `createBatchRulingSummary`), flip the case `resolved` + `known_ruling_id`, append a
       system trail, revalidate `/sync/cases`. Provenance: `batch "<code>" created + row written via
       Sync Review by <email>`. `ambiguous` plan (no clean writable row) → create the batch only.
-      FEED batches (block_loc null) create with `location_ref='FEED'`.
+      A batch's `location_ref` is the `block_loc` when it matches the DB CHECK
+      `chk_location_ref_format` (`^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$`), else `''` (empty = feed/no block —
+      covers a genuinely-missing block AND free text like "FOR FEEDING"). NEVER the literal `'FEED'`
+      sentinel — that 23514s the CHECK (BUG B, 2026-07-11). `FEED_LOCATION_REF` is a DISPLAY-only label
+      (`isFeed` badge), never a stored value.
   - Never deletes. Price gating: apply payloads carry NO ₱ (rc_out has no cost column;
     `deliveries.cost_basis` forced 0 by the writer per L-008). All revalidate `/sync/cases`.
 - `diff-plan.ts` (PURE, no `'use server'`, imports only `./types` → client-import-safe for R3b) —
@@ -565,8 +569,9 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   delimiters are `\uXXXX` escapes in source. Tested in `scripts/verify-findings.ts` (10 checks).
 - `lib/sync/create-batch-plan.ts` (**PURE, CLIENT-SAFE — imports ONLY `types`**) — the create-batch
   core (mirrors `diff-plan.ts`'s pick-source split). `buildCreateBatchPlan({kind, reportType, row})`
-  → `CreateBatchPlan {batch_code, fields (location_ref: block or 'FEED', status STORED, current_weight
-  0, avg_cost null), isFeed, writerLane: 'deliveries'|'rc_out'|null, unblock (the skipped row, no ₱),
+  → `CreateBatchPlan {batch_code, fields (location_ref: block if valid `chk_location_ref_format` code
+  else '' — empty = feed/no block, NEVER the 'FEED' sentinel [BUG B]; status STORED; current_weight
+  0; avg_cost null), isFeed (= location_ref===''), writerLane: 'deliveries'|'rc_out'|null, unblock (the skipped row, no ₱),
   ambiguous, note?}`. `deriveBatchFields`, `readBatchCaseInput` (handles both the UnresolvedBatch row
   and the held `row`; a minimal `{mode,index}` row → null), `pickWriterLane` (unresolved_batch→rc_out;
   deliveries→deliveries; rc_out→rc_out; gsheet→row.mode). Plus the PURE proposal helpers the action +
@@ -663,9 +668,11 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   (run id + total + one line per finding + the actual numbers 8200/12500/3000 survive; empty → clean
   block) and **`serializeCasesForClaude`** (run id + verdict read + natural key present; a `cost_basis`
   key on the raw row is stripped). No DB.
-- `scripts/verify-create-batch.ts` — `npx tsx scripts/verify-create-batch.ts` runs 8 framework-free
-  assertions over `lib/sync/create-batch-plan.ts`: FEED (null/blank block) → `location_ref='FEED'` +
-  `isFeed`, field defaults (STORED/0/null), writer-lane resolution (unresolved_batch→rc_out,
+- `scripts/verify-create-batch.ts` — `npx tsx scripts/verify-create-batch.ts` runs 9 framework-free
+  assertions over `lib/sync/create-batch-plan.ts`: FEED (null/blank/invalid-code block) →
+  `location_ref=''` + `isFeed`, a free-text/invalid block_loc falls back to '' not the 'FEED' sentinel
+  (BUG B 23514 guard) + valid codes pass through verbatim, field defaults (STORED/0/null),
+  writer-lane resolution (unresolved_batch→rc_out,
   deliveries→deliveries, gsheet mode→lane, writer-less→ambiguous), a minimal `{mode,index}` row → no
   plan, the ruling-summary shapes (created×rows), provenance, and the `parseCreateBatchInput` /
   `findOpenCreateBatchPlan` round-trip (decline closes). No DB.

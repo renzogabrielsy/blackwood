@@ -60,7 +60,7 @@ export interface BatchCaseInput {
 export interface CreateBatchPlan {
   batch_code: string
   fields: DerivedBatchFields
-  /** True when block_loc was null/blank → location_ref falls back to the FEED marker. */
+  /** True when block_loc was null/blank/not-a-valid-location-code → location_ref is ''. */
   isFeed: boolean
   /** The writer lane for the skipped row (deliveries for RC IN, rc_out for RC OUT). */
   writerLane: WriterLane
@@ -72,7 +72,12 @@ export interface CreateBatchPlan {
   note?: string
 }
 
-/** The FEED-batch location_ref placeholder when a batch has no block (block_loc null). */
+/**
+ * DISPLAY-ONLY label for a FEED batch (no block). NEVER write this string into
+ * `batches.location_ref` — `chk_location_ref_format` only allows '' or
+ * `^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$`, and 'FEED' matches neither (23514). Use it purely
+ * to label the UI/narration when `plan.isFeed` is true; the actual stored value is ''.
+ */
 export const FEED_LOCATION_REF = 'FEED'
 
 // ============================================================================
@@ -86,16 +91,27 @@ function str(v: unknown): string | null {
 }
 
 /**
- * Derive the new batch's columns. `location_ref` is the row's block when present, else the
- * FEED marker (a FEED batch legitimately has no block); `status` defaults STORED;
- * `current_weight` 0 (the trigger recomputes it from deliveries − rc_out); `avg_cost` null
- * (unpriced — never carries ₱). PURE.
+ * Mirrors the DB CHECK constraint `chk_location_ref_format` on `batches.location_ref`:
+ * `location_ref = '' OR location_ref ~ '^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$'`. A `block_loc`
+ * that doesn't match this (a FEED batch's null block, or free text like "FOR FEEDING" /
+ * "16A NEAR PATHWAY") must fall back to '' — never a sentinel like 'FEED', which violates
+ * the constraint and 23514s the insert (BUG B, 2026-07-11).
+ */
+const LOCATION_REF_PATTERN_RE = /^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$/
+
+/**
+ * Derive the new batch's columns. `location_ref` is the row's block when it matches the
+ * DB's `chk_location_ref_format` constraint, else '' (empty = feed/no block — covers both
+ * a genuinely missing block AND a block string that isn't a valid location code); `status`
+ * defaults STORED; `current_weight` 0 (the trigger recomputes it from deliveries − rc_out);
+ * `avg_cost` null (unpriced — never carries ₱). PURE.
  */
 export function deriveBatchFields(batchCode: string, blockLoc: string | null): DerivedBatchFields {
   const block = str(blockLoc)
+  const location_ref = block && LOCATION_REF_PATTERN_RE.test(block) ? block : ''
   return {
     batch_code: batchCode,
-    location_ref: block ?? FEED_LOCATION_REF,
+    location_ref,
     status: 'STORED',
     current_weight: 0,
     avg_cost: null,
@@ -161,7 +177,9 @@ export function buildCreateBatchPlan(args: {
   if (!input) return null
 
   const fields = deriveBatchFields(input.batch_code, input.block_loc)
-  const isFeed = fields.location_ref === FEED_LOCATION_REF
+  // Feed-ness is derived from the ABSENCE of a valid block (empty location_ref), not from
+  // a 'FEED' sentinel value — that sentinel is never actually stored (BUG B, 2026-07-11).
+  const isFeed = fields.location_ref === ''
   const lane = pickWriterLane(args.kind, args.reportType, args.row)
 
   if (!lane) {

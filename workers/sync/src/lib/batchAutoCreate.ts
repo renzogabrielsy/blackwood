@@ -17,9 +17,13 @@
  * this batch" Sync Review action (`lib/sync/create-batch-plan.ts::deriveBatchFields`,
  * app-side). That file is MIRRORED here field-for-field, not imported — workers/sync
  * is a separate package/module graph from the Next.js app:
- *   batch_code = the code; location_ref = block_loc if present else 'FEED';
- *   status = 'STORED'; current_weight = 0 (the trigger recomputes it from
- *   deliveries − rc_out); avg_cost = null (the sync never prices a batch).
+ *   batch_code = the code; location_ref = block_loc if it matches the DB's
+ *   `chk_location_ref_format` CHECK constraint, else '' (empty = feed/no block — BUG B
+ *   fix, 2026-07-11: the DB constraint is `location_ref = '' OR ~
+ *   '^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$'`, so a literal 'FEED' sentinel — or any free-text
+ *   block like "FOR FEEDING" — 23514s the insert); status = 'STORED'; current_weight = 0
+ *   (the trigger recomputes it from deliveries − rc_out); avg_cost = null (the sync never
+ *   prices a batch).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ALIAS-OF-EXISTING (never create a duplicate under a month-prefix alias)
@@ -96,22 +100,44 @@ export interface DerivedBatchFields {
 }
 
 /**
- * Derive the new batch's columns (PURE). `location_ref` is the row's block when
- * present, else the FEED marker; `status` STORED; `current_weight` 0 (the trigger
- * recomputes it); `avg_cost` null (unpriced — the sync never carries ₱ here).
+ * Mirrors the DB CHECK constraint `chk_location_ref_format` on `batches.location_ref`:
+ * `location_ref = '' OR location_ref ~ '^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$'`. MIRRORS
+ * `lib/sync/create-batch-plan.ts::LOCATION_REF_PATTERN_RE` — keep both in sync (BUG B,
+ * 2026-07-11).
+ */
+const LOCATION_REF_PATTERN_RE = /^(PCA|PCB|[A-DF])-\d{1,2}[A-D]$/;
+
+/**
+ * Derive the new batch's columns (PURE). `location_ref` is the row's block when it
+ * matches the DB's `chk_location_ref_format` constraint, else '' (empty = feed/no
+ * block — covers both a genuinely missing block AND a block string that isn't a valid
+ * location code, e.g. "FOR FEEDING" or "16A NEAR PATHWAY"); `status` STORED;
+ * `current_weight` 0 (the trigger recomputes it); `avg_cost` null (unpriced — the sync
+ * never carries ₱ here).
  */
 export function deriveBatchFields(
   batchCode: string,
   blockLoc: string | null | undefined,
 ): DerivedBatchFields {
   const block = typeof blockLoc === "string" && blockLoc.trim() ? blockLoc.trim() : null;
+  const location_ref = block && LOCATION_REF_PATTERN_RE.test(block) ? block : "";
   return {
     batch_code: batchCode,
-    location_ref: block ?? "FEED",
+    location_ref,
     status: "STORED",
     current_weight: 0,
     avg_cost: null,
   };
+}
+
+/**
+ * The human-facing label for a location_ref in run findings / progress messages / audit
+ * notes. The STORED value for a feed/no-block batch is '' (BUG B, 2026-07-11) — but ''
+ * reads as blank in the UI, so display it as the "FEED" label instead. NEVER feed this
+ * back into a DB write (it would 23514 chk_location_ref_format); display-only.
+ */
+export function displayLocationRef(locationRef: string): string {
+  return locationRef || "FEED";
 }
 
 /**

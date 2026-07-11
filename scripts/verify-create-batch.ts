@@ -5,7 +5,8 @@
  * (app/(app)/sync/resolve.ts::executeCreateBatch), which this does not touch.
  *
  * Asserts:
- *   1. FEED (null/blank block) → location_ref 'FEED', isFeed true; a real block → that block.
+ *   1. FEED (null/blank/invalid-code block) → location_ref '', isFeed true; a real
+ *      chk_location_ref_format-valid block → that block, verbatim.
  *   2. Batch fields default: STORED, current_weight 0, avg_cost null (unpriced).
  *   3. Writer lane: unresolved_batch → rc_out; deliveries → deliveries; gsheet mode → lane;
  *      an unknown/writer-less shape → ambiguous (create batch only).
@@ -40,19 +41,33 @@ function check(name: string, fn: () => void) {
 }
 
 // ── 1 + 2. FEED vs block + field defaults. ──────────────────────────────────
-check('FEED (null block) → location_ref FEED, isFeed; STORED/0/null defaults', () => {
+check('FEED (null block) → location_ref \'\' (BUG B fix), isFeed; STORED/0/null defaults', () => {
   const feed = deriveBatchFields('JULY-26-FEED1', null)
-  assert.equal(feed.location_ref, 'FEED')
+  assert.equal(feed.location_ref, '')
   assert.equal(feed.status, 'STORED')
   assert.equal(feed.current_weight, 0)
   assert.equal(feed.avg_cost, null)
 
   const blank = deriveBatchFields('X', '   ')
-  assert.equal(blank.location_ref, 'FEED') // blank block also → FEED marker
+  assert.equal(blank.location_ref, '') // blank block also → ''
 
   const block = deriveBatchFields('SEPT-26-BLK9', 'A-9C')
   assert.equal(block.location_ref, 'A-9C')
   assert.equal(block.avg_cost, null)
+})
+
+check('BUG B: a block_loc that is not a valid chk_location_ref_format code falls back to \'\', never the literal "FEED" sentinel (23514 guard)', () => {
+  const freeText = deriveBatchFields('JULY-26-BLK1', 'FOR FEEDING')
+  assert.equal(freeText.location_ref, '')
+  assert.notEqual(freeText.location_ref, 'FEED')
+
+  const pathway = deriveBatchFields('JULY-26-BLK2', '16A NEAR PATHWAY')
+  assert.equal(pathway.location_ref, '')
+
+  // Valid codes across every constraint prefix (PCA|PCB|[A-DF]) round-trip verbatim.
+  for (const code of ['A-9C', 'B-1A', 'C-12A', 'D-3B', 'F-1A', 'PCA-1B', 'PCB-2D']) {
+    assert.equal(deriveBatchFields('X', code).location_ref, code)
+  }
 })
 
 // ── 3. Writer lane resolution + plans. ──────────────────────────────────────
