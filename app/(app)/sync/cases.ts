@@ -19,6 +19,8 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePrivileged } from '@/lib/sync/privileged'
 import {
+  attributionDiffFingerprint,
+  attributionDiffNaturalKey,
   blockDiffFingerprint,
   blockDiffNaturalKey,
   caseFingerprint,
@@ -30,6 +32,7 @@ import {
   unresolvedBatchNaturalKey,
 } from '@/lib/sync/fingerprint'
 import {
+  collectAttributionDiffs,
   collectBlockDiffs,
   collectHeldRows,
   collectSingleSourceOverdue,
@@ -45,6 +48,7 @@ import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
 import type { Database, Json } from '@/types/supabase'
 
 import type {
+  AttributionDiff,
   BlockDiff,
   SingleSourceOverdue,
   SourceDiff,
@@ -101,12 +105,14 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
   const unresolvedBatches = collectUnresolvedBatches(result)
   const overdue = collectSingleSourceOverdue(result)
   const blockDiffs = collectBlockDiffs(result)
+  const attributionDiffs = collectAttributionDiffs(result)
   if (
     !collected.length &&
     !diffs.length &&
     !unresolvedBatches.length &&
     !overdue.length &&
-    !blockDiffs.length
+    !blockDiffs.length &&
+    !attributionDiffs.length
   )
     return empty
 
@@ -277,7 +283,46 @@ export async function ensureCasesForRun(runId: string): Promise<EnsureCasesResul
     })
   }
 
+  // 8. Fold second-pass attribution pairings (kind='attribution_diff') — two single-witness
+  //    facts that are almost certainly the SAME physical feeding under two different
+  //    batch/block attributions. NEVER auto-resolved (dismiss-only, v1). Idempotent by
+  //    fingerprint. Replaces the two single-witness facts it consumed — see rcOut.ts.
+  for (const a of attributionDiffs) {
+    await upsertCase({
+      fingerprint: attributionDiffFingerprint(a),
+      report_type: 'rc_out',
+      kind: 'attribution_diff',
+      natural_key: attributionDiffNaturalKey(a),
+      reason: attributionDiffReason(a),
+      detail: attributionDiffDetail(a),
+      row: a as unknown as Json,
+    })
+  }
+
   return { created, refreshed, knownMatched, caseIds }
+}
+
+/** Short identity for one side of an attribution_diff — code preferred over the raw id. */
+function attributionSideName(s: { batch_code?: string | null; batch: string | null }): string {
+  return s.batch_code ?? s.batch ?? '(no batch)'
+}
+
+/** Plain one-line reason for an `attribution_diff` case (no ₱ — weight + identity only). */
+function attributionDiffReason(a: AttributionDiff): string {
+  const kg = Math.round(a.weight_kg).toLocaleString('en-US')
+  return `both sources report ${kg} kg on ${a.transaction_date}, but disagree on which batch/block it came from`
+}
+
+/** Plain detail: both sides' batch + block, side by side. */
+function attributionDiffDetail(a: AttributionDiff): string {
+  const proposedName = attributionSideName(a.proposed)
+  const gsheetName = attributionSideName(a.gsheet)
+  const proposedBlock = a.proposed.block_loc ?? '(feed)'
+  const gsheetBlock = a.gsheet.block_loc ?? '(feed)'
+  return (
+    `Proposed report: ${proposedName} @ ${proposedBlock} (${Math.round(a.proposed.weight_kg).toLocaleString('en-US')} kg) ` +
+    `vs Google Sheet: ${gsheetName} @ ${gsheetBlock} (${Math.round(a.gsheet.weight_kg).toLocaleString('en-US')} kg)`
+  )
 }
 
 /** Plain one-line reason for a `block_diff` case (no ₱ — balances/identity only). */

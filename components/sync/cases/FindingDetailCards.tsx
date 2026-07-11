@@ -1,10 +1,16 @@
 'use client'
 
 import * as React from 'react'
-import { AlertTriangle, Boxes, Clock, PackageX } from 'lucide-react'
+import { AlertTriangle, Boxes, Clock, GitCompareArrows, PackageX } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import type { BlockDiff, SingleSourceOverdue, UnresolvedBatch } from '@/app/(app)/sync/types'
+import type {
+  AttributionDiff,
+  AttributionSide,
+  BlockDiff,
+  SingleSourceOverdue,
+  UnresolvedBatch,
+} from '@/app/(app)/sync/types'
 
 /**
  * FindingDetailCards — first-class detail rendering for the reconciliation case kinds that
@@ -255,6 +261,72 @@ function OverdueDetail({ o }: { o: SingleSourceOverdue }) {
   )
 }
 
+// ── attribution_diff ───────────────────────────────────────────────────────────
+
+function asAttributionDiff(row: unknown): AttributionDiff | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  const o = row as Record<string, unknown>
+  if (typeof o.transaction_date !== 'string') return null
+  if (!o.proposed || typeof o.proposed !== 'object') return null
+  if (!o.gsheet || typeof o.gsheet !== 'object') return null
+  return o as unknown as AttributionDiff
+}
+
+/** Short identity for one side — code preferred over the raw batch id. */
+function attributionSideName(s: AttributionSide): string {
+  return s.batch_code ?? s.batch ?? '(no batch)'
+}
+
+function AttributionDiffDetail({ a }: { a: AttributionDiff }) {
+  const destPart = a.destination && a.destination !== 'MAIN' ? ` → ${a.destination}` : ''
+
+  return (
+    <DetailShell
+      icon={<GitCompareArrows className="h-3 w-3" />}
+      badge="Sources disagree on attribution"
+      badgeClass="bg-blue-500/15 text-blue-600 dark:text-blue-400"
+      hint="RC OUT · same feeding, different batch/block"
+      title={`${fmtKg(a.weight_kg)} kg on ${a.transaction_date}${destPart}`}
+    >
+      <div className="mt-2 overflow-x-auto rounded border border-border bg-background/50">
+        <table className="w-full table-fixed border-collapse text-[11px]">
+          <thead className="bg-muted/60 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1 text-left font-medium">Source</th>
+              <th className="px-2 py-1 text-left font-medium">Batch</th>
+              <th className="px-2 py-1 text-left font-medium">Block</th>
+              <th className="w-[92px] px-2 py-1 text-right font-medium">Weight (kg)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(
+              [
+                { label: 'Proposed report', side: a.proposed },
+                { label: 'Google Sheet', side: a.gsheet },
+              ] as const
+            ).map(({ label, side }) => (
+              <tr key={label} className="border-t border-border/60 align-top">
+                <td className="px-2 py-1 font-medium text-foreground">{label}</td>
+                <td className="px-2 py-1 font-mono text-foreground">{attributionSideName(side)}</td>
+                <td className="px-2 py-1 font-mono text-foreground">{side.block_loc ?? '(feed)'}</td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums text-foreground">
+                  {fmtKg(side.weight_kg)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+        Both sources report <span className="font-medium text-foreground">{fmtKg(a.weight_kg)} kg</span>{' '}
+        on <span className="font-medium text-foreground">{a.transaction_date}</span>, but disagree on
+        which batch/block it came from. This is very likely the SAME physical feeding — pick which
+        attribution is correct outside this pass, or dismiss with a note (chat below).
+      </p>
+    </DetailShell>
+  )
+}
+
 // ── unmapped_batch_code / unresolved_batch ────────────────────────────────────
 
 /** Read whatever identity fields a batch case row carries (UnresolvedBatch OR a held row's row). */
@@ -355,6 +427,10 @@ export function CaseFindingDetail({ kind, row }: { kind: string; row: unknown })
   if (kind === 'single_source_overdue') {
     const o = asOverdue(row)
     return o ? <OverdueDetail o={o} /> : null
+  }
+  if (kind === 'attribution_diff') {
+    const a = asAttributionDiff(row)
+    return a ? <AttributionDiffDetail a={a} /> : null
   }
   if (kind === 'unmapped_batch_code' || kind === 'unresolved_batch') {
     return <UnmappedBatchDetail row={row} />

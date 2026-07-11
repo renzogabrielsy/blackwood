@@ -17,8 +17,10 @@ proposed-span (see the R4b section). Anchored on the **L-037** incident.
 
 ## Files
 - `types.ts` — `SourceRecord` (input), `Agreement` / `SourceDiff` / `SourceOpinion` /
-  `Recommendation` (output), `RcOutNaturalKey`, `ReconcileOptions`.
-- `rcOut.ts` — `reconcileRcOut(records, opts?)` engine + `proposedLegsSelfConsistent(legs)`
+  `Recommendation` / `AttributionDiff` / `AttributionSide` (output), `RcOutNaturalKey`,
+  `ReconcileOptions`.
+- `rcOut.ts` — `reconcileRcOut(records, opts?)` engine (now also runs the second-pass
+  attribution matcher, `matchAttributions`, before returning) + `proposedLegsSelfConsistent(legs)`
   Stage-1 helper (mirrors — does not import — `classify.ts::balanceIntegrity`).
 - `rcOutStage.ts` — **R2 SHADOW wiring.** The pure bridge from REAL extracted rows to the
   engine: `bucketProposed` / `bucketGsheetRcOut` / `movementSourceRecords` /
@@ -27,7 +29,8 @@ proposed-span (see the R4b section). Anchored on the **L-037** incident.
   (aligns month-prefix conventions) and the `ReconciliationChannel` result type (now
   `{ rc_out?, blocking? }` — both optional, so RB can ride alongside rc_out).
 - `blockBalance.ts` — **RB engine (block-balance cross-check).** See the RB section below.
-- Tests: `../../test/reconcile/rcOut.test.ts` (engine; L-037 golden + edges),
+- Tests: `../../test/reconcile/rcOut.test.ts` (engine; L-037 golden + edges + the
+  second-pass attribution matcher — see below),
   `../../test/reconcile/rcOutStage.test.ts` (bucketing → engine; L-037 through synthetic extracts),
   `../../test/reconcile/blockBalance.test.ts` (RB engine; two-level check + L-037 conceptual),
   `../../test/reports/gsheet/blocking.test.ts` (the Sheet Blocking-tab extractor).
@@ -269,6 +272,73 @@ or no Blocking tab; never fails a run and never writes.** runSync merges it into
 → one case per run). Rides the EXISTING triage + Sync Review + investigator rails. Verify:
 `scripts/verify-block-diff-fold.ts`.
 
+## Second-pass attribution matcher (shipped 2026-07-11, SHADOW / dismiss-only)
+
+**The forensics that motivated it (run `83d17774`, 2026-07-11).** The rc_out reconciler
+was producing 47 `single_source_overdue` cases that were really ~20 PAIRS of the same
+physical feeding seen under two different batch attributions. The Proposed report
+DERIVES its batch code from `(block_date, block_no)` while the Sheet carries an
+operator-typed code — for these feedings the two sources resolve to two DIFFERENT
+batch_ids AND two different `block_loc` strings (real example, 2026-05-04: proposed
+5,943 kg @ "16A NEAR PATHWAY" → batch `NOV-24-BLK10`, gsheet 5,943 kg @ "PCA-16C" → batch
+`MARCH-26-SUNDRY4`). Because the fine key is `(date, batch, block, dest)`, the two facts
+land at DISJOINT keys → each becomes a lone witness → each ages past `LAG_DAYS`
+independently → TWO false "overdue" alarms per feeding, when the truth is "both sources
+saw the same kilograms but disagree on which batch/block it came from."
+
+**The algorithm (`rcOut.ts::matchAttributions`, classic bank-reconciliation entity
+resolution).** Runs as a SECOND PASS inside `reconcileRcOut`, after the normal fine-key
+grouping + single-source classification. It collects every single-witness `weight_kg`
+Agreement that was tagged `pending` or `held_overdue` (i.e. inside the R4b actionable
+window — a settled/out-of-window fact is never swept in), groups those candidates by
+`(transaction_date, destination)`, then within each group greedily pairs a
+**proposed-only** fact with a **gsheet-only** fact whose `weight_kg` agrees within
+`weightTolKg` (default 1 kg). Matching is deterministic: each source's pool is sorted by
+the candidate's fine-key string before pairing, so when multiple candidates share the
+same weight on the same date, the pairing is reproducible (first-available match in
+sorted order) regardless of input order — never arbitrary. A pair whose fine keys
+resolve identical is skipped defensively (would already be one multi-source fact, not
+two single-witness ones). Each match becomes ONE `AttributionDiff` (`weight_kg` = the
+average of both sides, rounded — they already agree within tolerance) and REMOVES both
+consumed `Agreement`s from the result: **the pair replaces the two single-witness
+facts**, so they do NOT also surface as `pending`/`held_overdue`. Unmatched candidates
+(e.g. the real 2026-05-11 case, 3,692 vs 3,962 kg — a genuine digit transposition, diff
+270 kg > tolerance) are left exactly as before. Tests:
+`../../test/reconcile/rcOut.test.ts` § "second-pass attribution matcher" (pair found →
+one `attribution_diff` + zero leftover overdue Agreements; weight mismatch → no pairing;
+multiple same-weight candidates → deterministic 1:1 regardless of array order; tolerance
+boundary at exactly `weightTolKg`; cross-destination never pairs; a settled/out-of-window
+candidate never pairs).
+
+**Result shape.** `ReconcileResult.attributionDiffs: AttributionDiff[]` (types.ts) — always
+present (possibly `[]`). `AttributionDiff` carries `transaction_date`, `destination`,
+`weight_kg`, and both sides as `AttributionSide { source, batch (resolved id),
+batch_code?, block_loc, weight_kg, provenance }`. `rcOutStage.ts::reconcileRcOutStage`
+threads `result.attributionDiffs` straight through onto `RcOutReconciliation` (no
+transformation needed — the pairing is fully computed inside the pure engine); the run's
+telemetry flag count (`workflows/runSync.ts::reconcileRcOutShadow`) adds
+`rc_out.attributionDiffs.length` alongside diffs/heldOverdue/unresolvedBatches.
+
+**App fan-out** (`app/(app)/sync/cases.ts`): `collectAttributionDiffs` folds
+`attributionDiffs` into `sync_held_cases` rows `kind='attribution_diff'`,
+`report_type='rc_out'`, `natural_key` = `attributionDiffNaturalKey` (e.g.
+`"NOV-24-BLK10 vs MARCH-26-SUNDRY4 · 2026-05-04 · 5,943 kg"`, code preferred over the raw
+batch id), `row` = the full `AttributionDiff`, fingerprint = `attributionDiffFingerprint`
+(canonicalHash of `{date, destination, rounded weight, SORTED batch-id pair}` —
+order-independent: which side happens to be "proposed" vs "gsheet" never changes the
+hash; `block_loc` is intentionally NOT in the fingerprint, since disagreeing on the block
+is the whole point of the case). Rides the EXISTING triage + Sync Review rails — no new
+plumbing needed there. Detail card: `components/sync/cases/FindingDetailCards.tsx` §
+`AttributionDiffDetail` (both sides' batch/block/weight side by side, plain copy: "Both
+sources report N kg on DATE, but disagree on which batch/block it came from"). **V1
+resolution is dismiss-with-note only** (the existing generic Quick Dismiss path in
+`CaseDetail.tsx` — no kind-specific gating was needed since it already excludes only
+`run_triage`). **Future work:** a pick-and-rewrite resolution (like `source_diff`'s R3
+pick-source flow) that lets the reviewer choose which attribution is correct and have it
+write through — not built in this pass, since the two sides don't share a natural key the
+existing diff-plan machinery can target directly. Verify:
+`scripts/verify-attribution-diff-fold.ts`.
+
 ## Creation-race hold auto-clear (shipped 2026-07-09, read-only)
 
 Not part of this engine, but reconciliation-adjacent and wired in the SAME
@@ -312,6 +382,17 @@ reclassify, mixed sets) + `test/reports/gsheet.test.ts` (Fix 2 named held row). 
 has this race** — the 4 writers ingest a report ONCE per run and create their own batches, so
 they never hold on a batch a *sibling* creates; and under the R4b cutover gsheet no longer
 emits rc_out holds at all (the rc_out branch here is dormant-but-correct).
+
+**Interplay with the batch auto-create policy (2026-07-11, `../lib/batchAutoCreate.ts`).**
+This pass now finds FEWER holds by construction: a pattern-valid `unmapped_batch_code` no
+longer reaches this pass AT ALL — `gsheet/apply.ts`'s UNMAPPED loop auto-creates the batch and
+writes the row inline, before this pass ever runs (Stage 2b′ still runs after it, unchanged,
+for the residual cases: a pattern-INVALID code, or a case from a run predating this policy).
+The `unresolved_batch` cases the R4a/R4b reconciliation shadow step (`rcOutStage.ts`) emits are
+similarly reduced for free — that step re-queries `batches` fresh AFTER the writer stages, so a
+batch either lane auto-created this run is already resolvable by the time it runs. Neither
+`resolveCreationRaceHolds` nor `rcOutStage.ts` needed a code change for this — the reduction is
+a pure side effect of creating the batch earlier in the pipeline.
 
 ## See also
 - `SYNC_RECONCILIATION_MODEL.md` (owner: Renzo) — the phased plan (R1–R5).

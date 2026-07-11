@@ -9,6 +9,8 @@
  * upserts each entry, but this step is testable with no DB.
  */
 import type {
+  AttributionDiff,
+  AutoCreatedBatch,
   BlockDiff,
   HeldRow,
   SingleSourceOverdue,
@@ -21,6 +23,30 @@ import type {
 export interface CollectedHeld {
   reportType: SyncReportType
   held: HeldRow
+}
+
+export interface CollectedAutoCreatedBatch {
+  reportType: SyncReportType
+  note: AutoCreatedBatch
+}
+
+/**
+ * Flatten every auto-created batch across all reports in a run result
+ * (`result.reports[type].apply.auto_created_batches`, 2026-07-11 policy). Returns
+ * [] when the result has no `reports`, or when nothing was auto-created.
+ */
+export function collectAutoCreatedBatches(result: SyncRunResult): CollectedAutoCreatedBatch[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: CollectedAutoCreatedBatch[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    const notes = report.apply?.auto_created_batches ?? []
+    for (const note of notes) out.push({ reportType: key, note })
+  }
+  return out
 }
 
 /**
@@ -79,4 +105,14 @@ export function collectSingleSourceOverdue(result: SyncRunResult): SingleSourceO
  */
 export function collectBlockDiffs(result: SyncRunResult): BlockDiff[] {
   return result.reconciliation?.blocking?.blockDiffs ?? []
+}
+
+/**
+ * Flatten the second-pass `attribution_diff` pairings (two single-witness facts that are
+ * almost certainly the same physical feeding under two different batch/block
+ * attributions). Lives in `result.reconciliation.rc_out.attributionDiffs` (optional
+ * additive field — absent on pre-this-feature runs). Every level guarded. Pure.
+ */
+export function collectAttributionDiffs(result: SyncRunResult): AttributionDiff[] {
+  return result.reconciliation?.rc_out?.attributionDiffs ?? []
 }

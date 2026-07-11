@@ -18,6 +18,8 @@ import {
   LAG_DAYS,
   WINDOW_BUFFER_DAYS,
   type Agreement,
+  type AttributionDiff,
+  type AttributionSide,
   type ReconcileOptions,
   type ReconcileResult,
   type RcOutNaturalKey,
@@ -185,6 +187,9 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
 
   const agreements: Agreement[] = [];
   const diffs: SourceDiff[] = [];
+  // Candidates for the second-pass attribution matcher (below): single-witness weight_kg
+  // facts that were tagged pending/held_overdue (i.e. inside the actionable window).
+  const attributionCandidates: SingleWeightCandidate[] = [];
 
   for (const { key, recs } of byKey.values()) {
     // Union of field names any record at this key states.
@@ -219,6 +224,11 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
         if (disp) {
           agreement.disposition = disp.disposition;
           agreement.ageDays = disp.ageDays;
+          // Only a fact that would become pending/held_overdue (i.e. inside the actionable
+          // window) is eligible for attribution pairing — settled/undated facts are left alone.
+          if (field === weightField) {
+            attributionCandidates.push({ agreement, record: present[0].rec });
+          }
         }
         agreements.push(agreement);
         continue;
@@ -275,7 +285,120 @@ export function reconcileRcOut(records: SourceRecord[], opts: ReconcileOptions =
     }
   }
 
-  return { agreements, diffs };
+  // ── Second-pass attribution matcher ────────────────────────────────────────
+  // Classic bank-reconciliation entity resolution: two single-witness facts that would
+  // otherwise separately age into pending/held_overdue are, on inspection, almost
+  // certainly the SAME physical feeding reported under two different batch/block
+  // attributions (the proposed report derives its batch from (block_date, block_no)
+  // while the Sheet carries an operator-typed code — see ./CONTEXT.md). Pair a
+  // proposed-only fact with a gsheet-only fact on the same (date, destination) when
+  // their weight agrees within tolerance; the pair REPLACES both single-witness facts
+  // (they must not also surface as pending/held_overdue — see the filter below).
+  const { attributionDiffs, consumed } = matchAttributions(attributionCandidates, weightTol);
+  const finalAgreements = consumed.size > 0 ? agreements.filter((a) => !consumed.has(a)) : agreements;
+
+  return { agreements: finalAgreements, diffs, attributionDiffs };
+}
+
+/** A single-witness weight_kg Agreement paired with the SourceRecord it was built from
+ *  (attribution pairing needs the record's raw legs for batch_code + provenance). */
+interface SingleWeightCandidate {
+  agreement: Agreement;
+  record: SourceRecord;
+}
+
+/** Round to 2 decimal places (mirrors rcOutStage.ts::round2 — kept local, this file has
+ *  no dependency on the stage). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Build one AttributionDiff side from a candidate's Agreement + underlying SourceRecord. */
+function attributionSide(c: SingleWeightCandidate): AttributionSide {
+  return {
+    source: c.record.source,
+    batch: c.agreement.naturalKey.batch,
+    batch_code: c.record.rows?.[0]?.batch_code ?? null,
+    block_loc: c.agreement.naturalKey.block_loc,
+    weight_kg: typeof c.agreement.value === "number" ? c.agreement.value : 0,
+    provenance: c.record.provenance,
+  };
+}
+
+/**
+ * Group single-witness weight_kg candidates by (transaction_date, destination) and
+ * greedily pair a proposed-only fact with a gsheet-only fact whose weight agrees within
+ * `weightTolKg`. Deterministic: within a group each source's pool is sorted by the
+ * candidate's fine-key string, then matched in that stable order — so when multiple
+ * candidates share the same weight on the same date, the pairing is reproducible
+ * (first-available match), never arbitrary. Unmatched candidates are left as-is (the
+ * caller keeps their pending/held_overdue disposition). A pair whose fine keys turn out
+ * IDENTICAL (defensive — should not happen, as identical keys would already be one
+ * multi-source fact) is skipped rather than paired.
+ */
+function matchAttributions(
+  candidates: SingleWeightCandidate[],
+  weightTolKg: number,
+): { attributionDiffs: AttributionDiff[]; consumed: Set<Agreement> } {
+  const attributionDiffs: AttributionDiff[] = [];
+  const consumed = new Set<Agreement>();
+  if (candidates.length === 0) return { attributionDiffs, consumed };
+
+  const groupKey = (c: SingleWeightCandidate) =>
+    [c.agreement.naturalKey.transaction_date, c.agreement.naturalKey.destination ?? "MAIN"].join("");
+
+  const groups = new Map<string, SingleWeightCandidate[]>();
+  for (const c of candidates) {
+    const gk = groupKey(c);
+    const bucket = groups.get(gk);
+    if (bucket) bucket.push(c);
+    else groups.set(gk, [c]);
+  }
+
+  const byFineKey = (a: SingleWeightCandidate, b: SingleWeightCandidate) =>
+    fineKeyStr(a.agreement.naturalKey).localeCompare(fineKeyStr(b.agreement.naturalKey));
+
+  for (const group of groups.values()) {
+    const proposedPool = group.filter((c) => c.record.source === "proposed").sort(byFineKey);
+    const gsheetPool = group.filter((c) => c.record.source === "gsheet").sort(byFineKey);
+    const usedGsheet = new Set<number>();
+
+    for (const p of proposedPool) {
+      const pVal = p.agreement.value;
+      if (typeof pVal !== "number") continue;
+
+      let matchIdx = -1;
+      for (let i = 0; i < gsheetPool.length; i++) {
+        if (usedGsheet.has(i)) continue;
+        const gVal = gsheetPool[i].agreement.value;
+        if (typeof gVal !== "number") continue;
+        if (numWithin(pVal, gVal, weightTolKg)) {
+          matchIdx = i;
+          break;
+        }
+      }
+      if (matchIdx === -1) continue;
+
+      const g = gsheetPool[matchIdx];
+      const batchDiffers = p.agreement.naturalKey.batch !== g.agreement.naturalKey.batch;
+      const blockDiffers = p.agreement.naturalKey.block_loc !== g.agreement.naturalKey.block_loc;
+      if (!batchDiffers && !blockDiffers) continue; // identical key — would already be one fact
+
+      usedGsheet.add(matchIdx);
+      const gVal = g.agreement.value as number;
+      attributionDiffs.push({
+        transaction_date: p.agreement.naturalKey.transaction_date,
+        destination: p.agreement.naturalKey.destination ?? "MAIN",
+        weight_kg: round2((pVal + gVal) / 2),
+        proposed: attributionSide(p),
+        gsheet: attributionSide(g),
+      });
+      consumed.add(p.agreement);
+      consumed.add(g.agreement);
+    }
+  }
+
+  return { attributionDiffs, consumed };
 }
 
 /**

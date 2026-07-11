@@ -18,6 +18,8 @@
  * rulings) stays in `cases.ts` / `fingerprint.ts`; this file computes nothing durable.
  */
 import type {
+  AttributionDiff,
+  AutoCreatedBatch,
   BlockDiff,
   HeldRow,
   RcOutSource,
@@ -28,6 +30,8 @@ import type {
   UnresolvedBatch,
 } from '../../app/(app)/sync/types'
 import {
+  collectAttributionDiffs,
+  collectAutoCreatedBatches,
   collectBlockDiffs,
   collectHeldRows,
   collectSingleSourceOverdue,
@@ -283,6 +287,35 @@ function fromOverdue(o: SingleSourceOverdue): RunFinding {
   }
 }
 
+/** Short identity for one side of an attribution_diff — code preferred over the raw id. */
+function attributionSideName(s: { batch_code?: string | null; batch: string | null }): string {
+  return s.batch_code ?? s.batch ?? '(no batch)'
+}
+
+function fromAttributionDiff(a: AttributionDiff): RunFinding {
+  const proposedName = attributionSideName(a.proposed)
+  const gsheetName = attributionSideName(a.gsheet)
+  const kg = fmtKg(a.weight_kg)
+
+  return {
+    key: `attribution_diff:${a.transaction_date}:${a.destination}:${proposedName}:${gsheetName}`,
+    kind: 'attribution_diff',
+    kindLabel: 'Sources disagree on attribution',
+    source: 'RC OUT — cross-check (proposed vs sheet)',
+    title: `${kg} on ${a.transaction_date}: same feeding, different batch/block`,
+    location: `${a.transaction_date}${a.destination !== 'MAIN' ? ` → ${a.destination}` : ''}`,
+    data: {
+      transaction_date: a.transaction_date,
+      destination: a.destination,
+      weight_kg: num(a.weight_kg),
+      proposed: { batch: a.proposed.batch, batch_code: a.proposed.batch_code ?? null, block_loc: a.proposed.block_loc },
+      gsheet: { batch: a.gsheet.batch, batch_code: a.gsheet.batch_code ?? null, block_loc: a.gsheet.block_loc },
+    },
+    reason: `Both sources report ${kg} on ${a.transaction_date}, but disagree on which batch/block it came from — proposed says ${proposedName} @ ${a.proposed.block_loc ?? '(feed)'}, the sheet says ${gsheetName} @ ${a.gsheet.block_loc ?? '(feed)'}.`,
+    severity: 'attention',
+  }
+}
+
 function fromUnresolvedBatch(u: UnresolvedBatch): RunFinding {
   const kindOfMiss =
     u.candidates.length === 0
@@ -308,6 +341,39 @@ function fromUnresolvedBatch(u: UnresolvedBatch): RunFinding {
     },
     reason: `${fmtKg(u.weight_kg)} on ${u.transaction_date} (from ${srcs}) — ${kindOfMiss}. Map or create the batch.`,
     severity: 'attention',
+  }
+}
+
+/** Plain source label per report type, with the gsheet mode appended when present
+ *  (mirrors `heldSource`, but this note carries its OWN `mode` field, not a row). */
+function autoCreatedSource(reportType: SyncReportType, mode: 'rc_in' | 'rc_out' | undefined): string {
+  const base = REPORT_SOURCE_LABEL[reportType] ?? titleCase(reportType)
+  if (reportType === 'gsheet' && mode) return `${base} — ${mode === 'rc_in' ? 'RC IN' : 'RC OUT'}`
+  return base
+}
+
+function fromAutoCreatedBatch(reportType: SyncReportType, note: AutoCreatedBatch): RunFinding {
+  const locParts = [note.transaction_date, note.block_loc].filter(Boolean) as string[]
+  const location = locParts.length ? locParts.join(' · ') : (note.source_row != null ? `row ${note.source_row}` : '—')
+
+  return {
+    key: `batch_auto_created:${reportType}:${note.mode ?? ''}:${note.batch_code}:${note.source_row ?? ''}`,
+    kind: 'batch_auto_created',
+    kindLabel: 'New batch created automatically',
+    source: autoCreatedSource(reportType, note.mode),
+    title: `New batch "${note.batch_code}" created automatically (${note.location_ref})`,
+    location,
+    data: {
+      batch_code: note.batch_code,
+      location_ref: note.location_ref,
+      transaction_date: note.transaction_date,
+      block_loc: note.block_loc,
+      source_row: note.source_row,
+    },
+    reason:
+      `The batch code was pattern-valid (a real month + year + block/feed number) but new to ` +
+      `the database, so the sync created it and wrote the row automatically — nothing to do here.`,
+    severity: 'info',
   }
 }
 
@@ -374,11 +440,19 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 3. rc_out single-witness-overdue facts.
   for (const o of collectSingleSourceOverdue(result)) out.push(fromOverdue(o))
 
+  // 3.5. rc_out second-pass attribution pairings (same feeding, different batch/block).
+  for (const a of collectAttributionDiffs(result)) out.push(fromAttributionDiff(a))
+
   // 4. rc_out unresolved batches.
   for (const u of collectUnresolvedBatches(result)) out.push(fromUnresolvedBatch(u))
 
   // 5. Blocking cross-check diffs (per-block + the single grand_total).
   for (const d of collectBlockDiffs(result)) out.push(fromBlockDiff(d))
+
+  // 6. Batches auto-created this run (2026-07-11 policy) — info-level, visibility only.
+  for (const { reportType, note } of collectAutoCreatedBatches(result)) {
+    out.push(fromAutoCreatedBatch(reportType, note))
+  }
 
   return out
 }
@@ -421,6 +495,7 @@ const SHORT_KIND: Record<string, string> = {
   block_diff: 'block',
   single_source_overdue: 'overdue',
   source_diff: 'sources disagree',
+  attribution_diff: 'attribution mismatch',
   unresolved_batch: 'unknown batch',
   unmapped_batch_code: 'unknown batch',
   unmapped_bag_type_code: 'unknown bag type',
@@ -432,15 +507,18 @@ const SHORT_KIND: Record<string, string> = {
   low_confidence: 'low confidence',
   unresolved_shift: 'unmatched shift',
   unresolved_batch_id: 'unknown batch',
+  batch_auto_created: 'batch created',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
 const EXTRA_KIND_LABEL: Record<string, string> = {
   source_diff: 'Sources disagree',
   single_source_overdue: 'Only one source reported',
+  attribution_diff: 'Sources disagree on attribution',
   unresolved_batch: "Batch code can't be matched",
   block_diff: 'Block balance mismatch',
   run_triage: 'Run summary',
+  batch_auto_created: 'New batch created automatically',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

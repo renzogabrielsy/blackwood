@@ -494,7 +494,11 @@ async function reconcileRcOutShadow(
     }
 
     const rc_out = reconcileRcOutStage({ proposed, gsheetRcOut, movementByDate, batchLookup, runDate });
-    const flags = rc_out.diffs.length + rc_out.heldOverdue.length + rc_out.unresolvedBatches.length;
+    const flags =
+      rc_out.diffs.length +
+      rc_out.heldOverdue.length +
+      rc_out.unresolvedBatches.length +
+      rc_out.attributionDiffs.length;
     await emit(
       "reconcile",
       flags > 0

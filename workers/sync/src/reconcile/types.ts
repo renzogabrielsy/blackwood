@@ -219,9 +219,50 @@ export interface SourceDiff {
   recommended?: Recommendation;
 }
 
+/**
+ * One side of an `AttributionDiff` pairing — a single-witness fact matched to its
+ * likely counterpart from the OPPOSITE source (rcOut.ts's second-pass attribution
+ * matcher, see ./CONTEXT.md § "Attribution-diff second-pass matcher"). `batch` is the
+ * RESOLVED batch_id (always present — pairing only runs over `fine` records, which by
+ * construction have a non-null batch); `batch_code` is the source's raw code string
+ * when the caller has it (best-effort, from the record's first leg row).
+ */
+export interface AttributionSide {
+  source: RcOutSource;
+  batch: string | null;
+  batch_code?: string | null;
+  block_loc: string | null;
+  weight_kg: number;
+  provenance: string;
+}
+
+/**
+ * Two single-witness rc_out facts that are almost certainly the SAME physical feeding,
+ * reported under two DIFFERENT batch/block attributions — e.g. the proposed report
+ * derives its batch from `(block_date, block_no)` while the Sheet carries an
+ * operator-typed code, so the same feeding resolves to two different batch_ids AND two
+ * different block_loc strings. Distinct from a `SourceDiff` (same fine key, disagreeing
+ * VALUE): here the KEYS themselves differ, but the weight agrees within tolerance.
+ *
+ * NEVER auto-resolved — surfaced as an `attribution_diff` case; the human arbitrates
+ * which attribution is correct in Sync Review (no pick-and-rewrite in v1, dismiss-only).
+ * Replaces the two single-witness facts that would otherwise separately age into
+ * `pending`/`held_overdue` — see rcOut.ts's second-pass matcher.
+ */
+export interface AttributionDiff {
+  transaction_date: string;
+  destination: string;
+  /** Both sides' weight, averaged + rounded (they agree within `weightTolKg` by construction). */
+  weight_kg: number;
+  proposed: AttributionSide;
+  gsheet: AttributionSide;
+}
+
 export interface ReconcileResult {
   agreements: Agreement[];
   diffs: SourceDiff[];
+  /** Second-pass attribution pairings (see AttributionDiff). Always present (possibly []). */
+  attributionDiffs: AttributionDiff[];
 }
 
 export interface ReconcileOptions {

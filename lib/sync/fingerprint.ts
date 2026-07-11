@@ -20,6 +20,7 @@
 import { createHash } from 'node:crypto'
 
 import type {
+  AttributionDiff,
   BlockDiff,
   HeldRow,
   SingleSourceOverdue,
@@ -295,5 +296,44 @@ export function singleSourceOverdueFingerprint(o: SingleSourceOverdue): string {
     },
     field: o.field,
     source: o.source,
+  })
+}
+
+// ============================================================================
+// attribution_diff — second-pass attribution matcher fingerprint + human label
+// ============================================================================
+
+/** A short identity for one side of an attribution_diff — code preferred over the raw id. */
+function attributionSideLabel(s: { batch_code?: string | null; batch: string | null }): string {
+  return s.batch_code ?? s.batch ?? '(no batch)'
+}
+
+/**
+ * A stable, human-readable label for an `attribution_diff` case. Example:
+ *   "NOV-24-BLK10 vs MARCH-26-SUNDRY4 · 2026-05-04 · 5,943 kg"
+ */
+export function attributionDiffNaturalKey(a: AttributionDiff): string {
+  const dest = a.destination && a.destination !== 'MAIN' ? ` → ${a.destination}` : ''
+  const kg = Math.round(a.weight_kg).toLocaleString('en-US')
+  return `${attributionSideLabel(a.proposed)} vs ${attributionSideLabel(a.gsheet)}${dest} · ${a.transaction_date} · ${kg} kg`
+}
+
+/**
+ * The stable content hash for an `attribution_diff` pairing. Keyed on date + destination +
+ * the rounded shared weight + the SORTED set of both sides' batch ids — order-independent
+ * (which side happens to be "proposed" vs "gsheet" never changes the hash), so the SAME
+ * pairing recurs as one case, but a materially different pairing (different batches, or a
+ * different weight) re-alarms. block_loc is intentionally NOT in the fingerprint — the whole
+ * point of this case is that the two sides' block/batch attribution differs.
+ */
+export function attributionDiffFingerprint(a: AttributionDiff): string {
+  const batches = [a.proposed.batch ?? '', a.gsheet.batch ?? ''].sort()
+  return canonicalHash({
+    kind: 'attribution_diff',
+    table: 'rc_out',
+    transaction_date: a.transaction_date,
+    destination: a.destination,
+    weight_kg: Math.round(a.weight_kg),
+    batches,
   })
 }

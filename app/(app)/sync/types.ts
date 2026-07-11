@@ -185,6 +185,24 @@ export interface HeldRow {
   source_index?: string | number
 }
 
+/**
+ * One batch the sync auto-created this apply (2026-07-11 policy — reverses the old
+ * "never auto-create a batch" hard rule). A pattern-valid unknown batch_code (e.g.
+ * `JULY-26-BLK6`) is now created from the same template the human-confirmed
+ * "create this batch" Sync Review action uses (`lib/sync/create-batch-plan.ts`),
+ * and the triggering row is written through in the SAME run. Worker mirror:
+ * normalizeReport.ts::AutoCreatedBatchNote. NEVER a ₱/cost field.
+ */
+export interface AutoCreatedBatch {
+  batch_code: string
+  location_ref: string
+  /** gsheet only — which tab produced the row. Absent for the PROPOSED rc_out lane. */
+  mode?: 'rc_in' | 'rc_out'
+  transaction_date: string | null
+  block_loc: string | null
+  source_row: string | number | null
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -195,6 +213,11 @@ export interface ApplyResult {
   labeled: boolean
   watermark_updated: boolean
   errors: string[]
+  /** Batches the sync auto-created this apply. The worker always sends this array
+   *  (default []); optional here ONLY so older/hand-built fixtures that predate this
+   *  field still type-check. Consumers should read it as `apply?.auto_created_batches
+   *  ?? []` (see `collectAutoCreatedBatches`). */
+  auto_created_batches?: AutoCreatedBatch[]
 }
 
 // ============================================================
@@ -421,6 +444,36 @@ export interface SingleSourceOverdue {
 }
 
 /**
+ * One side of an `AttributionDiff` pairing. Mirror of the worker's
+ * reconcile/types.ts::AttributionSide. `batch` is the resolved batch_id; `batch_code` is
+ * the source's raw code string when available (best-effort). NEVER a ₱.
+ */
+export interface AttributionSide {
+  source: RcOutSource
+  batch: string | null
+  batch_code?: string | null
+  block_loc: string | null
+  weight_kg: number
+  provenance: string
+}
+
+/**
+ * Second-pass attribution matcher — two single-witness rc_out facts that are almost
+ * certainly the SAME physical feeding reported under two different batch/block
+ * attributions (e.g. the proposed report derives its batch from block_date+block_no
+ * while the Sheet carries an operator-typed code). Mirror of the worker's
+ * reconcile/types.ts::AttributionDiff. Surfaces as an `attribution_diff` case —
+ * NEVER auto-resolved; dismiss-only in v1 (no pick-and-rewrite yet).
+ */
+export interface AttributionDiff {
+  transaction_date: string
+  destination: string
+  weight_kg: number
+  proposed: AttributionSide
+  gsheet: AttributionSide
+}
+
+/**
  * The reconciliation output for one table (extensible per table in later phases). The R4a
  * fields are OPTIONAL here (defensive: a pre-R4a run's channel omits them) but the worker
  * always populates them.
@@ -434,6 +487,9 @@ export interface TableReconciliation {
   heldOverdue?: SingleSourceOverdue[]
   /** R4a — batches that could not resolve to one batch_id → `unresolved_batch` cases. */
   unresolvedBatches?: UnresolvedBatch[]
+  /** Second-pass attribution pairings → `attribution_diff` cases. Optional (defensive: a
+   *  pre-this-feature run's channel omits it). */
+  attributionDiffs?: AttributionDiff[]
 }
 
 // ============================================================

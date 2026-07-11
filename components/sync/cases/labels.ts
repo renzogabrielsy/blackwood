@@ -35,6 +35,7 @@ export const KIND_LABEL: Record<HeldKind, string> = {
  */
 const EXTRA_KIND_LABEL: Record<string, string> = {
   source_diff: 'Sources disagree',
+  attribution_diff: 'Sources disagree on attribution',
   run_triage: 'Run summary',
 }
 

@@ -338,3 +338,144 @@ describe("reconcileRcOut — single-witness disposition (R4b proposed-span windo
     expect(a.disposition).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Second-pass attribution matcher — the real 2026-07-11 forensics finding: 47
+// `single_source_overdue` cases that were really ~20 pairs of the SAME physical
+// feeding seen under two different batch/block attributions (proposed derives its
+// batch from block_date+block_no; the Sheet carries an operator-typed code).
+// ---------------------------------------------------------------------------
+
+describe("reconcileRcOut — second-pass attribution matcher", () => {
+  it("pair found (weight agrees, batch+block differ) → ONE attribution_diff, no overdue pair for either side", () => {
+    // The real 2026-05-04 case: proposed 5,943 kg @ "16A NEAR PATHWAY" (NOV-24-BLK10) vs
+    // gsheet 5,943 kg @ "PCA-16C" (MARCH-26-SUNDRY4) — same kilograms, different attribution.
+    const day = "2026-05-04";
+    const { agreements, attributionDiffs, diffs } = reconcileRcOut(
+      [
+        proposed(day, "NOV-24-BLK10", "16A NEAR PATHWAY", 5_943),
+        gsheet(day, "MARCH-26-SUNDRY4", "PCA-16C", 5_943),
+      ],
+      { runDate: "2026-05-09" }, // age 5 days > LAG_DAYS(2) → would be held_overdue for BOTH
+    );
+
+    expect(diffs).toHaveLength(0); // different fine keys — never a source_diff
+    expect(attributionDiffs).toHaveLength(1);
+
+    const pair = attributionDiffs[0];
+    expect(pair.transaction_date).toBe(day);
+    expect(pair.destination).toBe("MAIN");
+    expect(pair.weight_kg).toBe(5_943); // both sides agree exactly → average = itself
+    expect(pair.proposed).toMatchObject({
+      source: "proposed",
+      batch: "NOV-24-BLK10",
+      block_loc: "16A NEAR PATHWAY",
+      weight_kg: 5_943,
+    });
+    expect(pair.gsheet).toMatchObject({
+      source: "gsheet",
+      batch: "MARCH-26-SUNDRY4",
+      block_loc: "PCA-16C",
+      weight_kg: 5_943,
+    });
+
+    // The pair REPLACES the two single-witness facts — neither surfaces as a standalone
+    // pending/held_overdue Agreement anymore.
+    const weightAgreements = agreements.filter((a) => a.field === "weight_kg");
+    expect(weightAgreements).toHaveLength(0);
+  });
+
+  it("weight mismatch (digit transposition) → NO pairing; both stay lone witnesses", () => {
+    // The real 2026-05-11 case: 3,692 vs 3,962 kg — a genuine transposition, not the same
+    // feeding. Must NOT pair; both keep their held_overdue disposition untouched.
+    const day = "2026-05-11";
+    const { agreements, attributionDiffs } = reconcileRcOut(
+      [
+        proposed(day, "id-a", "BLK-A", 3_692),
+        gsheet(day, "id-b", "BLK-B", 3_962),
+      ],
+      { runDate: "2026-05-16" }, // age 5 days > LAG_DAYS
+    );
+
+    expect(attributionDiffs).toHaveLength(0);
+    const weightAgreements = agreements.filter((a) => a.field === "weight_kg");
+    expect(weightAgreements).toHaveLength(2);
+    for (const a of weightAgreements) {
+      expect(a.singleSource).toBe(true);
+      expect(a.disposition).toBe("held_overdue");
+    }
+  });
+
+  it("multiple same-weight candidates on one date → deterministic 1:1 pairing regardless of input order", () => {
+    const day = "2026-05-20";
+    const opts = { runDate: "2026-05-25" };
+    const buildRecords = () => [
+      // Deliberately shuffled / interleaved input order.
+      gsheet(day, "id-g2", "BLK-G2", 5_000),
+      proposed(day, "id-p2", "BLK-P2", 5_000),
+      gsheet(day, "id-g1", "BLK-G1", 5_000),
+      proposed(day, "id-p1", "BLK-P1", 5_000),
+    ];
+
+    const { attributionDiffs } = reconcileRcOut(buildRecords(), opts);
+    expect(attributionDiffs).toHaveLength(2);
+    // Deterministic: sorted-by-fine-key order pairs id-p1<->id-g1, id-p2<->id-g2.
+    const byProposedBatch = (b: string) => attributionDiffs.find((d) => d.proposed.batch === b)!;
+    expect(byProposedBatch("id-p1").gsheet.batch).toBe("id-g1");
+    expect(byProposedBatch("id-p2").gsheet.batch).toBe("id-g2");
+
+    // Re-run with the array reversed — same pairing (order-independent).
+    const reversed = buildRecords().reverse();
+    const { attributionDiffs: attributionDiffs2 } = reconcileRcOut(reversed, opts);
+    expect(attributionDiffs2).toHaveLength(2);
+    const byProposedBatch2 = (b: string) => attributionDiffs2.find((d) => d.proposed.batch === b)!;
+    expect(byProposedBatch2("id-p1").gsheet.batch).toBe("id-g1");
+    expect(byProposedBatch2("id-p2").gsheet.batch).toBe("id-g2");
+  });
+
+  it("tolerance boundary: exactly at weightTolKg pairs; just past it does not", () => {
+    const day = "2026-05-30";
+    const opts = { runDate: "2026-06-04" };
+
+    const atBoundary = reconcileRcOut(
+      [proposed(day, "id-x1", "BLK-X1", 4_000), gsheet(day, "id-y1", "BLK-Y1", 4_001)],
+      opts,
+    );
+    expect(atBoundary.attributionDiffs).toHaveLength(1); // diff = 1 kg == default weightTolKg
+
+    const pastBoundary = reconcileRcOut(
+      [proposed(day, "id-x2", "BLK-X2", 4_000), gsheet(day, "id-y2", "BLK-Y2", 4_001.5)],
+      opts,
+    );
+    expect(pastBoundary.attributionDiffs).toHaveLength(0); // diff = 1.5 kg > default weightTolKg
+    const weightAgreements = pastBoundary.agreements.filter((a) => a.field === "weight_kg");
+    expect(weightAgreements).toHaveLength(2);
+  });
+
+  it("does not pair across different destinations, even with matching weight + date", () => {
+    const day = "2026-06-01";
+    const mainRec = proposed(day, "id-m1", "BLK-M1", 2_000);
+    const sundryRec: SourceRecord = {
+      ...gsheet(day, "id-m2", "BLK-M2", 2_000),
+      naturalKey: { transaction_date: day, batch: "id-m2", block_loc: "BLK-M2", destination: "SUNDRY" },
+    };
+    const { attributionDiffs } = reconcileRcOut([mainRec, sundryRec], { runDate: "2026-06-06" });
+    expect(attributionDiffs).toHaveLength(0);
+  });
+
+  it("only pairs pending/held_overdue candidates — a settled (outside-window) fact never pairs", () => {
+    // Anchor the proposed window at 2026-07-05; a lone gsheet fact from 2026-06-10 is
+    // OUTSIDE the window (settled) and must never be swept into a pairing even if a
+    // same-weight proposed fact exists elsewhere in-window.
+    const { attributionDiffs } = reconcileRcOut(
+      [
+        proposed("2026-07-05", "id-anchor", "A-1A", 9_000),
+        gsheet("2026-07-05", "id-anchor", "A-1A", 9_000),
+        gsheet("2026-06-10", "id-old", "OLD-BLK", 5_943),
+        proposed("2026-07-05", "id-new", "NEW-BLK", 5_943),
+      ],
+      { runDate: "2026-07-08" },
+    );
+    expect(attributionDiffs).toHaveLength(0);
+  });
+});

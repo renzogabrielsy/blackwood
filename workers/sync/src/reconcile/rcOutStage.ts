@@ -29,6 +29,7 @@ import type { BlockReconciliation } from "./blockBalance.js";
 import {
   LAG_DAYS,
   type Agreement,
+  type AttributionDiff,
   type ReconcileResult,
   type SingleSourceOverdue,
   type SourceDiff,
@@ -77,6 +78,14 @@ export interface RcOutReconciliation {
   heldOverdue: SingleSourceOverdue[];
   /** R4a — batches that could not resolve to one batch_id → `unresolved_batch` cases. */
   unresolvedBatches: UnresolvedBatch[];
+  /**
+   * Second-pass attribution matcher — pairs of single-witness facts that are almost
+   * certainly the SAME physical feeding under two different batch/block attributions
+   * (see ./rcOut.ts § "Second-pass attribution matcher" + ./CONTEXT.md). Each pair
+   * REPLACES the two single-witness facts it consumed, so they do NOT also appear in
+   * `heldOverdue` / count toward `pending`. → `attribution_diff` cases (dismiss-only, v1).
+   */
+  attributionDiffs: AttributionDiff[];
 }
 
 /** The top-level reconciliation channel on the run result (extensible per table).
@@ -415,5 +424,6 @@ export function reconcileRcOutStage(input: RcOutReconcileInput): RcOutReconcilia
     pending,
     heldOverdue,
     unresolvedBatches: unresolved,
+    attributionDiffs: result.attributionDiffs,
   };
 }
