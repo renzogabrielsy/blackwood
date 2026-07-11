@@ -45,6 +45,7 @@ import {
   type RunInvestigationOpts,
 } from '@/lib/investigator/loop'
 import { runTriage, type RunTriageOutcome } from '@/lib/investigator/triage'
+import { SYNC_AI_REVIEW_ENABLED } from '@/lib/sync/config'
 import type { Database, Json } from '@/types/supabase'
 
 import type {
@@ -542,6 +543,16 @@ export interface AutoInvestigateResult {
 export async function autoInvestigateRun(runId: string): Promise<AutoInvestigateResult> {
   await requirePrivileged()
 
+  // Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). This is the
+  // auto-investigation entry point itself; the ONLY caller (useSyncRun.ts's
+  // finalizeRun) already gates its call on SYNC_AI_REVIEW_ENABLED, but this
+  // early-return is belt-and-suspenders so NOTHING fans a run into
+  // auto-investigated cases while the flag is off — not case creation, not the
+  // investigation pool, not triage. Flip SYNC_AI_REVIEW_ENABLED to restore.
+  if (!SYNC_AI_REVIEW_ENABLED) {
+    return { cases: 0, investigated: 0, skipped: 0, errors: 0, triage: { status: 'skipped' } }
+  }
+
   // ensureCasesForRun is itself privileged; calling it here is fine (same guard).
   const ensured = await ensureCasesForRun(runId)
   const admin = createAdminClient()
@@ -590,6 +601,12 @@ export async function autoInvestigateRun(runId: string): Promise<AutoInvestigate
  * fresh synthesis pass over the run's current cases, replacing the triage case's
  * verdict/row and appending a fresh system note (idempotent by fingerprint upsert).
  * Skipped for a run with zero non-triage cases.
+ *
+ * DORMANT (Renzo 2026-07-11, `lib/sync/config.ts::SYNC_AI_REVIEW_ENABLED`): already
+ * unwired — no client component imports `triageRun` (the "re-triage" button it was
+ * written for was never built). Left on disk untouched; no additional gating needed
+ * since nothing calls it. `autoInvestigateRun`'s own triage step is separately
+ * gated above.
  */
 export async function triageRun(runId: string): Promise<RunTriageOutcome> {
   await requirePrivileged()

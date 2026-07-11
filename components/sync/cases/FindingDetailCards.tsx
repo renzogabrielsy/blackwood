@@ -1,16 +1,27 @@
 'use client'
 
 import * as React from 'react'
-import { AlertTriangle, Boxes, Clock, GitCompareArrows, PackageX } from 'lucide-react'
+import {
+  AlertTriangle,
+  Boxes,
+  Clock,
+  GitCompareArrows,
+  HelpCircle,
+  PackagePlus,
+  PackageX,
+  ShieldAlert,
+} from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import type {
   AttributionDiff,
   AttributionSide,
+  AutoCreatedBatch,
   BlockDiff,
   SingleSourceOverdue,
   UnresolvedBatch,
 } from '@/app/(app)/sync/types'
+import { kindLabel } from './labels'
 
 /**
  * FindingDetailCards — first-class detail rendering for the reconciliation case kinds that
@@ -413,13 +424,309 @@ function UnmappedBatchDetail({ row }: { row: unknown }) {
   )
 }
 
+// ── gate_failure ───────────────────────────────────────────────────────────────
+
+interface GateFailureRowView {
+  transaction_date: string | null
+  batch_code: string | null
+  block_loc: string | null
+  destination: string | null
+  weight_kg: number | null
+  production_batch: string | null
+  driftCount: number
+}
+
+function readGateFailureRow(row: unknown): GateFailureRowView {
+  const o = (row && typeof row === 'object' && !Array.isArray(row) ? row : {}) as Record<
+    string,
+    unknown
+  >
+  const drift = Array.isArray(o.drift_dates) ? (o.drift_dates as unknown[]) : []
+  return {
+    transaction_date: str(o.transaction_date),
+    batch_code: str(o.batch_code),
+    block_loc: str(o.block_loc),
+    destination: str(o.destination),
+    weight_kg: num(o.weight_kg),
+    production_batch: str(o.production_batch),
+    driftCount: drift.length,
+  }
+}
+
+function GateFailureDetail({
+  row,
+  naturalKey,
+}: {
+  row: unknown
+  naturalKey?: string | null
+}) {
+  const v = readGateFailureRow(row)
+  const title = v.batch_code ?? naturalKey ?? v.transaction_date ?? 'Gate check failed'
+  const who = v.batch_code ? `batch ${v.batch_code}` : v.transaction_date ? v.transaction_date : 'this run'
+
+  return (
+    <DetailShell
+      icon={<ShieldAlert className="h-3 w-3" />}
+      badge="Totals don't match — nothing saved"
+      badgeClass="bg-red-500/15 text-red-600 dark:text-red-400"
+      hint="Sync gate check"
+      title={title}
+    >
+      <FieldGrid
+        rows={[
+          { label: 'Date', value: v.transaction_date, mono: true },
+          { label: 'Batch', value: v.batch_code, mono: true },
+          { label: 'Block', value: v.block_loc, mono: true },
+          {
+            label: 'Destination',
+            value: v.destination && v.destination !== 'MAIN' ? v.destination : null,
+            mono: true,
+          },
+          {
+            label: 'Weight',
+            value: v.weight_kg != null ? `${fmtKg(v.weight_kg)} kg` : null,
+            mono: true,
+          },
+          { label: 'Production batch', value: v.production_batch, mono: true },
+          {
+            label: 'Flagged dates',
+            value: v.driftCount > 0 ? String(v.driftCount) : null,
+            mono: true,
+          },
+        ]}
+      />
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+        The totals for {who} didn&apos;t reconcile between sources, so the sync held everything
+        back rather than risk writing the wrong numbers.
+      </p>
+      <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+        <span>
+          Check the flagged date(s) against the movement sheet and the proposed/daily report
+          (numbers above, if any). Once the totals agree, the next sync run applies this
+          automatically — nothing to fix directly in the database.
+        </span>
+      </p>
+    </DetailShell>
+  )
+}
+
+// ── cross_batch_reassignment ────────────────────────────────────────────────────
+
+interface CrossBatchRowView {
+  batch_code: string | null
+  transaction_date: string | null
+  block_loc: string | null
+  truck_plate: string | null
+  weight_kg: number | null
+  sacks: number | null
+  mode: string | null
+  conflictBatches: string[]
+}
+
+function readCrossBatchRow(row: unknown): CrossBatchRowView {
+  const o = (row && typeof row === 'object' && !Array.isArray(row) ? row : {}) as Record<
+    string,
+    unknown
+  >
+  const conflicts = Array.isArray(o.db_conflict_batches)
+    ? (o.db_conflict_batches as unknown[]).map(String)
+    : []
+  return {
+    batch_code: str(o.batch_code),
+    transaction_date: str(o.transaction_date),
+    block_loc: str(o.block_loc),
+    truck_plate: str(o.truck_plate),
+    weight_kg: num(o.weight_kg),
+    sacks: num(o.sacks),
+    mode: str(o.mode),
+    conflictBatches: conflicts,
+  }
+}
+
+function CrossBatchReassignmentDetail({
+  row,
+  naturalKey,
+}: {
+  row: unknown
+  naturalKey?: string | null
+}) {
+  const v = readCrossBatchRow(row)
+  const title = v.batch_code ?? naturalKey ?? 'Batch/block reassignment'
+
+  return (
+    <DetailShell
+      icon={<GitCompareArrows className="h-3 w-3" />}
+      badge="Same load, different batch"
+      badgeClass="bg-blue-500/15 text-blue-600 dark:text-blue-400"
+      hint={v.mode ? `${v.mode === 'rc_in' ? 'RC IN' : 'RC OUT'} · batch mapping` : 'Batch mapping'}
+      title={title}
+    >
+      <FieldGrid
+        rows={[
+          { label: 'Date', value: v.transaction_date, mono: true },
+          { label: 'Batch', value: v.batch_code, mono: true },
+          { label: 'Block', value: v.block_loc, mono: true },
+          { label: 'Truck plate', value: v.truck_plate, mono: true },
+          {
+            label: 'Weight',
+            value: v.weight_kg != null ? `${fmtKg(v.weight_kg)} kg` : null,
+            mono: true,
+          },
+          { label: 'Sacks', value: v.sacks != null ? String(v.sacks) : null, mono: true },
+          {
+            label: 'Conflicts with',
+            value: v.conflictBatches.length > 0 ? v.conflictBatches.join(', ') : null,
+            mono: true,
+          },
+        ]}
+      />
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+        This load&apos;s batch/block doesn&apos;t match what&apos;s already on file for it — it may
+        genuinely have moved blocks, or the source report may be carrying the wrong code.
+      </p>
+      <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
+        <span>
+          Confirm which batch/block this load actually belongs to, then correct the row in RC
+          IN/RC OUT — or dismiss if the reassignment is expected.
+        </span>
+      </p>
+    </DetailShell>
+  )
+}
+
+// ── batch_auto_created ────────────────────────────────────────────────────────
+
+function asAutoCreatedBatch(row: unknown): AutoCreatedBatch | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  const o = row as Record<string, unknown>
+  if (typeof o.batch_code !== 'string' || typeof o.location_ref !== 'string') return null
+  return o as unknown as AutoCreatedBatch
+}
+
+function BatchAutoCreatedDetail({ note }: { note: AutoCreatedBatch }) {
+  const isFeed = note.location_ref === ''
+
+  return (
+    <DetailShell
+      icon={<PackagePlus className="h-3 w-3" />}
+      badge="New batch created automatically"
+      badgeClass="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+      hint="Visibility only — nothing to do"
+      title={note.batch_code}
+    >
+      <FieldGrid
+        rows={[
+          { label: 'Location', value: isFeed ? '(feed / no block)' : note.location_ref, mono: true },
+          { label: 'Date', value: note.transaction_date, mono: true },
+          { label: 'Block', value: note.block_loc, mono: true },
+          {
+            label: 'Source row',
+            value: note.source_row != null ? String(note.source_row) : null,
+            mono: true,
+          },
+        ]}
+      />
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+        The batch code was new but pattern-valid (a real month + year + block/feed number), so
+        the sync created it and wrote the row automatically.
+      </p>
+      <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <span>
+          Nothing needed — informational only. Double-check the code is correct next time
+          you&apos;re in Blocking/RC IN.
+        </span>
+      </p>
+    </DetailShell>
+  )
+}
+
+// ── generic fallback (every other held kind) ────────────────────────────────────
+
+/** Title-case a snake_case JSON key into a field label ("truck_plate" → "Truck Plate"). */
+function fieldLabel(key: string): string {
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
+const COST_KEY_RE = /cost|price|php|peso/i
+
+function GenericHeldDetail({
+  kind,
+  row,
+  reason,
+  detail,
+  naturalKey,
+}: {
+  kind: string
+  row: unknown
+  reason?: string | null
+  detail?: string | null
+  naturalKey?: string | null
+}) {
+  const o = (row && typeof row === 'object' && !Array.isArray(row) ? row : {}) as Record<
+    string,
+    unknown
+  >
+  const fields = Object.entries(o)
+    .filter(([k, v]) => v != null && v !== '' && typeof v !== 'object' && !COST_KEY_RE.test(k))
+    .map(([k, v]) => ({ label: fieldLabel(k), value: String(v), mono: typeof v === 'number' }))
+
+  const summary = reason || detail || 'This needs a look — see the details below.'
+
+  return (
+    <DetailShell
+      icon={<HelpCircle className="h-3 w-3" />}
+      badge={kindLabel(kind)}
+      badgeClass="bg-amber-500/15 text-amber-600 dark:text-amber-400"
+      hint="Sync flag"
+      title={naturalKey ?? kindLabel(kind)}
+    >
+      <FieldGrid rows={fields} />
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{summary}</p>
+      <p className="mt-1.5 flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+        <span>
+          Review the row in the source report, correct it if needed, then re-sync — or dismiss if
+          this flag is a false positive.
+        </span>
+      </p>
+    </DetailShell>
+  )
+}
+
 // ── public switch ─────────────────────────────────────────────────────────────
 
 /**
- * Render the first-class detail for a reconciliation case kind, or null (letting CaseDetail
- * fall back to the generic verdict card for kinds handled elsewhere).
+ * Render the first-class, deterministic-only detail for a case kind — the SAME dense
+ * 3-part shape (badge + plain summary, a compact fact table, a plain "what this means /
+ * what to do" line) for every kind, so nothing falls back to blank when the AI verdict
+ * card is dormant (`SYNC_AI_REVIEW_ENABLED=false`, see `lib/sync/config.ts`).
+ *
+ * `source_diff` and `run_triage` return null on purpose — they have their OWN dedicated
+ * cards rendered elsewhere in `CaseDetail.tsx` (`SourceDiffCard`, `TriageSummaryCard` /
+ * `GroupResolutionCard`) and must never be duplicated here. Every other kind — the four
+ * reconciliation kinds with bespoke renderers, PLUS every remaining `HeldKind` — gets a
+ * card via `GenericHeldDetail`, which reads whatever fields the row actually carries.
  */
-export function CaseFindingDetail({ kind, row }: { kind: string; row: unknown }) {
+export function CaseFindingDetail({
+  kind,
+  row,
+  reason,
+  detail,
+  naturalKey,
+}: {
+  kind: string
+  row: unknown
+  reason?: string | null
+  detail?: string | null
+  naturalKey?: string | null
+}) {
   if (kind === 'block_diff') {
     const d = asBlockDiff(row)
     return d ? <BlockDiffDetail d={d} /> : null
@@ -435,5 +742,19 @@ export function CaseFindingDetail({ kind, row }: { kind: string; row: unknown })
   if (kind === 'unmapped_batch_code' || kind === 'unresolved_batch') {
     return <UnmappedBatchDetail row={row} />
   }
-  return null
+  if (kind === 'gate_failure') {
+    return <GateFailureDetail row={row} naturalKey={naturalKey} />
+  }
+  if (kind === 'cross_batch_reassignment') {
+    return <CrossBatchReassignmentDetail row={row} naturalKey={naturalKey} />
+  }
+  if (kind === 'batch_auto_created') {
+    const note = asAutoCreatedBatch(row)
+    return note ? <BatchAutoCreatedDetail note={note} /> : null
+  }
+  if (kind === 'source_diff' || kind === 'run_triage') return null
+
+  return (
+    <GenericHeldDetail kind={kind} row={row} reason={reason} detail={detail} naturalKey={naturalKey} />
+  )
 }

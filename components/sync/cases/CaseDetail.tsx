@@ -4,15 +4,20 @@ import * as React from 'react'
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   Loader2,
   RotateCw,
   Search,
   Sparkles,
   XCircle,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { errorToast } from '@/lib/toast'
+import { SYNC_AI_REVIEW_ENABLED } from '@/lib/sync/config'
+import { serializeCaseForClaude, type SerializableCase } from '@/lib/sync/findings'
 import type { OpenGroupProposal, OpenProposal } from '@/lib/investigator/resolution'
 import {
   asVerdict,
@@ -250,8 +255,14 @@ export function CaseDetail({
     className: 'bg-muted text-muted-foreground',
   }
   const drift = getDriftDates(theCase.row)
-  const hasVerdict = asVerdict(theCase.verdict) != null
-  const neverInvestigated = theCase.status === 'open' && messages.length === 0 && !hasVerdict
+  const verdict = asVerdict(theCase.verdict)
+  const hasVerdict = verdict != null
+  // Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). With the AI
+  // layer off there is never a verdict to reach, so the "not yet investigated"
+  // empty state (which points at the now-hidden Investigate button) would be a
+  // dead end. Flip SYNC_AI_REVIEW_ENABLED to restore.
+  const neverInvestigated =
+    SYNC_AI_REVIEW_ENABLED && theCase.status === 'open' && messages.length === 0 && !hasVerdict
   const isResolved = theCase.status === 'resolved'
   const isSourceDiff = theCase.kind === 'source_diff'
   const isBatchCase =
@@ -269,6 +280,37 @@ export function CaseDetail({
       row: theCase.row,
     })
   }, [isBatchCase, openCreateBatchPlan, theCase.kind, theCase.report_type, theCase.row])
+
+  // "Copy for Claude" — a self-contained diagnosis-ready markdown brief for THIS one
+  // case, network-free (serializeCaseForClaude never calls an API). Available
+  // regardless of SYNC_AI_REVIEW_ENABLED — this is the paste-into-Claude-Code
+  // workflow that replaces the in-app investigator when the flag is off.
+  const claudeCase = React.useMemo<SerializableCase>(
+    () => ({
+      kind: theCase.kind,
+      report_type: theCase.report_type,
+      natural_key: theCase.natural_key,
+      status: theCase.status,
+      reason: theCase.reason,
+      detail: theCase.detail,
+      row: theCase.row,
+      occurrence_count: theCase.occurrence_count,
+      verdict: verdict?.verdict ?? null,
+      verdictSummary: verdict?.summary ?? null,
+    }),
+    [theCase, verdict],
+  )
+
+  const onCopyForClaude = React.useCallback(() => {
+    const text = serializeCaseForClaude(claudeCase)
+    void navigator.clipboard.writeText(text).then(
+      () => toast.success('Copied case for Claude', { duration: 2000 }),
+      (err) =>
+        errorToast('Could not copy the case', {
+          description: err instanceof Error ? err.message : String(err),
+        }),
+    )
+  }, [claudeCase])
 
   // Keep the thread pinned to the newest message as it streams in.
   React.useEffect(() => {
@@ -298,6 +340,17 @@ export function CaseDetail({
                 seen in {theCase.occurrence_count} runs
               </span>
             )}
+            {/* Copy this ONE case as a diagnosis-ready markdown brief — the
+                paste-into-Claude-Code workflow (network-free, always available). */}
+            <button
+              type="button"
+              onClick={onCopyForClaude}
+              title="Copy this case as a diagnosis-ready block to paste into Claude Code"
+              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-foreground transition-all duration-150 hover:bg-muted"
+            >
+              <Copy className="h-3 w-3" />
+              Copy for Claude
+            </button>
           </div>
           <h2 className="mt-1 font-mono text-sm font-semibold text-foreground">
             {theCase.natural_key}
@@ -339,8 +392,16 @@ export function CaseDetail({
           />
         )}
 
-        {/* First-class detail for the reconciliation kinds (block/overdue/unmapped-batch). */}
-        <CaseFindingDetail kind={theCase.kind} row={theCase.row} />
+        {/* First-class, deterministic-only detail for every case kind (block/overdue/
+            unmapped-batch/gate-failure/cross-batch/auto-created/generic fallback) — the
+            blunt-template presentation that replaces the AI verdict below. */}
+        <CaseFindingDetail
+          kind={theCase.kind}
+          row={theCase.row}
+          reason={theCase.reason}
+          detail={theCase.detail}
+          naturalKey={theCase.natural_key}
+        />
 
         {/* Create-batch resolution for an unmapped / unresolved batch flag. */}
         {isBatchCase && createBatchPlan && (
@@ -356,7 +417,10 @@ export function CaseDetail({
           />
         )}
 
-        {hasVerdict && <VerdictCard verdict={theCase.verdict} />}
+        {/* Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). No AI prose
+            shows even if an old verdict is still sitting on the row. Flip
+            SYNC_AI_REVIEW_ENABLED to restore. */}
+        {SYNC_AI_REVIEW_ENABLED && hasVerdict && <VerdictCard verdict={theCase.verdict} />}
 
         {/* P5 — the confirm-gated resolution card (an open, un-actioned proposal). */}
         {openProposal && !isResolved && (
@@ -406,29 +470,36 @@ export function CaseDetail({
       {/* Actions bar + chat input (pinned) */}
       <div className="border-t border-border bg-background/95 p-3 backdrop-blur supports-backdrop-filter:bg-background/60">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          {neverInvestigated ? (
-            <Button size="sm" variant="outline" disabled={busy} onClick={onInvestigate}>
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {/* Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). The
+              Investigate / Re-investigate / Escalate buttons are AI-only actions;
+              hidden while the flag is off. Flip SYNC_AI_REVIEW_ENABLED to restore. */}
+          {SYNC_AI_REVIEW_ENABLED && (
+            <>
+              {neverInvestigated ? (
+                <Button size="sm" variant="outline" disabled={busy} onClick={onInvestigate}>
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Investigate
+                </Button>
               ) : (
+                <Button size="sm" variant="outline" disabled={busy} onClick={onReinvestigate}>
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-3.5 w-3.5" />
+                  )}
+                  Re-investigate
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={busy} onClick={onEscalate}>
                 <Sparkles className="h-3.5 w-3.5" />
-              )}
-              Investigate
-            </Button>
-          ) : (
-            <Button size="sm" variant="outline" disabled={busy} onClick={onReinvestigate}>
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RotateCw className="h-3.5 w-3.5" />
-              )}
-              Re-investigate
-            </Button>
+                Escalate to Opus
+              </Button>
+            </>
           )}
-          <Button size="sm" variant="outline" disabled={busy} onClick={onEscalate}>
-            <Sparkles className="h-3.5 w-3.5" />
-            Escalate to Opus
-          </Button>
 
           {/* ── P5 resolve slot ──────────────────────────────────────────────
               Quick Dismiss: a one-click, human-directed dismiss (zero operational
@@ -448,16 +519,22 @@ export function CaseDetail({
           )}
         </div>
 
-        <CaseChatInput
-          onSend={onSend}
-          pending={chatPending}
-          disabled={busy}
-          placeholder={
-            busy
-              ? 'Wait for the investigator to finish…'
-              : 'Ask why, or tell it to check another date…'
-          }
-        />
+        {/* Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). The case
+            chat is the AI conversation surface; hidden while the flag is off — use
+            "Copy for Claude" above and paste into a Claude Code session instead.
+            Flip SYNC_AI_REVIEW_ENABLED to restore. */}
+        {SYNC_AI_REVIEW_ENABLED && (
+          <CaseChatInput
+            onSend={onSend}
+            pending={chatPending}
+            disabled={busy}
+            placeholder={
+              busy
+                ? 'Wait for the investigator to finish…'
+                : 'Ask why, or tell it to check another date…'
+            }
+          />
+        )}
       </div>
     </div>
   )

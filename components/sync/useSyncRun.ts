@@ -13,6 +13,8 @@ import {
   type NarrateInput,
 } from '@/app/(app)/sync/actions'
 import { autoInvestigateRun } from '@/app/(app)/sync/cases'
+import { SYNC_AI_REVIEW_ENABLED } from '@/lib/sync/config'
+import { localSyncSummary } from '@/lib/sync/local-summary'
 import {
   SYNC_REPORTS,
   isTerminalRunStatus,
@@ -296,7 +298,12 @@ export function useSyncRun() {
       // run out into cases and runs the loop; verdicts surface over Realtime (P4).
       // Never awaited — the modal must not block — and any failure is swallowed
       // (the review page still lets Renzo investigate on demand). Skip a clean run.
-      if (!cancelled && findings.length > 0) {
+      //
+      // Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). This is the
+      // ONE automatic Claude API trigger in the whole sync path; gated on
+      // SYNC_AI_REVIEW_ENABLED so a finished run never spends a token unasked.
+      // Flip SYNC_AI_REVIEW_ENABLED to restore.
+      if (SYNC_AI_REVIEW_ENABLED && !cancelled && findings.length > 0) {
         void autoInvestigateRun(runId).catch(() => {})
       }
 
@@ -338,6 +345,16 @@ export function useSyncRun() {
         flagged: c.classify?.counts.flagged ?? 0,
         held: c.apply?.held?.length ?? 0,
       }))
+
+      // Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). Never call
+      // narrateSyncRun (an Anthropic completion) — always fold to the same local,
+      // deterministic template narrateSyncRun's own allClean branch already returns
+      // for a clean run, extended with a blunt counts-based line for a non-clean
+      // run. Flip SYNC_AI_REVIEW_ENABLED to restore AI narration.
+      if (!SYNC_AI_REVIEW_ENABLED) {
+        setState((prev) => ({ ...prev, summary: localSyncSummary(narrateInput), summarizing: false }))
+        return
+      }
 
       try {
         const summary = await narrateSyncRun(narrateInput)

@@ -19,6 +19,7 @@ import assert from 'node:assert/strict'
 
 import {
   flattenRunFindings,
+  serializeCaseForClaude,
   serializeCasesForClaude,
   serializeFindingsForClaude,
   summarizeFindings,
@@ -279,6 +280,50 @@ check('serializeCasesForClaude: run id + verdict read + natural key + cost strip
   // Cost is NEVER emitted.
   assert.ok(!block.includes('cost_basis'), 'cost_basis key must be stripped')
   assert.ok(!block.includes('42.5'), 'cost value must be stripped')
+})
+
+// ── 7. serializeCaseForClaude: the per-case "Copy for Claude" brief. ────────
+check('serializeCaseForClaude: instruction header + identity + reason + verdict + row data', () => {
+  const c: SerializableCase = {
+    kind: 'unresolved_batch',
+    report_type: 'rc_out',
+    natural_key: 'JULY-26-FEED1 @ FEED · 2026-07-08',
+    status: 'open',
+    reason: 'no matching batch in the database',
+    row: { batch_code: 'JULY-26-FEED1', weight_kg: 3000, cost_basis: 42.5 },
+    occurrence_count: 3,
+    verdict: 'needs-human',
+    verdictSummary: 'Batch not found — create it or map it before this can be saved.',
+  }
+  const block = serializeCaseForClaude(c)
+
+  assert.ok(
+    block.startsWith('Diagnose this Blackwood sync flag and recommend a resolution:'),
+    'missing instruction header line',
+  )
+  assert.ok(block.includes('JULY-26-FEED1 @ FEED'), 'natural key must appear')
+  assert.ok(block.includes('unresolved_batch'), 'kind must appear')
+  assert.ok(block.includes('Seen in: 3 runs'), 'occurrence count must appear')
+  assert.ok(block.includes('no matching batch in the database'), 'reason must appear')
+  assert.ok(block.includes('needs-human'), 'prior verdict word must appear')
+  assert.ok(block.includes('Batch not found'), 'prior verdict summary must appear')
+  assert.ok(block.includes('weight_kg=3000'), 'row data must appear')
+
+  // Cost is NEVER emitted, same discipline as every other serializer here.
+  assert.ok(!block.includes('cost_basis'), 'cost_basis key must be stripped')
+  assert.ok(!block.includes('42.5'), 'cost value must be stripped')
+})
+
+check('serializeCaseForClaude: minimal case (no verdict, no row) never throws', () => {
+  const c: SerializableCase = {
+    kind: 'other',
+    report_type: 'deliveries',
+    natural_key: 'row 4',
+  }
+  const block = serializeCaseForClaude(c)
+  assert.ok(block.includes('Diagnose this Blackwood sync flag'), 'header present')
+  assert.ok(block.includes('row 4'), 'natural key present')
+  assert.ok(!block.includes('Prior investigator verdict'), 'no verdict line when absent')
 })
 
 console.log(`\nAll ${passed} findings checks passed.`)

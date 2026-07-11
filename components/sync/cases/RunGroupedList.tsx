@@ -5,6 +5,7 @@ import { format } from 'date-fns'
 import { BadgeCheck } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { SYNC_AI_REVIEW_ENABLED } from '@/lib/sync/config'
 import {
   Tooltip,
   TooltipContent,
@@ -54,12 +55,22 @@ interface RunGroupedListProps {
   scrollToRunId: string | null
 }
 
-const FILTERS: { key: CaseFilter; label: string }[] = [
+const ALL_FILTERS: { key: CaseFilter; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'open', label: 'Open' },
   { key: 'investigated', label: 'Investigated' },
   { key: 'known', label: 'Known' },
 ]
+
+/**
+ * Dormant — Sync Review is deterministic-only (Renzo 2026-07-11). With the AI
+ * layer off, a case never reaches `status='investigated'` — it's just open or
+ * resolved — so the "Investigated" filter chip is dropped to keep the filter
+ * bar honest. Flip SYNC_AI_REVIEW_ENABLED to restore it.
+ */
+const FILTERS = SYNC_AI_REVIEW_ENABLED
+  ? ALL_FILTERS
+  : ALL_FILTERS.filter((f) => f.key !== 'investigated')
 
 function matchesFilter(row: RunListCase, filter: CaseFilter): boolean {
   switch (filter) {
@@ -274,6 +285,9 @@ export function RunGroupedList({
                               </td>
                               <td className="px-2 py-1 align-top">
                                 {row.known_ruling_id && row.known_ruling_summary ? (
+                                  // "Known issue" is a genuine, human-ruled signal (a prior
+                                  // resolve, not an AI verdict) — stays visible regardless
+                                  // of SYNC_AI_REVIEW_ENABLED.
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <span className="inline-flex">
@@ -284,8 +298,14 @@ export function RunGroupedList({
                                       Known issue — prior ruling: {row.known_ruling_summary}
                                     </TooltipContent>
                                   </Tooltip>
-                                ) : (
+                                ) : SYNC_AI_REVIEW_ENABLED ? (
                                   <VerdictBadge verdict={row.verdict} hasRuling={false} />
+                                ) : (
+                                  // Dormant — Sync Review is deterministic-only (Renzo
+                                  // 2026-07-11). No known ruling + AI off → nothing to
+                                  // surface here; a case is just open/resolved. Flip
+                                  // SYNC_AI_REVIEW_ENABLED to restore the verdict badge.
+                                  null
                                 )}
                               </td>
                             </tr>

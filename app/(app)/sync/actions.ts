@@ -236,6 +236,13 @@ export async function cancelSyncRun(runId: string): Promise<CancelSyncRunResult>
  * `kind` — the missing evidence — and (B) builds a context-rich prompt carrying the
  * human key, the structured row, the DB finding, and a short rule meaning. Single
  * completion, no tool loop. Falls back to "needs-human" for every row on any error.
+ *
+ * DORMANT (Renzo 2026-07-11, `lib/sync/config.ts::SYNC_AI_REVIEW_ENABLED`): this
+ * action is ALREADY unwired — `useSyncRun.ts` exposes an `adjudicate` callback that
+ * calls it, but no rendered UI (no per-group "Ask Claude" button) ever invokes that
+ * callback; the only remaining "Ask Claude" affordance is a plain doorway `<Link>`
+ * to Sync Review in `HeldRows.tsx`. Left on disk untouched so it can be re-wired
+ * later; no additional gating needed since nothing calls it.
  */
 export async function adjudicateHeldRows(
   reportType: SyncReportType,

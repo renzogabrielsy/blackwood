@@ -695,3 +695,46 @@ export function serializeCasesForClaude(
 
   return lines.join('\n')
 }
+
+/**
+ * Serialize ONE case into a self-contained diagnosis-ready markdown brief for a
+ * Claude Code session — the per-case "Copy for Claude" button (`CaseDetail.tsx`).
+ * This is the replacement workflow for the in-app investigator now that Sync
+ * Review is deterministic-only (`SYNC_AI_REVIEW_ENABLED=false`, see
+ * `lib/sync/config.ts`): copy this block, paste it into a Claude Code chat, and
+ * ask for a diagnosis + recommendation instead of clicking "Investigate".
+ *
+ * Leads with an explicit instruction line (so the pasted block is self-explaining
+ * with no extra typing needed), then the kind/label, natural key, status, why it
+ * was flagged, any prior investigator verdict (if the AI layer was on when it was
+ * written), and every row field (cost-ish keys stripped, same as every other
+ * serializer here). Pure, deterministic, network-free, never throws.
+ */
+export function serializeCaseForClaude(c: SerializableCase): string {
+  const lines: string[] = []
+  lines.push('Diagnose this Blackwood sync flag and recommend a resolution:')
+  lines.push('')
+  lines.push(`Kind: ${findingKindLabel(c.kind)} [${c.kind}]`)
+  lines.push(`Report: ${c.report_type}`)
+  lines.push(`Natural key: ${c.natural_key}`)
+  if (str(c.status)) lines.push(`Status: ${c.status}`)
+  if (c.occurrence_count && c.occurrence_count > 1) {
+    lines.push(`Seen in: ${c.occurrence_count} runs`)
+  }
+
+  const reason = str(c.reason) ?? str(c.detail)
+  if (reason) lines.push(`Why flagged: ${reason}`)
+
+  if (str(c.verdict)) {
+    const read = str(c.verdictSummary)
+    lines.push(`Prior investigator verdict: ${c.verdict}${read ? ` ${DASH} ${read}` : ''}`)
+  }
+
+  const data = c.row && typeof c.row === 'object' ? formatData(c.row as Record<string, unknown>) : ''
+  if (data) {
+    lines.push('')
+    lines.push(`Row data: ${data}`)
+  }
+
+  return lines.join('\n')
+}

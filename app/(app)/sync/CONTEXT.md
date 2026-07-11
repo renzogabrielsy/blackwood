@@ -14,6 +14,59 @@ digest header band (right-aligned, `app/(app)/page.tsx`) opens the sync as a Dia
 It is **Owner / Admin / Dev only** — enforced server-side in `enqueueSyncRun` and
 hidden client-side for other roles.
 
+## AI layer — DORMANT, deterministic-only (Renzo 2026-07-11)
+
+**Sync Review presents flags BLUNTLY, with deterministic template text only — ZERO
+Claude API calls fire automatically anywhere in the sync path.** The investigator /
+triage / case-chat / narration machinery described throughout this doc (the "Smart
+Held-Row Adjudicator" P1–P5 waves) is **NOT deleted** — every server action, DB
+column, and pure helper stays exactly as documented below — it is put to sleep
+behind ONE flag so it can be re-enabled with a one-line change:
+
+- **`lib/sync/config.ts::SYNC_AI_REVIEW_ENABLED`** (currently `false`) — the single
+  off-switch. Client-safe (zero imports) so both server actions and client
+  components can read it without dragging server-heavy deps into the browser
+  bundle (see CLAUDE.md's "Client/server module boundary trap").
+- **What's gated when `false`:**
+  - `useSyncRun.ts`'s `finalizeRun` — the fire-and-forget `autoInvestigateRun(runId)`
+    trigger on run finish never fires (was the ONE automatic Claude call in the
+    whole sync path).
+  - `useSyncRun.ts`'s narration step — never calls the `narrateSyncRun` server
+    action; always folds to **`lib/sync/local-summary.ts::localSyncSummary`**, a
+    pure/deterministic template (same "Nothing new today…" string for a clean run,
+    a blunt counts-based line otherwise — "Wrote 40 new rows. 3 items need your
+    review — see the findings below.").
+  - `cases.ts`'s `autoInvestigateRun` itself early-returns a no-op `skipped` result
+    (belt-and-suspenders — nothing fans a run into cases + investigates while the
+    flag is off, even if called directly).
+  - `adjudicateHeldRows` (`actions.ts`) and `triageRun` (`cases.ts`) are **already
+    dead code** independent of the flag — no client component wires either one up
+    (confirmed 2026-07-11) — left on disk with a comment, no extra gating needed.
+- **What's hidden in the UI when `false`** (code stays mounted, just doesn't
+  render — grep `SYNC_AI_REVIEW_ENABLED` in each file for the exact gate):
+  - `CaseDetail.tsx` — the Investigate / Re-investigate / Escalate buttons, the
+    case-chat input (`CaseChatInput`), the AI `VerdictCard`, and the "not yet
+    investigated" empty state (which pointed at the now-hidden Investigate button).
+  - `RunGroupedList.tsx` — the "Investigated" filter chip is dropped from the
+    filter bar, and the plain (no-known-ruling) verdict badge renders nothing — a
+    case is just **open or resolved**. The "Known issue" ruling badge/tooltip
+    (a genuine human-ruled signal from `resolve.ts`, orthogonal to the
+    investigator) stays visible regardless of the flag.
+- **The replacement workflow — copy-paste-into-Claude-Code:** every AI action now
+  has a network-free, deterministic serializer + a "Copy for Claude" button instead:
+  - **Per-run:** `HeldRows.tsx`'s "Copy all for Claude" (panel) and
+    `CasesClient.tsx`'s "Copy all for Claude" (review page) — pre-existing.
+  - **Per-case (NEW, 2026-07-11):** `CaseDetail.tsx` renders a compact **"Copy for
+    Claude"** button next to the status chip (same visual language as the
+    run-level buttons) → **`lib/sync/findings.ts::serializeCaseForClaude`** — a
+    self-contained markdown brief for ONE case (instruction header + kind/label +
+    natural key + reason/detail + prior verdict if any + all row data, cost keys
+    stripped). Pure, deterministic, never throws — proven network-free by
+    `scripts/verify-findings.ts` (mirrors `serializeCasesForClaude`'s discipline).
+- **Flag flip = full restore.** Set `SYNC_AI_REVIEW_ENABLED = true` and every
+  automatic trigger, every hidden button, and the verdict card come back — nothing
+  else in this doc changes.
+
 ## The durable flow (Wave 4B — laptop-proof)
 
 The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE +
@@ -438,17 +491,32 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     lose. The chat + Quick Dismiss stay available (a source_diff can also just be dismissed). All
     errors → `errorToast()` (persist + Copy). Client/server boundary: SourceDiffCard imports ONLY pure
     types from `diff-plan.ts` — NEVER `lib/investigator/resolution.ts` (`npm run build` is the gate).
-  - **FULL-DETAIL RENDERERS for the reconciliation kinds (2026-07-10)** — `CaseDetail` renders
-    **`cases/FindingDetailCards.tsx`** (`<CaseFindingDetail kind row />`) ABOVE the generic verdict
-    card for the kinds that previously fell back to the bare verdict. Each reads the case `row` and
-    shows source + actual data (font-mono, the two sides of a comparison) + the exact row/block + a
-    plain why: **`block_diff`** — block_loc, a Sheet-vs-App-vs-Δ balance table (grand_total shows the
-    two inventory totals), plus batch-identity fields for batch_mismatch/multi_batch + the `detail`;
-    **`single_source_overdue`** — the lone source, the value, the date+batch+block, days overdue, and
-    plainly "only <source> has this; the second report never arrived to confirm it"; **`unmapped_batch_code` /
-    `unresolved_batch`** — the batch code, the row (date/supplier/weight/block/reported-by), possible-match
-    count, and plainly "this batch doesn't exist yet" (or "matches N batches — ambiguous"). Presentation-only,
-    imports ONLY contract types.
+  - **FULL-DETAIL RENDERERS for EVERY case kind (2026-07-10, extended 2026-07-11)** — `CaseDetail`
+    renders **`cases/FindingDetailCards.tsx`** (`<CaseFindingDetail kind row reason detail naturalKey />`)
+    ABOVE the (now-dormant) AI verdict card. Every kind gets the SAME dense 3-part shape — a one-line
+    plain summary, a compact fact table, a plain "what this means / what to do" line: **`block_diff`** —
+    block_loc, a Sheet-vs-App-vs-Δ balance table (grand_total shows the two inventory totals), plus
+    batch-identity fields for batch_mismatch/multi_batch + the `detail`; **`single_source_overdue`** —
+    the lone source, the value, the date+batch+block, days overdue, and plainly "only <source> has this;
+    the second report never arrived to confirm it"; **`attribution_diff`** — a proposed-vs-sheet
+    comparison table (batch/block/weight per side) + "very likely the SAME physical feeding"; **`unmapped_batch_code`
+    / `unresolved_batch`** — the batch code, the row (date/supplier/weight/block/reported-by),
+    possible-match count, and plainly "this batch doesn't exist yet" (or "matches N batches — ambiguous");
+    **`gate_failure`** (2026-07-11) — date/batch/block/weight/production-batch + flagged-date count, "the
+    totals for X didn't reconcile… nothing saved", "check the flagged date(s) against the movement sheet
+    and the proposed/daily report"; **`cross_batch_reassignment`** (2026-07-11) — batch/block/date/truck
+    plate/sacks/weight + `db_conflict_batches` (tolerant of both the gsheet and deliveries `row` shapes),
+    "same load, different batch… may have genuinely moved, or the source report has the wrong code";
+    **`batch_auto_created`** (2026-07-11) — batch code, location (or "(feed / no block)"), date, block,
+    source row, "created automatically — nothing needed, informational only". Every OTHER `HeldKind`
+    (`location_occupied`, `malformed`, `low_confidence`, `already_exists`, `unmapped_or_missing_columns`,
+    `below_since_floor`, `unresolved_shift`, `unresolved_batch_id`, `sub_watermark_suspected_dup`,
+    `unmapped_bag_type_code`, `flagged`, `other`, and any future kind) falls through to
+    **`GenericHeldDetail`** (2026-07-11) — dumps whatever primitive fields the row carries into the same
+    fact-table shape + the case's own reason/detail as the summary, so no kind ever renders blank now that
+    the AI verdict card is dormant. `source_diff` and `run_triage` deliberately return `null` here — they
+    have their OWN dedicated cards (`SourceDiffCard`, `TriageSummaryCard`/`GroupResolutionCard`) rendered
+    elsewhere; never duplicated. Presentation-only, imports ONLY contract types + `./labels`'s `kindLabel`.
   - **CREATE-BATCH resolution UI (2026-07-10)** — for an `unmapped_batch_code` / `unresolved_batch`
     case, `CaseDetail` renders **`cases/CreateBatchCard.tsx`** (below the finding detail). It shows the
     derived batch (code + `location_ref` — "FEED" badge for a feed batch — + status + starting weight +
