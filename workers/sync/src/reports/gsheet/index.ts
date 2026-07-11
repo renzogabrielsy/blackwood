@@ -61,7 +61,7 @@ const CODIFIED_RULES = [
   "L-013",
   "L-018",
   "batch_code-fallback-prefixes",
-  "never-auto-create-batch",
+  "auto-create-pattern-valid-batch", // 2026-07-11 — reverses the old never-auto-create rule
   "never-delete",
   "2025-scope-floor",
 ] as const;
@@ -220,7 +220,7 @@ export async function runReport(
     rc_in: buildCompact(classified.rc_in, "rc_in"),
     rc_out: buildCompact(classified.rc_out, "rc_out"),
   };
-  const apply = await applyGsheet(modes, { db, progress: deps.progress, runTs: deps.runTs });
+  const apply = await applyGsheet(modes, { db, progress: deps.progress, runTs: deps.runTs, batchLookup });
 
   const perMode = {
     rc_in: {
@@ -360,6 +360,10 @@ function compactUnmapped(item: Record<string, unknown>, mode: "rc_in" | "rc_out"
     date: (r.transaction_date as string | null) ?? null,
     block_loc: (r.block_loc as string | null) ?? null,
     weight_kg: (r.weight_kg as number | null) ?? null,
+    // 2026-07-11 auto-create policy: the FULL row, same shape a "new" bucket item
+    // carries — apply writes it through the normal NEW insert path when the code
+    // turns out pattern-valid + genuinely new (see apply.ts's UNMAPPED loop).
+    full: mode === "rc_in" ? compactNewRcIn(item) : compactNewRcOut(item),
   };
   if (mode === "rc_in") {
     base.supplier = (r.supplier as string | null) ?? null;

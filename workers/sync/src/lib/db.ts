@@ -265,6 +265,48 @@ export class DbClient {
     }
   }
 
+  /**
+   * Idempotent, RACE-SAFE batch creation (2026-07-11 auto-create policy). Upserts one
+   * `batches` row keyed on the UNIQUE `batch_code` column with ON CONFLICT DO NOTHING
+   * (`ignoreDuplicates: true`), then re-SELECTs — so two PARALLEL writer lanes (e.g.
+   * deliveries + rc_out both feeding a brand-new batch in the same run) can't crash or
+   * duplicate each other: the loser's upsert silently does nothing and its re-select
+   * finds the winner's row. Returns `created:true` only for the caller that actually
+   * inserted the row (so exactly one lane writes the batch-creation audit log).
+   * Mirrors lib/sync/batchAutoCreate.ts's DerivedBatchFields shape (batch_code,
+   * location_ref, status, current_weight, avg_cost) but accepts any row shape.
+   */
+  async upsertBatchIfAbsent(row: Row): Promise<{ id: string; batch_code: string; created: boolean }> {
+    const batchCode = row.batch_code;
+    if (!batchCode) throw new Error("upsert_batch_if_absent: row.batch_code is required");
+    const { data, error } = await this.sb
+      .from("batches")
+      .upsert(row, { onConflict: "batch_code", ignoreDuplicates: true })
+      .select("id,batch_code");
+    if (error) {
+      throw new Error(
+        `upsert_batch_if_absent batches failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    if (data && data.length) {
+      const row0 = data[0] as { id: string; batch_code: string };
+      return { id: String(row0.id), batch_code: String(row0.batch_code), created: true };
+    }
+    // ignoreDuplicates means a conflict returns nothing from .select() — re-select the
+    // row a sibling lane already created (or that existed from a prior run).
+    const existing = await this.selectOne(
+      "batches",
+      { batch_code: `eq.${batchCode}` },
+      "id,batch_code"
+    );
+    if (!existing) {
+      throw new Error(
+        `upsert_batch_if_absent batches: no row found after ignoreDuplicates conflict for '${batchCode}'`
+      );
+    }
+    return { id: String(existing.id), batch_code: String(existing.batch_code), created: false };
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

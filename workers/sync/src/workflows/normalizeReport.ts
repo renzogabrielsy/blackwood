@@ -104,9 +104,25 @@ export interface ApplyApplied {
 }
 
 /**
+ * One batch the sync auto-created this apply (2026-07-11 policy — see
+ * lib/batchAutoCreate.ts). Mirror of the frontend `AutoCreatedBatch`. NEVER a
+ * ₱/cost field (avg_cost is always null on an auto-created batch).
+ */
+export interface AutoCreatedBatchNote {
+  batch_code: string;
+  location_ref: string;
+  mode?: "rc_in" | "rc_out";
+  transaction_date: string | null;
+  block_loc: string | null;
+  source_row: string | number | null;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
+ * `auto_created_batches` is ALWAYS present (default []) — the run-visibility list of
+ * batches the sync auto-created this apply.
  */
 export interface ApplyResult {
   report_type: string;
@@ -116,6 +132,7 @@ export interface ApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
+  auto_created_batches: AutoCreatedBatchNote[];
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -177,6 +194,8 @@ interface RawApply {
   labeled?: boolean;
   watermark_updated?: boolean;
   errors?: unknown;
+  /** gsheet (top-level) / rc_out — batches auto-created this apply. */
+  auto_created_batches?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,6 +237,28 @@ function toHeldRow(h: unknown): HeldRow {
 /** Coerce a raw held array (any of the ports' HeldEntry/HeldRow shapes) → HeldRow[]. */
 export function toHeldRows(v: unknown): HeldRow[] {
   return Array.isArray(v) ? v.map(toHeldRow) : [];
+}
+
+/** Coerce a raw auto-created-batch entry → contract AutoCreatedBatchNote. Every
+ *  field guarded — a bad/missing entry degrades to safe defaults, never a crash. */
+function toAutoCreatedBatch(v: unknown): AutoCreatedBatchNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const mode = o.mode === "rc_in" || o.mode === "rc_out" ? o.mode : undefined;
+  const sourceRow =
+    typeof o.source_row === "string" || typeof o.source_row === "number" ? o.source_row : null;
+  return {
+    batch_code: str(o.batch_code),
+    location_ref: str(o.location_ref),
+    ...(mode ? { mode } : {}),
+    transaction_date: typeof o.transaction_date === "string" ? o.transaction_date : null,
+    block_loc: typeof o.block_loc === "string" ? o.block_loc : null,
+    source_row: sourceRow,
+  };
+}
+
+/** Coerce a raw auto-created-batches array → AutoCreatedBatchNote[]. */
+function toAutoCreatedBatches(v: unknown): AutoCreatedBatchNote[] {
+  return Array.isArray(v) ? v.map(toAutoCreatedBatch) : [];
 }
 
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
@@ -286,6 +327,7 @@ export function normalizeApply(
     labeled: Boolean(raw.labeled),
     watermark_updated: Boolean(raw.watermark_updated),
     errors: strArray(raw.errors),
+    auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
   };
 }
 
@@ -335,6 +377,7 @@ export function failedReportResult(reportType: string, message: string): SyncRun
       labeled: false,
       watermark_updated: false,
       errors: [message],
+      auto_created_batches: [],
     },
     status: "error",
     error: message,

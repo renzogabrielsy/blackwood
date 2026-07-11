@@ -23,6 +23,13 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { rcOutReconcileCutover } from "../../lib/env.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
+import {
+  ensureBatch,
+  isPatternValidBatchCode,
+  autoCreateAuditComment,
+  autoCreateMessage,
+  type AutoCreatedBatchNote,
+} from "../../lib/batchAutoCreate.js";
 
 export const GSHEET_FILE_ID = "1yBZ0wW0DTr4ktYYtDIgXSVVoGsiETawyppkdyV1EiMM";
 
@@ -106,6 +113,13 @@ export interface CompactUnmapped {
   // rc_out natural-key extras.
   destination?: string | null;
   production_batch?: string | null;
+  /**
+   * 2026-07-11 auto-create policy: the FULL row payload (same shape a "new" bucket
+   * item would carry) so that when the batch_code turns out to be pattern-valid and
+   * genuinely new, the row can be written through the SAME insert path as a normal
+   * NEW row — "let the row proceed as a normal NEW insert in the same run."
+   */
+  full?: CompactNewRcIn | CompactNewRcOut;
 }
 
 export interface ModeCompact {
@@ -131,6 +145,13 @@ export interface ApplyDeps {
    * `applyFromCompact` ignores this field — the gate lives at the `applyGsheet` boundary.
    */
   cutoverRcOut?: boolean;
+  /**
+   * 2026-07-11 auto-create policy: the `batch_code → batch_id` lookup the classify
+   * layer already built. Shared (and MUTATED in place) across BOTH modes' apply calls
+   * so a batch auto-created while applying rc_in is immediately visible to rc_out's
+   * apply in the SAME run, with no extra DB round trip. Defaults to `{}` when absent.
+   */
+  batchLookup?: Record<string, string>;
 }
 
 /** Result of applying ONE mode. Mirrors the Python legacy result dict, plus an
@@ -147,6 +168,9 @@ export interface ModeApplyResult {
   skipped: Array<{ index: unknown; why: string; held?: EnrichedHeld }>;
   /** Present only when a safety gate tripped (PD-2). */
   gate_failure?: { gate: string; detail: string; indexes?: unknown[] };
+  /** Batches auto-created THIS MODE from a pattern-valid unmapped batch_code
+   *  (2026-07-11 policy — see lib/batchAutoCreate.ts). Empty when none. */
+  auto_created_batches: AutoCreatedBatchNote[];
   /**
    * R4b — set true when this mode was SKIPPED WHOLE by the rc_out cutover (gsheet no
    * longer writes rc_out; the PROPOSED report is the sole writer). Telemetry only —
@@ -173,6 +197,9 @@ export interface GsheetApplyResult {
   watermark_updated: boolean;
   errors: string[];
   per_mode: Record<string, ModeApplyResult>;
+  /** Batches auto-created across BOTH modes this run (2026-07-11 policy — see
+   *  lib/batchAutoCreate.ts). Empty when none. */
+  auto_created_batches: AutoCreatedBatchNote[];
 }
 
 const REPORT_TYPE = "gsheet" as const;
@@ -249,6 +276,91 @@ function enrichedFlagged(mode: "rc_in" | "rc_out", r: CompactFlagged): EnrichedH
 }
 
 /**
+ * Write ONE rc_in delivery row through the SAME payload shape the NEW loop uses
+ * (the batch already exists — the caller ensures it via `ensureBatch`). Kept
+ * STANDALONE from the NEW loop (not shared) so the auto-create path below can't
+ * disturb the NEW loop's already-tested behavior.
+ */
+async function writeRcInDelivery(
+  db: DbClient,
+  nr: CompactNewRcIn,
+  bc: string,
+  runTs: string,
+): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+  const payload: Record<string, unknown> = {
+    transaction_date: nr.date,
+    supplier: nr.supplier,
+    batch_code: bc,
+    block_loc: nr.block_loc,
+    truck_plate: nr.truck_plate,
+    sacks: nr.sacks,
+    weight_kg: nr.weight_kg,
+    cost_basis: 0, // L-008 placeholder.
+    remarks: nr.remarks,
+    lab_results: nr.lab_results,
+    true_weight_kg: nr.true_weight_kg ?? null,
+    deduction_note: nr.deduction_note ?? null,
+  };
+  try {
+    const ins = await db.insert("deliveries", [payload]);
+    const newId = ins[0].id as string;
+    await db.stampIngestionAudit({
+      tableName: "deliveries",
+      recordId: newId,
+      comment: provenanceComment(
+        "rc_in",
+        nr.index,
+        runTs,
+        "cost_basis=0 is an UNPRICED PLACEHOLDER (L-008) — deliveries-manager to enrich from " +
+          "Czarina/email. Batch auto-created from a pattern-valid unmapped code (2026-07-11 policy).",
+      ),
+      snapshot: payload,
+    });
+    return { ok: true, id: newId };
+  } catch (exc) {
+    return { ok: false, message: exc instanceof Error ? exc.message : String(exc) };
+  }
+}
+
+/** Write ONE rc_out row through the SAME payload shape the NEW loop uses. Standalone
+ *  — see `writeRcInDelivery`. */
+async function writeRcOutRow(
+  db: DbClient,
+  nr: CompactNewRcOut,
+  batchId: string,
+  runTs: string,
+): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+  const payload: Record<string, unknown> = {
+    transaction_date: nr.date,
+    batch_id: batchId,
+    destination: nr.destination || "MAIN",
+    weight_kg: nr.weight_kg,
+    remarks: nr.remarks,
+    block_loc: nr.block_loc,
+    production_batch: nr.production_batch,
+  };
+  try {
+    const ins = await db.insert("rc_out", [payload]);
+    const newId = ins[0].id as string;
+    await db.writeIngestionAudit({
+      tableName: "rc_out",
+      recordId: newId,
+      operation: "INSERT",
+      comment: provenanceComment(
+        "rc_out",
+        nr.index,
+        runTs,
+        "Batch auto-created from a pattern-valid unmapped code (2026-07-11 policy).",
+      ),
+      snapshot: payload,
+    });
+    return { ok: true, id: newId };
+  } catch (exc) {
+    return { ok: false, message: exc instanceof Error ? exc.message : String(exc) };
+  }
+}
+
+/**
  * Port of _apply_from_compact for ONE mode, with PORTING_DECISIONS #2/#3/#4.
  * Returns a typed ModeApplyResult (NEVER a bare int / crash).
  */
@@ -265,6 +377,10 @@ export async function applyFromCompact(
   const updatedIds: string[] = [];
   const skipped: ModeApplyResult["skipped"] = [];
   const newBatches: string[] = [];
+  // 2026-07-11 auto-create policy: the shared batch_code→batch_id lookup (mutated in
+  // place — see ApplyDeps.batchLookup) + the notes for every batch this call created.
+  const batchLookup: Record<string, string> = deps.batchLookup ?? {};
+  const autoCreatedBatches: AutoCreatedBatchNote[] = [];
 
   const base = (): ModeApplyResult => ({
     ok: true,
@@ -276,6 +392,7 @@ export async function applyFromCompact(
     new_batches_created: newBatches,
     flagged_resolved: [],
     skipped,
+    auto_created_batches: autoCreatedBatches,
   });
 
   // --- Safety gates (PORTING_DECISIONS #2 — proper envelope, no bare-int crash). ---
@@ -476,7 +593,11 @@ export async function applyFromCompact(
     skipped.push({ index: r.index, why: `unknown flagged decision '${decision}'`, held: enriched });
   }
 
-  // --- UNMAPPED: never auto-create a batch. ---
+  // --- UNMAPPED (2026-07-11 policy — reverses "never auto-create a batch"): a
+  // pattern-valid unknown batch_code is now auto-created from the template and the
+  // row proceeds as a normal NEW insert IN THIS SAME RUN (via `r.full`, the complete
+  // row the compact builder now carries). A pattern-INVALID code (a likely typo)
+  // still holds exactly as before. ---
   for (const r of actionable.unmapped) {
     const decision = (r.decision ?? "skip").trim();
     // Fix 2: NAME the offending batch_code in the alert (was just "RC IN row N").
@@ -499,6 +620,64 @@ export async function applyFromCompact(
       natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} row ${String(r.index)}${codeLabel}`,
       row: enrichedRow,
     };
+
+    if (decision === "skip" && r.full && isPatternValidBatchCode(r.batch_code)) {
+      const outcome = await ensureBatch(db, r.batch_code ?? null, r.block_loc ?? null, batchLookup);
+      if (outcome.status !== "invalid_pattern") {
+        if (outcome.status === "created") {
+          await db.writeIngestionAudit({
+            tableName: "batches",
+            recordId: outcome.batchId,
+            operation: "INSERT",
+            comment: autoCreateAuditComment({
+              source: `gsheet (${mode === "rc_in" ? "RC IN" : "RC OUT"})`,
+              runTs,
+              sourceRow: (r.index as string | number | null) ?? null,
+            }),
+            snapshot: outcome.fields as unknown as Record<string, unknown>,
+          });
+          autoCreatedBatches.push({
+            batch_code: outcome.resolvedCode,
+            location_ref: outcome.fields.location_ref,
+            mode,
+            transaction_date: r.date ?? null,
+            block_loc: r.block_loc ?? null,
+            source_row: (r.index as string | number) ?? null,
+          });
+          await deps.progress?.(
+            "apply",
+            autoCreateMessage({
+              batchCode: outcome.resolvedCode,
+              locationRef: outcome.fields.location_ref,
+              source: `Google Sheet ${mode === "rc_in" ? "RC IN" : "RC OUT"}`,
+              sourceRow: (r.index as string | number | null) ?? null,
+            }),
+            18,
+            undefined,
+            "info",
+          );
+        }
+
+        const writeRes =
+          mode === "rc_in"
+            ? await writeRcInDelivery(db, r.full as CompactNewRcIn, outcome.resolvedCode, runTs)
+            : await writeRcOutRow(db, r.full as CompactNewRcOut, outcome.batchId, runTs);
+
+        if (writeRes.ok) {
+          insertedIds.push(writeRes.id);
+          continue;
+        }
+        skipped.push({
+          index: r.index,
+          why: `batch auto-created (${outcome.resolvedCode}) but the row write failed: ${writeRes.message}`,
+          held: enriched,
+        });
+        continue;
+      }
+      // invalid_pattern: fall through to the ordinary held path below (shouldn't
+      // happen — isPatternValidBatchCode already gated this branch).
+    }
+
     if (decision === "skip") {
       skipped.push({
         index: r.index,
@@ -543,6 +722,11 @@ export async function applyGsheet(
   const held: GsheetApplyResult["held"] = [];
   const errors: string[] = [];
   const perMode: Record<string, ModeApplyResult> = {};
+  const autoCreatedBatches: AutoCreatedBatchNote[] = [];
+  // 2026-07-11 auto-create policy: ONE shared lookup object threaded to BOTH modes'
+  // applyFromCompact calls (rc_in runs before rc_out below), so a batch auto-created
+  // while applying rc_in is immediately visible to rc_out in the SAME run.
+  const sharedDeps: ApplyDeps = { ...deps, batchLookup: deps.batchLookup ?? {} };
 
   const modeList: Array<"rc_in" | "rc_out"> = ["rc_in", "rc_out"];
   for (let i = 0; i < modeList.length; i++) {
@@ -566,6 +750,7 @@ export async function applyGsheet(
         flagged_resolved: [],
         skipped: [],
         cutover_skipped: true,
+        auto_created_batches: [],
       };
       await emit?.(
         "apply",
@@ -577,8 +762,9 @@ export async function applyGsheet(
 
     await emit?.("apply", `Writing ${mode === "rc_in" ? "deliveries (RC IN)" : "feedings (RC OUT)"}…`, 15 + Math.trunc((70 * i) / modeList.length));
     try {
-      const res = await applyFromCompact(compact, deps);
+      const res = await applyFromCompact(compact, sharedDeps);
       perMode[mode] = res;
+      autoCreatedBatches.push(...res.auto_created_batches);
       if (res.gate_failure) {
         // PD-2: nothing applied for this mode; record the gate, do NOT crash.
         errors.push(`${mode} apply gate: ${res.gate_failure.gate} — ${res.gate_failure.detail}`);
@@ -641,6 +827,7 @@ export async function applyGsheet(
     watermark_updated: watermarkUpdated,
     errors,
     per_mode: perMode,
+    auto_created_batches: autoCreatedBatches,
   };
 }
 

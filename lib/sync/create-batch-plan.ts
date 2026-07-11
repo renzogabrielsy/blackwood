@@ -2,12 +2,24 @@
  * create-batch-plan.ts — the PURE core for the human-confirmed "create this batch"
  * resolution of an `unmapped_batch_code` / `unresolved_batch` case.
  *
- * WHY THIS EXISTS: the sync NEVER auto-creates a batch (CLAUDE.md hard rule) — a
- * genuinely-new batch like `JULY-26-FEED1` therefore recurs every run as an unmapped /
- * unresolved flag because nothing ever creates it. This is the ONE human-confirmed
- * exception: the reviewer looks at the flag and clicks "create this batch", which
- * (a) inserts the batch and (b) writes the row(s) that were skipped because it was
- * missing — through the SAME deterministic `apply-writers.ts` path the sync uses.
+ * WHY THIS EXISTS: this is the MANUAL / human-in-the-loop side of batch creation —
+ * the reviewer looks at a still-open flag in Sync Review and clicks "create this
+ * batch", which (a) inserts the batch and (b) writes the row(s) that were skipped
+ * because it was missing — through the SAME deterministic `apply-writers.ts` path
+ * the sync uses. It is the fallback for whatever the AUTOMATIC path below didn't
+ * catch (a pattern-INVALID code — a likely typo — or a case left over from before
+ * the policy change).
+ *
+ * POLICY UPDATE (2026-07-11, Renzo-approved): the "never auto-create a batch" hard
+ * rule this file's history refers to is REVERSED for pattern-valid codes. The sync
+ * worker now auto-creates a batch (from this EXACT template, mirrored — not
+ * imported, separate module graph — in `workers/sync/src/lib/batchAutoCreate.ts`)
+ * whenever a source names a `batch_code` that doesn't exist yet AND matches the
+ * canonical month-prefix + `-YY-` + kind+number shape (e.g. `JULY-26-BLK6`,
+ * `JULY-26-FEED1`). A pattern-INVALID code (`BLKZ`, a likely typo) still holds/
+ * unmapped and STILL needs this manual flow. See
+ * `workers/sync/specs/PORTING_DECISIONS.md` → "Apply-phase deviations" for the
+ * full ruling + file list.
  *
  * This module is PURE + CLIENT-SAFE (imports only `./types`): it derives the batch's
  * fields from the case row, decides which writer lane the skipped row belongs to, and
