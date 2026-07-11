@@ -400,6 +400,12 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
     Each selectable row carries a compact bulk-select checkbox; a **selection bar** (animate-fade-up,
     glass) offers "Dismiss N selected…" → the multi-mode `QuickDismissDialog` → `bulkDismissCases`.
     Status filters (All/Open/Investigated/Known + show-resolved) apply across all sections.
+  - **Copy all for Claude (2026-07-11):** a page header bar (above the list/detail split, hidden when
+    there are zero non-triage cases) carries an open-case count + a **"Copy all for Claude"** button.
+    It maps the visible cases (minus `run_triage`) into `SerializableCase[]` — extracting each case's
+    investigator verdict word + one-line read via `asVerdict` (from `./labels`) — and clipboards
+    `serializeCasesForClaude(cases, {runId})` → "Copied N cases" toast (failure → `errorToast`). The
+    header run id is the deep-linked `?run=` id, else the single run all cases share, else null.
     `CaseDetail` now also renders **`cases/GroupResolutionCard.tsx`** when the selected case is a
     triage case with an OPEN `propose_group_resolution` (detected client-side via
     `findOpenGroupProposal`): "Dismiss N flags" badge + the listed member cases → Confirm
@@ -475,7 +481,11 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   `kindLabel` badge + `location` (font-mono), font-mono **data chips** (batch/date/block/weight, or
   the two sides of a diff, or sheet-vs-app-vs-Δ for a block diff), and the plain `reason`; a per-card
   Copy button (everything copyable). Each source group keeps the **"Ask Claude → Sync Review"**
-  doorway Link (`/sync/cases?run=<runId>`). Zero findings → renders null (the existing clean state).
+  doorway Link (`/sync/cases?run=<runId>`). The header row now also carries a **"Copy all for Claude"**
+  button (2026-07-11) — `serializeFindingsForClaude(findings, {runId, runDate, status})` → clipboard →
+  a "Copied N flags" success toast (failure → `errorToast`); `runDate`/`status` are threaded from
+  `SyncPanelBody` (`state.startedAt.slice(0,10)` + `state.runStatus`). Zero findings → renders null
+  (the existing clean state), so the button is naturally hidden when there is nothing to copy.
   The old per-kind `KIND_LABEL` map + the recommendation-glance layer are retired here (the plain
   labels now live on each `RunFinding.kindLabel`, built in `lib/sync/findings.ts`).
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
@@ -543,6 +553,16 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   reason, severity: 'info'|'attention'|'high'}`. **`summarizeFindings(findings)`** → `{total, byKind}`.
   Fixes the panel keyhole: a run that flagged 10 things but showed 1 (the other 9 lived in
   `reconciliation`). Pure/exhaustive/never-throws → `scripts/verify-findings.ts`.
+  **COPY-FOR-CLAUDE (2026-07-11):** two pure serializers turn a run's flags into ONE dense,
+  self-contained diagnosis block to paste into a Claude Code session — a self-describing lead line,
+  the **LOAD-BEARING run id** (`Run: <runId> · <date> · <status>` — lets the assistant query
+  `sync_runs` / `sync_held_cases` for anything not in the dump), a `Total: N — <by-kind breakdown>`
+  line, then every entry grouped by kind carrying source / location / the ACTUAL `data` values /
+  plain reason. **`serializeFindingsForClaude(findings, {runId, runDate?, status?})`** (panel side) and
+  **`serializeCasesForClaude(cases: SerializableCase[], meta)`** (review-page side — also folds each
+  case's investigator `verdict` + one-line read). Both deterministic, never throw, emit NO ₱/cost
+  (`formatData` strips any `cost|price|php|peso` key as belt-and-braces on raw case rows). Non-ASCII
+  delimiters are `\uXXXX` escapes in source. Tested in `scripts/verify-findings.ts` (10 checks).
 - `lib/sync/create-batch-plan.ts` (**PURE, CLIENT-SAFE — imports ONLY `types`**) — the create-batch
   core (mirrors `diff-plan.ts`'s pick-source split). `buildCreateBatchPlan({kind, reportType, row})`
   → `CreateBatchPlan {batch_code, fields (location_ref: block or 'FEED', status STORED, current_weight
@@ -635,11 +655,14 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   (all noops), soft-remove of an over-stated leg (weight→0, kept), the exact provenance + `pick_source`
   ruling-summary strings, and the `parsePickSourceInput` / `findOpenPickSourcePlan` round-trip (a
   later decline closes it). No DB.
-- `scripts/verify-findings.ts` — `npx tsx scripts/verify-findings.ts` runs 7 framework-free
+- `scripts/verify-findings.ts` — `npx tsx scripts/verify-findings.ts` runs 10 framework-free
   assertions over `lib/sync/findings.ts`: the real-run fixture (1 unmapped held + 3 overdue + 3 block
   balance + 1 grand_total + 1 unresolved = **9** findings) flattens with the right per-kind breakdown
   (proving the panel keyhole fix — was showing 1), each channel's kind/source/plain data, a source_diff
-  also flattens (all 5 channels), and empty/manifest-only → `[]`. No DB.
+  also flattens (all 5 channels), and empty/manifest-only → `[]`. Plus **`serializeFindingsForClaude`**
+  (run id + total + one line per finding + the actual numbers 8200/12500/3000 survive; empty → clean
+  block) and **`serializeCasesForClaude`** (run id + verdict read + natural key present; a `cost_basis`
+  key on the raw row is stripped). No DB.
 - `scripts/verify-create-batch.ts` — `npx tsx scripts/verify-create-batch.ts` runs 8 framework-free
   assertions over `lib/sync/create-batch-plan.ts`: FEED (null/blank block) → `location_ref='FEED'` +
   `isFeed`, field defaults (STORED/0/null), writer-lane resolution (unresolved_batch→rc_out,

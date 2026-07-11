@@ -147,7 +147,12 @@ export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
         ))}
 
         {/* Everything the run flagged (held rows + all reconciliation channels). */}
-        <HeldRows findings={findings} runId={state.runId} />
+        <HeldRows
+          findings={findings}
+          runId={state.runId}
+          runDate={state.startedAt ? state.startedAt.slice(0, 10) : null}
+          status={state.runStatus}
+        />
       </div>
 
       {/* Summary footer */}

@@ -392,3 +392,228 @@ export function summarizeFindings(findings: RunFinding[]): {
   for (const f of findings) byKind[f.kind] = (byKind[f.kind] ?? 0) + 1
   return { total: findings.length, byKind }
 }
+
+// ============================================================================
+// Diagnosis-ready serializers — turn a run's findings (or the review page's
+// cases) into ONE dense, self-contained plain-text/markdown block optimized for
+// an LLM to ingest and diagnose. Pure, deterministic, never throw, no I/O.
+//
+// Non-ASCII structural delimiters are written as `\uXXXX` escapes (never raw
+// bytes) so the source stays byte-clean; the RUNTIME string carries the real
+// glyphs. NO ₱/cost is ever emitted — RunFinding.data already excludes it, and
+// `formatData` strips any cost-ish key from a raw case row as a belt-and-braces.
+// ============================================================================
+
+/** Middle dot `·`. */
+const DOT = '\u00B7'
+/** Em dash `—`. */
+const DASH = '\u2014'
+/** Multiplication sign `×`. */
+const TIMES = '\u00D7'
+
+/**
+ * Compact word per kind for the by-kind breakdown line (e.g. "4 block · 3 overdue").
+ * Mirrors HeldRows.tsx's SHORT_KIND (duplicated on purpose — this module must stay
+ * client-safe AND node-safe; the copy is trivial and drift-tolerant). Falls back to a
+ * plain kind label.
+ */
+const SHORT_KIND: Record<string, string> = {
+  block_diff: 'block',
+  single_source_overdue: 'overdue',
+  source_diff: 'sources disagree',
+  unresolved_batch: 'unknown batch',
+  unmapped_batch_code: 'unknown batch',
+  unmapped_bag_type_code: 'unknown bag type',
+  gate_failure: 'totals off',
+  cross_batch_reassignment: 'batch moved',
+  location_occupied: 'slot occupied',
+  malformed: 'bad row',
+  already_exists: 'already saved',
+  low_confidence: 'low confidence',
+  unresolved_shift: 'unmatched shift',
+  unresolved_batch_id: 'unknown batch',
+}
+
+/** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
+const EXTRA_KIND_LABEL: Record<string, string> = {
+  source_diff: 'Sources disagree',
+  single_source_overdue: 'Only one source reported',
+  unresolved_batch: "Batch code can't be matched",
+  block_diff: 'Block balance mismatch',
+  run_triage: 'Run summary',
+}
+
+/** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */
+function findingKindLabel(kind: string): string {
+  return EXTRA_KIND_LABEL[kind] ?? HELD_KIND_LABEL[kind] ?? titleCase(kind)
+}
+
+/** Keys we never emit — cost/price columns, gated everywhere in Blackwood. */
+const COST_KEY_RE = /cost|price|php|peso/i
+
+/**
+ * Flatten a `data` / raw-row object into compact `key=value; key=value` text. Skips
+ * empty values and any cost-ish key; nested values are compact-JSON'd so both sides of a
+ * diff / the candidate list survive intact.
+ */
+function formatData(data: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [k, v] of Object.entries(data)) {
+    if (v == null || v === '') continue
+    if (COST_KEY_RE.test(k)) continue
+    const val = typeof v === 'object' ? JSON.stringify(v) : String(v)
+    parts.push(`${k}=${val}`)
+  }
+  return parts.join('; ')
+}
+
+/** "4 block · 3 overdue · 1 unknown batch" — loudest kind first, then kind name. */
+function breakdownText(
+  counts: Record<string, number>,
+  labelFor: (kind: string) => string,
+): string {
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([kind, n]) => `${n} ${SHORT_KIND[kind] ?? labelFor(kind)}`)
+    .join(` ${DOT} `)
+}
+
+/** The run-identity header line — `runId` is LOAD-BEARING (lets the assistant query more). */
+function runHeaderLine(meta: { runId: string | null; runDate?: string | null; status?: string | null }): string {
+  const runDate = str(meta.runDate) ?? 'date n/a'
+  const status = str(meta.status) ?? 'unknown status'
+  return `Run: ${meta.runId ?? 'unknown (no run id)'} ${DOT} ${runDate} ${DOT} ${status}`
+}
+
+/**
+ * Serialize a run's honest findings into a diagnosis-ready block for Claude Code.
+ * Dense over pretty: a self-describing line, the LOAD-BEARING run id, a total + by-kind
+ * breakdown, then every finding grouped by kind (first-appearance order) carrying the
+ * source, location, the ACTUAL data values, and the plain reason. Deterministic, no throw.
+ */
+export function serializeFindingsForClaude(
+  findings: RunFinding[],
+  meta: { runId: string | null; runDate?: string | null; status?: string | null },
+): string {
+  const lines: string[] = []
+  lines.push(`Blackwood sync flags ${DASH} for diagnosis in Claude Code`)
+  lines.push(runHeaderLine(meta))
+
+  const { total, byKind } = summarizeFindings(findings)
+  if (total === 0) {
+    lines.push(`Total: 0 findings ${DASH} nothing was flagged (clean run).`)
+    return lines.join('\n')
+  }
+
+  const labelFor = (kind: string) =>
+    findings.find((f) => f.kind === kind)?.kindLabel ?? findingKindLabel(kind)
+  lines.push(
+    `Total: ${total} finding${total === 1 ? '' : 's'} ${DASH} ${breakdownText(byKind, labelFor)}`,
+  )
+
+  // Group by kind, kinds in first-appearance order (deterministic given flatten order).
+  const order: string[] = []
+  const groups = new Map<string, RunFinding[]>()
+  for (const f of findings) {
+    let list = groups.get(f.kind)
+    if (!list) {
+      list = []
+      groups.set(f.kind, list)
+      order.push(f.kind)
+    }
+    list.push(f)
+  }
+
+  for (const kind of order) {
+    const group = groups.get(kind)!
+    lines.push('')
+    lines.push(`## ${group[0].kindLabel} [${kind}] ${TIMES}${group.length}`)
+    for (const f of group) {
+      lines.push(`- [${f.severity}] ${f.source} | ${f.location} | ${f.title}`)
+      const data = formatData(f.data)
+      if (data) lines.push(`  data: ${data}`)
+      if (f.reason) lines.push(`  why: ${f.reason}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * The minimal, presentation-free shape `serializeCasesForClaude` needs. The Sync Review
+ * page maps each visible `sync_held_cases` row into this (extracting the investigator
+ * verdict word + one-line summary via `asVerdict`), so the serializer never imports the
+ * component/verdict types and stays pure.
+ */
+export interface SerializableCase {
+  kind: string
+  report_type: string
+  natural_key: string
+  status?: string | null
+  reason?: string | null
+  detail?: string | null
+  /** The raw held row jsonb (cost-ish keys are stripped on serialize). */
+  row?: unknown
+  occurrence_count?: number
+  /** Investigator verdict word (apply | skip | needs-human), if investigated. */
+  verdict?: string | null
+  /** The investigator's one-line read. */
+  verdictSummary?: string | null
+}
+
+/**
+ * Serialize the Sync Review page's open cases into a diagnosis-ready block for Claude Code.
+ * Richer than the findings dump: each case also carries the investigator's `verdict` +
+ * one-line read. Same header/breakdown discipline, grouped by kind. Pure, no throw.
+ */
+export function serializeCasesForClaude(
+  cases: SerializableCase[],
+  meta: { runId: string | null; runDate?: string | null; status?: string | null },
+): string {
+  const lines: string[] = []
+  lines.push(`Blackwood sync review cases ${DASH} for diagnosis in Claude Code`)
+  lines.push(runHeaderLine(meta))
+
+  const total = cases.length
+  if (total === 0) {
+    lines.push(`Total: 0 cases ${DASH} nothing open to review.`)
+    return lines.join('\n')
+  }
+
+  const byKind: Record<string, number> = {}
+  for (const c of cases) byKind[c.kind] = (byKind[c.kind] ?? 0) + 1
+  lines.push(
+    `Total: ${total} case${total === 1 ? '' : 's'} ${DASH} ${breakdownText(byKind, findingKindLabel)}`,
+  )
+
+  const order: string[] = []
+  const groups = new Map<string, SerializableCase[]>()
+  for (const c of cases) {
+    let list = groups.get(c.kind)
+    if (!list) {
+      list = []
+      groups.set(c.kind, list)
+      order.push(c.kind)
+    }
+    list.push(c)
+  }
+
+  for (const kind of order) {
+    const group = groups.get(kind)!
+    lines.push('')
+    lines.push(`## ${findingKindLabel(kind)} [${kind}] ${TIMES}${group.length}`)
+    for (const c of group) {
+      const occ = c.occurrence_count && c.occurrence_count > 1 ? ` ${TIMES}${c.occurrence_count}` : ''
+      const verdict = str(c.verdict) ? `verdict=${c.verdict}` : 'not yet investigated'
+      lines.push(`- [${str(c.status) ?? 'open'}] ${c.report_type} | ${c.natural_key}${occ} | ${verdict}`)
+      if (str(c.verdictSummary)) lines.push(`  read: ${c.verdictSummary}`)
+      const reason = str(c.reason) ?? str(c.detail)
+      if (reason) lines.push(`  why: ${reason}`)
+      const data =
+        c.row && typeof c.row === 'object' ? formatData(c.row as Record<string, unknown>) : ''
+      if (data) lines.push(`  data: ${data}`)
+    }
+  }
+
+  return lines.join('\n')
+}

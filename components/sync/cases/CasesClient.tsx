@@ -1,12 +1,13 @@
 'use client'
 
 import * as React from 'react'
-import { Inbox, XCircle } from 'lucide-react'
+import { Copy, Inbox, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 import { errorToast } from '@/lib/toast'
+import { serializeCasesForClaude, type SerializableCase } from '@/lib/sync/findings'
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js'
 import { ensureCasesForRun, getCaseWithMessages, investigateCase } from '@/app/(app)/sync/cases'
 import { chatOnCase } from '@/app/(app)/sync/case-chat'
@@ -41,6 +42,7 @@ import { asSourceDiff, type OpenPickPlan } from './SourceDiffCard'
 import type { ThreadMessage } from './CaseThread'
 import { QuickDismissDialog } from './QuickDismissDialog'
 import { groupCasesByRun, isBulkSelectable, preselectForRun } from './grouping'
+import { asVerdict } from './labels'
 
 /** A held-case row as it arrives on the wire (list + Realtime share this shape). */
 export interface WireCase extends RunListCase {
@@ -692,8 +694,74 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
 
   const bulkCount = selectedForBulk.size
 
+  // ── "Copy all for Claude": the visible cases (minus the synthetic triage summaries)
+  //    folded into diagnosis-ready entries, each carrying the investigator's verdict read. ──
+  const claudeCases = React.useMemo<SerializableCase[]>(
+    () =>
+      cases
+        .filter((c) => c.kind !== 'run_triage')
+        .map((c) => {
+          const v = asVerdict(c.verdict)
+          return {
+            kind: c.kind,
+            report_type: c.report_type,
+            natural_key: c.natural_key,
+            status: c.status,
+            reason: c.reason,
+            detail: c.detail,
+            row: c.row,
+            occurrence_count: c.occurrence_count,
+            verdict: v?.verdict ?? null,
+            verdictSummary: v?.summary ?? null,
+          }
+        }),
+    [cases],
+  )
+
+  // The load-bearing run id for the block header: the deep-linked run, else the single
+  // run all cases share, else null (the page may span multiple runs).
+  const copyRunId = React.useMemo(() => {
+    if (initialRunId) return initialRunId
+    const runs = new Set(
+      cases.map((c) => c.last_run_id).filter((r): r is string => Boolean(r)),
+    )
+    return runs.size === 1 ? [...runs][0] : null
+  }, [initialRunId, cases])
+
+  const onCopyAllForClaude = React.useCallback(() => {
+    const text = serializeCasesForClaude(claudeCases, { runId: copyRunId, status: 'open' })
+    void navigator.clipboard.writeText(text).then(
+      () =>
+        toast.success(`Copied ${claudeCases.length} case${claudeCases.length === 1 ? '' : 's'}`, {
+          duration: 2000,
+        }),
+      (err) =>
+        errorToast('Could not copy the cases', {
+          description: err instanceof Error ? err.message : String(err),
+        }),
+    )
+  }, [claudeCases, copyRunId])
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
+      {/* Run/page header: copy every open case as a diagnosis-ready block for Claude Code. */}
+      {claudeCases.length > 0 && (
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <span className="text-[11px] font-medium text-muted-foreground">
+            {claudeCases.length} open {claudeCases.length === 1 ? 'case' : 'cases'}
+          </span>
+          <button
+            type="button"
+            onClick={onCopyAllForClaude}
+            title="Copy every open case as a diagnosis-ready block to paste into Claude Code"
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[11px] font-medium text-foreground transition-all duration-150 hover:bg-muted"
+          >
+            <Copy className="h-3 w-3" />
+            Copy all for Claude
+          </button>
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
         {/* Left: run-grouped case list */}
         <div className="flex w-[400px] shrink-0 flex-col border-r border-border">

@@ -6,7 +6,9 @@ import { Copy, HandHelping, Sparkles } from 'lucide-react'
 
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { errorToast } from '@/lib/toast'
 import {
+  serializeFindingsForClaude,
   summarizeFindings,
   type FindingSeverity,
   type RunFinding,
@@ -28,6 +30,10 @@ interface HeldRowsProps {
   findings: RunFinding[]
   /** The current run id — threads into the "Ask Claude → Sync Review" doorway link. */
   runId: string | null
+  /** Run operational date (yyyy-MM-dd), for the diagnosis-block header. Optional. */
+  runDate?: string | null
+  /** Run lifecycle status, for the diagnosis-block header. Optional. */
+  status?: string | null
 }
 
 /** Severity rank for ordering (high first). */
@@ -229,7 +235,25 @@ function FindingCard({ f }: { f: RunFinding }) {
   )
 }
 
-export function HeldRows({ findings, runId }: HeldRowsProps) {
+/** Copy the WHOLE run's findings as a diagnosis-ready block for a Claude Code session. */
+function copyAllForClaude(
+  findings: RunFinding[],
+  meta: { runId: string | null; runDate?: string | null; status?: string | null },
+) {
+  const text = serializeFindingsForClaude(findings, meta)
+  void navigator.clipboard.writeText(text).then(
+    () =>
+      toast.success(`Copied ${findings.length} flag${findings.length === 1 ? '' : 's'}`, {
+        duration: 2000,
+      }),
+    (err) =>
+      errorToast('Could not copy the flags', {
+        description: err instanceof Error ? err.message : String(err),
+      }),
+  )
+}
+
+export function HeldRows({ findings, runId, runDate, status }: HeldRowsProps) {
   const { grouped, breakdown } = React.useMemo(() => {
     const { byKind } = summarizeFindings(findings)
     // By-kind breakdown chips (compact word per kind), loudest first.
@@ -269,11 +293,23 @@ export function HeldRows({ findings, runId }: HeldRowsProps) {
 
   return (
     <div className="animate-fade-up border-t border-border px-3 py-2.5">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <HandHelping className="h-3.5 w-3.5 text-orange-500" />
-        <h3 className="text-xs font-semibold tracking-tight text-foreground">
-          {total} {total === 1 ? 'thing needs' : 'things need'} review
-        </h3>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <HandHelping className="h-3.5 w-3.5 text-orange-500" />
+          <h3 className="text-xs font-semibold tracking-tight text-foreground">
+            {total} {total === 1 ? 'thing needs' : 'things need'} review
+          </h3>
+        </div>
+        {/* Copy the WHOLE run's flags as a diagnosis-ready block for Claude Code. */}
+        <button
+          type="button"
+          onClick={() => copyAllForClaude(findings, { runId, runDate, status })}
+          title="Copy every flag as a diagnosis-ready block to paste into Claude Code"
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px] font-medium text-foreground transition-all duration-150 hover:bg-muted"
+        >
+          <Copy className="h-3 w-3" />
+          Copy all for Claude
+        </button>
       </div>
 
       {/* By-kind breakdown chips (e.g. "3 overdue · 4 block · 1 unknown batch"). */}

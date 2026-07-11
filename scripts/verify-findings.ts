@@ -17,7 +17,13 @@
  */
 import assert from 'node:assert/strict'
 
-import { flattenRunFindings, summarizeFindings } from '../lib/sync/findings'
+import {
+  flattenRunFindings,
+  serializeCasesForClaude,
+  serializeFindingsForClaude,
+  summarizeFindings,
+  type SerializableCase,
+} from '../lib/sync/findings'
 import type {
   BlockDiff,
   SingleSourceOverdue,
@@ -192,6 +198,87 @@ check('empty + manifest-only results → [] (guarded, never throws)', () => {
   assert.deepEqual(flattenRunFindings({ summary: 'mail-clerk manifest, no reports' } as SyncRunResult), [])
   assert.deepEqual(flattenRunFindings({ reports: {} } as SyncRunResult), [])
   assert.equal(summarizeFindings([]).total, 0)
+})
+
+// ── 5. serializeFindingsForClaude: dense, self-contained diagnosis block. ────
+check('serializeFindingsForClaude: run id + total + one line per finding + real numbers', () => {
+  const findings = flattenRunFindings(realRun)
+  const block = serializeFindingsForClaude(findings, {
+    runId: 'run-abc-123',
+    runDate: '2026-07-05',
+    status: 'diffs_pending',
+  })
+
+  // The self-describing lead line + the LOAD-BEARING run id.
+  assert.ok(block.startsWith('Blackwood sync flags'), 'missing lead line')
+  assert.ok(block.includes('run-abc-123'), 'run id must be present (load-bearing)')
+  assert.ok(block.includes('2026-07-05'), 'run date present')
+  assert.ok(block.includes('diffs_pending'), 'status present')
+
+  // The honest total (9) shows in the summary line.
+  assert.ok(block.includes('Total: 9 findings'), `total line wrong:\n${block}`)
+
+  // One dense entry line ("- [sev] …") per finding.
+  const entryLines = block.split('\n').filter((l) => l.startsWith('- ['))
+  assert.equal(entryLines.length, 9, `expected 9 entry lines, got ${entryLines.length}`)
+
+  // The ACTUAL numbers survive: the held weight, the grand-total delta, the FEED weight.
+  assert.ok(block.includes('8200'), 'held weight_kg 8200 must appear')
+  assert.ok(block.includes('12500'), 'grand-total delta 12500 must appear')
+  assert.ok(block.includes('3000'), 'unresolved FEED weight 3000 must appear')
+
+  // Batch codes carried through for diagnosis.
+  assert.ok(block.includes('SEPT-26-BLK9'), 'held batch code must appear')
+  assert.ok(block.includes('JULY-26-FEED1'), 'unresolved batch code must appear')
+})
+
+check('serializeFindingsForClaude: empty run → clean-run block, no throw', () => {
+  const block = serializeFindingsForClaude([], { runId: null })
+  assert.ok(block.includes('Total: 0 findings'), 'empty block should state 0 findings')
+  assert.ok(block.includes('unknown (no run id)'), 'null run id rendered explicitly')
+})
+
+// ── 6. serializeCasesForClaude: folds verdicts, strips cost keys. ────────────
+check('serializeCasesForClaude: run id + verdict read + natural key + cost stripped', () => {
+  const cases: SerializableCase[] = [
+    {
+      kind: 'unresolved_batch',
+      report_type: 'rc_out',
+      natural_key: 'JULY-26-FEED1 @ FEED · 2026-07-08',
+      status: 'investigated',
+      reason: 'no matching batch in the database',
+      row: { batch_code: 'JULY-26-FEED1', weight_kg: 3000, cost_basis: 42.5 },
+      occurrence_count: 2,
+      verdict: 'needs-human',
+      verdictSummary: 'Batch not found — create it or map it before this can be saved.',
+    },
+    {
+      kind: 'source_diff',
+      report_type: 'rc_out',
+      natural_key: 'MAR-26-BLK5 @ D-11B · 2026-06-10',
+      status: 'open',
+      row: { field: 'weight_kg' },
+      verdict: null,
+    },
+  ]
+  const block = serializeCasesForClaude(cases, { runId: 'run-xyz-9', status: 'open' })
+
+  assert.ok(block.startsWith('Blackwood sync review cases'), 'missing lead line')
+  assert.ok(block.includes('run-xyz-9'), 'run id must be present')
+  assert.ok(block.includes('Total: 2 cases'), `total line wrong:\n${block}`)
+
+  // The investigator read + verdict word survive.
+  assert.ok(block.includes('Batch not found'), 'verdict summary must appear')
+  assert.ok(block.includes('verdict=needs-human'), 'verdict word must appear')
+  assert.ok(block.includes('not yet investigated'), 'un-investigated case labeled')
+
+  // Identity + real numbers survive.
+  assert.ok(block.includes('JULY-26-FEED1'), 'batch code must appear')
+  assert.ok(block.includes('weight_kg=3000'), 'weight must appear')
+
+  // Cost is NEVER emitted.
+  assert.ok(!block.includes('cost_basis'), 'cost_basis key must be stripped')
+  assert.ok(!block.includes('42.5'), 'cost value must be stripped')
 })
 
 console.log(`\nAll ${passed} findings checks passed.`)
