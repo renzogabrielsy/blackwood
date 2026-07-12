@@ -394,8 +394,40 @@ batch either lane auto-created this run is already resolvable by the time it run
 `resolveCreationRaceHolds` nor `rcOutStage.ts` needed a code change for this — the reduction is
 a pure side effect of creating the batch earlier in the pipeline.
 
+## Date-settlement ledger interplay (shipped 2026-07-12, Renzo's directive)
+
+Not part of the R1–R4b engine itself, but reconciliation-adjacent and directly narrows
+what this layer ever sees: `rc_out_date_settlements` (migration
+`20260712010000_rc_out_date_settlements.sql`, pure core `../workflows/settlement.ts`,
+writer `../workflows/runSync.ts::persistSettlements`) marks a `transaction_date` SETTLED
+once its DB feeding total agrees with the RC MOVEMENT sheet's daily total within the
+existing 50kg tolerance (two independent witnesses). See `specs/rc_out.md` §4b "§
+Settlement" for the full mechanism, criterion, and full-history backfill behavior.
+
+**Why this matters here specifically:** `reconcileRcOutShadow` (`../workflows/runSync.ts`)
+re-extracts the FULL-HISTORY `proposed` and `gsheetRcOut` witnesses every run (the same
+extracts the rc_out/gsheet reports themselves read) — without settlement filtering, this
+step would re-bucket and re-diff every historical date on every run, including months that
+settled down long ago, generating stale `source_diff`/`single_source_overdue`/
+`attribution_diff`/`unresolved_batch` noise. `reconcileRcOutShadow` now reads
+`db.readSettledDates()` and filters `proposed` + `gsheetRcOut` by it BEFORE calling
+`reconcileRcOutStage` — a settled date contributes ZERO `SourceRecord`s to this engine,
+same as if it were never in either workbook this run.
+
+**Window-narrowing note (fail-safe, not a behavior change).** The R4b actionable window
+(§ "R4b — retire Sheet-wins for rc_out" above) is computed from the PROPOSED extract's own
+date span (`min..max transaction_date` among proposed fine records) ± the buffer, entirely
+inside `reconcileRcOut` from the records it's actually given. Pre-filtering settled dates
+out of `proposed` BEFORE that window is computed can therefore only make the span the SAME
+or NARROWER than it would have been unfiltered — it can never widen it, and it can never
+make an already-in-window unsettled date fall out of the window. This is a structural
+guarantee (the window is a function of whatever records survive filtering), not a runtime
+check, so settlement filtering here composes safely with the R4b window policy without any
+additional coordination.
+
 ## See also
 - `SYNC_RECONCILIATION_MODEL.md` (owner: Renzo) — the phased plan (R1–R5).
 - `../reports/rc_out/classify.ts::balanceIntegrity` — the L-037 self-consistency source.
 - `../reports/rc_movement_audit/extract.ts` — the movement `date_to_fed_kls` grain.
+- `../workflows/settlement.ts` — the date-settlement ledger's pure criterion.
 - `LEARNING_LEDGER.md` L-037 — the motivating incident.

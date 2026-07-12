@@ -107,6 +107,25 @@ for r in all_rows:
 
 **N/A — no apply phase exists.** Do not implement one. The CLI's `--phase` argument only accepts `"classify"`.
 
+### Settlement writes live OUTSIDE this report (2026-07-12)
+
+The DATE-SETTLEMENT LEDGER (`rc_out_date_settlements`, see `rc_out.md` §4b "§ Settlement")
+is COMPUTED from the same movement data this auditor extracts (`date_to_fed_kls`), but it
+is **NOT written by this report**. `workers/sync/src/workflows/runSync.ts::persistSettlements`
+is its own dedicated DBOS step — it re-extracts the movement workbook independently
+(mirroring the pattern `reconcileRcOutShadow` already uses) and writes the ledger itself.
+This keeps the "never writes to the DB" invariant above genuinely true for
+`audit_rc_movement.py`/`rc_movement_audit/index.ts` — a future maintainer must NOT fold
+settlement-writing into this report's classify/orchestration path, even though it would be
+convenient (the movement extract is already sitting right there). Two more reasons this
+stayed external, beyond invariant-preservation: (1) `persistSettlements` needs a FULL-HISTORY
+rc_out read (since a fixed 2025-01-01 floor) to backfill every already-balanced date at
+once, which is wider than this auditor's own 30-day lookback window (§1 above) and would
+otherwise miss most of the backlog; (2) `rc_movement_audit` runs LAST in the panel order
+(Stage 2c) purely for read-only cross-check visibility — tying a real write to its
+completion would make the ledger's freshness depend on an ordering guarantee this report
+was never designed to provide.
+
 ---
 
 ## 6. Rule checklist

@@ -217,7 +217,27 @@ export async function runReport(
   const year = parseInt(since.slice(0, 4), 10);
   await emit?.("extract", "Reading the daily feeding spreadsheet…", 28);
   const proposedWb = await loadWorkbook(await readFile(primaryPath));
-  const proposed = extractProposed(proposedWb, year);
+  const proposedAll = extractProposed(proposedWb, year);
+
+  // DATE-SETTLEMENT LEDGER (2026-07-12): a settled date has its DB total already
+  // corroborated by the RC MOVEMENT sheet (see rc_out_date_settlements, populated by
+  // workflows/runSync.ts::persistSettlements). Drop those rows BEFORE the gate
+  // reconcile() calls and BEFORE classify — a settled date gets no extract-compare,
+  // no classify, no gate eval, no held/flagged rows, full stop. classifyCase (the
+  // parity-frozen entrypoint) is untouched; this filter lives only here, in the live
+  // orchestrator, which has DB access classifyCase does not.
+  const settledDates = await db.readSettledDates();
+  const proposed = settledDates.size
+    ? { ...proposedAll, rows: proposedAll.rows.filter((r) => !settledDates.has(r.transaction_date)) }
+    : proposedAll;
+  const skippedSettledCount = proposedAll.rows.length - proposed.rows.length;
+  if (skippedSettledCount > 0) {
+    await emit?.(
+      "classify",
+      `Skipped ${skippedSettledCount} row(s) on already-settled date(s) — no re-check needed.`,
+      30,
+    );
+  }
 
   // GATES (only when the RC MOVEMENT cross-check is present). Date-scoped quarantine
   // (not a run-wide halt): a gate trip marks ONLY the affected transaction_date(s) as

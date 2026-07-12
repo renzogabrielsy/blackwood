@@ -52,6 +52,8 @@ import {
   type ComputedBlock,
 } from "../reconcile/blockBalance.js";
 import { rcOutReconcileCutover } from "../lib/env.js";
+import { rcOutSumsFromRows } from "../reports/rc_out/reconcile.js";
+import { computeQualifyingSettlements, SETTLEMENT_BACKFILL_FLOOR } from "./settlement.js";
 import {
   reResolveCreationRaceHolds,
   type CreationRaceOutcome,
@@ -207,6 +209,18 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // worker's internal `rc_movement_audit` type. The events already use `rc_movement_audit`
   // as the report_type; those route to the `rc_movement` card too (reportWorkflowId maps).
   reports.rc_movement = await auditHandle.getResult();
+
+  // ── Stage 2d: date-settlement ledger (2026-07-12, Renzo's directive). Runs AFTER the
+  // parallel writers (rc_out's own writes for this run are already in the DB) and after
+  // the movement workbook is fetchable, and computes/persists the ledger itself —
+  // deliberately NOT inside the read-only rc_movement_audit report (which must stay
+  // "never writes"). Full-history backfill: on the first run after this ships, every
+  // already-balanced historical date settles at once. Guarded — any failure is a no-op,
+  // never fails the run (settlement is a re-ingestion optimization, not correctness).
+  await DBOS.runStep(
+    () => persistSettlements(runId, manifestResolved),
+    { name: "persistSettlements" },
+  );
 
   // ── Stage 3: reconciliation — rc_out only, additive, no writes of its own.
   // Re-extracts the same three witnesses the reports read (proposed + movement from
@@ -452,6 +466,27 @@ async function reconcileRcOutShadow(
       /* Sheet unreachable → no gsheet records (shadow) */
     }
 
+    // DATE-SETTLEMENT LEDGER (2026-07-12): drop proposed + gsheet rows on a settled date
+    // BEFORE bucketing, so source_diff / single_source_overdue / attribution_diff /
+    // unresolved_batch are never generated for it. Guarded — a failed read just means no
+    // dates are filtered this run (fail-safe: narrows nothing, never wrongly excludes a
+    // date that should still be reconciled). Note the R4b window (proposed-span ± buffer,
+    // computed inside reconcileRcOut from the records themselves) can only get NARROWER
+    // from pre-filtering settled dates out of the proposed span — never wider — so this
+    // filter cannot accidentally widen the actionable window past what it already was.
+    let settledDates = new Set<string>();
+    try {
+      settledDates = await db.readSettledDates();
+    } catch {
+      /* non-fatal — proceed unfiltered (shadow) */
+    }
+    if (settledDates.size) {
+      proposed = proposed.filter((r) => !settledDates.has(r.transaction_date));
+      gsheetRcOut = gsheetRcOut.filter(
+        (r) => !settledDates.has(String((r as { transaction_date?: string | null }).transaction_date ?? "")),
+      );
+    }
+
     // R4a Deliverable 1 — batch_code → batch_id map the reconciler resolves against (same shape
     // the rc_out report builds). Guarded: a failure leaves the lookup empty (tracked below).
     const batchLookup: Record<string, string> = {};
@@ -512,6 +547,60 @@ async function reconcileRcOutShadow(
   } catch {
     // Shadow observer: a failure here must never fail the run or change a write.
     return null;
+  }
+}
+
+/**
+ * DATE-SETTLEMENT LEDGER writer (2026-07-12, Renzo's directive). A dedicated stage — NOT
+ * inside rc_movement_audit, which must stay "never writes to the DB" (specs/rc_movement_audit.md
+ * §1 "No apply phase"). Computes the settle criterion (pure core: `./settlement.ts`) from two
+ * independent witnesses and persists newly-qualifying dates to `rc_out_date_settlements`.
+ * FULL-HISTORY BACKFILL: reads rc_out sums since `SETTLEMENT_BACKFILL_FLOOR` (not just this
+ * run's tail window) so the first run after this ships settles every already-balanced
+ * historical date at once — the auditor's own 30-day lookback window is too narrow for that
+ * (rc_movement_audit.md §1: `watermark - 30 days`). Guarded end-to-end: any failure, or no
+ * movement witness this run, is a silent no-op — settlement is a re-ingestion optimization,
+ * never a correctness requirement, and must never fail or slow down the run.
+ */
+async function persistSettlements(runId: string, manifest: MailClerkManifest): Promise<void> {
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+
+    // Can't verify without the movement witness — skip entirely (non-fatal).
+    const movementAtt = firstAtt(manifest, "rc_out_movement");
+    if (!movementAtt) return;
+
+    let movementByDate: Record<string, number>;
+    try {
+      const fetchToLocalPath = makeStorageFetcher();
+      const path = await fetchToLocalPath(movementAtt.storagePath);
+      movementByDate = extractMovement(await loadWorkbook(await readFile(path))).date_to_fed_kls;
+    } catch {
+      return; // movement attachment unreadable → can't verify, skip (non-fatal)
+    }
+
+    const settledAlready = await db.readSettledDates();
+
+    // Cheap 2-column aggregate over full history — only dates NOT already settled matter.
+    const dbRows = await db.readRows("rc_out", {
+      sinceDate: SETTLEMENT_BACKFILL_FLOOR,
+      columns: ["transaction_date", "weight_kg"],
+    });
+    const dbSums = rcOutSumsFromRows(dbRows);
+
+    const qualifying = computeQualifyingSettlements(dbSums, movementByDate, settledAlready);
+    if (qualifying.length === 0) return;
+
+    await db.insertSettlements(qualifying.map((q) => ({ ...q, settled_by_run_id: runId })));
+    const total = settledAlready.size + qualifying.length;
+    await emit(
+      "reconcile",
+      `Settled ${qualifying.length} new date(s) · ${total} total settled — future runs will skip them.`,
+      97,
+    );
+  } catch {
+    // Non-fatal: settlement is a re-ingestion optimization, never blocks or fails the run.
   }
 }
 

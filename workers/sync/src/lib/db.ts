@@ -307,6 +307,59 @@ export class DbClient {
     return { id: String(existing.id), batch_code: String(existing.batch_code), created: false };
   }
 
+  // -- rc_out date-settlement ledger (2026-07-12) ---------------------------
+  /**
+   * All settled `transaction_date`s (ISO "YYYY-MM-DD" strings) as a Set, for O(1)
+   * membership checks while filtering extracted rows. Reads the whole ledger — it is
+   * small (one row per already-balanced historical date) and read every run.
+   */
+  async readSettledDates(): Promise<Set<string>> {
+    const rows = await this.readRows("rc_out_date_settlements", {
+      columns: ["transaction_date"],
+      sinceColumn: null,
+    });
+    const out = new Set<string>();
+    for (const r of rows) {
+      const d = r.transaction_date;
+      if (d) out.add(String(d).slice(0, 10));
+    }
+    return out;
+  }
+
+  /**
+   * Idempotent insert of newly-qualifying settlement rows (insertIfAbsent on the
+   * `transaction_date` PK — a re-run naming a date already settled is a silent skip,
+   * never a duplicate/crash). Best-effort/non-fatal, mirroring
+   * upsertIngestionWatermark: a failure here must never fail the sync run — settlement
+   * is a re-ingestion optimization, not a correctness requirement.
+   */
+  async insertSettlements(
+    rows: Array<{
+      transaction_date: string;
+      db_sum_kg: number;
+      movement_kg: number;
+      settled_by_run_id?: string | null;
+    }>,
+  ): Promise<{ insertedCount: number; skippedCount: number }> {
+    if (!rows.length) return { insertedCount: 0, skippedCount: 0 };
+    try {
+      const result = await this.insertIfAbsent(
+        "rc_out_date_settlements",
+        rows as unknown as Row[],
+        ["transaction_date"],
+      );
+      return { insertedCount: result.insertedCount, skippedCount: result.skippedCount };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[warn] rc_out_date_settlements insert failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return { insertedCount: 0, skippedCount: rows.length };
+    }
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

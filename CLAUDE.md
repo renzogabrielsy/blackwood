@@ -135,6 +135,7 @@ supabase gen types typescript --linked > types/supabase.ts
 ### Sync / ingestion infrastructure (`public`)
 - **`ingestion_watermarks`** — per-report-type high-water mark. `report_type` (PK), `last_run_at`, `last_email_id`, `last_email_received_at`.
 - **`pending_review`** — staged extractions awaiting human commit. `report_type`, `status`, `rows_json`/`final_rows_json`/`diagnostic_json` (JSONB), `overall_confidence`, source-email refs, `reviewed_by` (FK→profiles), `commit_audit_log_id` (FK→audit_logs).
+- **`rc_out_date_settlements`** — the rc_out **date-settlement ledger** (2026-07-12). `transaction_date` (PK), `db_sum_kg`, `movement_kg` (the two corroborating witnesses at settlement time), `settled_at`, `settled_by_run_id` (FK→sync_runs, `ON DELETE SET NULL`). Written only by the sync worker's `workflows/runSync.ts::persistSettlements` (service role) — see "Sync Integrity" below.
 
 ### Jarvis AI assistant (`public`)
 - **`jarvis_conversations`** — `id`, `user_id`, `title`, `last_message_at`, `archived`, `created_at`.
@@ -207,6 +208,8 @@ The project is linked to Supabase. Common commands (see `/supabase` workflow for
 **Every sync run therefore ends in exactly one of two states:** (a) **CLEAN** — all sources reconciled, everything applied; or (b) **DIFFS PENDING** — a list of field-level disagreements awaiting a human pick. Never a silent auto-overwrite. The full architecture (extract → reconcile → diff-case → arbitrate) is specified in **`SYNC_RECONCILIATION_MODEL.md`**; it reuses the adjudicator's case/Sync-Review/resolve machinery wholesale.
 
 **Scope:** cross-source reconciliation applies to the THREE reports with a Google Sheet tab — **RC IN, RC OUT, Blocking** (Blocking is derived from RC IN − RC OUT and cross-checked against the Sheet, at both per-block and grand-total level). **Production and Flecon are single-source** and auto-write when they pass the validity rules in **`SYNC_VALIDITY_RULESET.md`**, stopping only on a rule violation. A lone witness whose second source is merely *not yet arrived* (the proposed report reports yesterday) is a self-clearing `pending`, not a review case.
+
+**Date settlement (rc_out, 2026-07-12).** Once a `transaction_date`'s rc_out has been reconciled CLEAN by two independent witnesses (the DB sum and the RC MOVEMENT sheet, within the existing 50kg tolerance), it is recorded SETTLED in `rc_out_date_settlements` and every future sync run skips that date entirely — no extract-compare, no classify, no reconcile, no gate, no flags. This exists because the PROPOSED workbook permanently carries every day-tab ever filled in, so without a ledger every run re-walks the whole history through both HARD gates. See `workers/sync/specs/rc_out.md` §4b "§ Settlement".
 
 ## UI Design System — The "Excel Standard"
 

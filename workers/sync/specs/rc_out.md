@@ -259,6 +259,78 @@ both write loops, the unclaimed-date summary pass). Tests: `test/reports/rc_out.
 
 ---
 
+## 4b. § Settlement — the DATE-SETTLEMENT LEDGER (2026-07-12)
+
+**Renzo's directive.** The PROPOSED workbook permanently carries every day-tab the
+operator has ever filled in, so the quarantine mechanism above (§4a) still re-walks the
+ENTIRE historical span through both HARD gates on every single run — even for months that
+settled down long ago. That is wasted work at best and a repeated false-quarantine risk
+at worst. `rc_out_date_settlements` (migration
+`20260712010000_rc_out_date_settlements.sql`) closes the loop: once a `transaction_date`
+is SETTLED, every future run skips it **entirely** — no extract-compare, no classify, no
+reconcile, no gate, no flags for that date, full stop.
+
+**Settled ⊥ quarantined.** These are opposite ends of the same idea, not overlapping
+concepts: quarantine (§4a) holds a date because the CURRENT run's witnesses disagree;
+settlement marks a date because a PAST run's witnesses already agreed and nothing since
+has touched it. A date can never be both in the same run — settlement short-circuits
+BEFORE quarantine (and before classify) ever sees the date's rows, so a settled date
+cannot also generate a quarantine hold. If a date is later resettled with disagreeing
+data (a hand-correction, a backdated write), it simply is not in the ledger yet — the
+ledger is populated by `persistSettlements`, never by a row's mere presence in `rc_out`.
+
+**Settle criterion (STRICT, safety-critical — silence is never agreement).** A date
+qualifies iff:
+```
+dbSum != null && dbSum > 0                          (DB non-empty for the date)
+&& movement[date] != null                            (a real second witness exists)
+&& Math.abs(dbSum - movement[date]) <= 50             (agree within the existing GATE tolerance)
+```
+An empty/zero DB sum, or the absence of a movement entry for that date, NEVER settles —
+an absent witness is not corroboration. Pure core:
+`src/workflows/settlement.ts::computeQualifyingSettlements` (mirrors the
+`workflows/creationRaceHolds.ts` split — pure criterion, separately unit-testable from
+the DB/IO wrapper).
+
+**Where it's computed and written — NOT inside classify, NOT inside the auditor.**
+`workflows/runSync.ts::persistSettlements` is a DEDICATED DBOS step (Stage 2d), run after
+the parallel writers (so this run's own rc_out writes are already in the DB) and after the
+movement workbook is fetchable. It is deliberately NOT wired into the read-only
+`rc_movement_audit` report — see `rc_movement_audit.md` §1, that report must stay "never
+writes to the DB." **Full-history backfill:** unlike the auditor's own 30-day lookback
+window (`rc_movement_audit.md` §1, "the auditor looks back further than a writer"),
+`persistSettlements` reads rc_out sums since a FIXED backfill floor
+(`SETTLEMENT_BACKFILL_FLOOR = "2025-01-01"`, cheap 2-column aggregate) — narrow windows
+are exactly what let the re-ingestion problem persist for months. The FIRST run after this
+ships therefore settles every already-balanced historical date in one pass; every run
+after that only evaluates the (small) set of not-yet-settled dates. Guarded end-to-end:
+any failure, or no movement attachment this run, is a silent no-op — settlement is a
+re-ingestion optimization, never a correctness requirement, and must never fail or slow
+down a run.
+
+**Two skip chokepoints — settled dates are dropped, not merely quarantined.**
+1. `reports/rc_out/index.ts::runReport` — reads `db.readSettledDates()` right after
+   `extractProposed`, filters `proposed.rows` by it BEFORE both GATE `reconcile()` calls
+   and BEFORE `classifyRcOut`. A settled date's rows never reach the gates, never reach
+   classify, and generate no `new`/`changed`/`flagged`/`held` entries at all — as if they
+   were never in the workbook this run. `classifyCase` (the parity-frozen entrypoint used
+   only by the harness, with no DB access) is untouched.
+2. `workflows/runSync.ts::reconcileRcOutShadow` — filters the re-extracted `proposed` +
+   `gsheetRcOut` rows by the same settled-date set before bucketing, so
+   `source_diff`/`single_source_overdue`/`attribution_diff`/`unresolved_batch` cases are
+   never generated for a settled date either. Note: the R4b reconciliation window (the
+   proposed extract's own date span ± buffer, computed inside `reconcileRcOut`) can only
+   get NARROWER from pre-filtering settled dates out of the proposed span — never
+   wider — so this filter is fail-safe with respect to the window policy, it cannot widen
+   what's actionable.
+
+**Tests:** `test/workflows/settlement.test.ts` (the pure settle criterion — boundary at
+exactly 50kg, empty-DB/no-movement never settle, multi-date backfill). `test/reports/rc_out-settlement.test.ts` (chokepoint A end-to-end through `runReport` — a settled
+date's rows never reach classify/apply, an unsettled sibling date on the same workbook
+still writes normally).
+
+---
+
 ## 5. Apply spec
 
 **TS worker note (2026-07-11):** this section describes the Python reference's write order,
