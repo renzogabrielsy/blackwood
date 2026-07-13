@@ -213,6 +213,10 @@ export class DbClient {
           filters[col] = `eq.${val}`;
         }
       }
+      // NOTE: hardcodes selecting "id" — this helper assumes `table` has an `id` column.
+      // For an id-less table (e.g. rc_out_date_settlements, PK = transaction_date) this
+      // throws "column <table>.id does not exist" via PostgREST. Use a dedicated
+      // upsert-on-conflict path (see upsertBatchIfAbsent / insertSettlements) instead.
       const existing = await this.selectOne(table, filters, "id");
       if (existing !== null) skipped.push(row);
       else toInsert.push(row);
@@ -327,11 +331,18 @@ export class DbClient {
   }
 
   /**
-   * Idempotent insert of newly-qualifying settlement rows (insertIfAbsent on the
-   * `transaction_date` PK — a re-run naming a date already settled is a silent skip,
-   * never a duplicate/crash). Best-effort/non-fatal, mirroring
-   * upsertIngestionWatermark: a failure here must never fail the sync run — settlement
-   * is a re-ingestion optimization, not a correctness requirement.
+   * Idempotent insert of newly-qualifying settlement rows. `rc_out_date_settlements` has
+   * NO `id` column (its PK is `transaction_date`), so this CANNOT go through
+   * `insertIfAbsent` (that helper hardcodes `.select("id")`, which PostgREST 400s on an
+   * id-less table — this was a real bug: the ledger silently inserted zero rows every
+   * run while the caller logged a false "Settled N date(s)"). Instead this upserts
+   * directly on the `transaction_date` PK with `ignoreDuplicates: true`, mirroring
+   * `upsertBatchIfAbsent`'s pattern: a re-run naming a date already settled is a silent
+   * skip, never a duplicate/crash. `.select()` after an `ignoreDuplicates` upsert returns
+   * ONLY the rows PostgREST actually inserted, so `data.length` is the true insertedCount.
+   * Best-effort/non-fatal, mirroring upsertIngestionWatermark: a failure here must never
+   * fail the sync run — settlement is a re-ingestion optimization, not a correctness
+   * requirement — but the happy path must actually write.
    */
   async insertSettlements(
     rows: Array<{
@@ -343,12 +354,20 @@ export class DbClient {
   ): Promise<{ insertedCount: number; skippedCount: number }> {
     if (!rows.length) return { insertedCount: 0, skippedCount: 0 };
     try {
-      const result = await this.insertIfAbsent(
-        "rc_out_date_settlements",
-        rows as unknown as Row[],
-        ["transaction_date"],
-      );
-      return { insertedCount: result.insertedCount, skippedCount: result.skippedCount };
+      const { data, error } = await this.sb
+        .from("rc_out_date_settlements")
+        .upsert(rows, { onConflict: "transaction_date", ignoreDuplicates: true })
+        .select("transaction_date");
+      if (error) {
+        throw new Error(
+          `insert_settlements rc_out_date_settlements failed ${error.code ?? ""}: ${sliceMsg(
+            error.message,
+          )}`,
+        );
+      }
+      const insertedCount = (data ?? []).length;
+      const skippedCount = rows.length - insertedCount;
+      return { insertedCount, skippedCount };
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(

@@ -592,13 +592,17 @@ async function persistSettlements(runId: string, manifest: MailClerkManifest): P
     const qualifying = computeQualifyingSettlements(dbSums, movementByDate, settledAlready);
     if (qualifying.length === 0) return;
 
-    await db.insertSettlements(qualifying.map((q) => ({ ...q, settled_by_run_id: runId })));
-    const total = settledAlready.size + qualifying.length;
-    await emit(
-      "reconcile",
-      `Settled ${qualifying.length} new date(s) · ${total} total settled — future runs will skip them.`,
-      97,
+    const { insertedCount } = await db.insertSettlements(
+      qualifying.map((q) => ({ ...q, settled_by_run_id: runId })),
     );
+    if (insertedCount > 0) {
+      const total = settledAlready.size + insertedCount;
+      await emit(
+        "reconcile",
+        `Settled ${insertedCount} new date(s) · ${total} total settled — future runs will skip them.`,
+        97,
+      );
+    }
   } catch {
     // Non-fatal: settlement is a re-ingestion optimization, never blocks or fails the run.
   }
