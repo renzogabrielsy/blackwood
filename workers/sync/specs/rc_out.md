@@ -293,11 +293,21 @@ an absent witness is not corroboration. Pure core:
 the DB/IO wrapper).
 
 **Where it's computed and written — NOT inside classify, NOT inside the auditor.**
-`workflows/runSync.ts::persistSettlements` is a DEDICATED DBOS step (Stage 2d), run after
-the parallel writers (so this run's own rc_out writes are already in the DB) and after the
-movement workbook is fetchable. It is deliberately NOT wired into the read-only
-`rc_movement_audit` report — see `rc_movement_audit.md` §1, that report must stay "never
-writes to the DB." **Full-history backfill:** unlike the auditor's own 30-day lookback
+`workflows/runSync.ts::persistSettlements` is a DEDICATED DBOS step, run at **Stage 1b**
+(2026-07-13 fix — immediately after Stage 1 Mail Clerk resolves, BEFORE Stage 2a gsheet,
+Stage 2b the four parallel writers, and Stage 3 reconciliation), so this run's
+newly-settled dates are visible to BOTH skip chokepoints below on the SAME run, not just
+the second one. It was originally "Stage 2d" (after the parallel writers), but that meant
+Stage 2b's own rc_out writer always read the ledger BEFORE this step had written this
+run's qualifying dates into it — so a date that settled during a run still incurred a full
+extract-compare-classify pass on that same run, one run later than necessary, before
+skipping started on the run after. `persistSettlements` itself does not depend on Stage 2
+output (writers, gsheet, or reconciliation) — only on `runId` and the resolved Mail Clerk
+manifest (for the movement attachment's Storage path) plus its own DB reads — so moving it
+earlier changes nothing about WHAT it computes, only WHEN the ledger row lands. The
+movement workbook is fetchable as soon as Stage 1 resolves (Mail Clerk downloads every
+report's attachment in one Gmail session), so "after the movement workbook is fetchable"
+no longer requires waiting for the writers. **Full-history backfill:** unlike the auditor's own 30-day lookback
 window (`rc_movement_audit.md` §1, "the auditor looks back further than a writer"),
 `persistSettlements` reads rc_out sums since a FIXED backfill floor
 (`SETTLEMENT_BACKFILL_FLOOR = "2025-01-01"`, cheap 2-column aggregate) — narrow windows

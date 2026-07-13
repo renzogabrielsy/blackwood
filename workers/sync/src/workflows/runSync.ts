@@ -14,6 +14,14 @@
  *             inside the gsheet report (download.ts), so every report reads from a
  *             stable source and a crash mid-run never re-hits Gmail for what's done.
  *
+ *   Stage 1b — date-settlement ledger (persistSettlements, 2026-07-12/07-13). Runs
+ *              IMMEDIATELY after Stage 1 (manifestResolved) and BEFORE every reader of
+ *              `rc_out_date_settlements` this run — the parallel writers (Stage 2b) and
+ *              the shadow reconcile (Stage 3) both call `db.readSettledDates()` fresh, so
+ *              writing the ledger first means a date settled THIS run is skipped by BOTH
+ *              same-run, not just by Stage 3 as before. Depends only on `runId` +
+ *              `manifestResolved` — see the function doc for the dependency proof.
+ *
  *   Stage 2 — Reports, in the EXACT panel order (app/(app)/sync/types.ts):
  *             gsheet FIRST and alone (source of truth) → then deliveries / rc_out /
  *             production / flecon as PARALLEL child workflows (DBOS.startWorkflow
@@ -142,6 +150,30 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
 
   const reports: Record<string, ReportEnvelope> = {};
 
+  // ── Stage 1b: settle balanced dates FIRST so the writers + reconcile skip them
+  // same-run (2026-07-13, Renzo's directive — moved from the old post-writers "Stage 2d"
+  // position). Depends ONLY on `runId` + `manifestResolved` (verified — see
+  // persistSettlements' doc comment): it does NOT read `since`, does NOT read any
+  // Stage-2 writer/reconcile output, and does its own DB read for the rc_out sums it
+  // compares against the movement witness. Running it here means Stage 2b's rc_out
+  // writer AND Stage 3's reconcileRcOutShadow both see the freshly-written ledger via
+  // their own `db.readSettledDates()` call — previously only Stage 3 benefited
+  // same-run because Stage 2b had already read (and found empty) the ledger by the
+  // time the old Stage 2d ran.
+  //
+  // Accepted tradeoff: a date that would only balance AFTER this run's OWN writes
+  // (Stage 2b below) now settles on the NEXT run instead of this one — recent dates
+  // are cheap to re-check every run, so that's fine. The expensive problem this
+  // solves is old, ALREADY-balanced dates (settled before this run even started)
+  // getting re-walked through the writers'/reconcile's full-history extract on every
+  // run — those settle here and are skipped same-run, same as before. Guarded
+  // end-to-end: any failure is a silent no-op (settlement is a re-ingestion
+  // optimization, never a correctness requirement).
+  await DBOS.runStep(
+    () => persistSettlements(runId, manifestResolved),
+    { name: "persistSettlements" },
+  );
+
   // ── Stage 2a: gsheet FIRST and alone (the source of truth). It self-downloads.
   const gsheetHandle = await DBOS.startWorkflow(reportWorkflow, {
     workflowID: reportWorkflowId(runId, "gsheet"),
@@ -209,18 +241,6 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // worker's internal `rc_movement_audit` type. The events already use `rc_movement_audit`
   // as the report_type; those route to the `rc_movement` card too (reportWorkflowId maps).
   reports.rc_movement = await auditHandle.getResult();
-
-  // ── Stage 2d: date-settlement ledger (2026-07-12, Renzo's directive). Runs AFTER the
-  // parallel writers (rc_out's own writes for this run are already in the DB) and after
-  // the movement workbook is fetchable, and computes/persists the ledger itself —
-  // deliberately NOT inside the read-only rc_movement_audit report (which must stay
-  // "never writes"). Full-history backfill: on the first run after this ships, every
-  // already-balanced historical date settles at once. Guarded — any failure is a no-op,
-  // never fails the run (settlement is a re-ingestion optimization, not correctness).
-  await DBOS.runStep(
-    () => persistSettlements(runId, manifestResolved),
-    { name: "persistSettlements" },
-  );
 
   // ── Stage 3: reconciliation — rc_out only, additive, no writes of its own.
   // Re-extracts the same three witnesses the reports read (proposed + movement from
@@ -551,16 +571,31 @@ async function reconcileRcOutShadow(
 }
 
 /**
- * DATE-SETTLEMENT LEDGER writer (2026-07-12, Renzo's directive). A dedicated stage — NOT
- * inside rc_movement_audit, which must stay "never writes to the DB" (specs/rc_movement_audit.md
- * §1 "No apply phase"). Computes the settle criterion (pure core: `./settlement.ts`) from two
- * independent witnesses and persists newly-qualifying dates to `rc_out_date_settlements`.
- * FULL-HISTORY BACKFILL: reads rc_out sums since `SETTLEMENT_BACKFILL_FLOOR` (not just this
- * run's tail window) so the first run after this ships settles every already-balanced
- * historical date at once — the auditor's own 30-day lookback window is too narrow for that
- * (rc_movement_audit.md §1: `watermark - 30 days`). Guarded end-to-end: any failure, or no
- * movement witness this run, is a silent no-op — settlement is a re-ingestion optimization,
- * never a correctness requirement, and must never fail or slow down the run.
+ * DATE-SETTLEMENT LEDGER writer (2026-07-12, Renzo's directive; moved to Stage 1b on
+ * 2026-07-13 — see the file-header stage list and the call site above). A dedicated
+ * stage — NOT inside rc_movement_audit, which must stay "never writes to the DB"
+ * (specs/rc_movement_audit.md §1 "No apply phase"). Computes the settle criterion (pure
+ * core: `./settlement.ts`) from two independent witnesses and persists newly-qualifying
+ * dates to `rc_out_date_settlements`. FULL-HISTORY BACKFILL: reads rc_out sums since
+ * `SETTLEMENT_BACKFILL_FLOOR` (not just this run's tail window) so the first run after
+ * this ships settles every already-balanced historical date at once — the auditor's own
+ * 30-day lookback window is too narrow for that (rc_movement_audit.md §1:
+ * `watermark - 30 days`). Guarded end-to-end: any failure, or no movement witness this
+ * run, is a silent no-op — settlement is a re-ingestion optimization, never a correctness
+ * requirement, and must never fail or slow down the run.
+ *
+ * DEPENDENCY PROOF (why this is safe to run BEFORE the parallel writers / Stage 2b):
+ * this function's only inputs are `runId` and `manifest` (the resolved Mail Clerk
+ * manifest from Stage 1 — read here only for `firstAtt(manifest, "rc_out_movement")`,
+ * a Storage path, not report output). Everything else is its own DB read
+ * (`db.readSettledDates()`, `db.readRows("rc_out", …)` since the fixed backfill floor)
+ * and its own file fetch/extract (`extractMovement`). It does NOT read `since`, does
+ * NOT read `reports.*` (gsheet/deliveries/rc_out/production/flecon output), and does
+ * NOT read the Stage 3 reconciliation channel. So moving its call site earlier changes
+ * nothing about what it computes THIS run — it only changes how early the ledger row
+ * lands, which is the whole point (Stage 2b's rc_out writer and Stage 3's
+ * reconcileRcOutShadow both call `db.readSettledDates()` fresh, so an earlier write is
+ * visible to both same-run instead of only to Stage 3).
  */
 async function persistSettlements(runId: string, manifest: MailClerkManifest): Promise<void> {
   try {

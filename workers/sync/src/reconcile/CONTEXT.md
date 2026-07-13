@@ -394,7 +394,7 @@ batch either lane auto-created this run is already resolvable by the time it run
 `resolveCreationRaceHolds` nor `rcOutStage.ts` needed a code change for this — the reduction is
 a pure side effect of creating the batch earlier in the pipeline.
 
-## Date-settlement ledger interplay (shipped 2026-07-12, Renzo's directive)
+## Date-settlement ledger interplay (shipped 2026-07-12, moved earlier 2026-07-13)
 
 Not part of the R1–R4b engine itself, but reconciliation-adjacent and directly narrows
 what this layer ever sees: `rc_out_date_settlements` (migration
@@ -403,6 +403,22 @@ writer `../workflows/runSync.ts::persistSettlements`) marks a `transaction_date`
 once its DB feeding total agrees with the RC MOVEMENT sheet's daily total within the
 existing 50kg tolerance (two independent witnesses). See `specs/rc_out.md` §4b "§
 Settlement" for the full mechanism, criterion, and full-history backfill behavior.
+
+**Stage order (2026-07-13 fix).** `persistSettlements` now runs at **Stage 1b** — right
+after Stage 1 (Mail Clerk) resolves, BEFORE Stage 2a (gsheet), Stage 2b (the four
+parallel writers, including this run's own rc_out writer), and Stage 3
+(`reconcileRcOutShadow`, this file). It previously ran as "Stage 2d", AFTER Stage 2b —
+which meant Stage 2b's rc_out writer always read `db.readSettledDates()` before the
+ledger had this run's newly-qualifying dates in it, so a date that settled during a run
+still incurred a full extract-compare-classify pass (and could still emit
+`sub_watermark_dup`/`gate_failure`/`unmapped_batch_code` findings) on the SAME run it
+settled, one run later than necessary. Moving the write earlier means both readers —
+Stage 2b's `runReport` (chokepoint A, `reports/rc_out/index.ts`) and this file's
+`reconcileRcOutShadow` (chokepoint B) — see the same-run ledger via their own fresh
+`db.readSettledDates()` call. `persistSettlements` itself is unchanged: it depends only
+on `runId` + the resolved Mail Clerk manifest (for the movement attachment path) and
+its own DB reads, never on Stage-2 output, so the reorder changes nothing about what it
+computes.
 
 **Why this matters here specifically:** `reconcileRcOutShadow` (`../workflows/runSync.ts`)
 re-extracts the FULL-HISTORY `proposed` and `gsheetRcOut` witnesses every run (the same
