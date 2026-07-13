@@ -25,6 +25,7 @@ import type { ProposedRow } from "../reports/rc_out/extract.js";
 import type { RowDict } from "../reports/gsheet/deductions.js";
 import type { BatchLookup } from "../reports/rc_out/classify.js";
 import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
+import { isKnownPatioAlias, normalizeProposedBlock } from "./blockAliases.js";
 import type { BlockReconciliation } from "./blockBalance.js";
 import {
   LAG_DAYS,
@@ -86,6 +87,14 @@ export interface RcOutReconciliation {
    * `heldOverdue` / count toward `pending`. → `attribution_diff` cases (dismiss-only, v1).
    */
   attributionDiffs: AttributionDiff[];
+  /**
+   * Patio block-name aliases (./blockAliases.ts) — count of PROPOSED rows this run whose
+   * raw descriptive block_loc (e.g. "16A NEAR WALL") matched a known alias and was
+   * normalized to the Sheet's coded block (e.g. "PCA-16A") before bucketing. Telemetry
+   * ONLY — feeds the run-summary visibility line
+   * (`workflows/runSync.ts::reconcileRcOutShadow`); never a case, never a write.
+   */
+  patioAliasesApplied: number;
 }
 
 /** The top-level reconciliation channel on the run result (extensible per table).
@@ -248,16 +257,30 @@ function resolveAndBucket<T>(
  * from the L-037 balance rule over those legs' STRT/END/DAY TOTAL. FEED rows (block_loc null)
  * now reconcile too — keyed on (date, batch_id, dest) (R4a Deliverable 2). Returns the records
  * plus any UnresolvedBatch markers (Deliverable 1).
+ *
+ * PATIO BLOCK ALIASES (./blockAliases.ts, 2026-07-13): before keying, a proposed row's raw
+ * descriptive block_loc (e.g. "16A NEAR WALL") is passed through `normalizeProposedBlock` —
+ * a known patio alias resolves to the Sheet's coded block (e.g. "PCA-16A"), so the bucket
+ * key (and therefore the resulting SourceRecord's `naturalKey.block_loc`) aligns with
+ * gsheet's OWN already-coded rows (`bucketGsheetRcOut`, which needs no aliasing — it is
+ * already coded). An unrecognized block_loc passes through unchanged. This is ONLY a
+ * keying change — the underlying `SourceLegRow.block_loc` on each leg (below) keeps the
+ * ORIGINAL descriptive string for audit/display, since this layer never writes and the
+ * alias exists solely to stop false reconciliation cases.
  */
 export function bucketProposed(
   rows: readonly ProposedRow[],
   lookup: BatchLookup = {},
-): { records: SourceRecord[]; unresolved: UnresolvedBatch[] } {
+): { records: SourceRecord[]; unresolved: UnresolvedBatch[]; patioAliasesApplied: number } {
+  const patioAliasesApplied = rows.reduce(
+    (acc, r) => acc + (isKnownPatioAlias(r.block_loc ?? null) ? 1 : 0),
+    0,
+  );
   const { buckets, unresolved } = resolveAndBucket("proposed", rows, lookup, (r) => ({
     date: r.transaction_date ?? null,
     primary: r.batch_code_primary ?? null,
     fallbacks: r.batch_code_fallbacks ?? [],
-    block: r.block_loc ?? null,
+    block: normalizeProposedBlock(r.block_loc ?? null),
     dest: r.destination || MAIN,
     weight: r.weight_kg ?? 0,
   }));
@@ -297,7 +320,7 @@ export function bucketProposed(
     return rec;
   });
 
-  return { records, unresolved };
+  return { records, unresolved, patioAliasesApplied };
 }
 
 /**
@@ -362,7 +385,7 @@ export function movementSourceRecords(byDate: Record<string, number> = {}): Sour
  */
 export function buildRcOutSourceRecords(
   input: RcOutReconcileInput,
-): { records: SourceRecord[]; unresolved: UnresolvedBatch[] } {
+): { records: SourceRecord[]; unresolved: UnresolvedBatch[]; patioAliasesApplied: number } {
   const lookup = input.batchLookup ?? {};
   const p = bucketProposed(input.proposed ?? [], lookup);
   const g = bucketGsheetRcOut(input.gsheetRcOut ?? [], lookup);
@@ -371,7 +394,11 @@ export function buildRcOutSourceRecords(
   const merged = new Map<string, UnresolvedBatch>();
   for (const u of [...p.unresolved, ...g.unresolved]) mergeUnresolvedInto(merged, u);
 
-  return { records: [...p.records, ...g.records, ...m], unresolved: [...merged.values()] };
+  return {
+    records: [...p.records, ...g.records, ...m],
+    unresolved: [...merged.values()],
+    patioAliasesApplied: p.patioAliasesApplied,
+  };
 }
 
 /** Provenance line for a single-source overdue fact (the Agreement carries no provenance). */
@@ -391,7 +418,7 @@ function singleSourceProvenance(a: Agreement): string {
  * are unchanged.
  */
 export function reconcileRcOutStage(input: RcOutReconcileInput): RcOutReconciliation {
-  const { records, unresolved } = buildRcOutSourceRecords(input);
+  const { records, unresolved, patioAliasesApplied } = buildRcOutSourceRecords(input);
   const result: ReconcileResult = reconcileRcOut(records, {
     runDate: input.runDate,
     lagDays: input.lagDays,
@@ -425,5 +452,6 @@ export function reconcileRcOutStage(input: RcOutReconcileInput): RcOutReconcilia
     heldOverdue,
     unresolvedBatches: unresolved,
     attributionDiffs: result.attributionDiffs,
+    patioAliasesApplied,
   };
 }

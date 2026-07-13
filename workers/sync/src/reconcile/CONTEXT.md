@@ -29,9 +29,13 @@ proposed-span (see the R4b section). Anchored on the **L-037** incident.
   (aligns month-prefix conventions) and the `ReconciliationChannel` result type (now
   `{ rc_out?, blocking? }` — both optional, so RB can ride alongside rc_out).
 - `blockBalance.ts` — **RB engine (block-balance cross-check).** See the RB section below.
+- `blockAliases.ts` — **Patio block-name alias table** (see the "Patio block aliases"
+  section below). Consumed only by `rcOutStage.ts::bucketProposed`.
 - Tests: `../../test/reconcile/rcOut.test.ts` (engine; L-037 golden + edges + the
   second-pass attribution matcher — see below),
-  `../../test/reconcile/rcOutStage.test.ts` (bucketing → engine; L-037 through synthetic extracts),
+  `../../test/reconcile/rcOutStage.test.ts` (bucketing → engine; L-037 through synthetic extracts
+  + the patio-alias integration tests),
+  `../../test/reconcile/blockAliases.test.ts` (the alias table + helpers, isolated),
   `../../test/reconcile/blockBalance.test.ts` (RB engine; two-level check + L-037 conceptual),
   `../../test/reports/gsheet/blocking.test.ts` (the Sheet Blocking-tab extractor).
 
@@ -338,6 +342,79 @@ pick-source flow) that lets the reviewer choose which attribution is correct and
 write through — not built in this pass, since the two sides don't share a natural key the
 existing diff-plan machinery can target directly. Verify:
 `scripts/verify-attribution-diff-fold.ts`.
+
+## Patio block aliases (shipped 2026-07-13, reconciler-only)
+
+**The problem.** The PROPOSED DAILY REPORT names several sun-drying patio spots
+DESCRIPTIVELY (`"16A NEAR WALL"`, `"15A MIDDLE SIDE"`); the Google Sheet names the SAME
+physical blocks with CODED refs from its PCA/PCB mini-grid (`"PCA-16A"`, `"PCA-15C"` —
+see the RB section above, the Sheet Blocking tab's cols 31..33). Same feeding, two block
+names, so before this fix the fine key `(date, batch, block_loc, dest)` never aligned for
+these rows: at best the second-pass attribution matcher (R-ATTR, above) paired them into
+an `attribution_diff` case; at worst — if batch resolution *also* differed, or the
+matcher's weight tolerance/window missed them — each side aged independently into its
+own `single_source_overdue`. Either way, a validated same-fact pair kept generating a
+review-queue case for no operational reason.
+
+**The fix.** `blockAliases.ts` — `PROPOSED_PATIO_BLOCK_ALIASES: Record<string,string>`, a
+validated, hand-maintained table of exactly 8 rows (normalized-descriptive-name → coded
+block), seeded 2026-07-13:
+
+| Proposed's descriptive name | Sheet's coded block |
+|---|---|
+| `16A NEAR WALL` | `PCA-16A` (Renzo-confirmed) |
+| `16A HALF OF MIDDLE` | `PCA-16B` |
+| `16A NEAR PATHWAY` | `PCA-16C` |
+| `15A NEAR WALL` | `PCA-15A` |
+| `15A HALF OF MIDDLE` | `PCA-15B` |
+| `15A MIDDLE SIDE` | `PCA-15C` |
+| `16B ANEAR PATHWAY` | `PCB-16A` |
+| `17A MIDDLE SIDE AND 17ANEAR PATHWAY` | `PCA-17B` |
+
+`normalizeProposedBlock(block)` looks the (trim+uppercase+whitespace-collapsed) input up
+in the table; a known alias returns the coded block, an unrecognized name returns the
+ORIGINAL input unchanged (never invents an alias), `null`/blank → `null`. **The Sheet's
+coded block is authoritative** for these locations — it's the operator's canonical
+reference and exactly what `bucketGsheetRcOut` already emits verbatim (gsheet needs no
+aliasing; only proposed's descriptive names do).
+
+**Wiring** (`rcOutStage.ts::bucketProposed`): the `fieldsOf` callback passed to
+`resolveAndBucket` now sets `block: normalizeProposedBlock(r.block_loc ?? null)` instead
+of the raw `r.block_loc` — this is the ONLY place the alias is applied, and it is applied
+ONLY to the fine-bucket key (and therefore the resulting `SourceRecord.naturalKey.block_loc`).
+The per-leg `SourceLegRow.block_loc` (each bucket's underlying rows, carried for R3's
+write-plan input) deliberately keeps the RAW descriptive string — this layer never writes,
+so there is nothing to keep in sync there; the alias exists purely to fix reconciliation
+KEYING. Because the alias is applied before grouping, the normal agree/diff machinery in
+`rcOut.ts::reconcileRcOut` does the rest with ZERO changes: once the block matches, if the
+batch ALSO resolves to the same `batch_id` (the common case — proposed and the Sheet agree
+on batch identity for a patio feeding, only the block name differs) the two rows land at
+one fine key and become either a plain multi-source `Agreement` (weights agree) or a real
+`SourceDiff` (weights genuinely disagree — STILL surfaced, the alias never suppresses an
+actual value disagreement). `matchAttributions` and `classifySingleSource` needed NO
+changes — neither keys on block_loc directly in a way the alias would break, and an
+unrecognized (non-patio) block-name mismatch still falls through to the existing
+second-pass attribution matcher exactly as before.
+
+**Visibility** (`workflows/runSync.ts::reconcileRcOutShadow`): `bucketProposed` also
+counts how many PROPOSED rows this run had a raw `block_loc` matching a known alias
+(`isKnownPatioAlias`), threaded through `RcOutReconciliation.patioAliasesApplied`. When
+`> 0`, the run emits one extra `"reconcile"` progress line — `"Auto-matched N patio
+feeding(s) via block aliases — proposed descriptive names reconciled to the Sheet's coded
+blocks."` — separate from the `flags` cross-check summary, so the alignment stays visible
+even on an otherwise all-clear run (an aligned+agreeing row never became a case, so it
+would otherwise be invisible).
+
+**Reconciler-only, read-only.** `blockAliases.ts` is imported ONLY by `rcOutStage.ts`
+(`bucketProposed`). It never touches `classify.ts`, the apply/write path, `batches`, or
+`rc_out` — a wrong or missing row can only change which reconciliation CASE surfaces, never
+the data already stored (which already holds the Sheet's correct block string). Extending
+the table: add a validated row to `PROPOSED_PATIO_BLOCK_ALIASES`, never derive one
+algorithmically inside the reconciler. Tests: `../../test/reconcile/blockAliases.test.ts`
+(the table + both helpers, case/whitespace/null edges) and
+`../../test/reconcile/rcOutStage.test.ts` § "Patio block aliases" (aligned-agree → plain
+Agreement no case; aligned-but-different-weight → still a `source_diff`; unaliased block
+mismatch → still an `attribution_diff`, unchanged).
 
 ## Creation-race hold auto-clear (shipped 2026-07-09, read-only)
 

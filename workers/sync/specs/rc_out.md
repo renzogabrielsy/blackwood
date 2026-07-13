@@ -71,6 +71,21 @@ Pallet columns are scanned from column 2 onward on row `R+3` until a sentinel ce
 
 `is_feed = bool(FEED_LABEL_RE.search(whse.upper()))`, where `FEED_LABEL_RE = r"\bFEED(?:ING)?\b"` — a case-insensitive **whole-word** match on `FEED` or `FEEDING` (2026-07-11 fix, both engines in lockstep — see PORTING_DECISIONS.md "Post-port business-rule changes"). Feed blocks get `block_loc = None`; standard blocks get `block_loc = whse` (the raw WHSE label string itself, e.g. `"A-1A"` — assumed already in Blackwood block_loc format for standard sections).
 
+**Patio spots keep their descriptive WHSE label verbatim (extraction unchanged).** A
+handful of standard sections are sun-drying PATIO spots whose WHSE label is descriptive
+prose rather than a coded block (`"16A NEAR PATHWAY"`, `"15A MIDDLE SIDE"` — see the
+2026-07-11 incident note above, which uses `"16A NEAR PATHWAY"` precisely BECAUSE it does
+NOT match the FEED regex and extracts as a normal block). Extraction does not touch these
+— `block_loc` is stored exactly as written, same as any other standard block. The Google
+Sheet names these SAME physical spots with a coded ref instead (its PCA/PCB mini-grid,
+e.g. `"PCA-16A"`), which used to make the cross-source reconciler (below) false-flag them
+as attribution mismatches. A validated alias table,
+`src/reconcile/blockAliases.ts` (`PROPOSED_PATIO_BLOCK_ALIASES` / `normalizeProposedBlock`),
+now aligns the PROPOSED side's descriptive name to the Sheet's coded block PURELY inside
+the reconciler's bucketing step (`src/reconcile/rcOutStage.ts::bucketProposed`) — this is
+reconciliation-side normalization only, not an extraction change, and it never writes to
+`rc_out`. See `src/reconcile/CONTEXT.md` § "Patio block aliases".
+
 **2026-07-11 production incident:** the original detector was `"FEEDING AREA" in whse.upper()` — an exact-phrase substring match. The JULY 8/9 2026 day-tabs' section #1 uses the operator's newer header text `"FOR FEEDING"` (not `"FEEDING AREA"`), which that check did NOT match. The section was mis-extracted as a numbered block (`block_no = 1` → derived `"JULY-26-BLK1"`, a real, unrelated batch at block D-19B) instead of a FEED batch (`"JULY-26-FEED1"`). Result: 3,000 kg (07-08) and 16,605 kg (07-09, closing remark) were written against the wrong batch, draining D-19B by 19,605 kg and closing it in error — hand-corrected in the DB by Renzo. The word-boundary regex fix recognizes both `"FEEDING AREA"` (legacy template, unchanged) and `"FOR FEEDING"` (current template) while staying conservative: a real block label like `"A-16D"` or `"16A NEAR PATHWAY"` contains no `FEED`/`FEEDING` word and does not match. Verified against the real JULY 2026 workbook (Storage path `789775c4-2b61-498a-9a54-9c5a01484a89/rc_out/PROPOSED DAILY REPORT JULY 2026.xlsx`) — see `test/reports/rc_out.test.ts` describe block `"extract — FEED-label detection"`. No existing fixture's classification changed (verified by diffing old-vs-new detector across every WHSE label in both rc_out fixtures) so no oracle rebuild was needed; parity stayed 12/12.
 
 ### `day_total_kg` derivation

@@ -563,6 +563,20 @@ async function reconcileRcOutShadow(
       undefined,
       flags > 0 ? "warn" : "info",
     );
+    // Patio block-name aliases (reconcile/blockAliases.ts, 2026-07-13) — visibility line.
+    // These are NOT part of `flags`: an aliased row that fully agrees never became a
+    // diff/held/attribution case in the first place, so this is reported separately so
+    // the alignment stays visible even on an otherwise all-clear run.
+    if (rc_out.patioAliasesApplied > 0) {
+      await emit(
+        "reconcile",
+        `Auto-matched ${rc_out.patioAliasesApplied} patio feeding(s) via block aliases — ` +
+          `proposed descriptive names reconciled to the Sheet's coded blocks.`,
+        96,
+        undefined,
+        "info",
+      );
+    }
     return { rc_out };
   } catch {
     // Shadow observer: a failure here must never fail the run or change a write.

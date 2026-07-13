@@ -437,3 +437,74 @@ describe("canonicalBatchKey (legacy alias helper — retained, superseded by bat
     expect(canonicalBatchKey("", ["  "])).toBeNull();
   });
 });
+
+describe("Patio block aliases (2026-07-13) — through the bucketing stage", () => {
+  // A real alias pair from ./blockAliases.ts: proposed's descriptive "16A NEAR WALL" ==
+  // gsheet's coded "PCA-16A". Both sides carry the SAME batch code (proposed report and
+  // Sheet agree on batch identity — only the block NAME differs), so once the alias
+  // aligns the block, the fine key fully matches and normal agree/diff logic applies.
+  const PATIO_LOOKUP: BatchLookup = { "JULY-26-BLK6": "id-blk6" };
+  const D = "2026-05-11";
+
+  it("aligned block + SAME weight → a plain multi-source Agreement, NOT an attribution_diff", () => {
+    const proposed = [pLeg("JULY-26-BLK6", [], "16A NEAR WALL", 10_000, 2_506, 7_494)];
+    const gsheetRcOut = [gRow("JULY-26-BLK6", [], "PCA-16A", 7_494)];
+    const res = reconcileRcOutStage({
+      proposed,
+      gsheetRcOut,
+      batchLookup: PATIO_LOOKUP,
+      runDate: D,
+    });
+    expect(res.diffs).toHaveLength(0);
+    expect(res.attributionDiffs).toHaveLength(0);
+    expect(res.heldOverdue).toHaveLength(0);
+    expect(res.pending).toBe(0); // multi-source agreement never gets a disposition
+    expect(res.agreements).toBe(1); // one weight_kg agreement at the aligned key
+    expect(res.patioAliasesApplied).toBe(1);
+  });
+
+  it("aligned block + DIFFERENT weight → still surfaced as a source_diff (never auto-resolved)", () => {
+    const proposed = [pLeg("JULY-26-BLK6", [], "16A NEAR WALL", 10_000, 2_506, 7_494)];
+    const gsheetRcOut = [gRow("JULY-26-BLK6", [], "PCA-16A", 7_200)]; // genuine disagreement
+    const res = reconcileRcOutStage({
+      proposed,
+      gsheetRcOut,
+      batchLookup: PATIO_LOOKUP,
+      runDate: D,
+    });
+    expect(res.diffs).toHaveLength(1);
+    expect(res.diffs[0].field).toBe("weight_kg");
+    const values = res.diffs[0].sources.map((s) => s.value).sort();
+    expect(values).toEqual([7_200, 7_494]);
+    expect(res.attributionDiffs).toHaveLength(0); // the alias resolved it to ONE key, not two
+    expect(res.patioAliasesApplied).toBe(1);
+  });
+
+  it("case/whitespace variance in the proposed block name still aligns (normalizeProposedBlock)", () => {
+    const proposed = [pLeg("JULY-26-BLK6", [], "  16a   near   wall  ", 10_000, 2_506, 7_494)];
+    const gsheetRcOut = [gRow("JULY-26-BLK6", [], "PCA-16A", 7_494)];
+    const res = reconcileRcOutStage({
+      proposed,
+      gsheetRcOut,
+      batchLookup: PATIO_LOOKUP,
+      runDate: D,
+    });
+    expect(res.diffs).toHaveLength(0);
+    expect(res.attributionDiffs).toHaveLength(0);
+    expect(res.patioAliasesApplied).toBe(1);
+  });
+
+  it("a NON-patio block difference (no alias) still produces an attribution_diff — unchanged behavior", () => {
+    const proposed = [pLeg("JULY-26-BLK6", [], "SOME OTHER DESCRIPTIVE SPOT", 10_000, 2_506, 7_494)];
+    const gsheetRcOut = [gRow("JULY-26-BLK6", [], "PCA-99Z", 7_494)];
+    const res = reconcileRcOutStage({
+      proposed,
+      gsheetRcOut,
+      batchLookup: PATIO_LOOKUP,
+      runDate: D,
+    });
+    expect(res.diffs).toHaveLength(0);
+    expect(res.attributionDiffs).toHaveLength(1); // the pre-existing second-pass matcher still catches it
+    expect(res.patioAliasesApplied).toBe(0); // NOT a known alias — nothing to count
+  });
+});
