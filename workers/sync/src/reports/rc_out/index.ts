@@ -27,6 +27,7 @@ import type { ProgressEmitter } from "../../lib/progress.js";
 
 import { extractProposed, extractMovement } from "./extract.js";
 import { classifyRcOut, type ClassifyResult, type RcOutDbRow, type BatchLookup } from "./classify.js";
+import { isKnownPatioAlias } from "../../reconcile/blockAliases.js";
 import {
   reconcile,
   rcOutSumsFromRows,
@@ -223,18 +224,51 @@ export async function runReport(
   // corroborated by the RC MOVEMENT sheet (see rc_out_date_settlements, populated by
   // workflows/runSync.ts::persistSettlements). Drop those rows BEFORE the gate
   // reconcile() calls and BEFORE classify — a settled date gets no extract-compare,
-  // no classify, no gate eval, no held/flagged rows, full stop. classifyCase (the
-  // parity-frozen entrypoint) is untouched; this filter lives only here, in the live
-  // orchestrator, which has DB access classifyCase does not.
+  // no classify, no gate eval, no held/flagged rows, full stop.
+  //
+  // PATIO WRITE-SKIP (2026-07-13, data-integrity fix): rc_out's natural key is
+  // (transaction_date, batch_id, destination) — NO block_loc (see apply.ts:13). A
+  // PROPOSED row at a known patio alias (src/reconcile/blockAliases.ts —
+  // `isKnownPatioAlias`) is really the Sheet's SUNDRY batch at a coded PCA/PCB block;
+  // PROPOSED mis-derives a BLK batch code for it from (block_date, block_no), and that
+  // phantom row then COLLIDES on the natural key with a genuine, unrelated block feeding
+  // attributed to the same derived batch — clobbering the real row every run (live proof:
+  // rc_out row 0238c58d flip-flopped 6× between "JAN-26-BLK17 @ A-11B" (real) and
+  // "JAN-26-BLK17 @ 15A MIDDLE SIDE" (patio duplicate of MARCH-26-SUNDRY7 @ PCA-15C)).
+  // These feedings are Sheet-owned: PROPOSED cannot attribute the correct SUNDRY batch,
+  // and the feeding already exists as the Sheet's SUNDRY row, so writing them can only
+  // duplicate/clobber. Dropped here, same as a settled row, BEFORE gates and classify.
+  //
+  // Both skips share ONE filter pass. classifyCase (the parity-frozen entrypoint) is
+  // untouched; this filter lives only here, in the live orchestrator, which has DB
+  // access classifyCase does not.
   const settledDates = await db.readSettledDates();
-  const proposed = settledDates.size
-    ? { ...proposedAll, rows: proposedAll.rows.filter((r) => !settledDates.has(r.transaction_date)) }
-    : proposedAll;
-  const skippedSettledCount = proposedAll.rows.length - proposed.rows.length;
+  let skippedSettledCount = 0;
+  let skippedPatioCount = 0;
+  const proposedRows = proposedAll.rows.filter((r) => {
+    if (settledDates.has(r.transaction_date)) {
+      skippedSettledCount++;
+      return false;
+    }
+    if (isKnownPatioAlias(r.block_loc)) {
+      skippedPatioCount++;
+      return false;
+    }
+    return true;
+  });
+  const proposed = { ...proposedAll, rows: proposedRows };
   if (skippedSettledCount > 0) {
     await emit?.(
       "classify",
       `Skipped ${skippedSettledCount} row(s) on already-settled date(s) — no re-check needed.`,
+      30,
+    );
+  }
+  if (skippedPatioCount > 0) {
+    await emit?.(
+      "classify",
+      `Skipped ${skippedPatioCount} patio feeding(s) on the write path — Sheet-owned SUNDRY blocks, ` +
+        `proposed can't attribute them (they remain the Sheet's records).`,
       30,
     );
   }

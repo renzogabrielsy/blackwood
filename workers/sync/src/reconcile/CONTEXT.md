@@ -405,16 +405,27 @@ blocks."` — separate from the `flags` cross-check summary, so the alignment st
 even on an otherwise all-clear run (an aligned+agreeing row never became a case, so it
 would otherwise be invisible).
 
-**Reconciler-only, read-only.** `blockAliases.ts` is imported ONLY by `rcOutStage.ts`
-(`bucketProposed`). It never touches `classify.ts`, the apply/write path, `batches`, or
-`rc_out` — a wrong or missing row can only change which reconciliation CASE surfaces, never
-the data already stored (which already holds the Sheet's correct block string). Extending
-the table: add a validated row to `PROPOSED_PATIO_BLOCK_ALIASES`, never derive one
-algorithmically inside the reconciler. Tests: `../../test/reconcile/blockAliases.test.ts`
-(the table + both helpers, case/whitespace/null edges) and
-`../../test/reconcile/rcOutStage.test.ts` § "Patio block aliases" (aligned-agree → plain
-Agreement no case; aligned-but-different-weight → still a `source_diff`; unaliased block
-mismatch → still an `attribution_diff`, unchanged).
+**Reconciler-only, read-only — UPDATED 2026-07-13, the alias table now also gates the
+write path.** `blockAliases.ts` (specifically `isKnownPatioAlias`) was imported ONLY by
+`rcOutStage.ts` (`bucketProposed`) through 2026-07-12; it never touched `classify.ts`,
+`batches`, or `rc_out`. As of 2026-07-13 it has a SECOND consumer:
+`../reports/rc_out/index.ts::runReport` also calls `isKnownPatioAlias` to DROP a
+patio-aliased PROPOSED row from the write path entirely (a confirmed data-integrity bug —
+rc_out's natural key `(transaction_date, batch_id, destination)` has no `block_loc`, so a
+patio row's mis-derived `BLK` batch code can collide with and overwrite an unrelated real
+block feeding; see `specs/PORTING_DECISIONS.md`'s 2026-07-13 entry and `specs/rc_out.md`
+§4b for the full incident + fix). The two consumers do two DIFFERENT things with the same
+predicate: `bucketProposed` REMAPS the block name for reconciliation keying (via
+`normalizeProposedBlock`, never touching the write path); `runReport` DROPS the row
+outright (never reconciliation-side, purely a write-path filter, applied BEFORE gates and
+classify). `normalizeProposedBlock` itself is still reconciler-only. Extending the table:
+add a validated row to `PROPOSED_PATIO_BLOCK_ALIASES`, never derive one algorithmically —
+this now affects BOTH consumers at once. Tests: `../../test/reconcile/blockAliases.test.ts`
+(the table + both helpers, case/whitespace/null edges), `../../test/reconcile/rcOutStage.test.ts`
+§ "Patio block aliases" (aligned-agree → plain Agreement no case; aligned-but-different-weight
+→ still a `source_diff`; unaliased block mismatch → still an `attribution_diff`, unchanged),
+and `../../test/reports/rc_out-patio-write-skip.test.ts` (the write-path drop, unaffected
+normal/FEED rows, the real collision-shape scenario).
 
 ## Creation-race hold auto-clear (shipped 2026-07-09, read-only)
 

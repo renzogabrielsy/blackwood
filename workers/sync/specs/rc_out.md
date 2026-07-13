@@ -86,6 +86,24 @@ the reconciler's bucketing step (`src/reconcile/rcOutStage.ts::bucketProposed`) 
 reconciliation-side normalization only, not an extraction change, and it never writes to
 `rc_out`. See `src/reconcile/CONTEXT.md` § "Patio block aliases".
 
+**2026-07-13 write-path fix — patio rows are DROPPED before they can write, not just
+aliased for reconciliation.** The alias table above only fixes reconciliation KEYING; it
+does nothing about the WRITE path, where the collision actually happens. rc_out's natural
+key is `(transaction_date, batch_id, destination)` — no `block_loc` (`apply.ts:13`) — so a
+patio row's mis-derived numbered `BLK` batch code (from `(block_date, block_no)`, same as
+any standard block; see `derive_batch_codes` above) can land on the EXACT SAME natural key
+as a genuine, unrelated block feeding on the same day (confirmed incident: rc_out row
+`0238c58d` flip-flopped 6× between `"JAN-26-BLK17 @ A-11B"` (real) and
+`"JAN-26-BLK17 @ 15A MIDDLE SIDE"` (patio duplicate of the already-stored
+`MARCH-26-SUNDRY7 @ PCA-15C`)), and every sync run OVERWRITES the real row with the patio
+duplicate. `reports/rc_out/index.ts::runReport` now drops any proposed row whose
+`block_loc` is a known patio alias (`isKnownPatioAlias`) in the SAME filter pass as the
+§4b date-settlement skip below, before the gate `reconcile()` calls and before
+`classifyRcOut` — a normal coded block or a FEED row (`block_loc = null`) is never
+affected. The reconciler still SEES these rows (for `attribution_diff`/findings
+visibility); only the WRITE is skipped. See `PORTING_DECISIONS.md`'s 2026-07-13 entry for
+the full deviation-log write-up.
+
 **2026-07-11 production incident:** the original detector was `"FEEDING AREA" in whse.upper()` — an exact-phrase substring match. The JULY 8/9 2026 day-tabs' section #1 uses the operator's newer header text `"FOR FEEDING"` (not `"FEEDING AREA"`), which that check did NOT match. The section was mis-extracted as a numbered block (`block_no = 1` → derived `"JULY-26-BLK1"`, a real, unrelated batch at block D-19B) instead of a FEED batch (`"JULY-26-FEED1"`). Result: 3,000 kg (07-08) and 16,605 kg (07-09, closing remark) were written against the wrong batch, draining D-19B by 19,605 kg and closing it in error — hand-corrected in the DB by Renzo. The word-boundary regex fix recognizes both `"FEEDING AREA"` (legacy template, unchanged) and `"FOR FEEDING"` (current template) while staying conservative: a real block label like `"A-16D"` or `"16A NEAR PATHWAY"` contains no `FEED`/`FEEDING` word and does not match. Verified against the real JULY 2026 workbook (Storage path `789775c4-2b61-498a-9a54-9c5a01484a89/rc_out/PROPOSED DAILY REPORT JULY 2026.xlsx`) — see `test/reports/rc_out.test.ts` describe block `"extract — FEED-label detection"`. No existing fixture's classification changed (verified by diffing old-vs-new detector across every WHSE label in both rc_out fixtures) so no oracle rebuild was needed; parity stayed 12/12.
 
 ### `day_total_kg` derivation
@@ -353,6 +371,15 @@ down a run.
 exactly 50kg, empty-DB/no-movement never settle, multi-date backfill). `test/reports/rc_out-settlement.test.ts` (chokepoint A end-to-end through `runReport` — a settled
 date's rows never reach classify/apply, an unsettled sibling date on the same workbook
 still writes normally).
+
+**Sibling filter, same chokepoint A, added 2026-07-13:** the PATIO WRITE-SKIP (see "FEED
+vs standard block" above) rides the exact same filter pass inside
+`reports/rc_out/index.ts::runReport` — a proposed row is dropped when EITHER its
+`transaction_date` is settled OR its `block_loc` is a known patio alias
+(`isKnownPatioAlias`). Test: `test/reports/rc_out-patio-write-skip.test.ts` (a lone
+patio-aliased row is dropped before gates/classify; a normal coded block and a FEED row
+are unaffected; the live-bug collision shape — a real block and a patio duplicate deriving
+the SAME batch on the SAME date — leaves only the non-patio row on the write path).
 
 ---
 
