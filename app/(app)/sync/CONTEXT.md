@@ -35,7 +35,16 @@ behind ONE flag so it can be re-enabled with a one-line change:
     action; always folds to **`lib/sync/local-summary.ts::localSyncSummary`**, a
     pure/deterministic template (same "Nothing new today…" string for a clean run,
     a blunt counts-based line otherwise — "Wrote 40 new rows. 3 items need your
-    review — see the findings below.").
+    review — see the findings below."). **The review-count N is the RENDERED
+    findings count** (`flattenRunFindings(result).length`, computed in
+    `finalizeRun` and passed as `localSyncSummary`'s second arg,
+    `findingsCount`) — NOT the raw per-report classify-level `held + flagged`
+    totals. Those totals can be nonzero with zero renderable findings (e.g. a
+    classify-level `flagged` with no held row and no reconciliation finding —
+    confirmed on run b142814b: gsheet + rc_movement_audit each flagged=1, apply
+    held=0, 0 block/diff findings → 0 rendered findings), which used to make the
+    footer promise a review the findings list below couldn't show (fixed
+    2026-07-14). The line only appears when `findingsCount > 0`.
   - `cases.ts`'s `autoInvestigateRun` itself early-returns a no-op `skipped` result
     (belt-and-suspenders — nothing fans a run into cases + investigates while the
     flag is off, even if called directly).

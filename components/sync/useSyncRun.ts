@@ -352,7 +352,11 @@ export function useSyncRun() {
       // for a clean run, extended with a blunt counts-based line for a non-clean
       // run. Flip SYNC_AI_REVIEW_ENABLED to restore AI narration.
       if (!SYNC_AI_REVIEW_ENABLED) {
-        setState((prev) => ({ ...prev, summary: localSyncSummary(narrateInput), summarizing: false }))
+        setState((prev) => ({
+          ...prev,
+          summary: localSyncSummary(narrateInput, findings.length),
+          summarizing: false,
+        }))
         return
       }
 

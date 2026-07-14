@@ -10,6 +10,15 @@
  * blunt, counts-based template — no jargon, no AI prose, just what wrote and
  * what needs a look.
  *
+ * The "N items need your review" line is keyed off `findingsCount` — the count
+ * of findings the Sync panel ACTUALLY renders (`flattenRunFindings(result).length`
+ * in `useSyncRun.ts`), NOT the raw per-report classify-level `held + flagged`
+ * totals. Those totals can be non-zero with zero renderable findings (e.g. a
+ * classify-level `flagged` that never produced a held row or a reconciliation
+ * finding — see the b142814b run: gsheet + rc_movement_audit each flagged=1,
+ * apply held=0, block/diff findings=0 → 0 rendered findings). Basing the count
+ * on raw totals made the footer promise reviews the findings list never showed.
+ *
  * PURE + CLIENT-SAFE: no imports besides a type-only import of `NarrateInput`
  * (erased at compile time — importing a TYPE from a `'use server'` file never
  * pulls its runtime code into the client bundle). Deterministic, never throws.
@@ -23,8 +32,12 @@ function plural(n: number, word: string): string {
 /**
  * The local, deterministic stand-in for `narrateSyncRun`. Same all-clean string
  * as the server action's short-circuit; a blunt counts-based summary otherwise.
+ *
+ * `findingsCount` is the number of findings the panel will actually render
+ * (`flattenRunFindings(result).length`) — the review line only appears, and is
+ * only ever sized, off that number.
  */
-export function localSyncSummary(results: NarrateInput[]): string {
+export function localSyncSummary(results: NarrateInput[], findingsCount: number): string {
   const allClean = results.every(
     (r) =>
       r.ok &&
@@ -54,10 +67,9 @@ export function localSyncSummary(results: NarrateInput[]): string {
   if (totals.updates > 0) wrote.push(plural(totals.updates, 'updated row'))
   const writeLine = wrote.length > 0 ? `Wrote ${wrote.join(' and ')}.` : 'Nothing was written.'
 
-  const reviewCount = totals.held + totals.flagged
   const reviewLine =
-    reviewCount > 0
-      ? `${plural(reviewCount, 'item')} need${reviewCount === 1 ? 's' : ''} your review — see the findings below.`
+    findingsCount > 0
+      ? `${plural(findingsCount, 'item')} need${findingsCount === 1 ? 's' : ''} your review — see the findings below.`
       : ''
 
   const gateLine =
