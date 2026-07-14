@@ -47,3 +47,6 @@ next-env.d.ts
 __pycache__/
 *.pyc
 .gstack/
+
+# machine-local subagent memory (workers/sync) — never commit; kept getting swept into `git add .`
+workers/sync/.claude/

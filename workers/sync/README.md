@@ -101,6 +101,11 @@ npm start                # node dist/index.js  (launches DBOS + kick server)
 npm run dev              # tsx watch src/index.ts
 ```
 
+Every launch path logs a startup banner (`[blackwood-sync] build <sha> · <mode> · started <time>`)
+as the first line — under `npm start` the sha/build-time come from esbuild's `define` (compiled
+into `dist/index.js`), under `npm run dev` the sha is read live via git. Check this line after any
+restart to confirm the process actually picked up new code, not a stale `dist/`.
+
 ### Kick a run
 
 ```bash
