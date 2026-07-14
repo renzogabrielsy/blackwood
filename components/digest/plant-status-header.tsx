@@ -2,15 +2,14 @@
 
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { fmtKg, relativeTime } from "../format";
+import { fmtKg, relativeTime } from "./format";
 import { BEACON_DOT } from "./status-tokens";
-import type { Freshness } from "@/lib/digest/types";
-import type { ProdSchedDay } from "@/lib/digest/prod-schedule-draft";
+import type { Freshness, PlantStatus } from "@/lib/digest/types";
 
 interface PlantStatusHeaderProps {
   operationalDate: string | null;
-  /** the day's PROD SCHED plan (undefined outside the draft window) */
-  plan: ProdSchedDay | undefined;
+  /** the operational date's plant status (null outside the ingested plan window) */
+  plantStatus: PlantStatus | null;
   /** kg fed on the operational date (RC Out KPI value) */
   fedKg: number;
   lastSyncAt: string | null;
@@ -24,6 +23,22 @@ const FRESHNESS_CHIP: Record<Freshness, string> = {
   recent: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
   stale: "bg-muted text-muted-foreground",
 };
+
+const DOW_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+/** Weekday name for a yyyy-MM-dd date (UTC). */
+function dowNameFor(date: string | null): string {
+  if (!date) return "";
+  return DOW_NAMES[new Date(date + "T00:00:00Z").getUTCDay()] ?? "";
+}
 
 function Fact({
   label,
@@ -52,14 +67,15 @@ function Fact({
 }
 
 /**
- * Operational-date status bar for the Dashboard Draft. Left: a running/rest
- * beacon + the date. Middle: planned setup, projected tons, fed kg. Right:
- * last-sync freshness (ticks client-side) + a streams-behind note. Mirrors
- * the digest's glass-card idiom.
+ * Operational-date status bar. Left: a running/rest beacon + the date.
+ * Middle: planned setup, projected tons, fed kg. Right: last-sync freshness
+ * (ticks client-side) + a streams-behind note. Mirrors the digest's
+ * glass-card idiom. Sourced from `plantStatus` (the `production_schedule`
+ * plan) + `meta`.
  */
 export function PlantStatusHeader({
   operationalDate,
-  plan,
+  plantStatus,
   fedKg,
   lastSyncAt,
   freshness,
@@ -72,11 +88,17 @@ export function PlantStatusHeader({
     return () => clearInterval(id);
   }, [lastSyncAt]);
 
-  const isRest = plan?.shifts === 0;
-  const running = !isRest;
-  const beaconLabel = isRest
-    ? "Plant at rest · planned"
-    : `Plant running · ${plan?.shifts ?? 1} shift${(plan?.shifts ?? 1) === 1 ? "" : "s"}`;
+  const hasPlan = plantStatus != null;
+  const isRest = hasPlan && plantStatus.shifts === 0;
+  const running = hasPlan ? plantStatus.running : false;
+
+  const beaconLabel = !hasPlan
+    ? "Plant status · no plan on record"
+    : isRest
+      ? "Plant at rest · planned"
+      : `Plant running · ${plantStatus.shifts} shift${plantStatus.shifts === 1 ? "" : "s"}`;
+
+  const dow = dowNameFor(operationalDate);
 
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70 animate-fade-up">
@@ -103,7 +125,7 @@ export function PlantStatusHeader({
             {beaconLabel}
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {plan ? `${plan.dow} ` : ""}
+            {dow ? `${dow} ` : ""}
             {operationalDate ?? "—"} · operational day
           </span>
         </div>
@@ -112,10 +134,12 @@ export function PlantStatusHeader({
       <div className="hidden h-9 w-px self-center bg-border sm:block" />
 
       <Fact label="Planned setup" plan>
-        {plan?.setup ?? "— off —"}
+        {hasPlan ? plantStatus.setup ?? "— off —" : "—"}
       </Fact>
       <Fact label="Projected out" plan>
-        {plan ? `${plan.projectedTons.toFixed(1)} ` : "— "}
+        {hasPlan && plantStatus.projectedTons != null
+          ? `${plantStatus.projectedTons.toFixed(1)} `
+          : "— "}
         <span className="text-xs font-normal text-muted-foreground">t</span>
       </Fact>
       <Fact label="Fed (RC Out)">
@@ -128,7 +152,8 @@ export function PlantStatusHeader({
       <div className="flex flex-col items-end gap-1 text-right">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
-            Last sync <span className="font-medium text-foreground/80">{rel}</span>
+            Last sync{" "}
+            <span className="font-medium text-foreground/80">{rel}</span>
           </span>
           <span
             className={cn(
@@ -141,7 +166,8 @@ export function PlantStatusHeader({
         </div>
         {streamsBehind > 0 && (
           <span className="text-[11px] text-amber-700 dark:text-amber-300">
-            {streamsBehind} stream{streamsBehind === 1 ? "" : "s"} behind — see cards
+            {streamsBehind} stream{streamsBehind === 1 ? "" : "s"} behind — see
+            cards
           </span>
         )}
       </div>

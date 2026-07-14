@@ -16,10 +16,16 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { fmtByUnit, fmtDeltaPct } from "./format";
+import { STATE_CHIP, STATE_LABEL, STATE_RAIL } from "./status-tokens";
 import type { DigestKpi } from "@/lib/digest/types";
+import type { KpiDayStatus } from "@/lib/digest/day-status";
 
 interface KpiHeroProps {
   kpis: DigestKpi[];
+  /** kpi.key → resolved operational-day state (the "misleading zero" fix).
+   *  `reported` cards show the number + delta + sparkline; every other state
+   *  shows a state label + severity rail + chip instead of a bare 0. */
+  dayStatus: Record<string, KpiDayStatus>;
 }
 
 /** Net-flow is a derived balance — drift is EXPECTED, so it gets neutral
@@ -139,6 +145,82 @@ function Sparkline({ kpi }: { kpi: DigestKpi }) {
   );
 }
 
+/** State pill for a non-reported card (Awaiting report / Rest day / …). */
+function StateChip({ state }: { state: KpiDayStatus["state"] }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-semibold",
+        STATE_CHIP[state]
+      )}
+    >
+      {STATE_LABEL[state]}
+    </span>
+  );
+}
+
+/** A non-reported card — a state label + severity rail + ghosted projection
+ *  instead of a misleading zero, and NO sparkline (the stream has no active
+ *  value today). Covers `awaiting` / `rest` / `stale` / `idle`. */
+function StateCard({ kpi, status }: { kpi: DigestKpi; status: KpiDayStatus }) {
+  const { state } = status;
+  const ghost =
+    state === "awaiting" && status.projectedTons != null ? (
+      <>
+        projected{" "}
+        <b className="font-mono font-semibold text-violet-600 dark:text-violet-300">
+          {status.projectedTons.toFixed(1)} t
+        </b>
+        {" · 1 shift"}
+      </>
+    ) : state === "stale" && status.staleDays != null ? (
+      <>last reading {status.staleDays} days ago</>
+    ) : state === "rest" ? (
+      <>planned rest — zero is correct</>
+    ) : state === "idle" ? (
+      <>procurement — not shift-bound</>
+    ) : null;
+
+  return (
+    <div
+      className={cn(
+        "hover-lift relative flex flex-col gap-2 overflow-hidden rounded-xl border p-3.5",
+        "bg-muted/30 supports-backdrop-filter:bg-muted/20"
+      )}
+    >
+      {/* left severity rail */}
+      <span
+        className={cn("absolute inset-y-0 left-0 w-[3px]", STATE_RAIL[state])}
+        aria-hidden
+      />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {kpi.label}
+        </span>
+        <StateChip state={state} />
+      </div>
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-base font-semibold leading-tight text-muted-foreground">
+          {STATE_LABEL[state]}
+        </span>
+      </div>
+      <div className="flex min-h-4 items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="truncate">{ghost}</span>
+        <span className="shrink-0 tabular-nums">
+          avg:{" "}
+          <span className="font-mono font-medium text-foreground/80">
+            {kpi.avg7 == null ? "—" : fmtSparkValue(kpi.avg7, kpi.unit)}
+          </span>
+        </span>
+      </div>
+      {/* no misleading sparkline — this stream has no active value today */}
+      <div className="flex h-10 w-full items-center justify-center rounded bg-muted/30 text-[10px] italic text-muted-foreground/70">
+        no active series
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({ kpi }: { kpi: DigestKpi }) {
   const neutral = isNeutralKpi(kpi.key);
   const valueStr = fmtByUnit(kpi.value, kpi.unit);
@@ -209,7 +291,7 @@ function KpiCard({ kpi }: { kpi: DigestKpi }) {
   return card;
 }
 
-export function KpiHero({ kpis }: KpiHeroProps) {
+export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
   if (!kpis.length) {
     return (
       <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -220,9 +302,16 @@ export function KpiHero({ kpis }: KpiHeroProps) {
 
   return (
     <div className="grid grid-cols-2 gap-3 stagger-children sm:grid-cols-3 lg:grid-cols-5">
-      {kpis.map((kpi) => (
-        <KpiCard key={kpi.key} kpi={kpi} />
-      ))}
+      {kpis.map((kpi) => {
+        // Default to `reported` when a stream has no resolved status (e.g. the
+        // adapter had no operational date) — preserves today's behavior.
+        const status = dayStatus[kpi.key] ?? { state: "reported" as const };
+        return status.state === "reported" ? (
+          <KpiCard key={kpi.key} kpi={kpi} />
+        ) : (
+          <StateCard key={kpi.key} kpi={kpi} status={status} />
+        );
+      })}
     </div>
   );
 }

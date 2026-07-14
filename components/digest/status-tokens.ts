@@ -1,12 +1,12 @@
 // =====================================================================
-// Draft dashboard — shared day-status style tokens
+// Digest — operational-day status style tokens
 // =====================================================================
 // One home for the chip / rail / label styling of every day-status so the
-// KpiHero, week strip and schedule table stay visually consistent. Pure
-// module (no imports) — client- and server-safe. Colors follow the digest's
-// existing severity idiom (emerald/amber/red/muted, from kpi-hero &
-// digest-header); `planned` uses violet to mark the forward-looking PLAN
-// layer, matching the static mock at public/verbose-dashboard.html.
+// KpiHero, plant-status header and week strip stay visually consistent.
+// Pure module (no imports) — client- and server-safe. Colors follow the
+// digest's existing severity idiom (emerald/amber/red/muted, from kpi-hero
+// & digest-header); `planned` uses violet to mark the forward-looking PLAN
+// layer.
 // =====================================================================
 
 export type StatusKey =

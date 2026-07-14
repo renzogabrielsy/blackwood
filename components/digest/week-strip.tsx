@@ -1,17 +1,10 @@
 import { cn } from "@/lib/utils";
 import { STATE_CHIP, STATE_LABEL } from "./status-tokens";
-import type { ProdSchedDay } from "@/lib/digest/prod-schedule-draft";
-
-/** One day's plan-vs-actual cell for the week strip. */
-export interface WeekDay {
-  day: ProdSchedDay;
-  /** actual production in tons, null when not yet reported */
-  actualTons: number | null;
-  isToday: boolean;
-}
+import type { WeekDayPlan } from "@/lib/digest/types";
 
 interface WeekStripProps {
-  week: WeekDay[];
+  /** the 7 days of the operational date's week (plan joined with actual tons) */
+  week: WeekDayPlan[];
 }
 
 /** A static horizontal bar (width is data-driven; never animated — layout-safe). */
@@ -36,26 +29,40 @@ function Bar({
   );
 }
 
+/**
+ * This-week plan-vs-actual strip: one card per day of the operational date's
+ * week. Rest days render dashed and calm; today gets a ring; each working day
+ * shows a violet planned bar over a chart-1 actual bar plus a state chip
+ * (Reported / Awaiting / Planned / Today). Presentation-only — `state` and the
+ * tons come pre-resolved from `getDigestData()`.
+ */
 export function WeekStrip({ week }: WeekStripProps) {
   // scale bars against the largest planned figure in the window
-  const maxTons = Math.max(1, ...week.map((w) => w.day.projectedTons));
+  const maxTons = Math.max(1, ...week.map((w) => w.projectedTons ?? 0));
 
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
-      {week.map(({ day, actualTons, isToday }) => {
+      {week.map((day) => {
         const rest = day.shifts === 0;
+        const projected = day.projectedTons ?? 0;
+        const reported = day.actualTons != null && day.actualTons > 0;
+        const chipState = reported
+          ? "reported"
+          : day.isToday
+            ? "today"
+            : "planned";
         return (
           <div
             key={day.date}
             className={cn(
               "flex flex-col gap-2 rounded-xl border bg-card p-2.5",
               rest && "border-dashed bg-muted/30",
-              isToday && "ring-1 ring-[var(--chart-2)]"
+              day.isToday && "ring-1 ring-[var(--chart-2)]"
             )}
           >
             <div className="flex items-baseline justify-between">
               <span className="text-[10.5px] font-bold uppercase tracking-wide text-muted-foreground">
-                {day.dow}
+                {day.dow.slice(0, 3)}
               </span>
               <span className="font-mono text-xs text-muted-foreground">
                 {day.date.slice(8)}
@@ -78,50 +85,33 @@ export function WeekStrip({ week }: WeekStripProps) {
             ) : (
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-1.5">
-                  <Bar fraction={day.projectedTons / maxTons} tone="plan" />
+                  <Bar fraction={projected / maxTons} tone="plan" />
                   <span className="w-8 text-right font-mono text-[9.5px] text-violet-600 dark:text-violet-300">
-                    {day.projectedTons}t
+                    {projected}t
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Bar
-                    fraction={actualTons != null ? actualTons / maxTons : 0}
+                    fraction={day.actualTons != null ? day.actualTons / maxTons : 0}
                     tone="actual"
                   />
                   <span className="w-8 text-right font-mono text-[9.5px] text-muted-foreground">
-                    {actualTons != null ? `${actualTons.toFixed(1)}t` : "—"}
+                    {day.actualTons != null ? `${day.actualTons.toFixed(1)}t` : "—"}
                   </span>
                 </div>
               </div>
             )}
 
-            {isToday ? (
+            {!rest && (
               <span
                 className={cn(
                   "w-fit rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
-                  actualTons != null && actualTons > 0
-                    ? STATE_CHIP.reported
-                    : STATE_CHIP.today
+                  STATE_CHIP[chipState]
                 )}
               >
-                {actualTons != null && actualTons > 0
-                  ? STATE_LABEL.reported
-                  : "Today"}
+                {chipState === "today" ? "Today" : STATE_LABEL[chipState]}
               </span>
-            ) : !rest ? (
-              <span
-                className={cn(
-                  "w-fit rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
-                  actualTons != null && actualTons > 0
-                    ? STATE_CHIP.reported
-                    : STATE_CHIP.planned
-                )}
-              >
-                {actualTons != null && actualTons > 0
-                  ? STATE_LABEL.reported
-                  : STATE_LABEL.planned}
-              </span>
-            ) : null}
+            )}
           </div>
         );
       })}

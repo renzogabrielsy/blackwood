@@ -812,6 +812,48 @@ export type Database = {
           },
         ]
       }
+      production_schedule: {
+        Row: {
+          dow: string | null
+          grades: Json | null
+          month: number
+          plan_date: string
+          projected_tons: number | null
+          remarks: string | null
+          setup: string | null
+          shifts: number
+          source: string
+          updated_at: string
+          year: number
+        }
+        Insert: {
+          dow?: string | null
+          grades?: Json | null
+          month: number
+          plan_date: string
+          projected_tons?: number | null
+          remarks?: string | null
+          setup?: string | null
+          shifts?: number
+          source?: string
+          updated_at?: string
+          year: number
+        }
+        Update: {
+          dow?: string | null
+          grades?: Json | null
+          month?: number
+          plan_date?: string
+          projected_tons?: number | null
+          remarks?: string | null
+          setup?: string | null
+          shifts?: number
+          source?: string
+          updated_at?: string
+          year?: number
+        }
+        Relationships: []
+      }
       production_shifts: {
         Row: {
           created_at: string
@@ -991,6 +1033,38 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
+          },
+        ]
+      }
+      rc_out_date_settlements: {
+        Row: {
+          db_sum_kg: number
+          movement_kg: number
+          settled_at: string
+          settled_by_run_id: string | null
+          transaction_date: string
+        }
+        Insert: {
+          db_sum_kg: number
+          movement_kg: number
+          settled_at?: string
+          settled_by_run_id?: string | null
+          transaction_date: string
+        }
+        Update: {
+          db_sum_kg?: number
+          movement_kg?: number
+          settled_at?: string
+          settled_by_run_id?: string | null
+          transaction_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rc_out_date_settlements_settled_by_run_id_fkey"
+            columns: ["settled_by_run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -1628,6 +1702,13 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_prod_actual_tons: {
+        Row: {
+          actual_tons: number | null
+          date: string | null
+        }
+        Relationships: []
+      }
       view_digest_rcin_daystats: {
         Row: {
           date: string | null
@@ -2178,6 +2259,7 @@ export type Database = {
       }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
+      fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       rc_out_avg_price: {
         Args: { rc_out_row: Database["public"]["Tables"]["rc_out"]["Row"] }

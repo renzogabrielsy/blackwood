@@ -20,40 +20,38 @@ in order is `app/(app)/page.tsx` (an async Server Component).
 |------|---------|--------------------|------|
 | `format.ts` | — (pure) | — | Display-only formatters: `fmtKwh`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue` (defined here) + `fmtKg`, `fmtPhpNumber` (**re-exported from `@/lib/format-utils`** — DUP-5 single-homed the canonical round-and-group kg/₱ formatters there; digest components still `import … from "./format"` unchanged). No aggregation. Client- and server-safe. |
 | `digest-header.tsx` | `'use client'` | `meta` | Sub-band header ("As of {operationalDate}") + glass freshness pill (fresh/recent/stale). Relative sync time ticks every 60 s client-side. |
-| `open-blocks.tsx` | Server | `openBlocks` | Compact card grid — one card per currently **IN-USE** block (`status = 'IN-USE'`), `block_loc` ascending: header + "volume left" bar + 7-stat lab mini-grid + optional gated ₱/kg line. Price display is INFERRED from whether any `phpKg` is non-null (Production gets all-null → no ₱ renders). Renders `null` when empty. **Surfaced at the very top** of the digest. |
-| `kpi-hero.tsx` | `'use client'` | `kpis` | Responsive stat-card grid (rc_in/rc_out/production/power/net_flow). Each card: label, big mono value, delta badge, recharts area sparkline (no animation). `net_flow` styled neutral ("expected drift", never red). |
-| `digest-charts.tsx` | `'use client'` | `flow`, `price`, `grades` | Recharts grid: Feed In vs Out (dual area), RC In price ₱/kg (line — omitted entirely when `price` is empty, which is how price-denied roles see it), Production by grade (stacked bar, pivots long→wide, segments multi-shift grades by `fillOpacity`). |
+| `plant-status-header.tsx` | `'use client'` | `plantStatus` (+ `meta`, `fedKg`) | Operational-date status bar: running/rest **beacon** (pulsing when running), planned setup, projected tons, fed kg, last-sync freshness (ticks every 60 s) + a streams-behind note. Renders a neutral "no plan on record" state when `plantStatus` is null. Glass card + `animate-fade-up`. |
+| `status-tokens.ts` | — (pure) | — | Shared chip / severity-rail / label class maps per operational-day state (`STATE_CHIP`, `STATE_RAIL`, `STATE_LABEL`, `BEACON_DOT`). emerald/amber/red/muted + violet for the PLAN layer. Consumed by `kpi-hero`, `week-strip`, `plant-status-header`. Client- and server-safe. |
+| `open-blocks.tsx` | Server | `openBlocks` | Compact card grid — one card per currently **IN-USE** block (`status = 'IN-USE'`), `block_loc` ascending: header + "volume left" bar + 7-stat lab mini-grid + optional gated ₱/kg line. Price display is INFERRED from whether any `phpKg` is non-null (Production gets all-null → no ₱ renders). Renders `null` when empty. **Surfaced near the top** of the digest. |
+| `kpi-hero.tsx` | `'use client'` | `kpis`, `dayStatus` | State-aware stat-card grid (rc_in/rc_out/production/power/net_flow). Each card consults `dayStatus[kpi.key]`: **`reported`** → number + delta badge + sparkline (as before; `net_flow` stays neutral "expected drift", never red); **`awaiting`/`rest`/`stale`/`idle`** → a `StateCard` with a state label + left severity rail + chip + ghosted projection and **no sparkline** ("no active series"), replacing the misleading `0`. |
+| `digest-charts.tsx` | `'use client'` | `flow`, `price`, `grades`, `weekPlan` | Recharts grid: **Feed In vs Out** (rest-day-aware `ComposedChart` — zero days render as **gaps** via `connectNulls={false}`, never a plunge; a `planByDate` map built from `weekPlan` adds a faint band on rest days and an amber marker on awaiting days), RC In price ₱/kg (line — omitted entirely when `price` is empty, which is how price-denied roles see it), Production by grade (stacked bar, pivots long→wide, segments multi-shift grades by `fillOpacity`). `ChartCard` gained an optional `legend` slot for the flow chart's custom band swatches. |
+| `week-strip.tsx` | Server | `weekPlan` | This-week plan-vs-actual strip — one card per day of the operational date's week: dow + date, setup, a violet planned bar over a chart-1 actual bar, and a state chip (Reported / Today / Planned). Rest days render dashed + "planned rest"; today gets a `ring`. Uses the pre-resolved `WeekDayPlan.state`. |
 | `trucks-summary.tsx` | `'use client'` | `trucks` | Excel-Standard dense table of trucks that logged a trip (`ttl_km > 0`) on the operational date, busiest first. Renders `null` on a no-movement day. |
 | `bag-inventory.tsx` | Server | `fleconBags` | Compact chip group — one chip per FLECON bag type (label + balance), `sort_order` ascending. Zero-balance chips dimmed. No price data. Renders `null` when no bag types. |
 | `sync-summary.tsx` | Server | `latestSync` | Compact header: "{date} · {n} new · {n} updated (· {n} removed)" + per-employee count chips (`byEmployee`). Owns the `employeeLabel()` key→friendly-name map. |
 | `activity-feed.tsx` | `'use client'` | `activity` | The changelog: up to ~40 recent `ActivityItem`s — op pill (INSERT/UPDATE/DELETE) + relative time + employee + provenance + table + note + diff chips. NOT animated per-row (single container fade). |
 | `digest-footer-band.tsx` | Server | `flags`, `monthToDate` (+ `meta.streams` for freshness) | 3-col final band: Flags (severity chips), Stream freshness (dense table), Month-to-date card. |
 
-## Draft dashboard (`draft/` — proposal, not live)
-The `components/digest/draft/` subfolder + the route `app/(app)/dashboard-draft/`
-are a **DRAFT proposal** (registered in the navbar, superseded the old static mock
-`public/verbose-dashboard.html`). It reworks the digest around operational-day
-**states** — resolving the "misleading zero" (a planned rest, an unfiled report, and
-a stale stream all rendered `0` today). It reuses the LIVE `getDigestData()` adapter
-for real KPIs/flow/meta and stands in for the not-yet-ingested PROD SCHED tab with a
-labeled constant. When a real PROD SCHED extractor + `view_digest_day_status` view
-land, the two `lib/digest/*-draft`/`day-status` modules should fold into SQL.
+## Operational-day states (the "misleading zero" fix, now LIVE)
+The digest resolves each stream/day to ONE of five states so a bare `0` carries
+meaning: **`reported`** (real value → number + delta), **`awaiting`** (plant ran
+but the report hasn't landed → amber, ghosted projection), **`rest`** (0 shifts,
+calm — zero is correct), **`stale`** (stream overdue → red), **`idle`** (rc_in
+procurement, not shift-bound → neutral). This was promoted from a draft proposal
+(`components/digest/draft/` + `app/(app)/dashboard-draft/`, both now deleted) into
+the real bands, fed by REAL data.
 
 | File | Client? | Role |
 |------|---------|------|
-| `lib/digest/prod-schedule-draft.ts` | pure | **DRAFT constant** — July 2026 PROD SCHED plan (`ProdSchedDay[]`), `SETUP_REFERENCE`, `ORDER_COMMITMENTS` + `getPlanForDate` / `getWeekPlan` / `getMonthPlan`. Delete when the tab is ingested. |
-| `lib/digest/day-status.ts` | pure | The "misleading zero" resolver — `resolveKpiDayStatus()` → `reported`/`awaiting`/`rest`/`stale`/`idle` (rc_in = procurement → `idle`, not late; net_flow stays neutral). `resolveScheduleRowState()` for the schedule table. |
-| `draft/status-tokens.ts` | pure | Shared chip/rail/label class maps per state (emerald/amber/red/muted + violet for the PLAN layer). |
-| `draft/plant-status-header.tsx` | `'use client'` | Operational-date status bar: running/rest beacon, planned setup, projected t, fed kg, last-sync freshness (ticks). |
-| `draft/draft-kpi-hero.tsx` | `'use client'` | State-aware KPI cards — `reported` mirrors the live hero; `awaiting`/`rest`/`stale`/`idle` show a state label + severity rail + chip + ghosted projection instead of a misleading zero (no sparkline). |
-| `draft/draft-flow-chart.tsx` | `'use client'` | Recharts `ComposedChart` — rest days = **gap** (`connectNulls={false}`, no plunge) + faint band; awaiting days = amber marker. |
-| `draft/week-strip.tsx` | Server | 7-day plan-vs-actual strip (planned vs actual bars, rest dashed, today ringed). |
-| `draft/schedule-table.tsx` | Server | Month plan-vs-actual table (Excel Standard density, sticky header) + orders & setup-reference rails. |
+| `lib/digest/day-status.ts` | pure | The state resolvers — `resolveKpiDayStatus()` → `reported`/`awaiting`/`rest`/`stale`/`idle` (rc_in = procurement → `idle`, not late; net_flow stays neutral) + `resolveScheduleRowState()` for the week strip. Also **owns the `ProdSchedDay` / `PlannedShifts` type** (moved here when the frozen `prod-schedule-draft.ts` constant was retired — the plan now comes from the `production_schedule` table via `getDigestData()`). |
 
-The route's actual-production tons are queried in the page (`getActualTonsByDate` —
-sums `production_runs.ttl_kg` by parent shift `transaction_date`, /1000; a DRAFT
-TS-side rollup that a real view would own). Price gating is inherited from
-`getDigestData()`; the draft surfaces no ₱.
+The live adapter (`getDigestData()`) computes `plantStatus`, per-KPI `dayStatus`,
+and the 7-day `weekPlan` server-side from the `production_schedule` table joined
+with `view_digest_prod_actual_tons` (actual tons SUM in SQL). The presentation
+bands (`plant-status-header`, state-aware `kpi-hero`, rest-day-aware
+`digest-charts` flow chart, `week-strip`) consume those slices — no plan constant,
+no TS aggregation. Price gating is inherited from `getDigestData()`; none of these
+bands surface ₱.
 
 ## Data
 - **Single source:** `getDigestData(): Promise<DigestData>` (`lib/digest/queries.ts`,

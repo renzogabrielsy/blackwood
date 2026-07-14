@@ -12,6 +12,8 @@
 // layer (lib/digest/queries.ts) only SHAPES rows into these types.
 // =====================================================================
 
+import type { KpiDayStatus, ScheduleRowState } from "./day-status";
+
 // ---------- Meta / freshness ----------
 
 export type Freshness = "fresh" | "recent" | "stale";
@@ -220,6 +222,45 @@ export interface MonthToDate {
   netKg: number;
 }
 
+// ---------- Production plan (PROD SCHED) ----------
+
+/** Plant status for the operational date, sourced from `production_schedule`.
+ *  `running = shifts > 0`. Null when the operational date has no plan row
+ *  (outside the ingested PROD SCHED window). Not price data — never gated. */
+export interface PlantStatus {
+  /** the operational date (yyyy-MM-dd) */
+  date: string;
+  /** planned shift count: 0 = rest/holiday, 1 = normal, 2 = double */
+  shifts: number;
+  /** planned line setup, e.g. "3X50 / 4X8"; null on a rest day */
+  setup: string | null;
+  /** planned TTL tons for the day; null when unknown */
+  projectedTons: number | null;
+  /** shifts > 0 — the plant was scheduled to run that day */
+  running: boolean;
+}
+
+/** One day of the operational date's week (Mon→Sun), plan joined with ACTUAL
+ *  production tons. `state` is resolved by `resolveScheduleRowState` in
+ *  ./day-status. `actualTons` is null when no production run is on record yet. */
+export interface WeekDayPlan {
+  /** yyyy-MM-dd */
+  date: string;
+  /** weekday name, e.g. "Tuesday" */
+  dow: string;
+  shifts: number;
+  setup: string | null;
+  projectedTons: number | null;
+  /** actual output in TONS for the day (SUM(production_runs.ttl_kg)/1000), or
+   *  null when no production run is on record. Aggregated in SQL
+   *  (view_digest_prod_actual_tons), never summed in TypeScript. */
+  actualTons: number | null;
+  /** the operational date */
+  isToday: boolean;
+  /** reported | awaiting | rest | planned | today (see ./day-status) */
+  state: ScheduleRowState;
+}
+
 // ---------- Top-level payload ----------
 
 export interface DigestData {
@@ -240,4 +281,19 @@ export interface DigestData {
   /** FLECON bag balance snapshot — one entry per bag type, sort_order ascending.
    *  No price data. Row-level passthrough from view_flecon_bag_balance. */
   fleconBags: FleconBagBalance[];
+  /** Plant status for the operational date, from `production_schedule`
+   *  (running / planned setup / projected tons). Null when the operational date
+   *  has no plan row. Not price data. */
+  plantStatus: PlantStatus | null;
+  /** Per-KPI operational-day state, keyed by kpi key
+   *  ("rc_in" | "rc_out" | "production" | "power" | "net_flow"). Resolves the
+   *  "misleading zero": a plan-driven state (reported / awaiting / rest / stale /
+   *  idle) so a bare 0 carries meaning. Computed by `resolveKpiDayStatus`
+   *  (./day-status) against the operational date's plan + stream freshness. */
+  dayStatus: Record<string, KpiDayStatus>;
+  /** The 7 days of the operational date's week (Mon→Sun): plan (from
+   *  `production_schedule`) joined with ACTUAL production tons (from
+   *  view_digest_prod_actual_tons) + a resolved per-day state. Empty when there
+   *  is no operational date. */
+  weekPlan: WeekDayPlan[];
 }

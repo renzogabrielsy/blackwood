@@ -16,7 +16,31 @@
 // =====================================================================
 
 import type { StreamFreshness } from "./types";
-import type { ProdSchedDay } from "./prod-schedule-draft";
+
+// ---------------------------------------------------------------------
+// PROD SCHED day shape (moved here from the retired prod-schedule-draft
+// constant — the live plan now comes from the `production_schedule` table
+// via getDigestData()). Shared by the digest adapter + the resolvers below.
+// ---------------------------------------------------------------------
+
+/** Planned shift count for a day. 0 = planned rest (Sunday / holiday). */
+export type PlannedShifts = 0 | 1 | 2;
+
+/** One day of the PROD SCHED plan (from `production_schedule`).
+ *  `projectedTons` is the planned output in TONS. */
+export interface ProdSchedDay {
+  /** yyyy-MM-dd */
+  date: string;
+  /** short weekday, e.g. "Mon" */
+  dow: string;
+  shifts: PlannedShifts;
+  /** line setup label, e.g. "3X50 / 4X8"; null on a rest day */
+  setup: string | null;
+  /** planned output in TONS */
+  projectedTons: number;
+  /** free-text planning note from the sheet, when present */
+  remarks?: string;
+}
 
 /**
  * Resolved status for one KPI on the operational date.

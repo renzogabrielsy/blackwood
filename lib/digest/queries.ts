@@ -34,7 +34,15 @@ import type {
   OpenBlock,
   OpenBlockDelivery,
   FleconBagBalance,
+  PlantStatus,
+  WeekDayPlan,
 } from "./types";
+import {
+  resolveKpiDayStatus,
+  resolveScheduleRowState,
+  type KpiDayStatus,
+  type ProdSchedDay,
+} from "./day-status";
 
 // Trailing-window sizes (kept here, not in SQL, so the contract windows
 // can be tuned without a migration).
@@ -149,6 +157,17 @@ interface LatestSyncByEmployeeRow {
   employee: string;
   count: number;
 }
+interface ProdSchedRow {
+  plan_date: string;
+  dow: string | null;
+  shifts: number | string | null;
+  setup: string | null;
+  projected_tons: number | string | null;
+}
+interface ProdActualTonsRow {
+  date: string;
+  actual_tons: number | string | null;
+}
 interface AuditLogRow {
   id: string;
   table_name: string;
@@ -202,6 +221,31 @@ function daysBetween(a: string, b: string): number {
   const ad = Date.parse(a + "T00:00:00Z");
   const bd = Date.parse(b + "T00:00:00Z");
   return Math.round((ad - bd) / 86_400_000);
+}
+
+/** UTC-safe yyyy-MM-dd + n days. */
+function addDaysUtc(date: string, n: number): string {
+  const ms = Date.parse(date + "T00:00:00Z") + n * 86_400_000;
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** Weekday name for a yyyy-MM-dd date (UTC) — fallback when a plan row is absent. */
+function dowNameFor(date: string): string {
+  return DOW_NAMES[new Date(date + "T00:00:00Z").getUTCDay()] ?? "";
+}
+
+/** Shape a production_schedule row into the ProdSchedDay contract the pure
+ *  day-status resolvers consume. */
+function toProdSchedDay(r: ProdSchedRow): ProdSchedDay {
+  const shifts = Math.trunc(n(r.shifts)) as 0 | 1 | 2;
+  return {
+    date: r.plan_date,
+    dow: r.dow ?? dowNameFor(r.plan_date),
+    shifts,
+    setup: r.setup,
+    projectedTons: n(r.projected_tons),
+  };
 }
 
 // =====================================================================
@@ -668,6 +712,90 @@ export async function getDigestData(): Promise<DigestData> {
         : "ok",
   }));
 
+  // ---------- production plan: plant status, per-KPI day state, week plan ----------
+  // Sourced from `production_schedule` (the ingested PROD SCHED plan) joined with
+  // ACTUAL production tons from view_digest_prod_actual_tons (SUM in SQL, never a
+  // TS reduction). The state RESOLUTION is light branching in the pure
+  // ./day-status resolvers (allowed in TS); the tons SUM stays in the view.
+  // Not price data → no gating. Dependent on operationalDate, so fetched here
+  // (same follow-up pattern as trucks / rcInSub).
+  let plantStatus: PlantStatus | null = null;
+  const dayStatus: Record<string, KpiDayStatus> = {};
+  let weekPlan: WeekDayPlan[] = [];
+  if (operationalDate) {
+    // The operational date's week = 7 consecutive days STARTING at the
+    // operational date (today is the first, isToday). This matches the draft's
+    // WeekStrip and sidesteps the sheet's off-by-one weekday labels (its `dow`
+    // text runs one day ahead of the real calendar) — the plan is keyed by DATE,
+    // not weekday, so rest/shift detection is unaffected.
+    const weekStart = operationalDate;
+    const weekDates = Array.from({ length: 7 }, (_, i) => addDaysUtc(weekStart, i));
+    const weekEnd = weekDates[6];
+
+    const [schedRes, actualRes] = await Promise.all([
+      supabase
+        .from("production_schedule")
+        .select("plan_date, dow, shifts, setup, projected_tons")
+        .gte("plan_date", weekStart)
+        .lte("plan_date", weekEnd),
+      supabase
+        .from("view_digest_prod_actual_tons")
+        .select("date, actual_tons")
+        .gte("date", weekStart)
+        .lte("date", weekEnd),
+    ]);
+
+    const planRows = (schedRes.data as ProdSchedRow[] | null) ?? [];
+    const planByDate = new Map(planRows.map((p) => [p.plan_date, p]));
+    const actualByDate = new Map(
+      ((actualRes.data as ProdActualTonsRow[] | null) ?? []).map((a) => [a.date, n(a.actual_tons)])
+    );
+
+    // Operational-date plan (always within its own Mon→Sun week).
+    const opPlanRow = planByDate.get(operationalDate);
+    const opPlan: ProdSchedDay | undefined = opPlanRow ? toProdSchedDay(opPlanRow) : undefined;
+
+    if (opPlanRow) {
+      plantStatus = {
+        date: operationalDate,
+        shifts: Math.trunc(n(opPlanRow.shifts)),
+        setup: opPlanRow.setup,
+        projectedTons: opPlanRow.projected_tons == null ? null : n(opPlanRow.projected_tons),
+        running: Math.trunc(n(opPlanRow.shifts)) > 0,
+      };
+    }
+
+    // Per-KPI day state (the "misleading zero" fix) against the op-date plan.
+    for (const kpi of kpis) {
+      dayStatus[kpi.key] = resolveKpiDayStatus({
+        kpiKey: kpi.key,
+        value: kpi.value,
+        operationalDate,
+        plan: opPlan,
+        streams,
+      });
+    }
+
+    // The operational date's week (Mon→Sun): plan joined with actual tons.
+    weekPlan = weekDates.map((date) => {
+      const row = planByDate.get(date);
+      const plan: ProdSchedDay = row
+        ? toProdSchedDay(row)
+        : { date, dow: dowNameFor(date), shifts: 0, setup: null, projectedTons: 0 };
+      const actualTons = actualByDate.has(date) ? round(actualByDate.get(date)!, 2) : null;
+      return {
+        date,
+        dow: plan.dow,
+        shifts: plan.shifts,
+        setup: plan.setup,
+        projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
+        actualTons,
+        isToday: date === operationalDate,
+        state: resolveScheduleRowState(plan, actualTons, operationalDate),
+      };
+    });
+  }
+
   const lastSyncAt = latestSyncRow ? auditRows[0]?.performed_at ?? null : null;
   const meta: DigestMeta = {
     operationalDate,
@@ -690,6 +818,9 @@ export async function getDigestData(): Promise<DigestData> {
     trucks,
     openBlocks,
     fleconBags,
+    plantStatus,
+    dayStatus,
+    weekPlan,
   };
 }
 

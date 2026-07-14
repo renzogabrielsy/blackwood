@@ -21,9 +21,12 @@ values into views.
 - `page.tsx` — **async Server Component**. Calls `getDigestData()` once and
   composes the bands. Thin: fetch + layout only. No `'use client'`.
   **Render order, top→bottom:** (DigestHeader + **SyncLauncher**) header row →
-  **OpenBlocks** (surfaced at the very top) → KpiHero → DigestCharts →
-  TrucksSummary → **BagInventory** → (SyncSummary + ActivityFeed) →
-  DigestFooterBand.
+  **PlantStatusHeader** (operational-date running/rest status bar) →
+  **OpenBlocks** → KpiHero (state-aware) → DigestCharts (rest-day-aware flow) →
+  **WeekStrip** (this week · plan vs actual) → TrucksSummary → **BagInventory** →
+  (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
+  presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
+  and `streamsBehind` (count of `meta.streams` with `status === 'warn'`).
   The header row is a `flex justify-between` wrapper: DigestHeader takes the
   remaining width (`flex-1`), and `<SyncLauncher />` (client component from
   `components/sync/`) sits right-aligned. **This is where the Daily Sync launcher
@@ -36,25 +39,44 @@ values into views.
   ("As of {operationalDate}") + glass freshness pill colored by `meta.freshness`
   (fresh=green pulsing dot / recent=amber / stale=muted). Relative sync time
   recomputes on the client and ticks every 60 s.
-- `components/digest/kpi-hero.tsx` — `'use client'`. Responsive stat-card grid
-  from `data.kpis` (rc_in, rc_out, production, power, net_flow). Each card: label,
-  big mono value + unit, delta badge (▲/▼), optional `sub` line, recharts area
-  sparkline (`isAnimationActive={false}`). `net_flow` is visually distinct
-  (dashed/muted, neutral delta coloring, "expected drift" tooltip — never red).
-  Uses `stagger-children` + `hover-lift`. ALL cards always render (no
-  card-hiding); the empty state shows only when `kpis` is empty. **Sparkline
-  zero-skip:** the four operational spark SERIES (`rc_in`, `rc_out`,
-  `production`, `power`) drop zero-value days so a 0 day doesn't plunge the area
-  chart to the floor and ruin the line — see queries.ts (Data below). This is a
-  spark-only transform: card values and `avg7` are unaffected, and `net_flow`'s
-  spark is left intact (a 0 net day is meaningful).
+- `components/digest/plant-status-header.tsx` — `'use client'`. Operational-date
+  status bar sourced from `data.plantStatus` (+ `meta`, `fedKg`): a running/rest
+  **beacon** (pulsing dot when running), planned setup, projected tons, fed kg,
+  and a last-sync freshness chip that re-ticks every 60 s + a "N streams behind"
+  note. Renders a neutral "no plan on record" state when `plantStatus` is null
+  (outside the ingested plan window). Glass card + `animate-fade-up`. Rendered
+  high (right under the header row).
+- `components/digest/kpi-hero.tsx` — `'use client'`. **State-aware** stat-card
+  grid from `data.kpis` + `data.dayStatus`. Each card consults
+  `dayStatus[kpi.key]`: a **`reported`** state renders the classic card (label,
+  big mono value + unit, delta badge ▲/▼, optional `sub`, recharts sparkline;
+  `net_flow` stays dashed/muted/neutral with the "expected drift" tooltip, never
+  red). Any other state (**`awaiting`/`rest`/`stale`/`idle`**) renders a
+  `StateCard` instead — a state label + left severity rail + chip + ghosted
+  projection and **NO sparkline** ("no active series"), so a planned rest, a
+  late report, and a stale stream never all masquerade as a misleading `0`.
+  Uses `stagger-children` + `hover-lift`; empty state only when `kpis` is empty.
+  **Sparkline zero-skip** still applies to `reported` cards: the four operational
+  spark SERIES drop zero-value days so a 0 day doesn't plunge the area chart —
+  see queries.ts (Data below); card values / `avg7` / `net_flow` spark unaffected.
 - `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
-  **Feed In vs Out** (dual area, `connectNulls` keeps zero days flat),
-  **RC In price ₱/kg** (line — skipped entirely when `price` is empty, which
-  happens for price-denied roles since the series is gated server-side),
-  **Production by grade** (stacked bar — pivots
-  long `GradePoint[]` to wide rows). All colors are `var(--chart-1..5)` tokens
-  (dark-mode safe). Glass tooltip via theme tokens.
+  **Feed In vs Out** — now a **rest-day-aware `ComposedChart`**: a zero day
+  renders as a **gap** (`connectNulls={false}`), never a plunge to the floor; a
+  `planByDate` map built from `data.weekPlan` adds a faint band on planned rest
+  days and an amber marker on `awaiting` days (report pending). **RC In price
+  ₱/kg** (line — skipped entirely when `price` is empty, which happens for
+  price-denied roles since the series is gated server-side), **Production by
+  grade** (stacked bar — pivots long `GradePoint[]` to wide rows). `ChartCard`
+  gained an optional `legend` slot for the flow chart's custom band swatches.
+  All colors are `var(--chart-1..5)` tokens (dark-mode safe). Glass tooltip via
+  theme tokens.
+- `components/digest/week-strip.tsx` — **Server component**. This-week
+  plan-vs-actual strip from `data.weekPlan` (7 days of the operational date's
+  week): one card per day with dow + date, setup, a violet planned bar over a
+  chart-1 actual bar, and a state chip (Reported / Today / Planned) driven by the
+  pre-resolved `WeekDayPlan.state`. Rest days render dashed + "planned rest";
+  today gets a `ring`. Rendered right after the charts (skipped when `weekPlan`
+  is empty). Presentation-only — states + tons come pre-resolved from the adapter.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
   from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
   series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
@@ -151,7 +173,7 @@ values into views.
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
   price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks,
-  fleconBags }`.
+  fleconBags, plantStatus, dayStatus, weekPlan }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -190,6 +212,23 @@ values into views.
     totalOut, balance, lastMovementDate }`. One entry per bag type,
     `sort_order` ascending. Row-level passthrough from `view_flecon_bag_balance`
     (all aggregation is the view's job). **No price data** — nothing gated.
+  - `plantStatus` — `{ date, shifts, setup, projectedTons, running } | null`.
+    The operational date's plant status from the `production_schedule` table
+    (`running = shifts > 0`; null outside the ingested plan window). **Not price
+    data** — never gated. Feeds `PlantStatusHeader`.
+  - `dayStatus` — `Record<string, KpiDayStatus>` keyed by kpi key
+    (`rc_in`/`rc_out`/`production`/`power`/`net_flow`). Each `KpiDayStatus` =
+    `{ state: 'reported'|'awaiting'|'rest'|'stale'|'idle', projectedTons?,
+    staleDays? }`, resolved by `resolveKpiDayStatus` (`lib/digest/day-status.ts`)
+    against the op-date plan + stream freshness — the "misleading zero" fix.
+    `net_flow` stays neutral (`reported`); `rc_in` with no delivery → `idle`.
+    Feeds the state-aware `KpiHero`.
+  - `weekPlan[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
+    isToday, state }` for the 7 days of the operational date's week. Plan (from
+    `production_schedule`) joined with ACTUAL tons (`view_digest_prod_actual_tons`
+    — SUM in SQL, never a TS reduction); `state` is a `ScheduleRowState`
+    (`reported`/`awaiting`/`rest`/`planned`/`today`). Feeds `WeekStrip` and the
+    flow chart's rest/awaiting band markers. Empty when there is no op date.
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
