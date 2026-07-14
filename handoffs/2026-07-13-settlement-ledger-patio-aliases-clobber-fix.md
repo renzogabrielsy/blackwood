@@ -1,6 +1,6 @@
 # Handoff — 2026-07-13 · Settlement ledger, patio aliases, and the natural-key clobber
 
-_Prior: `handoffs/2026-07-11-sync-reconciliation-and-visibility.md`. This session took the reconciliation sync from "surfaces 61 flags every run" to a healthy steady state, by fixing the **re-ingestion loop** (a date-settlement ledger) and a chain of real data-integrity bugs it exposed. 12 commits, all on `dev`, everything green (worker vitest 463, parity 12/12, tsc + build clean). The single most important operational fact is at the bottom of the TL;DR._
+_Prior: `handoffs/2026-07-11-sync-reconciliation-and-visibility.md`. This session took the reconciliation sync from "surfaces 61 flags every run" to a healthy steady state, by fixing the **re-ingestion loop** (a date-settlement ledger) and a chain of real data-integrity bugs it exposed. **15 commits (`840d609` → `35ffafd`), all on `dev`**, everything green (worker vitest 463, parity 12/12, tsc + build clean). The single most important operational fact is at the bottom of the TL;DR._
 
 ## TL;DR
 
@@ -8,11 +8,13 @@ _Prior: `handoffs/2026-07-11-sync-reconciliation-and-visibility.md`. This sessio
 2. That work exposed and we fixed: a **settlement insert bug** (wrote nothing while logging success), a **pipeline-ordering lag** (settled too late to help same-run), a **"FOR FEEDING" extractor bug**, an over-literal **close-remark** trigger, a **FEED-batch constraint** bug, and — the deepest — a **natural-key clobber** silently corrupting a real feeding every run.
 3. Also shipped this session: **batch auto-create** (policy reversal), **date-scoped gate quarantine**, the **attribution matcher** (`attribution_diff`), **deterministic-only Sync Review** (killed a ~40-API-call-per-run credit bleed), and **patio block-name aliases**.
 4. **Three DB hand-corrections** applied (all movement-confirmed, audited): see "DB hand-corrections" below.
-5. **⚠️ NEXT CONCRETE ACTION: the worker must be restarted on latest `dev` (through `bed6269`) to activate ALL of the above.** Everything is committed but the running worker is a build behind. See "The build/restart gotcha" — it cost two runs today. `cd workers/sync && git pull && npm run build && npm run dev` (fully stop the old process first).
+5. **⚠️ NEXT CONCRETE ACTION: restart BOTH the worker (latest `dev`) AND the Next.js app to activate everything.** Everything is committed (through `35ffafd`); the running processes are a build behind. See "The build/restart gotcha" — it cost two runs today. Worker: `cd workers/sync && git pull && npm run build && npm run dev` (fully stop the old process first — its next boot now prints `[blackwood-sync] build <sha> …` so you can confirm the code is live). App: restart `npm run dev` for the footer fix.
 
 ## What shipped (commits, newest first — all on `dev`)
 
-- _(committed with this handoff)_ **fix: Daily Sync footer review-count matches the rendered findings** (`lib/sync/local-summary.ts` now takes `findingsCount`; `components/sync/useSyncRun.ts` passes `flattenRunFindings(result).length`). The footer counted per-report classify `flagged`+`held` — including informational gsheet/rc_movement flags with no detail row — so it promised "N items need your review — see the findings below" while the panel rendered 0. **App-side — needs a Next.js restart to activate.**
+- `35ffafd` **chore: worker startup build-SHA banner + gitignore machine-local memory** (`workers/sync/{esbuild.config.mjs,src/index.ts,README.md}`, `.gitignore`) — worker logs `[blackwood-sync] build <sha> · <mode> · started <time>` on boot (guards the stale-build gotcha); `workers/sync/.claude/` no longer swept into `git add .`.
+- `8405dde` **docs(handoff): this file + TIMELINE.md**
+- `1c7f411` **fix: Daily Sync footer review-count matches the rendered findings** (`lib/sync/local-summary.ts` now takes `findingsCount`; `components/sync/useSyncRun.ts` passes `flattenRunFindings(result).length`). The footer counted per-report classify `flagged`+`held` — including informational gsheet/rc_movement flags with no detail row — so it promised "N items need your review — see the findings below" while the panel rendered 0. **App-side — needs a Next.js restart to activate.**
 - `bed6269` **fix: stop proposed from writing patio feedings — kills the natural-key clobber** (`workers/sync/src/reports/rc_out/index.ts` `runReport`)
 - `806c346` **feat: patio block-name aliases** (`workers/sync/src/reconcile/blockAliases.ts` — new; applied in `rcOutStage.ts` `bucketProposed`)
 - `85ba6ba` **fix: settle balanced dates BEFORE the writers** (moved `persistSettlements` to Stage 1b in `runSync.ts`)
@@ -56,14 +58,14 @@ _Prior: `handoffs/2026-07-11-sync-reconciliation-and-visibility.md`. This sessio
 - **C-11A** (block flag): **investigated — it's Sheet-lag, NOT a double-count.** JULY-26-BLK6 has 3 genuine truckloads (07-09 MAV 9202 22,875 + 07-10 CBN 2192 10,065 + 07-10 CBQ 5957 16,580 = 49,520); the Sheet's blocking tab shows only the first (22,875). App is correct; the Sheet trails 2 recent deliveries. Self-resolves when the Sheet updates. (The earlier "double-count" hypothesis was wrong — no duplicate exists.)
 - **A-7C / CBQ-5957** (Case 2, parked): app counts a Feb-4 21,333 kg delivery (truck CBQ 5957, ASH-deduction remark) the Sheet's blocking tab doesn't. Needs Renzo to check the Sheet's RC IN tab, early Feb — is it re-attributed or dropped?
 - **Block-close-lag (A-5B/A-7C/C-12B/D-7B):** the plant closed these ("DONE" 07-11), app followed correctly, Sheet's blocking tab hasn't caught up. Self-resolves when the Sheet updates — informational.
-- **Cleanup pass (Renzo deferred, "restart & check first"):** (a) **startup commit-SHA banner** in the worker (prevents the stale-build confusion — high value, ~10 min); (b) **gitignore `workers/sync/.claude/`**; (c) this handoff (done).
+- **Cleanup pass — DONE (`35ffafd`):** (a) worker **startup commit-SHA banner** (prints the build SHA so a stale build is obvious); (b) **gitignored `workers/sync/.claude/`**; (c) this handoff.
 - **Forward gap:** under R4b, PROPOSED is the sole rc_out writer but now skips patio rows, and gsheet doesn't write rc_out — so a genuinely-NEW patio feeding (if sun-drying season returns) has no writer. Currently fine (patio is historical April/May, all dups). Flag if new patio feedings appear.
 
 ## Next concrete action
 
-**Restart BOTH the worker (latest `dev`) AND the Next.js app, then run one sync.** Confirm: `rc_out_date_settlements` holds, the run logs "Auto-matched N patio feedings" + "Skipped N patio feedings," the footer's review count matches the rendered findings list (the app-side fix above), and the flag count sits at ~6 (all block-close-lag — verified benign, incl. C-11A). The **only genuine open reconciliation item is A-7C / Case 2** (the CBQ-5957 Feb delivery the Sheet never counted — Renzo to check the Sheet's RC IN tab, early Feb). Then the optional cleanup pass: worker **startup commit-SHA banner** (guards the build/restart gotcha) + **gitignore `workers/sync/.claude/`**.
+**Restart BOTH the worker (latest `dev`) AND the Next.js app, then run one sync.** Confirm: `rc_out_date_settlements` holds, the run logs "Auto-matched N patio feedings" + "Skipped N patio feedings," the footer's review count matches the rendered findings list (the app-side fix above), and the flag count sits at ~6 (all block-close-lag — verified benign, incl. C-11A). The **only genuine open reconciliation item is A-7C / Case 2** (the CBQ-5957 Feb delivery the Sheet never counted — Renzo to check the Sheet's RC IN tab, early Feb). The cleanup pass (SHA banner + gitignore) is **DONE** (`35ffafd`).
 
 ## Git state
 
-- Branch `dev`, tree clean (only untracked `workers/sync/.claude/`). All work committed + pushed.
-- Session commits: `840d609` → `bed6269` (12 commits). Prior handoff tip was `b77846d`.
+- Branch `dev`, tree **fully clean** (`workers/sync/.claude/` now gitignored — nothing untracked). All work committed + pushed.
+- Session commits: `840d609` → `35ffafd` (15 commits). Prior handoff tip was `b77846d`.
