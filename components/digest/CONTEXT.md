@@ -29,6 +29,32 @@ in order is `app/(app)/page.tsx` (an async Server Component).
 | `activity-feed.tsx` | `'use client'` | `activity` | The changelog: up to ~40 recent `ActivityItem`s — op pill (INSERT/UPDATE/DELETE) + relative time + employee + provenance + table + note + diff chips. NOT animated per-row (single container fade). |
 | `digest-footer-band.tsx` | Server | `flags`, `monthToDate` (+ `meta.streams` for freshness) | 3-col final band: Flags (severity chips), Stream freshness (dense table), Month-to-date card. |
 
+## Draft dashboard (`draft/` — proposal, not live)
+The `components/digest/draft/` subfolder + the route `app/(app)/dashboard-draft/`
+are a **DRAFT proposal** (registered in the navbar, superseded the old static mock
+`public/verbose-dashboard.html`). It reworks the digest around operational-day
+**states** — resolving the "misleading zero" (a planned rest, an unfiled report, and
+a stale stream all rendered `0` today). It reuses the LIVE `getDigestData()` adapter
+for real KPIs/flow/meta and stands in for the not-yet-ingested PROD SCHED tab with a
+labeled constant. When a real PROD SCHED extractor + `view_digest_day_status` view
+land, the two `lib/digest/*-draft`/`day-status` modules should fold into SQL.
+
+| File | Client? | Role |
+|------|---------|------|
+| `lib/digest/prod-schedule-draft.ts` | pure | **DRAFT constant** — July 2026 PROD SCHED plan (`ProdSchedDay[]`), `SETUP_REFERENCE`, `ORDER_COMMITMENTS` + `getPlanForDate` / `getWeekPlan` / `getMonthPlan`. Delete when the tab is ingested. |
+| `lib/digest/day-status.ts` | pure | The "misleading zero" resolver — `resolveKpiDayStatus()` → `reported`/`awaiting`/`rest`/`stale`/`idle` (rc_in = procurement → `idle`, not late; net_flow stays neutral). `resolveScheduleRowState()` for the schedule table. |
+| `draft/status-tokens.ts` | pure | Shared chip/rail/label class maps per state (emerald/amber/red/muted + violet for the PLAN layer). |
+| `draft/plant-status-header.tsx` | `'use client'` | Operational-date status bar: running/rest beacon, planned setup, projected t, fed kg, last-sync freshness (ticks). |
+| `draft/draft-kpi-hero.tsx` | `'use client'` | State-aware KPI cards — `reported` mirrors the live hero; `awaiting`/`rest`/`stale`/`idle` show a state label + severity rail + chip + ghosted projection instead of a misleading zero (no sparkline). |
+| `draft/draft-flow-chart.tsx` | `'use client'` | Recharts `ComposedChart` — rest days = **gap** (`connectNulls={false}`, no plunge) + faint band; awaiting days = amber marker. |
+| `draft/week-strip.tsx` | Server | 7-day plan-vs-actual strip (planned vs actual bars, rest dashed, today ringed). |
+| `draft/schedule-table.tsx` | Server | Month plan-vs-actual table (Excel Standard density, sticky header) + orders & setup-reference rails. |
+
+The route's actual-production tons are queried in the page (`getActualTonsByDate` —
+sums `production_runs.ttl_kg` by parent shift `transaction_date`, /1000; a DRAFT
+TS-side rollup that a real view would own). Price gating is inherited from
+`getDigestData()`; the draft surfaces no ₱.
+
 ## Data
 - **Single source:** `getDigestData(): Promise<DigestData>` (`lib/digest/queries.ts`,
   server-only). The contract lives in `lib/digest/types.ts`; extend it deliberately

@@ -131,6 +131,14 @@ values into views.
   **Stream freshness** (Excel-standard dense table: label · through-date · status
   dot ok-green/warn-amber), **Month-to-date** card (rcInKg / rcOutKg /
   productionKg / netKg in kg format; net row muted).
+  - Stream freshness is fed by `view_digest_stream_freshness` (one row per stream).
+    Each stream's `through_date` = max transaction/reading date on its OWN table,
+    EXCEPT **production**: its `through_date` = max `production_shifts.transaction_date`
+    that has ≥1 `production_runs` row (actual OUTPUT). This is deliberate — a shift is
+    also created by the WASTE report (`production_waste` FKs `shift_id`), so keying on
+    the raw shift date would report Production as current whenever waste is fresh even
+    though output ingestion (MC's Daily Production Report) has stalled. See migration
+    `20260714000000_digest_stream_freshness_production_output.sql`.
 
 ## Data
 - **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
