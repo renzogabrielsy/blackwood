@@ -51,10 +51,15 @@ const COL_RUN_SHIFT = 8; // H
 const TOTAL_ROW = 13;
 
 const COL_DT_CATEGORY = 3; // C
+// LEGACY fallback rows (old MC template). The 3Q cumulative workbook shifted every
+// section below the runs block DOWN by one row, so these fixed rows now read the
+// header/blank instead of the data. Section locators below ANCHOR on stable label
+// text and read at a fixed offset from the anchor, so BOTH the old template and the
+// 3Q layout resolve to the correct data row. The fixed rows survive only as a
+// fallback for a stripped sheet that carries no anchor label (e.g. the minimal
+// synthetic downtime edge fixture, which has the category+detail but no header).
 const DT_CATEGORY_ROW = 24;
-const DT_RANGES_ROW = 27;
-const DT_MINUTES_ROW = 27;
-const DT_REASON_ROW = 27;
+const DT_RANGES_ROW = 27; // detail row (ranges / minutes / reason share one row)
 const COL_DT_RANGES = 3; // C
 const COL_DT_MINUTES = 5; // E
 const COL_DT_REASON = 6; // F
@@ -66,6 +71,7 @@ const COL_ELEC_END = 5; // E
 const COL_ELEC_MULT = 5; // E
 const ELEC_BUNKHOUSE_ROW = 65;
 const ELEC_PUMP_ROW = 67;
+const COL_A = 1; // A (BUNKHOUSE / PUMP row labels)
 const DEFAULT_METER_MULTIPLIER = 120.0;
 
 const TRUCK_DATA_ROWS = [47, 49, 51];
@@ -76,6 +82,56 @@ const COL_TRUCK_TTL_KM = 6; // F
 const COL_TRUCK_LITERS = 8; // H
 const COL_TRUCK_GAUGE_START = 10; // J
 const COL_TRUCK_GAUGE_END = 11; // K
+
+// ── Anchor search windows (1-based, inclusive) ──────────────────────────────
+// Generous but bounded so an anchor label can only match inside its own section.
+// The invariant OFFSET from each anchor to its data row is layout-independent:
+// the old template and the 3Q layout differ only by which row the anchor sits on.
+const DT_ANCHOR_MIN = 20;
+const DT_ANCHOR_MAX = 40;
+const ELEC_ANCHOR_MIN = 45;
+const ELEC_ANCHOR_MAX = 58; // MAIN readings header only — below the trucks block, above bunkhouse
+const MULT_ANCHOR_MIN = 56;
+const MULT_ANCHOR_MAX = 64;
+const BUNK_ANCHOR_MIN = 62;
+const BUNK_ANCHOR_MAX = 75;
+const TRUCK_ANCHOR_MIN = 42;
+const TRUCK_ANCHOR_MAX = 52;
+const TOTAL_ANCHOR_MIN = 12;
+const TOTAL_ANCHOR_MAX = 18;
+
+// ── Anchor helpers — locate a section by stable label, not a fixed row ───────
+/** Uppercased, trimmed string form of a cell, or "" for null/non-string-ish. */
+function cellUpper(value: CellValue): string {
+  const s = coerceStr(value);
+  return s === null ? "" : s.trim().toUpperCase();
+}
+
+/** First row in [start,end] where predicate(row) holds, else null. */
+function findAnchorRow(
+  start: number,
+  end: number,
+  predicate: (row: number) => boolean,
+): number | null {
+  for (let r = start; r <= end; r++) {
+    if (predicate(r)) return r;
+  }
+  return null;
+}
+
+/** True if any cell in columns [c1,c2] on `row` equals `label` (trimmed, upper). */
+function rowHasLabel(ws: LoadedSheet, row: number, c1: number, c2: number, label: string): boolean {
+  const want = label.toUpperCase();
+  for (let col = c1; col <= c2; col++) {
+    if (cellUpper(ws.cell(row, col)) === want) return true;
+  }
+  return false;
+}
+
+/** True if cell(row,col), uppercased, CONTAINS `needle` (already uppercase). */
+function cellContainsUpper(ws: LoadedSheet, row: number, col: number, needle: string): boolean {
+  return cellUpper(ws.cell(row, col)).includes(needle);
+}
 
 // ── Coercers (mirror the Python coerce_* verbatim) ─────────────────────────
 function coerceFloat(value: CellValue): number | null {
@@ -324,16 +380,34 @@ function extractRuns(
 }
 
 // ── Section B — downtime (PD-5 dt_mins>=60 split is applied HERE) ────────────
+/**
+ * Locate the downtime category + detail rows by anchoring on the "DURATION"
+ * header (present in every real MC sheet), which sits ONE row below the category
+ * label and TWO rows above the detail row (time-ranges / minutes / reason) in
+ * BOTH the old template and the 3Q layout. A stripped synthetic sheet with no
+ * DURATION header falls back to the legacy fixed rows.
+ */
+function resolveDowntimeRows(ws: LoadedSheet): { categoryRow: number; detailRow: number } {
+  const durationRow = findAnchorRow(DT_ANCHOR_MIN, DT_ANCHOR_MAX, (r) =>
+    rowHasLabel(ws, r, COL_DT_CATEGORY, COL_DT_REASON, "DURATION"),
+  );
+  if (durationRow !== null) {
+    return { categoryRow: durationRow - 1, detailRow: durationRow + 2 };
+  }
+  return { categoryRow: DT_CATEGORY_ROW, detailRow: DT_RANGES_ROW };
+}
+
 function extractDowntime(
   ws: LoadedSheet,
   titleStripped: string,
   txnIso: string,
   productionBatch: string,
 ): DowntimeRow | null {
-  const category = coerceStr(ws.cell(DT_CATEGORY_ROW, COL_DT_CATEGORY));
-  const ranges = splitMultiline(ws.cell(DT_RANGES_ROW, COL_DT_RANGES));
-  const minuteLines = splitMultiline(ws.cell(DT_MINUTES_ROW, COL_DT_MINUTES));
-  const reasons = splitMultiline(ws.cell(DT_REASON_ROW, COL_DT_REASON));
+  const { categoryRow, detailRow } = resolveDowntimeRows(ws);
+  const category = coerceStr(ws.cell(categoryRow, COL_DT_CATEGORY));
+  const ranges = splitMultiline(ws.cell(detailRow, COL_DT_RANGES));
+  const minuteLines = splitMultiline(ws.cell(detailRow, COL_DT_MINUTES));
+  const reasons = splitMultiline(ws.cell(detailRow, COL_DT_REASON));
 
   const rowWarnings: string[] = [];
   let totalMins = 0.0;
@@ -418,18 +492,50 @@ function emitElectricity(
   };
 }
 
+/**
+ * Locate the MAIN electricity readings row + multiplier row by anchoring on the
+ * "PRESENT READING" header (MAIN only — the BUNKHOUSE block uses "CURRENT
+ * READING") and the "METER MULTIPLIER" header. The data sits ONE row below each
+ * header in BOTH the old template and the 3Q layout. Falls back to the legacy
+ * fixed rows when a header is absent (a stripped sheet).
+ */
+function resolveMainReadingRow(ws: LoadedSheet): number {
+  const hdr = findAnchorRow(ELEC_ANCHOR_MIN, ELEC_ANCHOR_MAX, (r) =>
+    cellContainsUpper(ws, r, COL_ELEC_END, "PRESENT READING"),
+  );
+  return hdr !== null ? hdr + 1 : ELEC_MAIN_READING_ROW;
+}
+
+function resolveMainMultRow(ws: LoadedSheet): number {
+  const hdr = findAnchorRow(MULT_ANCHOR_MIN, MULT_ANCHOR_MAX, (r) =>
+    cellContainsUpper(ws, r, COL_ELEC_MULT, "METER MULTIPLIER"),
+  );
+  return hdr !== null ? hdr + 1 : ELEC_MAIN_MULT_ROW;
+}
+
+/** BUNKHOUSE / PUMP reading row: anchor on the column-A label, else legacy row. */
+function resolveMeterRow(ws: LoadedSheet, label: string, legacyRow: number): number {
+  const row = findAnchorRow(BUNK_ANCHOR_MIN, BUNK_ANCHOR_MAX, (r) =>
+    rowHasLabel(ws, r, COL_A, COL_A, label),
+  );
+  return row !== null ? row : legacyRow;
+}
+
 function extractElectricity(ws: LoadedSheet, titleStripped: string, txnIso: string): ElectricityRow[] {
   const readings: ElectricityRow[] = [];
-  const mainStart = coerceFloat(ws.cell(ELEC_MAIN_READING_ROW, COL_ELEC_START));
-  const mainEnd = coerceFloat(ws.cell(ELEC_MAIN_READING_ROW, COL_ELEC_END));
-  const mainMult = coerceFloat(ws.cell(ELEC_MAIN_MULT_ROW, COL_ELEC_MULT));
+  const mainReadingRow = resolveMainReadingRow(ws);
+  const mainMultRow = resolveMainMultRow(ws);
+  const mainStart = coerceFloat(ws.cell(mainReadingRow, COL_ELEC_START));
+  const mainEnd = coerceFloat(ws.cell(mainReadingRow, COL_ELEC_END));
+  const mainMult = coerceFloat(ws.cell(mainMultRow, COL_ELEC_MULT));
   const main = emitElectricity("MAIN", mainStart, mainEnd, mainMult, txnIso, titleStripped);
   if (main !== null) readings.push(main);
 
-  for (const [meter, row] of [
+  for (const [meter, legacyRow] of [
     ["BUNKHOUSE", ELEC_BUNKHOUSE_ROW],
     ["PUMP", ELEC_PUMP_ROW],
   ] as Array<[string, number]>) {
+    const row = resolveMeterRow(ws, meter, legacyRow);
     const start = coerceFloat(ws.cell(row, COL_ELEC_START));
     const end = coerceFloat(ws.cell(row, COL_ELEC_END));
     const rec = emitElectricity(meter, start, end, null, txnIso, titleStripped);
@@ -439,9 +545,23 @@ function extractElectricity(ws: LoadedSheet, titleStripped: string, txnIso: stri
 }
 
 // ── Section D — trucks ──────────────────────────────────────────────────────
+/**
+ * Locate the truck data rows by anchoring on the "Truck Plate No." header. Each
+ * of the three truck slots is a 2-row merge, so the data rows sit at header+1,
+ * header+3, header+5 in BOTH the old template and the 3Q layout. Falls back to
+ * the legacy fixed rows when the header is absent (a stripped sheet).
+ */
+function resolveTruckRows(ws: LoadedSheet): number[] {
+  const hdr = findAnchorRow(TRUCK_ANCHOR_MIN, TRUCK_ANCHOR_MAX, (r) =>
+    cellContainsUpper(ws, r, COL_TRUCK_PLATE, "TRUCK PLATE NO"),
+  );
+  if (hdr !== null) return [hdr + 1, hdr + 3, hdr + 5];
+  return [...TRUCK_DATA_ROWS];
+}
+
 function extractTrucks(ws: LoadedSheet, titleStripped: string, txnIso: string): TruckRow[] {
   const trucks: TruckRow[] = [];
-  for (const r of TRUCK_DATA_ROWS) {
+  for (const r of resolveTruckRows(ws)) {
     const plate = coerceStr(ws.cell(r, COL_TRUCK_PLATE));
     const startKm = coerceFloat(ws.cell(r, COL_TRUCK_START_KM));
     const endKm = coerceFloat(ws.cell(r, COL_TRUCK_END_KM));
@@ -490,12 +610,21 @@ interface SheetResult {
 
 const COL_C13 = COL_RUN_GRADE - 1; // C
 
-/** G13 day-total, trusted when C13 == "TOTAL" (else still used if non-null). */
+/**
+ * Day-total row, trusted when its column-C cell == "TOTAL" (else still used if
+ * G is non-null). Anchored on the "TOTAL" label in column C — the 3Q layout
+ * pushed this row from 13 to 14 — with the legacy fixed row as the fallback.
+ * (Reconcile-only; NOT part of the classify oracle, so this never affects parity.)
+ */
 function extractDayTotal(ws: LoadedSheet): number | null {
-  const c13 = coerceStr(ws.cell(TOTAL_ROW, COL_C13));
-  const g13 = coerceFloat(ws.cell(TOTAL_ROW, COL_RUN_TTL_KG));
-  if (c13 && c13.trim().toUpperCase() === "TOTAL") return g13;
-  if (g13 !== null) return g13;
+  const totalRow =
+    findAnchorRow(TOTAL_ANCHOR_MIN, TOTAL_ANCHOR_MAX, (r) =>
+      rowHasLabel(ws, r, COL_C13, COL_C13, "TOTAL"),
+    ) ?? TOTAL_ROW;
+  const cLabel = coerceStr(ws.cell(totalRow, COL_C13));
+  const gTotal = coerceFloat(ws.cell(totalRow, COL_RUN_TTL_KG));
+  if (cLabel && cLabel.trim().toUpperCase() === "TOTAL") return gTotal;
+  if (gTotal !== null) return gTotal;
   return null;
 }
 

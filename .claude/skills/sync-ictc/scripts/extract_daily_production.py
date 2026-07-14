@@ -163,6 +163,24 @@ COL_TRUCK_TTL_KM = 6         # F
 COL_TRUCK_LITERS = 8         # H
 COL_TRUCK_GAUGE_START = 10   # J
 COL_TRUCK_GAUGE_END = 11     # K
+COL_A = 1                    # A (BUNKHOUSE / PUMP row labels)
+
+# ---------------------------------------------------------------------------
+# Anchor search windows (1-based, inclusive)
+# ---------------------------------------------------------------------------
+# The 3Q cumulative workbook ("Daily Production Report 2026 3Q.xlsx") shifted
+# every section BELOW the runs block DOWN by one row versus the older MC template,
+# so the fixed section rows above now read the header/blank instead of the data.
+# The section locators below ANCHOR on stable label text and read at a fixed
+# OFFSET from the anchor, so BOTH the old template and the 3Q layout resolve to
+# the correct data row. The fixed rows survive only as a fallback for a stripped
+# sheet that carries no anchor label. Kept byte-identical to extractMc.ts.
+DT_ANCHOR_MIN, DT_ANCHOR_MAX = 20, 40
+ELEC_ANCHOR_MIN, ELEC_ANCHOR_MAX = 45, 58
+MULT_ANCHOR_MIN, MULT_ANCHOR_MAX = 56, 64
+BUNK_ANCHOR_MIN, BUNK_ANCHOR_MAX = 62, 75
+TRUCK_ANCHOR_MIN, TRUCK_ANCHOR_MAX = 42, 52
+TOTAL_ANCHOR_MIN, TOTAL_ANCHOR_MAX = 12, 18
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +235,32 @@ def coerce_str(value: Any) -> str | None:
         return None
     s = str(value).strip()
     return s if s else None
+
+
+# ---------------------------------------------------------------------------
+# Anchor helpers — locate a section by stable label, not a fixed row.
+# Kept byte-identical in shape to extractMc.ts (findAnchorRow / rowHasLabel /
+# cellContainsUpper) so the TS port and this oracle resolve the same rows.
+# ---------------------------------------------------------------------------
+def _cell_upper(ws, row: int, col: int) -> str:
+    s = coerce_str(ws.cell(row, col).value)
+    return s.strip().upper() if s else ""
+
+
+def _find_anchor_row(ws, start: int, end: int, pred) -> int | None:
+    for r in range(start, end + 1):
+        if pred(r):
+            return r
+    return None
+
+
+def _row_has_label(ws, row: int, c1: int, c2: int, label: str) -> bool:
+    want = label.upper()
+    return any(_cell_upper(ws, row, c) == want for c in range(c1, c2 + 1))
+
+
+def _cell_contains_upper(ws, row: int, col: int, needle: str) -> bool:
+    return needle in _cell_upper(ws, row, col)
 
 
 # ---------------------------------------------------------------------------
@@ -424,15 +468,21 @@ def extract_runs(
             "confidence": round(confidence, 3),
         })
 
-    # G13 reconciliation total (CEBU-only day total). Only trust it when C13 says TOTAL.
+    # Day total (CEBU-only). Anchor on the "TOTAL" label in column C — the 3Q
+    # layout pushed this row from 13 to 14 — with the legacy fixed row as fallback.
+    # Only trust the G value when its column-C cell says TOTAL.
     day_total = None
-    c13 = coerce_str(ws.cell(TOTAL_ROW, COL_RUN_GRADE - 1).value)  # C13
-    g13 = coerce_float(ws.cell(TOTAL_ROW, COL_RUN_TTL_KG).value)   # G13
-    if c13 and c13.strip().upper() == "TOTAL":
-        day_total = g13
-    elif g13 is not None:
-        # Fall back to G13 even if the label is missing — but flag it.
-        day_total = g13
+    total_row = _find_anchor_row(
+        ws, TOTAL_ANCHOR_MIN, TOTAL_ANCHOR_MAX,
+        lambda r: _row_has_label(ws, r, COL_RUN_GRADE - 1, COL_RUN_GRADE - 1, "TOTAL"),
+    ) or TOTAL_ROW
+    c_label = coerce_str(ws.cell(total_row, COL_RUN_GRADE - 1).value)  # C
+    g_total = coerce_float(ws.cell(total_row, COL_RUN_TTL_KG).value)   # G
+    if c_label and c_label.strip().upper() == "TOTAL":
+        day_total = g_total
+    elif g_total is not None:
+        # Fall back to G even if the label is missing — but flag it.
+        day_total = g_total
 
     return runs, day_total
 
@@ -447,10 +497,21 @@ def extract_downtime(
     sheet_warnings: list[str],
 ) -> dict[str, Any] | None:
     """Aggregate the day's downtime events into a single M-shift row, or None if no downtime."""
-    category = coerce_str(ws.cell(DT_CATEGORY_ROW, COL_DT_CATEGORY).value)
-    ranges = split_multiline(ws.cell(DT_RANGES_ROW, COL_DT_RANGES).value)
-    minute_lines = split_multiline(ws.cell(DT_MINUTES_ROW, COL_DT_MINUTES).value)
-    reasons = split_multiline(ws.cell(DT_REASON_ROW, COL_DT_REASON).value)
+    # Anchor on the "DURATION" header (one row below the category, two above the
+    # detail row) so the old template and the 3Q layout both resolve correctly.
+    duration_row = _find_anchor_row(
+        ws, DT_ANCHOR_MIN, DT_ANCHOR_MAX,
+        lambda r: _row_has_label(ws, r, COL_DT_CATEGORY, COL_DT_REASON, "DURATION"),
+    )
+    if duration_row is not None:
+        category_row, detail_row = duration_row - 1, duration_row + 2
+    else:
+        category_row, detail_row = DT_CATEGORY_ROW, DT_RANGES_ROW
+
+    category = coerce_str(ws.cell(category_row, COL_DT_CATEGORY).value)
+    ranges = split_multiline(ws.cell(detail_row, COL_DT_RANGES).value)
+    minute_lines = split_multiline(ws.cell(detail_row, COL_DT_MINUTES).value)
+    reasons = split_multiline(ws.cell(detail_row, COL_DT_REASON).value)
 
     row_warnings: list[str] = []
 
@@ -553,10 +614,22 @@ def extract_electricity(
 ) -> list[dict[str, Any]]:
     readings: list[dict[str, Any]] = []
 
-    # MAIN
-    main_start = coerce_float(ws.cell(ELEC_MAIN_READING_ROW, COL_ELEC_START).value)
-    main_end = coerce_float(ws.cell(ELEC_MAIN_READING_ROW, COL_ELEC_END).value)
-    main_mult = coerce_float(ws.cell(ELEC_MAIN_MULT_ROW, COL_ELEC_MULT).value)
+    # MAIN — anchor on "PRESENT READING" (MAIN only; BUNKHOUSE uses "CURRENT
+    # READING") and "METER MULTIPLIER"; the data sits one row below each header.
+    pres_hdr = _find_anchor_row(
+        ws, ELEC_ANCHOR_MIN, ELEC_ANCHOR_MAX,
+        lambda r: _cell_contains_upper(ws, r, COL_ELEC_END, "PRESENT READING"),
+    )
+    main_reading_row = pres_hdr + 1 if pres_hdr is not None else ELEC_MAIN_READING_ROW
+    mult_hdr = _find_anchor_row(
+        ws, MULT_ANCHOR_MIN, MULT_ANCHOR_MAX,
+        lambda r: _cell_contains_upper(ws, r, COL_ELEC_MULT, "METER MULTIPLIER"),
+    )
+    main_mult_row = mult_hdr + 1 if mult_hdr is not None else ELEC_MAIN_MULT_ROW
+
+    main_start = coerce_float(ws.cell(main_reading_row, COL_ELEC_START).value)
+    main_end = coerce_float(ws.cell(main_reading_row, COL_ELEC_END).value)
+    main_mult = coerce_float(ws.cell(main_mult_row, COL_ELEC_MULT).value)
     main = _emit_electricity(
         "MAIN", main_start, main_end, main_mult, txn_date, ws.title, sheet_warnings
     )
@@ -564,7 +637,12 @@ def extract_electricity(
         readings.append(main)
 
     # BUNKHOUSE + PUMP (idle in 2026 — usually skipped). Multiplier defaults to 120.
-    for meter, row in (("BUNKHOUSE", ELEC_BUNKHOUSE_ROW), ("PUMP", ELEC_PUMP_ROW)):
+    # Anchor on the column-A meter label, else the legacy fixed row.
+    for meter, legacy_row in (("BUNKHOUSE", ELEC_BUNKHOUSE_ROW), ("PUMP", ELEC_PUMP_ROW)):
+        row = _find_anchor_row(
+            ws, BUNK_ANCHOR_MIN, BUNK_ANCHOR_MAX,
+            lambda r, _m=meter: _row_has_label(ws, r, COL_A, COL_A, _m),
+        ) or legacy_row
         start = coerce_float(ws.cell(row, COL_ELEC_START).value)
         end = coerce_float(ws.cell(row, COL_ELEC_END).value)
         rec = _emit_electricity(
@@ -586,7 +664,15 @@ def extract_trucks(
 ) -> list[dict[str, Any]]:
     trucks: list[dict[str, Any]] = []
 
-    for r in TRUCK_DATA_ROWS:
+    # Anchor on the "Truck Plate No." header; the three 2-row truck slots sit at
+    # header+1, header+3, header+5. Legacy fixed rows are the fallback.
+    truck_hdr = _find_anchor_row(
+        ws, TRUCK_ANCHOR_MIN, TRUCK_ANCHOR_MAX,
+        lambda r: _cell_contains_upper(ws, r, COL_TRUCK_PLATE, "TRUCK PLATE NO"),
+    )
+    data_rows = (truck_hdr + 1, truck_hdr + 3, truck_hdr + 5) if truck_hdr is not None else TRUCK_DATA_ROWS
+
+    for r in data_rows:
         plate = coerce_str(ws.cell(r, COL_TRUCK_PLATE).value)
         start_km = coerce_float(ws.cell(r, COL_TRUCK_START_KM).value)
         end_km = coerce_float(ws.cell(r, COL_TRUCK_END_KM).value)

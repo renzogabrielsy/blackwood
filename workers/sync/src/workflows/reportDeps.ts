@@ -76,6 +76,7 @@ export function makeDryRunDb(real: DbClient): DbClient {
     readRows: read((...a: [string, ReadRowsOptions?]) => real.readRows(...a)),
     selectOne: read((...a: [string, Record<string, string>, string?]) => real.selectOne(...a)),
     dataWatermark: read((...a: [string, string?]) => real.dataWatermark(...a)),
+    productionRunsFrontier: read(() => real.productionRunsFrontier()),
     // Progress events are observational, not data mutations — let them flow so the
     // live feed still streams during a dry run.
     insertProgressEvent: read((...a: [Parameters<DbClient["insertProgressEvent"]>[0]]) =>

@@ -1,23 +1,123 @@
 {
   "downtime": {
-    "classifications": [],
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no downtime row yet"
+        ],
+        "record": {
+          "_source_sheet": "07-01-26",
+          "dt_hrs": " num:0",
+          "dt_mins": " num:10",
+          "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, AND TANK 4X8; CHECK ROLLER MILL #1 GAP 2.3 MM",
+          "production_batch": "JULY",
+          "remarks": "Time ranges: 8:00 AM-8:10 AM",
+          "shift": "M",
+          "shift_hrs": " num:12",
+          "transaction_date": "2026-07-01",
+          "warnings": []
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert downtime"
+        ],
+        "record": {
+          "_source_sheet": "07-02-26",
+          "dt_hrs": " num:0",
+          "dt_mins": " num:10",
+          "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, AND TANK 4X8",
+          "production_batch": "JULY",
+          "remarks": "Time ranges: 8:00 AM-8:10 AM",
+          "shift": "M",
+          "shift_hrs": " num:12",
+          "transaction_date": "2026-07-02",
+          "warnings": []
+        },
+        "resolved_shift_id": null
+      }
+    ],
     "summary": {
       "duplicate_noop": " num:0",
       "malformed": " num:0",
-      "needs_shift_upsert": " num:0",
-      "new": " num:0",
+      "needs_shift_upsert": " num:1",
+      "new": " num:2",
       "value_changed": " num:0"
     },
     "table": "production_downtime"
   },
   "electricity": {
-    "classifications": [],
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:1",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "meter": "MAIN",
+          "reading_date": "2026-07-01"
+        },
+        "reasons": [
+          "natural key (reading_date, meter) not present in DB"
+        ],
+        "record": {
+          "end_kwh": " num:609.2",
+          "meter": "MAIN",
+          "meter_multiplier": " num:120",
+          "reading_date": "2026-07-01",
+          "remarks": null,
+          "start_kwh": " num:601.9"
+        }
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:1",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "meter": "MAIN",
+          "reading_date": "2026-07-02"
+        },
+        "reasons": [
+          "natural key (reading_date, meter) not present in DB"
+        ],
+        "record": {
+          "end_kwh": " num:616.3",
+          "meter": "MAIN",
+          "meter_multiplier": " num:120",
+          "reading_date": "2026-07-02",
+          "remarks": null,
+          "start_kwh": " num:609.2"
+        }
+      }
+    ],
     "summary": {
       "db_rows_in_window": " num:3",
       "duplicate_noop": " num:0",
-      "extracted_total": " num:0",
+      "extracted_total": " num:2",
       "malformed": " num:0",
-      "new": " num:0",
+      "new": " num:2",
       "value_changed": " num:0"
     },
     "table": "electricity_readings"

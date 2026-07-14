@@ -26,6 +26,7 @@
 
 # ICTC sync — flagged operator source files copied here for one-click review (transient)
 /.sync-flags/
+workers/sync/.sync-work/
 
 # debug
 npm-debug.log*

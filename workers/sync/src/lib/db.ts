@@ -485,6 +485,53 @@ export class DbClient {
     return val ? String(val).slice(0, 10) : null;
   }
 
+  /**
+   * The MC PRODUCTION watermark = MAX(production_shifts.transaction_date) among shifts
+   * that have at least one production_runs child. Returns "YYYY-MM-DD" or null — the
+   * SAME contract as dataWatermark.
+   *
+   * WHY this exists instead of dataWatermark("production_shifts"): production_shifts is
+   * written by BOTH source reports. MC's "Daily Production Report" drips ONE day per
+   * email and writes production_runs/downtime/electricity/trucks. Ivy's "WASTE" report
+   * is a CUMULATIVE monthly workbook — its parent-shift upsert creates a production_shifts
+   * row for EVERY waste day of the month. Because waste is cumulative it runs ahead of
+   * MC, so a plain MAX(production_shifts.transaction_date) tracks the latest WASTE day,
+   * not MC's frontier. Feeding that inflated max back as the EXCLUSIVE `since` made
+   * extractMc silently drop every MC day-sheet dated <= it — MC's runs/downtime/
+   * electricity/trucks stalled the moment waste passed MC's frontier, with no error.
+   * production_runs is written ONLY by MC, so its frontier is MC's true watermark.
+   *
+   * Deliberately the RUNS frontier (a per-day presence test), NOT a MIN across all MC
+   * streams: a chronically-sparse stream (e.g. trucks with no trips for days) must never
+   * peg the watermark backward and force a full re-walk every run. Electricity/trucks
+   * that are legitimately behind ride along on whatever day-sheets fall in the extraction
+   * window — they are not a reason to lower the durable watermark further.
+   *
+   * Mirrors the view_digest_stream_freshness production branch
+   * (supabase/migrations/20260714000000_digest_stream_freshness_production_output.sql):
+   *   max(ps.transaction_date) WHERE EXISTS (SELECT 1 FROM production_runs pr
+   *                                          WHERE pr.shift_id = ps.id)
+   * Issued over PostgREST as an inner embed (parent-side order/limit picks the max):
+   *   production_shifts?select=transaction_date,production_runs!inner(id)
+   *     &order=transaction_date.desc&limit=1
+   */
+  async productionRunsFrontier(): Promise<string | null> {
+    const { data, error } = await this.sb
+      .from("production_shifts")
+      .select("transaction_date,production_runs!inner(id)")
+      .order("transaction_date", { ascending: false })
+      .limit(1);
+    if (error) {
+      throw new Error(
+        `production_runs_frontier failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const rows = (data ?? []) as Array<{ transaction_date?: unknown }>;
+    if (!rows.length) return null;
+    const val = rows[0].transaction_date;
+    return val ? String(val).slice(0, 10) : null;
+  }
+
   // -- sync_runs / sync_run_events (new for the worker) --------------------
   async insertProgressEvent(ev: ProgressEventRow): Promise<void> {
     const { error } = await this.sb.from("sync_run_events").insert(ev);

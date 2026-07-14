@@ -184,7 +184,13 @@ export async function runReport(
   const emit = deps.progress;
 
   // Watermark + since (sync_production.py:90-91). `since` is EXCLUSIVE, NOT tail-offset.
-  const watermark = await db.dataWatermark("production_shifts");
+  // Anchor on the MC RUNS frontier, NOT MAX(production_shifts.transaction_date): Ivy's
+  // CUMULATIVE waste workbook upserts a parent shift for every waste day of the month,
+  // so a plain shifts-max watermark runs ahead of MC and makes extractMc silently drop
+  // MC's own day-sheets (runs/downtime/electricity/trucks stall with no error).
+  // production_runs is MC-only → its frontier is MC's true watermark. opts.since still
+  // overrides; the "2025-01-01" floor still applies. See db.productionRunsFrontier().
+  const watermark = await db.productionRunsFrontier();
   const since = opts.since ?? (watermark ?? "2025-01-01");
   const year = parseInt(since.slice(0, 4), 10);
 

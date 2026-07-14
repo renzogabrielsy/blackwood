@@ -216,6 +216,86 @@ describe("generated columns are never written", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 3Q layout shift — downtime/electricity/trucks are located by ANCHOR (label),
+// not fixed rows. The "Daily Production Report 2026 3Q.xlsx" cumulative workbook
+// shifted every section below the runs block DOWN by one row; the pre-anchor
+// extractor read the header/blank and emitted ZERO for those three sections.
+// These tests prove the 3Q layout now recovers AND the old-layout edge fixture
+// (downtime at the legacy fixed rows) is unchanged.
+// ---------------------------------------------------------------------------
+describe("3Q layout shift — anchor-based section location", () => {
+  it("recovers downtime + electricity + trucks from the 3Q workbook (previously all ZERO)", async () => {
+    const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
+
+    // All three previously-broken sections are now non-empty across the July sheets.
+    expect(mc.downtime.length).toBeGreaterThan(0);
+    expect(mc.electricity.length).toBeGreaterThan(0);
+    expect(mc.trucks.length).toBeGreaterThan(0);
+  });
+
+  it("electricity MAIN present-reading chain is recovered (07-08: prev 645.2 → present 652.2, mult 120)", async () => {
+    const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
+    const e0708 = mc.electricity.find((e) => e.reading_date === "2026-07-08" && e.meter === "MAIN");
+    expect(e0708).toBeDefined();
+    expect(e0708!.start_kwh).toBe(645.2);
+    expect(e0708!.end_kwh).toBe(652.2); // present reading
+    expect(e0708!.meter_multiplier).toBe(120);
+    // Diff (present − previous) = 7, matching the sheet's KWH DIFFERENCE cell.
+    expect(e0708!.end_kwh! - e0708!.start_kwh!).toBeCloseTo(7, 6);
+  });
+
+  it("trucks are recovered from the shifted rows (07-08: AAV 6111 315.9 km/155 L, KCA 378 241.2 km/140 L)", async () => {
+    const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
+    const day = mc.trucks.filter((t) => t.reading_date === "2026-07-08");
+
+    const aav = day.find((t) => t.plate_no === "AAV 6111");
+    expect(aav).toBeDefined();
+    expect(aav!.start_km).toBe(15704.6);
+    expect(aav!.end_km).toBe(16020.5);
+    expect(aav!.end_km! - aav!.start_km!).toBeCloseTo(315.9, 4); // total distance
+    expect(aav!.fuel_liters).toBe(155);
+
+    const kca = day.find((t) => t.plate_no === "KCA 378");
+    expect(kca).toBeDefined();
+    expect(kca!.start_km).toBe(36099.4);
+    expect(kca!.end_km).toBe(36340.6);
+    expect(kca!.end_km! - kca!.start_km!).toBeCloseTo(241.2, 4);
+    expect(kca!.fuel_liters).toBe(140);
+  });
+
+  it("a non-empty downtime row is recovered for 07-08 (dt_mins=28, DB-CHECK-valid < 60)", async () => {
+    const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
+    const dt = mc.downtime.find((d) => d._source_sheet === "07-08-26") as DowntimeRow | undefined;
+    expect(dt).toBeDefined();
+    expect(dt!.dt_mins).toBe(28);
+    expect(dt!.dt_hrs).toBe(0);
+    expect(dt!.dt_mins).toBeLessThan(60);
+    expect(dt!.dt_reason).toContain("REPAIR");
+  });
+
+  it("day totals are recovered from the shifted TOTAL row (07-08 = 26738)", async () => {
+    const mc = extractMc(await loadMc("production_mc_3q.xlsx"), 2026, "2026-06-25");
+    expect(mc.dayTotals["2026-07-08"]).toBe(26738);
+  });
+
+  it("OLD-layout edge fixture is UNCHANGED — legacy fixed rows still resolve (guard against regression)", async () => {
+    // The edge fixture is the genuine old template: downtime at the legacy fixed
+    // rows (no DURATION header → anchor falls back). Electricity/trucks are absent
+    // in that stripped sheet and must stay empty. dayTotal still reads the C13 TOTAL.
+    const mc = extractMc(await loadMc("production_mc_edge.xlsx"), 2026, "2026-01-01");
+    expect(mc.downtime).toHaveLength(1);
+    const dt = mc.downtime[0] as DowntimeRow;
+    expect(dt.dt_hrs).toBe(2); // 125 min → PD-5 split
+    expect(dt.dt_mins).toBe(5);
+    expect(dt.dt_reason).toBe("REPAIR | belt change; motor");
+    expect(dt.remarks).toBe("Time ranges: 8:00-9:00; 10:00-10:30");
+    expect(mc.electricity).toEqual([]);
+    expect(mc.trucks).toEqual([]);
+    expect(mc.dayTotals["2026-07-04"]).toBe(37048);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // missing-workbook robustness — extractIvy on an absent role is empty, never throws.
 // ---------------------------------------------------------------------------
 describe("empty-side extract", () => {
