@@ -29,7 +29,8 @@
     "@supabase/supabase-js": "^2.45.0",
     "exceljs": "^4.4.0",
     "imapflow": "^1.0.164",
-    "mailparser": "^3.7.1"
+    "mailparser": "^3.7.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.4",

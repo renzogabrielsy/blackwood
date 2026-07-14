@@ -26,6 +26,11 @@
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 import dotenv from "dotenv";
+import {
+  loadJosephSchedule,
+  parseJosephSchedule,
+  mergeSchedules,
+} from "./joseph-prod-sched";
 
 dotenv.config({ path: ".env.local" });
 
@@ -80,20 +85,34 @@ function toInt(v: unknown): number | null {
   return n === null ? null : Math.trunc(n);
 }
 
-/** yyyy-MM-dd from a JS Date read in UTC (xlsx cellDates yields UTC-anchored dates). */
+/**
+ * yyyy-MM-dd from an Excel DATE cell, timezone-INDEPENDENT.
+ *
+ * The workbook is read with `cellDates: false`, so a real date cell arrives as a
+ * raw Excel serial (a number). We convert it with SheetJS's `SSF.parse_date_code`,
+ * which returns integer `{ y, m, d }` calendar fields directly — no JS `Date`, no
+ * host-timezone shift. (The old path built a `Date` via `cellDates: true` and read
+ * it back with `getUTC*` getters; because SheetJS anchors those dates to LOCAL
+ * midnight, on a UTC+8 host every serial decoded one calendar day EARLY.)
+ *
+ * Monthly-total rows carry a STRING in the DATE column (e.g. "2026 July") and
+ * blank filler rows are null — both are non-numeric here, return null, and are
+ * skipped by the caller.
+ */
 function dateISO(v: unknown): string | null {
-  if (v instanceof Date && !isNaN(v.getTime())) {
-    const y = v.getUTCFullYear();
-    const m = String(v.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(v.getUTCDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-  return null;
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const d = XLSX.SSF.parse_date_code(v);
+  if (!d || !d.y || !d.m || !d.d) return null;
+  return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
 }
 
 /** Parse the "PROD SCHED" tab bytes into schedule rows (pure — no IO). */
 export function parseProdSchedule(buf: Buffer): ProdScheduleRow[] {
-  const wb = XLSX.read(buf, { cellDates: true });
+  // cellDates:false → DATE cells stay raw Excel serials (numbers); dateISO()
+  // decodes them with SSF.parse_date_code, host-timezone-independent. Do NOT
+  // switch this back to cellDates:true — that reintroduces the local-midnight
+  // anchoring that shifted every plan_date one day early on a UTC+8 host.
+  const wb = XLSX.read(buf, { cellDates: false });
   const ws = wb.Sheets[TAB_NAME];
   if (!ws) {
     throw new Error(
@@ -180,15 +199,35 @@ export interface SyncProdScheduleResult {
   upserted: number;
   minDate: string | null;
   maxDate: string | null;
+  /** Joseph overlay diagnostics (null when the overlay is disabled). */
+  joseph: {
+    origin: string;
+    sourceTag: string;
+    selectedTabs: string[];
+    days: number;
+    overridden: number;
+    warnings: string[];
+  } | null;
 }
 
 /**
- * Full populate routine: download → parse → upsert by plan_date. Idempotent.
- * Pass a preloaded buffer (e.g. the worker's already-downloaded workbook) to
- * skip the network fetch.
+ * Full populate routine: download → parse Renzo → overlay Joseph → upsert by
+ * plan_date. Idempotent (replace-by-date). Pass a preloaded buffer (e.g. the
+ * worker's already-downloaded Renzo workbook) to skip the network fetch.
+ *
+ * Joseph's authoritative scheduling is overlaid on top of Renzo's PROD SCHED:
+ * his work/rest, setup, campaign-switch dates, non-work day-types and shift
+ * hours win, while Renzo's tonnages/grades are kept (zeroed only on Joseph's
+ * non-work days). Set `joseph.disabled` to write Renzo-only. Set `joseph.useImap`
+ * to fetch Joseph's latest schedule email first (falls back to the saved file).
  */
 export async function syncProdSchedule(
-  opts: { buffer?: Buffer } = {}
+  opts: {
+    buffer?: Buffer;
+    joseph?: { disabled?: boolean; useImap?: boolean; savedFile?: string };
+    targetYear?: number;
+    fromQuarter?: number;
+  } = {}
 ): Promise<SyncProdScheduleResult> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -202,9 +241,32 @@ export async function syncProdSchedule(
   });
 
   const buf = opts.buffer ?? (await downloadWorkbook());
-  const rows = parseProdSchedule(buf);
+  let rows = parseProdSchedule(buf);
   if (rows.length === 0) {
     throw new Error("Parsed 0 schedule rows — refusing to write (sheet layout may have changed).");
+  }
+
+  // --- Joseph overlay ---
+  let josephDiag: SyncProdScheduleResult["joseph"] = null;
+  if (!opts.joseph?.disabled) {
+    const now = new Date();
+    const targetYear = opts.targetYear ?? now.getFullYear();
+    const fromQuarter = opts.fromQuarter ?? Math.floor(now.getMonth() / 3) + 1;
+    const src = await loadJosephSchedule({
+      useImap: opts.joseph?.useImap,
+      savedFile: opts.joseph?.savedFile,
+    });
+    const parsed = parseJosephSchedule(src.buffer, { targetYear, fromQuarter });
+    const merged = mergeSchedules(rows, parsed.days, src.rev);
+    rows = merged.rows;
+    josephDiag = {
+      origin: src.origin,
+      sourceTag: src.rev.sourceTag,
+      selectedTabs: parsed.selectedTabs,
+      days: parsed.days.length,
+      overridden: merged.overriddenDates.length,
+      warnings: parsed.warnings,
+    };
   }
 
   // Upsert by primary key plan_date (replace-by-date). updated_at refreshes.
@@ -220,6 +282,7 @@ export async function syncProdSchedule(
     upserted: payload.length,
     minDate: dates[0] ?? null,
     maxDate: dates[dates.length - 1] ?? null,
+    joseph: josephDiag,
   };
 }
 
@@ -230,11 +293,22 @@ const isMain =
   process.argv[1].endsWith("sync-prod-schedule.ts");
 
 if (isMain) {
-  syncProdSchedule()
+  const useImap = process.argv.includes("--imap");
+  const josephOff = process.argv.includes("--no-joseph");
+  syncProdSchedule({ joseph: { useImap, disabled: josephOff } })
     .then((res) => {
       console.log(
         `[sync-prod-schedule] parsed=${res.parsed} upserted=${res.upserted} range=${res.minDate}..${res.maxDate}`
       );
+      if (res.joseph) {
+        console.log(
+          `[sync-prod-schedule] joseph overlay: ${res.joseph.origin} · ${res.joseph.sourceTag} · tabs=[${res.joseph.selectedTabs.join(", ")}] · days=${res.joseph.days} · overridden=${res.joseph.overridden}`
+        );
+        if (res.joseph.warnings.length) {
+          console.log(`[sync-prod-schedule] joseph warnings (${res.joseph.warnings.length}):`);
+          for (const w of res.joseph.warnings) console.log(`  - ${w}`);
+        }
+      }
       process.exit(0);
     })
     .catch((err) => {

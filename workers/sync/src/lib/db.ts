@@ -379,6 +379,35 @@ export class DbClient {
     }
   }
 
+  // -- production plan (production_schedule) --------------------------------
+  /**
+   * Replace-by-date upsert of the production PLAN into `production_schedule` (PK =
+   * plan_date). Idempotent: re-running with the same rows overwrites in place, so the
+   * schedule-refresh step is safe to run every sync. Service-role write (bypasses RLS),
+   * matching the verified root routine scripts/sync-prod-schedule.ts. Chunked so a very
+   * large payload never trips a PostgREST body limit (the plan is ~year-sized, but the
+   * chunking is cheap insurance). Throws on a hard PostgREST error — the caller
+   * (refreshProductionSchedule) is fully guarded and downgrades any throw to non-fatal.
+   */
+  async upsertProductionSchedule(rows: Row[]): Promise<{ upsertedCount: number }> {
+    if (!rows.length) return { upsertedCount: 0 };
+    const CHUNK = 500;
+    let upsertedCount = 0;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const slice = rows.slice(i, i + CHUNK);
+      const { error } = await this.sb
+        .from("production_schedule")
+        .upsert(slice, { onConflict: "plan_date" });
+      if (error) {
+        throw new Error(
+          `upsert production_schedule failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
+        );
+      }
+      upsertedCount += slice.length;
+    }
+    return { upsertedCount };
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

@@ -68,6 +68,7 @@ import {
   type HeldRowLike,
   type RecordExistsFn,
 } from "./creationRaceHolds.js";
+import { refreshProductionSchedule } from "../reports/prodSchedule/refresh.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -264,6 +265,17 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     () => reconcileBlockBalanceShadow(runId),
     { name: "reconcile:blocking" },
   );
+
+  // ── Stage 3c: production-PLAN refresh — orthogonal, non-fatal, additive. Re-parses
+  // Renzo's PROD SCHED tab (re-downloads the Sheet, same as the reconcile shadows do —
+  // the gsheet report's buffer lives inside its isolated child workflow and is not
+  // threaded across the DBOS boundary; a multi-MB Buffer in a workflow result would bloat
+  // the checkpoint), overlays Joseph Go's latest schedule email (guarded — Renzo-only on
+  // any Joseph failure), and upserts `production_schedule` by plan_date (replace-by-date,
+  // idempotent). WRITES ONLY `production_schedule` (the read-only plan band feeding the
+  // Home Digest) — it touches NO inventory/report table and can NEVER fail the run: the
+  // whole step is wrapped so any throw is a logged warning and the sync continues.
+  await DBOS.runStep(() => refreshProdSchedule(runId), { name: "refresh:prod_schedule" });
 
   // Merge the two orthogonal reconciliation channels (either may be absent).
   const reconciliation: ReconciliationChannel | undefined =
@@ -735,6 +747,52 @@ async function reconcileBlockBalanceShadow(
   } catch {
     // Read-only shadow observer: a failure here must never fail the run.
     return null;
+  }
+}
+
+/**
+ * NON-FATAL production-schedule refresh step (Stage 3c). Delegates to
+ * refreshProductionSchedule (reports/prodSchedule/refresh.ts), which is itself fully
+ * guarded and returns ok:false rather than throwing. This wrapper adds the progress
+ * beats and a belt-and-braces try/catch so NOTHING here can fail the sync run — the
+ * production PLAN feeds a read-only Home Digest band, never a write gate.
+ *
+ * Emits one info/warn beat describing the outcome (rows written, Joseph overlay applied
+ * or the Renzo-only fallback reason). A total failure logs a single warn and returns.
+ */
+async function refreshProdSchedule(runId: string): Promise<void> {
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+    const res = await refreshProductionSchedule({ db });
+    if (!res.ok) {
+      await emit(
+        "reconcile",
+        "Skipped the production-plan refresh this run.",
+        99,
+        res.error,
+        "warn",
+      );
+      return;
+    }
+    const josephBit = res.joseph
+      ? `Joseph ${res.joseph.sourceTag} overlaid ${res.joseph.overridden} day(s)`
+      : `Renzo-only${res.josephSkippedReason ? ` (${res.josephSkippedReason})` : ""}`;
+    await emit(
+      "reconcile",
+      `Refreshed the production plan — ${res.upserted} day(s), ${res.minDate}..${res.maxDate}. ${josephBit}.`,
+      99,
+      res.joseph?.warnings.length ? `${res.joseph.warnings.length} schedule warning(s)` : undefined,
+    );
+  } catch (err) {
+    // Belt-and-braces: refreshProductionSchedule already guards, but a failure in the
+    // emitter/db construction must still never fail the run.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[warn] production-schedule refresh step failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 }
 
