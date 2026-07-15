@@ -532,7 +532,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         {/* Panel */}
         <div
           className={cn(
-            'fixed top-0 right-0 h-dvh w-[520px] z-50 bg-background border-l border-border',
+            'fixed top-0 right-0 h-dvh w-full sm:w-[520px] z-50 bg-background border-l border-border',
             'transition-transform duration-250 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]',
             isOpen ? 'translate-x-0' : 'translate-x-full',
           )}
@@ -566,7 +566,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
       {/* Panel */}
       <div
         className={cn(
-          'fixed top-0 right-0 h-dvh w-[520px] z-50 bg-background border-l border-border',
+          'fixed top-0 right-0 h-dvh w-full sm:w-[520px] z-50 bg-background border-l border-border',
           'transition-transform duration-250 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]',
           'overflow-hidden shadow-2xl flex flex-col',
           isOpen ? 'translate-x-0' : 'translate-x-full',

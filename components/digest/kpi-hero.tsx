@@ -14,6 +14,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { fmtByUnit, fmtDeltaPct } from "./format";
 import { STATE_CHIP, STATE_LABEL, STATE_RAIL } from "./status-tokens";
@@ -291,7 +298,71 @@ function KpiCard({ kpi }: { kpi: DigestKpi }) {
   return card;
 }
 
+/** Compact phone card — label + value (or state) + delta/state chip. The whole
+ *  card is a tap target that opens the full card (sparkline, delta, 7-day avg)
+ *  in a bottom sheet, so the phone grid stays glanceable without cramming five
+ *  full cards into 375px. */
+function MobileKpiCard({
+  kpi,
+  status,
+  onOpen,
+}: {
+  kpi: DigestKpi;
+  status: KpiDayStatus;
+  onOpen: () => void;
+}) {
+  const reported = status.state === "reported";
+  const neutral = isNeutralKpi(kpi.key);
+  const valueStr = reported ? fmtByUnit(kpi.value, kpi.unit) : STATE_LABEL[status.state];
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`${kpi.label} — tap for detail`}
+      className={cn(
+        "relative flex min-h-[76px] flex-col gap-1.5 overflow-hidden rounded-xl border p-3 text-left",
+        "transition-colors duration-150 hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        reported
+          ? "bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/70"
+          : "bg-muted/30 supports-backdrop-filter:bg-muted/20",
+        neutral && reported && "border-dashed bg-muted/30"
+      )}
+    >
+      {!reported && (
+        <span
+          className={cn("absolute inset-y-0 left-0 w-[3px]", STATE_RAIL[status.state])}
+          aria-hidden
+        />
+      )}
+      <div className="flex items-center justify-between gap-1">
+        <span className="truncate text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+          {kpi.label}
+        </span>
+        {reported ? <DeltaBadge kpi={kpi} /> : <StateChip state={status.state} />}
+      </div>
+      <div className="flex items-baseline gap-1">
+        <span
+          className={cn(
+            "font-mono font-semibold tabular-nums leading-none",
+            reported ? "text-xl" : "text-sm text-muted-foreground"
+          )}
+        >
+          {valueStr}
+        </span>
+        {reported && kpi.unit && (
+          <span className="text-[10px] font-medium text-muted-foreground">
+            {kpi.unit}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
 export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
+  const [openKey, setOpenKey] = React.useState<string | null>(null);
+
   if (!kpis.length) {
     return (
       <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -300,18 +371,77 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
     );
   }
 
+  // Default to `reported` when a stream has no resolved status (e.g. the adapter
+  // had no operational date) — preserves the prior behavior.
+  const statusFor = (kpi: DigestKpi): KpiDayStatus =>
+    dayStatus[kpi.key] ?? { state: "reported" as const };
+
+  const openKpi = kpis.find((k) => k.key === openKey) ?? null;
+  const openStatus = openKpi ? statusFor(openKpi) : null;
+
   return (
-    <div className="grid grid-cols-2 gap-3 stagger-children sm:grid-cols-3 lg:grid-cols-5">
-      {kpis.map((kpi) => {
-        // Default to `reported` when a stream has no resolved status (e.g. the
-        // adapter had no operational date) — preserves today's behavior.
-        const status = dayStatus[kpi.key] ?? { state: "reported" as const };
-        return status.state === "reported" ? (
-          <KpiCard key={kpi.key} kpi={kpi} />
-        ) : (
-          <StateCard key={kpi.key} kpi={kpi} status={status} />
-        );
-      })}
-    </div>
+    <>
+      {/* Desktop / tablet — full cards, IDENTICAL to the prior layout (grid,
+          gap-3, stagger, 3-up on tablet portrait, 5-up on wide). */}
+      <div className="hidden gap-3 stagger-children sm:grid sm:grid-cols-3 lg:grid-cols-5">
+        {kpis.map((kpi) => {
+          const status = statusFor(kpi);
+          return status.state === "reported" ? (
+            <KpiCard key={kpi.key} kpi={kpi} />
+          ) : (
+            <StateCard key={kpi.key} kpi={kpi} status={status} />
+          );
+        })}
+      </div>
+
+      {/* Phone — condensed 2-up cards; tap opens the full card in a bottom sheet. */}
+      <div className="grid grid-cols-2 gap-2.5 stagger-fast sm:hidden">
+        {kpis.map((kpi) => (
+          <MobileKpiCard
+            key={kpi.key}
+            kpi={kpi}
+            status={statusFor(kpi)}
+            onOpen={() => setOpenKey(kpi.key)}
+          />
+        ))}
+      </div>
+
+      {/* Bottom-sheet detail for the tapped KPI (phone only — never mounts a
+          trigger on desktop). Reuses the exact full KpiCard / StateCard. */}
+      <Sheet open={openKey !== null} onOpenChange={(o) => !o && setOpenKey(null)}>
+        <SheetContent
+          side="bottom"
+          className="max-h-[85dvh] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
+          {openKpi && openStatus && (
+            <>
+              <SheetHeader className="px-4 pt-4">
+                <SheetTitle className="uppercase tracking-wide">
+                  {openKpi.label}
+                </SheetTitle>
+                <SheetDescription>
+                  {openStatus.state === "reported"
+                    ? "Operational-day value, delta and 7-day trend."
+                    : "This stream has no active value today — here's why."}
+                </SheetDescription>
+              </SheetHeader>
+              <div className="px-4 pt-1">
+                {openStatus.state === "reported" ? (
+                  <KpiCard kpi={openKpi} />
+                ) : (
+                  <StateCard kpi={openKpi} status={openStatus} />
+                )}
+                {isNeutralKpi(openKpi.key) && (
+                  <p className="mt-3 rounded-lg border border-dashed bg-muted/30 p-3 text-[11px] leading-relaxed text-muted-foreground">
+                    Continuous-flow drift is expected — the feed tank balances at
+                    month-end, not day-to-day. This is informational, not an alert.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }

@@ -323,6 +323,35 @@ input[type=number] {
   pointer-events: none;
 }
 
+/* ─── Reduced motion ───
+   Honor the OS "reduce motion" setting: neutralize the project's entrance /
+   stagger / grow utilities so nothing animates in for users who opt out. Placed
+   AFTER every animation utility above so it wins the cascade (equal specificity,
+   later rule). Compositor hover transitions (hover-lift) are collapsed to near-
+   instant rather than removed, so focus/hover affordances still register. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-blur-in,
+  .animate-modal-enter,
+  .animate-badge-pop,
+  .animate-row-fade,
+  .animate-slide-up,
+  .animate-status-grow,
+  .animate-kpi-enter,
+  .animate-kpi-exit,
+  .stagger-children > *,
+  .stagger-fast > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .hover-lift {
+    transition-duration: 1ms;
+  }
+}
+
 /* ─── Blocking Heatmap System ─── */
 
 /* Heatmap gradient backgrounds — same in both light/dark modes.

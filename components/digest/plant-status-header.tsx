@@ -101,7 +101,7 @@ export function PlantStatusHeader({
   const dow = dowNameFor(operationalDate);
 
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70 animate-fade-up">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border bg-card/95 p-3.5 backdrop-blur supports-backdrop-filter:bg-card/70 animate-fade-up sm:gap-x-5 sm:p-4">
       {/* Beacon + date */}
       <div className="flex items-center gap-3">
         <span className="relative flex h-2.5 w-2.5">
@@ -147,9 +147,9 @@ export function PlantStatusHeader({
         <span className="text-xs font-normal text-muted-foreground">kg</span>
       </Fact>
 
-      <div className="flex-1" />
+      <div className="hidden flex-1 sm:block" />
 
-      <div className="flex flex-col items-end gap-1 text-right">
+      <div className="flex w-full flex-col items-start gap-1 text-left sm:w-auto sm:items-end sm:text-right">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>
             Last sync{" "}

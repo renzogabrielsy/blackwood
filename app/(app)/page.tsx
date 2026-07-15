@@ -27,7 +27,7 @@ export default async function DigestPage() {
   ).length;
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5">
       {/* A. Header strip (sub-band — navbar owns the page title). The Daily Sync
           launcher (privileged-only modal trigger) lives in this top band,
           right-aligned, replacing the retired floating button. */}
@@ -89,7 +89,7 @@ export default async function DigestPage() {
       {(data.schedulePreview.length > 0 || data.openBlocks.length > 0) && (
         <section
           className={cn(
-            "grid items-start gap-6",
+            "grid items-start gap-4 sm:gap-6",
             data.schedulePreview.length > 0 &&
               data.openBlocks.length > 0 &&
               "lg:grid-cols-2"

@@ -41,7 +41,14 @@ export function WeekStrip({ week }: WeekStripProps) {
   const maxTons = Math.max(1, ...week.map((w) => w.projectedTons ?? 0));
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+    <div
+      className={cn(
+        // Phone: a horizontal snap-scroll strip (7 day-cards never fit across
+        // 375px). Tablet/desktop: the original grid, unchanged.
+        "flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "sm:grid sm:grid-cols-4 sm:overflow-visible sm:pb-0 lg:grid-cols-7"
+      )}
+    >
       {week.map((day) => {
         const rest = day.shifts === 0;
         const projected = day.projectedTons ?? 0;
@@ -55,7 +62,8 @@ export function WeekStrip({ week }: WeekStripProps) {
           <div
             key={day.date}
             className={cn(
-              "flex flex-col gap-2 rounded-xl border bg-card p-2.5",
+              "flex min-w-[8.5rem] shrink-0 snap-start flex-col gap-2 rounded-xl border bg-card p-2.5",
+              "sm:min-w-0 sm:shrink",
               rest && "border-dashed bg-muted/30",
               day.isToday && "ring-1 ring-[var(--chart-2)]"
             )}

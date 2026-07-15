@@ -333,6 +333,51 @@ values into views.
 - **Navbar** — `/` returns `null` from `getBreadcrumb()`, so the left side stays
   empty (no redundant title). The digest renders its own sub-band header only.
 
+## Mobile / responsive (phone ≤375px, iPad Mini 768/1024)
+The digest is a responsive pass over the SAME design system — desktop (`sm`+ /
+`lg`+) output is unchanged; mobile behavior is layered below it. Rule of thumb:
+condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
+(`side="bottom"`)** for the full detail.
+- **Page shell** (`page.tsx`) — tighter mobile padding/gap
+  (`gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5`); the snapshot grid gap is
+  `gap-4 sm:gap-6`. The 2-col snapshot row already stacks single-column below `lg`.
+- **PlantStatusHeader** — smaller mobile padding/gap; the right-hand sync-freshness
+  block is full-width + left-aligned on phones (`w-full … sm:w-auto sm:items-end`),
+  and the `flex-1` spacer is `hidden sm:block` so it doesn't force an empty row.
+- **KpiHero** — `sm`+ keeps the identical full-card grid (`hidden sm:grid
+  sm:grid-cols-3 lg:grid-cols-5`; 3-up on iPad-Mini portrait, 5-up on wide).
+  Phones (`sm:hidden`) get a **condensed 2-up grid** (`MobileKpiCard`: label +
+  value/state + delta-or-state chip, NO sparkline); tapping a card opens a bottom
+  `Sheet` with the full `KpiCard`/`StateCard` (sparkline, delta, 7-day avg, and the
+  net-flow "expected drift" note as text). State managed in `kpi-hero.tsx`.
+- **WeekStrip** — phones render the 7 day-cards as a horizontal **snap-scroll**
+  strip (`flex snap-x overflow-x-auto`; each card `min-w-[8.5rem] snap-start`);
+  `sm`+ reverts to the original grid (`sm:grid sm:grid-cols-4 lg:grid-cols-7`).
+- **SchedulePreview** — the dense 9-col table shows inline only at `sm`+
+  (`hidden sm:block`, via the shared `ScheduleTable`). Phones (`sm:hidden`) render
+  `SchedulePreviewMobile`: a condensed stacked list of the nearest 5 days
+  (date · setup/grades · tons · status) plus a **"View full table" bottom `Sheet`**
+  containing the full `ScheduleTable` (`min-w-[640px]`, scrolls sideways inside the
+  sheet). "View full schedule →" link retained.
+- **OpenBlocks** — cards already stack 1-up on phones (`grid-cols-1 sm:grid-cols-2`);
+  the shared `BlockingDetailPanel` slide-over is now `w-full sm:w-[520px]` so it no
+  longer overflows a 375px screen (see blocking CONTEXT).
+- **DigestCharts** — all four charts already stack single-column below `lg`.
+  `ChartCard` gained a phone-only **expand** button (`sm:hidden`) that opens the
+  SAME chart taller (`h-[68dvh]`) in a bottom `Sheet` (the `children` element is
+  reused in both places — a React element is an immutable description, so recharts
+  just instantiates a second `ResponsiveContainer`; the sheet chart only mounts
+  while open). `ProductionHoursChart` (own chrome) stays responsive-only, no expand.
+- **Trucks / Bag / Sync+Activity / Footer** — already stack + use `table-fixed
+  w-full` / `flex-wrap`, so they reflow cleanly on phones (responsive-only, no
+  condense/expand needed).
+- **`/production/schedule`** — the month table got `overflow-x-auto` +
+  `min-w-[1080px]` so columns keep their widths and scroll sideways on phones
+  instead of crushing.
+- **Reduced motion** — `globals.css` now has a `@media (prefers-reduced-motion:
+  reduce)` guard that neutralizes the `animate-*` / `stagger-*` utilities and
+  collapses `hover-lift` to near-instant.
+
 ## Dependencies
 - `lib/digest/queries.ts` / `lib/digest/types.ts` — data contract (do not edit).
 - `recharts` — sparklines + the three charts (also used by the archived widgets).

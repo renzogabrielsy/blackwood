@@ -14,6 +14,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Maximize2 } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
 import { ProductionHoursChart } from "./production-hours-chart";
@@ -58,33 +67,67 @@ function ChartCard({
   children,
   className,
 }: ChartCardProps) {
+  // On phones the 220px full-width chart is legible but tight; a mobile-only
+  // "expand" button opens the SAME chart taller in a bottom sheet. Reusing the
+  // `children` element in two places is safe — a React element is an immutable
+  // description, so recharts just instantiates a second ResponsiveContainer. The
+  // sheet chart only mounts while open (Radix unmounts closed content).
   return (
-    <div
-      className={cn(
-        "hover-lift flex flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70",
-        className
-      )}
-    >
+    <Sheet>
       <div
         className={cn(
-          "flex items-baseline justify-between gap-2",
-          legend ? "mb-2" : "mb-3"
+          "hover-lift flex flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70",
+          className
         )}
       >
-        <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
-        {subtitle && (
-          <span className="text-[11px] text-muted-foreground">{subtitle}</span>
+        <div
+          className={cn(
+            "flex items-baseline justify-between gap-2",
+            legend ? "mb-2" : "mb-3"
+          )}
+        >
+          <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
+          <div className="flex items-baseline gap-2">
+            {subtitle && (
+              <span className="text-[11px] text-muted-foreground">{subtitle}</span>
+            )}
+            {!empty && (
+              <SheetTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Expand ${title} chart`}
+                  className="-my-1 inline-flex size-6 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+                >
+                  <Maximize2 className="size-3.5" />
+                </button>
+              </SheetTrigger>
+            )}
+          </div>
+        </div>
+        {legend && !empty && <div className="mb-2">{legend}</div>}
+        {empty ? (
+          <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+            No data for this window
+          </div>
+        ) : (
+          <div className="h-[220px] w-full">{children}</div>
         )}
       </div>
-      {legend && !empty && <div className="mb-2">{legend}</div>}
-      {empty ? (
-        <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-          No data for this window
-        </div>
-      ) : (
-        <div className="h-[220px] w-full">{children}</div>
+
+      {!empty && (
+        <SheetContent
+          side="bottom"
+          className="max-h-[90dvh] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
+        >
+          <SheetHeader className="px-4 pt-4">
+            <SheetTitle>{title}</SheetTitle>
+            {subtitle && <SheetDescription>{subtitle}</SheetDescription>}
+          </SheetHeader>
+          {legend && <div className="px-4 pb-1 pt-1">{legend}</div>}
+          <div className="h-[68dvh] w-full px-3 pb-2 pt-1">{children}</div>
+        </SheetContent>
       )}
-    </div>
+    </Sheet>
   );
 }
 

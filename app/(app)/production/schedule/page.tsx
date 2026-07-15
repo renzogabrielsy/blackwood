@@ -280,8 +280,8 @@ export default async function ProductionSchedulePage({
           No schedule on record for {bounds.label}.
         </div>
       ) : (
-        <div className="animate-fade-up overflow-auto rounded-xl border bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/70">
-          <table className="w-full table-fixed border-collapse text-xs">
+        <div className="animate-fade-up overflow-x-auto rounded-xl border bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/70">
+          <table className="w-full min-w-[1080px] table-fixed border-collapse text-xs">
             <thead>
               <tr>
                 <th className={cn(headCls, COL.date, "text-left")}>Date</th>
