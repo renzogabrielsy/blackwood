@@ -118,6 +118,7 @@ export default async function DigestPage() {
           flow={data.flow}
           price={data.price}
           grades={data.grades}
+          productionHours={data.productionHours}
           weekPlan={data.weekPlan}
         />
       </section>

@@ -97,6 +97,17 @@ export interface GradePoint {
   shift?: string;
 }
 
+/** Worked hours vs downtime hours per production day, trailing window (the same
+ *  GRADE_DAYS window as `grades`, so an hours table can sit beside the
+ *  Production-by-grade chart). Aggregated in SQL (view_digest_daily_hours):
+ *  workHrs = SUM(shift_hrs), downtimeHrs = SUM(dt_hrs + dt_mins/60). Rest /
+ *  no-production days simply have no row. Not price data. */
+export interface DailyHoursPoint {
+  date: string; // yyyy-MM-dd
+  workHrs: number;
+  downtimeHrs: number;
+}
+
 // ---------- Trucks band ----------
 
 /** A truck that logged a trip (ttl_km > 0) on the operational date. */
@@ -242,6 +253,9 @@ export interface WeekDayPlan {
    *  null when no production run is on record. Aggregated in SQL
    *  (view_digest_prod_actual_tons), never summed in TypeScript. */
   actualTons: number | null;
+  /** actual hours WORKED for the day (view_digest_daily_hours.work_hrs, joined by
+   *  date), or null when that date has no production/hours row. Not a TS sum. */
+  actualHrs: number | null;
   /** the operational date */
   isToday: boolean;
   /** reported | awaiting | rest | planned | today (see ./day-status) */
@@ -266,6 +280,9 @@ export interface SchedulePreviewRow {
    *  null when no production run is on record. Aggregated in SQL
    *  (view_digest_prod_actual_tons), never summed in TypeScript. */
   actualTons: number | null;
+  /** actual hours WORKED for the day (view_digest_daily_hours.work_hrs, joined by
+   *  date), or null when that date has no production/hours row. Not a TS sum. */
+  actualHrs: number | null;
   /** reported | awaiting | rest | planned | today (see ./day-status) */
   state: ScheduleRowState;
   /** raw DB `source` string, e.g. "joseph:REV2" | "gsheet:PROD SCHED". A
@@ -285,6 +302,10 @@ export interface DigestData {
   flow: FlowPoint[];
   price: PricePoint[];
   grades: GradePoint[];
+  /** Worked vs downtime hours per production day — the last GRADE_DAYS rows of
+   *  view_digest_daily_hours, ascending by date (same window as `grades`).
+   *  Aggregated in SQL; the adapter only windows + shapes. Not price data. */
+  productionHours: DailyHoursPoint[];
   latestSync: SyncRun | null;
   activity: ActivityItem[];
   flags: Flag[];

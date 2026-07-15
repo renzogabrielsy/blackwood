@@ -22,6 +22,7 @@ const COL = {
   shifts: "w-[58px]",
   projected: "w-[68px]",
   actual: "w-[68px]",
+  actualHrs: "w-[68px]",
   status: "w-[124px]",
   source: "w-[74px]",
 } as const;
@@ -78,6 +79,7 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
               <th className={cn(headCls, COL.shifts, "text-right")}>Sh</th>
               <th className={cn(headCls, COL.projected, "text-right")}>Total t</th>
               <th className={cn(headCls, COL.actual, "text-right")}>Act t</th>
+              <th className={cn(headCls, COL.actualHrs, "text-right")}>Act hrs</th>
               <th className={cn(headCls, COL.status, "text-left")}>Status</th>
               <th className={cn(headCls, COL.source, "text-left")}>Src</th>
             </tr>
@@ -145,6 +147,14 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
                   </td>
                   <td className="px-2 py-1 text-right font-mono tabular-nums">
                     {fmtTons(r.actualTons)}
+                  </td>
+                  <td
+                    className={cn(
+                      "px-2 py-1 text-right font-mono tabular-nums",
+                      r.actualHrs == null && "text-muted-foreground"
+                    )}
+                  >
+                    {fmtTons(r.actualHrs)}
                   </td>
                   <td className="px-2 py-1">
                     <span

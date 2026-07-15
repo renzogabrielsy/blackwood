@@ -16,10 +16,12 @@ import {
 } from "recharts";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
+import { ProductionHoursTable } from "./production-hours-table";
 import type {
   FlowPoint,
   PricePoint,
   GradePoint,
+  DailyHoursPoint,
   WeekDayPlan,
 } from "@/lib/digest/types";
 
@@ -658,6 +660,9 @@ interface DigestChartsProps {
   flow: FlowPoint[];
   price: PricePoint[];
   grades: GradePoint[];
+  /** worked vs downtime hours per production day (same 14-day window as
+   *  `grades`) — feeds the hours table paired beside the grade chart. */
+  productionHours: DailyHoursPoint[];
   /** the operational date's week plan — drives the flow chart's rest/awaiting
    *  band markers (dates outside the week simply render gaps on zero days). */
   weekPlan: WeekDayPlan[];
@@ -667,6 +672,7 @@ export function DigestCharts({
   flow,
   price,
   grades,
+  productionHours,
   weekPlan,
 }: DigestChartsProps) {
   // The price series is EMPTY for price-denied roles (gated server-side in
@@ -674,15 +680,28 @@ export function DigestCharts({
   // empty-looking chart renders — mirrors how other digest bands drop out on
   // empty data.
   const showPrice = price.length > 0;
+  const showHours = productionHours.length > 0;
   const planByDate = React.useMemo(
     () => new Map(weekPlan.map((w) => [w.date, w])),
     [weekPlan]
   );
   return (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-      <FlowChart flow={flow} planByDate={planByDate} />
-      {showPrice && <PriceChart price={price} />}
-      <GradeChart grades={grades} />
+    <div className="flex flex-col gap-3">
+      {/* Row 1 — Feed In vs Out + RC In price. When price is gated the flow
+          chart spans the full width (no empty half). */}
+      <div className={cn("grid grid-cols-1 gap-3", showPrice && "lg:grid-cols-2")}>
+        <FlowChart flow={flow} planByDate={planByDate} />
+        {showPrice && <PriceChart price={price} />}
+      </div>
+      {/* Row 2 — Production by grade (left) paired with the Work & downtime
+          hours table (right). This pairing is INDEPENDENT of the price chart
+          above, so the two production panels always sit side-by-side on wide
+          screens and stack on mobile. The grade chart spans full width only
+          when there are no hours rows to pair with. */}
+      <div className={cn("grid grid-cols-1 gap-3", showHours && "lg:grid-cols-2")}>
+        <GradeChart grades={grades} />
+        {showHours && <ProductionHoursTable rows={productionHours} />}
+      </div>
     </div>
   );
 }

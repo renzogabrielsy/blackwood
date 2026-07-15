@@ -21,6 +21,7 @@ import type {
   FlowPoint,
   PricePoint,
   GradePoint,
+  DailyHoursPoint,
   SyncRun,
   SyncEmployeeStat,
   ActivityItem,
@@ -95,6 +96,11 @@ interface GradeRow {
   grade: string;
   kg: number | string;
   shift: string | null;
+}
+interface DailyHoursRow {
+  date: string;
+  work_hrs: number | string;
+  downtime_hrs: number | string;
 }
 interface TruckReadingRow {
   plate_no: string;
@@ -267,6 +273,7 @@ export async function getDigestData(): Promise<DigestData> {
     productionRes,
     powerRes,
     gradesRes,
+    hoursRes,
     mtdRes,
     latestSyncRes,
     latestSyncByEmpRes,
@@ -284,6 +291,7 @@ export async function getDigestData(): Promise<DigestData> {
     supabase.from("view_digest_daily_production").select("*").order("date", { ascending: true }),
     supabase.from("view_digest_daily_power").select("*").order("date", { ascending: true }),
     supabase.from("view_digest_grades").select("*").order("date", { ascending: true }),
+    supabase.from("view_digest_daily_hours").select("*").order("date", { ascending: true }),
     supabase.from("view_digest_mtd").select("*").maybeSingle(),
     supabase.from("view_digest_latest_sync").select("*").maybeSingle(),
     supabase.from("view_digest_latest_sync_by_employee").select("*"),
@@ -568,6 +576,17 @@ export async function getDigestData(): Promise<DigestData> {
       shift: r.shift ?? undefined,
     }));
 
+  // ---------- production hours (worked vs downtime) ----------
+  // Same trailing window as `grades` (GRADE_DAYS), ascending by date, so the
+  // hours table can sit beside the Production-by-grade chart. The view carries
+  // the SUM; this only windows + shapes (round for display, no aggregation).
+  const hoursRows = (hoursRes.data as DailyHoursRow[] | null) ?? [];
+  const productionHours: DailyHoursPoint[] = tail(hoursRows, GRADE_DAYS).map((r) => ({
+    date: r.date,
+    workHrs: round(n(r.work_hrs)),
+    downtimeHrs: round(n(r.downtime_hrs)),
+  }));
+
   // ---------- latest sync ----------
   const latestSyncRow = latestSyncRes.data as LatestSyncRow | null;
   const byEmpRows = (latestSyncByEmpRes.data as LatestSyncByEmployeeRow[] | null) ?? [];
@@ -733,6 +752,11 @@ export async function getDigestData(): Promise<DigestData> {
     const actualByDate = new Map(
       ((actualRes.data as ProdActualTonsRow[] | null) ?? []).map((a) => [a.date, n(a.actual_tons)])
     );
+    // Actual WORKED hours per date, from the already-fetched (120-day windowed)
+    // view_digest_daily_hours rows — the window covers every forward date in the
+    // week/preview ranges. Joined by date the same way actual tons are; a date
+    // with no production/hours row → absent from the map → actualHrs null.
+    const workHrsByDate = new Map(hoursRows.map((h) => [h.date, n(h.work_hrs)]));
 
     // Operational-date plan (always within its own Mon→Sun week).
     const opPlanRow = planByDate.get(operationalDate);
@@ -766,6 +790,7 @@ export async function getDigestData(): Promise<DigestData> {
         ? toProdSchedDay(row)
         : { date, dow: dowNameFor(date), shifts: 0, setup: null, projectedTons: 0 };
       const actualTons = actualByDate.has(date) ? round(actualByDate.get(date)!, 2) : null;
+      const actualHrs = workHrsByDate.has(date) ? round(workHrsByDate.get(date)!, 2) : null;
       return {
         date,
         dow: plan.dow,
@@ -773,6 +798,7 @@ export async function getDigestData(): Promise<DigestData> {
         setup: plan.setup,
         projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
         actualTons,
+        actualHrs,
         isToday: date === operationalDate,
         state: resolveScheduleRowState(plan, actualTons, operationalDate),
       };
@@ -797,6 +823,7 @@ export async function getDigestData(): Promise<DigestData> {
       const actualTons = previewActualByDate.has(date)
         ? round(previewActualByDate.get(date)!, 2)
         : null;
+      const actualHrs = workHrsByDate.has(date) ? round(workHrsByDate.get(date)!, 2) : null;
       return {
         date,
         dow: plan.dow,
@@ -804,6 +831,7 @@ export async function getDigestData(): Promise<DigestData> {
         setup: plan.setup,
         projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
         actualTons,
+        actualHrs,
         state: resolveScheduleRowState(plan, actualTons, operationalDate),
         source: row?.source ?? null,
         grades: (row?.grades as unknown as Record<string, number> | null) ?? null,
@@ -826,6 +854,7 @@ export async function getDigestData(): Promise<DigestData> {
     flow,
     price,
     grades,
+    productionHours,
     latestSync,
     activity,
     flags,

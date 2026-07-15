@@ -89,6 +89,9 @@ interface ScheduleRow {
   gradeTons: GradeTon[];
   projectedTons: number | null;
   actualTons: number | null;
+  /** actual hours WORKED for the day (view_digest_daily_hours.work_hrs), or null
+   *  when that date has no production/hours row (muted dash). */
+  actualHrs: number | null;
   variance: number | null; // actual − projected (only when actual present)
   remarks: string | null;
   isJoseph: boolean;
@@ -120,6 +123,7 @@ const COL = {
   shifts: "w-[62px]",
   projected: "w-[92px]",
   actual: "w-[86px]",
+  actualHrs: "w-[80px]",
   variance: "w-[80px]",
   status: "w-[128px]",
   source: "w-[86px]",
@@ -151,8 +155,9 @@ export default async function ProductionSchedulePage({
     monthParam && MONTH_RE.test(monthParam) ? monthParam : defaultMonth;
   const bounds = monthBounds(month);
 
-  // Plan (production_schedule) + actual tons (view) for the month, joined by date.
-  const [schedRes, actualRes] = await Promise.all([
+  // Plan (production_schedule) + actual tons (view) + actual worked hours (view)
+  // for the month, all joined by date.
+  const [schedRes, actualRes, hoursRes] = await Promise.all([
     supabase
       .from("production_schedule")
       .select("plan_date, dow, shifts, setup, projected_tons, grades, remarks, source")
@@ -164,6 +169,11 @@ export default async function ProductionSchedulePage({
       .select("date, actual_tons")
       .gte("date", bounds.start)
       .lte("date", bounds.end),
+    supabase
+      .from("view_digest_daily_hours")
+      .select("date, work_hrs")
+      .gte("date", bounds.start)
+      .lte("date", bounds.end),
   ]);
 
   const actualByDate = new Map<string, number>();
@@ -173,12 +183,22 @@ export default async function ProductionSchedulePage({
     }
   }
 
+  const hoursByDate = new Map<string, number>();
+  for (const h of hoursRes.data ?? []) {
+    if (h.date != null && h.work_hrs != null) {
+      hoursByDate.set(h.date, Number(h.work_hrs));
+    }
+  }
+
   const rows: ScheduleRow[] = (schedRes.data ?? []).map((r) => {
     const shifts = Math.trunc(Number(r.shifts ?? 0));
     const projectedTons =
       r.projected_tons == null ? null : Number(r.projected_tons);
     const actualTons = actualByDate.has(r.plan_date)
       ? actualByDate.get(r.plan_date)!
+      : null;
+    const actualHrs = hoursByDate.has(r.plan_date)
+      ? hoursByDate.get(r.plan_date)!
       : null;
     const variance =
       actualTons != null && projectedTons != null
@@ -199,6 +219,7 @@ export default async function ProductionSchedulePage({
       gradeTons: parseGradeTons(r.grades),
       projectedTons,
       actualTons,
+      actualHrs,
       variance,
       remarks: r.remarks,
       isJoseph: (r.source ?? "").startsWith("joseph:"),
@@ -213,6 +234,7 @@ export default async function ProductionSchedulePage({
   // SUMmed in the SQL view, projected is the plan figure straight from the row).
   const totalProjected = rows.reduce((s, r) => s + (r.projectedTons ?? 0), 0);
   const totalActual = rows.reduce((s, r) => s + (r.actualTons ?? 0), 0);
+  const totalActualHrs = rows.reduce((s, r) => s + (r.actualHrs ?? 0), 0);
   const totalVariance = totalActual - totalProjected;
 
   const headCls =
@@ -273,6 +295,9 @@ export default async function ProductionSchedulePage({
                   Proj t
                 </th>
                 <th className={cn(headCls, COL.actual, "text-right")}>Act t</th>
+                <th className={cn(headCls, COL.actualHrs, "text-right")}>
+                  Act hrs
+                </th>
                 <th className={cn(headCls, COL.variance, "text-right")}>Var</th>
                 <th className={cn(headCls, COL.status, "text-left")}>Status</th>
                 <th className={cn(headCls, COL.source, "text-left")}>Source</th>
@@ -347,6 +372,14 @@ export default async function ProductionSchedulePage({
                     <td
                       className={cn(
                         "px-2 py-1 text-right font-mono tabular-nums",
+                        r.actualHrs == null && "text-muted-foreground"
+                      )}
+                    >
+                      {fmtTons(r.actualHrs)}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-2 py-1 text-right font-mono tabular-nums",
                         r.variance == null
                           ? "text-muted-foreground"
                           : r.variance > 0
@@ -402,6 +435,9 @@ export default async function ProductionSchedulePage({
                 </td>
                 <td className="px-2 py-1 text-right font-mono tabular-nums">
                   {fmtTons(totalActual)}
+                </td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums">
+                  {fmtTons(totalActualHrs)}
                 </td>
                 <td
                   className={cn(

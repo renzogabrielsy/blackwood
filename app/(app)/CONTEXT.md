@@ -66,7 +66,14 @@ values into views.
   **Sparkline zero-skip** still applies to `reported` cards: the four operational
   spark SERIES drop zero-value days so a 0 day doesn't plunge the area chart —
   see queries.ts (Data below); card values / `avg7` / `net_flow` spark unaffected.
-- `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
+- `components/digest/digest-charts.tsx` — `'use client'`. Recharts in **two
+  stacked sub-rows** (`flex flex-col`): **Row 1** = Feed In vs Out + RC In price
+  (`lg:grid-cols-2` only when price is shown, so a gated flow chart spans full
+  width); **Row 2** = **Production by grade (left) paired with the
+  `ProductionHoursTable` (right)** in its OWN `lg:grid-cols-2` sub-row, so the two
+  production panels are ALWAYS side-by-side regardless of whether the price chart
+  is present (grade spans full width only when `productionHours` is empty). Takes
+  a new `productionHours` prop (passed from `page.tsx`).
   **Feed In vs Out** — a **rest-day-aware `ComposedChart`**: rest / no-report /
   no-delivery days stay **null** (the line never plunges to the floor), but the
   lines **connect smoothly across** those nulls (`connectNulls={true}`) so the
@@ -82,6 +89,17 @@ values into views.
   gained an optional `legend` slot for the flow chart's custom band swatches.
   All colors are `var(--chart-1..5)` tokens (dark-mode safe). Glass tooltip via
   theme tokens.
+- `components/digest/production-hours-table.tsx` — **Server component**. Compact
+  Excel-Standard **Work & downtime hours** table from `data.productionHours`,
+  paired BESIDE the Production-by-grade chart (Row 2 of `DigestCharts`). Columns
+  **Date · Work hrs · Downtime hrs**, one row per day over the last 14 days
+  (`GRADE_DAYS` window, ascending → same day order as the grade chart), `text-xs`
+  `font-mono` right-aligned numerics, capped `max-h-[220px] overflow-y-auto` with
+  a sticky `.frozen-row` header + `.frozen-row-bottom` **TTL footer** (SUM of work
+  + downtime hrs — a display sum; per-day figures are SUMmed in
+  `view_digest_daily_hours`). Downtime > 0 tinted amber, else muted dash. Glass
+  card chrome; title "Work & downtime hours", subtitle "last 14 days · hrs".
+  Renders `null` when `productionHours` is empty. No ₱ → no gating.
 - `components/digest/week-strip.tsx` — **Server component**. This-week
   plan-vs-actual strip from `data.weekPlan` (7 days of the operational date's
   week): one card per day with dow + date, setup, a violet planned bar over a
@@ -96,7 +114,10 @@ values into views.
   rows**: operational date → +9 days), sized as a **half-width scroll card**
   (`max-h-[340px] overflow-auto` + sticky header) that pairs beside `OpenBlocks`
   in the snapshot row. Columns: Date · Day · **Setup / grades** · Sh · **Total t**
-  · Act t · Status · Src. The Setup cell stacks a muted **per-grade tonnage**
+  · Act t · **Act hrs** · Status · Src. **Act hrs** (`SchedulePreviewRow.actualHrs`
+  — reported work hours from `view_digest_daily_hours`) sits right of Act t; most
+  rows are null in this forward window → muted dash (expected). The Setup cell
+  stacks a muted **per-grade tonnage**
   breakdown (`3X50 21t · 4X8 5t`, heaviest first, single-line + `title`) under
   the setup name; **Total t** is the day total (`projectedTons`). Rest days show a
   clean dash. Today's row accent-tinted; Status chip reuses
@@ -211,8 +232,8 @@ values into views.
   `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
-  price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks,
-  fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview }`.
+  price, grades, productionHours, latestSync, activity, flags, monthToDate, trucks,
+  openBlocks, fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -224,6 +245,10 @@ values into views.
     (₱ = gated by `canViewPrices()`: EMPTY array for price-denied roles).
   - `grades[]` — `{ date, grade, kg, shift? }` (long form; UI pivots to wide for
     stacking; `shift` = 'M'|'E'|'N'|undefined, segments multi-shift grades).
+  - `productionHours[]` — `{ date, workHrs, downtimeHrs }` for the last 14 days
+    (same `GRADE_DAYS` window as `grades`, ascending). SUMmed in SQL
+    (`view_digest_daily_hours`); feeds the `ProductionHoursTable` beside the grade
+    chart. Not price data.
   - `latestSync` — `{ date, insertCount, updateCount, deleteCount, byEmployee[] }`.
   - `activity[]` — `{ id, at, table, operation, note, employee, provenance, diff[] }`.
   - `flags[]` — `{ kind, severity, message, date? }`.
