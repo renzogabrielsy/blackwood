@@ -71,15 +71,49 @@ function tooltipChrome() {
 const WORK_COLOR = "var(--chart-1)";
 const DOWNTIME_COLOR = "var(--chart-4)";
 
+/** Row shape after deriving the productive base from the scheduled shift. */
+interface HoursBarDatum {
+  date: string;
+  /** Actual productive hours = scheduled shift − downtime (never negative). */
+  actualHrs: number;
+  /** Time lost within the shift (unchanged from source). */
+  downtimeHrs: number;
+  /** Scheduled/expected shift length (source `workHrs`), for the tooltip. */
+  scheduledHrs: number;
+}
+
 /**
  * Work & downtime hours as a stacked bar chart. One bar per production day over
  * the last 14 days (ascending → same left→right order as the Production-by-grade
- * chart). `workHrs` is the base segment; `downtimeHrs` stacks ON TOP with the
- * rounded top corners so the small downtime reads as a distinct cap on the
- * ~12-hr work bar. Renders `null` when there is nothing to show.
+ * chart).
+ *
+ * The stacked bar totals the SCHEDULED shift (source `workHrs`, e.g. 12), split
+ * into the actual productive time (`actualHrs = max(0, workHrs − downtimeHrs)`)
+ * as the base and the `downtimeHrs` cap stacked ON TOP. So base + top = the
+ * expected shift, and downtime reads as the slice of the shift lost — never
+ * extra time added on top. Renders `null` when there is nothing to show.
  */
 export function ProductionHoursChart({ rows }: ProductionHoursChartProps) {
   const tip = tooltipChrome();
+
+  // Derive the productive base per day: subtract downtime OUT OF the scheduled
+  // shift so the two segments sum to workHrs (not workHrs + downtime). Guard the
+  // 0/absent-shift case so we never render a negative base bar.
+  const data = React.useMemo<HoursBarDatum[]>(
+    () =>
+      rows.map((r) => {
+        const scheduledHrs = r.workHrs || 0;
+        const downtimeHrs = r.downtimeHrs || 0;
+        return {
+          date: r.date,
+          actualHrs: Math.max(0, scheduledHrs - downtimeHrs),
+          downtimeHrs,
+          scheduledHrs,
+        };
+      }),
+    [rows],
+  );
+
   if (!rows.length) return null;
 
   const legend = (
@@ -114,7 +148,7 @@ export function ProductionHoursChart({ rows }: ProductionHoursChartProps) {
       <div className="mb-2">{legend}</div>
       <div className="h-[220px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+          <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid
               stroke="var(--border)"
               strokeOpacity={0.4}
@@ -141,17 +175,24 @@ export function ProductionHoursChart({ rows }: ProductionHoursChartProps) {
                 `${fmtHrs(Number(value) || 0)} hrs`,
                 name === "downtimeHrs" ? "Downtime" : "Work hrs",
               ]}
-              labelFormatter={(l) => l}
+              // Append the scheduled shift total so the two segments read as
+              // (actual work + downtime) = scheduled shift.
+              labelFormatter={(l, payload) => {
+                const d = payload?.[0]?.payload as HoursBarDatum | undefined;
+                return d
+                  ? `${l} · shift ${fmtHrs(d.scheduledHrs)} hrs`
+                  : String(l);
+              }}
             />
             <Legend
               iconType="square"
               wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
               formatter={(v) => (v === "downtimeHrs" ? "Downtime" : "Work hrs")}
             />
-            {/* Base segment — work hours (calm chart-1 bar). */}
+            {/* Base segment — actual productive hours (scheduled shift − downtime). */}
             <Bar
-              dataKey="workHrs"
-              name="workHrs"
+              dataKey="actualHrs"
+              name="actualHrs"
               stackId="hours"
               fill={WORK_COLOR}
               isAnimationActive={false}
