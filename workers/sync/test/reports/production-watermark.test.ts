@@ -118,8 +118,10 @@ describe("db.productionRunsFrontier — MC runs-frontier accessor", () => {
 describe("runReport — anchors `since` on the runs frontier, not the waste-inflated shifts max", () => {
   const manifest: ProductionManifest = {
     reports: {
-      // MC only (no ivy) — isolates the MC-frontier → extraction path.
-      production: [{ storagePath: "fake/mc.xlsx", filename: "DAILY.xlsx", emailUid: 1 }],
+      // MC only (no ivy) — isolates the MC-frontier → extraction path. The MC slot is the
+      // canonical Mail-Clerk key "production_mc" (mailQueries + investigator SOURCE_KEYS),
+      // NOT the bare "production" (the 2026-07-15 routing-drop bug).
+      production_mc: [{ storagePath: "fake/mc.xlsx", filename: "DAILY.xlsx", emailUid: 1 }],
     },
   };
 

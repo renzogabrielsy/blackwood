@@ -140,7 +140,10 @@ export interface StoredAttachmentLike {
   threadId?: string | null;
 }
 
-/** Per-report manifest slice: mail-clerk keys "production" (MC) + "production_waste" (Ivy). */
+/** Per-report manifest slice: mail-clerk keys "production_mc" (MC) + "production_waste" (Ivy).
+ *  These are the canonical Mail-Clerk Storage sub-keys (mailClerk.ts::mailQueries, also
+ *  lib/investigator/source.ts::SOURCE_KEYS). The MC slot is "production_mc", NOT "production"
+ *  — reading the bare "production" silently drops MC's workbook (2026-07-15 regression). */
 export interface ProductionManifest {
   reports: Record<string, StoredAttachmentLike[]>;
 }
@@ -194,7 +197,7 @@ export async function runReport(
   const since = opts.since ?? (watermark ?? "2025-01-01");
   const year = parseInt(since.slice(0, 4), 10);
 
-  const mcAtt = firstAttachment(manifest, "production");
+  const mcAtt = firstAttachment(manifest, "production_mc");
   const ivyAtt = firstAttachment(manifest, "production_waste");
 
   if (!mcAtt && !ivyAtt) {

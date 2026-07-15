@@ -139,7 +139,10 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
       const r = await runProduction(
         { db, fetchToLocalPath, labeler, progress, noLabel: dryRun, runTs },
         runId,
-        slice(manifest, ["production", "production_waste"]),
+        // MC's slot is the canonical Mail-Clerk key "production_mc" (mailQueries + the
+        // app investigator's SOURCE_KEYS), NOT "production" — slicing the bare "production"
+        // dropped the downloaded MC workbook (2026-07-15 regression, run 134cd9bd).
+        slice(manifest, ["production_mc", "production_waste"]),
         params.since ? { since: params.since } : {},
       );
       return toReportResult({
