@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
-import { ProductionHoursTable } from "./production-hours-table";
+import { ProductionHoursChart } from "./production-hours-chart";
 import type {
   FlowPoint,
   PricePoint,
@@ -694,13 +694,13 @@ export function DigestCharts({
         {showPrice && <PriceChart price={price} />}
       </div>
       {/* Row 2 — Production by grade (left) paired with the Work & downtime
-          hours table (right). This pairing is INDEPENDENT of the price chart
-          above, so the two production panels always sit side-by-side on wide
-          screens and stack on mobile. The grade chart spans full width only
-          when there are no hours rows to pair with. */}
+          hours stacked bar chart (right). This pairing is INDEPENDENT of the
+          price chart above, so the two production panels always sit side-by-side
+          on wide screens and stack on mobile. The grade chart spans full width
+          only when there are no hours rows to pair with. */}
       <div className={cn("grid grid-cols-1 gap-3", showHours && "lg:grid-cols-2")}>
         <GradeChart grades={grades} />
-        {showHours && <ProductionHoursTable rows={productionHours} />}
+        {showHours && <ProductionHoursChart rows={productionHours} />}
       </div>
     </div>
   );

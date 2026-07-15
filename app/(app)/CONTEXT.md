@@ -70,7 +70,7 @@ values into views.
   stacked sub-rows** (`flex flex-col`): **Row 1** = Feed In vs Out + RC In price
   (`lg:grid-cols-2` only when price is shown, so a gated flow chart spans full
   width); **Row 2** = **Production by grade (left) paired with the
-  `ProductionHoursTable` (right)** in its OWN `lg:grid-cols-2` sub-row, so the two
+  `ProductionHoursChart` (right)** in its OWN `lg:grid-cols-2` sub-row, so the two
   production panels are ALWAYS side-by-side regardless of whether the price chart
   is present (grade spans full width only when `productionHours` is empty). Takes
   a new `productionHours` prop (passed from `page.tsx`).
@@ -89,9 +89,10 @@ values into views.
   gained an optional `legend` slot for the flow chart's custom band swatches.
   All colors are `var(--chart-1..5)` tokens (dark-mode safe). Glass tooltip via
   theme tokens.
-- `components/digest/production-hours-table.tsx` — **Server component**. Compact
-  Excel-Standard **Work & downtime hours** table from `data.productionHours`,
-  paired BESIDE the Production-by-grade chart (Row 2 of `DigestCharts`). Columns
+- `components/digest/production-hours-chart.tsx` — **Client component**. A stacked
+  bar chart (sibling of the grade chart) of **Work & downtime hours** from
+  `data.productionHours` — work hrs as the base bar, downtime stacked on top in a
+  contrasting amber cap — paired BESIDE the Production-by-grade chart (Row 2 of `DigestCharts`). Columns
   **Date · Work hrs · Downtime hrs**, one row per day over the last 14 days
   (`GRADE_DAYS` window, ascending → same day order as the grade chart), `text-xs`
   `font-mono` right-aligned numerics, capped `max-h-[220px] overflow-y-auto` with
@@ -247,7 +248,7 @@ values into views.
     stacking; `shift` = 'M'|'E'|'N'|undefined, segments multi-shift grades).
   - `productionHours[]` — `{ date, workHrs, downtimeHrs }` for the last 14 days
     (same `GRADE_DAYS` window as `grades`, ascending). SUMmed in SQL
-    (`view_digest_daily_hours`); feeds the `ProductionHoursTable` beside the grade
+    (`view_digest_daily_hours`); feeds the `ProductionHoursChart` beside the grade
     chart. Not price data.
   - `latestSync` — `{ date, insertCount, updateCount, deleteCount, byEmployee[] }`.
   - `activity[]` — `{ id, at, table, operation, note, employee, provenance, diff[] }`.
