@@ -109,28 +109,18 @@ export interface TruckTrip {
 
 // ---------- Open blocks band ----------
 
-/** One per-delivery row for an open block's compact ledger. RAW passthrough
- *  from the deliveries table (NO aggregation) — mirrors fetchBlockingDetail's
- *  lab_results extraction. `price` is null when prices are gated (Production)
- *  OR when the delivery has no cost on record. Ordered newest-first. */
-export interface OpenBlockDelivery {
-  date: string;          // deliveries.transaction_date (yyyy-MM-dd)
-  supplier: string;      // deliveries.supplier
-  mc: number | null;     // lab_results.mc
-  bdAstm: number | null; // lab_results.bd_astm
-  ash: number | null;    // lab_results.ash
-  price: number | null;  // deliveries.cost_basis — null when gated or no price
-}
-
 /** An OPEN block — one actively IN-USE (being fed/consumed) — with its running
  *  balance and weighted-avg lab stats. All aggregation comes from
  *  view_blocking_grid; this is a row-level passthrough. `phpKg` is null when
  *  prices are gated (Production role) — nulled server-side, never hidden only
  *  on the client. `totalInKg` is the total ever delivered to the block, so the
- *  UI can show "volume left" as balanceKg / totalInKg. */
+ *  UI can show "volume left" as balanceKg / totalInKg. `batchId` drives the
+ *  click-through: the band calls `fetchBlockDataForBatch(batchId)` and opens the
+ *  shared Blocking detail slide-over. */
 export interface OpenBlock {
   blockLoc: string;
   batchCode: string;
+  batchId: string;         // batches.id — opens the Blocking detail slide-over
   status: string;          // 'IN-USE'
   balanceKg: number;
   totalInKg: number;       // total RC-IN ever delivered to this block (bar denominator)
@@ -142,9 +132,6 @@ export interface OpenBlock {
   vm: number;
   fc: number;
   phpKg: number | null;    // null when prices are gated (Production role)
-  /** Per-delivery ledger rows for this block (newest first). RAW passthrough,
-   *  no aggregation. Empty when the block has no delivery rows. */
-  deliveries: OpenBlockDelivery[];
 }
 
 // ---------- FLECON bag inventory band ----------

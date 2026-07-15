@@ -1,9 +1,28 @@
-// No 'use client' — Server Component. Pure display, no interactivity (the
-// Batch sub-label is a native `title`, not a shadcn Tooltip), so this band
-// matches sync-summary.tsx / digest-footer-band.tsx rather than trucks-summary.
+"use client";
+
+// Client Component — the cards are interactive: clicking a block fetches a
+// batch-accurate BlockData (fetchBlockDataForBatch) and opens the ESTABLISHED
+// Blocking slide-over (BlockingDetailPanel). This mirrors the RC Movement
+// matrix's exact click→fetch→panel pattern. Cross-importing the Blocking
+// tenant code is fine — both this band and Blocking are charcoal-tenant code.
+import * as React from "react";
+import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
-import type { OpenBlock, OpenBlockDelivery } from "@/lib/digest/types";
+import type { OpenBlock } from "@/lib/digest/types";
+import { fetchBlockDataForBatch } from "@/app/(app)/inventory/blocking/actions";
+import type { BlockData } from "@/app/(app)/inventory/blocking/types";
+
+// Lazily load the slide-over so the (heavy) Blocking detail panel + its edit /
+// print dependencies stay out of the digest's initial bundle — the panel only
+// mounts once a user actually clicks a block.
+const BlockingDetailPanel = dynamic(
+  () =>
+    import("@/app/(app)/inventory/_shared/blocking-detail-panel").then(
+      (m) => m.BlockingDetailPanel,
+    ),
+  { ssr: false },
+);
 
 interface OpenBlocksProps {
   openBlocks: OpenBlock[];
@@ -46,20 +65,45 @@ function depletionFill(fraction: number): string {
  * left; status dot+label with the gated weighted ₱/kg stacked beneath it,
  * right-aligned) · the centerpiece "volume left" bar (big balance kg + %
  * remaining, a left-anchored fill grown on mount via transform: scaleX) · a
- * single condensed row of all 7 lab stats · a compact per-delivery ledger
- * (Date · Supplier · MC · BD ASTM · ASH · Price) — omitted when the block has
- * no delivery rows.
+ * single condensed row of all 7 lab stats.
  *
- * Price gating is INFERRED from the data: there is no canViewPrices flag on the
- * contract. When the Production role is gated, the backend nulls EVERY card's
- * phpKg, so an all-null set ⇒ gated ⇒ no ₱ element is rendered ANYWHERE. A
- * visible `0` means "no priced deliveries on record" and renders as "—"
- * (distinct from null = gated).
+ * Each card is a CLICKABLE control: activating it fetches a batch-accurate
+ * BlockData (fetchBlockDataForBatch) and opens the shared Blocking detail
+ * slide-over (BlockingDetailPanel) with the full balance / quality / delivery
+ * + usage history. Only one panel is open at a time.
+ *
+ * Price gating: the CARD ₱/kg is INFERRED from the data (no canViewPrices flag
+ * on the contract — when Production is gated the backend nulls EVERY card's
+ * phpKg, so an all-null set ⇒ no ₱ renders anywhere). The PANEL uses the
+ * canViewPrices flag returned by fetchBlockDataForBatch (the canonical server
+ * gate), independent of the card inference.
  *
  * Renders NOTHING when there are no open blocks (matches how other bands skip
  * empty content rather than show a hollow card).
  */
 export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
+  // The block whose slide-over is open (null = closed), plus the fetched
+  // batch-accurate summary + its price gate. One panel open at a time.
+  const [selected, setSelected] = React.useState<OpenBlock | null>(null);
+  const [panelBlockData, setPanelBlockData] = React.useState<BlockData | null>(
+    null,
+  );
+  const [panelCanViewPrices, setPanelCanViewPrices] = React.useState(false);
+
+  const handleSelect = React.useCallback((block: OpenBlock) => {
+    setSelected(block);
+    setPanelBlockData(null); // panel shows its loading state until this resolves
+    fetchBlockDataForBatch(block.batchId).then((result) => {
+      setPanelBlockData(result.blockData);
+      setPanelCanViewPrices(result.canViewPrices);
+    });
+  }, []);
+
+  const handleClose = React.useCallback(() => {
+    setSelected(null);
+    setPanelBlockData(null);
+  }, []);
+
   if (!openBlocks.length) return null;
 
   // All cards nulled ⇒ Production role ⇒ render no ₱ element anywhere.
@@ -76,8 +120,10 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
       </div>
 
       {/* Card grid — small (≤ a handful) group, so per-card stagger + hover-lift
-          are allowed here (not the 100+-instance table case). */}
-      <div className="stagger-fast grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          are allowed here (not the 100+-instance table case). Simplified cards
+          (no ledger) let 2 blocks sit comfortably in the half-width column;
+          they stack to 1-up only when the column gets narrow. */}
+      <div className="stagger-fast grid grid-cols-1 gap-3 sm:grid-cols-2">
         {openBlocks.map((b, i) => {
           // Volume-left fraction, guarded against divide-by-zero and clamped 0–1.
           const fraction =
@@ -86,11 +132,19 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
               : 0;
           const pct = fraction * 100;
           const pctLabel = Math.round(pct);
+          const isSelected = selected?.batchId === b.batchId;
 
           return (
-            <div
+            <button
+              type="button"
               key={`${b.blockLoc}-${b.batchCode}-${i}`}
-              className="hover-lift flex flex-col gap-3 rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70"
+              onClick={() => handleSelect(b)}
+              aria-label={`Open details for ${b.blockLoc} (${b.batchCode})`}
+              className={cn(
+                "hover-lift flex cursor-pointer flex-col gap-3 rounded-xl border bg-card/95 p-4 text-left backdrop-blur transition-colors duration-150 supports-backdrop-filter:bg-card/70",
+                "hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isSelected && "border-primary/60 ring-1 ring-primary/40",
+              )}
             >
               {/* Header: block_loc + batch (left); status dot + label with the
                   weighted ₱/kg stacked beneath it (right, right-aligned). */}
@@ -154,7 +208,7 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
                   </span>
                 </div>
                 <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                  {/* Static final width via inline style (server-rendered);
+                  {/* Static final width via inline style (client-rendered);
                       origin-left overrides animate-status-grow's right-center
                       origin so the fill grows from the LEFT on mount. Only the
                       compositor-friendly transform/opacity animate — never width. */}
@@ -182,17 +236,24 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
                 <LabStat label="VM" value={fmt2(b.vm)} />
                 <LabStat label="FC" value={fmt2(b.fc)} />
               </div>
-
-              {/* Per-delivery ledger — compact mini-table, newest first (backend
-                  order preserved). Read defensively; omit entirely when empty. */}
-              <DeliveryLedger
-                rows={b.deliveries ?? []}
-                showPrice={showPrice}
-              />
-            </div>
+            </button>
           );
         })}
       </div>
+
+      {/* Shared Blocking slide-over — reused, NOT rebuilt. blockData is the
+          batch-accurate summary from fetchBlockDataForBatch; canViewPrices is
+          the server gate it returns. onNavigateToBatch is OMITTED — the panel's
+          internal fallback handles "Edit All" navigation. Mounts only once a
+          block is selected (lazy). */}
+      {selected && (
+        <BlockingDetailPanel
+          locKey={selected.blockLoc}
+          blockData={panelBlockData}
+          canViewPrices={panelCanViewPrices}
+          onClose={handleClose}
+        />
+      )}
     </div>
   );
 }
@@ -205,100 +266,6 @@ function LabStat({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       <span className="font-mono text-xs tabular-nums">{value}</span>
-    </div>
-  );
-}
-
-/** A single ledger numeric cell: right-aligned mono, "—" (muted) when null. */
-function LedgerNum({ value, dp }: { value: number | null; dp: 2 | 3 }) {
-  return (
-    <td className="px-1 py-0.5 text-right font-mono tabular-nums">
-      {value === null ? (
-        <span className="text-muted-foreground">—</span>
-      ) : dp === 3 ? (
-        fmt3(value)
-      ) : (
-        fmt2(value)
-      )}
-    </td>
-  );
-}
-
-/**
- * Compact per-delivery ledger for one open block — a real table (Excel Standard
- * density: text-[10px] body, tight px-1 py-0.5, mono right-aligned numerics).
- * Columns: Date · Supplier · MC · BD ASTM · ASH · Price. The Price column
- * (header + cells) is present ONLY when `showPrice`; a per-row null/0 price ⇒
- * "—". Rows arrive newest-first from the backend — NOT re-sorted here. Renders
- * nothing when there are no rows (never a hollow table shell). Not animated —
- * table rows are exempt from the motion system.
- */
-function DeliveryLedger({
-  rows,
-  showPrice,
-}: {
-  rows: OpenBlockDelivery[];
-  showPrice: boolean;
-}) {
-  if (rows.length === 0) return null;
-
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        Deliveries
-      </span>
-      <table className="w-full table-fixed border-collapse">
-        <thead>
-          <tr className="text-[9px] uppercase tracking-wide text-muted-foreground">
-            <th className="w-[44px] px-1 py-0.5 text-left font-medium">Date</th>
-            <th className="px-1 py-0.5 text-left font-medium">Supplier</th>
-            <th className="w-[52px] px-1 py-0.5 text-right font-mono font-medium tabular-nums">
-              MC
-            </th>
-            <th className="w-[56px] px-1 py-0.5 text-right font-mono font-medium tabular-nums">
-              BD ASTM
-            </th>
-            <th className="w-[52px] px-1 py-0.5 text-right font-mono font-medium tabular-nums">
-              ASH
-            </th>
-            {showPrice && (
-              <th className="w-[64px] px-1 py-0.5 text-right font-mono font-medium tabular-nums">
-                Price
-              </th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((d, i) => (
-            <tr key={`${d.date}-${d.supplier}-${i}`} className="text-[10px]">
-              <td className="px-1 py-0.5 text-left font-mono tabular-nums">
-                {d.date.slice(5)}
-              </td>
-              <td
-                className="max-w-[120px] truncate px-1 py-0.5 text-left"
-                title={d.supplier}
-              >
-                {d.supplier}
-              </td>
-              <LedgerNum value={d.mc} dp={2} />
-              <LedgerNum value={d.bdAstm} dp={3} />
-              <LedgerNum value={d.ash} dp={2} />
-              {showPrice && (
-                <td className="px-1 py-0.5 text-right font-mono tabular-nums">
-                  {d.price === null || d.price === 0 ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground">₱</span>
-                      {fmtPhpNumber(d.price)}
-                    </>
-                  )}
-                </td>
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }

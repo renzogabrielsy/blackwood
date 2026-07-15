@@ -122,12 +122,24 @@ values into views.
   **Renders `null` when no truck moved that day** (skips the band, matching how
   other bands avoid hollow cards). Rendered between the charts and the sync band
   in `page.tsx`. Source: `data.trucks` (see Data below).
-- `components/digest/open-blocks.tsx` — **Server component** (no interactivity;
-  Batch sub-label uses a native `title` tooltip, not shadcn Tooltip). A COMPACT
-  at-a-glance **card grid** — one card per currently **IN-USE** block
-  (`status = 'IN-USE'`), `block_loc` ascending — chosen because only a few blocks
-  are ever in-use, so cards read better than a dense table. Responsive grid
-  `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`. Each card, top→bottom:
+- `components/digest/open-blocks.tsx` — **Client component** (`'use client'` —
+  the cards are interactive; Batch sub-label uses a native `title` tooltip, not
+  shadcn Tooltip). A COMPACT at-a-glance **card grid** — one card per currently
+  **IN-USE** block (`status = 'IN-USE'`), `block_loc` ascending — chosen because
+  only a few blocks are ever in-use, so cards read better than a dense table.
+  Responsive grid `grid-cols-1 sm:grid-cols-2` (2-up, tuned to sit cleanly in the
+  half-width snapshot column beside `SchedulePreview`; stacks 1-up when narrow).
+  **Each card is a clickable `<button>` control** (keyboard-accessible, focus
+  ring, hover border): activating it calls `fetchBlockDataForBatch(batchId)`
+  (`@/app/(app)/inventory/blocking/actions`) and opens the ESTABLISHED Blocking
+  slide-over **`BlockingDetailPanel`** (`_shared/blocking-detail-panel`, lazy via
+  `next/dynamic` `ssr:false`) with the full balance / quality / delivery + usage
+  history — the exact click→fetch→panel pattern the RC Movement matrix uses. One
+  panel open at a time (`selected` state; `onClose` clears it); the panel's
+  loading state shows until the fetch resolves; `onNavigateToBatch` is OMITTED
+  (the panel's internal fallback owns "Edit All"). The former **embedded
+  per-block deliveries ledger was REMOVED** (it crammed the half-width column) —
+  that detail now lives entirely in the slide-over. Each card, top→bottom:
   **(1) header** — prominent `blockLoc` (`font-mono text-lg`) over a muted,
   truncated `batchCode` sub-label (`title={batchCode}`), with a status dot+label
   top-right (IN-USE `bg-primary` / else `bg-muted-foreground/40`);
@@ -222,10 +234,12 @@ values into views.
     `ttl_km` is a GENERATED column (= end_km − start_km); `> 0` ⇒ "had a trip".
     Keyed on the SAME `operationalDate` as the KPIs (fetched after it resolves,
     same pattern as the `rcInSub` follow-up query). Empty array ⇒ band hidden.
-  - `openBlocks[]` — `{ blockLoc, batchCode, status, balanceKg, totalInKg, mc, ash,
-    bdAstm, bdJis, grit, vm, fc, phpKg }`. Currently **IN-USE** blocks, `block_loc`
-    ascending. `totalInKg` (total RC-IN ever delivered to the block) is the
-    "volume left" bar denominator (`balanceKg / totalInKg`).
+  - `openBlocks[]` — `{ blockLoc, batchCode, batchId, status, balanceKg, totalInKg,
+    mc, ash, bdAstm, bdJis, grit, vm, fc, phpKg }`. Currently **IN-USE** blocks,
+    `block_loc` ascending. `totalInKg` (total RC-IN ever delivered to the block) is
+    the "volume left" bar denominator (`balanceKg / totalInKg`). `batchId` drives
+    the card click-through — the band passes it to `fetchBlockDataForBatch()` to
+    open the shared Blocking slide-over.
     Queried from `view_blocking_grid` (all aggregation is the view's job — light
     passthrough only): `.eq('status', 'IN-USE').order('block_loc', asc)`.
     The `.eq()` filter is load-bearing — the view ALSO returns
@@ -235,6 +249,9 @@ values into views.
     `canViewPrices()`** (`lib/auth.ts`): nulled SERVER-SIDE for the Production role
     before the payload leaves; a visible-but-`0` value means "no priced deliveries"
     (distinct from `null` = gated).
+    **The former dependent per-block deliveries follow-up query was REMOVED** (the
+    embedded ledger is gone — that detail now lives in the slide-over), dropping
+    one `deliveries` fetch per digest render.
   - `fleconBags[]` — `{ bagTypeId, code, label, sortOrder, opening, totalIn,
     totalOut, balance, lastMovementDate }`. One entry per bag type,
     `sort_order` ascending. Row-level passthrough from `view_flecon_bag_balance`

@@ -32,7 +32,6 @@ import type {
   DigestMeta,
   TruckTrip,
   OpenBlock,
-  OpenBlockDelivery,
   FleconBagBalance,
   PlantStatus,
   WeekDayPlan,
@@ -120,13 +119,6 @@ interface BlockingGridRow {
   avg_grit: number | string | null;
   avg_vm: number | string | null;
   avg_fc: number | string | null;
-}
-interface OpenBlockDeliveryRow {
-  batch_code: string;
-  transaction_date: string;
-  supplier: string;
-  cost_basis: number | string | null;
-  lab_results: Record<string, number> | null;
 }
 interface FleconBagBalanceRow {
   bag_type_id: string | null;
@@ -460,44 +452,10 @@ export async function getDigestData(): Promise<DigestData> {
   // no-price (Production) user never receives ₱ data in the payload.
   const blockingRows = (blockingRes.data as BlockingGridRow[] | null) ?? [];
 
-  // Per-delivery ledger rows for the open blocks — a DEPENDENT follow-up
-  // query (needs the batch_codes resolved in the Promise.all above), run
-  // sequentially like `trucks` / `rcInSub`. ONE query for ALL open blocks
-  // via .in(batch_code, …) — never one-per-block. RAW passthrough of the
-  // deliveries table, mirroring fetchBlockingDetail's lab_results extraction
-  // (NO aggregation). Ordered transaction_date DESC so grouping stays
-  // newest-first. ₱ (cost_basis) is nulled SERVER-SIDE when gated.
-  const byBatch = new Map<string, OpenBlockDelivery[]>();
-  const openBlockCodes = Array.from(new Set(blockingRows.map((r) => r.batch_code)));
-  if (openBlockCodes.length > 0) {
-    const deliveriesRes = await supabase
-      .from("deliveries")
-      .select("batch_code, transaction_date, supplier, cost_basis, lab_results")
-      .in("batch_code", openBlockCodes)
-      .order("transaction_date", { ascending: false });
-    const deliveryRows = (deliveriesRes.data as OpenBlockDeliveryRow[] | null) ?? [];
-    for (const d of deliveryRows) {
-      const lab = (d.lab_results as Record<string, number> | null) ?? {};
-      const row: OpenBlockDelivery = {
-        date: d.transaction_date,
-        supplier: d.supplier,
-        mc: lab.mc !== undefined ? Number(lab.mc) : null,
-        bdAstm: lab.bd_astm !== undefined ? Number(lab.bd_astm) : null,
-        ash: lab.ash !== undefined ? Number(lab.ash) : null,
-        price:
-          showPrices && d.cost_basis !== null && d.cost_basis !== undefined
-            ? round(Number(d.cost_basis), 2)
-            : null,
-      };
-      const list = byBatch.get(d.batch_code);
-      if (list) list.push(row);
-      else byBatch.set(d.batch_code, [row]);
-    }
-  }
-
   const openBlocks: OpenBlock[] = blockingRows.map((r) => ({
     blockLoc: r.block_loc,
     batchCode: r.batch_code,
+    batchId: r.batch_id,
     status: r.status,
     balanceKg: round(n(r.balance)),
     totalInKg: round(n(r.total_in)),
@@ -509,7 +467,6 @@ export async function getDigestData(): Promise<DigestData> {
     vm: round(n(r.avg_vm)),
     fc: round(n(r.avg_fc)),
     phpKg: showPrices ? round(n(r.avg_php_kg)) : null,
-    deliveries: byBatch.get(r.batch_code) ?? [],
   }));
 
   // FLECON bag balances — row-level passthrough (n() COALESCEs null → 0; the
