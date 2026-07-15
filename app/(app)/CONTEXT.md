@@ -24,7 +24,9 @@ values into views.
   **PlantStatusHeader** (operational-date running/rest status bar) →
   **WeekStrip** (this week · plan vs actual — surfaced near the TOP, right under
   the plant-status band; its heading carries a "View full schedule →" link to
-  `/production/schedule`) → **OpenBlocks** → KpiHero (state-aware) →
+  `/production/schedule`) → **SchedulePreview** (compact rolling ~2-week schedule
+  TABLE, grouped with the schedule content right under WeekStrip; skipped when
+  `schedulePreview` is empty) → **OpenBlocks** → KpiHero (state-aware) →
   DigestCharts (rest-day-aware flow) → TrucksSummary → **BagInventory** →
   (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
   presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
@@ -86,6 +88,15 @@ values into views.
   band, above OpenBlocks; skipped when `weekPlan` is empty); its section heading
   carries a "View full schedule →" link to the `/production/schedule` month
   table. Presentation-only — states + tons come pre-resolved from the adapter.
+- `components/digest/schedule-preview.tsx` — **Server component**. Dense
+  Excel-Standard **Production Schedule table** from `data.schedulePreview` (14
+  rows: operational date → +13 days). Columns: Date · Day · Setup · Shifts ·
+  Proj t · Act t · Status · Source. Today's row is accent-tinted, rest days
+  dashed/muted; Status chip reuses `STATE_CHIP`/`STATE_LABEL`, Source chip is
+  violet **Joseph** when `source` starts with `joseph:` else muted **Sheet**
+  (same visual as the schedule page). Card header "Production schedule · next 2
+  weeks" + right-aligned "View full schedule →" link. Rendered right under
+  WeekStrip; skipped when `schedulePreview` is empty. No ₱ → no gating.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
   from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
   series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
@@ -182,7 +193,7 @@ values into views.
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
   price, grades, latestSync, activity, flags, monthToDate, trucks, openBlocks,
-  fleconBags, plantStatus, dayStatus, weekPlan }`.
+  fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -238,6 +249,11 @@ values into views.
     — SUM in SQL, never a TS reduction); `state` is a `ScheduleRowState`
     (`reported`/`awaiting`/`rest`/`planned`/`today`). Feeds `WeekStrip` and the
     flow chart's rest/awaiting band markers. Empty when there is no op date.
+  - `schedulePreview[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
+    state, source }` for the rolling 14-day window (operational date → +13 days).
+    Same plan-vs-actual join + resolved `ScheduleRowState` as `weekPlan`, PLUS the
+    raw DB `source` tag (`joseph:…` = authoritative, else the sheet). Feeds the
+    `SchedulePreview` table band. Empty when there is no op date.
 
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,

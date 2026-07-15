@@ -7,6 +7,7 @@ import { PlantStatusHeader } from "@/components/digest/plant-status-header";
 import { KpiHero } from "@/components/digest/kpi-hero";
 import { DigestCharts } from "@/components/digest/digest-charts";
 import { WeekStrip } from "@/components/digest/week-strip";
+import { SchedulePreview } from "@/components/digest/schedule-preview";
 import { SyncSummary } from "@/components/digest/sync-summary";
 import { ActivityFeed } from "@/components/digest/activity-feed";
 import { DigestFooterBand } from "@/components/digest/digest-footer-band";
@@ -75,6 +76,15 @@ export default async function DigestPage() {
             </div>
           </div>
           <WeekStrip week={data.weekPlan} />
+        </section>
+      )}
+
+      {/* A4. Production schedule table — a dense rolling ~2-week window, grouped
+          with the schedule content at the top of the digest (complements the
+          WeekStrip cards + the full page at /production/schedule). */}
+      {data.schedulePreview.length > 0 && (
+        <section>
+          <SchedulePreview rows={data.schedulePreview} />
         </section>
       )}
 

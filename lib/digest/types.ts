@@ -261,6 +261,31 @@ export interface WeekDayPlan {
   state: ScheduleRowState;
 }
 
+/** One row of the rolling schedule-preview table on the Home Digest: the
+ *  operational date through the next 13 days (14 rows), plan (from
+ *  `production_schedule`) joined with ACTUAL production tons. Distinct from
+ *  `WeekDayPlan` (used by the week-strip cards) — this feeds a dense Excel-
+ *  Standard table complementing the full page at `/production/schedule`.
+ *  Not price data → never gated. */
+export interface SchedulePreviewRow {
+  /** yyyy-MM-dd */
+  date: string;
+  /** weekday name, e.g. "Tuesday" */
+  dow: string;
+  shifts: number;
+  setup: string | null;
+  projectedTons: number | null;
+  /** actual output in TONS for the day (SUM(production_runs.ttl_kg)/1000), or
+   *  null when no production run is on record. Aggregated in SQL
+   *  (view_digest_prod_actual_tons), never summed in TypeScript. */
+  actualTons: number | null;
+  /** reported | awaiting | rest | planned | today (see ./day-status) */
+  state: ScheduleRowState;
+  /** raw DB `source` string, e.g. "joseph:REV2" | "gsheet:PROD SCHED". A
+   *  `joseph:`-prefixed source is the authoritative plan. Null when absent. */
+  source: string | null;
+}
+
 // ---------- Top-level payload ----------
 
 export interface DigestData {
@@ -296,4 +321,9 @@ export interface DigestData {
    *  view_digest_prod_actual_tons) + a resolved per-day state. Empty when there
    *  is no operational date. */
   weekPlan: WeekDayPlan[];
+  /** Rolling ~2-week schedule preview: the operational date through the next 13
+   *  days (14 rows). Plan (from `production_schedule`) joined with actual tons
+   *  (view_digest_prod_actual_tons) + a resolved per-row state. Feeds the dense
+   *  schedule-preview table band. Empty when there is no operational date. */
+  schedulePreview: SchedulePreviewRow[];
 }

@@ -36,6 +36,7 @@ import type {
   FleconBagBalance,
   PlantStatus,
   WeekDayPlan,
+  SchedulePreviewRow,
 } from "./types";
 import {
   resolveKpiDayStatus,
@@ -163,6 +164,9 @@ interface ProdSchedRow {
   shifts: number | string | null;
   setup: string | null;
   projected_tons: number | string | null;
+  /** raw DB source string, e.g. "joseph:REV2" | "gsheet:PROD SCHED".
+   *  Only selected for the schedule-preview fetch; undefined elsewhere. */
+  source?: string | null;
 }
 interface ProdActualTonsRow {
   date: string;
@@ -722,6 +726,7 @@ export async function getDigestData(): Promise<DigestData> {
   let plantStatus: PlantStatus | null = null;
   const dayStatus: Record<string, KpiDayStatus> = {};
   let weekPlan: WeekDayPlan[] = [];
+  let schedulePreview: SchedulePreviewRow[] = [];
   if (operationalDate) {
     // The operational date's week = 7 consecutive days STARTING at the
     // operational date (today is the first, isToday). This matches the draft's
@@ -732,7 +737,14 @@ export async function getDigestData(): Promise<DigestData> {
     const weekDates = Array.from({ length: 7 }, (_, i) => addDaysUtc(weekStart, i));
     const weekEnd = weekDates[6];
 
-    const [schedRes, actualRes] = await Promise.all([
+    // Schedule-preview window: 14 days STARTING at the operational date (today
+    // first). A SUPERSET of the week window above, but fetched separately so it
+    // can also pull `source` (the plan-authority tag). Same two sources as
+    // weekPlan / the /production/schedule page.
+    const previewDates = Array.from({ length: 14 }, (_, i) => addDaysUtc(weekStart, i));
+    const previewEnd = previewDates[13];
+
+    const [schedRes, actualRes, previewSchedRes, previewActualRes] = await Promise.all([
       supabase
         .from("production_schedule")
         .select("plan_date, dow, shifts, setup, projected_tons")
@@ -743,6 +755,16 @@ export async function getDigestData(): Promise<DigestData> {
         .select("date, actual_tons")
         .gte("date", weekStart)
         .lte("date", weekEnd),
+      supabase
+        .from("production_schedule")
+        .select("plan_date, dow, shifts, setup, projected_tons, source")
+        .gte("plan_date", weekStart)
+        .lte("plan_date", previewEnd),
+      supabase
+        .from("view_digest_prod_actual_tons")
+        .select("date, actual_tons")
+        .gte("date", weekStart)
+        .lte("date", previewEnd),
     ]);
 
     const planRows = (schedRes.data as ProdSchedRow[] | null) ?? [];
@@ -794,6 +816,37 @@ export async function getDigestData(): Promise<DigestData> {
         state: resolveScheduleRowState(plan, actualTons, operationalDate),
       };
     });
+
+    // Rolling ~2-week schedule preview (op date → +13 days = 14 rows). Same
+    // plan-vs-actual join + resolved state as weekPlan, plus the `source` tag.
+    const previewPlanByDate = new Map(
+      ((previewSchedRes.data as ProdSchedRow[] | null) ?? []).map((p) => [p.plan_date, p])
+    );
+    const previewActualByDate = new Map(
+      ((previewActualRes.data as ProdActualTonsRow[] | null) ?? []).map((a) => [
+        a.date,
+        n(a.actual_tons),
+      ])
+    );
+    schedulePreview = previewDates.map((date) => {
+      const row = previewPlanByDate.get(date);
+      const plan: ProdSchedDay = row
+        ? toProdSchedDay(row)
+        : { date, dow: dowNameFor(date), shifts: 0, setup: null, projectedTons: 0 };
+      const actualTons = previewActualByDate.has(date)
+        ? round(previewActualByDate.get(date)!, 2)
+        : null;
+      return {
+        date,
+        dow: plan.dow,
+        shifts: plan.shifts,
+        setup: plan.setup,
+        projectedTons: row ? (row.projected_tons == null ? null : n(row.projected_tons)) : null,
+        actualTons,
+        state: resolveScheduleRowState(plan, actualTons, operationalDate),
+        source: row?.source ?? null,
+      };
+    });
   }
 
   const lastSyncAt = latestSyncRow ? auditRows[0]?.performed_at ?? null : null;
@@ -821,6 +874,7 @@ export async function getDigestData(): Promise<DigestData> {
     plantStatus,
     dayStatus,
     weekPlan,
+    schedulePreview,
   };
 }
 
