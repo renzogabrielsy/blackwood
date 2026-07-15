@@ -262,7 +262,7 @@ export interface WeekDayPlan {
 }
 
 /** One row of the rolling schedule-preview table on the Home Digest: the
- *  operational date through the next 13 days (14 rows), plan (from
+ *  operational date through the next 9 days (10 rows), plan (from
  *  `production_schedule`) joined with ACTUAL production tons. Distinct from
  *  `WeekDayPlan` (used by the week-strip cards) — this feeds a dense Excel-
  *  Standard table complementing the full page at `/production/schedule`.
@@ -284,6 +284,10 @@ export interface SchedulePreviewRow {
   /** raw DB `source` string, e.g. "joseph:REV2" | "gsheet:PROD SCHED". A
    *  `joseph:`-prefixed source is the authoritative plan. Null when absent. */
   source: string | null;
+  /** per-grade projected tonnage for the day, straight from the
+   *  production_schedule `grades` JSONB ({ "3X50": 21, "4X8": 5 }). null/empty
+   *  on a rest day. `projectedTons` remains the day TOTAL. */
+  grades: Record<string, number> | null;
 }
 
 // ---------- Top-level payload ----------
@@ -321,9 +325,10 @@ export interface DigestData {
    *  view_digest_prod_actual_tons) + a resolved per-day state. Empty when there
    *  is no operational date. */
   weekPlan: WeekDayPlan[];
-  /** Rolling ~2-week schedule preview: the operational date through the next 13
-   *  days (14 rows). Plan (from `production_schedule`) joined with actual tons
-   *  (view_digest_prod_actual_tons) + a resolved per-row state. Feeds the dense
-   *  schedule-preview table band. Empty when there is no operational date. */
+  /** Rolling schedule preview: the operational date through the next 9 days
+   *  (10 rows). Plan (from `production_schedule`, incl. per-grade tonnage) joined
+   *  with actual tons (view_digest_prod_actual_tons) + a resolved per-row state.
+   *  Feeds the compact schedule-preview table band. Empty when there is no
+   *  operational date. */
   schedulePreview: SchedulePreviewRow[];
 }

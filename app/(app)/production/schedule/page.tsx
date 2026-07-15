@@ -11,6 +11,12 @@ import {
   type ScheduleRowState,
 } from "@/lib/digest/day-status";
 import { STATE_CHIP, STATE_LABEL } from "@/components/digest/status-tokens";
+import {
+  parseGradeTons,
+  fmtGradeTons,
+  gradeTonsTitle,
+  type GradeTon,
+} from "@/components/digest/format";
 
 // ---------------------------------------------------------------------
 // Month helpers (pure yyyy-MM string math — no aggregation)
@@ -78,7 +84,9 @@ interface ScheduleRow {
   dow: string;
   shifts: number;
   setup: string | null;
-  grades: string | null;
+  /** per-grade projected tonnage (from the `grades` JSONB), heaviest first;
+   *  empty on a rest day. The day TOTAL stays in `projectedTons`. */
+  gradeTons: GradeTon[];
   projectedTons: number | null;
   actualTons: number | null;
   variance: number | null; // actual − projected (only when actual present)
@@ -87,23 +95,6 @@ interface ScheduleRow {
   state: ScheduleRowState;
   isToday: boolean;
   isRest: boolean;
-}
-
-/** Render the `grades` JSONB ({ "3X50": 25, … }) into a compact label. */
-function gradesToText(grades: unknown): string | null {
-  if (grades == null) return null;
-  if (typeof grades === "string") return grades || null;
-  if (Array.isArray(grades)) {
-    const parts = grades.map((g) => String(g)).filter(Boolean);
-    return parts.length ? parts.join(", ") : null;
-  }
-  if (typeof grades === "object") {
-    const parts = Object.entries(grades as Record<string, unknown>).map(
-      ([k, v]) => (v == null || v === "" ? k : `${k}: ${v}`)
-    );
-    return parts.length ? parts.join(", ") : null;
-  }
-  return null;
 }
 
 /** Compact tons — whole numbers bare, else one decimal. */
@@ -125,7 +116,7 @@ const COL = {
   date: "w-[104px]",
   day: "w-[92px]",
   setup: "w-[132px]",
-  grades: "w-[120px]",
+  grades: "w-[188px]",
   shifts: "w-[62px]",
   projected: "w-[92px]",
   actual: "w-[86px]",
@@ -205,7 +196,7 @@ export default async function ProductionSchedulePage({
       dow: r.dow ?? dowNameFor(r.plan_date),
       shifts,
       setup: r.setup,
-      grades: gradesToText(r.grades),
+      gradeTons: parseGradeTons(r.grades),
       projectedTons,
       actualTons,
       variance,
@@ -274,7 +265,9 @@ export default async function ProductionSchedulePage({
                 <th className={cn(headCls, COL.date, "text-left")}>Date</th>
                 <th className={cn(headCls, COL.day, "text-left")}>Day</th>
                 <th className={cn(headCls, COL.setup, "text-left")}>Setup</th>
-                <th className={cn(headCls, COL.grades, "text-left")}>Grades</th>
+                <th className={cn(headCls, COL.grades, "text-left")}>
+                  Grades (t)
+                </th>
                 <th className={cn(headCls, COL.shifts, "text-right")}>Shifts</th>
                 <th className={cn(headCls, COL.projected, "text-right")}>
                   Proj t
@@ -318,11 +311,29 @@ export default async function ProductionSchedulePage({
                     >
                       {r.setup ?? "— off —"}
                     </td>
-                    <td
-                      className="max-w-[120px] truncate px-2 py-1 text-muted-foreground"
-                      title={r.grades ?? undefined}
-                    >
-                      {r.grades ?? "—"}
+                    <td className="px-2 py-1">
+                      {r.gradeTons.length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div
+                          className="flex items-center gap-1 overflow-hidden"
+                          title={gradeTonsTitle(r.gradeTons)}
+                        >
+                          {r.gradeTons.map((g) => (
+                            <span
+                              key={g.grade}
+                              className="inline-flex shrink-0 items-baseline gap-0.5 rounded bg-muted px-1 py-0.5 text-[10px] font-medium leading-none"
+                            >
+                              <span className="uppercase tracking-tight">
+                                {g.grade}
+                              </span>
+                              <span className="font-mono tabular-nums text-muted-foreground">
+                                {fmtGradeTons(g.tons)}t
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-2 py-1 text-right font-mono tabular-nums">
                       {r.shifts}

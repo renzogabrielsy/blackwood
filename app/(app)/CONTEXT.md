@@ -24,9 +24,12 @@ values into views.
   **PlantStatusHeader** (operational-date running/rest status bar) →
   **WeekStrip** (this week · plan vs actual — surfaced near the TOP, right under
   the plant-status band; its heading carries a "View full schedule →" link to
-  `/production/schedule`) → **SchedulePreview** (compact rolling ~2-week schedule
-  TABLE, grouped with the schedule content right under WeekStrip; skipped when
-  `schedulePreview` is empty) → **OpenBlocks** → KpiHero (state-aware) →
+  `/production/schedule`) → **Snapshot row** (a `lg:grid-cols-2` grid pairing the
+  compact rolling **10-day SchedulePreview TABLE** BESIDE **OpenBlocks** so two
+  dense "current snapshot" bands share one row instead of stacking full-width;
+  each cell renders only when it has content and a lone survivor spans full
+  width — no `lg:grid-cols-2`; both stack single-column on mobile) → KpiHero
+  (state-aware) →
   DigestCharts (rest-day-aware flow) → TrucksSummary → **BagInventory** →
   (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
   presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
@@ -88,15 +91,19 @@ values into views.
   band, above OpenBlocks; skipped when `weekPlan` is empty); its section heading
   carries a "View full schedule →" link to the `/production/schedule` month
   table. Presentation-only — states + tons come pre-resolved from the adapter.
-- `components/digest/schedule-preview.tsx` — **Server component**. Dense
-  Excel-Standard **Production Schedule table** from `data.schedulePreview` (14
-  rows: operational date → +13 days). Columns: Date · Day · Setup · Shifts ·
-  Proj t · Act t · Status · Source. Today's row is accent-tinted, rest days
-  dashed/muted; Status chip reuses `STATE_CHIP`/`STATE_LABEL`, Source chip is
-  violet **Joseph** when `source` starts with `joseph:` else muted **Sheet**
-  (same visual as the schedule page). Card header "Production schedule · next 2
-  weeks" + right-aligned "View full schedule →" link. Rendered right under
-  WeekStrip; skipped when `schedulePreview` is empty. No ₱ → no gating.
+- `components/digest/schedule-preview.tsx` — **Server component**. Compact
+  Excel-Standard **Production Schedule table** from `data.schedulePreview` (**10
+  rows**: operational date → +9 days), sized as a **half-width scroll card**
+  (`max-h-[340px] overflow-auto` + sticky header) that pairs beside `OpenBlocks`
+  in the snapshot row. Columns: Date · Day · **Setup / grades** · Sh · **Total t**
+  · Act t · Status · Src. The Setup cell stacks a muted **per-grade tonnage**
+  breakdown (`3X50 21t · 4X8 5t`, heaviest first, single-line + `title`) under
+  the setup name; **Total t** is the day total (`projectedTons`). Rest days show a
+  clean dash. Today's row accent-tinted; Status chip reuses
+  `STATE_CHIP`/`STATE_LABEL`, Src chip is violet **Joseph** when `source` starts
+  with `joseph:` else muted **Sheet**. Card header "Production schedule · next 10
+  days" + right-aligned "View full schedule →" link. Skipped when
+  `schedulePreview` is empty. No ₱ → no gating.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
   from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
   series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
@@ -250,9 +257,11 @@ values into views.
     (`reported`/`awaiting`/`rest`/`planned`/`today`). Feeds `WeekStrip` and the
     flow chart's rest/awaiting band markers. Empty when there is no op date.
   - `schedulePreview[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
-    state, source }` for the rolling 14-day window (operational date → +13 days).
-    Same plan-vs-actual join + resolved `ScheduleRowState` as `weekPlan`, PLUS the
-    raw DB `source` tag (`joseph:…` = authoritative, else the sheet). Feeds the
+    state, source, grades }` for the rolling **10-day** window (operational date →
+    +9 days). Same plan-vs-actual join + resolved `ScheduleRowState` as `weekPlan`,
+    PLUS the raw DB `source` tag (`joseph:…` = authoritative, else the sheet) and
+    `grades` (the `production_schedule.grades` JSONB — `Record<string, number> |
+    null`, grade → projected tons; `projectedTons` stays the day TOTAL). Feeds the
     `SchedulePreview` table band. Empty when there is no op date.
 
 ## Key Behaviors

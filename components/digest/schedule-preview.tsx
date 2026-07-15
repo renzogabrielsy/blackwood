@@ -6,10 +6,11 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { STATE_CHIP, STATE_LABEL } from "./status-tokens";
+import { parseGradeTons, fmtGradeTons, gradeTonsTitle } from "./format";
 import type { SchedulePreviewRow } from "@/lib/digest/types";
 
 interface SchedulePreviewProps {
-  /** the operational date through the next 13 days (14 rows), plan + actual */
+  /** the operational date through the next 9 days (10 rows), plan + actual */
   rows: SchedulePreviewRow[];
 }
 
@@ -32,12 +33,15 @@ function fmtTons(v: number | null): string {
 }
 
 /**
- * Compact production-schedule table for the Home Digest — a rolling 14-day
- * window (today first). Dense, Excel-Standard: today's row is accent-tinted,
- * rest days render dashed/muted, each working row carries a Status chip
- * (STATE_CHIP/STATE_LABEL) and a Source chip (violet Joseph when the DB source
- * starts with `joseph:`, else muted Sheet — matching /production/schedule).
- * Renders `null` when there is nothing to show (no operational date).
+ * Compact production-schedule table for the Home Digest — a rolling 10-day
+ * window (today first), sized as a HALF-WIDTH scroll card (capped height +
+ * sticky header) rather than a tall full-width slab. Dense, Excel-Standard:
+ * today's row is accent-tinted, rest days render dashed/muted, each working row
+ * carries a Status chip (STATE_CHIP/STATE_LABEL) and a Source chip (violet
+ * Joseph when the DB source starts with `joseph:`, else muted Sheet — matching
+ * /production/schedule). The Setup cell stacks a muted per-grade tonnage
+ * breakdown (`3X50 21t · 4X8 5t`) beneath the setup name; the Proj t column is
+ * the day TOTAL. Renders `null` when there is nothing to show.
  */
 export function SchedulePreview({ rows }: SchedulePreviewProps) {
   if (!rows.length) return null;
@@ -52,7 +56,7 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
           <h3 className="text-sm font-semibold tracking-tight">
             Production schedule
           </h3>
-          <span className="text-[11px] text-muted-foreground">next 2 weeks</span>
+          <span className="text-[11px] text-muted-foreground">next 10 days</span>
         </div>
         <Link
           href="/production/schedule"
@@ -62,18 +66,20 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
         </Link>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="max-h-[340px] overflow-auto rounded-lg border">
         <table className="w-full table-fixed border-collapse text-xs">
           <thead>
             <tr>
               <th className={cn(headCls, COL.date, "text-left")}>Date</th>
               <th className={cn(headCls, COL.day, "text-left")}>Day</th>
-              <th className={cn(headCls, COL.setup, "text-left")}>Setup</th>
-              <th className={cn(headCls, COL.shifts, "text-right")}>Shifts</th>
-              <th className={cn(headCls, COL.projected, "text-right")}>Proj t</th>
+              <th className={cn(headCls, COL.setup, "text-left")}>
+                Setup / grades
+              </th>
+              <th className={cn(headCls, COL.shifts, "text-right")}>Sh</th>
+              <th className={cn(headCls, COL.projected, "text-right")}>Total t</th>
               <th className={cn(headCls, COL.actual, "text-right")}>Act t</th>
               <th className={cn(headCls, COL.status, "text-left")}>Status</th>
-              <th className={cn(headCls, COL.source, "text-left")}>Source</th>
+              <th className={cn(headCls, COL.source, "text-left")}>Src</th>
             </tr>
           </thead>
           <tbody>
@@ -81,11 +87,12 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
               const rest = r.shifts === 0;
               const isToday = r.state === "today";
               const isJoseph = (r.source ?? "").startsWith("joseph:");
+              const gradeTons = parseGradeTons(r.grades);
               return (
                 <tr
                   key={r.date}
                   className={cn(
-                    "h-8 border-t transition-colors hover:bg-muted/40",
+                    "border-t align-top transition-colors hover:bg-muted/40",
                     rest && "bg-muted/20 text-muted-foreground",
                     isToday && "bg-amber-500/[0.07]"
                   )}
@@ -99,19 +106,41 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
                     {r.date}
                   </td>
                   <td className="px-2 py-1">{r.dow.slice(0, 3)}</td>
-                  <td
-                    className={cn(
-                      "truncate px-2 py-1",
-                      rest && "italic text-muted-foreground/70"
+                  <td className="px-2 py-1">
+                    <div
+                      className={cn(
+                        "truncate",
+                        rest && "italic text-muted-foreground/70"
+                      )}
+                      title={r.setup ?? undefined}
+                    >
+                      {r.setup ?? "— off —"}
+                    </div>
+                    {gradeTons.length > 0 && (
+                      <div
+                        className="mt-0.5 flex items-center gap-1.5 overflow-hidden text-[10px] leading-tight text-muted-foreground"
+                        title={gradeTonsTitle(gradeTons)}
+                      >
+                        {gradeTons.map((g) => (
+                          <span
+                            key={g.grade}
+                            className="shrink-0 whitespace-nowrap"
+                          >
+                            <span className="font-medium text-foreground/70">
+                              {g.grade}
+                            </span>{" "}
+                            <span className="font-mono tabular-nums">
+                              {fmtGradeTons(g.tons)}t
+                            </span>
+                          </span>
+                        ))}
+                      </div>
                     )}
-                    title={r.setup ?? undefined}
-                  >
-                    {r.setup ?? "— off —"}
                   </td>
                   <td className="px-2 py-1 text-right font-mono tabular-nums">
                     {r.shifts}
                   </td>
-                  <td className="px-2 py-1 text-right font-mono tabular-nums text-violet-600 dark:text-violet-300">
+                  <td className="px-2 py-1 text-right font-mono font-semibold tabular-nums text-violet-600 dark:text-violet-300">
                     {r.projectedTons ? fmtTons(r.projectedTons) : "—"}
                   </td>
                   <td className="px-2 py-1 text-right font-mono tabular-nums">

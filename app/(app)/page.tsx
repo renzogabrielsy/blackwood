@@ -1,6 +1,7 @@
 // No 'use client' — async Server Component (Daily Sync Digest).
 // Replaces the archived modular widget dashboard (see _archived/dashboard-v1).
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 import { getDigestData } from "@/lib/digest/queries";
 import { DigestHeader } from "@/components/digest/digest-header";
 import { PlantStatusHeader } from "@/components/digest/plant-status-header";
@@ -79,22 +80,32 @@ export default async function DigestPage() {
         </section>
       )}
 
-      {/* A4. Production schedule table — a dense rolling ~2-week window, grouped
-          with the schedule content at the top of the digest (complements the
-          WeekStrip cards + the full page at /production/schedule). */}
-      {data.schedulePreview.length > 0 && (
-        <section>
-          <SchedulePreview rows={data.schedulePreview} />
+      {/* A4. Snapshot row — the compact rolling 10-day schedule table paired
+          BESIDE the Open Blocks card grid on wide screens (lg: 2 columns), so
+          two dense "current snapshot" bands share one row instead of stacking
+          full-width — reclaiming vertical space at the top of the digest. Each
+          renders only when it has content; a lone survivor spans the full width
+          (no lg:grid-cols-2). Both stack in a single column on mobile. */}
+      {(data.schedulePreview.length > 0 || data.openBlocks.length > 0) && (
+        <section
+          className={cn(
+            "grid items-start gap-6",
+            data.schedulePreview.length > 0 &&
+              data.openBlocks.length > 0 &&
+              "lg:grid-cols-2"
+          )}
+        >
+          {data.schedulePreview.length > 0 && (
+            <SchedulePreview rows={data.schedulePreview} />
+          )}
+          {data.openBlocks.length > 0 && (
+            <OpenBlocks
+              openBlocks={data.openBlocks}
+              operationalDate={data.meta.operationalDate}
+            />
+          )}
         </section>
       )}
-
-      {/* Open blocks — current in-use inventory, surfaced at the top (at-a-glance) */}
-      <section>
-        <OpenBlocks
-          openBlocks={data.openBlocks}
-          operationalDate={data.meta.operationalDate}
-        />
-      </section>
 
       {/* B. Hero — today's operations, state-aware per stream (no misleading 0) */}
       <section>

@@ -167,6 +167,9 @@ interface ProdSchedRow {
   /** raw DB source string, e.g. "joseph:REV2" | "gsheet:PROD SCHED".
    *  Only selected for the schedule-preview fetch; undefined elsewhere. */
   source?: string | null;
+  /** per-grade projected tonnage JSONB ({ "3X50": 21 }). Only selected for the
+   *  schedule-preview fetch; undefined elsewhere. */
+  grades?: Record<string, number> | null;
 }
 interface ProdActualTonsRow {
   date: string;
@@ -737,12 +740,13 @@ export async function getDigestData(): Promise<DigestData> {
     const weekDates = Array.from({ length: 7 }, (_, i) => addDaysUtc(weekStart, i));
     const weekEnd = weekDates[6];
 
-    // Schedule-preview window: 14 days STARTING at the operational date (today
+    // Schedule-preview window: 10 days STARTING at the operational date (today
     // first). A SUPERSET of the week window above, but fetched separately so it
-    // can also pull `source` (the plan-authority tag). Same two sources as
-    // weekPlan / the /production/schedule page.
-    const previewDates = Array.from({ length: 14 }, (_, i) => addDaysUtc(weekStart, i));
-    const previewEnd = previewDates[13];
+    // can also pull `source` (the plan-authority tag) + per-grade `grades`. Same
+    // two sources as weekPlan / the /production/schedule page. Trimmed from 14 →
+    // 10 to keep the digest band compact (it's now a half-width scroll card).
+    const previewDates = Array.from({ length: 10 }, (_, i) => addDaysUtc(weekStart, i));
+    const previewEnd = previewDates[9];
 
     const [schedRes, actualRes, previewSchedRes, previewActualRes] = await Promise.all([
       supabase
@@ -757,7 +761,7 @@ export async function getDigestData(): Promise<DigestData> {
         .lte("date", weekEnd),
       supabase
         .from("production_schedule")
-        .select("plan_date, dow, shifts, setup, projected_tons, source")
+        .select("plan_date, dow, shifts, setup, projected_tons, source, grades")
         .gte("plan_date", weekStart)
         .lte("plan_date", previewEnd),
       supabase
@@ -845,6 +849,7 @@ export async function getDigestData(): Promise<DigestData> {
         actualTons,
         state: resolveScheduleRowState(plan, actualTons, operationalDate),
         source: row?.source ?? null,
+        grades: (row?.grades as unknown as Record<string, number> | null) ?? null,
       };
     });
   }
