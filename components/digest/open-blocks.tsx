@@ -90,6 +90,11 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
     null,
   );
   const [panelCanViewPrices, setPanelCanViewPrices] = React.useState(false);
+  // The batchId currently being fetched (in-flight), so the clicked card can
+  // show a subtle pending affordance until its data resolves and the panel opens.
+  const [loadingBatchId, setLoadingBatchId] = React.useState<string | null>(
+    null,
+  );
 
   // The slide-over renders through a portal to document.body so it escapes this
   // band's transformed/blurred ancestors (hover-lift transform + backdrop-blur
@@ -99,18 +104,26 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
 
+  // Fetch FIRST, then open. The panel stays permanently mounted (see the render
+  // below) in its closed (translate-x-full) state; we only flip it open once the
+  // batch-accurate BlockData is ready — setting panelBlockData + selected in the
+  // SAME tick. That way the panel transitions from mounted-closed straight to
+  // open with content already present: one clean slide-in, no empty-panel flash.
   const handleSelect = React.useCallback((block: OpenBlock) => {
-    setSelected(block);
-    setPanelBlockData(null); // panel shows its loading state until this resolves
+    setLoadingBatchId(block.batchId);
     fetchBlockDataForBatch(block.batchId).then((result) => {
       setPanelBlockData(result.blockData);
       setPanelCanViewPrices(result.canViewPrices);
+      setSelected(block);
+      setLoadingBatchId(null);
     });
   }, []);
 
+  // Close only clears `selected` → locKey becomes null → the still-mounted panel
+  // slides OUT (never unmounts). panelBlockData is intentionally left in place so
+  // its content doesn't blank mid-animation; the closed branch ignores it anyway.
   const handleClose = React.useCallback(() => {
     setSelected(null);
-    setPanelBlockData(null);
   }, []);
 
   if (!openBlocks.length) return null;
@@ -142,17 +155,23 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
           const pct = fraction * 100;
           const pctLabel = Math.round(pct);
           const isSelected = selected?.batchId === b.batchId;
+          const isLoading = loadingBatchId === b.batchId;
 
           return (
             <button
               type="button"
               key={`${b.blockLoc}-${b.batchCode}-${i}`}
               onClick={() => handleSelect(b)}
+              disabled={isLoading}
+              aria-busy={isLoading}
               aria-label={`Open details for ${b.blockLoc} (${b.batchCode})`}
               className={cn(
                 "hover-lift flex cursor-pointer flex-col gap-3 rounded-xl border bg-card/95 p-4 text-left backdrop-blur transition-colors duration-150 supports-backdrop-filter:bg-card/70",
                 "hover:border-primary/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isSelected && "border-primary/60 ring-1 ring-primary/40",
+                // In-flight: subtle pulse + primary ring so the click feels
+                // responsive while BlockData loads (panel opens on resolve).
+                isLoading && "animate-pulse border-primary/60 ring-1 ring-primary/40",
               )}
             >
               {/* Header: block_loc + batch (left); status dot + label with the
@@ -250,16 +269,23 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
         })}
       </div>
 
-      {/* Shared Blocking slide-over — reused, NOT rebuilt. blockData is the
-          batch-accurate summary from fetchBlockDataForBatch; canViewPrices is
-          the server gate it returns. onNavigateToBatch is OMITTED — the panel's
-          internal fallback handles "Edit All" navigation. Mounts only once a
-          block is selected (lazy). */}
+      {/* Shared Blocking slide-over — reused, NOT rebuilt. It is PERMANENTLY
+          MOUNTED (once the client has hydrated) and animates purely via its
+          internal locKey-driven translate-x transition: locKey null → it sits
+          in its closed (translate-x-full) state; locKey set → it slides open;
+          back to null → it slides shut, WITHOUT unmounting (so the exit slide
+          plays). This mirrors the Blocking grid's always-mounted usage — the
+          conditional mount was what killed both the enter and exit slides.
+          blockData is the batch-accurate summary from fetchBlockDataForBatch
+          (already resolved before we set `selected`, so no empty-panel flash);
+          canViewPrices is the server gate it returns. onNavigateToBatch is
+          OMITTED — the panel's internal fallback handles "Edit All" navigation.
+          Portaled to document.body to escape this band's transformed/blurred
+          ancestors (see the `mounted` note above). */}
       {mounted &&
-        selected &&
         createPortal(
           <BlockingDetailPanel
-            locKey={selected.blockLoc}
+            locKey={selected ? selected.blockLoc : null}
             blockData={panelBlockData}
             canViewPrices={panelCanViewPrices}
             onClose={handleClose}
