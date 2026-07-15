@@ -51,6 +51,8 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
+    // Production sub-routes — MUST precede the `/production` catch-all below.
+    { test: prefix('/production/schedule'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — projected tons & Joseph\'s authoritative schedule' },
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Price & Volume Analysis design concepts (planning-stage demos).

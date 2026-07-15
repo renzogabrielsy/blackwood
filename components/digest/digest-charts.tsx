@@ -107,10 +107,12 @@ function tooltipChrome() {
 // Chart 1 — Feed In vs Out (last 30 days), rest-day aware
 // ---------------------------------------------------------------------
 // A zero day is NOT a plunge to the floor: a planned rest day (0 shifts) or a
-// day whose report hasn't landed yet is drawn as a GAP (null → connectNulls
-// false). Where the operational week's plan is known (weekPlan), a rest day
-// gets a faint band and an awaiting day gets an amber marker so a gap reads as
-// "pending"/"planned rest", never "nothing happened".
+// day whose report hasn't landed yet is kept NULL so the line never dives to
+// zero. But the lines CONNECT ACROSS those nulls (connectNulls={true}) — the
+// trend reads as one smooth, continuous stroke instead of a broken series of
+// gaps. Where the operational week's plan is known (weekPlan), a rest day still
+// gets a faint background band and an awaiting day an amber marker so the
+// bridged span reads as "pending"/"planned rest", never "nothing happened".
 
 interface FlowChartRow {
   date: string;
@@ -238,7 +240,9 @@ function FlowChart({
             maxBarSize={40}
             radius={[3, 3, 0, 0]}
           />
-          {/* connectNulls={false} → a gap (rest / no-delivery), never a plunge */}
+          {/* values stay null on rest/no-report/no-delivery days (never a
+              plunge to zero), but connectNulls bridges ACROSS them so the line
+              is one smooth continuous stroke, not a gapped series */}
           <Line
             type="monotone"
             dataKey="inKg"
@@ -246,7 +250,7 @@ function FlowChart({
             strokeWidth={2}
             dot={{ r: 2.5, fill: "var(--background)", stroke: "var(--chart-2)", strokeWidth: 1.5 }}
             isAnimationActive={false}
-            connectNulls={false}
+            connectNulls={true}
           />
           <Line
             type="monotone"
@@ -255,7 +259,7 @@ function FlowChart({
             strokeWidth={2}
             dot={{ r: 2.5, fill: "var(--background)", stroke: "var(--chart-1)", strokeWidth: 1.5 }}
             isAnimationActive={false}
-            connectNulls={false}
+            connectNulls={true}
           />
         </ComposedChart>
       </ResponsiveContainer>
@@ -301,6 +305,23 @@ function PriceChart({ price }: { price: PricePoint[] }) {
   // A single point yields no meaningful DoD change; still render the ₱/kg line.
   const hasPct = rows.some((r) => r.pctChange != null);
 
+  // ₱/kg axis domain — lift the lowest price OFF the chart floor so it never
+  // reads as "reporting zero". We pad well below the min (headroom ≈ 60% of the
+  // range, min 1.5₱) so the lowest point floats in the lower third, and a
+  // little above the max (25% of the range, min 0.5₱). A flat series still gets
+  // padding via the range floor of 1. Bounds are rounded to whole ₱ so the axis
+  // ticks read cleanly. Empty series → recharts auto (chart is skipped anyway).
+  const phpDomain = React.useMemo<[number, number] | undefined>(() => {
+    if (rows.length === 0) return undefined;
+    const values = rows.map((r) => r.phpPerKg);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = Math.max(max - min, 1);
+    const lower = Math.floor(min - Math.max(range * 0.6, 1.5));
+    const upper = Math.ceil(max + Math.max(range * 0.25, 0.5));
+    return [Math.max(0, lower), upper];
+  }, [rows]);
+
   return (
     <ChartCard
       title="RC In price"
@@ -322,14 +343,15 @@ function PriceChart({ price }: { price: PricePoint[] }) {
             axisLine={{ stroke: "var(--border)" }}
             minTickGap={24}
           />
-          {/* Primary (left) axis — ₱/kg */}
+          {/* Primary (left) axis — ₱/kg. Padded domain lifts the low off the floor. */}
           <YAxis
             yAxisId="php"
             tick={AXIS_TICK}
             tickLine={false}
             axisLine={false}
             width={52}
-            domain={["auto", "auto"]}
+            domain={phpDomain ?? ["auto", "auto"]}
+            allowDecimals={false}
             tickFormatter={(v: number) => `₱${fmtPhpNumber(v)}`}
           />
           {/* Secondary (right) axis — day-over-day % change */}

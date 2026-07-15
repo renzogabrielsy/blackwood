@@ -1,5 +1,6 @@
 // No 'use client' — async Server Component (Daily Sync Digest).
 // Replaces the archived modular widget dashboard (see _archived/dashboard-v1).
+import Link from "next/link";
 import { getDigestData } from "@/lib/digest/queries";
 import { DigestHeader } from "@/components/digest/digest-header";
 import { PlantStatusHeader } from "@/components/digest/plant-status-header";
@@ -52,6 +53,31 @@ export default async function DigestPage() {
         />
       </section>
 
+      {/* A3. This week — plan vs actual, surfaced right below the plant status
+          band (skips if there is no operational date). Links to the full
+          Production Schedule table. */}
+      {data.weekPlan.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              This week · plan vs actual
+            </h2>
+            <div className="flex items-baseline gap-3">
+              <span className="text-[11px] text-muted-foreground">
+                from the PROD SCHED plan
+              </span>
+              <Link
+                href="/production/schedule"
+                className="text-[11px] font-medium text-primary hover:underline"
+              >
+                View full schedule →
+              </Link>
+            </div>
+          </div>
+          <WeekStrip week={data.weekPlan} />
+        </section>
+      )}
+
       {/* Open blocks — current in-use inventory, surfaced at the top (at-a-glance) */}
       <section>
         <OpenBlocks
@@ -74,21 +100,6 @@ export default async function DigestPage() {
           weekPlan={data.weekPlan}
         />
       </section>
-
-      {/* C1. This week — plan vs actual (skips if there is no operational date) */}
-      {data.weekPlan.length > 0 && (
-        <section className="flex flex-col gap-2">
-          <div className="flex items-baseline justify-between gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              This week · plan vs actual
-            </h2>
-            <span className="text-[11px] text-muted-foreground">
-              from the PROD SCHED plan
-            </span>
-          </div>
-          <WeekStrip week={data.weekPlan} />
-        </section>
-      )}
 
       {/* C2. Trucks with a trip on the operational date (skips if none moved) */}
       <section>

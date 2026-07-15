@@ -22,8 +22,10 @@ values into views.
   composes the bands. Thin: fetch + layout only. No `'use client'`.
   **Render order, top→bottom:** (DigestHeader + **SyncLauncher**) header row →
   **PlantStatusHeader** (operational-date running/rest status bar) →
-  **OpenBlocks** → KpiHero (state-aware) → DigestCharts (rest-day-aware flow) →
-  **WeekStrip** (this week · plan vs actual) → TrucksSummary → **BagInventory** →
+  **WeekStrip** (this week · plan vs actual — surfaced near the TOP, right under
+  the plant-status band; its heading carries a "View full schedule →" link to
+  `/production/schedule`) → **OpenBlocks** → KpiHero (state-aware) →
+  DigestCharts (rest-day-aware flow) → TrucksSummary → **BagInventory** →
   (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
   presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
   and `streamsBehind` (count of `meta.streams` with `status === 'warn'`).
@@ -60,12 +62,17 @@ values into views.
   spark SERIES drop zero-value days so a 0 day doesn't plunge the area chart —
   see queries.ts (Data below); card values / `avg7` / `net_flow` spark unaffected.
 - `components/digest/digest-charts.tsx` — `'use client'`. Recharts 2-col grid:
-  **Feed In vs Out** — now a **rest-day-aware `ComposedChart`**: a zero day
-  renders as a **gap** (`connectNulls={false}`), never a plunge to the floor; a
-  `planByDate` map built from `data.weekPlan` adds a faint band on planned rest
-  days and an amber marker on `awaiting` days (report pending). **RC In price
-  ₱/kg** (line — skipped entirely when `price` is empty, which happens for
-  price-denied roles since the series is gated server-side), **Production by
+  **Feed In vs Out** — a **rest-day-aware `ComposedChart`**: rest / no-report /
+  no-delivery days stay **null** (the line never plunges to the floor), but the
+  lines **connect smoothly across** those nulls (`connectNulls={true}`) so the
+  trend reads as one continuous stroke, NOT a gapped series; a `planByDate` map
+  built from `data.weekPlan` still adds a faint band on planned rest days and an
+  amber marker on `awaiting` days (report pending) as background context. **RC In
+  price ₱/kg** (line — skipped entirely when `price` is empty, which happens for
+  price-denied roles since the series is gated server-side; the ₱ YAxis uses a
+  **data-driven padded domain** — `[min − max(range·0.6, 1.5), max + max(range·0.25,
+  0.5)]`, rounded to whole ₱ — so the lowest price floats in the lower third of
+  the chart instead of sitting on the axis floor and *looking* like zero), **Production by
   grade** (stacked bar — pivots long `GradePoint[]` to wide rows). `ChartCard`
   gained an optional `legend` slot for the flow chart's custom band swatches.
   All colors are `var(--chart-1..5)` tokens (dark-mode safe). Glass tooltip via
@@ -75,8 +82,10 @@ values into views.
   week): one card per day with dow + date, setup, a violet planned bar over a
   chart-1 actual bar, and a state chip (Reported / Today / Planned) driven by the
   pre-resolved `WeekDayPlan.state`. Rest days render dashed + "planned rest";
-  today gets a `ring`. Rendered right after the charts (skipped when `weekPlan`
-  is empty). Presentation-only — states + tons come pre-resolved from the adapter.
+  today gets a `ring`. Rendered **near the top** (right under the plant-status
+  band, above OpenBlocks; skipped when `weekPlan` is empty); its section heading
+  carries a "View full schedule →" link to the `/production/schedule` month
+  table. Presentation-only — states + tons come pre-resolved from the adapter.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
   from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
   series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
