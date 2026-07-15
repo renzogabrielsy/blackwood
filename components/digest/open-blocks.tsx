@@ -6,6 +6,7 @@
 // matrix's exact click→fetch→panel pattern. Cross-importing the Blocking
 // tenant code is fine — both this band and Blocking are charcoal-tenant code.
 import * as React from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
@@ -89,6 +90,14 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
     null,
   );
   const [panelCanViewPrices, setPanelCanViewPrices] = React.useState(false);
+
+  // The slide-over renders through a portal to document.body so it escapes this
+  // band's transformed/blurred ancestors (hover-lift transform + backdrop-blur
+  // both establish a containing block for position:fixed descendants, which
+  // would otherwise anchor the fixed panel to the card instead of the viewport).
+  // Guard on client mount so the portal only runs after hydration.
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
 
   const handleSelect = React.useCallback((block: OpenBlock) => {
     setSelected(block);
@@ -225,13 +234,13 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
                 </div>
               </div>
 
-              {/* Lab stats — a single condensed row of all 7 (glanceable). BD
-                  labels shorten to BDA/BDJ so 7-up fits without wrapping. */}
-              <div className="grid grid-cols-7 gap-x-1.5">
+              {/* Lab stats — a single condensed row of 6 (glanceable). BD ASTM
+                  shortens to BDA so 6-up fits without wrapping. BD JIS is omitted
+                  here (still shown in the shared BlockingDetailPanel lab row). */}
+              <div className="grid grid-cols-6 gap-x-1.5">
                 <LabStat label="MC" value={fmt2(b.mc)} />
                 <LabStat label="ASH" value={fmt2(b.ash)} />
                 <LabStat label="BDA" value={fmt3(b.bdAstm)} />
-                <LabStat label="BDJ" value={fmt3(b.bdJis)} />
                 <LabStat label="GRIT" value={fmt2(b.grit)} />
                 <LabStat label="VM" value={fmt2(b.vm)} />
                 <LabStat label="FC" value={fmt2(b.fc)} />
@@ -246,14 +255,17 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
           the server gate it returns. onNavigateToBatch is OMITTED — the panel's
           internal fallback handles "Edit All" navigation. Mounts only once a
           block is selected (lazy). */}
-      {selected && (
-        <BlockingDetailPanel
-          locKey={selected.blockLoc}
-          blockData={panelBlockData}
-          canViewPrices={panelCanViewPrices}
-          onClose={handleClose}
-        />
-      )}
+      {mounted &&
+        selected &&
+        createPortal(
+          <BlockingDetailPanel
+            locKey={selected.blockLoc}
+            blockData={panelBlockData}
+            canViewPrices={panelCanViewPrices}
+            onClose={handleClose}
+          />,
+          document.body,
+        )}
     </div>
   );
 }
