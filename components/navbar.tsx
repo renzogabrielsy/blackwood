@@ -245,7 +245,7 @@ export function Navbar() {
     };
 
     return (
-        <nav className="flex-none h-12 border-b border-zinc-700 bg-zinc-800 dark:bg-zinc-700 px-8 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
+        <nav className="flex-none h-[calc(3rem+env(safe-area-inset-top))] pt-[env(safe-area-inset-top)] border-b border-zinc-700 bg-zinc-800 dark:bg-zinc-700 px-4 sm:px-8 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
             {/* Left — hamburger (mobile, below sm) + breadcrumb (desktop, sm+) */}
             <div className="flex-1 flex items-center gap-2 min-w-0">
                 {/* Mobile-only navigation trigger — replaces the breadcrumb at <sm. */}
