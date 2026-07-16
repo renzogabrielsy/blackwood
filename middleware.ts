@@ -30,8 +30,18 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Public paths that don't require authentication
-  const PUBLIC_PATHS = ['/login', '/auth', '/access-denied', '/api']
+  // Public paths that don't require authentication. The PWA manifest + icon
+  // routes MUST be public — the browser fetches them before login (to offer
+  // "Add to Home Screen"), and iOS fetches apple-icon with no session.
+  const PUBLIC_PATHS = [
+    '/login',
+    '/auth',
+    '/access-denied',
+    '/api',
+    '/manifest.webmanifest',
+    '/icon',
+    '/apple-icon',
+  ]
   const isPublic = PUBLIC_PATHS.some((p) =>
     request.nextUrl.pathname.startsWith(p)
   )
