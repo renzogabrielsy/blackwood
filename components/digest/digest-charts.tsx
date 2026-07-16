@@ -96,7 +96,7 @@ function ChartCard({
                 <button
                   type="button"
                   aria-label={`Expand ${title} chart`}
-                  className="-my-1 inline-flex size-6 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
+                  className="-m-1 inline-flex size-9 items-center justify-center self-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:hidden"
                 >
                   <Maximize2 className="size-3.5" />
                 </button>

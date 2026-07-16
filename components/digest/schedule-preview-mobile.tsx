@@ -52,7 +52,7 @@ export function SchedulePreviewMobile({ rows }: { rows: SchedulePreviewRow[] }) 
         <SheetTrigger asChild>
           <button
             type="button"
-            className="mt-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border bg-muted/40 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="mt-2 inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border bg-muted/40 px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Maximize2 className="h-3.5 w-3.5" />
             {remaining > 0

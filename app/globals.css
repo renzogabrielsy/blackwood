@@ -490,6 +490,44 @@ input[type=number] {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 12px rgba(0, 0, 0, 0.25);
 }
 
+/* ─── Blocking grid columns (mobile horizontal-scroll gate) ───────────────────
+   Desktop (sm+, ≥640px): fractional tracks fit the whole 20-col grid to the
+   container width — the original, unchanged layout. Below sm: fixed ≥44px cell
+   tracks so the row overflows its `overflow-x-auto` wrapper and finally scrolls
+   horizontally, keeping cells thumb-tappable instead of crushing to ~13px.
+   `--blocking-cols` carries the dynamic column count (20 standard, 3 PCA/PCB). */
+.blocking-grid-cols {
+  grid-template-columns: 20px repeat(var(--blocking-cols), 44px);
+}
+@media (min-width: 640px) {
+  .blocking-grid-cols {
+    grid-template-columns: 20px repeat(var(--blocking-cols), minmax(0, 1fr));
+  }
+}
+
+/* Mobile-only frozen row-label column for the Blocking grid. Once the grid
+   switches to fixed-width tracks below sm (above), the 20px row-label column and
+   the top-left corner pin to the left while the cells scroll. OPAQUE per the
+   frozen-pane rule (never glass) with a solid right edge to kill the seam.
+   Desktop (sm+) is byte-for-byte untouched — the rule lives entirely inside the
+   max-width query, where the 1fr grid fits its box and never scrolls. */
+@media (max-width: 639px) {
+  .blocking-rowlabel-frozen {
+    position: sticky;
+    left: 0;
+    z-index: 10;
+    background: var(--card);
+    box-shadow:
+      inset -1px 0 0 0 var(--border),
+      2px 0 4px rgba(0, 0, 0, 0.12);
+  }
+  :is(.dark) .blocking-rowlabel-frozen {
+    box-shadow:
+      inset -1px 0 0 0 var(--border),
+      2px 0 6px rgba(0, 0, 0, 0.4);
+  }
+}
+
 /* Critical balance pulse — standalone version for balance text color */
 .balance-critical {
   animation: blocking-critical-pulse 2s ease-in-out infinite;

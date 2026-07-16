@@ -60,11 +60,11 @@ export function DiffDisplay({ entry }: { entry: AuditLogRow }) {
   return (
     <div className="space-y-1">
       {rows.map((r, i) => (
-        <div key={i} className="flex items-baseline gap-2 text-xs">
+        <div key={i} className="flex flex-wrap items-baseline gap-2 text-xs">
           <span className="font-medium text-muted-foreground w-24 shrink-0">{r.label}</span>
-          <span className="line-through text-red-500 dark:text-red-400 font-mono">{r.oldVal}</span>
+          <span className="line-through text-red-500 dark:text-red-400 font-mono min-w-0 break-all">{r.oldVal}</span>
           <span className="text-muted-foreground">&rarr;</span>
-          <span className="text-green-600 dark:text-green-400 font-mono">{r.newVal}</span>
+          <span className="text-green-600 dark:text-green-400 font-mono min-w-0 break-all">{r.newVal}</span>
         </div>
       ))}
     </div>
