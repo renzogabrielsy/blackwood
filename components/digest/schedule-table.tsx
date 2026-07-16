@@ -77,7 +77,11 @@ export function ScheduleTable({
               <tr
                 key={r.date}
                 className={cn(
-                  "border-t align-top transition-colors hover:bg-muted/40",
+                  // Fixed uniform height sized for the two-line (setup + grades)
+                  // case so rows WITHOUT a grade breakdown reserve the same space
+                  // instead of collapsing to one line. align-top keeps single-line
+                  // rows pinned to the top with the reserved space below.
+                  "h-[44px] border-t align-top transition-colors hover:bg-muted/40",
                   rest && "bg-muted/20 text-muted-foreground",
                   isToday && "bg-amber-500/[0.07]"
                 )}
