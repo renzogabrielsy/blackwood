@@ -16,7 +16,11 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    // 'default' (NOT 'black-translucent') so iOS keeps the status bar as its own
+    // opaque region and auto-insets the webview below it. black-translucent +
+    // viewport-fit=cover drew content UNDER the status bar and required manual
+    // safe-area padding on every top surface — reverted to the auto-inset behavior.
+    statusBarStyle: "default",
     title: "Blackwood",
   },
 };
@@ -24,7 +28,10 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover",
+  // NOTE: intentionally NOT viewportFit:'cover'. Edge-to-edge made content draw
+  // under the iOS status bar / home indicator on every surface; the default
+  // (auto-inset) is what we want. Do not re-add 'cover' without padding every
+  // top+bottom surface with env(safe-area-inset-*).
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#27272a" },
     { media: "(prefers-color-scheme: dark)", color: "#27272a" },
