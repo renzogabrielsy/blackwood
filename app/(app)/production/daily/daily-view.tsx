@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { DailyLedgerGrid } from './daily-ledger-grid';
+import { DailyCardsMobile } from './daily-cards-mobile';
 import type {
     ProductionShiftRow,
     ProductionRunRow,
@@ -37,14 +38,26 @@ export function DailyView({
                 key forces a remount only AFTER fresh data arrives — stale data never
                 shown in a "new" grid. */}
             <div className="min-w-0 flex-1 min-h-0">
-                <DailyLedgerGrid
-                    key={`${dataYear ?? 'all'}-${dataBatch ?? 'all'}`}
-                    initialShifts={shifts}
-                    initialRuns={runs}
-                    initialDowntime={downtime}
-                    initialWaste={waste}
-                    onSaveSuccess={onRefresh}
-                />
+                {/* Tablet / desktop — the dense inline-editable ledger (unchanged). */}
+                <div className="hidden sm:block">
+                    <DailyLedgerGrid
+                        key={`${dataYear ?? 'all'}-${dataBatch ?? 'all'}`}
+                        initialShifts={shifts}
+                        initialRuns={runs}
+                        initialDowntime={downtime}
+                        initialWaste={waste}
+                        onSaveSuccess={onRefresh}
+                    />
+                </div>
+                {/* Phone — read-only card list + section-grouped detail sheet. */}
+                <div className="h-[72dvh] sm:hidden">
+                    <DailyCardsMobile
+                        shifts={shifts}
+                        runs={runs}
+                        downtime={downtime}
+                        waste={waste}
+                    />
+                </div>
             </div>
         </div>
     );

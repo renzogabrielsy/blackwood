@@ -11,8 +11,9 @@ Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF an
 | File | Role |
 |------|------|
 | `actions.ts` | `fetchElectricityTabData(year, month)`, `saveBulkElectricity`. Defines `BulkSavePayload` locally. |
-| `electricity-view.tsx` | Scope-label wrapper (shows "Showing: {scope}") — passes readings to `ElectricityGrid`. Accepts `year: number\|null`, `month: number\|null`. |
-| `electricity-grid.tsx` | Inline-editable grid for `electricity_readings` |
+| `electricity-view.tsx` | Scope-label wrapper (shows "Showing: {scope}") — renders the grid `hidden sm:block` + `ElectricityCardsMobile` `sm:hidden` (`h-[70dvh]`). Accepts `year: number\|null`, `month: number\|null`. |
+| `electricity-grid.tsx` | Inline-editable grid for `electricity_readings` (desktop, unchanged) |
+| `electricity-cards-mobile.tsx` | **Phone read layer** (`sm:hidden`) — simplest Archetype C `MobileCardList` over the `readings` rows. Headline `date · meter · TTL KWH · [start→end]`; detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns. Read-only — no editing/keyboard/paste. |
 
 ## Column Order
 `#` / DATE / METER (Select + custom) / START KWH / END KWH / DIFF (computed, read-only) / MULT (`meter_multiplier`, editable, default 120) / TTL KWH (consumption — computed `diff × multiplier`, read-only) / REM / [delete]

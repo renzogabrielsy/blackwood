@@ -17,6 +17,10 @@ import {
   gradeTonsTitle,
   type GradeTon,
 } from "@/components/digest/format";
+import {
+  ScheduleCardsMobile,
+  type ScheduleMobileRow,
+} from "./schedule-cards-mobile";
 
 // ---------------------------------------------------------------------
 // Month helpers (pure yyyy-MM string math — no aggregation)
@@ -237,6 +241,24 @@ export default async function ProductionSchedulePage({
   const totalActualHrs = rows.reduce((s, r) => s + (r.actualHrs ?? 0), 0);
   const totalVariance = totalActual - totalProjected;
 
+  // Phone read layer — same `rows` (single source of truth), reshaped to the
+  // shared ScheduleRowCard contract. chipState mirrors the desktop table's
+  // "today wins unless already reported" rule.
+  const mobileRows: ScheduleMobileRow[] = rows.map((r) => ({
+    date: r.date,
+    dow: r.dow,
+    shifts: r.shifts,
+    setup: r.setup,
+    gradeTons: r.gradeTons,
+    projectedTons: r.projectedTons,
+    actualTons: r.actualTons,
+    actualHrs: r.actualHrs,
+    variance: r.variance,
+    state: r.state,
+    isToday: r.isToday,
+    chipState: r.isToday && r.state !== "reported" ? "today" : r.state,
+  }));
+
   const headCls =
     "frozen-row bg-muted px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground";
 
@@ -280,7 +302,14 @@ export default async function ProductionSchedulePage({
           No schedule on record for {bounds.label}.
         </div>
       ) : (
-        <div className="animate-fade-up overflow-x-auto rounded-xl border bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/70">
+        <>
+        {/* Phone — full-month condensed card list (desktop table hidden). */}
+        <div className="sm:hidden">
+          <ScheduleCardsMobile rows={mobileRows} />
+        </div>
+
+        {/* Tablet / desktop — the dense Excel-Standard table (unchanged). */}
+        <div className="hidden animate-fade-up overflow-x-auto rounded-xl border bg-card/95 backdrop-blur supports-backdrop-filter:bg-card/70 sm:block">
           <table className="w-full min-w-[1080px] table-fixed border-collapse text-xs">
             <thead>
               <tr>
@@ -456,6 +485,7 @@ export default async function ProductionSchedulePage({
             </tfoot>
           </table>
         </div>
+        </>
       )}
     </div>
   );

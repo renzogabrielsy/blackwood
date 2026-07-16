@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { ElectricityGrid } from './electricity-grid';
+import { ElectricityCardsMobile } from './electricity-cards-mobile';
 import type { Tables } from '@/types/supabase';
 
 type ElectricityReadingRow = Tables<'electricity_readings'>;
@@ -37,10 +38,17 @@ export function ElectricityView({ readings, year, month, onRefresh }: Electricit
                     {readings.length} readings
                 </span>
             </div>
-            <ElectricityGrid
-                initialData={readings}
-                onSaveSuccess={onRefresh}
-            />
+            {/* Tablet / desktop — the dense inline-editable grid (unchanged). */}
+            <div className="hidden sm:block">
+                <ElectricityGrid
+                    initialData={readings}
+                    onSaveSuccess={onRefresh}
+                />
+            </div>
+            {/* Phone — read-only card list + detail sheet. */}
+            <div className="h-[70dvh] sm:hidden">
+                <ElectricityCardsMobile readings={readings} />
+            </div>
         </div>
     );
 }

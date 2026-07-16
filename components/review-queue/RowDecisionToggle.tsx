@@ -12,7 +12,7 @@ interface RowDecisionToggleProps {
     disabled?: boolean
 }
 
-const OPTIONS: Array<{
+export const ROW_DECISION_OPTIONS: Array<{
     value: RowDecision
     label: string
     tooltip: string
@@ -55,7 +55,7 @@ export function RowDecisionToggle({
                 disabled && 'opacity-50 pointer-events-none'
             )}
         >
-            {OPTIONS.map((opt) => {
+            {ROW_DECISION_OPTIONS.map((opt) => {
                 const active = value === opt.value
                 return (
                     <button

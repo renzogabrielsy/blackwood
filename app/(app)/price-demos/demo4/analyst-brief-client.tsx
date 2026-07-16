@@ -45,6 +45,7 @@ import {
   type AggregationType,
 } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
+import { MonthlyDeliveryCardsMobile } from './monthly-delivery-cards-mobile';
 
 /* ------------------------------------------------------------------ */
 /* Props                                                              */
@@ -425,7 +426,7 @@ function StatCard({ label, value, sub, tone = 'default', swatch }: StatCardProps
       </div>
       <div
         className={cn(
-          'mt-2 font-mono text-xl font-semibold leading-none tabular-nums',
+          'mt-2 truncate font-mono text-xl font-semibold leading-none tabular-nums',
           tone === 'warn'
             ? 'text-red-600 dark:text-red-400'
             : tone === 'good'
@@ -1501,12 +1502,24 @@ export default function AnalystBriefClient({
           />
         </div>
         {focusTotals ? (
-          <MonthlyDeliveriesTable
-            rows={focusRows}
-            totals={focusTotals}
-            focusYear={focusYear}
-            showPrices={canViewPrices}
-          />
+          <>
+            {/* Desktop table (sm+) — Excel cell-range drag-select stays desktop-only. */}
+            <div className="hidden sm:block">
+              <MonthlyDeliveriesTable
+                rows={focusRows}
+                totals={focusTotals}
+                focusYear={focusYear}
+                showPrices={canViewPrices}
+              />
+            </div>
+            {/* Phone card list (Archetype C) — SAME focusRows, no refetch. */}
+            <div className="h-[70dvh] overflow-hidden rounded-lg border border-border bg-card sm:hidden">
+              <MonthlyDeliveryCardsMobile
+                rows={focusRows}
+                canViewPrices={canViewPrices}
+              />
+            </div>
+          </>
         ) : (
           <div className="rounded-lg border border-border bg-card p-6 text-center text-xs text-muted-foreground">
             No data for {focusYear}.

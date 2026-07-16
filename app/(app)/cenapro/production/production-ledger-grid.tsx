@@ -67,6 +67,7 @@ import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod 
 import { BulkAddModal } from './bulk-add-modal';
 import { CenaproPeriodPicker } from './period-picker';
 import { ProductionDailyBlock } from './production-daily-block';
+import { CenaproLedgerCardsMobile } from './production-ledger-cards-mobile';
 
 // ─── View modes ───────────────────────────────────────────────────────────────────
 // The production screen has multiple ways to look at one period's rows. 'ledger' is the
@@ -204,7 +205,7 @@ const DROPDOWN_FIELDS = new Set<GridField>([
 // ─── Row state ───────────────────────────────────────────────────────────────────
 type RowDirtyState = 'existing' | 'new' | 'modified' | 'deleted';
 
-interface GridRow {
+export interface GridRow {
     _state: RowDirtyState;
     // Stable DB id for existing rows (the upsert key); '' for unsaved new rows.
     id: string;
@@ -388,14 +389,14 @@ function rowDirectionFrozenTint(dir: RowDirection): string {
 // (Tailwind color util + /10–/15 fill + a `dark:` text variant) so it reads in BOTH
 // themes. These render in the GridCell/SelectCell DISPLAY state — the edit <Input> is
 // never wrapped, so typing/paste is unaffected.
-const BADGE_BASE =
+export const BADGE_BASE =
     'inline-flex items-center justify-center rounded px-1.5 py-0 h-5 font-mono text-[11px] font-bold leading-none border';
 
 // CCC/FLEC: FLEC (the bagging "in") → emerald; crushers C1–C4 → amber; kilns RK1–RK4 →
 // rose. So bagging clearly reads as the IN, and crushers vs kilns are distinguishable.
 // Punchier than before: /20–/25 fill + /40 border + a confident -700/-300 bold text so
 // each color is distinct and obvious in BOTH modes.
-function cccFlecBadgeClass(raw: string): string {
+export function cccFlecBadgeClass(raw: string): string {
     const v = raw.trim().toUpperCase();
     if (v === 'FLEC') return 'border-emerald-500/40 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300';
     if (/^C[1-4]$/.test(v)) return 'border-amber-500/40 bg-amber-500/25 text-amber-700 dark:text-amber-300';
@@ -408,7 +409,7 @@ function cccFlecBadgeClass(raw: string): string {
 // indigo (the union), DVO → slate. Empty/null plant → no badge (handled by the caller).
 // Stronger fill (/20) + border (/40) + bold -700/-300 text so each plant reads punchy
 // in both modes.
-function plantBadgeClass(raw: string): string {
+export function plantBadgeClass(raw: string): string {
     switch (raw.trim().toUpperCase()) {
         case 'W6': return 'border-blue-500/40 bg-blue-500/20 text-blue-700 dark:text-blue-300';
         case 'W7': return 'border-teal-500/40 bg-teal-500/20 text-teal-700 dark:text-teal-300';
@@ -421,7 +422,7 @@ function plantBadgeClass(raw: string): string {
 // formatDateShort is imported from the shared DatePickerCell module (its canonical home).
 
 // ─── KG formatter (whole kg, thousands separators) ───────────────────────────────
-function formatKg(value: string): string {
+export function formatKg(value: string): string {
     if (value === '') return '';
     const n = parseFloat(value);
     if (isNaN(n)) return '';
@@ -1517,11 +1518,25 @@ export function ProductionLedgerGrid({
     const visibleCount = rows.filter((r) => !isRowHidden(r) && !(r._state === 'new' && !isMeaningfulNewRow(r))).length;
     const allHiddenByFilter = anyFilterActive && visibleCount === 0;
 
+    // ─── Mobile read layer (sm:hidden) — the SAME rows the desktop table renders,
+    // minus deleted / empty-new / filter-hidden rows (single source of truth, no
+    // refetch). Fed to CenaproLedgerCardsMobile (Archetype C card list). ────────────
+    const mobileRows = React.useMemo(
+        () =>
+            rows.filter(
+                (r) =>
+                    r._state !== 'deleted' &&
+                    !(r._state === 'new' && !isMeaningfulNewRow(r)) &&
+                    !isRowHidden(r),
+            ),
+        [rows, isRowHidden],
+    );
+
     // ─── Render ────────────────────────────────────────────────────────────────────
     return (
         <div className="flex h-full flex-col">
             {/* Toolbar */}
-            <div className="flex flex-none items-center gap-2 border-b bg-muted/30 px-2 py-1.5 md:px-3">
+            <div className="flex flex-none flex-wrap items-center gap-2 border-b bg-muted/30 px-2 py-1.5 md:px-3">
                 <CenaproPeriodPicker
                     periods={periods}
                     selected={selectedPeriod}
@@ -1615,7 +1630,7 @@ export function ProductionLedgerGrid({
             {/* Grid */}
             <div
                 ref={gridRef}
-                className="relative min-h-0 flex-1 select-none overflow-auto outline-none"
+                className="relative hidden min-h-0 flex-1 select-none overflow-auto outline-none sm:block"
                 tabIndex={-1}
                 onKeyDown={handleGridKeyDown}
                 onPaste={handleGridPaste}
@@ -1780,6 +1795,33 @@ export function ProductionLedgerGrid({
                         })}
                     </tbody>
                 </table>
+            </div>
+
+            {/* Mobile read layer — phone card list (Archetype C). Fed the SAME
+                sorted/filtered rows the desktop table renders (single source of
+                truth). Read-only: no inline edit / Bulk Add / paste on touch. */}
+            <div className="min-h-0 flex-1 sm:hidden">
+                <CenaproLedgerCardsMobile
+                    rows={mobileRows}
+                    savedRowCount={savedRowCount}
+                    shiftFilter={shiftFilter}
+                    gradeFilter={gradeFilter}
+                    plantFilter={plantFilter}
+                    warehouseFilter={warehouseFilter}
+                    sourceFilter={sourceFilter}
+                    shiftOptions={shiftOptions}
+                    gradeOptions={gradeOptions}
+                    plantOptions={plantOptions}
+                    warehouseOptions={warehouseOptions}
+                    sourceOptions={sourceOptions}
+                    setShiftFilter={setShiftFilter}
+                    setGradeFilter={setGradeFilter}
+                    setPlantFilter={setPlantFilter}
+                    setWarehouseFilter={setWarehouseFilter}
+                    setSourceFilter={setSourceFilter}
+                    anyFilterActive={anyFilterActive}
+                    clearFilters={clearFilters}
+                />
             </div>
 
             {/* Right-click context menu */}
