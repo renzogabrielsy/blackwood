@@ -99,6 +99,7 @@ import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
 import { DensityToggle } from './components/density-toggle';
 import { ColumnsPopover } from './components/columns-popover';
 import { SettingsDialog } from './components/settings-dialog';
+import { DeliveryCardsMobile } from './components/delivery-cards-mobile';
 
 // ─── Column Width Config ──────────────────────────────────────────────────────
 
@@ -510,6 +511,21 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         maybeRestoreDate(urlKey);
     }, [syncInclusionToUrl, maybeRestoreDate]);
 
+    // Apply a full LOC inclusion set atomically (used by both the desktop LOC popover
+    // and the mobile Filters drawer — the whse-tree can flip many locs at once, so
+    // per-item toggling would clobber; this sets the whole `next` set in one go).
+    const setLocFilter = React.useCallback((next: Set<string>) => {
+        setFilters(prev => ({ ...prev, locIncluded: next }));
+        syncInclusionToUrl('loc', next);
+        if (next.size > 0 && yearParam !== 'all') {
+            if (preFilterDate.current === null) {
+                preFilterDate.current = { year: yearParam, month };
+            }
+            handleYearChange('all', buildFilterOverrides('loc', next));
+        }
+        if (next.size === 0) maybeRestoreDate('loc');
+    }, [yearParam, month, syncInclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate]);
+
     const handleMonthChange = (value: string) => {
         setMonth(value);
         syncParamToUrl('m', value, String(new Date().getMonth()));
@@ -801,17 +817,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             {
                 accessorKey: 'block_loc',
                 // LOC header with integrated filter popover
-                header: () => <LocHeaderFilter locsByWhse={locsByWhse} activeLocFilters={locIncluded} onFiltersChange={(next) => {
-                    setFilters(prev => ({ ...prev, locIncluded: next }));
-                    syncInclusionToUrl('loc', next);
-                    if (next.size > 0 && yearParam !== 'all') {
-                        if (preFilterDate.current === null) {
-                            preFilterDate.current = { year: yearParam, month };
-                        }
-                        handleYearChange('all', buildFilterOverrides('loc', next));
-                    }
-                    if (next.size === 0) maybeRestoreDate('loc');
-                }} />,
+                header: () => <LocHeaderFilter locsByWhse={locsByWhse} activeLocFilters={locIncluded} onFiltersChange={setLocFilter} />,
                 size: getDefaultColWidth('block_loc', density),
                 enableResizing: true,
                 cell: ({ row }) => {
@@ -1025,7 +1031,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             if (id && hiddenColumnsSet.has(id)) return false;
             return true;
         });
-    }, [density, labHighlights, canViewPrices, hiddenColumnsSet, supplierCounts, avgCostBasis, locsByWhse, locIncluded, yearParam, month, syncInclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate, uniqueStates, stateExcluded, toggleStateFilter, selectAllStates, deselectAllStates, clearStateFilter, allSuppliers, supIncluded, toggleInclusionFilter, clearInclusionFilter]);
+    }, [density, labHighlights, canViewPrices, hiddenColumnsSet, supplierCounts, avgCostBasis, locsByWhse, locIncluded, setLocFilter, uniqueStates, stateExcluded, toggleStateFilter, selectAllStates, deselectAllStates, clearStateFilter, allSuppliers, supIncluded, toggleInclusionFilter, clearInclusionFilter]);
 
     // ─── TanStack Table ───────────────────────────────────────────────────────
 
@@ -1593,8 +1599,8 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 {/* Settings Dialog */}
                 <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
-                {/* ─── Toolbar ─── */}
-                <div className="flex-none h-10 px-4 flex items-center border-b bg-background gap-2 shrink-0">
+                {/* ─── Toolbar (desktop only — mobile gets its own in DeliveryCardsMobile) ─── */}
+                <div className="hidden sm:flex flex-none h-10 px-4 items-center border-b bg-background gap-2 shrink-0">
                     {/* Left group: Search + Clear filters */}
                     <div className="flex items-center gap-1.5">
                         {/* Search */}
@@ -1688,9 +1694,9 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     </div>
                 </div>
 
-                {/* ─── Selection Mode Bar ─── */}
+                {/* ─── Selection Mode Bar (desktop only) ─── */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 border-b bg-muted/50 text-sm animate-fade-up">
+                    <div className="hidden sm:flex flex-none items-center gap-3 px-3 py-1.5 border-b bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -1706,8 +1712,8 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     </div>
                 )}
 
-                {/* ─── Scrollable Table ─── */}
-                <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative bg-background">
+                {/* ─── Scrollable Table (desktop only) ─── */}
+                <div className="hidden sm:flex flex-1 min-h-0 overflow-hidden flex-col relative bg-background">
                     {/* Loading Overlay */}
                     {isYearLoading && (
                         <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center animate-blur-in">
@@ -1987,6 +1993,32 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     />
                 </div>
 
+                {/* ─── Mobile Card List (phones only — Archetype C) ─── */}
+                <div className="sm:hidden flex-1 min-h-0">
+                    <DeliveryCardsMobile
+                        data={filteredData}
+                        canViewPrices={canViewPrices}
+                        searchTerm={searchTerm}
+                        onSearchChange={setSearchTerm}
+                        matchCount={filteredData.length}
+                        uniqueStates={uniqueStates}
+                        stateExcluded={stateExcluded}
+                        onToggleState={toggleStateFilter}
+                        onSelectAllStates={selectAllStates}
+                        onDeselectAllStates={deselectAllStates}
+                        allSuppliers={allSuppliers}
+                        supIncluded={supIncluded}
+                        onToggleSupplier={(v) => toggleInclusionFilter('sup', v, supIncluded)}
+                        onClearSuppliers={() => clearInclusionFilter('sup')}
+                        locsByWhse={locsByWhse}
+                        locIncluded={locIncluded}
+                        onLocFiltersChange={setLocFilter}
+                        hasActiveFilters={hasActiveFilters}
+                        onClearAllFilters={clearAllFilters}
+                        onViewHistory={(row) => { setHistoryDelivery(row); setHistoryOpen(true); }}
+                    />
+                </div>
+
                 {/* ─── Row Context Menu (shared Blackwood Table primitive) ─── */}
                 <GridContextMenu<string>
                     state={rowMenu.state}
@@ -2171,7 +2203,7 @@ interface LocFilterContentProps {
     onFiltersChange: (filters: Set<string>) => void;
 }
 
-function LocFilterContent({ locsByWhse, activeLocFilters, onFiltersChange }: LocFilterContentProps) {
+export function LocFilterContent({ locsByWhse, activeLocFilters, onFiltersChange }: LocFilterContentProps) {
     const whseKeys = React.useMemo(() => Object.keys(locsByWhse).sort(), [locsByWhse]);
     const [expandedWhse, setExpandedWhse] = React.useState<Set<string>>(new Set());
     const filterCount = activeLocFilters.size;
