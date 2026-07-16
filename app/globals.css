@@ -497,7 +497,10 @@ input[type=number] {
    horizontally, keeping cells thumb-tappable instead of crushing to ~13px.
    `--blocking-cols` carries the dynamic column count (20 standard, 3 PCA/PCB). */
 .blocking-grid-cols {
-  grid-template-columns: 20px repeat(var(--blocking-cols), 44px);
+  /* Phone: fixed-width cells wide enough to fit the batch/weight/₱/lab lines
+     legibly (the 44px tap-min crushed the content); the section scrolls
+     horizontally inside its own overflow-x-auto box. */
+  grid-template-columns: 20px repeat(var(--blocking-cols), 104px);
 }
 @media (min-width: 640px) {
   .blocking-grid-cols {
