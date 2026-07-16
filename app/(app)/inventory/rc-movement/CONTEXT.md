@@ -19,6 +19,9 @@ A cross-tab / pivot of feeding activity, mirroring how the user reasons about a 
 
 > The folder now HAS a `page.tsx` (Phase 2) — `/inventory/rc-movement` is a real standalone route. The matrix is reached there (no longer via a tab).
 
+### Mobile (Archetype E phone-summary)
+The frozen matrix can't shrink to a phone (its frozen-left region alone is 384px > a 375px screen), so `rc-movement-matrix.tsx` is **additive-responsive**: the full `<table>` is wrapped `hidden sm:flex` (byte-for-byte unchanged, desktop/landscape only) and a `sm:hidden` **`RcMovementSummaryMobile`** renders below it. The summary = a **campaign KPI strip** (Fed `grandTotalFed`, Produced `campaignTotalProduced`, Yield `campaignYieldPct`, Loss = `1 − yield` display transform, and a price-gated Camp. ₱/kg from `campaignAvgFedPrice`) + a **tappable block list** (`columns[].{batchCode, blockLoc, totalOut, blockLoss, status}` → taps through to the SAME `BlockingDetailPanel` via `handleHeaderClick`) + a **per-day feed list** (`rows[].{date, dayOfWeek, totalFed, totalProduced, avgFedPriceDay}`). **Every number is reused verbatim from `data` — nothing is recomputed** (CLAUDE.md); ₱ honors `data.canViewPrices` exactly as the desktop `showFedPrice` gate does (no ₱ for Production). The toolbar row is `flex-wrap` so it doesn't overflow at 375px. Helpers `KpiTile` / `StatusPill` are local to the file.
+
 ## Data
 - **Source:** the **8 campaign-keyed views** (`view_rc_movement_campaign_*`, see below) + `batches`/`deliveries`/`rc_out`/`view_rc_movement_batch_price` for the all-time per-block footer pass. (The selected campaign's `production_batch` comes straight from the resolved campaign — no separate `rc_out` dominant-batch query.)
 - **Server action:** `fetchRcMovementMatrix(campaign?)` from `app/(app)/inventory/rc-movement/actions.ts`. `campaign` = encoded key `"PRODUCTION_BATCH-YEAR"` (e.g. `"JUNE-2026"`); absent/invalid → most recent campaign.

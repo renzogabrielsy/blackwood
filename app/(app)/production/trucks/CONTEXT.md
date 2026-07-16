@@ -32,6 +32,7 @@ Column index map (3 plates → 13 cols): `0=DATE`, then per plate `[startCol=sta
 - **Smart paste:** Excel range paste maps left-to-right across the flat column indices (DATE + plate subcols); TTL columns are skipped.
 - **Empty state:** `animate-fade-up` "Awaiting Production Manager sync..." message.
 - **Error toasts:** `errorToast()` from `lib/toast.ts`.
+- **Mobile (Archetype E phone-summary):** the days×plates grid is really a frozen matrix (one 288px plate group can't fit beside the 96px frozen DATE), so the `<div ref={gridRef}>` grid is `hidden sm:block` (desktop-only; editing stays desktop by decree) and a `sm:hidden` **`TrucksSummaryMobile`** renders a **read-only per-day card** listing each plate's `km` (start→end), `ttl` (the grid's own inline `end − start` display value, not a new total), and `fuel`. It reuses the grid's existing `rows` pivot + `plates` (dropping the trailing empty `new` row and plates with no values for the day). `formatNum` is reused; the component is local to `trucks-grid.tsx`.
 
 ## Save Logic (pivot → rows)
 Walk every dirty/new grid row; for each `(reading_date, plate)` cell:

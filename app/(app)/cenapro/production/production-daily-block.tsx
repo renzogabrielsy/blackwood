@@ -883,10 +883,14 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
         <div className="flex min-h-0 flex-1 flex-col">
             {toolbar}
 
+            {/* ── Desktop / landscape: the full editable frozen matrix (Archetype E).
+                `hidden sm:block` — byte-for-byte unchanged, it never renders on a phone
+                (the 5 frozen identity columns alone are 476px, wider than the screen).
+                Editing stays desktop-only; the phone gets a read summary below. ── */}
             <div
                 ref={gridScrollRef}
                 onKeyDown={handleGridKeyDown}
-                className="relative min-h-0 flex-1 overflow-auto animate-fade-in"
+                className="relative hidden min-h-0 flex-1 overflow-auto animate-fade-in sm:block"
             >
                 <table
                     className="relative table-fixed border border-border text-[11px]"
@@ -938,6 +942,13 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
                 </table>
             </div>
 
+            {/* ── Phone (< sm): Archetype E read summary — a per-day "Daily total" strip +
+                a stacked per-row list, both built from the SAME `groups` pivot the matrix
+                uses (buildDateGroups). Every number (daily.total/subTotal/bagging, each
+                leaf's total) is reused verbatim — nothing is recomputed. Editing stays
+                desktop-only. ── */}
+            <CenaproDailyBlockSummaryMobile groups={groups} plantView={plantView} />
+
             {/* Filler identity typeahead is now a CUSTOM dropdown (IdentitySuggestInput) —
                 native <datalist> dropped (unreliable, esp. single-char Shift). */}
 
@@ -961,6 +972,123 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+        </div>
+    );
+}
+
+// ─── Phone-summary (Archetype E) ─────────────────────────────────────────────────────
+// Additive `sm:hidden` companion to the frozen matrix. Read-only (editing is desktop-only).
+//   • A per-day "Daily total" strip (horizontally scrollable chips) — the load-bearing
+//     footer number (group.daily.total) surfaced for a quick glance across days.
+//   • A stacked per-row list: one card per day (Daily total + Sub/Bag sub-metrics), then
+//     the pivot leaves (shift · grade · source · recv · row total).
+// EVERY number is reused verbatim from the `groups` pivot (buildDateGroups) — the same
+// values the desktop footer/cells render. Nothing is recomputed here.
+function CenaproDailyBlockSummaryMobile({
+    groups,
+    plantView,
+}: {
+    groups: DateGroup[];
+    plantView: PlantView;
+}) {
+    if (groups.length === 0) return null;
+
+    return (
+        <div className="flex flex-col gap-4 py-2 sm:hidden">
+            {/* Per-day Daily-total strip — reuses group.daily.total (the footer figure). */}
+            <section className="flex flex-col gap-1.5">
+                <h3 className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Daily total · {plantView} ({groups.length} days)
+                </h3>
+                <div className="-mx-0.5 flex gap-1.5 overflow-x-auto px-0.5 pb-1">
+                    {groups.map((g) => (
+                        <div
+                            key={g.date}
+                            className="flex shrink-0 flex-col rounded-md border border-border bg-card px-2.5 py-1.5"
+                        >
+                            <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                                {formatDayLabel(g.date)}
+                            </span>
+                            <span className="font-mono text-sm font-bold tabular-nums">
+                                {fmt(g.daily.total) || '0'}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </section>
+
+            {/* Stacked per-row list — one card per day, then its pivot leaves. */}
+            <section className="flex flex-col gap-3">
+                {groups.map((g) => {
+                    // Flatten the shift→grade→source→recv hierarchy into leaf lines. Every
+                    // field + total is read straight off the pivot (no recompute).
+                    const leaves = g.shifts.flatMap((sh) =>
+                        sh.grades.flatMap((gr) =>
+                            gr.sources.flatMap((src) =>
+                                src.recvRows.map((rv) => ({
+                                    key: `${g.date}|${sh.shift}|${gr.grade}|${src.source}|${rv.recvDate}`,
+                                    shift: sh.shift,
+                                    grade: gr.grade,
+                                    source: src.source,
+                                    recvDate: rv.recvDate,
+                                    total: rv.total,
+                                })),
+                            ),
+                        ),
+                    );
+                    return (
+                        <div key={g.date} className="rounded-md border border-border bg-card">
+                            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+                                <span className="text-xs font-semibold">{formatDayLabel(g.date)}</span>
+                                <div className="flex items-baseline gap-3 tabular-nums">
+                                    <span className="text-[10px] text-muted-foreground">
+                                        Sub{' '}
+                                        <span className="font-mono text-foreground">{fmt(g.daily.subTotal) || '0'}</span>
+                                    </span>
+                                    <span className="text-[10px] text-emerald-700 dark:text-emerald-400">
+                                        Bag{' '}
+                                        <span className="font-mono">{fmt(g.daily.bagging) || '0'}</span>
+                                    </span>
+                                    <span className="font-mono text-sm font-bold">{fmt(g.daily.total) || '0'}</span>
+                                </div>
+                            </div>
+                            <ul className="divide-y divide-border">
+                                {leaves.map((lf) => (
+                                    <li key={lf.key} className="flex items-center gap-2 px-3 py-1.5">
+                                        <span
+                                            className={cn(
+                                                'w-5 shrink-0 text-center font-mono text-[11px] font-bold',
+                                                SHIFT_LETTER[lf.shift] ?? 'text-muted-foreground',
+                                            )}
+                                            title={SHIFT_LABEL[lf.shift] ?? lf.shift}
+                                        >
+                                            {lf.shift || '—'}
+                                        </span>
+                                        <span
+                                            className={cn(
+                                                pillBase,
+                                                'shrink-0',
+                                                GRADE_CHIP[lf.grade] ?? 'bg-muted text-muted-foreground ring-border',
+                                            )}
+                                        >
+                                            {lf.grade || '—'}
+                                        </span>
+                                        <div className="min-w-0 flex-1 leading-tight">
+                                            <div className="truncate text-[11px]">{lf.source || '—'}</div>
+                                            <div className="truncate font-mono text-[10px] text-muted-foreground">
+                                                {formatRecvLabel(lf.recvDate)}
+                                            </div>
+                                        </div>
+                                        <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">
+                                            {fmt(lf.total) || '—'}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    );
+                })}
+            </section>
         </div>
     );
 }
