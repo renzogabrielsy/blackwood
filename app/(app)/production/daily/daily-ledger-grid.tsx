@@ -112,7 +112,7 @@ type RowDirtyState = 'existing' | 'new' | 'modified' | 'deleted';
 // Shift group key: "date|batch|shift"
 type ShiftKey = string;
 
-interface GridRow {
+export interface GridRow {
     _state: RowDirtyState;
     _shiftKey: ShiftKey;   // groups rows that share a shift
     _isPrimary: boolean;   // first run in this shift — owns downtime/waste columns
@@ -162,7 +162,7 @@ function shiftRank(s: string): number {
 }
 
 // ─── DB → Grid conversion ──────────────────────────────────────────────────────
-function buildGridRows(
+export function buildGridRows(
     shifts: ProductionShiftRow[],
     runs: ProductionRunRow[],
     downtime: ProductionDowntimeRow[],
@@ -1560,7 +1560,7 @@ export function DailyLedgerGrid({
                 {/* Grid */}
                 <div
                     ref={gridRef}
-                    className="outline-none select-none overflow-auto relative max-h-[70vh]"
+                    className="outline-none select-none overflow-auto relative max-h-[70dvh]"
                     tabIndex={-1}
                     onKeyDown={handleGridKeyDown}
                     onPaste={handleGridPaste}

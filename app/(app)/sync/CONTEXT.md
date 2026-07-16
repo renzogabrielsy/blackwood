@@ -10,9 +10,10 @@ rows, and surfaces anything that needs judgment (held/flagged rows, hard-gate
 failures). The modal watches it **live over Supabase Realtime**.
 
 **Entry point:** a compact zinc **"Run Sync" launcher button** in the dashboard's
-digest header band (right-aligned, `app/(app)/page.tsx`) opens the sync as a Dialog.
-It is **Owner / Admin / Dev only** — enforced server-side in `enqueueSyncRun` and
-hidden client-side for other roles.
+digest header band (right-aligned, `app/(app)/page.tsx`) opens the sync as a centered
+**Dialog** at `sm`+ and as a bottom **Sheet** on phones (viewport-switched from ONE
+lifted `useSyncRun` — see `SyncLauncher.tsx` below). It is **Owner / Admin / Dev only**
+— enforced server-side in `enqueueSyncRun` and hidden client-side for other roles.
 
 ## AI layer — DORMANT, deterministic-only (Renzo 2026-07-11)
 
@@ -420,8 +421,23 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
 
 ### Client (`components/sync/`)
 - `SyncLauncher.tsx` — the live entry point. Compact zinc "Run Sync" button in the
-  digest header band, privileged-only. Owns `useSyncRun()` (lifted above the Dialog
+  digest header band, privileged-only (the trigger is `h-11` ≥44px on phones,
+  `sm:h-8` compact on desktop). Owns `useSyncRun()` (lifted above the modal boundary
   so closing the modal never detaches the run) + the modal `open` state.
+  **Responsive surface split (Audit 01, `feat/mobile-pwa`):** it renders TWO surfaces
+  from the SAME lifted state — a centered **Dialog** at `sm`+ (desktop, byte-for-byte
+  unchanged) and a bottom-anchored **Sheet** (`side="bottom"`, `max-h-[90dvh]
+  rounded-t-2xl … pb-[max(1rem,env(safe-area-inset-bottom))]`, sticky glass header)
+  below `sm` for the first-class "kick a sync + watch it live from a phone" flow.
+  `useMediaQuery('(min-width: 640px)')` (`@/hooks/use-media-query`, SSR-safe via
+  `useSyncExternalStore`) mounts EXACTLY ONE surface per viewport — a CSS
+  `hidden sm:block` split can't work here because both Dialog and Sheet **portal** their
+  content to `document.body`, so mounting both would double the overlay + focus trap.
+  Both surfaces are fed the same `state`/`run`/`stop` (one `useSyncRun` instance) and the
+  same `open`/`setOpen`, so a run opened on one surface stays live if the viewport flips
+  (rotation/resize) mid-run. The phone Sheet is a NEW inline wrapper — the dormant
+  `SyncPanel.tsx` was NOT revived (it depends on the retired `JarvisProvider` and used a
+  second `useSyncRun`).
 - `SyncPanelBody.tsx` — the reusable panel content (written ONCE, shared with the
   dormant `SyncPanel.tsx`). Run button + a **"Dry run"** secondary button
   (classify-only; the first live full run should be a deliberate click) that becomes a

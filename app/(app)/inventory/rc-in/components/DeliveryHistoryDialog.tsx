@@ -209,7 +209,7 @@ export function DeliveryHistoryDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md w-full max-h-[90vh] overflow-hidden flex flex-col p-6">
+      <DialogContent className="sm:max-w-md w-full max-h-[90dvh] overflow-hidden flex flex-col p-6">
         <DialogHeader className="shrink-0 pb-1">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Clock className="h-4 w-4" />

@@ -573,7 +573,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
                 <div
                     ref={gridRef}
-                    className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60vh] outline-none select-none"
+                    className="border rounded-md overflow-hidden overflow-x-auto relative max-h-[60dvh] outline-none select-none"
                     tabIndex={-1}
                     onKeyDown={handleGridKeyDown}
                     onPaste={handleGridPaste}

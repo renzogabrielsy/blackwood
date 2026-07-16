@@ -198,10 +198,11 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                 on every row) was removed; the active campaign is anchored HERE instead so
                 the context isn't lost. The label is the prominent heading; the Select sits
                 beside it to switch campaigns. */}
-            <div className="flex items-center gap-3 pb-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-3 pb-3 shrink-0">
                 {/* Active campaign — prominent context anchor. Eyebrow label over the
                     campaignLabel heading (e.g. "June 2026"). Falls back gracefully when
-                    no campaign resolved (empty data). */}
+                    no campaign resolved (empty data). flex-wrap so at 375px the label +
+                    180px Select + counts wrap instead of overflowing (Archetype E). */}
                 <div className="flex flex-col leading-none">
                     <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                         Campaign
@@ -238,6 +239,11 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                 )}
             </div>
 
+            {/* ── Desktop / landscape: the full frozen days×blocks matrix (Archetype E).
+                Wrapped in `hidden sm:flex` — byte-for-byte unchanged below `sm`, it simply
+                never renders on a phone (the 384px frozen region alone exceeds a 375px
+                screen, so the summary replaces it). ── */}
+            <div className="hidden sm:flex sm:flex-1 sm:min-h-0 sm:flex-col">
             {hasData ? (
                 <TooltipProvider delayDuration={200}>
                     {/* Scroll container — both axes scroll; sticky handles the freezing */}
@@ -791,6 +797,27 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                     </div>
                 </div>
             )}
+            </div>
+
+            {/* ── Phone (< sm): Archetype E summary — the frozen matrix can't shrink to a
+                phone, so a KPI strip + tappable block list + per-day feed list replace it.
+                All numbers are REUSED verbatim from `data` (no recompute). Block rows tap
+                through to the SAME BlockingDetailPanel via handleHeaderClick. ── */}
+            <div className="sm:hidden flex-1 min-h-0 overflow-y-auto">
+                {hasData ? (
+                    <RcMovementSummaryMobile
+                        data={data}
+                        onBlockTap={handleHeaderClick}
+                        selectedBatchId={selectedColumn?.batchId ?? null}
+                    />
+                ) : (
+                    <div className="flex h-full items-center justify-center animate-fade-up">
+                        <div className="text-center text-sm text-muted-foreground">
+                            No feeding movement for this campaign.
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {/* ── Batch detail slide-over (shared with the Blocking tab) ──
                 Reuses BlockingDetailPanel. We pass an explicit, batch-accurate blockData
@@ -877,6 +904,216 @@ function FrozenBodyCell({
         >
             {children}
         </td>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phone-summary (Archetype E) — additive `sm:hidden` companion to the matrix.
+// EVERY number is read straight off the `data` payload (grandTotalFed,
+// campaignTotalProduced, campaignYieldPct, campaignAvgFedPrice, rows[].*,
+// columns[].*) — NOTHING is recomputed (CLAUDE.md hard rule). Price fields honor
+// `data.canViewPrices` exactly as the desktop `showFedPrice` gate does.
+// ---------------------------------------------------------------------------
+
+/** Small labeled stat tile for the campaign KPI strip. */
+function KpiTile({
+    label,
+    value,
+    tone,
+    className,
+}: {
+    label: string;
+    value: string;
+    tone?: 'amber' | 'emerald' | 'red';
+    className?: string;
+}) {
+    const toneClass =
+        tone === 'amber'
+            ? 'text-amber-700 dark:text-amber-400'
+            : tone === 'emerald'
+              ? 'text-emerald-700 dark:text-emerald-400'
+              : tone === 'red'
+                ? 'text-red-700 dark:text-red-400'
+                : 'text-foreground';
+    return (
+        <div className={cn('rounded-md border border-border bg-card px-3 py-2', className)}>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {label}
+            </div>
+            <div className={cn('font-mono text-sm font-semibold tabular-nums', toneClass)}>
+                {value}
+            </div>
+        </div>
+    );
+}
+
+/** Compact batch-state pill mirroring the desktop tooltip pill palette. */
+function StatusPill({ status }: { status: string }) {
+    const isClosedTint = status === 'CLOSED' || status === 'FEED';
+    return (
+        <span
+            className={cn(
+                'inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide',
+                isClosedTint
+                    ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
+                    : status === 'IN-USE'
+                      ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                      : 'bg-muted text-muted-foreground',
+            )}
+        >
+            {status}
+        </span>
+    );
+}
+
+function RcMovementSummaryMobile({
+    data,
+    onBlockTap,
+    selectedBatchId,
+}: {
+    data: RcMovementMatrixData;
+    onBlockTap: (column: RcMovementMatrixColumn) => void;
+    selectedBatchId: string | null;
+}) {
+    const {
+        columns, rows, grandTotalFed, campaignTotalProduced, campaignYieldPct,
+        campaignAvgFedPrice, canViewPrices,
+    } = data;
+    // Same price gate as the desktop `showFedPrice` flag — never render ₱ for Production.
+    const showFedPrice = canViewPrices;
+    // Loss% is the desktop tricolor's exact display transform (1 − yield), NOT a recompute.
+    const campaignLossPct = campaignYieldPct === null ? null : 1 - campaignYieldPct;
+
+    return (
+        <div className="flex flex-col gap-4 pb-4">
+            {/* Campaign KPI strip — the load-bearing headline figures. */}
+            <div className="grid grid-cols-2 gap-2">
+                <KpiTile label="Fed" value={`${fmtKg(grandTotalFed) || '0'} kg`} />
+                <KpiTile
+                    label="Produced"
+                    value={campaignTotalProduced !== null ? `${fmtKg(campaignTotalProduced) || '0'} kg` : '—'}
+                    tone="amber"
+                />
+                <KpiTile label="Yield" value={fmtYieldPct(campaignYieldPct)} tone="emerald" />
+                <KpiTile label="Loss" value={fmtYieldPct(campaignLossPct)} tone="red" />
+                {showFedPrice && (
+                    <KpiTile
+                        label="Camp. ₱/kg"
+                        value={campaignAvgFedPrice !== null ? `₱${fmtPrice(campaignAvgFedPrice)}` : '—'}
+                        className="col-span-2"
+                    />
+                )}
+            </div>
+
+            {/* Blocks — tappable → BlockingDetailPanel (shared, w-full on phones). */}
+            <section className="flex flex-col gap-1.5">
+                <h3 className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Blocks ({columns.length})
+                </h3>
+                <ul className="flex flex-col gap-1.5">
+                    {columns.map((c) => {
+                        const lossClass =
+                            c.blockLoss === null
+                                ? 'text-muted-foreground'
+                                : c.blockLoss < 0
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : 'text-emerald-600 dark:text-emerald-400';
+                        return (
+                            <li key={c.batchId}>
+                                <button
+                                    type="button"
+                                    onClick={() => onBlockTap(c)}
+                                    className={cn(
+                                        'flex w-full items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-left transition-colors duration-150 active:bg-accent',
+                                        selectedBatchId === c.batchId && 'ring-1 ring-ring',
+                                    )}
+                                >
+                                    <div className="min-w-0 flex-1">
+                                        <div className="truncate font-mono text-xs font-semibold">
+                                            {c.batchCode}
+                                        </div>
+                                        <div className="truncate text-[11px] text-muted-foreground">
+                                            {c.blockLoc ?? '—'}
+                                        </div>
+                                    </div>
+                                    <div className="flex shrink-0 flex-col items-end leading-tight">
+                                        <span className="font-mono text-xs font-semibold tabular-nums">
+                                            {fmtKg(c.totalOut) || '0'} kg
+                                        </span>
+                                        <span className={cn('font-mono text-[10px] tabular-nums', lossClass)}>
+                                            {fmtSignedPct(c.blockLoss)}
+                                        </span>
+                                    </div>
+                                    <StatusPill status={c.status} />
+                                </button>
+                            </li>
+                        );
+                    })}
+                </ul>
+            </section>
+
+            {/* Per-day feed list — date · day · total fed · total produced · ₱/kg (gated). */}
+            <section className="flex flex-col gap-1.5">
+                <h3 className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Daily feed ({rows.length})
+                </h3>
+                <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+                    {rows.map((row) => {
+                        const isZeroDay = row.totalFed === 0;
+                        const isWeekend = row.dayOfWeek === 'Sat' || row.dayOfWeek === 'Sun';
+                        return (
+                            <li
+                                key={row.date}
+                                className={cn(
+                                    'flex items-center gap-2 px-3 py-1.5',
+                                    isZeroDay && 'text-muted-foreground/60',
+                                )}
+                            >
+                                <div className="flex w-[88px] shrink-0 flex-col leading-tight">
+                                    <span className="font-mono text-xs tabular-nums">{row.date}</span>
+                                    <span
+                                        className={cn(
+                                            'text-[10px] text-muted-foreground',
+                                            isWeekend && 'text-amber-600 dark:text-amber-400',
+                                        )}
+                                    >
+                                        {row.dayOfWeek}
+                                    </span>
+                                </div>
+                                <div className="flex flex-1 items-stretch justify-end gap-3 text-right tabular-nums">
+                                    <div className="flex flex-col leading-tight">
+                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                            fed
+                                        </span>
+                                        <span className="font-mono text-xs font-medium">
+                                            {fmtKg(row.totalFed) || '—'}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-col leading-tight">
+                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                            prod
+                                        </span>
+                                        <span className="font-mono text-xs">
+                                            {fmtKg(row.totalProduced ?? undefined) || '—'}
+                                        </span>
+                                    </div>
+                                    {showFedPrice && (
+                                        <div className="flex w-[56px] flex-col leading-tight">
+                                            <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                ₱/kg
+                                            </span>
+                                            <span className="font-mono text-[11px]">
+                                                {row.avgFedPriceDay !== null ? fmtPrice(row.avgFedPriceDay) : '—'}
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            </li>
+                        );
+                    })}
+                </ul>
+            </section>
+        </div>
     );
 }
 

@@ -10,8 +10,13 @@ import {
     TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { MobileCardList } from '@/components/shared/mobile/mobile-card-list'
 
-import { RowDecisionToggle, type RowDecision } from './RowDecisionToggle'
+import {
+    RowDecisionToggle,
+    ROW_DECISION_OPTIONS,
+    type RowDecision,
+} from './RowDecisionToggle'
 import { ConfidenceDot } from './ConfidenceDot'
 import type { ClassifiedRow } from '@/app/(app)/review-queue/actions'
 
@@ -122,12 +127,14 @@ export function ClassifiedRowsTable({
     }
 
     return (
-        <TooltipProvider delayDuration={200}>
-            <div className="overflow-x-auto">
-                <table
-                    className="table-fixed border-collapse text-xs"
-                    style={{ width: STATUS_WIDTH + TOTAL_WIDTH + DECISION_WIDTH }}
-                >
+        <>
+            {/* ── Desktop: Excel-dense classified-rows table (≥sm, unchanged) ── */}
+            <TooltipProvider delayDuration={200}>
+                <div className="hidden overflow-x-auto sm:block">
+                    <table
+                        className="table-fixed border-collapse text-xs"
+                        style={{ width: STATUS_WIDTH + TOTAL_WIDTH + DECISION_WIDTH }}
+                    >
                     <colgroup>
                         <col style={{ width: STATUS_WIDTH }} />
                         {COLUMNS.map((c) => (
@@ -169,10 +176,288 @@ export function ClassifiedRowsTable({
                             />
                         ))}
                     </tbody>
-                </table>
+                    </table>
+                </div>
+            </TooltipProvider>
+
+            {/* ── Mobile: Archetype C card list (<sm) ── */}
+            <div className="h-[65dvh] sm:hidden">
+                <ClassifiedRowsCards rows={rows} decisions={decisions} />
             </div>
-        </TooltipProvider>
+        </>
     )
+}
+
+// ─── Mobile card view (Archetype C) ─────────────────────────────────────────
+
+interface ClassifiedRowsCardsProps {
+    rows: ClassifiedRow[]
+    decisions: Record<number, RowDecision>
+}
+
+/**
+ * Phone read layer for the classified rows. Wraps the platform MobileCardList
+ * primitive and is fed the SAME `rows` + `COLUMNS` the desktop table uses
+ * (single source of truth). Review editing stays desktop-only — the per-row
+ * decision is surfaced here as READ-ONLY status, never a touch toggle.
+ */
+function ClassifiedRowsCards({ rows, decisions }: ClassifiedRowsCardsProps) {
+    return (
+        <MobileCardList<ClassifiedRow>
+            items={rows}
+            getKey={(r) => String(r.index)}
+            estimateSize={76}
+            renderCard={(r) => <RowCard row={r} />}
+            renderDetail={(r) => (
+                <RowDetail row={r} decision={decisions[r.index] ?? 'email_wins'} />
+            )}
+            getDetailTitle={(r) => (r.class === 'NEW' ? 'New row' : 'Changed row')}
+            getDetailDescription={(r) => {
+                const date = formatCell(getByPath(r.payload, 'transaction_date'), DATE_COL)
+                const supplier = String(getByPath(r.payload, 'supplier') ?? '') || '—'
+                const batch = String(getByPath(r.payload, 'batch_code') ?? '') || '—'
+                return `${date} · ${supplier} · ${batch}`
+            }}
+            emptyState={
+                <div className="flex h-full flex-col items-center justify-center gap-1 py-16 text-center animate-fade-up">
+                    <p className="text-sm text-muted-foreground">No new or changed rows.</p>
+                    <p className="text-xs text-muted-foreground/70">Nothing to approve.</p>
+                </div>
+            }
+        />
+    )
+}
+
+// Column specs reused for the mobile headline (pulled once from COLUMNS).
+const DATE_COL = COLUMNS.find((c) => c.key === 'transaction_date')!
+const SUPPLIER_COL = COLUMNS.find((c) => c.key === 'supplier')!
+const BATCH_COL = COLUMNS.find((c) => c.key === 'batch_code')!
+const WEIGHT_COL = COLUMNS.find((c) => c.key === 'weight_kg')!
+
+// ─── Mobile card headline (≤6 fields, decision-state flagged) ────────────────
+
+function RowCard({ row }: { row: ClassifiedRow }) {
+    const isNew = row.class === 'NEW'
+    const supplier = formatCell(getByPath(row.payload, SUPPLIER_COL.key), SUPPLIER_COL) || '—'
+    const batch = formatCell(getByPath(row.payload, BATCH_COL.key), BATCH_COL) || '—'
+    const date = formatCell(getByPath(row.payload, DATE_COL.key), DATE_COL) || '—'
+    const weight = formatCell(getByPath(row.payload, WEIGHT_COL.key), WEIGHT_COL) || '—'
+    const hasWarnings = (row.warnings?.length ?? 0) > 0
+
+    return (
+        <div
+            className={cn(
+                'flex items-start gap-2.5 px-3 py-2.5',
+                // Changed rows are visually flagged with an amber left rail.
+                isNew
+                    ? 'bg-emerald-500/[0.03]'
+                    : 'border-l-2 border-amber-500/60 bg-amber-500/[0.05]'
+            )}
+        >
+            <ConfidenceDot value={row.confidence} />
+            <div className="min-w-0 flex-1">
+                <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{supplier}</span>
+                    <span className="shrink-0 font-mono text-sm tabular-nums">
+                        {weight} kg
+                    </span>
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                    <span className="tabular-nums">{date}</span>
+                    <span aria-hidden>·</span>
+                    <span className="truncate">{batch}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-1.5">
+                    <StateBadge isNew={isNew} />
+                    {hasWarnings ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                            <AlertTriangle className="h-3 w-3" />
+                            {row.warnings!.length}
+                        </span>
+                    ) : null}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function StateBadge({ isNew }: { isNew: boolean }) {
+    return (
+        <span
+            className={cn(
+                'inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide',
+                isNew
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                    : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+            )}
+        >
+            {isNew ? 'New' : 'Changed'}
+        </span>
+    )
+}
+
+// ─── Mobile detail sheet (all columns; changed cells show dual value) ────────
+
+function RowDetail({
+    row,
+    decision,
+}: {
+    row: ClassifiedRow
+    decision: RowDecision
+}) {
+    const isNew = row.class === 'NEW'
+    const warnings = row.warnings ?? []
+
+    const diffMap = React.useMemo(() => {
+        const m = new Map<string, { emailValue: unknown; dbValue: unknown }>()
+        for (const d of row.diff ?? []) {
+            m.set(d.field, { emailValue: d.emailValue, dbValue: d.dbValue })
+        }
+        return m
+    }, [row.diff])
+
+    return (
+        <div className="flex flex-col gap-4">
+            {/* Status + read-only decision (editing stays desktop-only) */}
+            <div className="flex flex-wrap items-center gap-2">
+                <StateBadge isNew={isNew} />
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <ConfidenceDot value={row.confidence} bare />
+                    {confidenceLabel(row.confidence)}
+                </span>
+                <DecisionStatus isNew={isNew} decision={decision} />
+            </div>
+
+            {/* Warnings */}
+            {warnings.length > 0 ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5">
+                    <ul className="space-y-0.5 text-[11px] leading-snug text-amber-700 dark:text-amber-300">
+                        {warnings.map((w, i) => (
+                            <li key={i} className="flex gap-1.5">
+                                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                                <span>{w}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ) : null}
+
+            {/* Every column — changed cells render dual value (new bold / old struck) */}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                {COLUMNS.map((col) => {
+                    const emailRaw = getByPath(row.payload, col.key)
+                    const diff = diffMap.get(col.key)
+                    const changed =
+                        diff !== undefined && !sameValue(diff.emailValue, diff.dbValue)
+                    return (
+                        <DetailField
+                            key={col.key}
+                            label={col.label}
+                            mono={col.numeric}
+                            wide={col.key === 'remarks'}
+                            changed={changed}
+                            emailValue={formatCell(emailRaw, col)}
+                            dbValue={changed ? formatCell(diff!.dbValue, col) : undefined}
+                        />
+                    )
+                })}
+            </div>
+        </div>
+    )
+}
+
+function DetailField({
+    label,
+    emailValue,
+    dbValue,
+    changed,
+    mono,
+    wide,
+}: {
+    label: string
+    emailValue: string
+    dbValue?: string
+    changed?: boolean
+    mono?: boolean
+    wide?: boolean
+}) {
+    return (
+        <div
+            className={cn(
+                'flex flex-col gap-0.5',
+                wide && 'col-span-2',
+                changed &&
+                    '-mx-1.5 rounded-md border-l-2 border-amber-500/60 bg-amber-500/[0.08] px-1.5 py-1'
+            )}
+        >
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {label}
+            </span>
+            {changed ? (
+                <div className="flex flex-col leading-[1.2]">
+                    <span
+                        className={cn(
+                            'text-sm font-semibold text-foreground',
+                            mono && 'font-mono tabular-nums',
+                            wide ? 'break-words' : 'truncate'
+                        )}
+                    >
+                        {emailValue || '—'}
+                    </span>
+                    <span
+                        className={cn(
+                            'text-[11px] text-muted-foreground/70 line-through',
+                            mono && 'font-mono tabular-nums',
+                            wide ? 'break-words' : 'truncate'
+                        )}
+                    >
+                        {dbValue || '—'}
+                    </span>
+                </div>
+            ) : (
+                <span
+                    className={cn(
+                        'text-sm',
+                        mono && 'font-mono tabular-nums',
+                        wide ? 'break-words' : 'truncate',
+                        emailValue === '' && 'text-muted-foreground/40'
+                    )}
+                >
+                    {emailValue || '—'}
+                </span>
+            )}
+        </div>
+    )
+}
+
+/** Read-only mirror of RowDecisionToggle — mobile never edits the decision. */
+function DecisionStatus({
+    isNew,
+    decision,
+}: {
+    isNew: boolean
+    decision: RowDecision
+}) {
+    if (isNew) {
+        return (
+            <span className="inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                Auto-insert on approve
+            </span>
+        )
+    }
+    const label =
+        ROW_DECISION_OPTIONS.find((o) => o.value === decision)?.label ?? decision
+    return (
+        <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+            <span className="uppercase tracking-wide text-primary/70">Decision</span>
+            {label}
+        </span>
+    )
+}
+
+function confidenceLabel(v: number | null | undefined): string {
+    if (v === null || v === undefined || Number.isNaN(v)) return 'Confidence unknown'
+    return `${Math.round(v * 100)}% confidence`
 }
 
 // ─── Row ───────────────────────────────────────────────────────────────────

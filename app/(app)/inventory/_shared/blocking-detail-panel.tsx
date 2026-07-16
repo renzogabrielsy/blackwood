@@ -831,7 +831,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
                 </Tooltip>
               </TooltipProvider>
             </div>
-            <div className="rounded-md overflow-hidden bg-muted border border-border">
+            <div className="rounded-md overflow-x-auto bg-muted border border-border">
               {detailLoading ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -938,7 +938,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
                 </Tooltip>
               </TooltipProvider>
             </div>
-            <div className="rounded-md overflow-hidden bg-muted border border-border">
+            <div className="rounded-md overflow-x-auto bg-muted border border-border">
               {detailLoading ? (
                 <div className="flex items-center justify-center py-4">
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

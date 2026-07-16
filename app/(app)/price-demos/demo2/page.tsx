@@ -107,7 +107,7 @@ export default function LedgerDemoPage() {
 
       {/* The Ledger */}
       <div className="rounded-lg border border-border bg-card overflow-hidden shadow-sm">
-        <div className="max-h-[70vh] overflow-auto">
+        <div className="max-h-[70dvh] overflow-auto">
           <table className="w-full table-fixed border-collapse text-xs">
             <colgroup>
               <col className="w-[148px]" />

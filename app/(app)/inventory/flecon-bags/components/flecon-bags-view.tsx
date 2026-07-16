@@ -421,7 +421,7 @@ export function FleconBagsView({ balances, movements, error }: FleconBagsViewPro
                    Cell gridlines are reconstructed per-cell (border-b / border-r). */
                 <div
                     ref={scrollRef}
-                    className="min-h-0 flex-1 overflow-auto rounded-md border border-border max-h-[calc(100vh-180px)]"
+                    className="hidden min-h-0 flex-1 overflow-auto rounded-md border border-border max-h-[calc(100dvh-180px)] sm:block"
                 >
                     <table
                         className="relative table-fixed text-xs"
@@ -603,6 +603,106 @@ export function FleconBagsView({ balances, movements, error }: FleconBagsViewPro
                     </p>
                 </div>
             )}
+
+            {/* ── Phone (< sm): Archetype E summary — the 14-column matrix can't shrink to a
+                phone (frozen region alone is 276px), so a Current-Balance card list + a
+                recent-movements feed replace the one-column-at-a-time scroll. Balances and
+                signed qtys are REUSED verbatim from the balance view / movement rows (the
+                same SQL-computed numbers the desktop footer/cells show — no recompute). ── */}
+            {hasData ? (
+                <FleconBagsSummaryMobile columns={columns} movements={movements} />
+            ) : null}
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phone-summary (Archetype E) — additive `sm:hidden` companion to the matrix.
+// - Current-Balance card list: all bag types with their live `balance` (red when
+//   negative), straight from `view_flecon_bag_balance` (the same values the frozen
+//   footer renders). NO price data exists in Flecon.
+// - Recent-movements feed: `movements` arrives server-sorted ASC, so it's reversed
+//   for newest-first; each row is one (date · particular · ±qty · bag type).
+// ---------------------------------------------------------------------------
+
+// Cap the mobile feed so a full-year ledger doesn't render hundreds of un-virtualized
+// rows on a phone; the desktop matrix remains the exhaustive view.
+const MOBILE_FEED_CAP = 120;
+
+function FleconBagsSummaryMobile({
+    columns,
+    movements,
+}: {
+    columns: BagColumn[];
+    movements: FleconBagMovementRow[];
+}) {
+    // code → display label (nickname || label) for the movement feed's bag-type tag.
+    const labelByCode = new Map(columns.map((c) => [c.code, c.nickname?.trim() || c.label]));
+    // Newest-first, capped. `movements` is server-ordered ASC (single source of truth).
+    const recent = [...movements].reverse();
+    const shown = recent.slice(0, MOBILE_FEED_CAP);
+    const hiddenCount = recent.length - shown.length;
+
+    return (
+        <div className="flex flex-col gap-4 pb-4 sm:hidden">
+            {/* Current-Balance card list — the numbers operators check. */}
+            <section className="flex flex-col gap-1.5">
+                <h3 className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Current balance ({columns.length})
+                </h3>
+                <ul className="grid grid-cols-2 gap-1.5">
+                    {columns.map((c) => (
+                        <li
+                            key={c.bagTypeId || c.code}
+                            className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-2.5 py-2"
+                            title={c.label}
+                        >
+                            <span className="min-w-0 flex-1 truncate text-[11px] leading-tight">
+                                {c.nickname?.trim() || c.label}
+                            </span>
+                            <span
+                                className={cn(
+                                    'shrink-0 font-mono text-xs font-bold tabular-nums',
+                                    c.balance < 0 && 'text-red-600 dark:text-red-400',
+                                )}
+                            >
+                                {c.balance.toLocaleString('en-US')}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            </section>
+
+            {/* Recent-movements feed — latest first. */}
+            <section className="flex flex-col gap-1.5">
+                <h3 className="px-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Recent movements
+                </h3>
+                <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+                    {shown.map((m) => (
+                        <li key={m.id} className="flex items-center gap-2 px-3 py-1.5">
+                            <span className="w-[44px] shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                                {/* MM-dd (slice — no date-fns); the desktop cell does the same. */}
+                                {m.transaction_date.slice(5)}
+                            </span>
+                            <div className="min-w-0 flex-1 leading-tight">
+                                <div className="truncate text-xs">{m.particular}</div>
+                                <div className="truncate font-mono text-[10px] text-muted-foreground">
+                                    {labelByCode.get(m.bag_code) ?? m.bag_code}
+                                </div>
+                            </div>
+                            <span className="shrink-0 font-mono text-xs font-semibold tabular-nums">
+                                <SignedQty q={m.qty_delta} />
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+                {hiddenCount > 0 && (
+                    <p className="px-0.5 text-[10px] text-muted-foreground">
+                        Showing latest {MOBILE_FEED_CAP} of {recent.length} · open on desktop for the full matrix.
+                    </p>
+                )}
+            </section>
         </div>
     );
 }

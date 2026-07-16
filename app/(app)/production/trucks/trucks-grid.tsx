@@ -673,9 +673,13 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                 </div>
             </div>
 
+            {/* ── Desktop / landscape: the full editable days×plates matrix (Archetype E).
+                `hidden sm:block` — byte-for-byte unchanged, it simply never renders on a
+                phone (one 288px plate group can't fit beside the 96px frozen DATE column).
+                Editing stays desktop-only by decree; the phone gets a read summary below. ── */}
             <div
                 ref={gridRef}
-                className="outline-none select-none overflow-auto relative max-h-[60vh]"
+                className="hidden sm:block outline-none select-none overflow-auto relative max-h-[60dvh]"
                 tabIndex={-1}
                 onKeyDown={handleGridKeyDown}
                 onPaste={handleGridPaste}
@@ -828,6 +832,101 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                     </TableBody>
                 </table>
             </div>
+
+            {/* ── Phone (< sm): Archetype E read summary — a per-day card listing each
+                plate's km + fuel. Reuses the SAME pivoted `rows`/`plates` the grid holds;
+                TTL is the grid's own inline (end − start) display value, not a new total. ── */}
+            <TrucksSummaryMobile rows={rows} plates={plates} />
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phone-summary (Archetype E) — additive `sm:hidden` companion to the editable
+// grid. Read-only (editing is desktop-only by decree). One card per reading_date;
+// within each, one line per plate that has any value for that day (km start→end,
+// TTL, fuel). All values come from the grid's existing `rows` pivot — nothing is
+// recomputed; TTL mirrors the grid's own inline `end − start` display.
+// ---------------------------------------------------------------------------
+function TrucksSummaryMobile({ rows, plates }: { rows: GridRow[]; plates: string[] }) {
+    // Only real data rows — drop the trailing empty "new" input row the grid appends.
+    const dataRows = rows.filter((r) => r._state !== 'new');
+
+    return (
+        <div className="flex flex-col gap-2 py-2 sm:hidden">
+            {dataRows.length === 0 ? (
+                <p className="px-3 py-8 text-center text-xs text-muted-foreground animate-fade-up">
+                    Awaiting Production Manager sync.
+                </p>
+            ) : (
+                dataRows.map((row, i) => {
+                    // Plates with any value for this day (skip fully-empty plate cells).
+                    const activePlates = plates.filter((p) => {
+                        const c = row.cells[p];
+                        return c && (c.start_km || c.end_km || c.fuel_liters);
+                    });
+                    return (
+                        <div
+                            key={`${row.reading_date}-${i}`}
+                            className="rounded-md border border-border bg-card"
+                        >
+                            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-1.5">
+                                <span className="font-mono text-xs font-semibold tabular-nums">
+                                    {row.reading_date}
+                                </span>
+                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    {activePlates.length} truck{activePlates.length !== 1 ? 's' : ''}
+                                </span>
+                            </div>
+                            {activePlates.length === 0 ? (
+                                <p className="px-3 py-2 text-[11px] text-muted-foreground">No readings.</p>
+                            ) : (
+                                <ul className="divide-y divide-border">
+                                    {activePlates.map((p) => {
+                                        const c = row.cells[p];
+                                        const ttlKm = (parseFloat(c.end_km) || 0) - (parseFloat(c.start_km) || 0);
+                                        return (
+                                            <li key={p} className="flex items-center gap-2 px-3 py-1.5">
+                                                <span className="w-[92px] shrink-0 truncate font-mono text-[11px] font-medium uppercase text-blue-600 dark:text-blue-400">
+                                                    {p}
+                                                </span>
+                                                <div className="flex flex-1 items-stretch justify-end gap-3 text-right tabular-nums">
+                                                    <div className="flex flex-col leading-tight">
+                                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                            km
+                                                        </span>
+                                                        <span className="font-mono text-[11px]">
+                                                            {formatNum(c.start_km) || '—'}
+                                                            <span className="text-muted-foreground"> → </span>
+                                                            {formatNum(c.end_km) || '—'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex w-[52px] flex-col leading-tight">
+                                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                            ttl
+                                                        </span>
+                                                        <span className="font-mono text-[11px] font-semibold">
+                                                            {ttlKm > 0 ? formatNum(ttlKm) : '—'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex w-[52px] flex-col leading-tight">
+                                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                            fuel
+                                                        </span>
+                                                        <span className="font-mono text-[11px]">
+                                                            {formatNum(c.fuel_liters) || '—'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </div>
+                    );
+                })
+            )}
         </div>
     );
 }

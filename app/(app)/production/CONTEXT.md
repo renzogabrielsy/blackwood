@@ -9,6 +9,10 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | File | Role |
 |------|------|
 | `page.tsx` | Server entry point — renders `<ProductionView />` |
+| `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
+| `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
+| `electricity/electricity-cards-mobile.tsx` | **Phone read layer** for Electricity (`sm:hidden`). Simplest `MobileCardList` — card headline `date · meter · TTL KWH · [start→end]`, detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns (`diff_kwh`, `consumption_kwh`). |
+| `schedule/schedule-cards-mobile.tsx` | **Phone read layer** for the Schedule page (`sm:hidden`; desktop table `hidden sm:block`). A **full-month** list of the shared `ScheduleRowCard` (generalized from the digest's `SchedulePreviewMobile`) with the `Act hrs` / `Var` fields the digest omits. Fed the page's same `rows`. |
 | `schedule/page.tsx` | **Async Server Component** — the **Production Schedule** table at `/production/schedule`. Dense Excel-standard month table of PLAN vs ACTUAL: queries the `production_schedule` table (`plan_date, dow, shifts, setup, projected_tons, grades, remarks, source`) joined by date with `view_digest_prod_actual_tons` (actual tons SUM in SQL) AND `view_digest_daily_hours` (`date, work_hrs` — actual reported work hours SUM in SQL, joined by date). Columns: Date · Day · Setup · Grades · Shifts · Proj t · Act t · **Act hrs** (actual reported work hours; muted dash on days with no report) · Var (actual−proj, green/red) · Status (reused `resolveScheduleRowState` + `STATE_CHIP`/`STATE_LABEL` from the digest: reported/awaiting/rest/planned/today) · Source (a **Joseph** chip when `source` starts with `joseph:`, else **Sheet**) · Remarks (truncated). Month via `?month=YYYY-MM` searchParam (validated) with prev/next `<Link>`s; defaults to the operational month (`view_digest_operational_days.operational_date`, fallback today). Sticky (frozen) header `.frozen-row` + sticky `.frozen-row-bottom` month-total footer, both solid `bg-muted` (opaque per Frozen-Panes rule). Rest days muted/dashed, today row amber-tinted. **No ₱ anywhere → no price gating.** Linked from the Home Digest's "This week" band ("View full schedule →"). This is the domain-layer table that was removed when the digest draft was promoted. |
 | `layout.tsx` | Client layout — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
 | `error.tsx` | Error boundary |
@@ -72,6 +76,14 @@ The Year + Batch picker is a **module-level, shared period control** — NOT per
 - Inactive tabs never fetch — they pick up the latest period lazily on next activation.
 - The `periodsLoading` guard prevents a wasted initial "All Batches" fetch before the default batch resolves.
 - Daily filters by `production_batch` directly. Electricity/Trucks call `batchToMonth(batch)` and pass `(year, month)` to their fetch actions (batch → calendar month, since they store dates not batch names).
+
+## Mobile Read Layer (phones, `sm:hidden`)
+Additive Archetype C card views for the read surfaces — the dense desktop grids/tables are wrapped `hidden sm:block` and are otherwise **untouched** (editing / keyboard / paste stay desktop-only). Each mobile view is fed the SAME row data the desktop uses (single source of truth), never a second fetch:
+- **Daily** (`daily/daily-cards-mobile.tsx`): built on `MobileCardList`, one card per run row from the grid's exported `buildGridRows()`; derived metrics from `ledger-derive.ts::deriveDailyMetrics`. Wrapped in `daily-view.tsx` (`h-[72dvh] sm:hidden`).
+- **Electricity** (`electricity/electricity-cards-mobile.tsx`): `MobileCardList` over the `readings` rows. Wrapped in `electricity-view.tsx` (`h-[70dvh] sm:hidden`).
+- **Schedule** (`schedule/schedule-cards-mobile.tsx`): a full-month list of the shared `ScheduleRowCard` (`components/digest/schedule-row-card.tsx`, generalized from `SchedulePreviewMobile`). The `schedule/page.tsx` month switcher + prev/next `<Link>`s stay shared across breakpoints.
+- **Trucks** is intentionally NOT covered here — it is a frozen-pane matrix (Archetype E), handled in a later phase.
+- No ₱ exists anywhere in Production → no price gating on any mobile surface.
 
 ## Key Behaviors
 - **Lazy loading:** All 3 tabs load on first activation AND refetch when the shared period changes (see Universal Period Control). `fetchedPeriodRef` per tab prevents redundant fetches for an unchanged period.

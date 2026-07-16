@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, type CSSProperties } from 'react';
 import { Calculator, Check, Layers, X, Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
@@ -466,10 +466,14 @@ export function BlockingGrid({
 
   return (
     <div className="flex flex-col gap-3 px-4 py-3">
-      {/* ── Global Summary Header (sticky) ── */}
-      <div className="sticky top-0 z-30 bg-card/95 backdrop-blur-sm border border-border rounded-lg px-4 py-2.5 flex items-center justify-between flex-wrap gap-3">
+      {/* ── Global Summary Header (sticky) ──
+          Desktop (sm+): the original wrapping, space-between cluster row.
+          Below sm: a single horizontal-scroll strip (no wrap) so the many filter/
+          stat clusters stay on one compact, swipeable line instead of ballooning
+          to a dozen rows; the orphan-prone top-level dividers are hidden there. */}
+      <div className="sticky top-0 z-30 bg-card/95 backdrop-blur-sm border border-border rounded-lg px-4 py-2.5 flex items-center justify-between flex-wrap gap-3 max-sm:flex-nowrap max-sm:justify-start max-sm:overflow-x-auto">
         {/* Warehouse filter chips */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 max-sm:shrink-0">
           <button
             onClick={handleSelectAllWarehouses}
             className={cn(
@@ -515,10 +519,10 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border" />
+        <div className="h-5 w-px bg-border max-sm:hidden" />
 
         {/* Status filter toggles */}
-        <div className="flex items-center gap-1.5 text-xs">
+        <div className="flex items-center gap-1.5 text-xs max-sm:shrink-0">
           <button
             onClick={() => handleToggleStatus('STORED')}
             className={cn(
@@ -611,10 +615,10 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border" />
+        <div className="h-5 w-px bg-border max-sm:hidden" />
 
         {/* Global stats */}
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-4 text-xs max-sm:shrink-0">
           <div className="text-right">
             <div className="text-muted-foreground font-medium">Total Balance</div>
             <div className="text-foreground font-semibold font-mono">
@@ -662,7 +666,7 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border" />
+        <div className="h-5 w-px bg-border max-sm:hidden" />
 
         {/* ── Prices visibility toggle (presenter/privacy) ── */}
         {/* Shown ONLY when the server allows prices. For a server-gated no-price user the
@@ -673,7 +677,7 @@ export function BlockingGrid({
             onClick={handleToggleShowPrices}
             aria-pressed={showPrices}
             className={cn(
-              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold',
+              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold max-sm:shrink-0',
               'border transition-all duration-150 cursor-pointer',
               showPrices
                 ? 'bg-muted text-muted-foreground border-border hover:bg-accent hover:text-foreground'
@@ -699,7 +703,7 @@ export function BlockingGrid({
           onClick={handleToggleBlendMode}
           aria-pressed={blendMode}
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold',
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold max-sm:shrink-0',
             'border transition-all duration-150 cursor-pointer',
             blendMode
               ? 'bg-primary text-primary-foreground border-primary'
@@ -951,14 +955,16 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
       {/* ── Grid ── */}
       <div className="p-2 overflow-x-auto">
         <div
-          className={cn('grid', isPrepared && 'max-w-[280px]')}
-          style={{
-            gridTemplateColumns: `20px repeat(${whse.cols}, minmax(0, 1fr))`,
-            gap: '2px',
-          }}
+          className={cn('grid blocking-grid-cols', isPrepared && 'max-w-[280px]')}
+          style={
+            {
+              '--blocking-cols': whse.cols,
+              gap: '2px',
+            } as CSSProperties
+          }
         >
-          {/* Column headers: corner + colStart..colEnd */}
-          <div className="flex items-center justify-center" />
+          {/* Column headers: corner (frozen-left on mobile so it pins with the row labels) */}
+          <div className="blocking-rowlabel-frozen flex items-center justify-center" />
           {Array.from({ length: whse.cols }, (_, i) => (
             <div
               key={i}
@@ -1030,9 +1036,10 @@ interface WarehouseRowProps {
 function WarehouseRow({ whseKey, row, cols, colStart, selectedLocKey, onCellClick, statusFilter, data, canViewPrices, labHighlights, blendMode, blendSelection }: WarehouseRowProps) {
   return (
     <>
-      {/* Row label */}
+      {/* Row label — frozen-left on mobile so the row letter stays pinned while
+          the fixed-width cell columns scroll horizontally (opaque, never glass). */}
       <div
-        className="flex items-center justify-center text-muted-foreground font-semibold uppercase"
+        className="blocking-rowlabel-frozen flex items-center justify-center text-muted-foreground font-semibold uppercase"
         style={{ fontSize: '10px', letterSpacing: '0.05em', width: '20px' }}
       >
         {row}

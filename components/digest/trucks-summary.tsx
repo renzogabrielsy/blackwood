@@ -1,11 +1,10 @@
 "use client";
 
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { fmtKg } from "./format";
 import type { TruckTrip } from "@/lib/digest/types";
 
@@ -54,40 +53,44 @@ export function TrucksSummary({ trucks }: TrucksSummaryProps) {
             </tr>
           </thead>
           <tbody>
-            <TooltipProvider delayDuration={150}>
-              {trucks.map((t, i) => (
-                <tr
-                  key={`${t.plateNo}-${i}`}
-                  className="h-8 border-b last:border-0 transition-all duration-150 hover:bg-muted/40"
-                >
-                  <td className="max-w-[200px] truncate px-2 py-1 font-medium">
-                    {t.remarks ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="cursor-help underline decoration-dotted decoration-muted-foreground/50 underline-offset-2">
-                            {t.plateNo}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent
-                          side="bottom"
-                          className="max-w-[240px] text-xs"
+            {trucks.map((t, i) => (
+              <tr
+                key={`${t.plateNo}-${i}`}
+                className="h-8 border-b last:border-0 transition-all duration-150 hover:bg-muted/40"
+              >
+                <td className="max-w-[200px] truncate px-2 py-1 font-medium">
+                  {t.remarks ? (
+                    // Tap-native Popover (not a hover-only Tooltip) so truck
+                    // remarks are reachable on touch devices as well as by mouse.
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button
+                          type="button"
+                          className="cursor-pointer underline decoration-dotted decoration-muted-foreground/50 underline-offset-2"
                         >
-                          {t.remarks}
-                        </TooltipContent>
-                      </Tooltip>
-                    ) : (
-                      t.plateNo
-                    )}
-                  </td>
-                  <td className="px-2 py-1 text-right font-mono tabular-nums">
-                    {fmtNum(t.ttlKm)}
-                  </td>
-                  <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
-                    {t.fuelLiters == null ? "—" : fmtNum(t.fuelLiters)}
-                  </td>
-                </tr>
-              ))}
-            </TooltipProvider>
+                          {t.plateNo}
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        side="bottom"
+                        align="start"
+                        className="w-auto max-w-[240px] p-2 text-xs"
+                      >
+                        {t.remarks}
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
+                    t.plateNo
+                  )}
+                </td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums">
+                  {fmtNum(t.ttlKm)}
+                </td>
+                <td className="px-2 py-1 text-right font-mono tabular-nums text-muted-foreground">
+                  {t.fuelLiters == null ? "—" : fmtNum(t.fuelLiters)}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

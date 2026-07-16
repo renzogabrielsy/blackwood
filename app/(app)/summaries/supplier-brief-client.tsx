@@ -86,6 +86,7 @@ import {
   type AggregationType,
 } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
+import { SupplierCardsMobile } from './supplier-cards-mobile';
 
 /* ------------------------------------------------------------------ */
 /* Props                                                              */
@@ -2221,17 +2222,33 @@ export default function SupplierBriefClient({
             </p>
           </div>
         </div>
-        <SupplierTable
-          rows={tableRows}
-          totals={footerTotals}
-          graphed={graphedSet}
-          graphedFull={!canGraphMore}
-          onToggleGraph={toggleGraph}
-          onOpenSupplier={setOpenSupplier}
-          colors={colors}
-          showPrices={canViewPrices}
-          resetKey={tableResetKey}
-        />
+        {/* Desktop table (sm+) — Excel cell-range drag-select + sortable headers
+            stay desktop-only. */}
+        <div className="hidden sm:block">
+          <SupplierTable
+            rows={tableRows}
+            totals={footerTotals}
+            graphed={graphedSet}
+            graphedFull={!canGraphMore}
+            onToggleGraph={toggleGraph}
+            onOpenSupplier={setOpenSupplier}
+            colors={colors}
+            showPrices={canViewPrices}
+            resetKey={tableResetKey}
+          />
+        </div>
+        {/* Phone card list (Archetype C) — SAME tableRows + gating, no refetch. */}
+        <div className="h-[70dvh] overflow-hidden rounded-lg border border-border bg-card sm:hidden">
+          <SupplierCardsMobile
+            rows={tableRows}
+            canViewPrices={canViewPrices}
+            graphed={graphedSet}
+            graphedFull={!canGraphMore}
+            colors={colors}
+            onToggleGraph={toggleGraph}
+            onOpenSupplier={setOpenSupplier}
+          />
+        </div>
       </section>
 
       {/* ---- Footer note ---- */}

@@ -72,6 +72,7 @@ import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
+import { RcOutCardsMobile } from './rc-out-cards-mobile';
 
 const STATE_OPTIONS = ['IN-USE', 'SUNDRYING', 'SUNDRIED', 'CLOSED'];
 const STATE_COUNT = STATE_OPTIONS.length;
@@ -726,7 +727,7 @@ export function RcOutTable({
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
-                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95dvh] border-none shadow-xl"
                     >
                         <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
@@ -759,7 +760,7 @@ export function RcOutTable({
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
-                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95dvh] border-none shadow-xl"
                     >
                         <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
@@ -808,8 +809,8 @@ export function RcOutTable({
                     </DialogContent>
                 </Dialog>
 
-                {/* Toolbar */}
-                <div className="flex-none flex items-center justify-between py-1">
+                {/* Toolbar (desktop only — mobile gets its own in RcOutCardsMobile) */}
+                <div className="hidden sm:flex flex-none items-center justify-between py-1">
                     {/* In Closed Blocks summary mode the 5 feeding filters are hidden;
                         the empty <div /> placeholder keeps the right cluster right-aligned. */}
                     {!closedBlocksMode ? (
@@ -1182,9 +1183,9 @@ export function RcOutTable({
                     </div>
                 </div>
 
-                {/* Floating Action Bar */}
+                {/* Floating Action Bar (desktop only) */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm animate-fade-up">
+                    <div className="hidden sm:flex flex-none items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -1200,9 +1201,9 @@ export function RcOutTable({
                     </div>
                 )}
 
-                {/* Scrollable Table — feeding view (toggle OFF) */}
+                {/* Scrollable Table — feeding view (toggle OFF, desktop only) */}
                 {!closedBlocksMode && (
-                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
+                <div className="hidden sm:flex flex-1 min-h-0 rounded-md border overflow-hidden flex-col relative bg-background">
                     <div
                         className="flex-1 overflow-auto relative w-full outline-none select-none"
                         ref={tableContainerRef}
@@ -1348,7 +1349,7 @@ export function RcOutTable({
                 {/* Closed Blocks summary (toggle ON). Rows render in server array order
                     (close_date desc) — NO client re-sort, NO re-sum, NO re-aggregation. */}
                 {closedBlocksMode && (
-                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background animate-fade-up">
+                <div className="hidden sm:flex flex-1 min-h-0 rounded-md border overflow-hidden flex-col relative bg-background animate-fade-up">
                     {closedLoading && closedBlocks === null ? (
                         <div className="flex-1 flex items-center justify-center">
                             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -1424,6 +1425,45 @@ export function RcOutTable({
                 </div>
                 )}
 
+                {/* ─── Mobile Card List (phones only — Archetype C) ─── */}
+                <div className="sm:hidden flex-1 min-h-0">
+                    <RcOutCardsMobile
+                        data={filteredData}
+                        canViewPrices={canViewPrices}
+                        searchTerm={searchTerm}
+                        onSearchChange={setSearchTerm}
+                        closedBlocksMode={closedBlocksMode}
+                        onToggleClosedBlocksMode={(on) => setClosedBlocksMode(on)}
+                        closedBlocks={closedBlocks}
+                        closedLoading={closedLoading}
+                        closedCanViewPrices={closedCanViewPrices}
+                        stateOptions={STATE_OPTIONS}
+                        stateExcluded={stateExcluded}
+                        onToggleState={(v) => setStateExcluded(prev => {
+                            const n = new Set(prev);
+                            if (n.has(v)) n.delete(v); else n.add(v);
+                            return n;
+                        })}
+                        yearOptions={yearOptions}
+                        selectedYears={selectedYears}
+                        onToggleYear={(y) => setSelectedYears(prev => {
+                            const n = new Set(prev);
+                            if (n.has(y)) n.delete(y); else n.add(y);
+                            return n;
+                        })}
+                        batchOptions={batchOptions}
+                        selectedBatches={selectedBatches}
+                        onToggleBatch={(v) => toggleFilter(setSelectedBatches, v)}
+                        destinations={destinations}
+                        selectedDestinations={selectedDestinations}
+                        onToggleDestination={(v) => toggleFilter(setSelectedDestinations, v)}
+                        blockLocs={blockLocs}
+                        selectedBlockLocs={selectedBlockLocs}
+                        onToggleBlockLoc={(v) => toggleFilter(setSelectedBlockLocs, v)}
+                        hasActiveFilters={hasActiveFilters}
+                        onClearAllFilters={clearAllFilters}
+                    />
+                </div>
 
             </div>
         </TooltipProvider>

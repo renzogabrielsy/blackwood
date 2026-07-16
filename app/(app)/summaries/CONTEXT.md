@@ -13,7 +13,8 @@ The `/summaries` route is the permanent home for delivery **price & volume analy
 |------|------|
 | `page.tsx` | Server component. Fetches BOTH datasets — `fetchMonthlyDeliveryAnalytics` (period, imported from `../price-demos/demo4/actions`) and `fetchSupplierAnalytics` (supplier, from `./actions`) — each in its own try/catch, and passes `period` + `supplier` props to `<SummariesClient>`. |
 | `summaries-client.tsx` | `'use client'` shell. URL-driven view toggle via `?view=period\|supplier` (default `period`; `?view=period` deletes the param to keep the URL clean). Renders `AnalystBriefClient` (period) or `SupplierBriefClient` (supplier). `useSearchParams` is wrapped in a Suspense boundary. |
-| `supplier-brief-client.tsx` | The **By Supplier** view (see Key Behaviors). |
+| `supplier-brief-client.tsx` | The **By Supplier** view (see Key Behaviors). Desktop `SupplierTable` is `hidden sm:block`; below `sm` it renders `SupplierCardsMobile` instead (additive). |
+| `supplier-cards-mobile.tsx` | Phone read layer for the supplier table (Archetype C, `sm:hidden`). `SupplierCardsMobile` on the platform `MobileCardList` primitive. Fed the SAME `tableRows` + gating booleans the desktop table renders (single source of truth). Headline (≤6, NO ₱): on-graph toggle · supplier · weight · deliveries · sacks; the toggle wires to the SAME `toggleGraph` handler. Detail bottom-sheet: core numbers + full lab panel + ₱/kg & ₱ Total (gated) + an "Open full profile" button that opens the EXISTING `SupplierDetailPanel` Sheet via `onOpenSupplier` (no logic duplicated). Includes a read-only "View full table" escape hatch. |
 | `actions.ts` | `'use server'`. `fetchSupplierAnalytics()` + exported interfaces `SupplierMonthRow`, `SupplierYearSummary`, `SupplierAnalytics`. Price-gated via `canViewPrices()`. |
 
 ## Data
@@ -47,7 +48,8 @@ The `/summaries` route is the permanent home for delivery **price & volume analy
 - Excel cell-selection (`use-cell-selection` + `use-cell-aggregation`) pushes sum/avg/count to the app-wide `FloatingStatusBar` via `useStatusBar`.
 
 ## Dependencies
-- `app/(app)/price-demos/demo4/` — the **period view** (`AnalystBriefClient`) + `fetchMonthlyDeliveryAnalytics` are imported from here (reuse, not duplicated). *Future cleanup: relocate the period view into this module so the permanent feature no longer imports from a `price-demos` folder.*
+- `app/(app)/price-demos/demo4/` — the **period view** (`AnalystBriefClient`) + `fetchMonthlyDeliveryAnalytics` are imported from here (reuse, not duplicated). Its phone read layer is `monthly-delivery-cards-mobile.tsx` (`MonthlyDeliveryCardsMobile`, `sm:hidden`, Archetype C): desktop `MonthlyDeliveriesTable` is `hidden sm:block`; the cards are fed the SAME `focusRows` and `canViewPrices`. Headline (≤6, NO ₱): month · weight · deliveries · MC; detail bottom-sheet adds sacks + full lab panel + ₱/kg & ₱ Total (gated) + a read-only "View full table" escape hatch. *Future cleanup: relocate the period view into this module so the permanent feature no longer imports from a `price-demos` folder.*
+- `@/components/shared/mobile/mobile-card-list` — the platform `MobileCardList<T>` Archetype C primitive both mobile card layers build on.
 - `@/lib/hooks/use-cell-selection`, `@/lib/hooks/use-cell-aggregation`, `@/components/providers/status-bar-context` + `FloatingStatusBar` (mounted in `app/(app)/app-shell.tsx`).
 - `@/components/ui/{sheet,select,popover,command}`, `recharts`, `@/lib/auth` (`canViewPrices`).
 - SQL views (above) — owned by the supabase layer.

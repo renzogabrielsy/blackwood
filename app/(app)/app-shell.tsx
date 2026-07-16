@@ -19,7 +19,7 @@ const Navbar = dynamic(
 //                              provider or its Cmd+K toggle.
 export function AppShell({ children }: { children: React.ReactNode }) {
     return (
-        <div className="flex flex-col h-screen">
+        <div className="flex flex-col h-dvh">
             <Navbar />
             <div className="flex-1 min-h-0 flex flex-col">{children}</div>
             <FloatingStatusBar />
