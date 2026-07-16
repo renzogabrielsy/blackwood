@@ -43,6 +43,7 @@
 - [R1 rc_out reconcile engine](reconcile-r1-rcout.md) — 2026-07-08: pure engine, no wiring. Granularity = (date,batch,block,dest) SUM of weight_kg; MOVEMENT is per-DATE only → date-level corroboration witness, not a fine competitor (L-037 discriminator = daily-rollup vs movement total). Advisory recommend only when exactly one opinion selfConsistent&corroborated. 11 vitest, parity 12/12. [[reconcile-r1-rcout]]
 
 ## Data-layer views & actions
+- [PROD SCHED plan → digest day-states](production-schedule-plan.md) — 2026-07-14 (NOT committed): `production_schedule` table + `view_digest_prod_actual_tons` + `scripts/sync-prod-schedule.ts` populate PROD SCHED tab; adds plantStatus/dayStatus/weekPlan to getDigestData. TRAP: sheet weekday labels are off-by-one from real calendar (key on plan_date); view_digest_* denied to service_role. [[production-schedule-plan]]
 - [Closed Blocks view](rc-out-closed-blocks.md) — 2026-06-29: `view_rc_out_closed_blocks`, 1 row/CLOSED block, 440 rows, price = deliveries weighted-avg. [[rc-out-closed-blocks]]
 - [deliveries true-weight/deduction cols](deliveries-true-weight-deduction.md) — 2026-06-25: additive display-only NULLABLE `true_weight_kg`+`deduction_note`; nothing computational uses them. [[deliveries-true-weight-deduction]]
 - [Blend Proposal RPC](blend-proposal.md) — 2026-06-19: `fn_blend_proposal(text[])` balance-weighted blend over view_blocking_grid. [[blend-proposal]]

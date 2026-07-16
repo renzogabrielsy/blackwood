@@ -2,10 +2,12 @@
 # Stage 1 (builder): install ALL deps, bundle src -> dist/index.js with esbuild.
 # Stage 2 (runtime): copy dist + PRODUCTION node_modules only (runtime deps are kept
 # external from the bundle because DBOS/exceljs/imapflow/mailparser have native or
-# dynamic-require bits that don't survive bundling). Small final image on node:20-slim.
+# dynamic-require bits that don't survive bundling). Small final image on node:22-slim.
+# NOTE: Node 22+ is REQUIRED — @supabase/supabase-js (realtime-js) needs the native
+# global WebSocket, which Node 20 lacks (createClient throws on boot otherwise).
 
 # ---- builder ----------------------------------------------------------------
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
 
 # Install deps against the lockfile for reproducibility.
@@ -21,7 +23,7 @@ RUN npm run build
 RUN npm ci --omit=dev
 
 # ---- runtime ----------------------------------------------------------------
-FROM node:20-slim AS runtime
+FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 

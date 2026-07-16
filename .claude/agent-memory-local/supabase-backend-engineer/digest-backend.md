@@ -20,7 +20,7 @@ Replaces the old modular widget dashboard at `/`. Backend-only deliverable: SQL 
 
 ## Views (all SECURITY INVOKER, SELECT→authenticated)
 - `view_digest_operational_days` — 1 row {operational_date, prev_operational_date}. operational = latest day with ANY data across deliveries/rc_out/production_shifts/electricity (UNION + ROW_NUMBER). prev = 2nd-latest such day (NOT op-1).
-- `view_digest_stream_freshness` — per-stream max date (deliveries/rc_out/production/electricity/trucks).
+- `view_digest_stream_freshness` — per-stream max date (deliveries/rc_out/production/electricity/trucks). **production row keys on ACTUAL OUTPUT, not any shift:** `max(production_shifts.transaction_date) WHERE EXISTS production_runs.shift_id`. Fixed 2026-07-14 (mig `20260714000000_digest_stream_freshness_production_output.sql`) — the WASTE report also creates shift rows (`production_waste` FKs shift_id), so keying on raw shift date falsely reported Production fresh while output ingestion (MC's Daily Production Report) had stalled 10 days. Do NOT revert to `max(production_shifts.transaction_date)`.
 - `view_digest_daily_flow` — zero-filled calendar series, in_kg/out_kg per day (generate_series from min delivery/rc_out date → operational_date). Source for FlowPoint + rc_in/rc_out/net_flow KPIs+sparks.
 - `view_digest_daily_price` — weighted avg ₱/kg = sum(w*cost)/sum(w), **WHERE cost_basis > 0** (excludes L-008 gsheet placeholders).
 - `view_digest_daily_production` — sum production_runs.ttl_kg per shift transaction_date.
@@ -31,6 +31,7 @@ Replaces the old modular widget dashboard at `/`. Backend-only deliverable: SQL 
 - `view_digest_latest_sync` + `view_digest_latest_sync_by_employee` — counts for max(performed_day).
 - `view_digest_rcin_daystats` — suppliers + sacks per day (rc_in KPI sub-line).
 - `view_digest_unpriced_recent` — count cost_basis=0 in trailing 30d of operational date (missing_price flag).
+- `view_digest_daily_hours` (2026-07-15, mig `20260715120000_view_digest_daily_hours.sql`) — per production date: `work_hrs=SUM(production_downtime.shift_hrs)` (shift_hrs = hours worked that shift, e.g. 12), `downtime_hrs=SUM(dt_hrs + dt_mins/60.0)`. `production_downtime` JOIN `production_shifts` on shift_id, GROUP BY transaction_date. 120-day windowed (bounds CTE off operational_date, same as daily_flow/power). One downtime row per shift → summing across shifts = daily total. Feeds `DailyHoursPoint[] productionHours` (GRADE_DAYS=14 tail) + `actualHrs` on SchedulePreviewRow/WeekDayPlan (join workHrsByDate over the same forward ranges as actual tons). NOTE: production stream lags op date by ~1 day, so forward schedule windows currently show actualHrs=null (awaiting); reported 12-hr days sit in the trailing productionHours slice.
 
 ## Flags (derived in queries.ts, light logic only)
 - stale_stream (warn): stream throughDate lags operationalDate > 2 days. Trucks currently fires (7d behind).
