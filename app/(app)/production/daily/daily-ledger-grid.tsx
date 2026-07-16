@@ -1560,7 +1560,7 @@ export function DailyLedgerGrid({
                 {/* Grid */}
                 <div
                     ref={gridRef}
-                    className="outline-none select-none overflow-auto relative max-h-[70vh]"
+                    className="outline-none select-none overflow-auto relative max-h-[70dvh]"
                     tabIndex={-1}
                     onKeyDown={handleGridKeyDown}
                     onPaste={handleGridPaste}

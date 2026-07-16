@@ -9,7 +9,7 @@ export const metadata = {
 
 export default function AccessDeniedPage() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-background">
+    <div className="flex items-center justify-center min-h-dvh bg-background">
       <Card className="p-8 max-w-md text-center">
         <ShieldX className="h-12 w-12 mx-auto text-destructive mb-4" />
         <h1 className="text-2xl font-bold mb-2">Access Revoked</h1>

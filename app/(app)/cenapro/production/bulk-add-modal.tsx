@@ -434,7 +434,7 @@ export function BulkAddModal({ open, onOpenChange, onInserted, defaultYear }: Bu
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent
-                className="flex max-h-[88vh] w-full flex-col gap-4 sm:max-w-[min(96vw,1180px)]"
+                className="flex max-h-[88dvh] w-full flex-col gap-4 sm:max-w-[min(96vw,1180px)]"
                 onOpenAutoFocus={(e) => e.preventDefault()}
             >
                 <DialogHeader>

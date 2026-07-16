@@ -351,7 +351,7 @@ export function BlendProposalDialog({
       <DialogContent
         showCloseButton={false}
         aria-describedby={undefined}
-        className="animate-modal-enter w-[calc(100%-2rem)] max-w-4xl sm:max-w-4xl max-h-[85vh] p-0 gap-0 overflow-hidden flex flex-col"
+        className="animate-modal-enter w-[calc(100%-2rem)] max-w-4xl sm:max-w-4xl max-h-[85dvh] p-0 gap-0 overflow-hidden flex flex-col"
       >
         {/* ── Header (Print + close live here; stays fixed while body scrolls) ── */}
         <DialogHeader className="shrink-0 bg-background/90 backdrop-blur-sm border-b border-border px-4 py-3 text-left">

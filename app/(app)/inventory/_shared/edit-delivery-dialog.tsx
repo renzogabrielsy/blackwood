@@ -164,7 +164,7 @@ export function EditDeliveryDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[480px] max-h-[85vh] overflow-y-auto animate-modal-enter">
+      <DialogContent className="sm:max-w-[480px] max-h-[85dvh] overflow-y-auto animate-modal-enter">
         <DialogHeader>
           <DialogTitle className="text-sm">Edit Delivery</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">

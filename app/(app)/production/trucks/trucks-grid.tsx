@@ -675,7 +675,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
 
             <div
                 ref={gridRef}
-                className="outline-none select-none overflow-auto relative max-h-[60vh]"
+                className="outline-none select-none overflow-auto relative max-h-[60dvh]"
                 tabIndex={-1}
                 onKeyDown={handleGridKeyDown}
                 onPaste={handleGridPaste}

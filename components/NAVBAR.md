@@ -6,11 +6,22 @@ Persistent navigation bar (`components/navbar.tsx`). Owns ALL page titles/descri
 > **Platform Chrome:** The navbar is platform-level chrome — it must remain domain-neutral. Module links and breadcrumbs are tenant-registered navigation entries, not hardcoded charcoal concepts. Any future tenant module is registered in the registry + the `MODULES`-family constants the same way.
 
 ## Layout (3-column)
-- **Left:** Breadcrumb — `← {backLabel} / {pageTitle}` + muted `pageDescription`
+- **Left:** Breadcrumb — `← {backLabel} / {pageTitle}` + muted `pageDescription` (**`hidden sm:flex` — desktop only**). Below `sm` a **hamburger `Sheet` trigger** (`sm:hidden`) takes its place — see [Mobile Navigation](#mobile-navigation-below-sm).
 - **Center:** "Blackwood" logo (always visible, links to `/`)
 - **Right:** Modules dropdown (Factory icon), dev role switcher (Shield, privileged only), dark-mode toggle, notification bell, profile avatar
 
 The dashboard (`/`) returns `null` from `getBreadcrumb()` — no breadcrumb shown.
+
+## Mobile Navigation (below `sm`)
+Additive, mobile-only. At 375px the desktop breadcrumb (fixed `shrink-0` parts ~180px) can't fit the narrow left region without clipping/overflow (Audit 10). Fix:
+
+- The desktop breadcrumb block is wrapped in `hidden sm:flex` → shows **only at `sm`+** (desktop navbar unchanged above `sm`).
+- Below `sm`, a `sm:hidden` hamburger (`Menu` icon) `Button` in the left region opens a shadcn `Sheet` (`side="left"`), rendered by the module-level **`MobileNav`** component.
+- The sheet is a normal `bg-background` surface (readable nav, per the sheet glass convention) — NOT the dark navbar theme. The **BAR itself stays dark** (`bg-zinc-800 dark:bg-zinc-700`), only the slide-out panel is a normal surface.
+- **Header:** shows the current `getBreadcrumb(pathname).pageTitle` (fallback `"Dashboard"` for `/`), since the breadcrumb text is now hidden on mobile. Same title resolution the breadcrumb uses.
+- **Body:** REUSES the same three constants the desktop Modules dropdown renders — `ICTC_INVENTORY` / `ICTC_MODULES` / `CENAPRO_MODULES` — plus the identical `PRIVILEGED_ROLES` conditional section (Sync Review · Review Queue · Admin Panel). **No duplicated link list** — single source of truth. The nesting (ICTC · Davao → indented Inventory sub-group → sibling modules → Cenapro · Cebu → privileged) mirrors the dropdown structure.
+- **Close-on-navigate:** each live row is a module-level **`MobileNavItem`** that wraps its `Link` in `SheetClose asChild`, so a tap closes the sheet AND navigates in one gesture. Disabled modules (e.g. Accounting) render as inert `text-muted-foreground/50` text. Rows are `min-h-11` (44px touch targets).
+- `MobileNavItem` is hoisted to module level (never defined during render) to satisfy the `react-hooks/static-components` lint rule.
 
 ## Breadcrumb Registry (`BREADCRUMB_REGISTRY` → `getBreadcrumb()`)
 The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname)` predicate (built via the `exact()` / `prefix()` helpers); the FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb()` just `.find()`s the first matching entry.
@@ -94,7 +105,8 @@ Cenapro · Cebu               ← uppercase tenant label
 - `@/components/providers/auth-context` — `useAuth()`, `UserRole`
 - `next-themes` — `useTheme()` for dark mode toggle
 - `next/navigation` — `usePathname()` (breadcrumb), `useRouter()` (sign-out redirect)
-- shadcn: Avatar, Button, DropdownMenu (incl. Label/Separator/Item), Tooltip
+- shadcn: Avatar, Button, DropdownMenu (incl. Label/Separator/Item), Tooltip, **Sheet** (incl. `SheetClose`/`SheetTrigger`/`SheetContent`/`SheetHeader`/`SheetTitle`/`SheetDescription` — mobile nav)
+- `lucide-react` — `Menu` icon (mobile hamburger)
 
 ## See Also
 - [Auth Provider](providers/AUTH.md) — role/permission context consumed by navbar

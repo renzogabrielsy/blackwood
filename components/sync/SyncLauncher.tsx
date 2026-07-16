@@ -60,7 +60,7 @@ export function SyncLauncher() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           showCloseButton
-          className="max-h-[85vh] gap-0 overflow-y-auto p-0 sm:max-w-3xl"
+          className="max-h-[85dvh] gap-0 overflow-y-auto p-0 pb-[max(0px,env(safe-area-inset-bottom))] sm:max-w-3xl"
         >
           {/* Sticky glass header (glass pattern for sticky dialog headers) */}
           <DialogHeader className="sticky top-0 z-10 flex-none space-y-0 border-b border-border bg-background/90 px-4 py-3 text-left backdrop-blur-sm">

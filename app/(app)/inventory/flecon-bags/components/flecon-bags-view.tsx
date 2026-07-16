@@ -421,7 +421,7 @@ export function FleconBagsView({ balances, movements, error }: FleconBagsViewPro
                    Cell gridlines are reconstructed per-cell (border-b / border-r). */
                 <div
                     ref={scrollRef}
-                    className="min-h-0 flex-1 overflow-auto rounded-md border border-border max-h-[calc(100vh-180px)]"
+                    className="min-h-0 flex-1 overflow-auto rounded-md border border-border max-h-[calc(100dvh-180px)]"
                 >
                     <table
                         className="relative table-fixed text-xs"

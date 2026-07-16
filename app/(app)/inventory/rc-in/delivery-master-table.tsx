@@ -1515,7 +1515,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
-                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95dvh] border-none shadow-xl"
                     >
                         <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
@@ -1542,7 +1542,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     <DialogContent
                         onEscapeKeyDown={(e) => e.preventDefault()}
                         onInteractOutside={(e) => e.preventDefault()}
-                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
+                        className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95dvh] border-none shadow-xl"
                     >
                         <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
