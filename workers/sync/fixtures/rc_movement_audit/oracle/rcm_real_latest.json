@@ -1,0 +1,5516 @@
+{
+  "ok": false,
+  "reconcile": {
+    "drift_dates": [
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34153",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34153",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34153"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:40876",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-05",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:40876",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:40876"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32147",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-06",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32147",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32147"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36970",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36970",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36970"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:51096",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-10",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:51096",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:51096"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36810",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-11",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36810",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36810"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33749",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33749",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33749"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39005",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-13",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:39005",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:39005"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:52382",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:52382",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:52382"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48167",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:48167",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:48167"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:50096",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:50096",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:50096"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:47165",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-23",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:47165",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:47165"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44503",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-24",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:44503",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:44503"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33481",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-25",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33481",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33481"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43101",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-26",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:43101",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:43101"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:10741",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-27",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:10741",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:10741"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:10653",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-28",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:10653",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:10653"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31814",
+            "whse": null
+          }
+        ],
+        "date": "2025-06-30",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:31814",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:31814"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:55234",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:55234",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:55234"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43439",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-02",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:43439",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:43439"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45192",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-03",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:45192",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:45192"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31320",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:31320",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:31320"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31570",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-05",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:31570",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:31570"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43728",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-07",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:43728",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:43728"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:27547",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-08",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:27547",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:27547"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33724",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33724",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33724"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38238",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-10",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:38238",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:38238"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41437",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-11",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:41437",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:41437"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35672",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35672",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35672"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34152",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-14",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34152",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34152"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38169",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:38169",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:38169"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29172",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29172",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29172"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35776",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-17",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35776",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35776"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34768",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34768",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34768"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:20631",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:20631",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:20631"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33814",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-21",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33814",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33814"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42612",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:42612",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:42612"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:21656",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-23",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:21656",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:21656"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32017",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-24",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32017",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32017"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38933",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-25",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:38933",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:38933"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32621",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-26",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32621",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32621"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32543",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-28",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32543",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32543"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:19963",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-29",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:19963",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:19963"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:16144",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-30",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:16144",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:16144"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:6332",
+            "whse": null
+          }
+        ],
+        "date": "2025-07-31",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:6332",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:6332"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35696",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35696",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35696"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32881",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-02",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32881",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32881"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41774",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:41774",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:41774"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38725",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-05",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:38725",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:38725"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36390",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-06",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36390",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36390"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38393",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-07",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:38393",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:38393"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:55216",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-08",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:55216",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:55216"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35951",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35951",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35951"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39866",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-11",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:39866",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:39866"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:27057",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:27057",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:27057"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36374",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-13",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36374",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36374"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48075",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-14",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:48075",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:48075"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28507",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:28507",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:28507"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43969",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:43969",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:43969"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36847",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36847",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36847"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34561",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-20",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34561",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34561"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:30612",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-21",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:30612",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:30612"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34105",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34105",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34105"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35123",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-26",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35123",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35123"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29369",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-27",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29369",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29369"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28957",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-28",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:28957",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:28957"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:11514",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-29",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:11514",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:11514"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:23898",
+            "whse": null
+          }
+        ],
+        "date": "2025-08-30",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:23898",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:23898"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42118",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:42118",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:42118"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43820",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-02",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:43820",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:43820"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28726",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-03",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:28726",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:28726"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:46244",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:46244",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:46244"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31248",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-05",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:31248",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:31248"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:19429",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-06",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:19429",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:19429"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44029",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-08",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:44029",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:44029"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35477",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35477",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35477"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:22449",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-10",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:22449",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:22449"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37068",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-11",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37068",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37068"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39585",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:39585",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:39585"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32240",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-13",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32240",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32240"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:27414",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:27414",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:27414"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35887",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:35887",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:35887"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:26482",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-17",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:26482",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:26482"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:26724",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:26724",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:26724"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31147",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:31147",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:31147"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:26995",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-20",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:26995",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:26995"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37918",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37918",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37918"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:30135",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-23",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:30135",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:30135"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:52121",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-24",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:52121",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:52121"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:20369",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-25",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:20369",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:20369"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32928",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-26",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32928",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32928"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37836",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-27",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37836",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37836"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:12153",
+            "whse": null
+          }
+        ],
+        "date": "2025-09-29",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:12153",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:12153"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44801",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:44801",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:44801"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42640",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-02",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:42640",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:42640"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:30442",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-03",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:30442",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:30442"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37128",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37128",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37128"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45114",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-06",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:45114",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:45114"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42199",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-07",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:42199",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:42199"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41815",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-08",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:41815",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:41815"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37301",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37301",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37301"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:14202",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-10",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:14202",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:14202"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:27884",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-13",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:27884",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:27884"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33337",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-14",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33337",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33337"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29690",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29690",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29690"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29789",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29789",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29789"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34379",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-17",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34379",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34379"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32879",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32879",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32879"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41554",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-20",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:41554",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:41554"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32653",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-21",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:32653",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:32653"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34880",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34880",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34880"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45529",
+            "whse": null
+          }
+        ],
+        "date": "2025-10-23",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:45529",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:45529"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48554",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:48554",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:48554"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36272",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-17",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36272",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36272"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48947",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:48947",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:48947"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33090",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33090",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33090"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34497",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-20",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34497",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34497"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37234",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-21",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37234",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37234"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34633",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:34633",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:34633"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:24842",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-24",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:24842",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:24842"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29016",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-25",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29016",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29016"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:13458",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-27",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:13458",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:13458"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:50028",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-28",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:50028",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:50028"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29196",
+            "whse": null
+          }
+        ],
+        "date": "2025-11-29",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:29196",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:29196"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:49220",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:49220",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:49220"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:50862",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-02",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:50862",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:50862"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:57780",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-03",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:57780",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:57780"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:26075",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-04",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:26075",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:26075"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:30015",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-05",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:30015",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:30015"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:67539",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-06",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:67539",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:67539"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:67976",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-09",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:67976",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:67976"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:52949",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-10",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:52949",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:52949"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:59358",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-11",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:59358",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:59358"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:56133",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:56133",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:56133"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:25197",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-13",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:25197",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:25197"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:50864",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:50864",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:50864"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:26493",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:26493",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:26493"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37865",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-17",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:37865",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:37865"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36706",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:36706",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:36706"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41420",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-19",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:41420",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:41420"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:11528",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-20",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:11528",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:11528"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:21267",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-22",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:21267",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:21267"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:20927",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-23",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:20927",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:20927"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45596",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-26",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:45596",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:45596"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33661",
+            "whse": null
+          }
+        ],
+        "date": "2025-12-27",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:33661",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:33661"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29722",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-17",
+        "drift_p_vs_m_kg": " num:3611",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:3611",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +3611 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +3611 kg (O=29722 > M=26111). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:29722",
+        "rc_movement_kg": " num:26111",
+        "rc_out_existing_kg": " num:29722"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:11779",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-18",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:11779",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:11779"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44331",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-27",
+        "drift_p_vs_m_kg": " num:7000",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7000",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7000 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7000 kg (O=44331 > M=37331). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:44331",
+        "rc_movement_kg": " num:37331",
+        "rc_out_existing_kg": " num:44331"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:25328",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-28",
+        "drift_p_vs_m_kg": " num:2128",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:2128",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +2128 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +2128 kg (O=25328 > M=23200). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:25328",
+        "rc_movement_kg": " num:23200",
+        "rc_out_existing_kg": " num:25328"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35473",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-29",
+        "drift_p_vs_m_kg": " num:7557",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7557",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7557 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7557 kg (O=35473 > M=27916). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:35473",
+        "rc_movement_kg": " num:27916",
+        "rc_out_existing_kg": " num:35473"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37096",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-30",
+        "drift_p_vs_m_kg": " num:8809",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8809",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8809 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8809 kg (O=37096 > M=28287). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:37096",
+        "rc_movement_kg": " num:28287",
+        "rc_out_existing_kg": " num:37096"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:8685",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-31",
+        "drift_p_vs_m_kg": " num:8685",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8685",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8685 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8685 kg (O=8685 > M=0). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:8685",
+        "rc_movement_kg": " num:0",
+        "rc_out_existing_kg": " num:8685"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:11707",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-01",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:11707",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:11707"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29496",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-02",
+        "drift_p_vs_m_kg": " num:8997",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8997",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8997 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8997 kg (O=29496 > M=20499). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:29496",
+        "rc_movement_kg": " num:20499",
+        "rc_out_existing_kg": " num:29496"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45830",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-03",
+        "drift_p_vs_m_kg": " num:10823",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:10823",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +10823 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +10823 kg (O=45830 > M=35007). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:45830",
+        "rc_movement_kg": " num:35007",
+        "rc_out_existing_kg": " num:45830"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38589",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-05",
+        "drift_p_vs_m_kg": " num:8952",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8952",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8952 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8952 kg (O=38589 > M=29637). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:38589",
+        "rc_movement_kg": " num:29637",
+        "rc_out_existing_kg": " num:38589"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45217",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-07",
+        "drift_p_vs_m_kg": " num:9302",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:9302",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +9302 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +9302 kg (O=45217 > M=35915). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:45217",
+        "rc_movement_kg": " num:35915",
+        "rc_out_existing_kg": " num:45217"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:12623",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-08",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:12623",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:12623"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37226",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-09",
+        "drift_p_vs_m_kg": " num:6902",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6902",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6902 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6902 kg (O=37226 > M=30324). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:37226",
+        "rc_movement_kg": " num:30324",
+        "rc_out_existing_kg": " num:37226"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35344",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-10",
+        "drift_p_vs_m_kg": " num:7905",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7905",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7905 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7905 kg (O=35344 > M=27439). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:35344",
+        "rc_movement_kg": " num:27439",
+        "rc_out_existing_kg": " num:35344"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:47081",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-11",
+        "drift_p_vs_m_kg": " num:7825",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7825",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7825 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7825 kg (O=47081 > M=39256). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:47081",
+        "rc_movement_kg": " num:39256",
+        "rc_out_existing_kg": " num:47081"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:65119",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-12",
+        "drift_p_vs_m_kg": " num:25992",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:25992",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +25992 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +25992 kg (O=65119 > M=39127). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:65119",
+        "rc_movement_kg": " num:39127",
+        "rc_out_existing_kg": " num:65119"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35896",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-14",
+        "drift_p_vs_m_kg": " num:8346",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8346",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8346 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8346 kg (O=35896 > M=27550). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:35896",
+        "rc_movement_kg": " num:27550",
+        "rc_out_existing_kg": " num:35896"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:17608",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:17608",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:17608"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:17555",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:17555",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:17555"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48605",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-17",
+        "drift_p_vs_m_kg": " num:6593",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6593",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6593 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6593 kg (O=48605 > M=42012). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:48605",
+        "rc_movement_kg": " num:42012",
+        "rc_out_existing_kg": " num:48605"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38590",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-25",
+        "drift_p_vs_m_kg": " num:8010",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8010",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8010 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8010 kg (O=38590 > M=30580). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:38590",
+        "rc_movement_kg": " num:30580",
+        "rc_out_existing_kg": " num:38590"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:40471",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-26",
+        "drift_p_vs_m_kg": " num:7920",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7920",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7920 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7920 kg (O=40471 > M=32551). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:40471",
+        "rc_movement_kg": " num:32551",
+        "rc_out_existing_kg": " num:40471"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:7530",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-27",
+        "drift_p_vs_m_kg": " num:7530",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7530",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7530 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7530 kg (O=7530 > M=0). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:7530",
+        "rc_movement_kg": " num:0",
+        "rc_out_existing_kg": " num:7530"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41686",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-02",
+        "drift_p_vs_m_kg": " num:10561",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:10561",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +10561 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +10561 kg (O=41686 > M=31125). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:41686",
+        "rc_movement_kg": " num:31125",
+        "rc_out_existing_kg": " num:41686"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:48953",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-03",
+        "drift_p_vs_m_kg": " num:12108",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:12108",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +12108 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +12108 kg (O=48953 > M=36845). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:48953",
+        "rc_movement_kg": " num:36845",
+        "rc_out_existing_kg": " num:48953"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:46612",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-04",
+        "drift_p_vs_m_kg": " num:12591",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:12591",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +12591 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +12591 kg (O=46612 > M=34021). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:46612",
+        "rc_movement_kg": " num:34021",
+        "rc_out_existing_kg": " num:46612"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:47879",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-05",
+        "drift_p_vs_m_kg": " num:11617",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:11617",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +11617 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +11617 kg (O=47879 > M=36262). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:47879",
+        "rc_movement_kg": " num:36262",
+        "rc_out_existing_kg": " num:47879"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43438",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-06",
+        "drift_p_vs_m_kg": " num:9880",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:9880",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +9880 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +9880 kg (O=43438 > M=33558). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:43438",
+        "rc_movement_kg": " num:33558",
+        "rc_out_existing_kg": " num:43438"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:46573",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-07",
+        "drift_p_vs_m_kg": " num:7339",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7339",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7339 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7339 kg (O=46573 > M=39234). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:46573",
+        "rc_movement_kg": " num:39234",
+        "rc_out_existing_kg": " num:46573"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:59126",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-11",
+        "drift_p_vs_m_kg": " num:8499",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8499",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8499 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8499 kg (O=59126 > M=50627). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:59126",
+        "rc_movement_kg": " num:50627",
+        "rc_out_existing_kg": " num:59126"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45011",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-12",
+        "drift_p_vs_m_kg": " num:-57121",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:-57121",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: -57121 kg"
+        ],
+        "proposed_sum_kg": " num:45011",
+        "rc_movement_kg": " num:102132",
+        "rc_out_existing_kg": " num:45011"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:49158",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-13",
+        "drift_p_vs_m_kg": " num:10066",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:10066",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +10066 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +10066 kg (O=49158 > M=39092). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:49158",
+        "rc_movement_kg": " num:39092",
+        "rc_out_existing_kg": " num:49158"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37680",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-14",
+        "drift_p_vs_m_kg": " num:15140",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:15140",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +15140 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +15140 kg (O=37680 > M=22540). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:37680",
+        "rc_movement_kg": " num:22540",
+        "rc_out_existing_kg": " num:37680"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:6044",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-15",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:6044",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:6044"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:8672",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-16",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:8672",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:8672"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:69899",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-17",
+        "drift_p_vs_m_kg": " num:22352",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:22352",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +22352 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +22352 kg (O=69899 > M=47547). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:69899",
+        "rc_movement_kg": " num:47547",
+        "rc_out_existing_kg": " num:69899"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38652",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-18",
+        "drift_p_vs_m_kg": " num:7607",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7607",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7607 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7607 kg (O=38652 > M=31045). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:38652",
+        "rc_movement_kg": " num:31045",
+        "rc_out_existing_kg": " num:38652"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:52462",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-19",
+        "drift_p_vs_m_kg": " num:7371",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7371",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7371 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7371 kg (O=52462 > M=45091). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:52462",
+        "rc_movement_kg": " num:45091",
+        "rc_out_existing_kg": " num:52462"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:18708",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-20",
+        "drift_p_vs_m_kg": " num:5563",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:5563",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +5563 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +5563 kg (O=18708 > M=13145). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:18708",
+        "rc_movement_kg": " num:13145",
+        "rc_out_existing_kg": " num:18708"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:3959",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-21",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:3959",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:3959"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:102206",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-23",
+        "drift_p_vs_m_kg": " num:8094",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8094",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8094 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8094 kg (O=102206 > M=94112). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:102206",
+        "rc_movement_kg": " num:94112",
+        "rc_out_existing_kg": " num:102206"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:61727",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-24",
+        "drift_p_vs_m_kg": " num:14494",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:14494",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +14494 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +14494 kg (O=61727 > M=47233). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:61727",
+        "rc_movement_kg": " num:47233",
+        "rc_out_existing_kg": " num:61727"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:69126",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-25",
+        "drift_p_vs_m_kg": " num:6279",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6279",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6279 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6279 kg (O=69126 > M=62847). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:69126",
+        "rc_movement_kg": " num:62847",
+        "rc_out_existing_kg": " num:69126"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:65740",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-27",
+        "drift_p_vs_m_kg": " num:7978",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7978",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7978 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7978 kg (O=65740 > M=57762). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:65740",
+        "rc_movement_kg": " num:57762",
+        "rc_out_existing_kg": " num:65740"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:59154",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-28",
+        "drift_p_vs_m_kg": " num:6610",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6610",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6610 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6610 kg (O=59154 > M=52544). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:59154",
+        "rc_movement_kg": " num:52544",
+        "rc_out_existing_kg": " num:59154"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42552",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-30",
+        "drift_p_vs_m_kg": " num:9130",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:9130",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +9130 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +9130 kg (O=42552 > M=33422). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:42552",
+        "rc_movement_kg": " num:33422",
+        "rc_out_existing_kg": " num:42552"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:60821",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-31",
+        "drift_p_vs_m_kg": " num:8932",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8932",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8932 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8932 kg (O=60821 > M=51889). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:60821",
+        "rc_movement_kg": " num:51889",
+        "rc_out_existing_kg": " num:60821"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:23141",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-01",
+        "drift_p_vs_m_kg": " num:5753",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:5753",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +5753 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +5753 kg (O=23141 > M=17388). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:23141",
+        "rc_movement_kg": " num:17388",
+        "rc_out_existing_kg": " num:23141"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42633",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-06",
+        "drift_p_vs_m_kg": " num:3077",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:3077",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +3077 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +3077 kg (O=42633 > M=39556). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:42633",
+        "rc_movement_kg": " num:39556",
+        "rc_out_existing_kg": " num:42633"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:40544",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-07",
+        "drift_p_vs_m_kg": " num:10446",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:10446",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +10446 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +10446 kg (O=40544 > M=30098). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:40544",
+        "rc_movement_kg": " num:30098",
+        "rc_out_existing_kg": " num:40544"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31745",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-08",
+        "drift_p_vs_m_kg": " num:9639",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:9639",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +9639 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +9639 kg (O=31745 > M=22106). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:31745",
+        "rc_movement_kg": " num:22106",
+        "rc_out_existing_kg": " num:31745"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33626",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-09",
+        "drift_p_vs_m_kg": " num:9767",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:9767",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +9767 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +9767 kg (O=33626 > M=23859). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:33626",
+        "rc_movement_kg": " num:23859",
+        "rc_out_existing_kg": " num:33626"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:24290",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-10",
+        "drift_p_vs_m_kg": " num:7100",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:7100",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +7100 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +7100 kg (O=24290 > M=17190). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:24290",
+        "rc_movement_kg": " num:17190",
+        "rc_out_existing_kg": " num:24290"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32244",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-13",
+        "drift_p_vs_m_kg": " num:2843",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:2843",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +2843 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +2843 kg (O=32244 > M=29401). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:32244",
+        "rc_movement_kg": " num:29401",
+        "rc_out_existing_kg": " num:32244"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44238",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-14",
+        "drift_p_vs_m_kg": " num:12146",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:12146",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +12146 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +12146 kg (O=44238 > M=32092). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:44238",
+        "rc_movement_kg": " num:32092",
+        "rc_out_existing_kg": " num:44238"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38637",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-15",
+        "drift_p_vs_m_kg": " num:8726",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8726",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8726 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8726 kg (O=38637 > M=29911). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:38637",
+        "rc_movement_kg": " num:29911",
+        "rc_out_existing_kg": " num:38637"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:12952",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-16",
+        "drift_p_vs_m_kg": " num:5302",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:5302",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +5302 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +5302 kg (O=12952 > M=7650). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:12952",
+        "rc_movement_kg": " num:7650",
+        "rc_out_existing_kg": " num:12952"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:41748",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-17",
+        "drift_p_vs_m_kg": " num:12531",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:12531",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +12531 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +12531 kg (O=41748 > M=29217). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:41748",
+        "rc_movement_kg": " num:29217",
+        "rc_out_existing_kg": " num:41748"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:40104",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-18",
+        "drift_p_vs_m_kg": " num:6418",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6418",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6418 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6418 kg (O=40104 > M=33686). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:40104",
+        "rc_movement_kg": " num:33686",
+        "rc_out_existing_kg": " num:40104"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42942",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-20",
+        "drift_p_vs_m_kg": " num:2322",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:2322",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +2322 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +2322 kg (O=42942 > M=40620). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:42942",
+        "rc_movement_kg": " num:40620",
+        "rc_out_existing_kg": " num:42942"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35724",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-21",
+        "drift_p_vs_m_kg": " num:6249",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:6249",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +6249 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +6249 kg (O=35724 > M=29475). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:35724",
+        "rc_movement_kg": " num:29475",
+        "rc_out_existing_kg": " num:35724"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:49943",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-22",
+        "drift_p_vs_m_kg": " num:8304",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8304",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8304 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8304 kg (O=49943 > M=41639). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:49943",
+        "rc_movement_kg": " num:41639",
+        "rc_out_existing_kg": " num:49943"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:47349",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-23",
+        "drift_p_vs_m_kg": " num:8453",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:8453",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +8453 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +8453 kg (O=47349 > M=38896). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:47349",
+        "rc_movement_kg": " num:38896",
+        "rc_out_existing_kg": " num:47349"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32416",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-11",
+        "drift_p_vs_m_kg": " num:270",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:270",
+        "notes": [
+          "Tolerable drift PROPOSED vs RC MOVEMENT: +270 kg",
+          "DB rc_out SUM above RC MOVEMENT by +270 kg (possible partial duplication) — review."
+        ],
+        "proposed_sum_kg": " num:32416",
+        "rc_movement_kg": " num:32146",
+        "rc_out_existing_kg": " num:32416"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:71144",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-10",
+        "drift_p_vs_m_kg": " num:13743",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:13743",
+        "notes": [
+          "SERIOUS drift PROPOSED vs RC MOVEMENT: +13743 kg",
+          "SERIOUS DB-side DUPLICATION: rc_out DB SUM exceeds RC MOVEMENT by +13743 kg (O=71144 > M=57401). Likely duplicated feedings already in the DB — do NOT write; investigate this date."
+        ],
+        "proposed_sum_kg": " num:71144",
+        "rc_movement_kg": " num:57401",
+        "rc_out_existing_kg": " num:71144"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:82375",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-12",
+        "drift_p_vs_m_kg": null,
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": null,
+        "notes": [
+          "No RC MOVEMENT entry for this date"
+        ],
+        "proposed_sum_kg": " num:82375",
+        "rc_movement_kg": null,
+        "rc_out_existing_kg": " num:82375"
+      }
+    ],
+    "ok_dates": [
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:20721",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-02",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:20721",
+        "rc_movement_kg": " num:20721",
+        "rc_out_existing_kg": " num:20721"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39063",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-03",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:39063",
+        "rc_movement_kg": " num:39063",
+        "rc_out_existing_kg": " num:39063"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38991",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-05",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:38991",
+        "rc_movement_kg": " num:38991",
+        "rc_out_existing_kg": " num:38991"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39768",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-06",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:39768",
+        "rc_movement_kg": " num:39768",
+        "rc_out_existing_kg": " num:39768"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37786",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-07",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37786",
+        "rc_movement_kg": " num:37786",
+        "rc_out_existing_kg": " num:37786"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37647",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-08",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37647",
+        "rc_movement_kg": " num:37647",
+        "rc_out_existing_kg": " num:37647"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37213",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-09",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37213",
+        "rc_movement_kg": " num:37213",
+        "rc_out_existing_kg": " num:37213"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28858",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-10",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:28858",
+        "rc_movement_kg": " num:28858",
+        "rc_out_existing_kg": " num:28858"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37206",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-12",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37206",
+        "rc_movement_kg": " num:37206",
+        "rc_out_existing_kg": " num:37206"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36213",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-13",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:36213",
+        "rc_movement_kg": " num:36213",
+        "rc_out_existing_kg": " num:36213"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:27120",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-14",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:27120",
+        "rc_movement_kg": " num:27120",
+        "rc_out_existing_kg": " num:27120"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28331",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-15",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:28331",
+        "rc_movement_kg": " num:28331",
+        "rc_out_existing_kg": " num:28331"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35462",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-16",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:35462",
+        "rc_movement_kg": " num:35462",
+        "rc_out_existing_kg": " num:35462"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42195",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-19",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:42195",
+        "rc_movement_kg": " num:42195",
+        "rc_out_existing_kg": " num:42195"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34990",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-20",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:34990",
+        "rc_movement_kg": " num:34990",
+        "rc_out_existing_kg": " num:34990"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33626",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-21",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33626",
+        "rc_movement_kg": " num:33626",
+        "rc_out_existing_kg": " num:33626"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29565",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-22",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29565",
+        "rc_movement_kg": " num:29565",
+        "rc_out_existing_kg": " num:29565"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:25390",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-23",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:25390",
+        "rc_movement_kg": " num:25390",
+        "rc_out_existing_kg": " num:25390"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31387",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-24",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:31387",
+        "rc_movement_kg": " num:31387",
+        "rc_out_existing_kg": " num:31387"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44951",
+            "whse": null
+          }
+        ],
+        "date": "2026-01-26",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:44951",
+        "rc_movement_kg": " num:44951",
+        "rc_out_existing_kg": " num:44951"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29516",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-04",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29516",
+        "rc_movement_kg": " num:29516",
+        "rc_out_existing_kg": " num:29516"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:22226",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-06",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:22226",
+        "rc_movement_kg": " num:22226",
+        "rc_out_existing_kg": " num:22226"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:25931",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-13",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:25931",
+        "rc_movement_kg": " num:25931",
+        "rc_out_existing_kg": " num:25931"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36165",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-18",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:36165",
+        "rc_movement_kg": " num:36165",
+        "rc_out_existing_kg": " num:36165"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33013",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-19",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33013",
+        "rc_movement_kg": " num:33013",
+        "rc_out_existing_kg": " num:33013"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31869",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-20",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:31869",
+        "rc_movement_kg": " num:31869",
+        "rc_out_existing_kg": " num:31869"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28970",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-21",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:28970",
+        "rc_movement_kg": " num:28970",
+        "rc_out_existing_kg": " num:28970"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43697",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-23",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:43697",
+        "rc_movement_kg": " num:43697",
+        "rc_out_existing_kg": " num:43697"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:42471",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-24",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:42471",
+        "rc_movement_kg": " num:42471",
+        "rc_out_existing_kg": " num:42471"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:24783",
+            "whse": null
+          }
+        ],
+        "date": "2026-02-28",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:24783",
+        "rc_movement_kg": " num:24783",
+        "rc_out_existing_kg": " num:24783"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:77704",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-09",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:77704",
+        "rc_movement_kg": " num:77704",
+        "rc_out_existing_kg": " num:77704"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:57257",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-10",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:57257",
+        "rc_movement_kg": " num:57257",
+        "rc_out_existing_kg": " num:57257"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:75213",
+            "whse": null
+          }
+        ],
+        "date": "2026-03-26",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:75213",
+        "rc_movement_kg": " num:75213",
+        "rc_out_existing_kg": " num:75213"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:44456",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-24",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:44456",
+        "rc_movement_kg": " num:44456",
+        "rc_out_existing_kg": " num:44456"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33266",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-25",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33266",
+        "rc_movement_kg": " num:33266",
+        "rc_out_existing_kg": " num:33266"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43129",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-27",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:43129",
+        "rc_movement_kg": " num:43129",
+        "rc_out_existing_kg": " num:43129"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:20465",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-28",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:20465",
+        "rc_movement_kg": " num:20465",
+        "rc_out_existing_kg": " num:20465"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:22253",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-29",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:22253",
+        "rc_movement_kg": " num:22253",
+        "rc_out_existing_kg": " num:22253"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:17569",
+            "whse": null
+          }
+        ],
+        "date": "2026-04-30",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:17569",
+        "rc_movement_kg": " num:17569",
+        "rc_out_existing_kg": " num:17569"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38192",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-04",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:38192",
+        "rc_movement_kg": " num:38192",
+        "rc_out_existing_kg": " num:38192"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:39951",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-05",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:39951",
+        "rc_movement_kg": " num:39951",
+        "rc_out_existing_kg": " num:39951"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34934",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-06",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:34934",
+        "rc_movement_kg": " num:34934",
+        "rc_out_existing_kg": " num:34934"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34320",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-07",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:34320",
+        "rc_movement_kg": " num:34320",
+        "rc_out_existing_kg": " num:34320"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:24212",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-08",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:24212",
+        "rc_movement_kg": " num:24212",
+        "rc_out_existing_kg": " num:24212"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33944",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-09",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33944",
+        "rc_movement_kg": " num:33944",
+        "rc_out_existing_kg": " num:33944"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:25367",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-12",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:25367",
+        "rc_movement_kg": " num:25367",
+        "rc_out_existing_kg": " num:25367"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31091",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-13",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:31091",
+        "rc_movement_kg": " num:31091",
+        "rc_out_existing_kg": " num:31091"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32224",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-14",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:32224",
+        "rc_movement_kg": " num:32224",
+        "rc_out_existing_kg": " num:32224"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:28087",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-15",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:28087",
+        "rc_movement_kg": " num:28087",
+        "rc_out_existing_kg": " num:28087"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32149",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-18",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:32149",
+        "rc_movement_kg": " num:32149",
+        "rc_out_existing_kg": " num:32149"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33911",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-19",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33911",
+        "rc_movement_kg": " num:33911",
+        "rc_out_existing_kg": " num:33911"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:32236",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-20",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:32236",
+        "rc_movement_kg": " num:32236",
+        "rc_out_existing_kg": " num:32236"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37705",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-21",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37705",
+        "rc_movement_kg": " num:37705",
+        "rc_out_existing_kg": " num:37705"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:31908",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-22",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:31908",
+        "rc_movement_kg": " num:31908",
+        "rc_out_existing_kg": " num:31908"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:60056",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-23",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:60056",
+        "rc_movement_kg": " num:60056",
+        "rc_out_existing_kg": " num:60056"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35145",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-25",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:35145",
+        "rc_movement_kg": " num:35145",
+        "rc_out_existing_kg": " num:35145"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:45167",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-26",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:45167",
+        "rc_movement_kg": " num:45167",
+        "rc_out_existing_kg": " num:45167"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:64686",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-27",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:64686",
+        "rc_movement_kg": " num:64686",
+        "rc_out_existing_kg": " num:64686"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:56393",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-28",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:56393",
+        "rc_movement_kg": " num:56393",
+        "rc_out_existing_kg": " num:56393"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:21810",
+            "whse": null
+          }
+        ],
+        "date": "2026-05-29",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:21810",
+        "rc_movement_kg": " num:21810",
+        "rc_out_existing_kg": " num:21810"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34705",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-01",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:34705",
+        "rc_movement_kg": " num:34705",
+        "rc_out_existing_kg": " num:34705"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35666",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-02",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:35666",
+        "rc_movement_kg": " num:35666",
+        "rc_out_existing_kg": " num:35666"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:47371",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-03",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:47371",
+        "rc_movement_kg": " num:47371",
+        "rc_out_existing_kg": " num:47371"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37566",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-04",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37566",
+        "rc_movement_kg": " num:37566",
+        "rc_out_existing_kg": " num:37566"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29450",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-05",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29450",
+        "rc_movement_kg": " num:29450",
+        "rc_out_existing_kg": " num:29450"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:34527",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-09",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:34527",
+        "rc_movement_kg": " num:34527",
+        "rc_out_existing_kg": " num:34527"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:43270",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-11",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:43270",
+        "rc_movement_kg": " num:43270",
+        "rc_out_existing_kg": " num:43270"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33963",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-15",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33963",
+        "rc_movement_kg": " num:33963",
+        "rc_out_existing_kg": " num:33963"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33805",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-16",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33805",
+        "rc_movement_kg": " num:33805",
+        "rc_out_existing_kg": " num:33805"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33897",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-17",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33897",
+        "rc_movement_kg": " num:33897",
+        "rc_out_existing_kg": " num:33897"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29426",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-18",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29426",
+        "rc_movement_kg": " num:29426",
+        "rc_out_existing_kg": " num:29426"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29894",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-19",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29894",
+        "rc_movement_kg": " num:29894",
+        "rc_out_existing_kg": " num:29894"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:38742",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-20",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:38742",
+        "rc_movement_kg": " num:38742",
+        "rc_out_existing_kg": " num:38742"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:29639",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-22",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:29639",
+        "rc_movement_kg": " num:29639",
+        "rc_out_existing_kg": " num:29639"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:37226",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-23",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:37226",
+        "rc_movement_kg": " num:37226",
+        "rc_out_existing_kg": " num:37226"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:40568",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-24",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:40568",
+        "rc_movement_kg": " num:40568",
+        "rc_out_existing_kg": " num:40568"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:33454",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-25",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:33454",
+        "rc_movement_kg": " num:33454",
+        "rc_out_existing_kg": " num:33454"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:46790",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-26",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:46790",
+        "rc_movement_kg": " num:46790",
+        "rc_out_existing_kg": " num:46790"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:22385",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-27",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:22385",
+        "rc_movement_kg": " num:22385",
+        "rc_out_existing_kg": " num:22385"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:35827",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-29",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:35827",
+        "rc_movement_kg": " num:35827",
+        "rc_out_existing_kg": " num:35827"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:18963",
+            "whse": null
+          }
+        ],
+        "date": "2026-06-30",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:18963",
+        "rc_movement_kg": " num:18963",
+        "rc_out_existing_kg": " num:18963"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:36226",
+            "whse": null
+          }
+        ],
+        "date": "2026-07-01",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:36226",
+        "rc_movement_kg": " num:36226",
+        "rc_out_existing_kg": " num:36226"
+      },
+      {
+        "blocks": [
+          {
+            "batch_code": null,
+            "weight_kg": " num:30992",
+            "whse": null
+          }
+        ],
+        "date": "2026-07-02",
+        "drift_p_vs_m_kg": " num:0",
+        "drift_p_vs_o_kg": " num:0",
+        "excess_o_vs_m_kg": " num:0",
+        "notes": [],
+        "proposed_sum_kg": " num:30992",
+        "rc_movement_kg": " num:30992",
+        "rc_out_existing_kg": " num:30992"
+      }
+    ],
+    "summary": {
+      "db_dates_checked": " num:295",
+      "drift_dates": " num:212",
+      "max_severity": "serious",
+      "ok_dates": " num:83",
+      "proposed_dates": " num:295",
+      "serious_drift_kg": " num:500",
+      "tolerance_kg": " num:50",
+      "total_dates": " num:295"
+    }
+  },
+  "severity": " num:2"
+}

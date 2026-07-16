@@ -1,0 +1,44 @@
+{
+  "report_type": "production",
+  "cases": [
+    {
+      "id": "production_real_latest",
+      "kind": "real",
+      "covers": [
+        "shift-triplet-resolution",
+        "grade-allowlist-L027",
+        "electricity-natural-key",
+        "waste-carryover",
+        "5-section-classify"
+      ],
+      "workbooks": {
+        "mc": "workbooks/production_real_mc.xlsx",
+        "ivy": "workbooks/production_real_ivy.xlsx"
+      },
+      "db_window": "db_window/production_real_latest.json",
+      "opts": {
+        "since": "2026-06-25"
+      },
+      "note": "Real MC Daily Production Report + Ivy WASTE PRODUCTION REPORT, classified against the real 6-table snapshot. Oracle composes all 5 sections {runs, downtime, waste, electricity, trucks}."
+    },
+    {
+      "id": "production_downtime_ge60",
+      "kind": "synthetic",
+      "covers": [
+        "L-014-dt_mins-ge60-split (deviation PD-5)",
+        "L-026-combine-candidate",
+        "L-027-grade-allowlist-drop",
+        "L-025-blank-shift-default",
+        "shift-upsert-needed"
+      ],
+      "workbooks": {
+        "mc": "workbooks/production_mc_edge.xlsx"
+      },
+      "db_window": "db_window/production_downtime_ge60.json",
+      "opts": {
+        "since": "2026-01-01"
+      },
+      "note": "MC sheet 07-04-26: a downtime day summing to 125 min (extractor emits dt_mins=125 unsplit -> the DB CHECK(dt_mins<60)-violating scenario; PD-5 says the TS port splits to dt_hrs=2/dt_mins=5). Also two CEBU 3X50 runs (L-026 combine candidates), a dropped KOREA POWDER grade (L-027), and a blank-shift KURARAY run (L-025 Morning default)."
+    }
+  ]
+}

@@ -2,11 +2,11 @@
 
 import * as React from 'react';
 
-import { format, endOfMonth } from 'date-fns';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
-import { useAuth } from '@/components/providers/auth-context';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import {
@@ -18,7 +18,7 @@ import {
     useReactTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowUpDown, ChevronDown, Search, MoreHorizontal, Plus, Settings, Loader2, Trash2, Pencil, X, MessageSquareText } from 'lucide-react';
+import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Plus, Settings, Trash2, Pencil, X, RefreshCw, PackageCheck, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -55,15 +55,46 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { getRcOutRecords, deleteRcOutRecord, bulkDeleteRcOut } from '../actions';
+import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList,
+} from '@/components/ui/command';
+import { Checkbox } from '@/components/ui/checkbox';
+import { deleteRcOutRecord, bulkDeleteRcOut, fetchClosedBlocks } from '../actions';
 import type { RcOutRow } from '@/types/rc-out';
+import type { Tables } from '@/types/supabase';
 import { BulkUsageInput } from '../bulk-usage-input';
-import { DeliverySheetFooter } from '../../components/DeliverySheetFooter';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 
-const ITEMS_PER_PAGE = 15;
+const STATE_OPTIONS = ['IN-USE', 'SUNDRYING', 'SUNDRIED', 'CLOSED'];
+const STATE_COUNT = STATE_OPTIONS.length;
+
+function getStateClasses(state: string): string {
+    switch (state) {
+        case 'IN-USE': return 'text-blue-700 bg-blue-200 dark:text-blue-300 dark:bg-blue-900 shadow-sm ring-1 ring-blue-300/60 dark:ring-blue-600/40';
+        case 'CLOSED': return 'text-red-700 bg-red-200 dark:text-red-300 dark:bg-red-900 shadow-sm ring-1 ring-red-300/60 dark:ring-red-600/40';
+        case 'SUNDRYING': return 'text-amber-700 bg-amber-200 dark:text-amber-300 dark:bg-amber-900 shadow-sm ring-1 ring-amber-300/60 dark:ring-amber-600/40';
+        case 'SUNDRIED': return 'text-amber-800 bg-amber-100 dark:text-amber-200 dark:bg-amber-950/50 shadow-sm ring-1 ring-amber-200/60 dark:ring-amber-700/40';
+        default: return 'text-muted-foreground bg-muted/10'; // STORED and others
+    }
+}
+
+function getRowStateClasses(state: string): string {
+    switch (state) {
+        case 'IN-USE':    return 'bg-blue-100/70 dark:bg-blue-950/40';
+        case 'CLOSED':    return 'bg-red-100/70 dark:bg-red-950/40';
+        case 'SUNDRYING': return 'bg-amber-100/70 dark:bg-amber-950/40';
+        case 'SUNDRIED':  return 'bg-amber-50/70 dark:bg-amber-950/20';
+        default:          return ''; // STORED and others — no row highlight
+    }
+}
 
 type Batch = {
     id: string;
@@ -71,92 +102,177 @@ type Batch = {
     location_ref: string;
 };
 
+// Generated view Row type — resolves the shipped `view_rc_out_closed_blocks` view.
+// Powers the "Closed Blocks" summary toggle (one row per closed block).
+type ClosedBlockRow = Tables<'view_rc_out_closed_blocks'>;
+
 export function RcOutTable({
     data,
-    search,
-    year = String(new Date().getFullYear()),
-    month = String(new Date().getMonth()),
     batches,
     destinations,
-    productionBatches,
+    batchOptions,
+    yearOptions,
+    blockLocs,
+    canViewPrices,
+    onRefresh,
 }: {
     data: RcOutRow[];
-    search?: string;
-    year?: string;
-    month?: string;
     batches: Batch[];
     destinations: string[];
-    productionBatches: string[];
+    batchOptions: string[];
+    yearOptions: number[];
+    blockLocs: string[];
+    // Server-computed price gate (lib/auth.canViewPrices, resolved in fetchRcOutTabData).
+    // Single source of truth for price column/footer visibility — render exactly matches
+    // the server data gate (the price fields are already nulled server-side when false).
+    canViewPrices: boolean;
+    onRefresh?: () => Promise<void>;
 }) {
+    const searchParams = useSearchParams();
     const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { hasPermission } = useAuth();
-    const { setCellSelectionCount } = useStatusBar();
+    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
 
-    // Internal date state (not URL-driven) so month/year changes work inside lazy-loaded tab
-    const [currentYear, setCurrentYear] = React.useState(year);
-    const [currentMonth, setCurrentMonth] = React.useState(month);
-    const [isDateLoading, setIsDateLoading] = React.useState(false);
+    // Refresh state
+    const [refreshing, setRefreshing] = React.useState(false);
 
-    // Search state (internal, not URL-driven) — same approach as year/month
-    const [searchTerm, setSearchTerm] = React.useState(search || '');
-    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
-    const [searchField, setSearchField] = React.useState<'all' | 'batch_code' | 'production_batch' | 'destination' | 'remarks' | 'block_loc'>('all');
+    // ─── Closed Blocks summary toggle ────────────────────────────────────
+    // Default OFF — swaps the feeding table for a one-row-per-closed-block
+    // summary sourced from `view_rc_out_closed_blocks`. Data is lazy-fetched
+    // on first toggle-ON. Price columns gate on the SERVER's canViewPrices.
+    const [closedBlocksMode, setClosedBlocksMode] = React.useState(false);
+    const [closedBlocks, setClosedBlocks] = React.useState<ClosedBlockRow[] | null>(null);
+    const [closedLoading, setClosedLoading] = React.useState(false);
+    const [closedCanViewPrices, setClosedCanViewPrices] = React.useState(canViewPrices);
 
-    // Infinite Scroll State
-    const [allData, setAllData] = React.useState<RcOutRow[]>(data);
-    const [offset, setOffset] = React.useState(data.length);
-    const [hasMore, setHasMore] = React.useState(true);
-    const [isLoadingMore, setIsLoadingMore] = React.useState(false);
-
+    // Lazy-fetch closed blocks on first toggle-ON only. The `closedBlocks !== null`
+    // guard prevents refetch once data is held; on error we leave it null so a later
+    // toggle-off/on retries.
     React.useEffect(() => {
-        setAllData(data);
-        setOffset(data.length);
-        setHasMore(data.length > 0);
-    }, [data]);
+        if (!closedBlocksMode || closedBlocks !== null) return;
+        let cancelled = false;
+        setClosedLoading(true);
+        fetchClosedBlocks()
+            .then((res) => {
+                if (cancelled) return;
+                if (res.error) {
+                    errorToast('Failed to load closed blocks.', { description: res.error });
+                    return;
+                }
+                setClosedBlocks(res.rows);
+                setClosedCanViewPrices(res.canViewPrices);
+            })
+            .catch((e) => {
+                if (!cancelled) errorToast('Failed to load closed blocks.', { description: e instanceof Error ? e.message : String(e) });
+            })
+            .finally(() => { if (!cancelled) setClosedLoading(false); });
+        return () => { cancelled = true; };
+    }, [closedBlocksMode, closedBlocks]);
 
-    const getDateRange = React.useCallback(() => {
-        let startDate: string | undefined;
-        let endDate: string | undefined;
-
-        if (currentYear !== 'all') {
-            const y = parseInt(currentYear, 10);
-            if (currentMonth !== 'all') {
-                const m = parseInt(currentMonth, 10);
-                const start = new Date(y, m, 1);
-                const end = endOfMonth(start);
-                startDate = format(start, 'yyyy-MM-dd');
-                endDate = format(end, 'yyyy-MM-dd');
-            } else {
-                const start = new Date(y, 0, 1);
-                const end = new Date(y, 11, 31);
-                startDate = format(start, 'yyyy-MM-dd');
-                endDate = format(end, 'yyyy-MM-dd');
-            }
-        }
-        return { startDate, endDate };
-    }, [currentYear, currentMonth]);
-
-    const loadMore = React.useCallback(async () => {
-        if (isLoadingMore || !hasMore) return;
-        setIsLoadingMore(true);
+    const handleRefresh = React.useCallback(async () => {
+        if (!onRefresh) return;
+        setRefreshing(true);
         try {
-            const { startDate, endDate } = getDateRange();
-            const nextData = await getRcOutRecords(searchTerm || undefined, searchField, offset, ITEMS_PER_PAGE, startDate, endDate);
-
-            if (nextData.length < ITEMS_PER_PAGE) {
-                setHasMore(false);
-            }
-            if (nextData.length > 0) {
-                setAllData(prev => [...prev, ...nextData]);
-                setOffset(prev => prev + nextData.length);
-            }
-        } catch (error) {
-            console.error('Failed to load more:', error);
-            toast.error('Failed to load more records');
+            await onRefresh();
         } finally {
-            setIsLoadingMore(false);
+            setRefreshing(false);
         }
-    }, [isLoadingMore, hasMore, offset, searchTerm, searchField, getDateRange]);
+    }, [onRefresh]);
+
+    // Client-side search (150ms debounce)
+    const [searchTerm, setSearchTerm] = React.useState('');
+    const [debouncedSearch, setDebouncedSearch] = React.useState('');
+    React.useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchTerm), 150);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
+
+    // Inclusion-model filter state
+    const [selectedBatches, setSelectedBatches] = React.useState<Set<string>>(new Set());
+    const [selectedDestinations, setSelectedDestinations] = React.useState<Set<string>>(new Set());
+    const [selectedBlockLocs, setSelectedBlockLocs] = React.useState<Set<string>>(new Set());
+
+    // New filter state: STATE (exclusion) and YEAR (inclusion)
+    const [stateExcluded, setStateExcluded] = React.useState<Set<string>>(new Set(['CLOSED']));
+    const [selectedYears, setSelectedYears] = React.useState<Set<number>>(new Set());
+
+    const hasActiveFilters =
+        (stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT) ||
+        selectedYears.size > 0 || selectedBatches.size > 0 ||
+        selectedDestinations.size > 0 || selectedBlockLocs.size > 0;
+
+    // All data state — synced from props
+    const [allData, setAllData] = React.useState<RcOutRow[]>(data);
+    React.useEffect(() => { setAllData(data); }, [data]);
+
+    // ─── Auto-Edit from Blocking Panel ───────────────────────────────────
+    React.useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const editBatch = params.get('editBatch');
+        // Both the Deliveries and Usage tables are always mounted on /inventory and BOTH
+        // read `?editBatch=`. `editView` discriminates which one acts: this Usage table
+        // only consumes the param when it explicitly targets 'usage'. A missing/other
+        // editView defaults to deliveries, so we leave both params intact for that table.
+        const editView = params.get('editView');
+        if (editView !== 'usage') return;
+        if (editBatch && allData.length > 0) {
+            // Match by production_batch or batches.batch_code
+            const matchingIds = allData
+                .filter(d => d.production_batch === editBatch || d.batches?.batch_code === editBatch)
+                .map(d => d.id);
+            if (matchingIds.length > 0) {
+                setSelectionMode(true);
+                setSelectedIds(new Set(matchingIds));
+                // Trigger bulk edit after a tick
+                setTimeout(() => {
+                    const matchingRows = allData.filter(d => matchingIds.includes(d.id));
+                    setEditRows(matchingRows);
+                }, 100);
+                // Clean up URL — strip BOTH params so the matching consumer fully owns them.
+                params.delete('editBatch');
+                params.delete('editView');
+                const qs = params.toString();
+                window.history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : ''));
+            }
+        }
+    }, [allData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Client-side filtered data (order: STATE > YEAR > BATCH > PLANT/ETC > BLOCK LOC > search)
+    const filteredData = React.useMemo(() => {
+        let filtered = allData;
+        if (stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT)
+            filtered = filtered.filter(d => !stateExcluded.has(d.batches?.status || 'STORED'));
+        if (selectedYears.size > 0)
+            filtered = filtered.filter(d => selectedYears.has(parseInt(d.transaction_date?.slice(0, 4))));
+        if (selectedBatches.size > 0)
+            filtered = filtered.filter(d => selectedBatches.has(d.production_batch));
+        if (selectedDestinations.size > 0)
+            filtered = filtered.filter(d => selectedDestinations.has(d.destination));
+        if (selectedBlockLocs.size > 0)
+            filtered = filtered.filter(d => selectedBlockLocs.has(d.block_loc || d.batches?.location_ref || ''));
+        if (debouncedSearch) {
+            const term = debouncedSearch.toLowerCase();
+            filtered = filtered.filter(d =>
+                [d.production_batch, d.destination, d.block_loc, d.remarks, d.batches?.batch_code, d.transaction_date]
+                    .some(f => (f || '').toLowerCase().includes(term))
+            );
+        }
+        return filtered;
+    }, [allData, stateExcluded, selectedYears, selectedBatches, selectedDestinations, selectedBlockLocs, debouncedSearch]);
+
+    // Footer totals (computed from filteredData)
+    const { totalWeight, totalAvgPrice, totalAvgWtdValue } = React.useMemo(() => {
+        let tw = 0, sumPrice = 0, sumVal = 0, countPrice = 0;
+        filteredData.forEach(d => {
+            tw += d.weight_kg || 0;
+            if (d.avg_price) { sumPrice += d.avg_price * (d.weight_kg || 0); countPrice += d.weight_kg || 0; }
+            sumVal += d.avg_wtd_value || 0;
+        });
+        return {
+            totalWeight: tw,
+            totalAvgPrice: countPrice > 0 ? sumPrice / countPrice : 0,
+            totalAvgWtdValue: sumVal,
+        };
+    }, [filteredData]);
 
     // Sorting state
     const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -171,40 +287,6 @@ export function RcOutTable({
     const [isInputDirty, setIsInputDirty] = React.useState(false);
     const [showExitConfirmation, setShowExitConfirmation] = React.useState(false);
     const [pendingAction, setPendingAction] = React.useState<() => void>(() => { });
-
-    // Debounced search — refetch data directly via server action (no URL navigation)
-    const isFirstSearchMount = React.useRef(true);
-
-    React.useEffect(() => {
-        // Skip the initial mount — data is already provided via props
-        if (isFirstSearchMount.current) {
-            isFirstSearchMount.current = false;
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            let mounted = true;
-            setIsDateLoading(true);
-
-            const fetchData = async () => {
-                const { startDate, endDate } = getDateRange();
-                const newData = await getRcOutRecords(
-                    searchTerm || undefined, searchField, 0, 40, startDate, endDate
-                );
-
-                if (mounted) {
-                    setAllData(newData);
-                    setOffset(newData.length);
-                    setHasMore(newData.length >= 40);
-                    setIsDateLoading(false);
-                }
-            };
-
-            fetchData();
-            return () => { mounted = false; };
-        }, 300);
-        return () => clearTimeout(timer);
-    }, [searchTerm, searchField]);
 
     const toggleSelect = React.useCallback((id: string) => {
         setSelectedIds(prev => {
@@ -222,8 +304,9 @@ export function RcOutTable({
                 toast.success('Record deleted');
                 setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
                 setAllData(prev => prev.filter(row => row.id !== id));
+                await handleRefresh();
             } else {
-                toast.error('Delete failed: ' + res.message);
+                errorToast('Delete failed: ' + res.message);
             }
         }
     };
@@ -236,8 +319,9 @@ export function RcOutTable({
                 toast.success(`${count} record${count === 1 ? '' : 's'} deleted`);
                 setAllData(prev => prev.filter(row => !selectedIds.has(row.id)));
                 setSelectedIds(new Set());
+                await handleRefresh();
             } else {
-                toast.error('Bulk delete failed: ' + res.message);
+                errorToast('Bulk delete failed: ' + res.message);
             }
         }
     };
@@ -282,83 +366,23 @@ export function RcOutTable({
         }
     }, [isAddOpen, editRows]);
 
-    const handleSearchChange = (term: string) => setSearchTerm(term);
-    const handleFieldChange = (field: string) => setSearchField(field as typeof searchField);
-
-    const handleYearChange = (newYear: string) => {
-        let newMonth = currentMonth;
-        if (newYear === 'all') {
-            newMonth = 'all';
-        } else if (currentMonth === 'all') {
-            newMonth = '0';
-        }
-        setCurrentYear(newYear);
-        setCurrentMonth(newMonth);
-    };
-
-    const handleMonthChange = (newMonth: string) => {
-        setCurrentMonth(newMonth);
-    };
-
-    // Refetch data when year/month changes (skip initial mount)
-    const isFirstMount = React.useRef(true);
-
-    React.useEffect(() => {
-        if (isFirstMount.current) {
-            isFirstMount.current = false;
-            return;
-        }
-
-        let mounted = true;
-        setIsDateLoading(true);
-
-        const fetchData = async () => {
-            let startDate: string | undefined;
-            let endDate: string | undefined;
-            if (currentYear !== 'all') {
-                const y = parseInt(currentYear, 10);
-                if (currentMonth !== 'all') {
-                    const m = parseInt(currentMonth, 10);
-                    const start = new Date(y, m, 1);
-                    const end = endOfMonth(start);
-                    startDate = format(start, 'yyyy-MM-dd');
-                    endDate = format(end, 'yyyy-MM-dd');
-                } else {
-                    startDate = format(new Date(y, 0, 1), 'yyyy-MM-dd');
-                    endDate = format(new Date(y, 11, 31), 'yyyy-MM-dd');
-                }
-            }
-
-            const newData = await getRcOutRecords(
-                searchTerm || undefined, searchField, 0, 40, startDate, endDate
-            );
-
-            if (mounted) {
-                setAllData(newData);
-                setOffset(newData.length);
-                setHasMore(newData.length >= 40);
-                setIsDateLoading(false);
-            }
-        };
-
-        fetchData();
-        return () => { mounted = false; };
-    }, [currentYear, currentMonth]);
-
-    // Footer totals
-    const { totalWeight, totalAvgPrice, totalAvgWtdValue } = React.useMemo(() => {
-        let tw = 0, sumPrice = 0, sumVal = 0, countPrice = 0;
-        allData.forEach(d => {
-            tw += d.weight_kg || 0;
-            if (d.avg_price) { sumPrice += d.avg_price * (d.weight_kg || 0); countPrice += d.weight_kg || 0; }
-            sumVal += d.avg_wtd_value || 0;
+    // Filter helpers
+    const toggleFilter = React.useCallback((setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) => {
+        setter(prev => {
+            const next = new Set(prev);
+            if (next.has(value)) next.delete(value);
+            else next.add(value);
+            return next;
         });
-        return {
-            totalWeight: tw,
-            totalAvgPrice: countPrice > 0 ? sumPrice / countPrice : 0,
-            totalAvgWtdValue: sumVal,
-        };
-    }, [allData]);
+    }, []);
+
+    const clearAllFilters = React.useCallback(() => {
+        setStateExcluded(new Set(['CLOSED']));
+        setSelectedYears(new Set());
+        setSelectedBatches(new Set());
+        setSelectedDestinations(new Set());
+        setSelectedBlockLocs(new Set());
+    }, []);
 
     // Columns
     const columns = React.useMemo<ColumnDef<RcOutRow>[]>(() => {
@@ -382,8 +406,31 @@ export function RcOutTable({
                 cell: ({ row }) => <div className="whitespace-nowrap text-center font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{row.original.transaction_date}</div>,
             },
             {
+                id: 'state',
+                header: () => <div className="text-center px-1 font-mono font-bold">STATE</div>,
+                size: 55,
+                cell: ({ row }) => {
+                    const status = row.original.batches?.status || 'STORED';
+                    return (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="flex items-center justify-center">
+                                    <span className={cn(
+                                        "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold leading-none",
+                                        getStateClasses(status)
+                                    )}>
+                                        {status}
+                                    </span>
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Batch status: {status}</TooltipContent>
+                        </Tooltip>
+                    );
+                },
+            },
+            {
                 accessorKey: 'production_batch',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'production_batch' ? 'text-primary bg-primary/10 rounded' : ''}`}>BATCH</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">BATCH</div>,
                 size: 80,
                 cell: ({ row }) => row.original.production_batch ? (
                     <Tooltip>
@@ -397,7 +444,7 @@ export function RcOutTable({
             {
                 id: 'batch_code',
                 accessorKey: 'batches.batch_code',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'batch_code' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
                 size: 80,
                 cell: ({ row }) => row.original.batches?.batch_code ? (
                     <Tooltip>
@@ -416,7 +463,7 @@ export function RcOutTable({
             },
             {
                 accessorKey: 'destination',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'destination' ? 'text-primary bg-primary/10 rounded' : ''}`}>PLANT/ETC</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">PLANT/ETC</div>,
                 size: 100,
                 cell: ({ row }) => row.original.destination ? (
                     <Tooltip>
@@ -429,32 +476,31 @@ export function RcOutTable({
             },
             {
                 accessorKey: 'block_loc',
-                header: () => <div className={`text-center px-1 font-mono font-bold ${searchField === 'block_loc' ? 'text-primary bg-primary/10 rounded' : ''}`}>BLOCK LOC</div>,
+                header: () => <div className="text-center px-1 font-mono font-bold">BLOCK LOC</div>,
                 size: 80,
-                cell: ({ row }) => row.original.block_loc ? (
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.original.block_loc}</div>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs">{row.original.block_loc}</TooltipContent>
-                    </Tooltip>
-                ) : <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }} />
+                cell: ({ row }) => {
+                    const loc = row.original.block_loc || row.original.batches?.location_ref || '';
+                    return loc ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{loc}</div>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">{loc}</TooltipContent>
+                        </Tooltip>
+                    ) : <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }} />;
+                }
             },
             {
                 accessorKey: 'remarks',
-                header: () => <div className={`flex justify-center ${searchField === 'remarks' ? 'text-primary bg-primary/10 rounded' : ''}`}><MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" /></div>,
-                size: 50,
+                header: () => <div className="text-center px-1 font-mono font-bold">REMARKS</div>,
+                size: 120,
                 cell: ({ row }) => row.original.remarks ? (
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <button className="flex items-center justify-center w-full opacity-40 hover:opacity-100 transition-opacity">
-                                <MessageSquareText className="h-3.5 w-3.5" />
-                            </button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-80 p-3">
-                            <p className="text-sm">{row.original.remarks}</p>
-                        </PopoverContent>
-                    </Popover>
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <span className="max-w-[120px] truncate block text-xs text-muted-foreground" style={{ fontSize: `${fontSize}px` }}>{row.original.remarks}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">{row.original.remarks}</TooltipContent>
+                    </Tooltip>
                 ) : null
             },
             {
@@ -510,16 +556,17 @@ export function RcOutTable({
         ];
 
         return allColumns.filter(col => {
-            const key = (col as any).accessorKey;
+            const key = 'accessorKey' in col ? col.accessorKey : undefined;
             if (key === 'avg_price' || key === 'avg_wtd_value') {
-                return hasPermission('view:prices');
+                // Render gate matches the server data gate (price fields nulled when false).
+                return canViewPrices;
             }
             return true;
         });
-    }, [fontSize, searchField, hasPermission]);
+    }, [fontSize, canViewPrices]);
 
     const table = useReactTable({
-        data: allData,
+        data: filteredData,
         columns,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
@@ -546,12 +593,7 @@ export function RcOutTable({
         enabled: !selectionMode,
     });
 
-    // Push cell selection count to shared context
-    React.useEffect(() => {
-        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+    const selectionSize = cellSelection.getSelectionSize();
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -564,18 +606,63 @@ export function RcOutTable({
 
         switch (colId) {
             case 'transaction_date': return data.transaction_date || '';
+            case 'state': return data.batches?.status || 'STORED';
             case 'production_batch': return data.production_batch || '';
             case 'batch_code':
             case 'batches.batch_code': return data.batches?.batch_code || '';
             case 'weight_kg': return data.weight_kg != null ? data.weight_kg.toLocaleString() : '';
             case 'destination': return data.destination || '';
-            case 'block_loc': return data.block_loc || '';
+            case 'block_loc': return data.block_loc || data.batches?.location_ref || '';
             case 'remarks': return data.remarks || '';
             case 'avg_price': return data.avg_price != null ? data.avg_price.toFixed(2) : '';
             case 'avg_wtd_value': return data.avg_wtd_value != null ? data.avg_wtd_value.toFixed(2) : '';
             default: return '';
         }
     }, [rows, visibleColumns]);
+
+    const getNumericCellValue = React.useCallback((rowIdx: number, colIdx: number): number | null => {
+        const row = rows[rowIdx];
+        if (!row) return null;
+        const data = row.original;
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+        const colId = col.id || ('accessorKey' in col.columnDef ? col.columnDef.accessorKey as string : '');
+        switch (colId) {
+            case 'weight_kg': return data.weight_kg ?? null;
+            case 'avg_price': return data.avg_price ?? null;
+            case 'avg_wtd_value': return data.avg_wtd_value ?? null;
+            default: return null;
+        }
+    }, [rows, visibleColumns]);
+
+    const getColumnDefaultCalcType = React.useCallback((colIdx: number): AggregationType | null => {
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+        const colId = col.id || ('accessorKey' in col.columnDef ? col.columnDef.accessorKey as string : '');
+        switch (colId) {
+            case 'weight_kg':
+            case 'avg_wtd_value':
+                return 'SUM';
+            case 'avg_price':
+                return 'AVERAGE';
+            default: return null;
+        }
+    }, [visibleColumns]);
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    // Push cell selection count + aggregates to shared context with debounce to reduce status bar re-renders during drag
+    React.useEffect(() => {
+        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
+
+        // Debounce by 50ms to prevent excessive updates during drag selection
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+            setCellAggregates(count > 1 ? aggregates : null);
+        }, 50);
+
+        return () => clearTimeout(timer);
+    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
 
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
         getSelectedRange: cellSelection.getSelectedRange,
@@ -595,6 +682,9 @@ export function RcOutTable({
         const handleClickOutside = (e: MouseEvent) => {
             const container = tableContainerRef.current;
             if (container && !container.contains(e.target as Node)) {
+                const target = e.target as HTMLElement;
+                // Don't clear selection when clicking the floating status bar or its popover
+                if (target.closest?.('[data-floating-status-bar]') || target.closest?.('[data-radix-popper-content-wrapper]')) return;
                 cellSelection.clearSelection();
             }
         };
@@ -624,46 +714,9 @@ export function RcOutTable({
         overscan: 10,
     });
 
-    // Infinite Scroll Trigger
-    React.useEffect(() => {
-        const [lastItem] = [...rowVirtualizer.getVirtualItems()].reverse();
-        if (!lastItem) return;
-
-        if (
-            lastItem.index >= rows.length - 1 &&
-            hasMore &&
-            !isLoadingMore
-        ) {
-            loadMore();
-        }
-    }, [
-        hasMore,
-        isLoadingMore,
-        loadMore,
-        rowVirtualizer.getVirtualItems(),
-        rows.length,
-    ]);
-
-    // Status Text
-    const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    const statusText = React.useMemo(() => {
-        const count = allData.length;
-        const displayYear = (currentYear === 'all' || searchTerm) ? 'All Years' : currentYear;
-
-        if (searchTerm) {
-            return <span>Found <span className="font-semibold text-foreground">{count}</span> results for &ldquo;<span className="font-semibold text-foreground">{searchTerm}</span>&rdquo;</span>;
-        }
-        if (currentMonth === 'all') {
-            return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{displayYear}</span> (All Months)</span>;
-        }
-        return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(currentMonth)]} {displayYear}</span></span>;
-    }, [allData.length, searchTerm, currentMonth, currentYear]);
-
     // Count non-price visible columns for footer colSpan
-    // DATE + BATCH + BLOCK + WT + PLANT/ETC + BLOCK LOC + REMARKS = 7
-    // But WT gets its own cell. So colSpan for "TOTALS" label = columns before WT
-    // DATE(1) + BATCH(2) + BLOCK(3) = 3 columns before WT
-    const colsBeforeWeight = 3; // DATE, BATCH, BLOCK
+    // DATE + STATE + BATCH + BLOCK = 4 columns before WT
+    const colsBeforeWeight = 4;
 
     return (
         <TooltipProvider>
@@ -675,7 +728,7 @@ export function RcOutTable({
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Add Usage Records</DialogTitle>
                                 <DialogDescription>
@@ -690,8 +743,11 @@ export function RcOutTable({
                             <BulkUsageInput
                                 batches={batches}
                                 destinations={destinations}
-                                productionBatches={productionBatches}
-                                onSuccess={() => setIsAddOpen(false)}
+                                productionBatches={batchOptions}
+                                onSuccess={async () => {
+                                    setIsAddOpen(false);
+                                    await handleRefresh();
+                                }}
                                 onDirtyChange={setIsInputDirty}
                             />
                         </div>
@@ -705,7 +761,7 @@ export function RcOutTable({
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Edit Record{editRows?.length === 1 ? '' : 's'}</DialogTitle>
                                 <DialogDescription>
@@ -723,8 +779,12 @@ export function RcOutTable({
                                     initialData={editRows}
                                     batches={batches}
                                     destinations={destinations}
-                                    productionBatches={productionBatches}
-                                    onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
+                                    productionBatches={batchOptions}
+                                    onSuccess={async () => {
+                                        setEditRows(null);
+                                        setSelectedIds(new Set());
+                                        await handleRefresh();
+                                    }}
                                     onDirtyChange={setIsInputDirty}
                                 />
                             )}
@@ -750,103 +810,381 @@ export function RcOutTable({
 
                 {/* Toolbar */}
                 <div className="flex-none flex items-center justify-between py-1">
+                    {/* In Closed Blocks summary mode the 5 feeding filters are hidden;
+                        the empty <div /> placeholder keeps the right cluster right-aligned. */}
+                    {!closedBlocksMode ? (
                     <div className="flex items-center gap-2">
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="ml-auto w-32 h-8 text-[12px] font-mono">
-                                    {searchField === 'all' ? 'All Fields' : searchField.toUpperCase()}
-                                    <ChevronDown className="ml-2 h-4 w-4" />
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="start">
-                                <DropdownMenuLabel>Search Field</DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => handleFieldChange('all')}>All Fields</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('batch_code')}>Block</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('production_batch')}>Batch</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('destination')}>Plant/Etc</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('block_loc')}>Block Loc</DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleFieldChange('remarks')}>Remarks</DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <div className="relative max-w-sm w-64">
+                        {/* Search */}
+                        <div className="relative max-w-sm w-56">
                             <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
                             <Input
-                                placeholder={`Search ${searchField === 'all' ? 'records' : searchField}...`}
+                                placeholder="Search records..."
                                 value={searchTerm}
-                                onChange={(event) => handleSearchChange(event.target.value)}
-                                onFocus={() => setIsSearchFocused(true)}
-                                onBlur={() => setIsSearchFocused(false)}
+                                onChange={(e) => setSearchTerm(e.target.value)}
                                 className="pl-8 h-8 text-xs font-mono"
                             />
                         </div>
-                    </div>
-                    <Button
-                        variant={selectionMode ? "default" : "outline"}
-                        size="sm"
-                        className="ml-auto h-8 gap-1"
-                        onClick={() => {
-                            setSelectionMode(prev => !prev);
-                            if (selectionMode) setSelectedIds(new Set());
-                            else cellSelection.clearSelection();
-                        }}
-                    >
-                        Select
-                    </Button>
-                    <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1 ml-2">
-                        <Plus className="h-4 w-4" />
-                        Add Record
-                    </Button>
 
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 ml-2">
-                                <Settings className="h-4 w-4" />
+                        {/* BATCH filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[70px] text-xs font-mono px-2",
+                                    selectedBatches.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {selectedBatches.size === 0
+                                        ? 'Batch'
+                                        : `Batch (${selectedBatches.size})`}
+                                    {selectedBatches.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); setSelectedBatches(new Set()); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[220px] p-0" align="start">
+                                {selectedBatches.size > 0 && (
+                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                                        <button onClick={() => setSelectedBatches(new Set())} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <Command>
+                                    <CommandInput placeholder="Search batches..." className="text-xs" />
+                                    <CommandList>
+                                        <CommandEmpty>No batch found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {batchOptions.map(code => (
+                                                <CommandItem
+                                                    key={code}
+                                                    value={code}
+                                                    onSelect={() => toggleFilter(setSelectedBatches, code)}
+                                                    className="text-xs font-mono"
+                                                >
+                                                    <Checkbox checked={selectedBatches.has(code)} className="mr-2 h-3.5 w-3.5" />
+                                                    {code}
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* YEAR filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[60px] text-xs font-mono px-2",
+                                    selectedYears.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {selectedYears.size === 0
+                                        ? 'Year'
+                                        : `Year (${selectedYears.size})`}
+                                    {selectedYears.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); setSelectedYears(new Set()); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[140px] p-2" align="start">
+                                {selectedYears.size > 0 && (
+                                    <div className="flex items-center justify-end pb-1 mb-1 border-b">
+                                        <button onClick={() => setSelectedYears(new Set())} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <div className="space-y-1">
+                                    {yearOptions.map(yr => (
+                                        <label key={yr} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-muted cursor-pointer text-xs font-mono">
+                                            <Checkbox
+                                                checked={selectedYears.has(yr)}
+                                                onCheckedChange={() => {
+                                                    setSelectedYears(prev => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(yr)) next.delete(yr);
+                                                        else next.add(yr);
+                                                        return next;
+                                                    });
+                                                }}
+                                                className="h-3.5 w-3.5"
+                                            />
+                                            {yr}
+                                        </label>
+                                    ))}
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* STATE filter (exclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[60px] text-xs font-mono px-2",
+                                    stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT && "border-primary bg-primary/5"
+                                )}>
+                                    {stateExcluded.size === 0 || stateExcluded.size >= STATE_COUNT
+                                        ? 'State'
+                                        : `State (-${stateExcluded.size})`}
+                                    {stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); setStateExcluded(new Set()); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[180px] p-2" align="start">
+                                <div className="flex items-center justify-between pb-1 mb-1 border-b">
+                                    <button onClick={() => setStateExcluded(new Set())} className="text-[10px] text-muted-foreground hover:text-foreground">Show All</button>
+                                    <button onClick={() => setStateExcluded(new Set(STATE_OPTIONS))} className="text-[10px] text-muted-foreground hover:text-foreground">Hide All</button>
+                                </div>
+                                <div className="space-y-1">
+                                    {STATE_OPTIONS.map(state => (
+                                        <label key={state} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-muted cursor-pointer text-xs font-mono">
+                                            <Checkbox
+                                                checked={!stateExcluded.has(state)}
+                                                onCheckedChange={() => {
+                                                    setStateExcluded(prev => {
+                                                        const next = new Set(prev);
+                                                        if (next.has(state)) next.delete(state);
+                                                        else next.add(state);
+                                                        return next;
+                                                    });
+                                                }}
+                                                className="h-3.5 w-3.5"
+                                            />
+                                            <span className={cn(
+                                                "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold leading-none",
+                                                getStateClasses(state)
+                                            )}>
+                                                {state}
+                                            </span>
+                                        </label>
+                                    ))}
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* PLANT/ETC filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
+                                    selectedDestinations.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {selectedDestinations.size === 0
+                                        ? 'Plant/Etc'
+                                        : `Plant/Etc (${selectedDestinations.size})`}
+                                    {selectedDestinations.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); setSelectedDestinations(new Set()); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[220px] p-0" align="start">
+                                {selectedDestinations.size > 0 && (
+                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                                        <button onClick={() => setSelectedDestinations(new Set())} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <Command>
+                                    <CommandInput placeholder="Search destinations..." className="text-xs" />
+                                    <CommandList>
+                                        <CommandEmpty>No destination found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {destinations.map(d => (
+                                                <CommandItem
+                                                    key={d}
+                                                    value={d}
+                                                    onSelect={() => toggleFilter(setSelectedDestinations, d)}
+                                                    className="text-xs font-mono"
+                                                >
+                                                    <Checkbox checked={selectedDestinations.has(d)} className="mr-2 h-3.5 w-3.5" />
+                                                    {d}
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* BLOCK LOC filter (inclusion model) */}
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className={cn(
+                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
+                                    selectedBlockLocs.size > 0 && "border-primary bg-primary/5"
+                                )}>
+                                    {selectedBlockLocs.size === 0
+                                        ? 'Block Loc'
+                                        : `Block Loc (${selectedBlockLocs.size})`}
+                                    {selectedBlockLocs.size > 0 ? (
+                                        <span
+                                            onClick={(e) => { e.stopPropagation(); setSelectedBlockLocs(new Set()); }}
+                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </span>
+                                    ) : (
+                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-[180px] p-0" align="start">
+                                {selectedBlockLocs.size > 0 && (
+                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                                        <button onClick={() => setSelectedBlockLocs(new Set())} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
+                                    </div>
+                                )}
+                                <Command>
+                                    <CommandInput placeholder="Search locations..." className="text-xs" />
+                                    <CommandList>
+                                        <CommandEmpty>No location found.</CommandEmpty>
+                                        <CommandGroup>
+                                            {blockLocs.map(l => (
+                                                <CommandItem
+                                                    key={l}
+                                                    value={l}
+                                                    onSelect={() => toggleFilter(setSelectedBlockLocs, l)}
+                                                    className="text-xs font-mono"
+                                                >
+                                                    <Checkbox checked={selectedBlockLocs.has(l)} className="mr-2 h-3.5 w-3.5" />
+                                                    {l}
+                                                </CommandItem>
+                                            ))}
+                                        </CommandGroup>
+                                    </CommandList>
+                                </Command>
+                            </PopoverContent>
+                        </Popover>
+
+                        {/* Clear all filters */}
+                        {hasActiveFilters && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                onClick={clearAllFilters}
+                            >
+                                <X className="mr-1 h-3 w-3" />
+                                Clear
                             </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-80" align="end">
-                            <div className="grid gap-4">
-                                <div className="space-y-2">
-                                    <h4 className="font-medium leading-none">View Options</h4>
-                                    <p className="text-sm text-muted-foreground">
-                                        Customize the table appearance.
-                                    </p>
-                                </div>
-                                <div className="grid gap-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
+                        )}
+                    </div>
+                    ) : (<div />)}
+
+                    <div className="flex items-center gap-1.5">
+                        <Button
+                            variant={closedBlocksMode ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 gap-1"
+                            onClick={() => setClosedBlocksMode(prev => !prev)}
+                        >
+                            <PackageCheck className="h-4 w-4" />
+                            Closed Blocks
+                        </Button>
+                        <Button
+                            variant={selectionMode ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 gap-1"
+                            onClick={() => {
+                                setSelectionMode(prev => !prev);
+                                if (selectionMode) setSelectedIds(new Set());
+                                else cellSelection.clearSelection();
+                            }}
+                        >
+                            Select
+                        </Button>
+                        <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1">
+                            <Plus className="h-4 w-4" />
+                            Add Record
+                        </Button>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={handleRefresh}
+                                    disabled={refreshing}
+                                >
+                                    <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">Refresh data</TooltipContent>
+                        </Tooltip>
+
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-8 w-8">
+                                    <Settings className="h-4 w-4" />
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-80" align="end">
+                                <div className="grid gap-4">
+                                    <div className="space-y-2">
+                                        <h4 className="font-medium leading-none">View Options</h4>
+                                        <p className="text-sm text-muted-foreground">
+                                            Customize the table appearance.
+                                        </p>
                                     </div>
-                                    <Slider
-                                        id="font-size"
-                                        min={9}
-                                        max={14}
-                                        step={1}
-                                        value={[fontSize]}
-                                        onValueChange={(value) => setFontSize(value[0])}
-                                    />
-                                </div>
-                                <div className="grid gap-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
+                                    <div className="grid gap-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
+                                        </div>
+                                        <Slider
+                                            id="font-size"
+                                            min={9}
+                                            max={14}
+                                            step={1}
+                                            value={[fontSize]}
+                                            onValueChange={(value) => setFontSize(value[0])}
+                                        />
                                     </div>
-                                    <Slider
-                                        id="row-height"
-                                        min={20}
-                                        max={60}
-                                        step={1}
-                                        value={[rowHeight]}
-                                        onValueChange={(value: number[]) => setRowHeight(value[0])}
-                                    />
+                                    <div className="grid gap-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
+                                        </div>
+                                        <Slider
+                                            id="row-height"
+                                            min={20}
+                                            max={60}
+                                            step={1}
+                                            value={[rowHeight]}
+                                            onValueChange={(value: number[]) => setRowHeight(value[0])}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
-                        </PopoverContent>
-                    </Popover>
+                            </PopoverContent>
+                        </Popover>
+                    </div>
                 </div>
 
                 {/* Floating Action Bar */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
+                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -862,7 +1200,8 @@ export function RcOutTable({
                     </div>
                 )}
 
-                {/* Scrollable Table */}
+                {/* Scrollable Table — feeding view (toggle OFF) */}
+                {!closedBlocksMode && (
                 <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
                     <div
                         className="flex-1 overflow-auto relative w-full outline-none select-none"
@@ -875,12 +1214,12 @@ export function RcOutTable({
                     >
                         <div className="w-full h-full">
                             <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
-                                <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                                <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                                     {table.getHeaderGroups().map((headerGroup) => (
                                         <TableRow key={headerGroup.id} className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                             {headerGroup.headers.map((header) => {
                                                 return (
-                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
+                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted/90 sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
                                                         <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
                                                             {header.isPlaceholder
                                                                 ? null
@@ -916,7 +1255,8 @@ export function RcOutTable({
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
-                                                                "hover:bg-muted/50 border-b last:border-0 transition-colors",
+                                                                "hover:bg-muted/50 border-b last:border-0 transition-all duration-150 animate-row-fade",
+                                                                getRowStateClasses(row.original.batches?.status || 'STORED'),
                                                                 selectionMode && "cursor-pointer",
                                                                 isSelected && "bg-primary/5 hover:bg-primary/10 border-l-2 border-l-primary"
                                                             )}
@@ -952,74 +1292,137 @@ export function RcOutTable({
                                                 {paddingBottom > 0 && (
                                                     <tr><td style={{ height: `${paddingBottom}px`, padding: 0, border: 0 }} /></tr>
                                                 )}
-                                                {isLoadingMore && (
-                                                    <TableRow>
-                                                        <TableCell colSpan={columns.length} className="h-12 text-center text-muted-foreground">
-                                                            <div className="flex items-center justify-center gap-2">
-                                                                <Loader2 className="h-4 w-4 animate-spin" />
-                                                                Loading more...
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                )}
                                             </>
                                         );
                                     })() : (
                                         <TableRow>
                                             <TableCell colSpan={columns.length} className="h-24 text-center">
-                                                No results.
+                                                <span className="animate-fade-up text-muted-foreground">No results.</span>
                                             </TableCell>
                                         </TableRow>
                                     )}
                                 </TableBody>
-                                <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
-                                    <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
-                                        {/* DATE + BATCH + BLOCK = 3 columns */}
-                                        <TableCell colSpan={colsBeforeWeight} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                            TOTALS
-                                        </TableCell>
-                                        {/* WT */}
-                                        <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                            {Math.round(totalWeight).toLocaleString()}
-                                        </TableCell>
-                                        {/* PLANT/ETC + BLOCK LOC + REMARKS = 3 empty cells */}
-                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                        <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                        {/* AVG PRICE + AVG VAL (permission-gated) */}
-                                        {hasPermission('view:prices') && (
-                                            <>
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{totalAvgPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{totalAvgWtdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                                    </div>
-                                                </TableCell>
-                                            </>
-                                        )}
-                                        {/* Actions */}
-                                        <TableCell className="py-0" />
-                                    </TableRow>
-                                </TableFooter>
+                                {hasActiveFilters && (
+                                    <TableFooter className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50 animate-slide-up">
+                                        <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
+                                            {/* DATE + STATE + BATCH + BLOCK = 4 columns */}
+                                            <TableCell colSpan={colsBeforeWeight} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                TOTALS
+                                            </TableCell>
+                                            {/* WT */}
+                                            <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                {Math.round(totalWeight).toLocaleString()}
+                                            </TableCell>
+                                            {/* PLANT/ETC + BLOCK LOC + REMARKS = 3 empty cells */}
+                                            <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
+                                            <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
+                                            <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
+                                            {/* AVG PRICE + AVG VAL (price-gated — server canViewPrices) */}
+                                            {canViewPrices && (
+                                                <>
+                                                    <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">₱</span>
+                                                            <span>{totalAvgPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">₱</span>
+                                                            <span>{totalAvgWtdValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                        </div>
+                                                    </TableCell>
+                                                </>
+                                            )}
+                                            {/* Actions */}
+                                            <TableCell className="py-0" />
+                                        </TableRow>
+                                    </TableFooter>
+                                )}
                             </table>
                         </div>
                     </div>
-                    <DeliverySheetFooter
-                        month={currentMonth}
-                        year={currentYear}
-                        onMonthChange={handleMonthChange}
-                        onYearChange={handleYearChange}
-                        disabled={!!searchTerm || isSearchFocused || isDateLoading}
-                        monthsDisabled={currentYear === 'all'}
-                        statusText={statusText}
-                    />
                 </div>
+                )}
+
+                {/* Closed Blocks summary (toggle ON). Rows render in server array order
+                    (close_date desc) — NO client re-sort, NO re-sum, NO re-aggregation. */}
+                {closedBlocksMode && (
+                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background animate-fade-up">
+                    {closedLoading && closedBlocks === null ? (
+                        <div className="flex-1 flex items-center justify-center">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                        </div>
+                    ) : closedBlocks && closedBlocks.length === 0 ? (
+                        <div className="flex-1 flex items-center justify-center">
+                            <span className="animate-fade-up text-muted-foreground text-sm">No closed blocks.</span>
+                        </div>
+                    ) : (
+                        <div className="flex-1 overflow-auto relative w-full">
+                            <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
+                                <thead className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
+                                    <tr className="border-b" style={{ height: '32px' }}>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[110px]">CLOSE DATE</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[140px]">BATCH</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-center w-[90px]">BLOCK</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[120px]">TOTAL FED (KG)</th>
+                                        <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[90px]">FEEDINGS</th>
+                                        {closedCanViewPrices && (
+                                            <>
+                                                <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[120px]">AVG ₱/KG</th>
+                                                <th className="px-2 py-1 font-mono font-bold text-xs text-foreground border-b border-foreground/20 text-right w-[130px]">TOTAL VALUE</th>
+                                            </>
+                                        )}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(closedBlocks ?? []).map((b) => (
+                                        <tr
+                                            key={b.batch_id ?? `${b.batch_code}-${b.block_loc}-${b.close_date}`}
+                                            className="border-b last:border-0 hover:bg-muted/50 transition-all duration-150"
+                                            style={{ height: '32px' }}
+                                        >
+                                            <td className="px-2 py-1 font-mono text-center text-xs">{b.close_date ?? '—'}</td>
+                                            <td className="px-2 py-1 font-mono font-bold text-center text-xs">{b.batch_code ?? '—'}</td>
+                                            <td className="px-2 py-1 font-mono text-center text-xs">{b.block_loc || '—'}</td>
+                                            <td className="px-2 py-1 font-mono text-right text-xs">
+                                                {b.total_fed_kg != null ? b.total_fed_kg.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                                            </td>
+                                            <td className="px-2 py-1 font-mono text-right text-xs">
+                                                {b.feed_count != null ? b.feed_count.toLocaleString() : '—'}
+                                            </td>
+                                            {closedCanViewPrices && (
+                                                <>
+                                                    <td className="px-1 text-xs">
+                                                        {b.avg_price != null ? (
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span className="font-mono">{b.avg_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-right"><span className="text-muted-foreground font-mono text-xs">—</span></div>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-1 text-xs">
+                                                        {b.total_value != null ? (
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span className="font-mono font-bold">{b.total_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="text-right"><span className="text-muted-foreground font-mono text-xs">—</span></div>
+                                                        )}
+                                                    </td>
+                                                </>
+                                            )}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+                )}
 
 
             </div>

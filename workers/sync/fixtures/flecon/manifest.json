@@ -1,0 +1,62 @@
+{
+  "report_type": "flecon",
+  "cases": [
+    {
+      "id": "flecon_real_latest",
+      "kind": "real",
+      "covers": [
+        "day-set-multiset-noop",
+        "column-header-signature-map",
+        "REPLACE audit operation",
+        "balance-crosscheck-informational"
+      ],
+      "workbooks": {
+        "primary": "workbooks/flecon_real_latest.xlsx"
+      },
+      "db_window": "db_window/flecon_real_latest.json",
+      "opts": {
+        "since": "2026-01-01"
+      },
+      "note": "Real FLECON BAG MOVEMENT 2026 workbook + snapshot of flecon_bag_movements/types/view_balance. Exercises the full extract->classify path end-to-end against a real multi-row-header, month-section, marker-row, balance-snapshot sheet."
+    },
+    {
+      "id": "flecon_edge",
+      "kind": "synthetic",
+      "covers": [
+        "column-header-signature-map",
+        "ambiguous-vs-disambiguated-FG",
+        "unmapped-column-flagged",
+        "multi-column-movement-row",
+        "zamboanga-typo-preserved",
+        "balance-snapshot",
+        "opening-balances",
+        "day-set-DATE_CHANGED",
+        "month-section-reset",
+        "never-auto-create-bag-type"
+      ],
+      "workbooks": {
+        "primary": "workbooks/flecon_edge.xlsx"
+      },
+      "db_window": "db_window/flecon_edge.json",
+      "opts": {
+        "since": "2026-01-01"
+      },
+      "note": "Synthetic edge workbook: reshuffled registry, F/G row-5 'FG' ambiguity disambiguated by row-3, an unmapped column, a multi-column blend row, both ZAMBOANGA spellings, a balance snapshot, and a DATE_CHANGED day (DB qty off by 1)."
+    },
+    {
+      "id": "flecon_noop_reorder",
+      "kind": "synthetic",
+      "covers": [
+        "day-set-multiset-noop"
+      ],
+      "workbooks": {
+        "primary": "workbooks/flecon_noop_reorder.xlsx"
+      },
+      "db_window": "db_window/flecon_noop_reorder.json",
+      "opts": {
+        "since": "2026-01-01"
+      },
+      "note": "Identical multiset, different row order in sheet vs DB -> must classify DUPLICATE_NOOP (Counter equality is order-independent)."
+    }
+  ]
+}

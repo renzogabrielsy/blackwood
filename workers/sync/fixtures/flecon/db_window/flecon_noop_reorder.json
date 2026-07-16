@@ -1,0 +1,52 @@
+{
+  "movements": [
+    {
+      "id": "n3",
+      "transaction_date": "2026-06-20",
+      "particular": "C",
+      "bag_type_id": "id-unusable",
+      "qty_delta": -5
+    },
+    {
+      "id": "n1",
+      "transaction_date": "2026-06-20",
+      "particular": "A",
+      "bag_type_id": "id-kuraray",
+      "qty_delta": -2
+    },
+    {
+      "id": "n2",
+      "transaction_date": "2026-06-20",
+      "particular": "B",
+      "bag_type_id": "id-kuraray",
+      "qty_delta": -2
+    }
+  ],
+  "bag_types": [
+    {
+      "id": "id-kuraray",
+      "code": "KURARAY_590"
+    },
+    {
+      "id": "id-unusable",
+      "code": "UNUSABLE"
+    }
+  ],
+  "bag_type_registry": [
+    {
+      "code": "KURARAY_590",
+      "source_label": "590 kls(Kuraray)",
+      "source_column": "C",
+      "sort_order": 1,
+      "label": "Kuraray 590"
+    },
+    {
+      "code": "UNUSABLE",
+      "source_label": "Un-usable bag",
+      "source_column": "D",
+      "sort_order": 2,
+      "label": "Un-usable bag"
+    }
+  ],
+  "view_balance": []
+}

@@ -3,12 +3,14 @@
 ## Purpose
 Whitelist-based user invitation, role assignment, and soft-delete access control. Only accessible to Owner/Admin/Dev roles.
 
+> **Platform Infrastructure:** Admin is platform-level infrastructure — it manages access control for all tenants and modules, not charcoal-specific logic. Auth, roles, and invitations are intentionally domain-neutral and will work identically for any future tenant on the platform.
+
 ## Files
 | File | Lines | Role |
 |------|-------|------|
 | `page.tsx` | 52 | Server component — auth check, fetches all profiles, passes to table |
 | `actions.ts` | 201 | 4 server actions: `inviteUser`, `revokeUserAccess`, `reactivateUser`, `updateUserRole` |
-| `layout.tsx` | 25 | Route guard — redirects non-privileged users to `/inventory/rc-in` |
+| `layout.tsx` | 25 | Route guard — redirects non-privileged users to `/inventory` (and unauthenticated users to `/login`) |
 | `loading.tsx` | 15 | Skeleton loading state |
 | `components/UserManagementTable.tsx` | 168 | Dense data table with inline role dropdown + revoke/reactivate |
 | `components/InviteUserDialog.tsx` | 113 | Modal form — email + role selection, calls `inviteUser()` |

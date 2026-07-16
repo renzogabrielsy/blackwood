@@ -1,0 +1,58 @@
+# FLECON Bag Inventory Module
+
+## Purpose
+Read-only view of FLECON bag stock — an **Excel-style frozen matrix** that mirrors the operator's `FLECON BAG MOVEMENT 2026.xlsx` one-to-one: `DATE | PARTICULAR | one column per bag type`, with a Forwarded Balance row on top and a Current Balance footer at the bottom. The digital mirror of the Ivy bag-tracking sheet. All balances are SQL-computed; the UI never sums or recomputes them.
+
+> **Domain Module (Charcoal Tenant):** This module is domain-specific — it belongs to the charcoal plant operations layer, not the platform layer. Business logic, schema references, and terminology here are intentionally charcoal-specific.
+
+> **Movements are READ-ONLY from the UI:** There is NO UI write path to the `flecon_bag_movements` FACT table. A single-source daily "FLECON BAGGED" sync (a Python ingestion employee, not the app) is its sole writer. The UI only reads and displays movements. The ONE exception is a DIMENSION edit: per-column display **nicknames** on `flecon_bag_types` are user-editable from the matrix header (`updateFleconBagNickname`) — this never touches movement facts.
+
+> **NO price gating:** There is no ₱/price data anywhere in the FLECON bag domain — nothing to gate. `canViewPrices()` is deliberately NOT imported.
+
+## Files
+| File | Role |
+|------|------|
+| `page.tsx` | Async Server Component — calls `fetchFleconBagData()`, passes `balances`/`movements`/`error` to the client view. Thin; navbar owns the title (no header rendered). |
+| `actions.ts` | Read server action `fetchFleconBagData()` (exports `FleconBagMovementRow`) + the ONE mutation `updateFleconBagNickname(bagTypeId, nickname)` — writes the column nickname on `flecon_bag_types` (dimension only, never movement facts). |
+| `components/flecon-bags-view.tsx` | Client view — the **frozen bag-movement matrix** (rebuild of the old card grid). Owns the page container. Includes `BagTypeHeaderCell` — the click-to-edit nickname header. |
+
+## Data
+- **View: `view_flecon_bag_balance`** — one row per bag type. Columns (ALL nullable): `bag_type_id`, `code`, `label`, `nickname`, `sort_order`, `opening`, `total_in`, `total_out`, `balance`, `last_movement_date`. **`balance` is SQL-computed — NEVER recomputed in TS** (the `nz()` helper only COALESCEs null → 0 for display). The header display label = `nickname?.trim() || label` (fall back to the internal label; the full `label` stays in the cell `title`). 14 rows. Ordered by `sort_order` ascending server-side.
+- **Table: `flecon_bag_movements`** — `id` (uuid), `transaction_date` (date), `particular` (text), `bag_type_id` (uuid FK→`flecon_bag_types`), `qty_delta` (signed int; negative = OUT, positive = IN), `source_row` (int|null), `remarks` (text|null), `created_at`. Scoped to the **current calendar year** (`transaction_date >= <currentYear>-01-01`), ordered **`transaction_date` ASC then `source_row` ASC (nulls first) then `created_at` ASC** — chronological oldest→newest so the matrix renders top→bottom with a single server sort (the client never re-sorts). 134 rows in 2026 (2026-01-02 → 2026-07-01).
+- **Table: `flecon_bag_types`** — `id`, `code`, `label`, `nickname` (text|null — user-editable column display name), `source_column`, `sort_order`, `active`. Joined into movements for the display label/code; `nickname` is the target of `updateFleconBagNickname`.
+- **Type: `FleconBagMovementRow`** — flattened movement row with `bag_code`/`bag_label` from the join. Falls back to `bag_code` for the label and `''` for the code when the join is missing.
+
+## Key Behaviors
+- **`fetchFleconBagData()` server action:** Returns `{ balances, movements, error? }`. Balances via `view_flecon_bag_balance` ordered by `sort_order`. Movements via the **shared `fetchAllRows()` helper** (`@/lib/supabase/paginate`, DUP-1) to bypass PostgREST's `max_rows` cap — a thin local `fetchAll` wraps it, catching the helper's throw to preserve this module's surfaced-error contract (`{ balances: [], movements: [], error }`). Ordered **ASC** (`transaction_date` → `source_row` nulls-first → `created_at`). The join to `flecon_bag_types` is flattened defensively (object OR single-element array). One localized `any` on the `fetchAll` builder param — the only `any` in the module.
+- **`updateFleconBagNickname(bagTypeId, nickname)` server action:** the ONLY mutation. Trims the input and writes `nickname = <trimmed> || null` (empty ⇒ NULL) to `flecon_bag_types` for that id, then `revalidatePath('/inventory/flecon-bags')`. Returns `{ ok: true }` / `{ ok: false, error }`. Touches the DIMENSION only — never `flecon_bag_movements`.
+- **Frozen matrix layout** (`flecon-bags-view.tsx`): `table-fixed`, `border-separate`+`borderSpacing:0` (NOT `border-collapse` — collapsed borders make sticky cell backgrounds transparent and let content bleed through the frozen columns), `text-xs`, `px-2 py-1`, `font-mono tabular-nums` numerics right-aligned.
+- **Fill-width + horizontal scroll** (the RC Movement fill-and-scroll mechanism): the table is `width:100%` with `minWidth = W_DATE + W_PARTICULAR + nBagCols * MIN_BAG_W` (`MIN_BAG_W=72`). The frozen `DATE` (`W_DATE=76`) and `PARTICULAR` (`W_PARTICULAR=200`) `<col>`s keep FIXED widths (the sticky `left` offsets depend on them: `LEFT_DATE=0`, `LEFT_PARTICULAR=76`). The 14 bag `<col>`s have NO explicit width — under `table-fixed` they share the leftover width equally, so on a wide monitor they stretch to fill the page; when the container is narrower than `minWidth`, the `overflow-auto` container shows a horizontal scrollbar with DATE/PARTICULAR pinned. Bag order is sheet C→P via `sort_order`.
+- **Frozen classes (where each went):**
+  - Header row cells: `.frozen-corner` (z30) on the two left cells (DATE, PARTICULAR); `.frozen-row` (z20) on the 14 bag headers (`BagTypeHeaderCell`). PARTICULAR header also carries `.frozen-edge` (last frozen-left col → vertical seam).
+  - Body left cells (Forwarded Balance, movement, month-separator rows): `.frozen-col` (z10), solid `bg-background` (movements) or `bg-muted` (month separators); PARTICULAR body cell carries `.frozen-edge`. Row hover repaints `group-hover:bg-muted/50` OPAQUELY onto the frozen cells.
+  - Footer (Current Balance): `.frozen-corner-bottom` (z30) + `.frozen-edge-top` on the two left cells; `.frozen-row-bottom` (z20) + `.frozen-edge-top` on the 14 balance cells; PARTICULAR footer also carries `.frozen-edge`. All OPAQUE `bg-muted` — never glass.
+- **Row types:** (1) **Forwarded Balance** (first tbody row, muted) — each type's `opening` from the view (0 → blank), NOT computed. (2) **Movement rows** — chronological ASC; the signed `qty_delta` goes in the intersecting bag-type cell (positive emerald `+N`, negative red `−N` real minus glyph, empty cells stay empty). Each DB movement row is its own matrix row with a 1-entry qty map (mirrors the sheet, where a rare two-type row is two adjacent entries). (3) **Month separator rows** — injected when the `yyyy-MM` prefix changes (parsed by string slice, no `Date()` to avoid TZ drift); month name uppercase muted on the PARTICULAR cell; the frozen DATE+PARTICULAR cells repaint opaquely (`bg-muted`) per the frozen repaint rule. (4) **Current Balance footer** — each type's `balance` (bold, red when negative) from `view_flecon_bag_balance`, NEVER recomputed in TS.
+- **Editable column nicknames** (`BagTypeHeaderCell`): each bag-type header shows `nickname?.trim() || label` (full internal `label` in the native `title`). Clicking the cell (or the hover pencil affordance) swaps in a compact `text-[9px]` input inside the frozen header cell (stays `.frozen-row`, OPAQUE `bg-muted`), seeded with the current nickname (empty if none). **Enter or blur SAVES** via `updateFleconBagNickname`, **Escape cancels**. Save is a no-op when unchanged. On success → `router.refresh()` so the header reflects the new value (empty ⇒ falls back to the label); on error → `errorToast()` (persist + Copy, HARD RULE) and the input stays open for retry. `saving` disables the input during the round-trip.
+- **Scroll + auto-scroll:** single `overflow-auto` container (both axes), `flex-1 min-h-0` so it fills the inventory-layout height box. `useEffect` sets `scrollTop = scrollHeight` on mount (keyed on `rows.length`) so the LATEST movements are shown first — what operators check.
+- **No card grid, no bag-type filter:** the old Zone-1 balance cards + Zone-2 filtered ledger were fully replaced by the matrix (all 14 columns always visible → filter is redundant). One slim summary line (`{n} bag types · {n} movements`) is the only chrome above the matrix. Padding comes from the inventory layout — the view does NOT re-pad.
+- **Empty state:** when `movements.length === 0` the matrix (which needs movements) is replaced entirely by a centered `animate-fade-up` muted panel — "No bag movements recorded yet — the daily FLECON BAGGED sync will populate this matrix." The summary strip still renders above it.
+- **Error handling:** on `error`, `errorToast()` fires (persist-until-dismissed + Copy, per the Error Toasts HARD RULE — never `toast.error` directly) AND an inline banner renders with its own Copy button. Matrix still renders whatever arrived.
+- **Date format:** `transaction_date` is already `yyyy-MM-dd`. The frozen DATE cell renders `MM-dd` (via `.slice(5)` — no date-fns) with the full `yyyy-MM-dd` in the native `title`; month separators use the month slice for TZ-safe grouping.
+
+## Dependencies
+- `@/lib/supabase/server` — `createClient()` for the read query
+- `@/lib/supabase/paginate` — `fetchAllRows()` shared pagination helper (DUP-1)
+- `@/types/supabase` — `Tables<'view_flecon_bag_balance'>`
+- `@/lib/toast` — `errorToast()` for load + nickname-save failures (persist + Copy)
+- `@/lib/utils` — `cn()` for conditional frozen-cell class merging
+- `@/components/ui/button` — inline banner Copy button
+- `next/navigation` — `useRouter().refresh()` to re-render the header after a nickname save
+- `../actions` — `updateFleconBagNickname` (the nickname mutation)
+- `lucide-react` — `Copy` + `Pencil` (edit affordance) icons
+- **`app/globals.css` frozen-pane utilities** — `.frozen-col` / `.frozen-row` / `.frozen-row-bottom` / `.frozen-corner` / `.frozen-corner-bottom` / `.frozen-edge` / `.frozen-edge-top` (canonical z-scale + anti-seam)
+
+## See Also
+- [RC Movement matrix](../rc-movement/rc-movement-matrix.tsx) — the reference frozen-pane Excel matrix this view's frozen discipline (opaque sticky cells, z-scale, cumulative offsets, `border-separate`) is modeled on
+- [RC OUT](../rc-out/CONTEXT.md) — the `fetchAll` pagination + join-flatten pattern this module mirrors
+- [Navbar](../../../../components/NAVBAR.md) — breadcrumb + inventory sub-group registration (`Bag Inventory` entry)
+- [Dashboard digest](../../CONTEXT.md) — the `bag-inventory.tsx` snapshot card consumes `view_flecon_bag_balance` via `lib/digest/queries.ts`

@@ -1,0 +1,29 @@
+{
+  "deliveries": [
+    {
+      "id": "db-a19c",
+      "transaction_date": "2026-07-04",
+      "supplier": "Ornales",
+      "batch_code": "JUNE-26-BLK9",
+      "block_loc": "A-19C",
+      "truck_plate": "MAV 9202",
+      "sacks": 580,
+      "weight_kg": 20640.0,
+      "cost_basis": 38.0,
+      "remarks": null,
+      "lab_results": {
+        "mc": 11.0,
+        "grit": 3.0,
+        "bd_astm": 0.58,
+        "bd_jis": 0.6,
+        "vm": 13.0,
+        "ash": 3.0,
+        "fc": 82.0
+      }
+    }
+  ],
+  "batch_codes": [
+    "JUNE-26-BLK9",
+    "JULY-26-BLK9"
+  ]
+}

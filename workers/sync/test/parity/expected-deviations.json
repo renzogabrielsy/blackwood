@@ -1,0 +1,43 @@
+{
+  "$comment": "Expected TS-vs-oracle differences, implementing PORTING_DECISIONS.md rulings #2-#5. Each ACTIVE entry (in `deviations`) = a place the TS port INTENTIONALLY diverges from the Python oracle at CLASSIFY parity because the oracle carries a live crash or DB-constraint bug. A canonical diff matching an entry is PASS-with-note; anything else is FAIL. `path` is a glob (* = one segment, ** = any suffix). See test/parity/deviations.ts for matching semantics.",
+  "$apply_phase_todo": "APPLY-LAYER PARITY (M3/M5 follow-up, NOT YET BUILT): rulings PD-2/PD-3/PD-4 are APPLY-phase deviations for gsheet — the classify envelopes match the oracle byte-for-byte (proven: gsheet parity is 2/2 clean), so these never fire at CLASSIFY parity and would forever report as STALE noise. They are PARKED below in `apply_phase_deferred` (which the runner ignores) to PRESERVE the ruling record without polluting every parity run. When an apply-parity harness lands (diffs the apply payload / DB effect, not just classify), MOVE these back into `deviations` and add the gsheet apply fixtures they reference. Do NOT delete them — they document real, ruled-on divergences from the oracle's apply bugs.",
+  "deviations": [
+    {
+      "rule": "PD-5",
+      "type": "production",
+      "case": "production_downtime_ge60",
+      "path": "/**",
+      "note": "PORTING_DECISIONS #5: a downtime day with dt_mins>=60 violates the production_downtime CHECK (dt_mins<60). The Python never splits (hrs += mins//60; mins %= 60); the TS port implements the split. The split happens at APPLY/extract shaping; whether it surfaces in the CLASSIFY envelope depends on where the port applies it. Registered so the split's downstream value change is an expected deviation, not a porter bug. FIRES at classify parity (unlike the gsheet apply-phase set) — the production port shapes the split before classify."
+    }
+  ],
+  "apply_phase_deferred": [
+    {
+      "rule": "PD-2",
+      "type": "gsheet",
+      "case": "gsheet_over50_new",
+      "path": "/**",
+      "note": "PORTING_DECISIONS #2: the Python `_apply_from_compact` returns bare int 1 on the >50-NEW gate, crashing the caller under the contract CLI. The TS port returns a proper gate-failure envelope (nothing applied). APPLY-phase — at CLASSIFY parity the envelopes match, so this is DEFERRED until the apply-parity harness exists. Kept per the deviation-log discipline."
+    },
+    {
+      "rule": "PD-2",
+      "type": "gsheet",
+      "case": "gsheet_low_confidence",
+      "path": "/**",
+      "note": "PORTING_DECISIONS #2 (confidence<0.7 gate variant): same return-type bug path. TS returns a clean gate-failure envelope instead of crashing. APPLY-phase — deferred until the apply-parity harness exists."
+    },
+    {
+      "rule": "PD-3",
+      "type": "gsheet",
+      "case": "gsheet_l018_decision_skip",
+      "path": "/**",
+      "note": "PORTING_DECISIONS #3 (L-018): the Python apply honors only top-level `skip`, never `decision`, on CHANGED rows (corrupted a real row once). The TS port honors `decision` per the ledger's intent. APPLY-phase behavior; the CLASSIFY envelope is identical. Deferred until the apply-parity harness has the carve-out ready."
+    },
+    {
+      "rule": "PD-4",
+      "type": "gsheet",
+      "case": "gsheet_true_weight_deduction",
+      "path": "/**",
+      "note": "PORTING_DECISIONS #4: gsheet RC IN extractor computes true_weight_kg/deduction_note but the Python apply never writes them; the TS port writes them (aligning to the email pipeline + L-021). CLASSIFY output is unaffected (these fields are additive/never-diffed); the deviation lives in the apply payload. Deferred until the apply-parity harness exists."
+    }
+  ]
+}

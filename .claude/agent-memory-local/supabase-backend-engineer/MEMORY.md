@@ -1,228 +1,70 @@
 # Supabase Backend Engineer Memory
 
-## Database Schema Insights
-
-### Batch Status Management (Updated 2026-02-15)
-
-**Critical Discovery:** The `batch_status` enum drives the STATE column in RC IN. Status is now **fully derived from RC OUT data** via the `fn_process_blackwood_usage` trigger.
-
-**Status Values:**
-- `STORED` — default for new batches, no rc_out entries
-- `IN-USE` — batch has rc_out entry with `destination='MAIN'`, no CLOSED remarks
-- `CLOSED` — batch has rc_out with `destination='MAIN'` AND `remarks ILIKE '%CLOSED%'`
-- `SUNDRYING` — batch has rc_out with `destination='SUNDRY'`
-
-**Priority Order:** CLOSED > SUNDRYING > IN-USE > STORED
-
-**Note on FEED:** The `FEED` enum value still exists in `batch_status` but is no longer actively set by triggers (as of 2026-02-15). FEED location is indicated by the WHSE column in RC IN (derived from `block_loc` starting with 'F'), not by batch status. FEED batches follow the same status rules as other batches.
-
-### Trigger: fn_process_blackwood_usage
-
-**File:** Located in `supabase/migrations/` — full rewrite completed 2026-02-15
-
-**Operations Supported:**
-1. **INSERT** — Optimized, checks only new row, depletes weight, sets status
-2. **DELETE** — Adds weight back, **recalculates** status from remaining rc_out records
-3. **UPDATE** — Adjusts weight delta, **recalculates** status; handles batch_id changes
-
-**Key Behavior:**
-- Block location (`block_loc`) auto-copied from `batches.location_ref` if not provided
-- Status recalculation uses `EXISTS` queries with priority cascade
-- UPDATE/DELETE operations query ALL rc_out records to determine correct state
-- If batch_id changes during UPDATE, BOTH old and new batches are recalculated
-
-**Common Pitfall:** Previously, the RC IN batch upsert **overrode** trigger-managed status back to 'STORED'. This was fixed by removing the `status` field from `upsertBatchesFromRows()` in `app/(app)/inventory/rc-in/actions.ts` (line 17).
-
-### Trigger: fn_update_blackwood_state (2026-02-16 Fix)
-
-**File:** Located in `supabase/migrations/` — fixed to handle UPDATE operations on 2026-02-16
-
-**Operations Supported:**
-1. **INSERT** — Uses incremental weighted average formula to update `avg_cost`, `quality_stats`, `current_weight`
-2. **UPDATE** — Recalculates `avg_cost` from scratch when cost data or `batch_code` changes
-3. **DELETE** — Recalculates `avg_cost` from scratch for the old batch (if trigger is configured)
-
-**Critical UPDATE Behavior:**
-- When `batch_code` changes: recalculates BOTH old and new batches from all their deliveries
-- When `cost_basis` or `weight_kg` changes (same batch): recalculates that batch from all its deliveries
-- Uses full aggregation query: `SUM(cost_basis * weight_kg) / NULLIF(SUM(weight_kg), 0)`
-
-**Why the Fix Was Needed:**
-- The trigger originally only fired on INSERT (tgtype=5)
-- When users edited deliveries in RC IN (changing batch_code or cost data), the batch avg_cost was never updated
-- This caused `rc_out.rc_out_avg_price` (a generated column derived from `batches.avg_cost`) to show stale data
-- Migration `fix_delivery_trigger_handle_updates.sql` added UPDATE support (tgtype=23: BEFORE INSERT OR UPDATE)
-
-**Data Cleanup:** If batches have stale avg_cost, run:
-```sql
-UPDATE batches b
-SET avg_cost = COALESCE(calc.avg, 0)
-FROM (
-  SELECT batch_code, SUM(cost_basis * weight_kg) / NULLIF(SUM(weight_kg), 0) as avg
-  FROM deliveries
-  GROUP BY batch_code
-) calc
-WHERE calc.batch_code = b.batch_code;
-```
-
-### View: view_rc_in_master
-
-**Columns Include:** `state` (aliased from `batches.status`)
-
-**Query Pattern:**
-```sql
-SELECT *, batches(location_ref, status) FROM deliveries
-```
-
-Always fetch BOTH `location_ref` and `status` when querying deliveries for the RC IN module.
-
-### Enum Addition Best Practice
-
-PostgreSQL requires enum values to be committed before use in function definitions. Always split enum additions into separate migrations:
-1. Migration 1: `ALTER TYPE batch_status ADD VALUE 'NEW_VALUE';`
-2. Migration 2: Function/trigger updates that reference the new value
-
-**Error if violated:** `unsafe use of new value "X" of enum type`
-
-## RC IN Module Architecture
-
-### Batch Upsert Strategy
-
-**Location:** `app/(app)/inventory/rc-in/actions.ts`, function `upsertBatchesFromRows()`
-
-**Pattern:**
-1. Map delivery rows to batch upsert payload (`batch_code`, `location_ref`)
-2. Deduplicate via JS Map keyed by `batch_code`
-3. Upsert with `onConflict: 'batch_code'`
-4. **DO NOT include `status`** — DB default ('STORED') + trigger handle state
-
-**Critical Rule:** Never send `status` in batch upserts. The trigger owns state management.
-
-### Data Flow for STATE Column
-
-1. User submits deliveries → `submitBulkDeliveries()` action
-2. Batches upserted → default status = 'STORED'
-3. User creates RC OUT entry → `fn_process_blackwood_usage` trigger fires
-4. Trigger updates batch status based on RC OUT data
-5. RC IN page queries `deliveries` with `batches(status)` join
-6. Frontend displays color-coded STATE badges
-
-### Type Definitions
-
-**File:** `types/rc-in.ts`
-
-**Key Types:**
-- `DeliveryRow` — includes optional `state?: string`
-- `DeliveryHistoryRow` — extends DeliveryRow, includes `batches?: { location_ref: string; status: string }`
-- Always map `(d as any).batches?.status || 'STORED'` to `state` in page.tsx
-
-## Common Debugging Patterns
-
-### Verify Trigger Behavior
-
-```sql
--- Check trigger is active
-SELECT tgname, tgenabled FROM pg_trigger WHERE tgname = 'tr_blackwood_usage';
-
--- View function source
-SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'fn_process_blackwood_usage';
-```
-
-### Verify Status Distribution
-
-```sql
-SELECT status, COUNT(*) FROM batches GROUP BY status ORDER BY count DESC;
-```
-
-Expected distribution post-migration (2026-02-15):
-- Initial (after STATE rewrite): CLOSED: 258, STORED: 154, FEED: 73, IN-USE: 5, SUNDRYING: 3
-- After FEED removal: CLOSED: 322, STORED: 159, IN-USE: 9, SUNDRYING: 3 (0 FEED)
-
-### Test Trigger Operations
-
-```sql
--- Test INSERT (should set SUNDRYING)
-INSERT INTO rc_out (batch_id, destination, weight_kg, transaction_date)
-SELECT id, 'SUNDRY', 100, '2026-01-01' FROM batches WHERE batch_code = 'TEST-BATCH';
-
--- Test DELETE (should recalculate to STORED if no other rc_out records)
-DELETE FROM rc_out WHERE id = '<rc_out_id>';
-
--- Verify batch status changed
-SELECT batch_code, status FROM batches WHERE batch_code = 'TEST-BATCH';
-```
-
-## Migration History
-
-### 2026-02-15: STATE Column Rewrite
-
-**Migrations:**
-1. `20260214173510_rewrite_state_column_derive_from_rc_out.sql` — Add SUNDRYING enum
-2. `20260214173709_rewrite_trigger_view_and_data_fix.sql` — Rewrite trigger, update view, fix data
-3. `20260215XXXXXX_remove_feed_status_from_triggers.sql` — Remove FEED from trigger logic
-
-**Changes:**
-- Added SUNDRYING to batch_status enum
-- Rewrote fn_process_blackwood_usage to handle INSERT/UPDATE/DELETE
-- Updated view_rc_in_master to include `state` column
-- One-time data fix recalculated all batch statuses from rc_out data
-- Removed status from batch upsert in RC IN actions
-- Updated RC IN page to fetch and map batch status
-- Updated DeliveryHistoryRow type to include status
-- Removed FEED priority checks from both fn_process_blackwood_usage and fn_update_blackwood_state
-- Recalculated all FEED batches to proper status based on rc_out records
-
-**Files Modified:**
-- `supabase/migrations/` (3 migrations)
-- `app/(app)/inventory/rc-in/actions.ts` (line 17 — removed status)
-- `app/(app)/inventory/rc-in/page.tsx` (line 30, 79 — added status)
-- `app/(app)/inventory/rc-in/CONTEXT.md` (removed FEED from status list)
-- `app/(app)/inventory/rc-out/CONTEXT.md` (removed FEED from trigger priority)
-- `types/rc-in.ts` (line 27 — added status to batches type)
-- `types/supabase.ts` (regenerated)
-
-## Supabase CLI Patterns
-
-### Type Regeneration
-
-Always run after schema changes:
-```bash
-supabase gen types typescript --linked > types/supabase.ts
-```
-
-### Migration Workflow
-
-1. Create migration: `supabase migration new <descriptive_name>`
-2. Write idempotent SQL (use `IF NOT EXISTS`, `CREATE OR REPLACE`)
-3. Apply via MCP: `mcp__supabase__apply_migration`
-4. Verify with diagnostic queries
-5. Regenerate types
-
-### Verification After Deployment
-
-1. Check enum values: `SELECT unnest(enum_range(NULL::batch_status))::text;`
-2. Check data distribution: `SELECT status, COUNT(*) FROM batches GROUP BY status;`
-3. Test CRUD operations on rc_out and verify batch status updates
-4. Run `npm run build` to catch type errors
-
-## Performance Notes
-
-### Trigger Efficiency
-
-The rewritten trigger uses `EXISTS` subqueries for status recalculation. For large datasets:
-- INSERT is optimized (no subqueries, direct CASE evaluation)
-- DELETE/UPDATE are slower (must scan rc_out table for each batch)
-
-**Monitoring:** If rc_out grows large (>10k records per batch), consider:
-- Indexing `rc_out(batch_id, destination, remarks)` for EXISTS queries
-- Debouncing bulk deletes/updates to reduce trigger invocations
-
-### View Performance
-
-`view_rc_in_master` uses LEFT JOIN on batches. No indexing needed (batch_code is unique key).
-
-## Related Modules
-
-- **RC OUT:** Creates rc_out records that trigger batch status updates
-- **RC IN:** Displays batch status in STATE column (read-only, no manual override)
-- See `app/(app)/inventory/rc-in/CONTEXT.md` and `rc-out/CONTEXT.md` for module details
+> Index only — one line per entry. Detail lives in the linked topic files. Trigger/view BODIES are authoritative in `supabase/migrations/**`; re-read before editing.
+
+## Durable references
+- [Schema / triggers / RLS](schema-triggers-rls.md) — batch_status trigger semantics + priority, RLS `TO authenticated`+`(true)` convention, blocking constraints, PostgREST 1000-row cap, CLI/type-regen workflow. [[schema-triggers-rls]]
+- [Price gating](price-gating.md) — `canViewPrices()` in lib/auth.ts is CANONICAL; null ₱ SERVER-SIDE before payload; Production is the only denied role. [[price-gating]]
+
+## Sync visibility overhaul (panel read-model + human create-batch)
+- [Findings read-model + create-batch](sync-findings-and-create-batch.md) — 2026-07-10 (NOT committed): `lib/sync/findings.ts` `flattenRunFindings`/`summarizeFindings` (PURE client-safe) = honest run-flag list (held + ALL reconciliation channels; fixes 10-flagged-showed-1 keyhole). `proposeCreateBatch`/`executeCreateBatch` in resolve.ts + PURE `lib/sync/create-batch-plan.ts` = human create-batch exception; FEED batch → location_ref 'FEED'; `create_batch` ruling (migration applied). [[sync-findings-and-create-batch]]
+- [Batch auto-create policy (reverses never-auto-create)](batch-auto-create-policy.md) — 2026-07-11: pattern-valid unknown batch_code now AUTO-creates (workers/sync/src/lib/batchAutoCreate.ts, mirrors create-batch-plan.ts template) in gsheet + rc_out apply.ts (NOT classify.ts — parity untouched, 12/12); race-safe via NEW `DbClient.upsertBatchIfAbsent`; findings as a NEW `RunFinding.kind` (never touch closed `HeldKind`). [[batch-auto-create-policy]]
+
+## Sync worker orchestration (`workers/sync/src/workflows/**`)
+- [Creation-race holds + HeldKind lock](creation-race-holds.md) — 2026-07-09: gsheet-first-then-parallel-writers race made brand-new batches hold false `unmapped_batch_code`; post-writers re-resolve pass (Stage 2b′, `creationRaceHolds.ts`) auto-clears them read-only. HARD: `HeldKind` is frontend-locked (exhaustive `Record<HeldKind>` in components/) — reclassify via reason/detail/row, never a new kind. Fix 2 names batch_code in the alert. NOT committed. [[creation-race-holds]]
+
+## Python → TS sync migration (`workers/sync/**`)
+- [L-037 rc_out balance-integrity guard](l037-rc-out-balance-integrity.md) — 2026-07-07: HOLD a row whose scraped DAY TOTAL ≠ block's own STRT−END (cross-block cumulative; June-10 over-stated rc_out 32,195 kg) or breaks same-(whse,block_no)-same-day continuity. Net-sum is UNRELIABLE (pathway zones list no pallets) → NOT a trigger; only STRT−END (==DAY exactly across corpus). Validation layer in classify; extractor unchanged. Both engines, parity 12/12, vitest 304. [[l037-rc-out-balance-integrity]]
+- [L-034 compare-window audit (all report types)](l034-compare-window-audit.md) — 2026-07-07: audited deliveries/production/flecon/gsheet for the rc_out asymmetry; ALL IMMUNE (tail-filter / extract-derived floor / fixed full-window floor). Only rc_out kept sub-floor rows (L-019 guard) → the sole vulnerable one, already fixed. No code change. [[l034-compare-window-audit]]
+- [L-034 rc_out month-boundary false-flag fix](rc-out-month-boundary-l034.md) — 2026-07-07: 5 already-saved June-30 rows held sub_watermark_suspected_dup. TWO bugs: production_batch label variance (June-30 sheet titled "JULY FEEDING") + asymmetric compare-set window (since=watermark−3d misses workbook's oldest sheet rows). Fix BOTH engines: widen floor to min(extract_min, watermark−3d) in orchestrator + demote label-only diff → NOOP+soft_warnings[] in classify. Oracle rebuilt, parity 12/12. gsheet untouched. [[rc-out-month-boundary-l034]]
+- [O>M gate self-diagnosis](adjudication-om-self-diagnose.md) — 2026-07-06: `db_vs_movement_duplication` drift reads rc_out per date (NO ₱, limit 50) → DB double-entry vs movement-sheet gap; never blanket "suspected duplication"; P-vs-M stays DB-call-free; verify-adjudication 10/10. [[adjudication-om-self-diagnose]]
+- [Adjudicator plain + specific](adjudicator-plain-specific.md) — 2026-07-06: gate_failure held rows carry `row.drift_dates` (worker index.ts threads reconciler drift, NO ₱); ADJUDICATOR_SYSTEM bans jargon + names exact dates/numbers; HeldRows.tsx `KIND_LABEL` map; verify 7/7, parity 12/12. [[adjudicator-plain-specific]]
+- [Held-row enrichment + adjudicator](held-row-enrichment.md) — 2026-07-06: HeldRow gains kind/human natural_key/structured row (SoT `workers/sync/src/reports/held.ts`, NO ₱ in row); "Ask Claude" does per-kind read-only DB lookups; pure core `app/(app)/sync/adjudication.ts` (`AdminLike` cast fixes TS2589); parity 12/12 unchanged. [[held-row-enrichment]]
+- [sync_runs.result shape fix](sync-result-shape-fix.md) — 2026-07-06: worker↔frontend result reconciliation. `normalizeReport.ts` = SoT; nested `apply.applied` always present, `apply.held`=ROWS, auditor→`apply:null` + re-key rc_movement_audit→rc_movement (`panelCardKey`). Proof: worker normalizeReport.test.ts + app scripts/verify-sync-reducer.ts (22). Parity 12/12. [[sync-result-shape-fix]]
+- [M5.1 lifecycle controls](sync-ts-m51-lifecycle-controls.md) — 2026-07-06: Stop button + graceful cancel + startup-recovery + stale-run watchdog; DBOS cancel error classes live under the `Error` NAMESPACE only; `ALTER TYPE … ADD VALUE` alone via MCP execute_sql (not apply_migration); ids.ts = workflow-ID SoT; lifecycle-proof.ts 20/20 on local pg. [[sync-ts-m51-lifecycle-controls]]
+- [Wave 4A runSync worker](sync-ts-wave4a-runsync-worker.md) — 2026-07-04: real runSync DBOS workflow runs all 6 ports end-to-end (gsheet→4 parallel writers→audit); write-blocking dry-run proxy (0 data rows); crash-resume PASSED; DbClient.deleteByDate added; kick `{runId,dryRun}`; env SYNC_WORKER_URL+SYNC_KICK_SECRET; LC_ALL=C for local PG. [[sync-ts-wave4a-runsync-worker]]
+- [M2 parity harness](sync-ts-parity-harness.md) — 2026-07-04: `npm run parity` golden-master gate; frozen `classifyCase` contract; 12 fixtures/6 types; oracle+canonicalizer (TS+Py mirror); PORTING_DECISIONS deviations. [[sync-ts-parity-harness]]
+- [Flecon TS port (Wave 3 #1)](flecon-ts-port.md) — 2026-07-04: 3/3 parity; sets porter idiom (deps/runReport, classifyCase returns classifier result). MERGED-CELL trap: exceljs duplicates merged-header values vs openpyxl → local sheet.ts wrapper. [[flecon-ts-port]]
+- [rc_out TS port (Wave 3 #2)](sync-ts-rc-out-port.md) — 2026-07-04: 2/2 parity, 0 deviations; TWO hard reconcile gates (P-vs-M, O-vs-M dup, strict >500/>50kg), L-019 sub-watermark FLAGGED, batch fallback resolution; classifyCase = classify_rc_out.py result dict. [[sync-ts-rc-out-port]]
+- [deliveries TS port (Wave 3 #3)](sync-ts-deliveries-port.md) — 2026-07-04: 2/2 parity, 0 dev; the L-033 flagship. classify oracle = GUARD-LAYER output (parity_guards.py); summary keeps RAW pre-guard counts; dup_noop natural_key STRING needs pyFloat ".0"; local sheet.ts (merged-cell + activeTab); L-033a/b + L-004 + low-conf guard order. [[sync-ts-deliveries-port]]
+- [gsheet TS port (Wave 3 #4)](sync-ts-gsheet-port.md) — 2026-07-04: 2/2 parity; classifyCase returns COMBINED {rc_in,rc_out} dual-mode (oracle runs both regardless of opts.mode). All 3 gsheet deviations (PD-2/3/4) are APPLY-phase → DORMANT at classify (registered→shows STALE, still exits clean). Local deductions.ts (scope fence), no merge wrapper needed (0 merged cells). Write-tool null-byte trap. [[sync-ts-gsheet-port]]
+- [production TS port (Wave 3 #5)](sync-ts-production-port.md) — 2026-07-04: 2/2 parity, PD-5 dt-split PASS-with-note (my ruling). Composed envelope {runs,downtime,waste,electricity,trucks}=classifier dicts; db_window fed direct; MERGED-CELL trap FIRED (local sheet.ts null-out); elec/trucks plain rounded-eq + extra summary keys; null-byte trap hit again. [[sync-ts-production-port]]
+- [rc_movement_audit TS port (Wave 3 #6)](sync-ts-rc-movement-audit-port.md) — 2026-07-04: 1/1 parity; read-only watchdog (NO apply/writes/labels). Oracle envelope `{ok,reconcile,severity}` (strip reconciler's nested severity→top-level); synthetic-proposed-from-rc_out-sums double-feed (P==O); `blocks` per entry required; em-dash U+2014 verbatim; strict `>` 50/500; NO merge wrapper (A/B cols merge-free despite 44 ranges); L-022 cross-month running-sum. [[sync-ts-rc-movement-audit-port]]
+
+## Sync orchestrators (ICTC ingestion, `.claude/skills/sync-ictc/**`)
+- [Progress events + Gmail retry](sync-progress-and-gmail-retry.md) — 2026-07-03: `oc.progress()` streams `##SYNC_PROGRESS` on stderr (stdout stays pure JSON) + Gmail transient-EOF retry/jitter across all 6 orchestrators. [[sync-progress-and-gmail-retry]]
+- [Run Sync orchestrators](sync-orchestrators.md) — 2026-07-03: 5 two-phase orchestrators + `write_ingestion_audit` RPC (L-009 fix), SYNC_CLI_CONTRACT, ingestion_watermarks. [[sync-orchestrators]]
+- [Lean sync orchestrator](lean-sync-orchestrator.md) — 2026-06-02: token-lean two-phase Python (sync_gsheet.py + lib/db.py); agent reads compact decisions JSON only. [[lean-sync-orchestrator]]
+
+## Sync Reconciliation Model (multi-source, `workers/sync/src/reconcile/**`)
+- [R4b rc_out cutover (Sheet-wins retired)](reconcile-r4b-rcout-cutover.md) — 2026-07-08: gsheet STOPS writing rc_out (gate in gsheet/apply.ts::applyGsheet mode-skip); env `SYNC_RCOUT_RECONCILE_CUTOVER` default ON (lib/env.ts); window = proposed-span±2 (empty→act on nothing = anti-clobber); batch-lookup fail-safe = skip+1 diagnostic; parity green (apply-only, classify untouched); worker vitest 349/parity 12/12; gsheet-sync now SAFE to run. NOT committed. [[reconcile-r4b-rcout-cutover]]
+- [R3a pick-source resolution](reconcile-r3a-pick-source.md) — 2026-07-08: resolve a `source_diff` by PICKING the authoritative source → per-leg rc_out writes + `pick_source` ruling. PURE planner `app/(app)/sync/diff-plan.ts` (EDIT-preferred; ambiguous→P5 fallback; remove=soft-zero) + 2 actions in `resolve.ts` (proposePickSource persists an assistant propose_pick_source msg, no write; executeDiffResolution re-reads plan from DB, applies + audits). Live-leg lookup by (date,block,dest). Gates: root tsc0/build/10 verify, worker tsc0/vitest 323/parity 12/12. NOT committed. [[reconcile-r3a-pick-source]]
+- [R2 rc_out shadow wiring](reconcile-r2-shadow-wiring.md) — 2026-07-08: shadow-wired real diffs → `source_diff` cases, ZERO write/Sheet-wins changes. 3 extracts DON'T co-locate (isolated DBOS child workflows) → re-extract in a guarded shadow step (`runSync.ts::reconcileRcOutShadow`); gsheet has NO Storage copy → re-download; FEED blocks (null block_loc) skipped; `result.reconciliation` channel + `ensureCasesForRun` folds via shared upsert spine; worker 322 + parity 12/12. [[reconcile-r2-shadow-wiring]]
+- [R1 rc_out reconcile engine](reconcile-r1-rcout.md) — 2026-07-08: pure engine, no wiring. Granularity = (date,batch,block,dest) SUM of weight_kg; MOVEMENT is per-DATE only → date-level corroboration witness, not a fine competitor (L-037 discriminator = daily-rollup vs movement total). Advisory recommend only when exactly one opinion selfConsistent&corroborated. 11 vitest, parity 12/12. [[reconcile-r1-rcout]]
+
+## Data-layer views & actions
+- [PROD SCHED plan → digest day-states](production-schedule-plan.md) — 2026-07-14 (NOT committed): `production_schedule` table + `view_digest_prod_actual_tons` + `scripts/sync-prod-schedule.ts` populate PROD SCHED tab; adds plantStatus/dayStatus/weekPlan to getDigestData. TRAP: sheet weekday labels are off-by-one from real calendar (key on plan_date); view_digest_* denied to service_role. [[production-schedule-plan]]
+- [Closed Blocks view](rc-out-closed-blocks.md) — 2026-06-29: `view_rc_out_closed_blocks`, 1 row/CLOSED block, 440 rows, price = deliveries weighted-avg. [[rc-out-closed-blocks]]
+- [deliveries true-weight/deduction cols](deliveries-true-weight-deduction.md) — 2026-06-25: additive display-only NULLABLE `true_weight_kg`+`deduction_note`; nothing computational uses them. [[deliveries-true-weight-deduction]]
+- [Blend Proposal RPC](blend-proposal.md) — 2026-06-19: `fn_blend_proposal(text[])` balance-weighted blend over view_blocking_grid. [[blend-proposal]]
+- [Delivery reprocessing exclusion](delivery-sundried-exclusion.md) — 2026-06-16: canonical sundried+refeed+recook exclusion on 4 Summaries views; kept = 1,508 rows/28,926,630.10 kg. [[delivery-sundried-exclusion]]
+- [By-Supplier analytics](delivery-supplier-analytics.md) — 2026-06-16: 3 supplier-grain views + `canonical_supplier(text)` IMMUTABLE helper (combo/typo merges). [[delivery-supplier-analytics]]
+- [Monthly delivery analytics](delivery-monthly-analytics.md) — 2026-06-15: 2 views (year/month + year), price over cost_basis>0 only (L-008). [[delivery-monthly-analytics]]
+- [RC Movement campaign re-key](rc-movement-campaign.md) — 2026-06-09: 8 views keyed by (production_batch, campaign_year); production data only Dec-2025+. [[rc-movement-campaign]]
+- [RC Movement production+yield](rc-movement-production-yield.md) — 2026-06-09: 4 views connecting fed→produced by grade. [[rc-movement-production-yield]]
+- [RC Movement fed price](rc-movement-fed-price.md) — 2026-06-09: 3 weighted-avg fed-price views from deliveries.cost_basis; batches.avg_cost is STALE, compute from deliveries. [[rc-movement-fed-price]]
+- [Daily Sync Digest backend](digest-backend.md) — 2026-06-04: 12 `view_digest_*` views + lib/digest/queries.ts; operationalDate lags calendar. [[digest-backend]]
+
+## Tenants & modules
+- [Cenapro schema (Tenant #2)](cenapro-schema.md) — 2026-06-01: isolated `cenapro` schema walled from ICTC; 3 thin public `cenapro_*` accessors expose it; write path via auto-updatable view. [[cenapro-schema]]
+- [Blocking phantom-inventory fix](blocking-current-weight-drift.md) — 2026-05-31: balance = SUM(deliveries)−SUM(rc_out); root cause was imperative `+=` on top of trigger, not the trigger. [[blocking-current-weight-drift]]
+- [Production module schema](production-module-schema.md) — 2026-05-28: production_shifts parent + runs/downtime/waste FK-children via shift_id; 3 views. [[production-module-schema]]
+- [Jarvis ingestion pipeline](jarvis-ingestion-pipeline.md) — 2026-05-27: ingestion_watermarks table, RC deliveries extractor/classifier/review queue. [[jarvis-ingestion-pipeline]]
+- [Jarvis foundation](jarvis-foundation.md) — 2026-05-26: 4 jarvis tables; Anthropic SDK needs TextBlockParam/ToolUseBlockParam for stored history. [[jarvis-foundation]]
+
+## Smart Adjudicator (held-case investigator + chat)
+- [Case-chat 400 tool_use pairing](case-chat-tooluse-pairing.md) — 2026-07-07: dangling terminal `submit_verdict` tool_use (no tool_result) 400'd every investigated case's first chat; fixed write-time (loop.ts synthetic tool row) + replay-time `sanitizeAnthropicHistory` in NEW pure `app/(app)/sync/case-history.ts` (foldHistory moved there — `'use server'` can't export sync fns); verify 34, both live-smoke scenarios pass. [[case-chat-tooluse-pairing]]
+- [Run Triage v1.1 T1](run-triage-t1.md) — 2026-07-07: triage=SYNTHETIC case row (kind='run_triage', NO migration); runTriage clusters a run's flags via ONE forced submit_triage call, parseTriage repairs to full partition; group dismiss (dismiss-only) via ONE dismissOneCase path; verify-triage 25 + live smoke 2+1 partition; 7 scripts green. [[run-triage-t1]]
+
+## Security work
+- [Phase 0 security fixes](phase0-security.md) — 2026-07-03: SEC-1 digest price series, SEC-2 jarvis tool-handlers price null, SEC-3 server-side delete role gate. [[phase0-security]]

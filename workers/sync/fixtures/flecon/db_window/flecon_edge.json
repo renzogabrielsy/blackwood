@@ -1,0 +1,92 @@
+{
+  "movements": [
+    {
+      "id": "m1",
+      "transaction_date": "2026-06-10",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "id-kuraray",
+      "qty_delta": -1
+    },
+    {
+      "id": "m2",
+      "transaction_date": "2026-06-10",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "id-unusable",
+      "qty_delta": -4
+    },
+    {
+      "id": "m3",
+      "transaction_date": "2026-06-10",
+      "particular": "BLEND RECOUNT",
+      "bag_type_id": "id-kuraray",
+      "qty_delta": 5
+    },
+    {
+      "id": "m4",
+      "transaction_date": "2026-06-10",
+      "particular": "BLEND RECOUNT",
+      "bag_type_id": "id-futamura",
+      "qty_delta": 7
+    }
+  ],
+  "bag_types": [
+    {
+      "id": "id-kuraray",
+      "code": "KURARAY_590"
+    },
+    {
+      "id": "id-unusable",
+      "code": "UNUSABLE"
+    },
+    {
+      "id": "id-futamura",
+      "code": "FUTAMURA_550"
+    },
+    {
+      "id": "id-sling",
+      "code": "FG_BLACK_SLING_6X50"
+    },
+    {
+      "id": "id-allblack",
+      "code": "FG_ALL_BLACK"
+    }
+  ],
+  "bag_type_registry": [
+    {
+      "code": "KURARAY_590",
+      "source_label": "590 kls(Kuraray)",
+      "source_column": "C",
+      "sort_order": 1,
+      "label": "Kuraray 590"
+    },
+    {
+      "code": "UNUSABLE",
+      "source_label": "Un-usable bag",
+      "source_column": "D",
+      "sort_order": 2,
+      "label": "Un-usable bag"
+    },
+    {
+      "code": "FUTAMURA_550",
+      "source_label": "550 kls(FUTAMURA)",
+      "source_column": "E",
+      "sort_order": 3,
+      "label": "Futamura 550"
+    },
+    {
+      "code": "FG_BLACK_SLING_6X50",
+      "source_label": "BLACK SLING 6X50",
+      "source_column": "G",
+      "sort_order": 5,
+      "label": "FG Black Sling"
+    },
+    {
+      "code": "FG_ALL_BLACK",
+      "source_label": "ALL BLACK",
+      "source_column": "F",
+      "sort_order": 4,
+      "label": "FG All Black"
+    }
+  ],
+  "view_balance": []
+}

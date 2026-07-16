@@ -2,21 +2,11 @@
 
 import * as React from 'react';
 import { toast } from 'sonner';
-import { Check, Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
+import { errorToast } from '@/lib/toast';
+import { Plus, X, PencilLine, MessageSquarePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import {
-    Command,
-    CommandGroup,
-    CommandItem,
-    CommandList,
-} from '@/components/ui/command';
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import {
     TableBody,
@@ -31,25 +21,36 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '@/components/ui/popover';
 import { submitBulkUsage, bulkUpdateUsage } from './actions';
 import { useTableSettings } from '@/components/providers/table-settings';
 import { COLUMN_MAP, cleanCellValue } from './paste-utils';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useCellDelete } from '@/lib/hooks/use-cell-delete';
+import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import {
+    useGridKeyboardNav,
+    createCoordinateNavResolver,
+    type CoordinateId,
+    type GridRangeSlot,
+} from '@/lib/hooks/use-grid-keyboard-nav';
+import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
+import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { InputRcOutRow, RcOutInput, RcOutRow } from '@/types/rc-out';
+import { AutocompletePopover, type AutocompleteItem } from '@/components/shared/AutocompletePopover';
+import { GridCell } from '@/components/shared/grid/GridCell';
 
 // --- TYPES ---
 type Batch = {
     id: string;
     batch_code: string;
     location_ref: string;
-};
-
-type AutocompleteItem = {
-    value: string;
-    detail?: string;
 };
 
 const createEmptyRow = (): InputRcOutRow => ({
@@ -91,12 +92,17 @@ type BulkUsageInputProps = {
 
 export function BulkUsageInput({ batches, destinations, productionBatches, onSuccess, mode = 'create', initialData, onDirtyChange }: BulkUsageInputProps) {
     const { fontSize, rowHeight } = useTableSettings();
-    const { setCellSelectionCount } = useStatusBar();
+    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const isEdit = mode === 'edit';
 
     // In edit mode, store original IDs aligned by row index
     const rowIdsRef = React.useRef<string[]>(initialData?.map(d => d.id) ?? []);
     const gridRef = React.useRef<HTMLDivElement>(null);
+
+    // Stable indirection so the mouse/blur handlers can end an active edit without a
+    // forward reference to the edit session (created later, after updateRow). Mirrors
+    // the RC IN reference's endEditRef.
+    const endEditRef = React.useRef<() => void>(() => {});
 
     const [rows, setRows] = React.useState<InputRcOutRow[]>(() => {
         if (initialData && initialData.length > 0) {
@@ -108,9 +114,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
     const [auditComments, setAuditComments] = React.useState<Record<number, string>>({});
 
     const [isSubmitting, setIsSubmitting] = React.useState(false);
-    const [activeCell, setActiveCell] = React.useState<{ row: number; col: number } | null>(null);
-    const [isEditing, setIsEditing] = React.useState(false);
-    const preEditValue = React.useRef<any>(null);
+    const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
 
     // --- Cell range selection ---
     const cellSelection = useCellSelection({
@@ -121,12 +125,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         enabled: true,
     });
 
-    // Push cell selection count to shared context
-    React.useEffect(() => {
-        const count = cellSelection.range ? cellSelection.getSelectionSize() : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, cellSelection, setCellSelectionCount]);
+    const selectionSize = cellSelection.getSelectionSize();
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
@@ -136,6 +135,33 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         const val = row[field];
         return val != null ? String(val) : '';
     }, [rows]);
+
+    const getNumericCellValue = React.useCallback((rowIdx: number, colIdx: number): number | null => {
+        const row = rows[rowIdx];
+        if (!row) return null;
+        const field = COLUMN_MAP[colIdx];
+        if (field !== 'weight_kg') return null;
+        const val = parseFloat(String(row[field]));
+        return isNaN(val) ? null : val;
+    }, [rows]);
+
+    const getColumnDefaultCalcType = React.useCallback((colIdx: number): AggregationType | null => {
+        const field = COLUMN_MAP[colIdx];
+        if (field === 'weight_kg') return 'SUM';
+        return null;
+    }, []);
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    // Push cell selection count + aggregates to shared context (debounced to reduce re-renders during drag)
+    React.useEffect(() => {
+        const count = cellSelection.range ? selectionSize : 0;
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+            setCellAggregates(count > 1 ? aggregates : null);
+        }, 50);
+        return () => { clearTimeout(timer); setCellSelectionCount(0); setCellAggregates(null); };
+    }, [cellSelection.range, selectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
 
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
         getSelectedRange: cellSelection.getSelectedRange,
@@ -157,7 +183,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         // If mouse up on same cell as mouse down and no range formed -> single cell click
         if (downCell && downCell.row === rowIdx && downCell.col === colIdx && cellSelection.getSelectionSize() <= 1) {
             setActiveCell({ row: rowIdx, col: colIdx });
-            setIsEditing(false);
+            endEditRef.current();
             cellSelection.clearSelection();
             gridRef.current?.focus();
         }
@@ -184,7 +210,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         });
     }, []);
 
-    const updateRow = React.useCallback((index: number, field: keyof InputRcOutRow, value: any) => {
+    const updateRow = React.useCallback((index: number, field: keyof InputRcOutRow, value: InputRcOutRow[keyof InputRcOutRow]) => {
         setRows(prev => {
             const newRows = [...prev];
             newRows[index] = { ...newRows[index], [field]: value };
@@ -215,219 +241,113 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
 
     const isRangeSelected = cellSelection.getSelectionSize() > 1;
 
+    // --- EDIT SESSION (shared Blackwood Table primitive) ---
+    // Owns isEditing + the pre-edit snapshot + start/revert/commit, wired to the grid's
+    // existing getCellValue/updateRow via the {row,col} coordinate id.
+    const setCellValue = React.useCallback((id: CoordinateId, value: string) => {
+        const field = COLUMN_MAP[id.col];
+        if (field) updateRow(id.row, field, value);
+    }, [updateRow]);
+
+    // NOTE: commit does NOT auto-focus the grid — focus is restored explicitly only at
+    // the call sites that did so before (Tab/Enter commit, Escape revert, single-cell
+    // click). onBlur must NOT re-focus, so focus is kept out of here.
+    const editSession = useGridEditSession<CoordinateId>({
+        getValue: (id) => getCellValue(id.row, id.col),
+        setValue: setCellValue,
+    });
+    const isEditing = editSession.isEditing;
+    const setIsEditing = React.useCallback((editing: boolean) => {
+        if (!editing) editSession.commit();
+    }, [editSession]);
+    // Keep the stable endEdit indirection pointing at the latest commit.
+    endEditRef.current = () => { if (editSession.isEditing) editSession.commit(); };
+
+    // GridCell-compatible adapters: GridCell calls onStartEditing(row, col, char?) and
+    // onRevert(); the edit session is keyed by a {row,col} id.
     const startEditing = React.useCallback((rowIdx: number, colIdx: number, initialChar?: string) => {
-        const field = COLUMN_MAP[colIdx];
-        if (!field) return;
-
-        const currentRow = rows[rowIdx];
-        const currentValue = currentRow ? currentRow[field] : '';
-        preEditValue.current = currentValue;
-
+        if (COLUMN_MAP[colIdx] == null) return;
         setActiveCell({ row: rowIdx, col: colIdx });
-        setIsEditing(true);
-
-        if (initialChar !== undefined) {
-            updateRow(rowIdx, field, initialChar);
-        }
-    }, [rows, updateRow]);
+        editSession.startEditing({ row: rowIdx, col: colIdx }, initialChar);
+    }, [editSession]);
 
     const revertChanges = React.useCallback(() => {
-        if (!activeCell) return;
-        if (preEditValue.current !== null) {
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                updateRow(activeCell.row, field, preEditValue.current);
-            }
-        }
-        setIsEditing(false);
+        editSession.revertChanges();
         gridRef.current?.focus();
-    }, [activeCell, updateRow]);
+    }, [editSession]);
 
-    // --- GRID NAVIGATION ---
+    // --- GRID NAVIGATION (shared Blackwood Table primitives) ---
+    // Coordinate resolver = the old moveSelection math (skip null cols, Tab row-wrap +
+    // clamp, Enter down / Shift+Enter up). Rebuilt when row count changes.
+    const resolver = React.useMemo(
+        () => createCoordinateNavResolver({ rowCount: rows.length, columnMap: COLUMN_MAP }),
+        [rows.length]
+    );
+
+    // Range slot = the existing useCellSelection + copy + delete instances.
+    const rangeSlot = React.useMemo<GridRangeSlot>(() => ({
+        isRangeSelected,
+        extend: (e) => cellSelection.handleKeyDown(e),
+        clear: () => cellSelection.clearSelection(),
+        seedFromActive: () => {
+            if (!activeCell) return;
+            cellSelection.handleCellMouseDown(
+                activeCell.row,
+                activeCell.col,
+                { shiftKey: false, preventDefault: () => {} } as unknown as React.MouseEvent
+            );
+            cellSelection.handleMouseUp();
+        },
+        anchorId: () => {
+            const range = cellSelection.range;
+            return range ? { row: range.startRow, col: range.startCol } : null;
+        },
+        onCopy: (e) => handleCopyKeyDown(e),
+        onDelete: (e) => handleDeleteKeyDown(e),
+    }), [isRangeSelected, cellSelection, activeCell, handleCopyKeyDown, handleDeleteKeyDown]);
+
+    const { handleKeyDown: handleNavKeyDown } = useGridKeyboardNav<CoordinateId>({
+        activeCell,
+        setActiveCell,
+        isEditing,
+        resolver,
+        edit: {
+            start: (id, char) => startEditing(id.row, id.col, char),
+            revert: revertChanges,
+            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+        },
+        range: rangeSlot,
+        // RC OUT's moveSelection used plain Enter → straight down (no Tab-then-Enter
+        // "return to lane"). Keep that exact behavior.
+        enableEnterAnchor: false,
+    });
+
+    // Container key handler. The shared hook covers nav/edit/range. RC OUT additionally
+    // supported single-cell Ctrl/Cmd+C (copy the active cell) when NOT editing and NOT
+    // in a multi-cell range — the shared hook only copies in range mode, so preserve
+    // that branch here before delegating.
     const handleGridKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-        if (!activeCell) return;
-
-        if (isEditing) {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                e.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
-                revertChanges();
-            } else if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
-                setIsEditing(false);
-                moveSelection(e.key, e.shiftKey);
-                gridRef.current?.focus();
-            }
-            return;
-        }
-
-        // --- Range selection mode handling ---
-        if (isRangeSelected) {
-            // Shift+Arrow -> extend selection
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-                e.preventDefault();
-                cellSelection.handleKeyDown(e);
-                return;
-            }
-            // Copy (Ctrl+C)
-            if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
-                handleCopyKeyDown(e);
-                return;
-            }
-            // Delete/Backspace -> clear selected cells
-            if (e.key === 'Backspace' || e.key === 'Delete') {
-                handleDeleteKeyDown(e);
-                cellSelection.clearSelection();
-                return;
-            }
-            // Escape -> clear range
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                cellSelection.clearSelection();
-                return;
-            }
-            // Non-shift nav keys -> exit range, do normal single-cell nav
-            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
-                cellSelection.clearSelection();
-                // fall through to existing nav below
-            }
-            // Printable char -> exit range, start editing anchor cell
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-                const anchor = cellSelection.range;
-                if (anchor) {
-                    cellSelection.clearSelection();
-                    setActiveCell({ row: anchor.startRow, col: anchor.startCol });
-                }
-                // fall through to existing char handling below
-            }
-        }
-
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab', 'Enter'].includes(e.key)) {
-            e.preventDefault();
-            // Shift+Arrow from single cell -> enter range selection
-            if (e.shiftKey && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && !isRangeSelected) {
-                cellSelection.handleCellMouseDown(activeCell.row, activeCell.col, { shiftKey: false, preventDefault: () => {} } as unknown as React.MouseEvent);
-                cellSelection.handleMouseUp();
-                cellSelection.handleKeyDown(e);
-                return;
-            }
-            moveSelection(e.key, e.shiftKey);
-            return;
-        }
-
-        if (e.key === 'F2') {
-            e.preventDefault();
-            startEditing(activeCell.row, activeCell.col);
-            return;
-        }
-
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-            e.preventDefault();
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                startEditing(activeCell.row, activeCell.col, '');
-            }
-            return;
-        }
-
-        // Copy (Ctrl+C) for single cell
-        if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        if (!isEditing && !isRangeSelected && (e.metaKey || e.ctrlKey) && e.key === 'c') {
             handleCopyKeyDown(e);
             return;
         }
+        handleNavKeyDown(e);
+    }, [isEditing, isRangeSelected, handleCopyKeyDown, handleNavKeyDown]);
 
-        // Printable characters -> Enter edit mode with value
-        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            const field = COLUMN_MAP[activeCell.col];
-            if (field) {
-                e.preventDefault();
-                startEditing(activeCell.row, activeCell.col, e.key);
-            }
-        }
-    }, [activeCell, isEditing, rows, updateRow, startEditing, revertChanges, isRangeSelected, handleCopyKeyDown, handleDeleteKeyDown, cellSelection]);
+    // --- PASTE LOGIC (shared smart-paste primitive) ---
+    const { handleSmartPaste, handleGridPaste: handleGridPasteAt } = useGridPaste<InputRcOutRow>({
+        columnMap: COLUMN_MAP,
+        setRows,
+        createEmptyRow,
+        cleanCellValue,
+    });
 
-    const moveSelection = (key: string, shift: boolean) => {
-        if (!activeCell) return;
-        let { row, col } = activeCell;
-
-        if (key === 'ArrowUp' || (key === 'Enter' && shift)) {
-            row = Math.max(0, row - 1);
-        } else if (key === 'ArrowDown' || (key === 'Enter' && !shift)) {
-            row = Math.min(rows.length - 1, row + 1);
-        } else if (key === 'ArrowLeft') {
-            do { col--; } while (col > 0 && COLUMN_MAP[col] === null);
-            col = Math.max(0, col);
-        } else if (key === 'ArrowRight') {
-            do { col++; } while (col < COLUMN_MAP.length && COLUMN_MAP[col] === null);
-            col = Math.min(COLUMN_MAP.length - 1, col);
-        } else if (key === 'Tab') {
-            if (shift) {
-                do {
-                    col--;
-                    if (col < 0) { row--; col = COLUMN_MAP.length - 1; }
-                } while (row >= 0 && COLUMN_MAP[col] === null);
-                if (row < 0) { row = 0; col = activeCell.col; }
-            } else {
-                do {
-                    col++;
-                    if (col >= COLUMN_MAP.length) { row++; col = 0; }
-                } while (row < rows.length && COLUMN_MAP[col] === null);
-                if (row >= rows.length) { row = rows.length - 1; col = activeCell.col; }
-            }
-        }
-
-        setActiveCell({ row, col });
-    };
-
-    // --- PASTE LOGIC ---
-    const handleSmartPaste = React.useCallback((e: React.ClipboardEvent, startRowIndex: number, startColIndex: number) => {
-        e.preventDefault();
-        const clipboardData = e.clipboardData.getData('text');
-        if (!clipboardData) return;
-
-        const pastedRows = clipboardData.split(/\r\n|\n|\r/).filter(row => row.trim() !== '');
-        if (pastedRows.length === 0) return;
-
-        setRows(prev => {
-            const newRows = [...prev];
-
-            pastedRows.forEach((pastedRow, rOffset) => {
-                const targetRowIndex = startRowIndex + rOffset;
-                const columns = pastedRow.split('\t');
-
-                if (targetRowIndex >= newRows.length) {
-                    newRows.push(createEmptyRow());
-                }
-
-                columns.forEach((cellValue, cOffset) => {
-                    const targetColIndex = startColIndex + cOffset;
-
-                    if (targetColIndex < COLUMN_MAP.length) {
-                        const fieldKey = COLUMN_MAP[targetColIndex];
-
-                        if (fieldKey) {
-                            newRows[targetRowIndex] = {
-                                ...newRows[targetRowIndex],
-                                [fieldKey]: cleanCellValue(cellValue, fieldKey)
-                            };
-                        }
-                    }
-                });
-            });
-
-            return newRows;
-        });
-
-        toast.success(`Pasted ${pastedRows.length} rows`);
-    }, []);
-
+    // Handle paste on the grid container when in selection mode (not editing).
     const handleGridPaste = React.useCallback((e: React.ClipboardEvent) => {
-        if (!isEditing && activeCell) {
-            handleSmartPaste(e, activeCell.row, activeCell.col);
-            cellSelection.clearSelection();
+        if (!isEditing) {
+            handleGridPasteAt(e, activeCell, () => cellSelection.clearSelection());
         }
-    }, [isEditing, activeCell, handleSmartPaste, cellSelection]);
+    }, [isEditing, activeCell, handleGridPasteAt, cellSelection]);
 
     // --- DIRTY CHECKING ---
     React.useEffect(() => {
@@ -532,10 +452,10 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
                 toast.success(`${validRows.length} ${noun} ${isEdit ? 'updated' : 'logged'} successfully`);
                 onSuccess?.();
             } else {
-                toast.error(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
+                errorToast(`${isEdit ? 'Update' : 'Submission'} failed: ` + res.message);
             }
-        } catch (error: any) {
-            toast.error('An unexpected error occurred: ' + (error.message || 'Unknown'));
+        } catch (error: unknown) {
+            errorToast('An unexpected error occurred: ' + (error instanceof Error ? error.message : 'Unknown'));
         } finally {
             setIsSubmitting(false);
         }
@@ -604,17 +524,17 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
                     }}
                 >
                     <table className="w-full table-fixed text-xs relative caption-bottom border-collapse">
-                        <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                        <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm border-b">
                             <TableRow className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
                                 <TableHead className="w-[30px] p-0 sticky left-0 z-50 bg-muted border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden"></TableHead>
-                                <TableHead className="w-[90px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
-                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BATCH</TableHead>
-                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
-                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
-                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PLANT/ETC</TableHead>
-                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK LOC</TableHead>
-                                <TableHead className="w-[60px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
-                                <TableHead className="w-[20px] p-0 bg-muted sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
+                                <TableHead className="w-[90px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>DATE</TableHead>
+                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BATCH</TableHead>
+                                <TableHead className="w-[100px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK</TableHead>
+                                <TableHead className="w-[70px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>WT</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>PLANT/ETC</TableHead>
+                                <TableHead className="w-[120px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>REMARKS</TableHead>
+                                <TableHead className="w-[80px] text-center px-1 py-1 font-mono font-bold border-b border-foreground/20 bg-muted/90 sticky top-0 z-50 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden" style={{ fontSize: `${fontSize}px` }}>BLOCK LOC</TableHead>
+                                <TableHead className="w-[20px] p-0 bg-muted/90 sticky top-0 z-50 border-b border-foreground/20 shadow-none"></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -697,7 +617,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     batchItems: AutocompleteItem[];
     destinationItems: AutocompleteItem[];
     productionBatchItems: AutocompleteItem[];
-    updateRow: (index: number, field: keyof InputRcOutRow, value: any) => void;
+    updateRow: (index: number, field: keyof InputRcOutRow, value: InputRcOutRow[keyof InputRcOutRow]) => void;
     updateRowFields: (index: number, updates: Partial<InputRcOutRow>) => void;
     removeRow: (index: number) => void;
     onPaste: (e: React.ClipboardEvent, rowIndex: number, colIndex: number) => void;
@@ -735,7 +655,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
     };
 
     return (
-        <TableRow className="hover:bg-muted/50 transition-colors" style={{ height: `${rowHeight}px` }}>
+        <TableRow className="hover:bg-muted/50 transition-all duration-150" style={{ height: `${rowHeight}px` }}>
             {/* 0: Row action area */}
             <TableCell className="p-0 sticky left-0 bg-background z-10 border-r" style={{ height: `${rowHeight}px` }}>
                 {isEditMode ? (
@@ -814,7 +734,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(2)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.production_batch}
                         onChange={(val) => updateRow(index, 'production_batch', val)}
                         items={productionBatchItems}
@@ -838,7 +758,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(3)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.batch_code}
                         onChange={(val) => updateRow(index, 'batch_code', val)}
                         items={batchItems}
@@ -893,7 +813,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isCellRangeAnchor={isCellAnchor(5)}
                     isDragActive={cellDragging}
                 >
-                    <AutocompleteInput
+                    <AutocompletePopover
                         value={row.destination}
                         onChange={(val) => updateRow(index, 'destination', val)}
                         items={destinationItems}
@@ -907,9 +827,9 @@ const BulkInputRow = React.memo(function BulkInputRow({
                 </GridCell>
             </TableCell>
 
-            {/* 6: BLOCK LOC */}
+            {/* 6: REMARKS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={6} value={row.block_loc} {...commonCellProps}
+                <GridCell col={6} value={row.remarks} {...commonCellProps} className="font-bold text-left pl-1"
                     onCellMouseDown={(e) => cellMouseDown(6, e)}
                     onCellMouseUp={() => cellMouseUp(6)}
                     onCellMouseEnter={() => cellMouseEnter(6)}
@@ -919,35 +839,31 @@ const BulkInputRow = React.memo(function BulkInputRow({
                 >
                     <Input
                         autoFocus
-                        value={row.block_loc}
-                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
-                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        value={row.remarks}
+                        onChange={(e) => updateRow(index, 'remarks', e.target.value)}
+                        className={cn(inputClass, "font-bold text-left")}
+                        placeholder="Remarks..."
                         style={inputStyle}
                     />
                 </GridCell>
             </TableCell>
 
-            {/* 7: REMARKS */}
+            {/* 7: BLOCK LOC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
-                <GridCell col={7} value={row.remarks} {...commonCellProps}
+                <GridCell col={7} value={row.block_loc} {...commonCellProps}
                     onCellMouseDown={(e) => cellMouseDown(7, e)}
                     onCellMouseUp={() => cellMouseUp(7)}
                     onCellMouseEnter={() => cellMouseEnter(7)}
                     isCellRangeSelected={isCellSelected(7)}
                     isCellRangeAnchor={isCellAnchor(7)}
                     isDragActive={cellDragging}
-                    displayValue={
-                        <div className={cn("h-6 w-6 flex items-center justify-center rounded-sm", row.remarks ? "text-primary" : "text-muted-foreground/30")}>
-                            <MessageSquareText className="w-3 h-3" />
-                        </div>
-                    }
                 >
-                    <RemarksCellAdaptor
-                        value={row.remarks}
-                        onChange={(val) => updateRow(index, 'remarks', val)}
-                        onClose={() => setIsEditing(false)}
-                        onRevert={onRevert}
-                        fontSize={fontSize}
+                    <Input
+                        autoFocus
+                        value={row.block_loc}
+                        onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
+                        className={cn(inputClass, "font-bold text-center font-mono")}
+                        style={inputStyle}
                     />
                 </GridCell>
             </TableCell>
@@ -968,279 +884,4 @@ const BulkInputRow = React.memo(function BulkInputRow({
 });
 
 // --- GRID CELL HELPERS ---
-
-function GridCell({ row, col, value, activeCell, isEditing, setActiveCell, setIsEditing, onStartEditing, onRevert, children, displayValue, className, tabIndex, gridRef, onCellMouseDown, onCellMouseUp, onCellMouseEnter, isCellRangeSelected, isCellRangeAnchor, isDragActive }: {
-    row: number;
-    col: number;
-    value: string | number;
-    activeCell: { row: number; col: number } | null;
-    isEditing: boolean;
-    setActiveCell: (cell: { row: number; col: number }) => void;
-    setIsEditing: (editing: boolean) => void;
-    onStartEditing: (row: number, col: number, char?: string) => void;
-    onRevert?: () => void;
-    children: React.ReactNode;
-    displayValue?: React.ReactNode;
-    className?: string;
-    tabIndex?: number;
-    gridRef?: React.RefObject<HTMLDivElement | null>;
-    onCellMouseDown?: (e: React.MouseEvent) => void;
-    onCellMouseUp?: () => void;
-    onCellMouseEnter?: () => void;
-    isCellRangeSelected?: boolean;
-    isCellRangeAnchor?: boolean;
-    isDragActive?: boolean;
-}) {
-    const isActive = activeCell?.row === row && activeCell?.col === col;
-    const isEditingThis = isActive && isEditing;
-
-    if (isEditingThis) {
-        return (
-            <div
-                className={cn("h-full w-full relative", className)}
-                style={isDragActive ? { pointerEvents: 'none' } : undefined}
-                onMouseEnter={() => {
-                    onCellMouseEnter?.();
-                }}
-            >
-                {children}
-            </div>
-        );
-    }
-
-    return (
-        <div
-            data-row={row}
-            data-col={col}
-            tabIndex={tabIndex ?? 0}
-            className={cn(
-                "h-full w-full flex items-center justify-center outline-none cursor-default select-none",
-                isActive && !isCellRangeSelected && "ring-2 ring-primary ring-inset z-10",
-                isCellRangeSelected && "bg-primary/10 dark:bg-primary/20",
-                isCellRangeAnchor && "ring-2 ring-primary ring-inset z-10",
-                className
-            )}
-            style={{ minHeight: '100%' }}
-            onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (onCellMouseDown) {
-                    onCellMouseDown(e);
-                } else {
-                    setActiveCell({ row, col });
-                    setIsEditing(false);
-                    gridRef?.current?.focus();
-                }
-            }}
-            onMouseUp={(e) => {
-                e.stopPropagation();
-                onCellMouseUp?.();
-            }}
-            onMouseEnter={() => {
-                onCellMouseEnter?.();
-            }}
-            onDoubleClick={(e) => {
-                e.stopPropagation();
-                onStartEditing(row, col);
-            }}
-        >
-            {displayValue ?? value}
-        </div>
-    );
-}
-
-function RemarksCellAdaptor({ value, onChange, onClose, onRevert, fontSize }: { value: string, onChange: (v: string) => void, onClose: () => void, onRevert: () => void, fontSize: number }) {
-    const [open, setOpen] = React.useState(true);
-
-    const onOpenChange = (isOpen: boolean) => {
-        setOpen(isOpen);
-        if (!isOpen) {
-            onClose();
-        }
-    }
-
-    return (
-        <Popover open={open} onOpenChange={onOpenChange}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full" />
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-80 p-2"
-                align="center"
-                side="bottom"
-                onEscapeKeyDown={(e) => e.preventDefault()}
-            >
-                <div className="space-y-2">
-                    <h4 className="font-medium leading-none">Remarks</h4>
-                    <p className="text-xs text-muted-foreground">Add notes about this usage record.</p>
-                    <Input
-                        autoFocus
-                        value={value}
-                        onChange={(e) => onChange(e.target.value)}
-                        className="h-8"
-                        style={{ fontSize: `${fontSize}px` }}
-                        placeholder="Enter remarks..."
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.stopPropagation();
-                                setOpen(false);
-                            } else if (e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                onRevert();
-                            }
-                        }}
-                    />
-                </div>
-            </PopoverContent>
-        </Popover>
-    )
-}
-
-function AutocompleteInput({ value, onChange, onSelect, items, className, placeholder, style, autoFocus, onRevert }: {
-    value: string;
-    onChange: (val: string) => void;
-    onSelect: (val: string) => void;
-    items: AutocompleteItem[];
-    className?: string;
-    placeholder?: string;
-    style?: React.CSSProperties;
-    autoFocus?: boolean;
-    onRevert?: () => void;
-}) {
-    const [open, setOpen] = React.useState(false);
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    const [selectedIndex, setSelectedIndex] = React.useState(0);
-
-    const filtered = React.useMemo(
-        () => items.filter(item => item.value.toLowerCase().includes(value.toLowerCase())).slice(0, 5),
-        [items, value]
-    );
-
-    React.useEffect(() => {
-        setSelectedIndex(0);
-    }, [filtered]);
-
-    React.useEffect(() => {
-        if (autoFocus && filtered.length > 0) {
-            setOpen(true);
-        }
-    }, [autoFocus, filtered.length]);
-
-    const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (open) {
-            switch (e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1));
-                    return;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedIndex(prev => Math.max(prev - 1, 0));
-                    return;
-                case 'Enter':
-                    e.preventDefault();
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                        e.stopPropagation();
-                    }
-                    return;
-                case 'Tab':
-                    if (filtered.length > 0) {
-                        onSelect(filtered[selectedIndex].value);
-                        setOpen(false);
-                    }
-                    return;
-                case 'Escape':
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    setOpen(false);
-                    if (onRevert) onRevert();
-                    return;
-            }
-        }
-    }, [open, filtered, selectedIndex, onSelect, onRevert]);
-
-    const handleSelect = React.useCallback((itemValue: string) => {
-        onSelect(itemValue);
-        setOpen(false);
-    }, [onSelect]);
-
-    return (
-        <Popover open={open && filtered.length > 0} onOpenChange={setOpen} modal={false}>
-            <PopoverTrigger asChild>
-                <div className="w-full h-full relative">
-                    <Input
-                        ref={inputRef}
-                        value={value}
-                        onChange={(e) => {
-                            onChange(e.target.value);
-                            setOpen(true);
-                        }}
-                        onKeyDown={(e) => {
-                            if (!open && e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                e.nativeEvent.stopImmediatePropagation();
-                                if (onRevert) onRevert();
-                                return;
-                            }
-                            handleKeyDown(e);
-                        }}
-                        onFocus={() => {
-                            if (filtered.length > 0) setOpen(true);
-                        }}
-                        className={className}
-                        placeholder={placeholder}
-                        style={style}
-                        autoFocus={autoFocus}
-                    />
-                </div>
-            </PopoverTrigger>
-            <PopoverContent
-                className="w-[200px] p-0"
-                onOpenAutoFocus={(e) => e.preventDefault()}
-                onCloseAutoFocus={(e) => e.preventDefault()}
-                side="bottom"
-                align="start"
-                sideOffset={4}
-                onContextMenu={(e) => e.preventDefault()}
-            >
-                <Command shouldFilter={false}>
-                    <CommandList>
-                        <CommandGroup>
-                            {filtered.map((item, idx) => (
-                                <CommandItem
-                                    key={item.value}
-                                    value={item.value}
-                                    onSelect={() => handleSelect(item.value)}
-                                    className={cn(
-                                        "text-xs font-mono cursor-pointer",
-                                        idx === selectedIndex && "bg-accent text-accent-foreground"
-                                    )}
-                                    onMouseEnter={() => setSelectedIndex(idx)}
-                                >
-                                    <Check
-                                        className={cn(
-                                            "mr-2 h-3 w-3",
-                                            value === item.value ? "opacity-100" : "opacity-0"
-                                        )}
-                                    />
-                                    {item.value}
-                                    {item.detail && (
-                                        <span className="ml-auto text-muted-foreground text-[10px]">{item.detail}</span>
-                                    )}
-                                </CommandItem>
-                            ))}
-                        </CommandGroup>
-                    </CommandList>
-                </Command>
-            </PopoverContent>
-        </Popover>
-    );
-}
+// GridCell and AutocompletePopover are imported from shared components

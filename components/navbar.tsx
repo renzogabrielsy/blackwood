@@ -15,9 +15,6 @@ import {
     DropdownMenuItem,
     DropdownMenuLabel,
     DropdownMenuSeparator,
-    DropdownMenuSub,
-    DropdownMenuSubContent,
-    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -34,23 +31,53 @@ interface Breadcrumb {
     pageDescription?: string;
 }
 
+/**
+ * Ordered breadcrumb registry. Each entry's `test` decides whether it applies to the
+ * current pathname; the FIRST match wins, so MORE-SPECIFIC routes must come BEFORE their
+ * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all, and
+ * `/cenapro/production` precedes `/cenapro`). Replaces the old long if-chain.
+ */
+interface BreadcrumbEntry extends Breadcrumb {
+    test: (pathname: string) => boolean;
+}
+
+const exact = (path: string) => (pathname: string) => pathname === path;
+const prefix = (path: string) => (pathname: string) => pathname.startsWith(path);
+
+const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
+    { test: prefix('/edit/'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' },
+    // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
+    { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
+    { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
+    { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
+    { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
+    // Production sub-routes — MUST precede the `/production` catch-all below.
+    { test: prefix('/production/schedule'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — projected tons & Joseph\'s authoritative schedule' },
+    { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
+    { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
+    // Price & Volume Analysis design concepts (planning-stage demos).
+    // Specific demo routes MUST precede the `/price-demos` index catch-all.
+    { test: prefix('/price-demos/demo1'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Terminal', pageDescription: 'Dual-axis volume × price command view (concept 1 of 4)' },
+    { test: prefix('/price-demos/demo2'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Ledger', pageDescription: 'Sortable supplier league table with sparklines (concept 2 of 4)' },
+    { test: prefix('/price-demos/demo3'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Heatmap', pageDescription: 'Month × supplier ₱/kg & volume matrix (concept 3 of 4)' },
+    { test: prefix('/price-demos/demo4'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Analyst Brief', pageDescription: 'Executive monthly review dashboard (concept 4 of 4)' },
+    { test: prefix('/price-demos'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Price & Volume Demos', pageDescription: 'Four design concepts for delivery price & volume analysis' },
+    // Cenapro sub-routes — MUST precede the `/cenapro` catch-all below.
+    { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
+    { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
+    { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
+    { test: exact('/notifications'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' },
+    { test: exact('/settings'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Your profile and sign-out' },
+    { test: exact('/admin'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' },
+    { test: exact('/review-queue'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Review Queue', pageDescription: 'Pre-extracted rows from daily reports awaiting approval' },
+    { test: prefix('/sync/cases'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Sync Review', pageDescription: 'Held-row cases & investigations' },
+];
+
 function getBreadcrumb(pathname: string): Breadcrumb | null {
-    if (pathname.startsWith('/inventory/rc-in/edit/')) {
-        return { backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Remarks' };
-    }
-    if (pathname.startsWith('/inventory')) {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' };
-    }
-    if (pathname === '/notifications') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Notifications' };
-    }
-    if (pathname === '/settings') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Settings', pageDescription: 'Manage user roles and permissions' };
-    }
-    if (pathname === '/admin') {
-        return { backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Admin Panel', pageDescription: 'Manage users and invitations' };
-    }
-    return null;
+    const entry = BREADCRUMB_REGISTRY.find((e) => e.test(pathname));
+    if (!entry) return null;
+    const { backLabel, backHref, pageTitle, pageDescription } = entry;
+    return { backLabel, backHref, pageTitle, pageDescription };
 }
 
 function getInitials(name: string | null, email: string | null): string {
@@ -70,21 +97,30 @@ function getInitials(name: string | null, email: string | null): string {
 
 const PRIVILEGED_ROLES: UserRole[] = ['Owner', 'Admin', 'Dev'];
 
-type SubModule = { name: string; href: string };
-type Module = { name: string; href?: string; subModules?: SubModule[] };
+type Module = { name: string; href: string; disabled?: boolean };
 
-const MODULES: Module[] = [
-    {
-        name: 'Inventory',
-        href: '/inventory',
-        subModules: [
-            { name: 'Deliveries', href: '/inventory' },
-            { name: 'Usage', href: '/inventory' },
-            { name: 'Blocking', href: '/inventory' },
-        ],
-    },
-    { name: 'Production' },
-    { name: 'Accounting' },
+// ICTC / Davao Inventory sub-group — the four inventory surfaces, shown INDENTED under an
+// "Inventory" mini-label in the dropdown. Deliveries/Usage deep-link into the logs page's
+// tab; Blocking/Movement are standalone routes. Plain labels (no "RC " prefix).
+const ICTC_INVENTORY: Module[] = [
+    { name: 'Blocking', href: '/inventory/blocking' },
+    { name: 'Deliveries', href: '/inventory?tab=deliveries' },
+    { name: 'Usage', href: '/inventory?tab=usage' },
+    { name: 'Movement', href: '/inventory/rc-movement' },
+    { name: 'Bag Inventory', href: '/inventory/flecon-bags' },
+];
+
+// ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
+const ICTC_MODULES: Module[] = [
+    { name: 'Production', href: '/production' },
+    { name: 'Summaries', href: '/summaries' },
+    { name: 'Accounting', href: '/accounting', disabled: true },
+];
+
+// Cenapro / Cebu tenant modules — kept in a separate section from ICTC.
+const CENAPRO_MODULES: Module[] = [
+    { name: 'Production', href: '/cenapro/production' },
+    { name: 'Flec Inventory', href: '/cenapro/inventory' },
 ];
 
 export function Navbar() {
@@ -93,7 +129,6 @@ export function Navbar() {
     const router = useRouter();
     const { setTheme, resolvedTheme } = useTheme();
     const [mounted, setMounted] = React.useState(false);
-    const [modulesOpen, setModulesOpen] = React.useState(false);
 
     React.useEffect(() => setMounted(true), []);
 
@@ -149,7 +184,7 @@ export function Navbar() {
             <div className="flex-1 flex items-center justify-end gap-1.5">
                 <TooltipProvider delayDuration={300}>
                     {/* Modules */}
-                    <DropdownMenu open={modulesOpen} onOpenChange={setModulesOpen}>
+                    <DropdownMenu>
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
@@ -161,39 +196,49 @@ export function Navbar() {
                             <TooltipContent>Modules</TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="end" onCloseAutoFocus={(e) => e.preventDefault()}>
-                            <DropdownMenuLabel>Modules</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            {MODULES.map((mod) =>
-                                mod.subModules ? (
-                                    <DropdownMenuSub key={mod.name}>
-                                        <DropdownMenuSubTrigger
-                                            onClick={(e) => {
-                                                if (mod.href) {
-                                                    e.preventDefault();
-                                                    setModulesOpen(false);
-                                                    router.push(mod.href);
-                                                }
-                                            }}
-                                        >
-                                            {mod.name}
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent>
-                                            {mod.subModules.map((sub) => (
-                                                <DropdownMenuItem key={sub.href} asChild>
-                                                    <Link href={sub.href}>{sub.name}</Link>
-                                                </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuSubContent>
-                                    </DropdownMenuSub>
-                                ) : (
-                                    <DropdownMenuItem key={mod.name} disabled>
+                            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                ICTC · Davao
+                            </DropdownMenuLabel>
+                            {/* Inventory sub-group — a mini-label with indented children, so
+                                the four inventory surfaces read as a scannable cluster. */}
+                            <DropdownMenuLabel className="pl-2 text-[11px] font-medium text-muted-foreground/80">
+                                Inventory
+                            </DropdownMenuLabel>
+                            {ICTC_INVENTORY.map((mod) => (
+                                <DropdownMenuItem key={`ictc-inv-${mod.name}`} asChild className="pl-5">
+                                    <Link href={mod.href}>{mod.name}</Link>
+                                </DropdownMenuItem>
+                            ))}
+                            {/* Sibling modules below the Inventory sub-group. */}
+                            {ICTC_MODULES.map((mod) =>
+                                mod.disabled ? (
+                                    <DropdownMenuItem key={`ictc-${mod.name}`} disabled>
                                         {mod.name}
+                                    </DropdownMenuItem>
+                                ) : (
+                                    <DropdownMenuItem key={`ictc-${mod.name}`} asChild>
+                                        <Link href={mod.href}>{mod.name}</Link>
                                     </DropdownMenuItem>
                                 )
                             )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Cenapro · Cebu
+                            </DropdownMenuLabel>
+                            {CENAPRO_MODULES.map((mod) => (
+                                <DropdownMenuItem key={`cenapro-${mod.name}`} asChild>
+                                    <Link href={mod.href}>{mod.name}</Link>
+                                </DropdownMenuItem>
+                            ))}
                             {PRIVILEGED_ROLES.includes(role) && (
                                 <>
                                     <DropdownMenuSeparator />
+                                    <DropdownMenuItem asChild>
+                                        <Link href="/sync/cases">Sync Review</Link>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem asChild>
+                                        <Link href="/review-queue">Review Queue</Link>
+                                    </DropdownMenuItem>
                                     <DropdownMenuItem asChild>
                                         <Link href="/admin">Admin Panel</Link>
                                     </DropdownMenuItem>

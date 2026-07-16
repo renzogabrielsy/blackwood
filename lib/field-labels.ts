@@ -35,7 +35,7 @@ export function isHiddenField(key: string): boolean {
 }
 
 /** Format a value for display based on its field key */
-export function formatFieldValue(key: string, value: any): string {
+export function formatFieldValue(key: string, value: string | number | boolean | null): string {
   if (value == null || value === '') return '-';
 
   if (key === 'cost_basis') {
@@ -73,8 +73,8 @@ export function formatFieldValue(key: string, value: any): string {
  * Output: [{ key: 'mc', label: 'MC', old: '1.00', new: '1.50' }]
  */
 export function flattenLabResultsDiff(
-  oldVal: Record<string, any> | null,
-  newVal: Record<string, any> | null
+  oldVal: Record<string, unknown> | null,
+  newVal: Record<string, unknown> | null
 ): { key: string; label: string; oldFormatted: string; newFormatted: string }[] {
   const results: { key: string; label: string; oldFormatted: string; newFormatted: string }[] = [];
   const allKeys = new Set([
@@ -90,8 +90,8 @@ export function flattenLabResultsDiff(
       results.push({
         key: subKey,
         label: LAB_LABELS[subKey] ?? subKey,
-        oldFormatted: formatFieldValue(subKey, oldSub),
-        newFormatted: formatFieldValue(subKey, newSub),
+        oldFormatted: formatFieldValue(subKey, oldSub as string | number | boolean | null),
+        newFormatted: formatFieldValue(subKey, newSub as string | number | boolean | null),
       });
     }
   }

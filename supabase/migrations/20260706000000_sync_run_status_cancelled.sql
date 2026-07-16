@@ -1,0 +1,11 @@
+-- Add 'cancelled' as a terminal status for sync_runs (M5.1 — lifecycle controls).
+--
+-- The Stop button (graceful cancel) needs a NEUTRAL terminal status distinct from
+-- 'failed': a stopped run KEEPS every row already written (idempotent / never-delete
+-- philosophy — no rollback), the report ends "cancelled", and the modal reads it as
+-- a calm "Stopped." card, NOT an error-red failure.
+--
+-- ALTER TYPE ... ADD VALUE cannot run inside a transaction block, so this migration
+-- contains ONLY the enum extension (no other DDL). IF NOT EXISTS makes a re-apply a
+-- no-op. Applied to remote via the Supabase MCP on 2026-07-06.
+alter type public.sync_run_status add value if not exists 'cancelled';

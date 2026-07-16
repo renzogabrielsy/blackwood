@@ -1,7 +1,12 @@
+import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import { format } from 'date-fns';
 import { InventoryView } from './components/inventory-view';
+import { LogsShell } from './components/logs-shell';
+import { getTableSettings } from '@/lib/actions/table-settings';
+import { canViewPrices } from '@/lib/auth';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 
 export default async function InventoryPage({
     searchParams
@@ -20,8 +25,9 @@ export default async function InventoryPage({
         .neq('status', 'CLOSED')
         .order('created_at', { ascending: false });
 
-    // Build deliveries query (reusable for paginated fetch)
-    const buildDeliveriesQuery = () => {
+    // Build deliveries query for a given page window (filters/ordering reapplied
+    // per page). Passed to the shared fetchAllRows pagination helper.
+    const buildDeliveriesQuery = (from: number, to: number) => {
         let q = supabase
             .from('deliveries')
             .select('*, batches(location_ref, status)')
@@ -37,21 +43,12 @@ export default async function InventoryPage({
             q = q.gte('transaction_date', format(startDate, 'yyyy-MM-dd'))
                  .lte('transaction_date', format(endDate, 'yyyy-MM-dd'));
         }
-        return q;
+        return q.range(from, to);
     };
 
-    // Paginated fetch — bypasses PostgREST max_rows (default 1000)
-    const PAGE_SIZE = 1000;
-    let deliveriesRaw: any[] = [];
-    let from = 0;
-    let hasMore = true;
-    while (hasMore) {
-        const { data, error } = await buildDeliveriesQuery().range(from, from + PAGE_SIZE - 1);
-        if (error) throw new Error(`Failed to fetch deliveries: ${error.message}`);
-        deliveriesRaw = deliveriesRaw.concat(data || []);
-        hasMore = (data?.length || 0) === PAGE_SIZE;
-        from += PAGE_SIZE;
-    }
+    // Paginated fetch — bypasses PostgREST max_rows (default 1000).
+    type DeliveryRaw = NonNullable<Awaited<ReturnType<typeof buildDeliveriesQuery>>['data']>[number];
+    const deliveriesRaw = await fetchAllRows<DeliveryRaw>((from, to) => buildDeliveriesQuery(from, to));
 
     // Fetch ALL distinct suppliers and locations (not scoped by year) for header bar filters
     const [{ data: supRows }, { data: locRows }] = await Promise.all([
@@ -63,22 +60,17 @@ export default async function InventoryPage({
         (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
     ) as string[];
 
-    const { data: userRaw } = await supabase.auth.getUser();
-    let role = 'Production';
-    if (userRaw?.user) {
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', userRaw.user.id)
-            .single();
-        if (profile?.role) role = profile.role;
-    }
+    // CANONICAL price gate — derives the EFFECTIVE role via lib/auth.getUserRole(),
+    // so the dev-impersonation cookie is respected (an Owner "viewing as Production"
+    // is correctly denied). Replaces the previous inline profiles lookup, which
+    // ignored the cookie and leaked cost_basis to impersonating admins.
+    const showPrices = await canViewPrices();
 
     const deliveries: DeliveryHistoryRow[] = (deliveriesRaw || []).map((d) => ({
         ...d,
-        state: (d as any).batches?.status || 'STORED',
+        state: (d.batches as Record<string, unknown> | null)?.status as string || 'STORED',
         lab_results: typeof d.lab_results === 'string' ? JSON.parse(d.lab_results) : (d.lab_results || {}),
-        cost_basis: role === 'Production' ? undefined : d.cost_basis,
+        cost_basis: showPrices ? d.cost_basis : undefined,
     }));
 
     const activeBatches = (batches || []).map(b => ({
@@ -87,13 +79,21 @@ export default async function InventoryPage({
         location_ref: b.location_ref,
     }));
 
+    const initialSettings = await getTableSettings('rc_in');
+
     return (
-        <InventoryView
-            deliveries={deliveries}
-            batches={activeBatches}
-            search={search}
-            allSuppliers={allSuppliers}
-            allLocations={allLocations}
-        />
+        // useSearchParams (inside LogsShell's tab provider) needs a Suspense boundary.
+        <Suspense fallback={<div className="h-full w-full" />}>
+            <LogsShell>
+                <InventoryView
+                    deliveries={deliveries}
+                    batches={activeBatches}
+                    search={search}
+                    allSuppliers={allSuppliers}
+                    allLocations={allLocations}
+                    initialSettings={initialSettings}
+                />
+            </LogsShell>
+        </Suspense>
     );
 }

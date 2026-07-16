@@ -1,0 +1,3904 @@
+{
+  "movements": [
+    {
+      "id": "040c4473-1172-4bdc-803e-c5c7060d52d6",
+      "transaction_date": "2026-07-02",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "fc2e4077-ac48-4c43-b3bc-a3b1f3c975a6",
+      "transaction_date": "2026-07-02",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "716e5e96-ef58-4b2b-a81a-5bdb71ab8edb",
+      "transaction_date": "2026-07-02",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -14
+    },
+    {
+      "id": "65eaa090-2129-492b-95ed-75431ece384c",
+      "transaction_date": "2026-01-02",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "4e17cccc-a2dd-4e85-a0e5-b2f043d1d834",
+      "transaction_date": "2026-01-02",
+      "particular": "RETURNED BAG FROM KURARAY 3X50 TO PP SACKS",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 18
+    },
+    {
+      "id": "b59f7573-f51e-47d0-81b2-157062280340",
+      "transaction_date": "2026-01-03",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -1
+    },
+    {
+      "id": "7db714b7-9742-42b7-92f2-641b86d33a3b",
+      "transaction_date": "2026-01-03",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "66b085da-2b8e-4f01-828e-6f400da4d757",
+      "transaction_date": "2026-01-03",
+      "particular": "RETURNED BAG FROM KURARAY 3X50 TO PP SACKS",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 19
+    },
+    {
+      "id": "37d8e239-ff43-448c-8854-81d622eb4f48",
+      "transaction_date": "2026-01-05",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -1
+    },
+    {
+      "id": "583e5029-3420-4771-a0c4-37cd2b23859c",
+      "transaction_date": "2026-01-05",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "e5b45c33-79e1-4ef3-ae72-3d0819f21f84",
+      "transaction_date": "2026-01-05",
+      "particular": "RETURNED BAG FROM KURARAY 3X50 TO PP SACKS",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 15
+    },
+    {
+      "id": "276a64ba-f775-423d-be92-ccf14f3b3223",
+      "transaction_date": "2026-01-06",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -1
+    },
+    {
+      "id": "dc4ca606-cfeb-4322-bab1-d401cee44468",
+      "transaction_date": "2026-01-06",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "a338fc1f-17de-48cd-8636-435ff5b35cd5",
+      "transaction_date": "2026-01-07",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "c5b99684-008f-4e20-aaa5-dcec3e8dd8f7",
+      "transaction_date": "2026-01-07",
+      "particular": "RETURNED BAG FROM TIMBOL (6X50)",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": 1
+    },
+    {
+      "id": "4d7f77d6-f3c8-44a5-8151-4a672d3d62c7",
+      "transaction_date": "2026-01-08",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -1
+    },
+    {
+      "id": "1b2e45bf-80cd-4d80-92df-a4dbb62f3846",
+      "transaction_date": "2026-01-08",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "0aa7e6b1-ccab-430a-adb1-f1fa9a17b9bd",
+      "transaction_date": "2026-01-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "9d779678-50f6-4248-ab04-050cb4cd8d20",
+      "transaction_date": "2026-01-09",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "1aa4a5ad-8070-4e05-a44d-af85ee5cebcb",
+      "transaction_date": "2026-01-10",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -2
+    },
+    {
+      "id": "1bc803e5-330b-46a4-949b-fc0a443336d3",
+      "transaction_date": "2026-01-10",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "aa06cff3-9252-448f-8f0f-e31f865281ec",
+      "transaction_date": "2026-01-12",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "951e0217-02ec-4520-aa0b-723bfbf54bc8",
+      "transaction_date": "2026-01-12",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "fce47e82-f3df-47d0-9117-039dc43f839b",
+      "transaction_date": "2026-01-13",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "629f1e07-9729-48c7-847b-3327f3623f81",
+      "transaction_date": "2026-01-13",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "4516f530-1ad0-4003-ba24-ee3cdf4052dd",
+      "transaction_date": "2026-01-14",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -2
+    },
+    {
+      "id": "a7238146-cf33-4359-bd0e-f71417fcbf71",
+      "transaction_date": "2026-01-14",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "c6601383-b9d0-42ec-87ed-68a317568c37",
+      "transaction_date": "2026-01-14",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -6
+    },
+    {
+      "id": "b57e7b5d-a317-49bd-82f7-e930f90b5748",
+      "transaction_date": "2026-01-15",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "ba857281-6472-4d70-9455-df40926843e5",
+      "transaction_date": "2026-01-15",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "7f7f46d9-41b6-457f-98e5-31d3d7a33e66",
+      "transaction_date": "2026-01-16",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "560fea5a-0071-4c69-9494-ae42c9e01157",
+      "transaction_date": "2026-01-16",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "c480217e-2397-4a27-8f23-3609f784931b",
+      "transaction_date": "2026-01-17",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "1e53b05e-c8f5-4b70-835e-460178c06aeb",
+      "transaction_date": "2026-01-17",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "f1fcd3fb-7f35-4155-914e-9fcdd5924e0b",
+      "transaction_date": "2026-01-17",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -6
+    },
+    {
+      "id": "95b55e07-e8e4-4f09-a091-172643c29b80",
+      "transaction_date": "2026-01-18",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -23
+    },
+    {
+      "id": "baefc5b2-b758-4434-bb62-25513b55ebf6",
+      "transaction_date": "2026-01-19",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "aead3afc-5bec-4187-82e5-2d6510d8dbe9",
+      "transaction_date": "2026-01-19",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "279a7530-18db-42b1-a49b-b623a58de31a",
+      "transaction_date": "2026-01-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "9417dd29-e480-4350-b3ed-6623709fc445",
+      "transaction_date": "2026-01-20",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "5cd342a0-02bd-44e2-8d69-99fb9427ced5",
+      "transaction_date": "2026-01-20",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 26
+    },
+    {
+      "id": "925b4ba4-ee93-4bc6-ac18-5d91c6e8577e",
+      "transaction_date": "2026-01-21",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "cc8775a9-c058-4b8b-81b7-f21f9619b238",
+      "transaction_date": "2026-01-21",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "2339ee77-5140-41bb-84b8-b442b249cce7",
+      "transaction_date": "2026-01-21",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 26
+    },
+    {
+      "id": "3de75441-c9a3-4484-9d32-eac1fa0a3455",
+      "transaction_date": "2026-01-22",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "e7231f62-db49-455d-841c-cae6cf30369d",
+      "transaction_date": "2026-01-22",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 24
+    },
+    {
+      "id": "340b086e-437e-46c8-ad77-8f9d69fdcea9",
+      "transaction_date": "2026-01-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "11e676f8-8300-41c8-976c-070e8a6bdd13",
+      "transaction_date": "2026-01-23",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "de8f9f0d-1cc9-4237-ae6d-e85d78e9df8d",
+      "transaction_date": "2026-01-24",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "922006db-545a-4282-a725-c848f239283a",
+      "transaction_date": "2026-01-24",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "39f4198a-df72-419c-90f9-0d218031b15b",
+      "transaction_date": "2026-01-24",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 22
+    },
+    {
+      "id": "8178272a-6e77-43a2-af13-e9c179b8e12f",
+      "transaction_date": "2026-01-26",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "627af5dc-59b7-4221-b5e9-fa192da9b164",
+      "transaction_date": "2026-01-26",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "5f9c1926-8415-4ecf-8a09-fdd9a4da395e",
+      "transaction_date": "2026-01-26",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 18
+    },
+    {
+      "id": "a94a2d39-a92d-42b6-b5a6-4737b22915d4",
+      "transaction_date": "2026-01-27",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "b7150d0f-5581-49cd-b9e8-a64def929f64",
+      "transaction_date": "2026-01-27",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "53d971f8-71f6-40b5-b6b6-59452ae1377a",
+      "transaction_date": "2026-01-27",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 26
+    },
+    {
+      "id": "ee3bcf46-5df3-4384-832b-2c6894c998ad",
+      "transaction_date": "2026-01-28",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "33dbcbd2-0e54-40da-8b12-6147a862e285",
+      "transaction_date": "2026-01-28",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 22
+    },
+    {
+      "id": "30be675f-6c13-4c9e-8633-471c2efca670",
+      "transaction_date": "2026-01-28",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -4
+    },
+    {
+      "id": "16ccd06c-d91a-4c2a-a6ac-edb0e4b34eba",
+      "transaction_date": "2026-01-29",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "a2269e55-b8f4-4bd2-8822-22cfcea5ec06",
+      "transaction_date": "2026-01-29",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "33c0df1a-255f-47ed-a59b-f43cb7ccf4df",
+      "transaction_date": "2026-01-29",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 12
+    },
+    {
+      "id": "e4f10fc0-cda8-422e-955b-b06501d5d91f",
+      "transaction_date": "2026-01-29",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "6d99b6a3-5c60-4557-a2f7-acee82f4b3ec",
+      "transaction_date": "2026-01-30",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "466165f1-05c9-44de-a82f-176827653794",
+      "transaction_date": "2026-01-30",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "a7c6b814-dc9e-4ed2-bc41-797bcaa856b8",
+      "transaction_date": "2026-01-30",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 14
+    },
+    {
+      "id": "5b6ce6c2-d8a9-4d38-8ecf-ca47ef747506",
+      "transaction_date": "2026-01-30",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -13
+    },
+    {
+      "id": "a6723bcc-20b5-48ec-8385-c4815d56cc89",
+      "transaction_date": "2026-02-01",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -17
+    },
+    {
+      "id": "685b9a03-068b-4a5b-82fc-36b533300735",
+      "transaction_date": "2026-02-02",
+      "particular": "BAGGED 2x6",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -7
+    },
+    {
+      "id": "39eaa6af-b684-4ace-a21f-4f997714ca67",
+      "transaction_date": "2026-02-02",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "5551c740-9dd5-40a2-9a61-37882f8a469e",
+      "transaction_date": "2026-02-02",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "61381c7c-2c54-4764-81b9-c7b4f8d1c67b",
+      "transaction_date": "2026-02-02",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 22
+    },
+    {
+      "id": "ce3b560b-37db-4ffc-a08d-8df26d78a571",
+      "transaction_date": "2026-02-02",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "3301bacb-9858-4e38-954f-0cea92777d71",
+      "transaction_date": "2026-02-03",
+      "particular": "BAGGED 2x6",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -31
+    },
+    {
+      "id": "474937d6-780c-4e69-bb45-3ab5112f5a4c",
+      "transaction_date": "2026-02-03",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "e1d36145-5dc9-4711-8308-b4fe04417cd0",
+      "transaction_date": "2026-02-03",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 14
+    },
+    {
+      "id": "a2f02bd1-bb5e-4581-bfa7-8a3f9fe3c70e",
+      "transaction_date": "2026-02-04",
+      "particular": "BAGGED 2x6",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -27
+    },
+    {
+      "id": "b6cfacf4-1148-43b6-869b-f69f3861046d",
+      "transaction_date": "2026-02-04",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "a899345e-19e8-4604-a1df-b697e0af4bfd",
+      "transaction_date": "2026-02-04",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 16
+    },
+    {
+      "id": "06a4af1a-c011-4aa5-8c9a-009b72f82a1f",
+      "transaction_date": "2026-02-04",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "09c34eab-f63e-4879-879c-1d2c0ece8f15",
+      "transaction_date": "2026-02-04",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 14
+    },
+    {
+      "id": "76f4159c-7702-4c57-a4f4-46dc576514c1",
+      "transaction_date": "2026-02-05",
+      "particular": "BAGGED 2x6",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -24
+    },
+    {
+      "id": "9669b211-a012-4e31-9c32-2f9b25a2daa0",
+      "transaction_date": "2026-02-05",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "071a089c-50e1-438e-abc9-6ccfe599b88a",
+      "transaction_date": "2026-02-05",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "0bfe2fde-3e9d-4f2b-a1df-2a5b0be2f770",
+      "transaction_date": "2026-02-05",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 7
+    },
+    {
+      "id": "7938618d-563d-4ad9-9fa8-9d231590b39a",
+      "transaction_date": "2026-02-06",
+      "particular": "BAGGED 2x6",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -10
+    },
+    {
+      "id": "eafbb19f-73dd-473e-907b-c52a58366ca3",
+      "transaction_date": "2026-02-06",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -3
+    },
+    {
+      "id": "b96efcd0-2d0d-43c4-89c0-21662da2e956",
+      "transaction_date": "2026-02-06",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "27347b17-fe2b-4865-b21c-60bd29d8a79c",
+      "transaction_date": "2026-02-06",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "92b457d8-9873-4626-8cae-6f8da1f14ed3",
+      "transaction_date": "2026-02-07",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -1
+    },
+    {
+      "id": "555fcb75-a829-4b20-a5bf-73bdb02f103b",
+      "transaction_date": "2026-02-07",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "afe70626-1740-43c3-87d6-0245bcc88853",
+      "transaction_date": "2026-02-07",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -12
+    },
+    {
+      "id": "0fb7209a-2697-4ee0-ad7c-8e4e26a4ea48",
+      "transaction_date": "2026-02-07",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "785ea9c6-3635-4349-860a-690644cf149b",
+      "transaction_date": "2026-02-07",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "1ff4b49d-c468-49fc-a90f-944e916a2af9",
+      "transaction_date": "2026-02-08",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -20
+    },
+    {
+      "id": "598666f6-802b-4414-80ef-061bafd2e70a",
+      "transaction_date": "2026-02-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "qty_delta": -3
+    },
+    {
+      "id": "39146fe2-de45-4a67-b9e6-b6611dc2872e",
+      "transaction_date": "2026-02-09",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "fe9c2c72-2e01-4f07-bfbb-8e1c4592fcf9",
+      "transaction_date": "2026-02-09",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "8eb13caf-84a8-4672-8f9a-f3e0875a76ca",
+      "transaction_date": "2026-02-09",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "95ca9747-3a9d-4764-89d2-1b219f92a116",
+      "transaction_date": "2026-02-10",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "2ce638c2-6ada-4aa5-91b2-987c02187f2f",
+      "transaction_date": "2026-02-10",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "b499dd2e-7301-427b-93cc-6026d68a3848",
+      "transaction_date": "2026-02-10",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "ba078dd2-c977-44ce-af4d-ff16067436f4",
+      "transaction_date": "2026-02-10",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -13
+    },
+    {
+      "id": "18e82a41-be65-41c5-8e4a-952a1a41ee27",
+      "transaction_date": "2026-02-10",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 22
+    },
+    {
+      "id": "45f55575-6489-4a60-8293-b380a2333988",
+      "transaction_date": "2026-02-10",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "6f640fae-8fe9-4fc7-b87a-52bc58678956",
+      "transaction_date": "2026-02-11",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "d1098927-30c4-4b18-b489-417de753c048",
+      "transaction_date": "2026-02-11",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "bfe80710-f353-489c-9453-4da7cd222b08",
+      "transaction_date": "2026-02-11",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -13
+    },
+    {
+      "id": "817a7a6c-73f8-4890-aefc-dd2cfd02174d",
+      "transaction_date": "2026-02-11",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "2955a474-0206-4efb-9a4e-7adf10b4b791",
+      "transaction_date": "2026-02-11",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 24
+    },
+    {
+      "id": "129ccd07-558f-40fa-aa1f-01a78fe4b475",
+      "transaction_date": "2026-02-11",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "b8b07d3a-a787-43d6-90f6-c80d722bfd95",
+      "transaction_date": "2026-02-12",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "2d9a9b03-e7c2-461e-9a34-e95d761acdbc",
+      "transaction_date": "2026-02-12",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "5a95eee2-f8da-44ae-a0b3-bbba6ce52517",
+      "transaction_date": "2026-02-12",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -15
+    },
+    {
+      "id": "66323513-cbb1-4ac9-bf95-60d6335e12ee",
+      "transaction_date": "2026-02-12",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "7b696e4e-eebb-47d6-b31a-86e52f4aecf4",
+      "transaction_date": "2026-02-12",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 22
+    },
+    {
+      "id": "5233e530-e7e8-4b75-86d5-ae8395222c0b",
+      "transaction_date": "2026-02-12",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "ae986177-d022-4018-a4eb-dd2e930584d8",
+      "transaction_date": "2026-02-13",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -3
+    },
+    {
+      "id": "2748e682-19a5-4a4f-9c95-f1324769dc08",
+      "transaction_date": "2026-02-13",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "1f05f8f7-c676-4c45-a867-158248009f3b",
+      "transaction_date": "2026-02-13",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "57502aa6-3289-4d8b-a919-9ca64ad878b3",
+      "transaction_date": "2026-02-13",
+      "particular": "RETURNED BAG FROM BAGGED 3X50 TO PP SACKS",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 6
+    },
+    {
+      "id": "97fdda39-6fdd-470e-8f20-c1f90b225926",
+      "transaction_date": "2026-02-13",
+      "particular": "DAMAGED BAG 6X50 BLACK SLING",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -4
+    },
+    {
+      "id": "5ef5b011-8813-477c-aa13-72df670547c7",
+      "transaction_date": "2026-02-13",
+      "particular": "DAMAGED BAG 6X50 BLACK SLING",
+      "bag_type_id": "f395864e-5c7b-4091-bc9e-671cd698561e",
+      "qty_delta": 4
+    },
+    {
+      "id": "607193c8-b73c-40a5-9a28-dfa5c48adfbc",
+      "transaction_date": "2026-02-14",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "c80f699c-a095-4958-bedd-b1a07e3ff29d",
+      "transaction_date": "2026-02-14",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "7a0cacd2-019c-4372-97d4-bed409a7c14c",
+      "transaction_date": "2026-02-14",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "91bb4ec8-b99e-4750-9544-ca0099962b8f",
+      "transaction_date": "2026-02-14",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -13
+    },
+    {
+      "id": "58b172f8-0488-4e76-8dbc-ce3da00a4f0e",
+      "transaction_date": "2026-02-14",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "9acf79f6-0562-4447-a442-54f6d0c28bbd",
+      "transaction_date": "2026-02-15",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -30
+    },
+    {
+      "id": "15dbcf4a-5219-43f4-8f83-cb8132473f75",
+      "transaction_date": "2026-02-16",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -28
+    },
+    {
+      "id": "068f0833-10c1-42d4-bec5-91761f05c1ba",
+      "transaction_date": "2026-02-17",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -3
+    },
+    {
+      "id": "97c2e7c8-0710-496b-896a-96b52215989b",
+      "transaction_date": "2026-02-17",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "79349803-82ae-42db-9856-d477f73f5785",
+      "transaction_date": "2026-02-17",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "53173a97-2eaf-4416-9beb-12dac7fb1676",
+      "transaction_date": "2026-02-17",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -10
+    },
+    {
+      "id": "ae952dab-293a-4077-b1e1-ced656b3670d",
+      "transaction_date": "2026-02-17",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "9c0e60ad-d5f3-446a-9441-aacf6c75380a",
+      "transaction_date": "2026-02-18",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "1f4928c9-6840-40d6-ba48-e63ed967d5a8",
+      "transaction_date": "2026-02-18",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "1669f4ab-5ecd-492a-b345-ff456fae131f",
+      "transaction_date": "2026-02-18",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -17
+    },
+    {
+      "id": "8e263391-f5c0-4d3f-8562-e6efa9cbf997",
+      "transaction_date": "2026-02-18",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "94656253-d71a-46c3-8c24-9561aba82660",
+      "transaction_date": "2026-02-19",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "7c9c8fac-3d6b-42de-8724-b9205c5a6d5c",
+      "transaction_date": "2026-02-19",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "288f37fc-d025-4b38-a15a-4fa6638cf9ac",
+      "transaction_date": "2026-02-19",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "6220dfd1-ec3d-4372-aae8-0b9c3b14044b",
+      "transaction_date": "2026-02-19",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "5b76f584-5d5b-458a-8aae-1e1d0c1c9332",
+      "transaction_date": "2026-02-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -3
+    },
+    {
+      "id": "27e1b8b9-b587-4b11-a7ac-67224a94a306",
+      "transaction_date": "2026-02-20",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "ee12d2ab-ff7d-48e3-9a15-49bc15ce26a0",
+      "transaction_date": "2026-02-20",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "a58ebae8-56f6-4478-b25b-389f85641a86",
+      "transaction_date": "2026-02-20",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "d0eb8e87-e49f-4aaa-bd4c-db3649d367de",
+      "transaction_date": "2026-02-20",
+      "particular": "ZAMBOANGA DELIVERED EMPTY BAG",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": 96
+    },
+    {
+      "id": "d757cece-b652-4145-ba43-c740575f6dc4",
+      "transaction_date": "2026-02-21",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "1e2246b2-2940-4882-8295-545e245ea758",
+      "transaction_date": "2026-02-21",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "820bf355-6087-491a-bd49-3af651b1d180",
+      "transaction_date": "2026-02-21",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -16
+    },
+    {
+      "id": "fd4a3f47-a495-4cdd-802d-62a96795003b",
+      "transaction_date": "2026-02-21",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "83b9fce4-e8b4-44ab-a604-a6c939052c7d",
+      "transaction_date": "2026-02-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "5c5a7914-499c-4e3a-ae0e-fd1664e62af8",
+      "transaction_date": "2026-02-23",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "01bc9405-d4c8-46d1-88e5-8f79a3e66c02",
+      "transaction_date": "2026-02-23",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "701cb847-4e05-4b7f-99cf-a7f5858f3411",
+      "transaction_date": "2026-02-23",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "c868d9c8-487e-4836-8011-4768cf0364f7",
+      "transaction_date": "2026-02-24",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "ed2053fc-bcef-4754-b9c9-a6a839e72cdc",
+      "transaction_date": "2026-02-24",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "7898b56e-f505-4bbd-918c-057c3361e091",
+      "transaction_date": "2026-02-24",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "cc4aa504-d2bd-4974-8681-16ee03859832",
+      "transaction_date": "2026-02-25",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "ec633af8-2a43-4001-a5e2-505efa31e8b7",
+      "transaction_date": "2026-02-25",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "ec6ae945-5878-430c-bacb-bbe55b810042",
+      "transaction_date": "2026-02-25",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "9120c454-6577-438d-b205-926bbc38e8c2",
+      "transaction_date": "2026-02-25",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "0dcc47ad-8b80-4b3b-be81-8368bd6f6355",
+      "transaction_date": "2026-02-26",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "001f6782-e705-45c6-875d-53b2d98c5a12",
+      "transaction_date": "2026-02-26",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "e4c99066-f9d8-4afe-aeeb-e2c2d8a8edc3",
+      "transaction_date": "2026-02-26",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "878eefd8-f0f2-4ac6-a5ba-fd5c2bcf2b21",
+      "transaction_date": "2026-02-26",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -13
+    },
+    {
+      "id": "bffa4df4-8a50-4d76-b6db-6e5afc20ebe8",
+      "transaction_date": "2026-02-27",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "4ee0b034-589e-45f4-96a5-fd2edd76cc89",
+      "transaction_date": "2026-02-28",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "909c093a-97fe-4dcc-96de-f900618d7146",
+      "transaction_date": "2026-02-28",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "97b72fc8-2cc4-486d-98c2-833af3bd4b1e",
+      "transaction_date": "2026-02-28",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "4b2fcced-2bb6-4a69-8239-a1dcbf99c7f2",
+      "transaction_date": "2026-03-02",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "de9453da-fdaf-483a-9373-f2afec6ac375",
+      "transaction_date": "2026-03-02",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "3e2b7898-97e3-4da8-a90b-2c82bbc67977",
+      "transaction_date": "2026-03-02",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "73bb5757-44dc-4c3e-bba3-a9de6fc090e3",
+      "transaction_date": "2026-03-02",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -16
+    },
+    {
+      "id": "afe688e1-53d3-40e7-a535-59ffb79251a6",
+      "transaction_date": "2026-03-03",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "5b9cc827-ae02-4b01-bd8e-e4b5b77420ce",
+      "transaction_date": "2026-03-03",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "12b83f4b-7194-4470-9e09-412bbe21026e",
+      "transaction_date": "2026-03-03",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "ef6a16f7-37cf-4893-bc6b-cb81bb6a52a4",
+      "transaction_date": "2026-03-03",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -18
+    },
+    {
+      "id": "531af3ac-8079-409b-b234-6a03db3dcb47",
+      "transaction_date": "2026-03-04",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "6db08040-4023-4ff0-964c-439c6ce0ef4e",
+      "transaction_date": "2026-03-04",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "e93445db-eb2f-48f9-a212-4a2667dd8971",
+      "transaction_date": "2026-03-04",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "100ee90b-93dd-464f-b4d5-6808e3a05a2d",
+      "transaction_date": "2026-03-04",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -19
+    },
+    {
+      "id": "38698299-5e0b-4083-a690-7ed4b8e47dc6",
+      "transaction_date": "2026-03-05",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "1c4dc1b8-8740-4de7-b478-706ec650ac6a",
+      "transaction_date": "2026-03-05",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "2bed4ef8-3830-42f4-9f44-a7f568868972",
+      "transaction_date": "2026-03-05",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "2a85c6df-19ce-4149-8025-3b5ecaaf9a4d",
+      "transaction_date": "2026-03-05",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -16
+    },
+    {
+      "id": "ca1db6bc-b49b-4e8a-a110-f7451e3a4f4d",
+      "transaction_date": "2026-03-06",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "f9f1b264-ea82-41a3-bb64-7b1b336c810a",
+      "transaction_date": "2026-03-06",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "06df1651-a8f9-45d3-96a0-b62a007c3ff6",
+      "transaction_date": "2026-03-06",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "ce352850-dd4c-4141-9851-a9f899b5bc0c",
+      "transaction_date": "2026-03-06",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "dff219eb-75d3-4d34-8c8a-629275635f94",
+      "transaction_date": "2026-03-07",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "e9bf7ec3-8d00-4eb9-991c-d9d25a79040b",
+      "transaction_date": "2026-03-07",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "64ac6787-240d-43d5-a259-f9a8b56130e5",
+      "transaction_date": "2026-03-07",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "f3f06269-c8e6-49ba-bcc1-39a41b103bc2",
+      "transaction_date": "2026-03-07",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "cbedac09-02c7-4347-b4be-9485f3d3514e",
+      "transaction_date": "2026-03-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "f8ffe4f8-52b4-4830-9f8d-4efaba69cf88",
+      "transaction_date": "2026-03-09",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "72dec9c7-01e4-4723-bcc0-dbb95fa5b65b",
+      "transaction_date": "2026-03-09",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "afffbbcc-f29b-4de1-ac34-af2c4dd3e3fd",
+      "transaction_date": "2026-03-10",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "1b734ebf-fa61-4b24-bb90-f1ccee2e1c67",
+      "transaction_date": "2026-03-10",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -3
+    },
+    {
+      "id": "a6170068-bd69-4518-8924-05045c5f9943",
+      "transaction_date": "2026-03-10",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "81a263c5-714b-42eb-9182-618b5dda3e2c",
+      "transaction_date": "2026-03-10",
+      "particular": "CEBU IN COMING (FG BLACK SLING USED)",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": 139
+    },
+    {
+      "id": "1143b0fe-4431-441f-a4b5-38423edabcd7",
+      "transaction_date": "2026-03-10",
+      "particular": "CEBU IN COMING (PLASTIC LINER 12 SACKS BUNDLE OF 50 PCS/SACK)",
+      "bag_type_id": "ad337cca-6560-4e38-a041-0f89f59ed11d",
+      "qty_delta": 600
+    },
+    {
+      "id": "e069a015-92d0-4c38-88a1-b476aee30f0d",
+      "transaction_date": "2026-03-11",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "5d015647-9392-4311-a7f7-d0ad5af20a16",
+      "transaction_date": "2026-03-11",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "b8626ea6-c153-4a17-95d8-d3a5e18f1cb4",
+      "transaction_date": "2026-03-11",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "186ee32d-2c80-4c08-9bf6-e732f3c79877",
+      "transaction_date": "2026-03-11",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "4580fc17-fccc-4b0d-a7c6-102619470bed",
+      "transaction_date": "2026-03-12",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "2082a17d-24a3-4006-bed8-5873aa2ff3f1",
+      "transaction_date": "2026-03-12",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "fe1f8ccd-df00-4a65-9dc0-9baa3626f601",
+      "transaction_date": "2026-03-12",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -10
+    },
+    {
+      "id": "c1752b2a-170d-4744-a1b5-4cb43075e63d",
+      "transaction_date": "2026-03-13",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "fa62b782-c080-4ae5-9abf-3086588794f6",
+      "transaction_date": "2026-03-13",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "968bf645-b697-484c-b041-afe37b74803d",
+      "transaction_date": "2026-03-13",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "045db267-de71-4549-962d-51d5305a948c",
+      "transaction_date": "2026-03-13",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "08d7abd4-a26b-4b10-965c-5ce03383b8bf",
+      "transaction_date": "2026-03-14",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "1c7ca83d-1892-4f70-a750-1c742be33ccb",
+      "transaction_date": "2026-03-14",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "328bc4d6-c45e-4e17-a94d-cad2869a2af9",
+      "transaction_date": "2026-03-14",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "009ee12f-5f46-4b7f-9290-8a9eceecaf2f",
+      "transaction_date": "2026-03-15",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -7
+    },
+    {
+      "id": "94fa725f-b03d-42bd-83b7-a9cb6b5e5ea9",
+      "transaction_date": "2026-03-16",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -4
+    },
+    {
+      "id": "28836457-fcde-45e7-aa16-b80c9619583a",
+      "transaction_date": "2026-03-17",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "626ea757-b95a-486c-86cb-ca6c4957c74a",
+      "transaction_date": "2026-03-17",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "61a932b5-6f74-4b54-b5c3-2f9aee4d8c2d",
+      "transaction_date": "2026-03-17",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "9733727c-f1e5-4ed1-8c7f-1892bb6f89fe",
+      "transaction_date": "2026-03-17",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -16
+    },
+    {
+      "id": "2a89d043-b824-426f-944a-956757fa19f1",
+      "transaction_date": "2026-03-18",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "b970616a-1e7a-4aab-a9ef-c1a3945d713d",
+      "transaction_date": "2026-03-18",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "dd0294cc-bf6d-43ba-9807-6a8c9fa31ae1",
+      "transaction_date": "2026-03-18",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "72a1b543-71e9-47e9-87d7-761e18cd9b1d",
+      "transaction_date": "2026-03-19",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "e4f77d3d-1e46-4b6d-948b-92fe62cf41d3",
+      "transaction_date": "2026-03-19",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "d229d2ab-be03-46b1-a79e-e7f14ef32ca5",
+      "transaction_date": "2026-03-19",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -11
+    },
+    {
+      "id": "0e1036ec-7281-40ee-80d9-1fef1d1c5b02",
+      "transaction_date": "2026-03-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "a9621144-f27e-4bcf-bcba-472091a8f800",
+      "transaction_date": "2026-03-20",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "63b67b62-c7fd-492e-ab79-3df6e5a32c40",
+      "transaction_date": "2026-03-20",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "6626aeea-b6af-480b-ac61-20b5a9ded6b4",
+      "transaction_date": "2026-03-20",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -8
+    },
+    {
+      "id": "2e05c9f1-30c9-46b2-8714-287d38b76a6d",
+      "transaction_date": "2026-03-21",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -6
+    },
+    {
+      "id": "e737156e-adbc-4e98-a1de-e0d06d05857f",
+      "transaction_date": "2026-03-23",
+      "particular": "ZAMBOANGA DELIVERED EMPTY BAG",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": 132
+    },
+    {
+      "id": "8023d2d5-1ed2-4323-b064-72b6e49c3728",
+      "transaction_date": "2026-03-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "c5797f88-2aac-4446-8bad-0d92ba21e7c8",
+      "transaction_date": "2026-03-23",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "5552fc95-6897-4dd4-90a6-b7d3f81544de",
+      "transaction_date": "2026-03-23",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "b794d581-7514-48c0-aa4d-6e8f98bcc3f2",
+      "transaction_date": "2026-03-23",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -12
+    },
+    {
+      "id": "8eb29aa2-ea6c-454d-bf52-cda5ec934df5",
+      "transaction_date": "2026-03-24",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "6cbdac10-5c23-4e95-bff3-7395d5297b45",
+      "transaction_date": "2026-03-24",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "e9a4ffa2-c152-4f40-b8f9-e17481b32657",
+      "transaction_date": "2026-03-24",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "4fdc7cd3-03ce-479f-8841-22740f0ccd95",
+      "transaction_date": "2026-03-24",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "fbea4ea9-5d0b-4cbb-82d1-40da12bdbcb3",
+      "transaction_date": "2026-03-25",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "41a6d987-6459-41b0-8729-403562de2d8b",
+      "transaction_date": "2026-03-25",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "1d9fb360-639d-4994-bf9d-842a6d1b07b0",
+      "transaction_date": "2026-03-25",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "862788f2-36fb-4ac7-928d-c225c6f3194c",
+      "transaction_date": "2026-03-25",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -9
+    },
+    {
+      "id": "3f83a8ac-549a-4a58-8c28-7439a94bacfd",
+      "transaction_date": "2026-03-26",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "70b61c21-b617-4504-931a-ef4f011cdc2e",
+      "transaction_date": "2026-03-26",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "2ad3b659-4998-4ab8-9dd4-80d880c6d2df",
+      "transaction_date": "2026-03-26",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "cd11b41a-a65d-4ebd-bcf8-3f14a5843588",
+      "transaction_date": "2026-03-27",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "39f103ce-16f7-4cf5-83ac-851a0a6e4ff2",
+      "transaction_date": "2026-03-27",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "ab901b9a-581d-434c-9381-afca8a969d74",
+      "transaction_date": "2026-03-27",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -11
+    },
+    {
+      "id": "a14f28be-c22c-4346-a0de-771542930c4d",
+      "transaction_date": "2026-03-28",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "c992f009-2db0-42ba-a4ba-e8d997c6b0c3",
+      "transaction_date": "2026-03-28",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 2
+    },
+    {
+      "id": "640b3925-8271-4ef7-b98a-5aeae8520c32",
+      "transaction_date": "2026-03-28",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -11
+    },
+    {
+      "id": "6f132bc5-d549-4156-bebc-048a3edbe25a",
+      "transaction_date": "2026-03-30",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "598f930e-bd47-4986-b4c8-517edd099a15",
+      "transaction_date": "2026-03-30",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "4d21c660-01c2-41f6-af33-e28588b088de",
+      "transaction_date": "2026-03-30",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -16
+    },
+    {
+      "id": "6fc28cc1-4927-4895-a857-00c0d4a5c858",
+      "transaction_date": "2026-03-30",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "213feca5-9140-4bb8-a65e-ad1071b427c4",
+      "transaction_date": "2026-03-30",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "93aa1f1b-6fb4-4d2a-826b-867434fc5a90",
+      "transaction_date": "2026-03-30",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -32
+    },
+    {
+      "id": "e8e83238-e554-416c-9306-3134c7509a94",
+      "transaction_date": "2026-03-31",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "da6c8393-1959-4d72-8520-3d96428f8236",
+      "transaction_date": "2026-03-31",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "9c2745f9-b43e-4689-ad39-c126b00c0281",
+      "transaction_date": "2026-03-31",
+      "particular": "USED BAG OF SUNDRY",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "453d7e77-3e3b-4303-81af-85788ccf9dfc",
+      "transaction_date": "2026-03-31",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 30
+    },
+    {
+      "id": "ab99e21a-106d-482f-b00f-5eee1104d647",
+      "transaction_date": "2026-03-31",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "0c045953-adbb-4f70-b6b9-5bacd0b4aef6",
+      "transaction_date": "2026-03-31",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -47
+    },
+    {
+      "id": "81e3857d-de07-49dc-a45a-bbd370d406a6",
+      "transaction_date": "2026-04-01",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "e8248418-9e0f-4eac-9e0d-a15b1696fe1c",
+      "transaction_date": "2026-04-01",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 9
+    },
+    {
+      "id": "c4be2fb5-4e41-4ce0-aed2-66583d008e65",
+      "transaction_date": "2026-04-01",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -11
+    },
+    {
+      "id": "45008633-71bf-478b-8f39-14183eb63c2d",
+      "transaction_date": "2026-04-01",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "fcf98066-b865-45e9-90e2-c228531a1a61",
+      "transaction_date": "2026-04-01",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -38
+    },
+    {
+      "id": "767b518d-3607-49d5-a947-d137768030fd",
+      "transaction_date": "2026-04-06",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "417271e3-843f-444d-b3ad-7dcab1392ce6",
+      "transaction_date": "2026-04-06",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "0ac99161-15ad-46f3-aa2a-6e33ae7db79b",
+      "transaction_date": "2026-04-06",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 5
+    },
+    {
+      "id": "92d8eefc-9ed7-4b31-a98c-47d02838249d",
+      "transaction_date": "2026-04-06",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -28
+    },
+    {
+      "id": "056546dd-6c2a-4c2f-8c96-2916428a9488",
+      "transaction_date": "2026-04-06",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "3724e945-1b7b-410b-b848-bef73599953e",
+      "transaction_date": "2026-04-06",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -38
+    },
+    {
+      "id": "d50ac85a-246e-4dbb-9d18-ccfb2d07bb25",
+      "transaction_date": "2026-04-07",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "7ef16ddd-a60d-4854-88f8-7927c3bb5f15",
+      "transaction_date": "2026-04-07",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "0b899ed6-53ca-402d-a7eb-45d4e27240db",
+      "transaction_date": "2026-04-07",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -16
+    },
+    {
+      "id": "8d9be2a8-ac24-4c28-a39a-f0610425a3c1",
+      "transaction_date": "2026-04-07",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 16
+    },
+    {
+      "id": "611cc62a-1680-4710-9e02-f2360f1658b0",
+      "transaction_date": "2026-04-07",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "a0780ba1-4e0f-4821-b14f-2a4db61fe0d9",
+      "transaction_date": "2026-04-07",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -41
+    },
+    {
+      "id": "0f16c32b-ae81-497e-b8e6-99e251fba6dd",
+      "transaction_date": "2026-04-08",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "acd70e6e-db04-40df-87a9-634f167e49c9",
+      "transaction_date": "2026-04-08",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "66d382ec-59f0-4a8c-9ed1-3b8eba785d05",
+      "transaction_date": "2026-04-08",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -14
+    },
+    {
+      "id": "fe172d41-8a21-48bf-98c6-789f40394365",
+      "transaction_date": "2026-04-08",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "a1fdcc0c-89b3-4e9e-9817-7297a6226dfd",
+      "transaction_date": "2026-04-08",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "1e412332-47d3-4cfa-8f76-eab3136942a4",
+      "transaction_date": "2026-04-08",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -43
+    },
+    {
+      "id": "3ad2a47b-0b51-456b-bd14-58f85d7c3ae5",
+      "transaction_date": "2026-04-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "a6c5ec0d-2426-4765-b94f-b10051a4a7c7",
+      "transaction_date": "2026-04-09",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "0708dcdd-1d6f-4a10-8a17-dba6f835f407",
+      "transaction_date": "2026-04-09",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "b0a62be7-4d4d-4b89-9de5-0770c965c912",
+      "transaction_date": "2026-04-09",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "3db64584-b211-441b-99f6-64bf70b0b109",
+      "transaction_date": "2026-04-09",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "6b7fa63b-d8bf-4e4d-ae30-484a118b482e",
+      "transaction_date": "2026-04-09",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -43
+    },
+    {
+      "id": "ebd60f3b-9480-404a-b535-e75693c40990",
+      "transaction_date": "2026-04-10",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "3a8a6e3b-5eb9-4243-b2c0-9d6ab57d0c97",
+      "transaction_date": "2026-04-10",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -11
+    },
+    {
+      "id": "b30803ac-ac26-4ac7-aeb4-077511895200",
+      "transaction_date": "2026-04-10",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "955f918c-9627-4815-8749-c62cd35e8058",
+      "transaction_date": "2026-04-10",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND) (DAMAGED)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -4
+    },
+    {
+      "id": "d626f83a-bd39-474c-923d-b741fb2f9e1d",
+      "transaction_date": "2026-04-10",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND) (DAMAGED)",
+      "bag_type_id": "f395864e-5c7b-4091-bc9e-671cd698561e",
+      "qty_delta": 4
+    },
+    {
+      "id": "619863f8-2050-423f-8973-e67209395671",
+      "transaction_date": "2026-04-10",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -37
+    },
+    {
+      "id": "f52470b4-30af-48d2-8baf-528b2d24e6c0",
+      "transaction_date": "2026-04-13",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "eb84d908-dff8-47dc-a214-65fa14498730",
+      "transaction_date": "2026-04-13",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "0d3f3b0b-03e4-430a-9c27-24c0e0376dd4",
+      "transaction_date": "2026-04-13",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -5
+    },
+    {
+      "id": "4b7e4f38-ca57-4c9a-a940-5d1bf37729ac",
+      "transaction_date": "2026-04-13",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 9
+    },
+    {
+      "id": "ad89cce1-1086-4682-af67-edba43856888",
+      "transaction_date": "2026-04-13",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "da49ae1b-03e8-42db-bb28-5ee6d1ae20b4",
+      "transaction_date": "2026-04-13",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -46
+    },
+    {
+      "id": "bf68cde1-f45b-4ef6-a963-d4cf197f04de",
+      "transaction_date": "2026-04-13",
+      "particular": "ACTUAL COUNTING OF KURARAY",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -16
+    },
+    {
+      "id": "96d969ac-b83b-4e90-bd6b-41075d08be11",
+      "transaction_date": "2026-04-13",
+      "particular": "ACTUAL COUNTING OF KURARAY",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": 16
+    },
+    {
+      "id": "603e4c71-b610-4344-a5ae-c7e86109c349",
+      "transaction_date": "2026-04-13",
+      "particular": "UNACCOUNTED BLACK SLING",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": 19
+    },
+    {
+      "id": "74d3704a-171d-4ea4-9024-14b34ed243a5",
+      "transaction_date": "2026-04-14",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "7dd391cf-3977-4685-be65-84ea31444c63",
+      "transaction_date": "2026-04-14",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "b600dae4-2582-4687-a4ea-8e7529986745",
+      "transaction_date": "2026-04-14",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -20
+    },
+    {
+      "id": "e93738e5-3b09-43ea-b98d-5ed73b78b7c0",
+      "transaction_date": "2026-04-14",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 17
+    },
+    {
+      "id": "0805ec53-0a0c-472f-8f0d-0ba765788464",
+      "transaction_date": "2026-04-14",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "c0b55911-46c3-4698-8240-1be7be29d5d4",
+      "transaction_date": "2026-04-14",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -47
+    },
+    {
+      "id": "a53949b8-0ec1-4bd5-bfbf-ebd534cfd74a",
+      "transaction_date": "2026-04-15",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "fe0ec290-639b-49dd-87aa-882294f0bed9",
+      "transaction_date": "2026-04-15",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "42f676d1-2cef-4b0e-946a-63b1c48fe7ef",
+      "transaction_date": "2026-04-15",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -15
+    },
+    {
+      "id": "8934e25d-7967-4aba-bbe4-a23796c51902",
+      "transaction_date": "2026-04-15",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 5
+    },
+    {
+      "id": "507fe3a5-2000-4281-8d8e-28a068ccca64",
+      "transaction_date": "2026-04-15",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "fab90e6d-07fb-4a1d-b3a1-05341b7d5a01",
+      "qty_delta": -20
+    },
+    {
+      "id": "2c9ea6f9-677f-42c5-bd46-07b4b0cbb04a",
+      "transaction_date": "2026-04-15",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -15
+    },
+    {
+      "id": "0f4ffbc0-3284-435e-97f6-31869e71b72c",
+      "transaction_date": "2026-04-15",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "9adc3e97-9ab5-42d4-b3b6-d4698e5d48cf",
+      "transaction_date": "2026-04-16",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "8eb33da8-7011-4e6d-8fee-8b3defeafb49",
+      "transaction_date": "2026-04-16",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "ee518ce2-3bd1-402a-b0dc-0198f1bd1448",
+      "transaction_date": "2026-04-16",
+      "particular": "RETURNED KURARAY OLD BAG 3X50 (BLEND)",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 4
+    },
+    {
+      "id": "db6c4592-d649-4372-b30b-0396ed43d2f1",
+      "transaction_date": "2026-04-16",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": -9
+    },
+    {
+      "id": "0971e6fe-4593-41cd-aa28-c9e9b5f15a07",
+      "transaction_date": "2026-04-16",
+      "particular": "BAGGED  3X50",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -27
+    },
+    {
+      "id": "72ee3930-cedc-49da-b9b3-74027540369c",
+      "transaction_date": "2026-04-17",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "d40643ae-c789-452e-8153-9b27f328371d",
+      "transaction_date": "2026-04-17",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "05891368-1b41-4bcd-aad3-e00fd9cab2af",
+      "transaction_date": "2026-04-17",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "88465637-3574-482f-a18e-3b5df36c7509",
+      "transaction_date": "2026-04-18",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "98edd230-50a5-4ddc-8df0-49ba21df7c8b",
+      "transaction_date": "2026-04-18",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "9aa7ad48-5f89-423f-b7de-ea5390cbc635",
+      "transaction_date": "2026-04-18",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": -9
+    },
+    {
+      "id": "9aee7f6d-d17d-4a1d-a47b-f5b87f86d6df",
+      "transaction_date": "2026-04-18",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "61c8573a-8800-486c-b370-2bfe849497a8",
+      "qty_delta": -1
+    },
+    {
+      "id": "033dbc38-8550-48aa-ae78-5439090ad16b",
+      "transaction_date": "2026-04-18",
+      "particular": "CEBU INCOMING \"TUNNER BAG\" BEIGE FROM ECOPACK WITH UN MARKINGS",
+      "bag_type_id": "de90c799-c01c-4cc2-be18-f1bcb7bf0335",
+      "qty_delta": 500
+    },
+    {
+      "id": "8966dbb3-bb81-4254-a913-5d3c7091cc20",
+      "transaction_date": "2026-04-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "f5d1698d-7ded-47c9-aaa9-e2aafcc8b138",
+      "transaction_date": "2026-04-20",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "5edc8d52-8562-466e-b3f6-f8069c69a5e1",
+      "transaction_date": "2026-04-20",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "907fffd2-ca7f-40c3-8fd1-88bb1c420cbc",
+      "transaction_date": "2026-04-20",
+      "particular": "USED BAG OF SUNDRY \"SELECTED DRY  RC SEVILLA \"",
+      "bag_type_id": "61c8573a-8800-486c-b370-2bfe849497a8",
+      "qty_delta": -4
+    },
+    {
+      "id": "08442bf4-35e8-4f5b-ae36-9affe42d2f06",
+      "transaction_date": "2026-04-21",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "afc517ef-13e8-4235-92a5-458f177480cf",
+      "transaction_date": "2026-04-21",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "81f3bf02-46f0-4628-8311-a8332c8a55e7",
+      "transaction_date": "2026-04-22",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "6b75190c-5da2-4338-b22a-e2a29da71e6b",
+      "transaction_date": "2026-04-22",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "72ca78f9-b748-4826-b1ba-e718a0bfc381",
+      "transaction_date": "2026-04-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "0083827e-3dee-4761-8997-075f66061416",
+      "transaction_date": "2026-04-23",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "bda7100f-ae81-4bf1-86f6-49e1d8af471b",
+      "transaction_date": "2026-04-24",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "0f8beaff-e528-4388-b073-7f92538a02e7",
+      "transaction_date": "2026-04-24",
+      "particular": "RETURNED BAG 2x6 \"OLD STOCK\"",
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "qty_delta": 1
+    },
+    {
+      "id": "7df5fb25-f6ec-4339-a906-92ff6b0cccef",
+      "transaction_date": "2026-04-25",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "bdd2f1f2-7e3c-4aba-8ef8-be739cef54b2",
+      "transaction_date": "2026-04-27",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 10
+    },
+    {
+      "id": "a0df5d51-66f0-4394-8df1-a37033d55b89",
+      "transaction_date": "2026-04-28",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "64cc1710-615b-4491-addb-e74967fba06c",
+      "transaction_date": "2026-04-28",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "d9263d32-dca5-4a6a-a0e2-328f0f2df383",
+      "transaction_date": "2026-04-29",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "98dc9305-69a1-4bdc-8dc8-dac70e524d08",
+      "transaction_date": "2026-04-29",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "798cd639-007a-419e-9b41-ac17e64beb0c",
+      "transaction_date": "2026-04-30",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 16
+    },
+    {
+      "id": "56046ebe-a5c4-4e0d-a20d-0e912dc38fb3",
+      "transaction_date": "2026-05-04",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "e4f6ccb2-d04c-456a-b8b3-e476275795de",
+      "transaction_date": "2026-05-04",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "a2eef0ad-c116-4e74-b914-f66bda4c7069",
+      "transaction_date": "2026-05-05",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "405cf879-f0d0-45b9-a468-3f9e6719c1f3",
+      "transaction_date": "2026-05-05",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "b409c62e-4b53-4070-862e-279add62881b",
+      "transaction_date": "2026-05-05",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "b48f4787-6c39-4b1e-8685-579c1c1266a1",
+      "transaction_date": "2026-05-06",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "09680e2f-e573-4853-a710-e47b7ab96633",
+      "transaction_date": "2026-05-06",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "e4b9337d-621f-4d7b-a1ab-20a6242e48a0",
+      "transaction_date": "2026-05-06",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "319c56a8-7a6e-4349-b536-159550752612",
+      "transaction_date": "2026-05-07",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "14b08a68-1c0b-413f-8efc-c4fef35a7743",
+      "transaction_date": "2026-05-07",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "64c47a1b-618b-4db4-9ce2-f0e3a808bf45",
+      "transaction_date": "2026-05-07",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "3e552745-54c1-4f6a-97a7-f5ca3b9b8971",
+      "transaction_date": "2026-05-07",
+      "particular": "CEBU IN COMING",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 120
+    },
+    {
+      "id": "9e189ce0-9063-48f1-a419-860279e09e05",
+      "transaction_date": "2026-05-08",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 14
+    },
+    {
+      "id": "a08779d9-0460-4fb5-8117-dd30393eb812",
+      "transaction_date": "2026-05-08",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "ed80a4c3-dbf1-4bb4-ac98-0bfd0de3c58b",
+      "transaction_date": "2026-05-08",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "2bcd9d2e-3e4a-49c8-8108-850535579054",
+      "transaction_date": "2026-05-09",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "c1d23102-f225-40f1-a917-1832ceb65bc2",
+      "transaction_date": "2026-05-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "9e44839d-b9b5-4f1e-9404-8faebd5bae5f",
+      "transaction_date": "2026-05-09",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "e625514e-fdb9-4807-81e9-b548348b0a30",
+      "transaction_date": "2026-05-09",
+      "particular": "ZAMBOANGA DELIVERED EMPTY BAG",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": 64
+    },
+    {
+      "id": "e944e59c-47b1-431e-8ece-84276df1707a",
+      "transaction_date": "2026-05-11",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 21
+    },
+    {
+      "id": "675e38dc-b422-4fda-af89-e6262eb9bc80",
+      "transaction_date": "2026-05-11",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "ef08689c-fa1f-4cc2-a881-4344841388d7",
+      "transaction_date": "2026-05-11",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "d361d495-7eea-41eb-9654-801d387b8196",
+      "transaction_date": "2026-05-11",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -5
+    },
+    {
+      "id": "c37b9687-8dcf-4377-95ab-71446bd1a53e",
+      "transaction_date": "2026-05-12",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 25
+    },
+    {
+      "id": "3b1b288a-c0a9-43d3-958a-ce1d58faae0c",
+      "transaction_date": "2026-05-12",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "052482f5-48ce-4047-9db2-ca7f73ee613a",
+      "transaction_date": "2026-05-12",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "d9e85009-c0c7-4ff4-a9b0-3d0b06cc8f32",
+      "transaction_date": "2026-05-12",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -12
+    },
+    {
+      "id": "50e3a6bc-c700-4d05-917d-4651bf8868c3",
+      "transaction_date": "2026-05-13",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 30
+    },
+    {
+      "id": "fb083e62-8564-41a7-aeaf-e4580b8a1717",
+      "transaction_date": "2026-05-13",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "567bda91-354a-4f2a-b4e5-e79275dbe1b8",
+      "transaction_date": "2026-05-13",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "935f165b-3987-4318-9834-1940c1f94b08",
+      "transaction_date": "2026-05-13",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -12
+    },
+    {
+      "id": "8171c4bd-4565-4771-a1e2-6fbd7aa61693",
+      "transaction_date": "2026-05-14",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "ab5e8a07-513f-46f5-92ef-d73337db0a4a",
+      "transaction_date": "2026-05-14",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "739680d0-2ab0-475b-ba5b-5ae4728e09fd",
+      "transaction_date": "2026-05-14",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "5ac49b41-a785-464f-9eb1-b03a48a25c8f",
+      "transaction_date": "2026-05-14",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -9
+    },
+    {
+      "id": "5f83139b-26f7-4c71-a003-5794fbe167ab",
+      "transaction_date": "2026-05-15",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 29
+    },
+    {
+      "id": "3c6ab858-b8dc-493e-a84f-b50f4e5dac04",
+      "transaction_date": "2026-05-15",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "3accd84f-cac6-4265-8612-fc045e597a90",
+      "transaction_date": "2026-05-15",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "dde98b36-a0d0-4c36-8eb9-a45ed1fabaf6",
+      "transaction_date": "2026-05-15",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "ffb0bf27-1dbc-4e3a-b2c8-be5a08af4bb8",
+      "transaction_date": "2026-05-18",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 20
+    },
+    {
+      "id": "85e45b3a-c1da-4dec-8967-c3949e0fe3ec",
+      "transaction_date": "2026-05-18",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "7943a58c-f1ff-4ea0-b774-a2bd7c05f463",
+      "transaction_date": "2026-05-18",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "246e7c26-fb88-4e29-bc9b-ae470c52ffd5",
+      "transaction_date": "2026-05-18",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "69e8cd5f-83f5-495a-b0e7-d8d2ee3a64eb",
+      "transaction_date": "2026-05-19",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "93a6c112-0a11-4326-8b24-a80f147cc82c",
+      "transaction_date": "2026-05-19",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "80f1114f-a583-4ed7-8279-0d72e8251078",
+      "transaction_date": "2026-05-19",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "9482ccbf-53ce-4cf9-bd8c-c4ed19761707",
+      "transaction_date": "2026-05-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "8243ad6b-1715-4969-9eee-0ecab32554c8",
+      "transaction_date": "2026-05-20",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "e6854f9a-3b66-4a98-8e66-90a6b5a6b1a6",
+      "transaction_date": "2026-05-20",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "f79f5ce9-24a1-4a54-82c2-dae0e3378d16",
+      "transaction_date": "2026-05-21",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "7a8b5e79-72d5-4512-a185-1e094058e907",
+      "transaction_date": "2026-05-21",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "db91e82e-8f80-4d3b-8eec-8d7589ec6285",
+      "transaction_date": "2026-05-21",
+      "particular": "RS 1 ZAMBOANGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "489fb2e7-e3fe-4f3e-8b6e-c2096bcb3f99",
+      "transaction_date": "2026-05-22",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "19b7a72e-4d9b-4eb8-83b1-004fe744297f",
+      "transaction_date": "2026-05-22",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "741486c7-02ec-4c5d-a7e2-4f8ddb3400cf",
+      "transaction_date": "2026-05-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "74f786df-e8ae-4d65-a20f-890046fc9be0",
+      "transaction_date": "2026-05-23",
+      "particular": "BAGGED 6X50",
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "qty_delta": -14
+    },
+    {
+      "id": "e1f34866-8e1f-4648-8dc5-a6c9bf6c5713",
+      "transaction_date": "2026-05-25",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "e30b424f-78cc-4980-8b94-07e2d3a47e81",
+      "transaction_date": "2026-05-25",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "5112cb24-c952-4593-9cc2-8eedc7518f95",
+      "transaction_date": "2026-05-26",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "3e62a154-0a52-4fbd-b288-2d39a27aea5e",
+      "transaction_date": "2026-05-26",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -7
+    },
+    {
+      "id": "58ab7299-9f40-4d13-a254-7cf166128848",
+      "transaction_date": "2026-05-27",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "f30fffc3-5387-46eb-8aeb-22bead1c699e",
+      "transaction_date": "2026-05-27",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "9b6c6408-52c3-4e26-8152-2f8894fb4ac8",
+      "transaction_date": "2026-05-27",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 15
+    },
+    {
+      "id": "cd933fdf-8fc8-499f-8e14-36fc312c88d2",
+      "transaction_date": "2026-05-27",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "61c8573a-8800-486c-b370-2bfe849497a8",
+      "qty_delta": 5
+    },
+    {
+      "id": "d3bea3f2-ecf6-40a5-84ca-756aa18241b1",
+      "transaction_date": "2026-05-28",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "4be9d64e-b6f2-4257-ae4e-6a286b4357b9",
+      "transaction_date": "2026-05-28",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -8
+    },
+    {
+      "id": "761c5cc7-1d9d-4b82-9625-fb34089fab4d",
+      "transaction_date": "2026-05-28",
+      "particular": "SUNDRY FEEDING HINUBO",
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "qty_delta": 30
+    },
+    {
+      "id": "71bb72f6-f7ec-4765-b9df-b2125a0f0976",
+      "transaction_date": "2026-05-29",
+      "particular": "ZAMBOANGA DELIVERED EMPTY BAG",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": 96
+    },
+    {
+      "id": "e971ec36-5163-478d-b00e-d244e1b71a08",
+      "transaction_date": "2026-05-29",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "f2e67951-9ca7-4e42-86ed-5e06bf5231e6",
+      "transaction_date": "2026-05-29",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "d2f85892-7277-4b43-874f-33751d5ad9e9",
+      "transaction_date": "2026-06-01",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "9120c145-e4da-4268-9c6a-a79508973f2c",
+      "transaction_date": "2026-06-02",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "2768c3d9-d419-4a68-8704-5c1f55e9169a",
+      "transaction_date": "2026-06-02",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -5
+    },
+    {
+      "id": "fcda50da-d993-47f7-a4a8-0f0b046e8417",
+      "transaction_date": "2026-06-03",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "db7f0dd3-f27e-4189-817a-c2d663309ceb",
+      "transaction_date": "2026-06-03",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "0b265967-f1c6-438c-92a1-a282e5ab1f31",
+      "transaction_date": "2026-06-04",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "648738ae-abab-4751-b18d-06ff4df91b67",
+      "transaction_date": "2026-06-04",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "96f5a816-844d-43b2-bd8c-131dcb83d1fc",
+      "transaction_date": "2026-06-05",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "4f059204-60c4-47e8-853d-fe58357d4838",
+      "transaction_date": "2026-06-09",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "832824bd-1aa5-4cdf-a55a-0880cca5896c",
+      "transaction_date": "2026-06-09",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "850a9b23-2275-407a-aa33-ab4f3aba891b",
+      "transaction_date": "2026-06-10",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "b62c563e-5a38-454d-b4e6-a3ddc437115c",
+      "transaction_date": "2026-06-10",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "bdafc984-c551-4dc6-86af-cccf973533a3",
+      "transaction_date": "2026-06-11",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "d2c818a3-6cff-47c9-9e47-d6a744e94ba0",
+      "transaction_date": "2026-06-11",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "89231bad-110b-4458-b9cc-9bc2bdd8efa1",
+      "transaction_date": "2026-06-12",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "724c26bf-41b6-4807-91b7-4a77a14bdfd3",
+      "transaction_date": "2026-06-12",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "ac7c9411-808d-48a9-a509-c8d9167645a2",
+      "transaction_date": "2026-06-15",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "21244c49-710c-4009-ab13-f48369ca9247",
+      "transaction_date": "2026-06-16",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "cb3f40f2-57d9-4b6d-81b1-91473392f9c0",
+      "transaction_date": "2026-06-17",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "1afe5515-fee7-4b86-a12d-1150786ec81e",
+      "transaction_date": "2026-06-17",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -2
+    },
+    {
+      "id": "e9c41492-3f3c-48c7-babc-2b03184e4635",
+      "transaction_date": "2026-06-18",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -3
+    },
+    {
+      "id": "4df40f3e-887f-4268-a021-5097b6c9399e",
+      "transaction_date": "2026-06-19",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -6
+    },
+    {
+      "id": "da7c9e2d-c49d-43ea-b27a-27c3c8d96999",
+      "transaction_date": "2026-06-19",
+      "particular": "CEBU INCOMING",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": 81
+    },
+    {
+      "id": "89cb8d9a-8bec-4db8-a155-aac269b6b737",
+      "transaction_date": "2026-06-20",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "2da71a8c-44c8-4fc8-8e0d-8a2b444c78bd",
+      "transaction_date": "2026-06-20",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "19764e4c-1f94-4e2a-8182-1b9231374c96",
+      "transaction_date": "2026-06-22",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "901a17fd-4683-400e-8e7b-1d3d0d0e5245",
+      "transaction_date": "2026-06-22",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "5482b447-8577-4244-b2db-4186755e8611",
+      "transaction_date": "2026-06-22",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -6
+    },
+    {
+      "id": "a8955b42-ee7a-42bf-84cc-7701fb72748a",
+      "transaction_date": "2026-06-23",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "4c4668a6-24e2-4d92-bcd0-5dfc789986f9",
+      "transaction_date": "2026-06-23",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "d9f08ee3-1f4c-4602-a726-8f214f4770bf",
+      "transaction_date": "2026-06-23",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -8
+    },
+    {
+      "id": "149ad69d-a9f0-4493-b7ef-5758553fae0e",
+      "transaction_date": "2026-06-24",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "d278ff44-7d7c-404e-bd88-81ec48a5e2f0",
+      "transaction_date": "2026-06-24",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "1dd876ee-ac59-42d5-888b-109bdfb718f6",
+      "transaction_date": "2026-06-24",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -9
+    },
+    {
+      "id": "ab744e69-9b88-495d-8e5b-93f52b68d2e2",
+      "transaction_date": "2026-06-24",
+      "particular": "5X9 SEGREGATION",
+      "bag_type_id": "f395864e-5c7b-4091-bc9e-671cd698561e",
+      "qty_delta": -6
+    },
+    {
+      "id": "639fa1df-e616-44fc-8559-d990aa4c74ec",
+      "transaction_date": "2026-06-25",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "10460256-8c02-4bf5-80d2-6fe7660b7cf3",
+      "transaction_date": "2026-06-25",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "73c9e120-cb72-46b9-8fcf-03af012b542a",
+      "transaction_date": "2026-06-25",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -8
+    },
+    {
+      "id": "beb900f1-bc2b-4a06-a7fc-d5a60f3c4c10",
+      "transaction_date": "2026-06-26",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "b0279946-d9fc-4183-888c-84bf01d8b88f",
+      "transaction_date": "2026-06-26",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "87c22cf4-333f-4cec-b2c1-7b76334fe389",
+      "transaction_date": "2026-06-26",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -13
+    },
+    {
+      "id": "315f4361-6e1f-43d6-aff8-f58f1ffcdbce",
+      "transaction_date": "2026-06-27",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "6fedb6c3-c266-407f-b3d5-2f42a5376977",
+      "transaction_date": "2026-06-27",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "b9cf7196-b29a-4498-a3d5-12ea56ec3926",
+      "transaction_date": "2026-06-27",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -15
+    },
+    {
+      "id": "210f693b-70dd-4fc7-89e3-2916508a9ac2",
+      "transaction_date": "2026-06-27",
+      "particular": "CEBU INCOMING",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": 100
+    },
+    {
+      "id": "39219a3f-5f0c-4b93-aea0-af2da8bfd99c",
+      "transaction_date": "2026-06-27",
+      "particular": "RETURNED BAG FROM TIMBOL (4X8)",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": 1
+    },
+    {
+      "id": "44c65aa4-6e63-460e-bd01-c402a03d59ce",
+      "transaction_date": "2026-06-29",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "d97aca0a-4b99-4e50-826a-267961602087",
+      "transaction_date": "2026-06-29",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "f4ebe860-3f30-4e09-8028-9b7c739c6289",
+      "transaction_date": "2026-06-29",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -11
+    },
+    {
+      "id": "9d199484-38c2-426f-a146-2fc4537d2eb3",
+      "transaction_date": "2026-06-30",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -1
+    },
+    {
+      "id": "f30cc75c-41a0-489d-b455-5d8dea7747c1",
+      "transaction_date": "2026-06-30",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "21ace9df-d730-4641-82ee-db5cd80420bf",
+      "transaction_date": "2026-06-30",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -13
+    },
+    {
+      "id": "6bf2657a-69bb-4fb7-9416-a352201995d0",
+      "transaction_date": "2026-07-01",
+      "particular": "BAGGED POWDER",
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "qty_delta": -2
+    },
+    {
+      "id": "066eed64-3d89-44e9-a7f7-1afc08fc25cc",
+      "transaction_date": "2026-07-01",
+      "particular": "RS 1 ZAMBAONGA",
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "qty_delta": -4
+    },
+    {
+      "id": "cb5e6ed6-811b-45a8-af25-c32948cc05be",
+      "transaction_date": "2026-07-01",
+      "particular": "BAGGED 4X8",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": -14
+    },
+    {
+      "id": "a6d1946b-31f5-48d5-9617-2878f6fead1c",
+      "transaction_date": "2026-07-01",
+      "particular": "RETURNED BAG FROM TIMBOL (4X8)",
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "qty_delta": 1
+    }
+  ],
+  "bag_types": [
+    {
+      "id": "36e64280-f3d1-4f70-90f7-a6eb9eb65f87",
+      "code": "UNUSABLE"
+    },
+    {
+      "id": "98b43bd8-b69b-42db-87e1-f2d7dc2e6c06",
+      "code": "FUTAMURA_550"
+    },
+    {
+      "id": "78909301-2d83-457f-85f0-dd18016c9ffd",
+      "code": "KOREA_550_BEIGE"
+    },
+    {
+      "id": "b425153b-f3e8-4fcb-a8d4-7874c98f0288",
+      "code": "KOREA_500"
+    },
+    {
+      "id": "fab90e6d-07fb-4a1d-b3a1-05341b7d5a01",
+      "code": "KURARAY_590_NEW"
+    },
+    {
+      "id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "code": "KURARAY_RETURN"
+    },
+    {
+      "id": "ad337cca-6560-4e38-a041-0f89f59ed11d",
+      "code": "PLASTIC_LINER"
+    },
+    {
+      "id": "ee0ef3c7-afea-4ab9-b0e0-73e4256437a0",
+      "code": "ECOPACK_BEIGE"
+    },
+    {
+      "id": "de90c799-c01c-4cc2-be18-f1bcb7bf0335",
+      "code": "TUNNER_BAG"
+    },
+    {
+      "id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "code": "FG_BLACK_SLING_6X50"
+    },
+    {
+      "id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "code": "FG_ALL_BLACK"
+    },
+    {
+      "id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "code": "KOREA_WHITE"
+    },
+    {
+      "id": "2af637e1-0a31-4f0e-833c-02aebde454a0",
+      "code": "MAEHATA_580"
+    },
+    {
+      "id": "ef675d5f-3383-419b-afd6-f4b4aa4415c7",
+      "code": "KURARAY_590"
+    },
+    {
+      "id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "code": "SMALL_MOUTH_LOCAL_WHITE"
+    },
+    {
+      "id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "code": "KOREA_WHITE_SUNDRY"
+    },
+    {
+      "id": "b626b02e-6b6f-4af5-8d93-e96deb6cf499",
+      "code": "KOREA_550_POWDER"
+    },
+    {
+      "id": "61c8573a-8800-486c-b370-2bfe849497a8",
+      "code": "BEIGE_BAG_SUNDRY"
+    },
+    {
+      "id": "ac038f64-9aef-4054-8566-b40d96c95de8",
+      "code": "BW_SUNDRY_OLD_STOCK"
+    },
+    {
+      "id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "code": "ZAMBOANGA_BAG"
+    },
+    {
+      "id": "e6a71a15-0c7a-4c45-b20c-5c391286a3c3",
+      "code": "OLD_STOCKS"
+    },
+    {
+      "id": "f395864e-5c7b-4091-bc9e-671cd698561e",
+      "code": "DAMAGED_BAGS"
+    }
+  ],
+  "bag_type_registry": [
+    {
+      "code": "UNUSABLE",
+      "source_label": "Un-usable bag",
+      "source_column": "D",
+      "sort_order": 2,
+      "label": "Un-usable bag"
+    },
+    {
+      "code": "FUTAMURA_550",
+      "source_label": "550 kls (Futamura)",
+      "source_column": "E",
+      "sort_order": 3,
+      "label": "550 kls (Futamura)"
+    },
+    {
+      "code": "KOREA_550_BEIGE",
+      "source_label": "550 kls (Korea) Beige",
+      "source_column": "F",
+      "sort_order": 4,
+      "label": "550 kls (Korea) Beige"
+    },
+    {
+      "code": "KOREA_500",
+      "source_label": "500 kls (Korea)",
+      "source_column": "G",
+      "sort_order": 5,
+      "label": "500 kls (Korea)"
+    },
+    {
+      "code": "KURARAY_590_NEW",
+      "source_label": "590 kls (Kuraray) brandnew",
+      "source_column": "H",
+      "sort_order": 6,
+      "label": "590 kls (Kuraray) brand-new"
+    },
+    {
+      "code": "KURARAY_RETURN",
+      "source_label": "kuraray (Re-turn bag)",
+      "source_column": "I",
+      "sort_order": 7,
+      "label": "Kuraray (return bag)"
+    },
+    {
+      "code": "PLASTIC_LINER",
+      "source_label": "Plastic Liner 78x130x15 mm",
+      "source_column": "J",
+      "sort_order": 8,
+      "label": "Plastic Liner (78x130x15mm)"
+    },
+    {
+      "code": "ECOPACK_BEIGE",
+      "source_label": "Ecopack Beige 90x90x125",
+      "source_column": "K",
+      "sort_order": 9,
+      "label": "Ecopack Beige (90x90x125)"
+    },
+    {
+      "code": "TUNNER_BAG",
+      "source_label": "Ecopack Beige Tunner Bag",
+      "source_column": "L",
+      "sort_order": 10,
+      "label": "Ecopack Beige / Tunner Bag (UN markings)"
+    },
+    {
+      "code": "FG_BLACK_SLING_6X50",
+      "source_label": "6X50 FG w/ Black Sling",
+      "source_column": "M",
+      "sort_order": 11,
+      "label": "FG w/ Black Sling (6X50)"
+    },
+    {
+      "code": "FG_ALL_BLACK",
+      "source_label": "FG All Black",
+      "source_column": "N",
+      "sort_order": 12,
+      "label": "FG All Black (4X8)"
+    },
+    {
+      "code": "KOREA_WHITE",
+      "source_label": "Korea (White)",
+      "source_column": "O",
+      "sort_order": 13,
+      "label": "Korea (White)"
+    },
+    {
+      "code": "MAEHATA_580",
+      "source_label": "8X50 580 kls (Maehata)",
+      "source_column": "P",
+      "sort_order": 14,
+      "label": "580 kls (Maehata) (8X50)"
+    },
+    {
+      "code": "KURARAY_590",
+      "source_label": "590 kls (Kuraray)",
+      "source_column": "C",
+      "sort_order": 1,
+      "label": "590 kls (Kuraray)"
+    },
+    {
+      "code": "SMALL_MOUTH_LOCAL_WHITE",
+      "source_label": "Small Mouth Local (White)",
+      "source_column": "Q",
+      "sort_order": 15,
+      "label": "Small Mouth / Local (White)"
+    },
+    {
+      "code": "KOREA_WHITE_SUNDRY",
+      "source_label": "Korea White Sundry Big Opening",
+      "source_column": "R",
+      "sort_order": 16,
+      "label": "Korea White Sundry (Big Opening)"
+    },
+    {
+      "code": "KOREA_550_POWDER",
+      "source_label": "550 (Korea) Biege & white Powder",
+      "source_column": "S",
+      "sort_order": 17,
+      "label": "550 Korea Beige & White (Powder)"
+    },
+    {
+      "code": "BEIGE_BAG_SUNDRY",
+      "source_label": "Beige Bag Sundry",
+      "source_column": "T",
+      "sort_order": 18,
+      "label": "Beige Bag (Sundry)"
+    },
+    {
+      "code": "BW_SUNDRY_OLD_STOCK",
+      "source_label": "Black/White Sundry Old Stock",
+      "source_column": "U",
+      "sort_order": 19,
+      "label": "Black/White Sundry (Old Stock)"
+    },
+    {
+      "code": "ZAMBOANGA_BAG",
+      "source_label": "Zamboanga Bag",
+      "source_column": "V",
+      "sort_order": 20,
+      "label": "Zamboanga Bag"
+    },
+    {
+      "code": "OLD_STOCKS",
+      "source_label": "from Old Stocks",
+      "source_column": "W",
+      "sort_order": 21,
+      "label": "From Old Stocks"
+    },
+    {
+      "code": "DAMAGED_BAGS",
+      "source_label": "Damaged Bags",
+      "source_column": "X",
+      "sort_order": 22,
+      "label": "Damaged Bags"
+    }
+  ],
+  "view_balance": [
+    {
+      "bag_type_id": "ac038f64-9aef-4054-8566-b40d96c95de8",
+      "code": "BW_SUNDRY_OLD_STOCK",
+      "label": "Black/White Sundry (Old Stock)",
+      "nickname": null,
+      "sort_order": 19,
+      "opening": 2,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 2,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "e6a71a15-0c7a-4c45-b20c-5c391286a3c3",
+      "code": "OLD_STOCKS",
+      "label": "From Old Stocks",
+      "nickname": null,
+      "sort_order": 21,
+      "opening": 30,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 30,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "b626b02e-6b6f-4af5-8d93-e96deb6cf499",
+      "code": "KOREA_550_POWDER",
+      "label": "550 Korea Beige & White (Powder)",
+      "nickname": null,
+      "sort_order": 17,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "36e64280-f3d1-4f70-90f7-a6eb9eb65f87",
+      "code": "UNUSABLE",
+      "label": "Un-usable bag",
+      "nickname": null,
+      "sort_order": 2,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "f395864e-5c7b-4091-bc9e-671cd698561e",
+      "code": "DAMAGED_BAGS",
+      "label": "Damaged Bags",
+      "nickname": null,
+      "sort_order": 22,
+      "opening": 0,
+      "total_in": 8,
+      "total_out": 6,
+      "balance": 2,
+      "last_movement_date": "2026-06-24"
+    },
+    {
+      "bag_type_id": "728b626f-d34c-4a31-be18-d4b1ac3f62b1",
+      "code": "SMALL_MOUTH_LOCAL_WHITE",
+      "label": "Small Mouth / Local (White)",
+      "nickname": null,
+      "sort_order": 15,
+      "opening": 385,
+      "total_in": 0,
+      "total_out": 127,
+      "balance": 258,
+      "last_movement_date": "2026-07-02"
+    },
+    {
+      "bag_type_id": "b425153b-f3e8-4fcb-a8d4-7874c98f0288",
+      "code": "KOREA_500",
+      "label": "500 kls (Korea)",
+      "nickname": null,
+      "sort_order": 5,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "eaa5c491-df26-416e-8fea-fb6204afc946",
+      "code": "ZAMBOANGA_BAG",
+      "label": "Zamboanga Bag",
+      "nickname": null,
+      "sort_order": 20,
+      "opening": 98,
+      "total_in": 388,
+      "total_out": 569,
+      "balance": -83,
+      "last_movement_date": "2026-07-02"
+    },
+    {
+      "bag_type_id": "ef675d5f-3383-419b-afd6-f4b4aa4415c7",
+      "code": "KURARAY_590",
+      "label": "590 kls (Kuraray)",
+      "nickname": null,
+      "sort_order": 1,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "d57aec2e-1611-403e-994c-dee7196b8b70",
+      "code": "KURARAY_RETURN",
+      "label": "Kuraray (return bag)",
+      "nickname": null,
+      "sort_order": 7,
+      "opening": 340,
+      "total_in": 123,
+      "total_out": 456,
+      "balance": 7,
+      "last_movement_date": "2026-04-24"
+    },
+    {
+      "bag_type_id": "22c46041-34e5-498e-b5b8-e460735959ff",
+      "code": "KOREA_WHITE",
+      "label": "Korea (White)",
+      "nickname": null,
+      "sort_order": 13,
+      "opening": 25,
+      "total_in": 0,
+      "total_out": 25,
+      "balance": 0,
+      "last_movement_date": "2026-02-09"
+    },
+    {
+      "bag_type_id": "78909301-2d83-457f-85f0-dd18016c9ffd",
+      "code": "KOREA_550_BEIGE",
+      "label": "550 kls (Korea) Beige",
+      "nickname": null,
+      "sort_order": 4,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "61c8573a-8800-486c-b370-2bfe849497a8",
+      "code": "BEIGE_BAG_SUNDRY",
+      "label": "Beige Bag (Sundry)",
+      "nickname": null,
+      "sort_order": 18,
+      "opening": 14,
+      "total_in": 5,
+      "total_out": 5,
+      "balance": 14,
+      "last_movement_date": "2026-05-27"
+    },
+    {
+      "bag_type_id": "de90c799-c01c-4cc2-be18-f1bcb7bf0335",
+      "code": "TUNNER_BAG",
+      "label": "Ecopack Beige / Tunner Bag (UN markings)",
+      "nickname": null,
+      "sort_order": 10,
+      "opening": 0,
+      "total_in": 500,
+      "total_out": 0,
+      "balance": 500,
+      "last_movement_date": "2026-04-18"
+    },
+    {
+      "bag_type_id": "fc791de2-535d-4ddb-88ec-a97b52a66a23",
+      "code": "FG_BLACK_SLING_6X50",
+      "label": "FG w/ Black Sling (6X50)",
+      "nickname": null,
+      "sort_order": 11,
+      "opening": 207,
+      "total_in": 175,
+      "total_out": 328,
+      "balance": 54,
+      "last_movement_date": "2026-05-23"
+    },
+    {
+      "bag_type_id": "2af637e1-0a31-4f0e-833c-02aebde454a0",
+      "code": "MAEHATA_580",
+      "label": "580 kls (Maehata) (8X50)",
+      "nickname": null,
+      "sort_order": 14,
+      "opening": 507,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 507,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "fab90e6d-07fb-4a1d-b3a1-05341b7d5a01",
+      "code": "KURARAY_590_NEW",
+      "label": "590 kls (Kuraray) brand-new",
+      "nickname": null,
+      "sort_order": 6,
+      "opening": 20,
+      "total_in": 0,
+      "total_out": 20,
+      "balance": 0,
+      "last_movement_date": "2026-04-15"
+    },
+    {
+      "bag_type_id": "7c3ea3d0-98a9-467b-9051-19f5d1487e33",
+      "code": "KOREA_WHITE_SUNDRY",
+      "label": "Korea White Sundry (Big Opening)",
+      "nickname": null,
+      "sort_order": 16,
+      "opening": 89,
+      "total_in": 1203,
+      "total_out": 801,
+      "balance": 491,
+      "last_movement_date": "2026-05-28"
+    },
+    {
+      "bag_type_id": "1652749b-abb9-4aaf-bab3-ca47c1b5e99b",
+      "code": "FG_ALL_BLACK",
+      "label": "FG All Black (4X8)",
+      "nickname": null,
+      "sort_order": 12,
+      "opening": 108,
+      "total_in": 183,
+      "total_out": 210,
+      "balance": 81,
+      "last_movement_date": "2026-07-02"
+    },
+    {
+      "bag_type_id": "ee0ef3c7-afea-4ab9-b0e0-73e4256437a0",
+      "code": "ECOPACK_BEIGE",
+      "label": "Ecopack Beige (90x90x125)",
+      "nickname": null,
+      "sort_order": 9,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "98b43bd8-b69b-42db-87e1-f2d7dc2e6c06",
+      "code": "FUTAMURA_550",
+      "label": "550 kls (Futamura)",
+      "nickname": null,
+      "sort_order": 3,
+      "opening": 0,
+      "total_in": 0,
+      "total_out": 0,
+      "balance": 0,
+      "last_movement_date": null
+    },
+    {
+      "bag_type_id": "ad337cca-6560-4e38-a041-0f89f59ed11d",
+      "code": "PLASTIC_LINER",
+      "label": "Plastic Liner (78x130x15mm)",
+      "nickname": null,
+      "sort_order": 8,
+      "opening": 0,
+      "total_in": 600,
+      "total_out": 0,
+      "balance": 600,
+      "last_movement_date": "2026-03-10"
+    }
+  ]
+}

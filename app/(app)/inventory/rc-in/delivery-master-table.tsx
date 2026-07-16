@@ -4,15 +4,15 @@
 import * as React from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useTableSettings } from '@/components/providers/table-settings';
-import { useAuth, UserRole } from '@/components/providers/auth-context';
-import { Slider } from '@/components/ui/slider';
-import { Label } from '@/components/ui/label';
+import { useAuth } from '@/components/providers/auth-context';
 import {
-    ColumnDef,
-    ColumnFiltersState,
-    SortingState,
+    type ColumnDef,
+    type ColumnFiltersState,
+    type SortingState,
+    type ColumnSizingState,
     flexRender,
     getCoreRowModel,
     getFilteredRowModel,
@@ -21,26 +21,37 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { ArrowUpDown, ChevronsUpDown, Search, MoreHorizontal, Pencil, Trash2, MessageSquareText, Plus, Settings, X, Loader2, Clock, SlidersHorizontal } from 'lucide-react';
+import {
+    ArrowUpDown,
+    ArrowUp,
+    ArrowDown,
+    Search,
+    Pencil,
+    Trash2,
+    Plus,
+    X,
+    Loader2,
+    SlidersHorizontal,
+    RefreshCw,
+    FileText,
+    Filter,
+    ChevronDown,
+    ChevronRight,
+    CheckSquare,
+    Copy,
+    Check,
+    Square,
+    Bold,
+    Italic,
+    Underline,
+    EyeOff,
+    RotateCcw,
+    Sigma,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import {
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-    TableFooter,
-} from '@/components/ui/table';
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+// Shadcn table components not used — using raw HTML elements for density control
 import {
     Dialog,
     DialogContent,
@@ -68,93 +79,192 @@ import {
     TooltipProvider,
 } from '@/components/ui/tooltip';
 import { deleteDelivery, bulkDeleteDeliveries } from './actions';
-import { calculateWhse } from '@/lib/rc-utils';
+
 import type { DeliveryHistoryRow } from '@/types/rc-in';
+import { formatCompact } from '@/lib/format-utils';
+import type { DensityMode, LabMetric } from '@/types/table-settings';
+import { getLabHighlightBg, getStateDotClass } from '@/types/table-settings';
 
 export type { DeliveryHistoryRow };
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
+import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
+import { GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
+import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { BulkDeliveryInput } from './bulk-delivery-input';
 import { DeliverySheetFooter } from '../components/DeliverySheetFooter';
+import { TrueWeightPopover } from '@/app/(app)/inventory/_shared/true-weight-popover';
 import { DeliveryHistoryDialog } from './components/DeliveryHistoryDialog';
+import { DensityToggle } from './components/density-toggle';
+import { ColumnsPopover } from './components/columns-popover';
+import { SettingsDialog } from './components/settings-dialog';
 
-function getStateClasses(state: string): string {
-    switch (state) {
-        case 'IN-USE': return 'text-blue-700 bg-blue-200 dark:text-blue-300 dark:bg-blue-900 shadow-sm ring-1 ring-blue-300/60 dark:ring-blue-600/40';
-        case 'CLOSED': return 'text-red-700 bg-red-200 dark:text-red-300 dark:bg-red-900 shadow-sm ring-1 ring-red-300/60 dark:ring-red-600/40';
-        case 'SUNDRYING': return 'text-amber-700 bg-amber-200 dark:text-amber-300 dark:bg-amber-900 shadow-sm ring-1 ring-amber-300/60 dark:ring-amber-600/40';
-        default: return 'text-muted-foreground bg-muted/10'; // STORED
-    }
+// ─── Column Width Config ──────────────────────────────────────────────────────
+
+interface ColumnWidthSpec {
+    normal: number;
+    expanded: number;
 }
 
-function getRowStateClasses(state: string): string {
-    switch (state) {
-        case 'IN-USE':    return 'bg-blue-100/70 dark:bg-blue-950/40';
-        case 'CLOSED':    return 'bg-red-100/70 dark:bg-red-950/40';
-        case 'SUNDRYING': return 'bg-amber-100/70 dark:bg-amber-950/40';
-        default:          return ''; // STORED — no row highlight
-    }
+const COL_WIDTHS: Record<string, ColumnWidthSpec | number> = {
+    state: { normal: 80, expanded: 100 },
+    transaction_date: { normal: 80, expanded: 80 },
+    supplier: { normal: 140, expanded: 140 },
+    batch_code: 85,
+    block_loc: 45,
+    truck_plate: 70,
+    weight_kg: 65,
+    sacks: 40,
+    mc: 45,
+    grit: 45,
+    bd_astm: 50,
+    bd_jis: 50,
+    vm: 45,
+    ash: 45,
+    fc: 45,
+    remarks: { normal: 90, expanded: 120 },
+    cost_basis: 60,
+    php_total: 90,
+};
+
+function getDefaultColWidth(colId: string, density: DensityMode): number {
+    const spec = COL_WIDTHS[colId];
+    if (!spec) return 60;
+    if (typeof spec === 'number') return spec;
+    return spec[density];
 }
+
+// ─── Lab Config ───────────────────────────────────────────────────────────────
 
 const LAB_COLUMNS: { key: string; label: string; decimals: number }[] = [
     { key: 'mc', label: 'MC', decimals: 2 },
     { key: 'grit', label: 'GRIT', decimals: 2 },
-    { key: 'bd_astm', label: 'ASTM', decimals: 3 },
-    { key: 'bd_jis', label: 'JIS', decimals: 3 },
+    { key: 'bd_astm', label: 'BD\nASTM', decimals: 3 },
+    { key: 'bd_jis', label: 'BD\nJIS', decimals: 3 },
     { key: 'vm', label: 'VM', decimals: 2 },
     { key: 'ash', label: 'ASH', decimals: 2 },
     { key: 'fc', label: 'FC', decimals: 2 },
 ];
 
-const formatCompact = (value: number, decimals: number = 2): string => {
-    const abs = Math.abs(value);
-    if (abs >= 1e12) return (value / 1e12).toFixed(decimals) + 't';
-    if (abs >= 1e9) return (value / 1e9).toFixed(decimals) + 'b';
-    if (abs >= 1e6) return (value / 1e6).toFixed(decimals) + 'm';
-    if (abs >= 1e3) return (value / 1e3).toFixed(decimals) + 'k';
-    return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-};
+const LAB_KEYS = new Set(['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc']);
 
-export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: { data: DeliveryHistoryRow[], batches: any[], search?: string, allSuppliers: string[], allLocations: string[] }) {
-    const { fontSize, rowHeight, setFontSize, setRowHeight } = useTableSettings();
-    const { user, role, hasPermission } = useAuth();
-    const { setCellSelectionCount } = useStatusBar();
+const PREFIX_COLUMN_IDS = ['state', 'transaction_date', 'supplier', 'batch_code', 'block_loc', 'truck_plate'];
+
+// ─── Formatting Helpers ───────────────────────────────────────────────────────
+
+function formatDateByDensity(dateStr: string): string {
+    const d = new Date(dateStr + 'T00:00:00');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${mm}/${dd}/${yyyy}`;
+}
+
+function getDayName(dateStr: string): string {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+function formatCurrency(value: number): string {
+    return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatWeight(value: number): string {
+    return value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+// ─── Density Helpers ──────────────────────────────────────────────────────────
+
+function getDensityClasses(density: DensityMode) {
+    const rowHeightClass = density === 'normal' ? 'h-8' : 'h-12';
+    const fontSizeClass = 'text-xs';
+    const cellPaddingClass = density === 'normal' ? 'px-2 py-1' : 'px-2 py-1.5';
+    return { rowHeightClass, fontSizeClass, cellPaddingClass };
+}
+
+// ─── Popup Dimensions ─────────────────────────────────────────────────────────
+
+const POPUP_WIDTH = 200;
+const POPUP_HEIGHT = 280;
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+interface DeliveryMasterTableProps {
+    data: DeliveryHistoryRow[];
+    batches: { id: string; batch_code: string; location_ref: string }[];
+    search?: string;
+    allSuppliers: string[];
+    allLocations: string[];
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLocations }: DeliveryMasterTableProps) {
+    const { settings, setDensity, toggleColumn, showAllColumns, setColumnWidth, setColumnFormat } = useTableSettings();
+    const { hasPermission } = useAuth();
+    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
 
+    const density = settings.densityMode;
+    const { rowHeightClass, fontSizeClass, cellPaddingClass } = getDensityClasses(density);
+    const labHighlights = settings.labHighlights;
+    const canViewPrices = hasPermission('view:prices');
+
+    // ─── Refresh State ────────────────────────────────────────────────────────
+    const [refreshing, setRefreshing] = React.useState(false);
+
+    const handleRefresh = React.useCallback(() => {
+        setRefreshing(true);
+        router.refresh();
+        setTimeout(() => setRefreshing(false), 1000);
+    }, [router]);
+
+    // ─── Month State ──────────────────────────────────────────────────────────
     const [month, setMonth] = React.useState<string>(() => searchParams.get('m') || String(new Date().getMonth()));
 
-    // Ref to save the user's year+month before header filters auto-switch to All Years
+    // Ref to save user's year+month before header filters auto-switch to All Years
     const preFilterDate = React.useRef<{ year: string; month: string } | null>(null);
 
-    // Header bar filter state — exclusion sets initialized from URL params to survive Suspense remounts
-    // STATE defaults to excluding CLOSED on fresh load (no sx param) so users see active inventory first.
-    // Sentinel value '_all' in URL means "user explicitly cleared the filter" (show all states).
-    // Absent sx param means "fresh load, apply default exclusion".
+    // ─── Filter State ─────────────────────────────────────────────────────────
+
+    type FilterState = {
+        stateExcluded: Set<string>;
+        supIncluded: Set<string>;
+        locIncluded: Set<string>;
+    };
+
     const STATE_DEFAULT_EXCLUDED = ['CLOSED'];
-    const [stateExcluded, setStateExcluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('sx');
-        if (param === '_all') return new Set();        // user explicitly cleared — show all
-        if (param) return new Set(param.split(','));   // user-set exclusions
-        return new Set(STATE_DEFAULT_EXCLUDED);        // fresh load — exclude CLOSED
-    });
-    const [whseExcluded, setWhseExcluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('wx');
-        return param ? new Set(param.split(',')) : new Set();
-    });
-    // Supplier & LOC use INCLUSION model: empty set = show all (no filter), non-empty = show ONLY those values
-    const [supIncluded, setSupIncluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('sup');
-        return param ? new Set(param.split(',')) : new Set();
-    });
-    const [locIncluded, setLocIncluded] = React.useState<Set<string>>(() => {
-        const param = searchParams.get('loc');
-        return param ? new Set(param.split(',')) : new Set();
+    const [filters, setFilters] = React.useState<FilterState>(() => {
+        const sx = searchParams.get('sx');
+        const sup = searchParams.get('sup');
+        const loc = searchParams.get('loc');
+
+        return {
+            stateExcluded: sx === '_all' ? new Set() : sx ? new Set(sx.split(',')) : new Set(STATE_DEFAULT_EXCLUDED),
+            supIncluded: sup ? new Set(sup.split(',')) : new Set(),
+            locIncluded: loc ? new Set(loc.split(',')) : new Set(),
+        };
     });
 
-    // Silently sync a param to URL without triggering Next.js navigation
+    // Clean up deprecated wx param on mount
+    React.useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('wx') || params.has('supx') || params.has('lx')) {
+            params.delete('wx');
+            params.delete('supx');
+            params.delete('lx');
+            const qs = params.toString();
+            window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+        }
+    }, [pathname]);
+
+    const { stateExcluded, supIncluded, locIncluded } = filters;
+
+    // ─── URL Sync Helpers ─────────────────────────────────────────────────────
+
     const syncParamToUrl = React.useCallback((key: string, value: string, defaultVal: string = 'all') => {
         const params = new URLSearchParams(window.location.search);
         if (value !== defaultVal) params.set(key, value);
@@ -168,7 +278,6 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         if (excluded.size > 0) {
             params.set(key, [...excluded].join(','));
         } else if (key === 'sx') {
-            // Sentinel: distinguish "user cleared filter" from "fresh load (apply default)"
             params.set(key, '_all');
         } else {
             params.delete(key);
@@ -177,7 +286,6 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
     }, [pathname]);
 
-    // Silently sync an inclusion set to URL (non-empty = set param, empty = delete param)
     const syncInclusionToUrl = React.useCallback((key: string, included: Set<string>) => {
         const params = new URLSearchParams(window.location.search);
         if (included.size > 0) {
@@ -189,10 +297,21 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
     }, [pathname]);
 
+    // ─── Sorting & TanStack State ─────────────────────────────────────────────
+
     const [sorting, setSorting] = React.useState<SortingState>([]);
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+    const [columnSizing, setColumnSizing] = React.useState<ColumnSizingState>(() => {
+        // Merge defaults with user-persisted widths
+        const defaults: ColumnSizingState = {};
+        Object.keys(COL_WIDTHS).forEach(id => {
+            defaults[id] = getDefaultColWidth(id, density);
+        });
+        return { ...defaults, ...settings.columnWidths };
+    });
 
-    // fontSize and rowHeight are from useTableSettings hook above
+    // ─── Dialog State ─────────────────────────────────────────────────────────
+
     const [isInputDirty, setIsInputDirty] = React.useState(false);
     const [showExitConfirmation, setShowExitConfirmation] = React.useState(false);
     const [pendingAction, setPendingAction] = React.useState<() => void>(() => { });
@@ -202,107 +321,70 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     const [editRows, setEditRows] = React.useState<DeliveryHistoryRow[] | null>(null);
     const [historyDelivery, setHistoryDelivery] = React.useState<DeliveryHistoryRow | null>(null);
     const [historyOpen, setHistoryOpen] = React.useState(false);
+    const [settingsOpen, setSettingsOpen] = React.useState(false);
 
-    // Column visibility — persisted to localStorage
-    const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(() => {
-        if (typeof window === 'undefined') return new Set();
-        try {
-            const saved = localStorage.getItem('rc-in-hidden-columns');
-            return saved ? new Set(JSON.parse(saved)) : new Set();
-        } catch { return new Set(); }
-    });
+    // ─── Row + Column Context Menus (shared Blackwood Table primitive) ─────────
+    // Two instances of the same hook: the row menu keys on the delivery id (string),
+    // the column-header menu keys on the column id (string). Both carry their own
+    // viewport edge-flip + close-on-outside/Esc.
+    const rowMenu = useGridContextMenu<string>({ width: POPUP_WIDTH, height: POPUP_HEIGHT });
+    const columnMenu = useGridContextMenu<string>({ width: POPUP_WIDTH, height: POPUP_HEIGHT });
 
-    React.useEffect(() => {
-        if (hiddenColumns.size > 0) {
-            localStorage.setItem('rc-in-hidden-columns', JSON.stringify([...hiddenColumns]));
-        } else {
-            localStorage.removeItem('rc-in-hidden-columns');
-        }
-    }, [hiddenColumns]);
+    const openPopup = React.useCallback(
+        (id: string, clientX: number, clientY: number) => rowMenu.open(id, clientX, clientY),
+        [rowMenu],
+    );
 
-    const toggleColumnVisibility = (colId: string) => {
-        setHiddenColumns(prev => {
-            const next = new Set(prev);
-            if (next.has(colId)) next.delete(colId);
-            else next.add(colId);
-            return next;
-        });
-    };
+    // ─── Search State ─────────────────────────────────────────────────────────
 
-    const showAllColumns = () => setHiddenColumns(new Set());
+    const [searchTerm, setSearchTerm] = React.useState(search || '');
+    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
 
-    const hideableColumns = React.useMemo(() => {
-        const cols = [
-            { id: 'whse', label: 'WHSE' },
-            { id: 'state', label: 'STATE' },
-            { id: 'transaction_date', label: 'DATE' },
-            { id: 'supplier', label: 'SUPPLIER' },
-            { id: 'batch_code', label: 'BLOCK' },
-            { id: 'block_loc', label: 'LOC' },
-            { id: 'truck_plate', label: 'TRUCK' },
-            { id: 'weight_kg', label: 'WT' },
-            { id: 'sacks', label: 'SKS' },
-            { id: 'mc', label: 'MC' },
-            { id: 'grit', label: 'GRIT' },
-            { id: 'bd_astm', label: 'ASTM' },
-            { id: 'bd_jis', label: 'JIS' },
-            { id: 'vm', label: 'VM' },
-            { id: 'ash', label: 'ASH' },
-            { id: 'fc', label: 'FC' },
-            { id: 'remarks', label: 'REMARKS' },
-        ];
-        if (hasPermission('view:prices')) {
-            cols.push({ id: 'cost_basis', label: 'PHP/KG' });
-            cols.push({ id: 'php_ttl', label: 'PHP TTL' });
-        }
-        return cols;
-    }, [hasPermission]);
-
-    const handleViewHistory = (delivery: DeliveryHistoryRow) => {
-        setHistoryDelivery(delivery);
-        setHistoryOpen(true);
-    };
     const createQueryString = React.useCallback(
         (name: string, value: string) => {
             const params = new URLSearchParams(searchParams.toString());
-            if (value) {
-                params.set(name, value);
-            } else {
-                params.delete(name);
-            }
+            if (value) params.set(name, value);
+            else params.delete(name);
             return params.toString();
         },
         [searchParams]
     );
 
-    const [isSearchFocused, setIsSearchFocused] = React.useState(false);
+    React.useEffect(() => {
+        const timer = setTimeout(() => {
+            if (searchTerm !== (search || '')) {
+                router.push(pathname + '?' + createQueryString('search', searchTerm));
+            }
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [searchTerm, search, router, pathname, createQueryString]);
 
-    // Loading state for server fetches (year change)
+    // ─── Year Loading ─────────────────────────────────────────────────────────
+
     const [isYearLoading, setIsYearLoading] = React.useState(false);
     const [minLoadingTimer, setMinLoadingTimer] = React.useState<NodeJS.Timeout | null>(null);
 
-    // Build URL with all current filter + month state for navigation
+    const yearParam = searchParams.get('year') || String(new Date().getFullYear());
+
     const buildFilterParams = (base: URLSearchParams, filterOverrides: Record<string, string> = {}) => {
-        const filters: Record<string, string> = {
+        const filterEntries: Record<string, string> = {
             sx: stateExcluded.size > 0 ? [...stateExcluded].join(',') : '_all',
-            wx: [...whseExcluded].join(','),
             sup: [...supIncluded].join(','),
             loc: [...locIncluded].join(','),
             ...filterOverrides,
         };
-        // Clean up legacy exclusion params if present
+        base.delete('wx');
         base.delete('supx');
         base.delete('lx');
-        Object.entries(filters).forEach(([key, value]) => {
+        Object.entries(filterEntries).forEach(([key, value]) => {
             if (value) base.set(key, value);
             else base.delete(key);
         });
         return base;
     };
 
-    const handleYearChange = (newYear: string, filterOverrides: Record<string, string> = {}) => {
+    const handleYearChange = React.useCallback((newYear: string, filterOverrides: Record<string, string> = {}) => {
         setIsYearLoading(true);
-        // Start min 2s timer
         const timer = setTimeout(() => {
             setIsYearLoading(false);
             setMinLoadingTimer(null);
@@ -310,66 +392,150 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         setMinLoadingTimer(timer);
 
         let newMonth = month;
-        // When selecting ALL years: force month to ALL and disable month buttons
         if (newYear === 'all') {
             newMonth = 'all';
             setMonth('all');
         } else if (month === 'all') {
-            // When switching to a specific year from ALL months, default to JAN
-            // to avoid rendering every entry client-side
             newMonth = '0';
             setMonth('0');
         }
-        // Otherwise keep the current month selection
 
         const params = new URLSearchParams(searchParams.toString());
         params.set('year', newYear);
         params.delete('view_date');
-        // Sync month param for remount
         const defaultMonth = String(new Date().getMonth());
         if (newMonth !== defaultMonth) params.set('m', newMonth);
         else params.delete('m');
-        // Persist filter state in URL for Suspense remount
         buildFilterParams(params, filterOverrides);
 
         router.replace(pathname + '?' + params.toString(), { scroll: false });
-    };
+    }, [month, searchParams, pathname, router, stateExcluded, supIncluded, locIncluded]);
 
-    // Clear timeout on unmount
     React.useEffect(() => {
-        return () => {
-            if (minLoadingTimer) clearTimeout(minLoadingTimer);
-        };
+        return () => { if (minLoadingTimer) clearTimeout(minLoadingTimer); };
     }, [minLoadingTimer]);
 
-    // Auto-switch to "All Years" when a header filter activates
-    const yearParam = searchParams.get('year') || String(new Date().getFullYear());
+    // ─── Filter Helpers ───────────────────────────────────────────────────────
 
-    const buildFilterOverrides = (urlKey: string, filterSet: Set<string>) => {
-        if (filterSet.size > 0) return { [urlKey]: [...filterSet].join(',') };
-        // For sx: use sentinel to preserve "show all" across remounts
-        return { [urlKey]: urlKey === 'sx' ? '_all' : '' };
-    };
-
-    // Restore user's previous year+month when all filters become empty
-    // STATE has 5 values, WHSE has 5 values (hardcoded)
     const STATE_COUNT = 5;
-    const WHSE_COUNT = 5;
-    const maybeRestoreDate = (clearedKey?: string) => {
+
+    const buildFilterOverrides = React.useCallback((urlKey: string, filterSet: Set<string>) => {
+        if (filterSet.size > 0) return { [urlKey]: [...filterSet].join(',') };
+        return { [urlKey]: urlKey === 'sx' ? '_all' : '' };
+    }, []);
+
+    const maybeRestoreDate = React.useCallback((clearedKey?: string) => {
         if (!preFilterDate.current) return;
-        // Check all filter sets are effectively inactive (treat clearedKey as already cleared)
-        // STATE/WHSE: exclusion model — size 0 = no filter; size >= total = full exclusion (Deselect All) = no filter
-        // Supplier/LOC: inclusion model — size 0 = no filter
         const isInactive = (key: string): boolean => {
             if (key === clearedKey) return true;
             if (key === 'sx') return stateExcluded.size === 0 || stateExcluded.size >= STATE_COUNT;
-            if (key === 'wx') return whseExcluded.size === 0 || whseExcluded.size >= WHSE_COUNT;
             if (key === 'sup') return supIncluded.size === 0;
             if (key === 'loc') return locIncluded.size === 0;
             return true;
         };
-        const allClear = ['sx', 'wx', 'sup', 'loc'].every(isInactive);
+        const allClear = ['sx', 'sup', 'loc'].every(isInactive);
         if (allClear) {
+            const { year, month: savedMonth } = preFilterDate.current;
+            preFilterDate.current = null;
+            if (year !== 'all') {
+                handleYearChange(year);
+                setMonth(savedMonth);
+                syncParamToUrl('m', savedMonth, String(new Date().getMonth()));
+            }
+        }
+    }, [stateExcluded, supIncluded, locIncluded, handleYearChange, syncParamToUrl]);
+
+    // STATE exclusion toggle
+    const toggleStateFilter = React.useCallback((value: string, exclude: boolean) => {
+        const next = new Set(stateExcluded);
+        if (exclude) next.add(value);
+        else next.delete(value);
+
+        setFilters(prev => ({ ...prev, stateExcluded: next }));
+        syncExclusionToUrl('sx', next);
+
+        if (next.size > 0 && yearParam !== 'all') {
+            if (preFilterDate.current === null) {
+                preFilterDate.current = { year: yearParam, month };
+            }
+            handleYearChange('all', buildFilterOverrides('sx', next));
+        }
+        if (next.size === 0) maybeRestoreDate('sx');
+    }, [stateExcluded, yearParam, month, syncExclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate]);
+
+    const clearStateFilter = React.useCallback(() => {
+        setFilters(prev => ({ ...prev, stateExcluded: new Set() }));
+        syncExclusionToUrl('sx', new Set());
+        maybeRestoreDate('sx');
+    }, [syncExclusionToUrl, maybeRestoreDate]);
+
+    const selectAllStates = React.useCallback(() => {
+        setFilters(prev => ({ ...prev, stateExcluded: new Set() }));
+        syncExclusionToUrl('sx', new Set());
+        maybeRestoreDate('sx');
+    }, [syncExclusionToUrl, maybeRestoreDate]);
+
+    const deselectAllStates = React.useCallback((allValues: string[]) => {
+        setFilters(prev => ({ ...prev, stateExcluded: new Set(allValues) }));
+        // UI-only: no URL sync, no year switch
+    }, []);
+
+    // Supplier/LOC inclusion toggles
+    const toggleInclusionFilter = React.useCallback((urlKey: string, value: string, current: Set<string>) => {
+        const next = new Set(current);
+        if (next.has(value)) next.delete(value);
+        else next.add(value);
+
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sup' ? 'supIncluded' : 'locIncluded']: next,
+        }));
+        syncInclusionToUrl(urlKey, next);
+
+        if (next.size > 0 && yearParam !== 'all') {
+            if (preFilterDate.current === null) {
+                preFilterDate.current = { year: yearParam, month };
+            }
+            handleYearChange('all', buildFilterOverrides(urlKey, next));
+        }
+        if (next.size === 0) maybeRestoreDate(urlKey);
+    }, [yearParam, month, syncInclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate]);
+
+    const clearInclusionFilter = React.useCallback((urlKey: string) => {
+        setFilters(prev => ({
+            ...prev,
+            [urlKey === 'sup' ? 'supIncluded' : 'locIncluded']: new Set(),
+        }));
+        syncInclusionToUrl(urlKey, new Set());
+        maybeRestoreDate(urlKey);
+    }, [syncInclusionToUrl, maybeRestoreDate]);
+
+    const handleMonthChange = (value: string) => {
+        setMonth(value);
+        syncParamToUrl('m', value, String(new Date().getMonth()));
+    };
+
+    // ─── Unique Filter Options ────────────────────────────────────────────────
+
+    const uniqueStates = React.useMemo(
+        () => ['STORED', 'IN-USE', 'CLOSED', 'SUNDRYING', 'SUNDRIED'],
+        []
+    );
+
+    const hasActiveFilters = (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) || supIncluded.size > 0 || locIncluded.size > 0;
+
+    const clearAllFilters = () => {
+        setFilters({ stateExcluded: new Set(), supIncluded: new Set(), locIncluded: new Set() });
+        const params = new URLSearchParams(window.location.search);
+        params.set('sx', '_all');
+        params.delete('wx');
+        params.delete('sup');
+        params.delete('loc');
+        params.delete('supx');
+        params.delete('lx');
+        const qs = params.toString();
+        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
+        if (preFilterDate.current) {
             const { year, month: savedMonth } = preFilterDate.current;
             preFilterDate.current = null;
             if (year !== 'all') {
@@ -380,86 +546,20 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         }
     };
 
-    const toggleFilterValue = (urlKey: string, value: string, exclude: boolean, current: Set<string>, setter: (s: Set<string>) => void) => {
-        const next = new Set(current);
-        if (exclude) next.add(value);
-        else next.delete(value);
-        setter(next);
-        syncExclusionToUrl(urlKey, next);
-        if (next.size > 0 && yearParam !== 'all') {
-            if (preFilterDate.current === null) {
-                preFilterDate.current = { year: yearParam, month };
-            }
-            handleYearChange('all', buildFilterOverrides(urlKey, next));
-        }
-        if (next.size === 0) {
-            maybeRestoreDate(urlKey);
-        }
-    };
+    // ─── Filtered Data ────────────────────────────────────────────────────────
 
-    const clearFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
-        syncExclusionToUrl(urlKey, new Set());
-        maybeRestoreDate(urlKey);
-    };
-
-    const selectAllFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
-        syncExclusionToUrl(urlKey, new Set());
-        maybeRestoreDate(urlKey);
-    };
-
-    const deselectAllFilter = (_urlKey: string, allValues: string[], setter: (s: Set<string>) => void) => {
-        setter(new Set(allValues)); // UI-only: no URL sync, no year switch
-    };
-
-    // Inclusion model helpers for Supplier/LOC
-    const toggleInclusionFilter = (urlKey: string, value: string, current: Set<string>, setter: (s: Set<string>) => void) => {
-        const next = new Set(current);
-        if (next.has(value)) next.delete(value);
-        else next.add(value);
-        setter(next);
-        syncInclusionToUrl(urlKey, next);
-        if (next.size > 0 && yearParam !== 'all') {
-            if (preFilterDate.current === null) {
-                preFilterDate.current = { year: yearParam, month };
-            }
-            handleYearChange('all', buildFilterOverrides(urlKey, next));
-        }
-        if (next.size === 0) {
-            maybeRestoreDate(urlKey);
-        }
-    };
-
-    const clearInclusionFilter = (urlKey: string, setter: (s: Set<string>) => void) => {
-        setter(new Set());
-        syncInclusionToUrl(urlKey, new Set());
-        maybeRestoreDate(urlKey);
-    };
-
-    const handleMonthChange = (value: string) => {
-        setMonth(value);
-        syncParamToUrl('m', value, String(new Date().getMonth()));
-    };
-
-    // Client-side filtering (Fix #4: string slicing instead of new Date())
-    // Execution order: 1) HeaderBar filters (always), 2) search overrides month, 3) FooterBar month
     const filteredData = React.useMemo(() => {
         let filtered = data;
 
-        // HeaderBar filters — ALWAYS apply (even with search)
-        // Guard: full exclusion (size >= total) = "Deselect All" = UI-only, treat as no filter
+        // STATE filter (exclusion model)
         if (stateExcluded.size > 0 && stateExcluded.size < STATE_COUNT) {
             filtered = filtered.filter(d => !stateExcluded.has(d.state || 'STORED'));
         }
-        if (whseExcluded.size > 0 && whseExcluded.size < WHSE_COUNT) {
-            filtered = filtered.filter(d =>
-                !whseExcluded.has(calculateWhse(d.block_loc || d.batches?.location_ref, d.batch_code))
-            );
-        }
+        // Supplier filter (inclusion model)
         if (supIncluded.size > 0) {
             filtered = filtered.filter(d => supIncluded.has(d.supplier));
         }
+        // LOC filter (inclusion model)
         if (locIncluded.size > 0) {
             filtered = filtered.filter(d =>
                 locIncluded.has(d.block_loc || d.batches?.location_ref || '')
@@ -469,7 +569,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         // Search overrides FooterBar month filter
         if (search) return filtered;
 
-        // FooterBar month filter (no search active)
+        // FooterBar month filter
         if (month !== 'all') {
             const monthNum = parseInt(month, 10);
             filtered = filtered.filter(d => {
@@ -479,23 +579,25 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         }
 
         return filtered;
-    }, [data, month, search, stateExcluded, whseExcluded, supIncluded, locIncluded]);
+    }, [data, month, search, stateExcluded, supIncluded, locIncluded]);
 
-    const [searchTerm, setSearchTerm] = React.useState(search || '');
+    // ─── Supplier / Cost Aggregates for Expanded Mode ─────────────────────────
 
-    React.useEffect(() => {
-        const timer = setTimeout(() => {
-            if (searchTerm !== (search || '')) {
-                router.push(pathname + '?' + createQueryString('search', searchTerm));
-            }
-        }, 300);
+    const supplierCounts = React.useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const d of filteredData) {
+            counts[d.supplier] = (counts[d.supplier] || 0) + 1;
+        }
+        return counts;
+    }, [filteredData]);
 
-        return () => clearTimeout(timer);
-    }, [searchTerm, search, router, pathname, createQueryString]);
+    const avgCostBasis = React.useMemo(() => {
+        if (filteredData.length === 0) return 0;
+        const sum = filteredData.reduce((acc, d) => acc + (parseFloat(String(d.cost_basis)) || 0), 0);
+        return sum / filteredData.length;
+    }, [filteredData]);
 
-    const handleSearchChange = (term: string) => {
-        setSearchTerm(term);
-    };
+    // ─── Selection Handlers ───────────────────────────────────────────────────
 
     const toggleSelect = React.useCallback((id: string) => {
         setSelectedIds(prev => {
@@ -506,17 +608,21 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         });
     }, []);
 
-    const handleDelete = async (id: string) => {
+    // Single-row delete: currently only available via bulk selection mode
+    // Kept for future row action popup integration
+    const _handleDelete = async (id: string) => {
         if (confirm('Are you sure you want to delete this delivery?')) {
             const res = await deleteDelivery(id);
             if (res.success) {
                 toast.success('Delivery deleted');
                 setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+                handleRefresh();
             } else {
-                toast.error('Delete failed: ' + res.message);
+                errorToast('Delete failed: ' + res.message);
             }
         }
     };
+    void _handleDelete; // suppress unused warning
 
     const handleBulkDelete = async () => {
         const count = selectedIds.size;
@@ -525,11 +631,14 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
             if (res.success) {
                 toast.success(`${count} deliver${count === 1 ? 'y' : 'ies'} deleted`);
                 setSelectedIds(new Set());
+                handleRefresh();
             } else {
-                toast.error('Bulk delete failed: ' + res.message);
+                errorToast('Bulk delete failed: ' + res.message);
             }
         }
     };
+
+    // ─── Dialog Handlers ──────────────────────────────────────────────────────
 
     const handleCloseAdd = () => {
         if (isInputDirty) {
@@ -542,10 +651,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
 
     const handleCloseEdit = () => {
         if (isInputDirty) {
-            setPendingAction(() => () => {
-                setEditRows(null);
-                // Also clear selection logic if needed, but setEditRows(null) is main close
-            });
+            setPendingAction(() => () => setEditRows(null));
             setShowExitConfirmation(true);
         } else {
             setEditRows(null);
@@ -554,15 +660,12 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
 
     const confirmExit = () => {
         setShowExitConfirmation(false);
-        setIsInputDirty(false); // Reset dirty state
+        setIsInputDirty(false);
         if (pendingAction) pendingAction();
     };
 
-    // Reset dirty state when dialogs open/close naturally
     React.useEffect(() => {
-        if (!isAddOpen && !editRows) {
-            setIsInputDirty(false);
-        }
+        if (!isAddOpen && !editRows) setIsInputDirty(false);
     }, [isAddOpen, editRows]);
 
     const handleBulkEdit = () => {
@@ -574,251 +677,357 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         setEditRows([delivery]);
     };
 
-    const columns = React.useMemo<ColumnDef<DeliveryHistoryRow>[]>(() => {
-        const labColumnDefs = LAB_COLUMNS.map(({ key, label, decimals }): ColumnDef<DeliveryHistoryRow> => ({
-            id: key,
-            header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{label}</div>,
-            size: 35,
-            cell: ({ row }) => {
-                const val = row.original.lab_results?.[key as keyof DeliveryHistoryRow['lab_results']];
-                return <div className="text-center" style={{ fontSize: `${fontSize}px` }}>{val != null ? val.toFixed(decimals) : '-'}</div>;
-            },
-        }));
+    const handleViewHistory = (delivery: DeliveryHistoryRow) => {
+        setHistoryDelivery(delivery);
+        setHistoryOpen(true);
+    };
 
+    // ─── LOC Filter Data ──────────────────────────────────────────────────────
+
+    const locsByWhse = React.useMemo(() => {
+        const map: Record<string, string[]> = {};
+        const seen = new Set<string>();
+        for (const loc of allLocations) {
+            if (seen.has(loc)) continue;
+            seen.add(loc);
+            const whse = loc.charAt(0).toUpperCase();
+            if (!map[whse]) map[whse] = [];
+            map[whse].push(loc);
+        }
+        for (const whse of Object.keys(map)) {
+            map[whse].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        }
+        return map;
+    }, [allLocations]);
+
+    // ─── Column Definitions ───────────────────────────────────────────────────
+
+    const hiddenColumnsSet = React.useMemo(() => new Set(settings.hiddenColumns), [settings.hiddenColumns]);
+
+    const columns = React.useMemo<ColumnDef<DeliveryHistoryRow>[]>(() => {
         const allColumns: ColumnDef<DeliveryHistoryRow>[] = [
             {
                 id: 'state',
-                header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>STATE</div>,
-                size: 50,
+                header: () => <StateHeaderFilter
+                    uniqueStates={uniqueStates}
+                    stateExcluded={stateExcluded}
+                    onToggle={toggleStateFilter}
+                    onSelectAll={selectAllStates}
+                    onDeselectAll={() => deselectAllStates(uniqueStates)}
+                    onClear={clearStateFilter}
+                />,
+                size: getDefaultColWidth('state', density),
+                enableResizing: true,
                 cell: ({ row }) => {
                     const state = row.original.state || 'STORED';
+                    const dotClass = getStateDotClass(state);
+                    if (density === 'expanded') {
+                        const annotation = state === 'CLOSED' ? 'Closed' : 'Active';
+                        return (
+                            <div className="flex flex-col justify-center">
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', dotClass)} />
+                                    <span className="text-[10px]">{state}</span>
+                                </span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">{annotation}</span>
+                            </div>
+                        );
+                    }
                     return (
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <div
-                                    className={cn("text-center font-mono uppercase py-0.5 rounded-sm truncate", getStateClasses(state))}
-                                    style={{ fontSize: `${fontSize}px` }}
-                                >
-                                    {state}
-                                </div>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">
-                                {state}
-                            </TooltipContent>
-                        </Tooltip>
+                        <span className="inline-flex items-center gap-1.5">
+                            <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', dotClass)} />
+                            <span className="text-[10px]">{state}</span>
+                        </span>
                     );
                 },
-            },
-            {
-                id: 'whse',
-                header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>WHSE</div>,
-                size: 50,
-                cell: ({ row }) => {
-                    const loc = row.original.block_loc || row.original.batches?.location_ref;
-                    const whse = calculateWhse(loc, row.original.batch_code);
-                    return whse ? (
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }}>{whse}</div>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">
-                                {whse}
-                            </TooltipContent>
-                        </Tooltip>
-                    ) : <div className="text-center font-mono font-bold truncate" style={{ fontSize: `${fontSize}px` }}>{whse}</div>;
-                }
             },
             {
                 accessorKey: 'transaction_date',
-                header: ({ column }) => {
-                    return (
-                        <Button
-                            variant="ghost"
-                            onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-                            className="h-6 px-1 text-xs font-mono font-bold"
-                            style={{ fontSize: `${fontSize}px` }}
-                        >
-                            DATE
-                            <ArrowUpDown className="ml-1 h-3 w-3" />
-                        </Button>
-                    );
+                header: ({ column }) => (
+                    <Button
+                        variant="ghost"
+                        onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+                        className="h-6 px-0 text-xs font-semibold text-muted-foreground gap-1"
+                    >
+                        Date
+                        <ArrowUpDown className="size-3" />
+                    </Button>
+                ),
+                size: getDefaultColWidth('transaction_date', density),
+                enableResizing: true,
+                cell: ({ row }) => {
+                    const dateStr = row.original.transaction_date;
+                    if (density === 'expanded') {
+                        return (
+                            <div className="flex flex-col justify-center">
+                                <span>{formatDateByDensity(dateStr)}</span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">{getDayName(dateStr)}</span>
+                            </div>
+                        );
+                    }
+                    return <span className="whitespace-nowrap">{formatDateByDensity(dateStr)}</span>;
                 },
-                size: 70,
-                cell: ({ row }) => <div className="whitespace-nowrap text-center font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{format(new Date(row.getValue('transaction_date')), 'MM/dd/yyyy')}</div>,
             },
             {
                 accessorKey: 'supplier',
-                header: () => <div className="text-center px-1 font-mono font-bold">SUPPLIER</div>,
-                size: 120,
+                header: () => <SupplierHeaderFilter
+                    allSuppliers={allSuppliers}
+                    supIncluded={supIncluded}
+                    onToggle={(value) => toggleInclusionFilter('sup', value, supIncluded)}
+                    onClear={() => clearInclusionFilter('sup')}
+                />,
+                size: getDefaultColWidth('supplier', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const supplier = row.getValue('supplier') as string;
-                    return supplier ? (
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }}>{supplier}</div>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs">
-                                {supplier}
-                            </TooltipContent>
-                        </Tooltip>
-                    ) : <div className="truncate font-bold text-left" style={{ fontSize: `${fontSize}px` }}>{supplier}</div>;
-                }
+                    const supplier = row.original.supplier || '';
+                    if (density === 'expanded') {
+                        return (
+                            <div className="flex flex-col justify-center">
+                                <span className="block truncate" title={supplier}>{supplier}</span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">{supplierCounts[supplier] || 0} deliveries</span>
+                            </div>
+                        );
+                    }
+                    return <span className="block truncate" title={supplier}>{supplier}</span>;
+                },
             },
             {
                 accessorKey: 'batch_code',
-                header: () => <div className="text-center px-1 font-mono font-bold">BLOCK</div>,
-                size: 80,
-                cell: ({ row }) => {
-                    const batchCode = row.getValue('batch_code') as string;
-                    return batchCode ? (
-                        <Tooltip>
-                            <TooltipTrigger asChild>
-                                <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{batchCode}</div>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs">
-                                {batchCode}
-                            </TooltipContent>
-                        </Tooltip>
-                    ) : <div className="truncate text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{batchCode}</div>;
-                }
+                header: () => <span className="font-semibold text-muted-foreground">Batch</span>,
+                size: getDefaultColWidth('batch_code', density),
+                enableResizing: true,
+                cell: ({ row }) => <span className="font-mono truncate block">{row.original.batch_code}</span>,
             },
             {
                 accessorKey: 'block_loc',
-                header: () => <div className="text-center px-1 font-mono font-bold">LOC</div>,
-                size: 40,
+                // LOC header with integrated filter popover
+                header: () => <LocHeaderFilter locsByWhse={locsByWhse} activeLocFilters={locIncluded} onFiltersChange={(next) => {
+                    setFilters(prev => ({ ...prev, locIncluded: next }));
+                    syncInclusionToUrl('loc', next);
+                    if (next.size > 0 && yearParam !== 'all') {
+                        if (preFilterDate.current === null) {
+                            preFilterDate.current = { year: yearParam, month };
+                        }
+                        handleYearChange('all', buildFilterOverrides('loc', next));
+                    }
+                    if (next.size === 0) maybeRestoreDate('loc');
+                }} />,
+                size: getDefaultColWidth('block_loc', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const val = row.original.block_loc || row.original.batches?.location_ref;
-                    return <div className="text-center font-bold font-mono" style={{ fontSize: `${fontSize}px` }}>{val || '-'}</div>;
-                }
+                    const val = row.original.block_loc || row.original.batches?.location_ref || '-';
+                    if (density === 'expanded') {
+                        return (
+                            <div className="flex flex-col justify-center">
+                                <span className="font-mono">{val}</span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">WHSE {val.charAt(0)}</span>
+                            </div>
+                        );
+                    }
+                    return <span className="font-mono">{val}</span>;
+                },
             },
             {
                 accessorKey: 'truck_plate',
-                header: () => <div className="text-center px-1 font-mono font-bold">TRUCK</div>,
-                size: 40,
+                header: () => <span className="font-semibold text-muted-foreground">Truck</span>,
+                size: getDefaultColWidth('truck_plate', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const truckPlate = row.getValue('truck_plate') as string;
-                    return truckPlate ? (
+                    const truck = row.original.truck_plate || '';
+                    return (
                         <Tooltip>
                             <TooltipTrigger asChild>
-                                <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{truckPlate}</div>
+                                <span className="font-mono truncate block">{truck}</span>
                             </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs">
-                                {truckPlate}
-                            </TooltipContent>
+                            {truck.length > 8 && <TooltipContent side="top" className="text-xs">{truck}</TooltipContent>}
                         </Tooltip>
-                    ) : <div className="truncate text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{truckPlate}</div>;
-                }
+                    );
+                },
             },
             {
                 accessorKey: 'weight_kg',
-                header: () => <div className="text-center px-1 font-mono font-bold">WT</div>,
-                size: 50,
+                header: () => <span className="font-semibold text-muted-foreground text-right block">Weight</span>,
+                size: getDefaultColWidth('weight_kg', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const val = parseFloat(row.getValue('weight_kg'));
-                    return <div className="text-center font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{Math.round(val).toLocaleString()}</div>;
-                }
+                    const wt = parseFloat(String(row.original.weight_kg)) || 0;
+                    const tw = row.original.true_weight_kg;
+                    // Display-only deduction marker (DEDUCTIONS_DESIGN.md): rendered ONLY
+                    // when the row is tagged. Placed LEFT of the number so the value stays
+                    // hard-right against the column edge; untagged rows render unchanged.
+                    const deductionMarker = tw != null ? (
+                        <TrueWeightPopover
+                            trueWeightKg={tw}
+                            weightKg={wt}
+                            deductionNote={row.original.deduction_note ?? null}
+                            costBasis={row.original.cost_basis ?? null}
+                            canViewPrices={canViewPrices}
+                        >
+                            <button
+                                type="button"
+                                aria-label="View true weight / deduction"
+                                title="View true weight / deduction"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center justify-center shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                <Sigma className="h-3 w-3" />
+                            </button>
+                        </TrueWeightPopover>
+                    ) : null;
+                    if (density === 'expanded') {
+                        return (
+                            <div className="flex flex-col justify-center text-right font-mono">
+                                <span className="flex items-center justify-end gap-1">
+                                    {deductionMarker}
+                                    <span>{formatWeight(wt)}</span>
+                                </span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">{row.original.sacks} sks</span>
+                            </div>
+                        );
+                    }
+                    return (
+                        <span className="flex items-center justify-end gap-1 font-mono">
+                            {deductionMarker}
+                            <span>{formatWeight(wt)}</span>
+                        </span>
+                    );
+                },
             },
             {
                 accessorKey: 'sacks',
-                header: () => <div className="text-center px-1 font-mono font-bold ">SKS</div>,
-                size: 30,
-                cell: ({ row }) => <div className="text-center font-mono" style={{ fontSize: `${fontSize}px` }}>{row.getValue('sacks')}</div>,
-            },
-            ...labColumnDefs,
-            {
-                accessorKey: 'remarks',
-                header: () => <div className="flex justify-center"><MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" /></div>,
-                size: 40,
+                header: () => <span className="font-semibold text-muted-foreground text-right block">Sks</span>,
+                size: getDefaultColWidth('sacks', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const remarks = row.getValue('remarks') as string;
-                    if (!remarks) return null;
-                    return (
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <div className="flex justify-center cursor-pointer hover:text-foreground transition-colors">
-                                    <MessageSquareText className="h-4 w-4 text-muted-foreground" />
-                                </div>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-80">
-                                <p className="text-sm">{remarks}</p>
-                            </PopoverContent>
-                        </Popover>
-                    );
-                }
+                    const sacks = row.original.sacks;
+                    if (density === 'expanded') {
+                        return (
+                            <div className="flex flex-col justify-center text-right font-mono">
+                                <span>{sacks?.toLocaleString() ?? '-'}</span>
+                                <span className="text-[10px] text-muted-foreground leading-none mt-0.5">sacks</span>
+                            </div>
+                        );
+                    }
+                    return <span className="font-mono text-right block">{sacks?.toLocaleString() ?? '-'}</span>;
+                },
             },
-            {
+        ];
+
+        // Lab columns
+        for (const { key, label, decimals } of LAB_COLUMNS) {
+            const isBD = key === 'bd_astm' || key === 'bd_jis';
+            allColumns.push({
+                id: key,
+                header: () => (
+                    <span className={cn(
+                        'font-semibold text-muted-foreground text-right block',
+                        isBD ? 'whitespace-pre-wrap leading-[1.1]' : 'whitespace-nowrap'
+                    )}>
+                        {label}
+                    </span>
+                ),
+                size: getDefaultColWidth(key, density),
+                enableResizing: true,
+                cell: ({ row }) => {
+                    const val = row.original.lab_results?.[key as keyof DeliveryHistoryRow['lab_results']];
+                    if (val == null) return <span className="font-mono text-right block text-muted-foreground">-</span>;
+                    const numVal = Number(val);
+                    const highlightBg = getLabHighlightBg(key as LabMetric, numVal, labHighlights);
+
+                    if (density === 'expanded') {
+                        return (
+                            <div className={cn('flex flex-col justify-center text-right font-mono', highlightBg)}>
+                                <span>{numVal.toFixed(decimals)}</span>
+                            </div>
+                        );
+                    }
+
+                    return <span className={cn('font-mono text-right block', highlightBg)}>{numVal.toFixed(decimals)}</span>;
+                },
+            });
+        }
+
+        // Remarks column (before cost columns)
+        allColumns.push({
+            accessorKey: 'remarks',
+            header: () => <span className="font-semibold text-muted-foreground">Rmk</span>,
+            size: getDefaultColWidth('remarks', density),
+            enableResizing: true,
+            cell: ({ row }) => {
+                const remarks = row.original.remarks;
+                if (!remarks) return null;
+                return (
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <span className="block truncate max-w-full text-muted-foreground cursor-default">{remarks}</span>
+                        </TooltipTrigger>
+                        <TooltipContent side="left" className="text-xs max-w-[200px]">{remarks}</TooltipContent>
+                    </Tooltip>
+                );
+            },
+        });
+
+        // Cost columns (gated by permission)
+        if (canViewPrices) {
+            allColumns.push({
                 accessorKey: 'cost_basis',
-                header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>PHP/KG</div>,
-                size: 50,
+                header: () => <span className="font-semibold text-muted-foreground text-right block">PHP/KG</span>,
+                size: getDefaultColWidth('cost_basis', density),
+                enableResizing: true,
                 cell: ({ row }) => {
-                    const val = parseFloat(row.getValue('cost_basis'));
+                    const val = parseFloat(String(row.original.cost_basis)) || 0;
+                    if (density === 'expanded') {
+                        const delta = val - avgCostBasis;
+                        const sign = delta >= 0 ? '+' : '';
+                        const deltaColor = delta >= 0 ? 'text-red-500' : 'text-emerald-500';
+                        return (
+                            <div className="flex flex-col justify-center font-mono">
+                                <span className="flex justify-between">
+                                    <span className="text-muted-foreground">&#8369;</span>
+                                    <span>{formatCurrency(val)}</span>
+                                </span>
+                                <span className={cn('text-[10px] leading-none mt-0.5 text-right', deltaColor)}>
+                                    {sign}&#8369;{Math.abs(delta).toFixed(2)}
+                                </span>
+                            </div>
+                        );
+                    }
                     return (
-                        <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground" style={{ fontSize: `${fontSize}px` }}>₱</span>
-                            <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        </div>
+                        <span className="flex justify-between font-mono">
+                            <span className="text-muted-foreground">&#8369;</span>
+                            <span>{formatCurrency(val)}</span>
+                        </span>
                     );
-                }
-            },
-            {
-                id: 'php_ttl',
-                header: () => <div className="text-center px-1 font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>PHP TTL</div>,
-                size: 85,
+                },
+            });
+            allColumns.push({
+                id: 'php_total',
+                header: () => <span className="font-semibold text-muted-foreground text-right block">PHP Total</span>,
+                size: getDefaultColWidth('php_total', density),
+                enableResizing: true,
                 cell: ({ row }) => {
                     const wt = parseFloat(String(row.original.weight_kg)) || 0;
                     const price = parseFloat(String(row.original.cost_basis)) || 0;
                     const total = wt * price;
                     return (
-                        <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground" style={{ fontSize: `${fontSize}px` }}>₱</span>
-                            <span className="text-right font-mono font-bold" style={{ fontSize: `${fontSize}px` }}>{total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                        </div>
+                        <span className="flex justify-between font-mono">
+                            <span className="text-muted-foreground">&#8369;</span>
+                            <span>{formatCurrency(total)}</span>
+                        </span>
                     );
-                }
-            },
-            {
-                id: 'actions',
-                header: '',
-                size: 20,
-                cell: ({ row }) => {
-                    const delivery = row.original;
-                    return (
-                        <DropdownMenu modal={false}>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" className="h-6 w-6 p-0">
-                                    <span className="sr-only">Open menu</span>
-                                    <MoreHorizontal className="h-3 w-3" />
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                                <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                <DropdownMenuItem onClick={() => handleViewHistory(delivery)}>
-                                    <Clock className="mr-2 h-4 w-4" /> Info
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => handleSingleEdit(delivery)}>
-                                    <Pencil className="mr-2 h-4 w-4" /> Edit
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => handleDelete(delivery.id)} className="text-destructive">
-                                    <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                    )
-                }
-            }
-        ];
+                },
+            });
+        }
 
+        // Filter out hidden columns
         return allColumns.filter(col => {
             const id = col.id || (col as { accessorKey?: string }).accessorKey;
-            if (id === 'actions') return true; // never hide actions
-            if (id && hiddenColumns.has(id)) return false;
-            if (id === 'cost_basis' || id === 'php_ttl') {
-                return hasPermission('view:prices');
-            }
+            if (id && hiddenColumnsSet.has(id)) return false;
             return true;
         });
-    }, [fontSize, hasPermission, hiddenColumns]);
+    }, [density, labHighlights, canViewPrices, hiddenColumnsSet, supplierCounts, avgCostBasis, locsByWhse, locIncluded, yearParam, month, syncInclusionToUrl, handleYearChange, buildFilterOverrides, maybeRestoreDate, uniqueStates, stateExcluded, toggleStateFilter, selectAllStates, deselectAllStates, clearStateFilter, allSuppliers, supIncluded, toggleInclusionFilter, clearInclusionFilter]);
+
+    // ─── TanStack Table ───────────────────────────────────────────────────────
 
     const table = useReactTable({
         data: filteredData,
@@ -828,15 +1037,36 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
+        enableColumnResizing: true,
+        columnResizeMode: 'onChange',
+        onColumnSizingChange: setColumnSizing,
         state: {
             sorting,
             columnFilters,
+            columnSizing,
         },
     });
 
-    // Row virtualization setup
+    // Debounced persist column widths
+    const columnSizingTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+    React.useEffect(() => {
+        if (columnSizingTimerRef.current) clearTimeout(columnSizingTimerRef.current);
+        columnSizingTimerRef.current = setTimeout(() => {
+            Object.entries(columnSizing).forEach(([colId, width]) => {
+                if (width !== getDefaultColWidth(colId, density)) {
+                    setColumnWidth(colId, width);
+                }
+            });
+        }, 300);
+        return () => { if (columnSizingTimerRef.current) clearTimeout(columnSizingTimerRef.current); };
+    }, [columnSizing, density, setColumnWidth]);
+
+    // ─── Row Virtualization ───────────────────────────────────────────────────
+
     const tableContainerRef = React.useRef<HTMLDivElement>(null);
     const { rows } = table.getRowModel();
+
+    const rowHeight = density === 'normal' ? 32 : 48;
 
     const rowVirtualizer = useVirtualizer({
         count: rows.length,
@@ -845,63 +1075,104 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         overscan: 15,
     });
 
-    // --- Cell selection for copy-paste ---
+    // ─── Cell Selection ───────────────────────────────────────────────────────
+
     const visibleColumns = table.getAllColumns().filter(c => c.getIsVisible());
     const cellSelection = useCellSelection({
         rowCount: rows.length,
         colCount: visibleColumns.length,
-        isSelectableColumn: (colIdx) => {
-            const col = visibleColumns[colIdx];
-            return col ? col.id !== 'actions' : false;
-        },
+        isSelectableColumn: () => true,
         scrollContainerRef: tableContainerRef,
         enabled: !selectionMode,
     });
 
-    // Push cell selection count to shared context
-    React.useEffect(() => {
-        const count = cellSelection.range && !selectionMode ? cellSelection.getSelectionSize() : 0;
-        setCellSelectionCount(count);
-        return () => setCellSelectionCount(0);
-    }, [cellSelection.range, selectionMode, cellSelection, setCellSelectionCount]);
+    const selectionSize = cellSelection.getSelectionSize();
 
     const getCellValue = React.useCallback((rowIdx: number, colIdx: number): string => {
         const row = rows[rowIdx];
         if (!row) return '';
-        const data = row.original;
+        const d = row.original;
         const col = visibleColumns[colIdx];
         if (!col) return '';
 
         switch (col.id) {
-            case 'state': return data.state || 'STORED';
-            case 'whse': return calculateWhse(data.block_loc || data.batches?.location_ref, data.batch_code);
-            case 'transaction_date': return format(new Date(data.transaction_date), 'MM/dd/yyyy');
-            case 'supplier': return data.supplier || '';
-            case 'batch_code': return data.batch_code || '';
-            case 'block_loc': return data.block_loc || data.batches?.location_ref || '';
-            case 'truck_plate': return data.truck_plate || '';
-            case 'weight_kg': return String(Math.round(parseFloat(String(data.weight_kg)) || 0));
-            case 'sacks': return String(data.sacks || '');
-            case 'mc': return data.lab_results?.mc != null ? data.lab_results.mc.toFixed(2) : '';
-            case 'grit': return data.lab_results?.grit != null ? data.lab_results.grit.toFixed(2) : '';
-            case 'bd_astm': return data.lab_results?.bd_astm != null ? data.lab_results.bd_astm.toFixed(3) : '';
-            case 'bd_jis': return data.lab_results?.bd_jis != null ? data.lab_results.bd_jis.toFixed(3) : '';
-            case 'vm': return data.lab_results?.vm != null ? data.lab_results.vm.toFixed(2) : '';
-            case 'ash': return data.lab_results?.ash != null ? data.lab_results.ash.toFixed(2) : '';
-            case 'fc': return data.lab_results?.fc != null ? data.lab_results.fc.toFixed(2) : '';
-            case 'remarks': return data.remarks || '';
-            case 'cost_basis': {
-                const val = parseFloat(String(data.cost_basis));
-                return isNaN(val) ? '' : val.toFixed(2);
-            }
-            case 'php_ttl': {
-                const wt = parseFloat(String(data.weight_kg)) || 0;
-                const price = parseFloat(String(data.cost_basis)) || 0;
+            case 'state': return d.state || 'STORED';
+
+            case 'transaction_date': return format(new Date(d.transaction_date), 'MM/dd/yyyy');
+            case 'supplier': return d.supplier || '';
+            case 'batch_code': return d.batch_code || '';
+            case 'block_loc': return d.block_loc || d.batches?.location_ref || '';
+            case 'truck_plate': return d.truck_plate || '';
+            case 'weight_kg': return String(Math.round(parseFloat(String(d.weight_kg)) || 0));
+            case 'sacks': return String(d.sacks || '');
+            case 'mc': return d.lab_results?.mc != null ? d.lab_results.mc.toFixed(2) : '';
+            case 'grit': return d.lab_results?.grit != null ? d.lab_results.grit.toFixed(2) : '';
+            case 'bd_astm': return d.lab_results?.bd_astm != null ? d.lab_results.bd_astm.toFixed(3) : '';
+            case 'bd_jis': return d.lab_results?.bd_jis != null ? d.lab_results.bd_jis.toFixed(3) : '';
+            case 'vm': return d.lab_results?.vm != null ? d.lab_results.vm.toFixed(2) : '';
+            case 'ash': return d.lab_results?.ash != null ? d.lab_results.ash.toFixed(2) : '';
+            case 'fc': return d.lab_results?.fc != null ? d.lab_results.fc.toFixed(2) : '';
+            case 'remarks': return d.remarks || '';
+            case 'cost_basis': { const v = parseFloat(String(d.cost_basis)); return isNaN(v) ? '' : v.toFixed(2); }
+            case 'php_total': {
+                const wt = parseFloat(String(d.weight_kg)) || 0;
+                const price = parseFloat(String(d.cost_basis)) || 0;
                 return (wt * price).toFixed(2);
             }
             default: return '';
         }
     }, [rows, visibleColumns]);
+
+    const getNumericCellValue = React.useCallback((rowIdx: number, colIdx: number): number | null => {
+        const row = rows[rowIdx];
+        if (!row) return null;
+        const d = row.original;
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+
+        switch (col.id) {
+            case 'weight_kg': return parseFloat(String(d.weight_kg)) || null;
+            case 'sacks': return d.sacks != null ? Number(d.sacks) : null;
+            case 'mc': return d.lab_results?.mc ?? null;
+            case 'grit': return d.lab_results?.grit ?? null;
+            case 'bd_astm': return d.lab_results?.bd_astm ?? null;
+            case 'bd_jis': return d.lab_results?.bd_jis ?? null;
+            case 'vm': return d.lab_results?.vm ?? null;
+            case 'ash': return d.lab_results?.ash ?? null;
+            case 'fc': return d.lab_results?.fc ?? null;
+            case 'cost_basis': { const v = parseFloat(String(d.cost_basis)); return isNaN(v) ? null : v; }
+            case 'php_total': {
+                const wt = parseFloat(String(d.weight_kg)) || 0;
+                const price = parseFloat(String(d.cost_basis)) || 0;
+                const total = wt * price;
+                return total > 0 ? total : null;
+            }
+            default: return null;
+        }
+    }, [rows, visibleColumns]);
+
+    const getColumnDefaultCalcType = React.useCallback((colIdx: number): AggregationType | null => {
+        const col = visibleColumns[colIdx];
+        if (!col) return null;
+        switch (col.id) {
+            case 'weight_kg': case 'sacks': case 'php_total': return 'SUM';
+            case 'mc': case 'grit': case 'bd_astm': case 'bd_jis': case 'vm': case 'ash': case 'fc':
+            case 'cost_basis': return 'AVERAGE';
+            default: return null;
+        }
+    }, [visibleColumns]);
+
+    const aggregates = useCellAggregation({ range: cellSelection.range, getNumericCellValue, getColumnDefaultCalcType });
+
+    // Push cell selection count + aggregates to shared context
+    React.useEffect(() => {
+        const count = cellSelection.range && !selectionMode ? selectionSize : 0;
+        const timer = setTimeout(() => {
+            setCellSelectionCount(count);
+            setCellAggregates(count > 1 ? aggregates : null);
+        }, 50);
+        return () => clearTimeout(timer);
+    }, [cellSelection.range, selectionMode, selectionSize, setCellSelectionCount, setCellAggregates, aggregates]);
 
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
         getSelectedRange: cellSelection.getSelectedRange,
@@ -917,75 +1188,62 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     // Clear cell selection when clicking outside the scroll container
     React.useEffect(() => {
         if (!cellSelection.range) return;
-
         const handleClickOutside = (e: MouseEvent) => {
             const container = tableContainerRef.current;
             if (container && !container.contains(e.target as Node)) {
+                const target = e.target as HTMLElement;
+                if (target.closest?.('[data-floating-status-bar]') || target.closest?.('[data-radix-popper-content-wrapper]')) return;
                 cellSelection.clearSelection();
             }
         };
-
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [cellSelection.range, cellSelection.clearSelection]);
 
-    // Clear cell selection on Escape key (global listener so it works regardless of focus)
+    // Clear cell selection on Escape key
     React.useEffect(() => {
         if (!cellSelection.range) return;
-
         const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                cellSelection.clearSelection();
-            }
+            if (e.key === 'Escape') cellSelection.clearSelection();
         };
-
         document.addEventListener('keydown', handleEscape);
         return () => document.removeEventListener('keydown', handleEscape);
     }, [cellSelection.range, cellSelection.clearSelection]);
 
-    // Unique filter options — hardcoded for STATE/WHSE, from props for Supplier/LOC
-    const uniqueStates = React.useMemo(
-        () => ['STORED', 'IN-USE', 'CLOSED', 'SUNDRYING', 'SUNDRIED'],
-        []
-    );
-
-    const uniqueWhse = React.useMemo(
-        () => ['WHSE A', 'WHSE B', 'WHSE C', 'WHSE D', 'FEED'],
-        []
-    );
-
-    const hasActiveFilters = (stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length) || (whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length) || supIncluded.size > 0 || locIncluded.size > 0;
-
-    const clearAllFilters = () => {
-        setStateExcluded(new Set());
-        setWhseExcluded(new Set());
-        setSupIncluded(new Set());
-        setLocIncluded(new Set());
+    // ─── Auto-Edit from Blocking Panel ───────────────────────────────────
+    React.useEffect(() => {
         const params = new URLSearchParams(window.location.search);
-        params.set('sx', '_all'); // sentinel: user explicitly cleared (don't re-apply default on remount)
-        params.delete('wx');
-        params.delete('sup');
-        params.delete('loc');
-        // Clean up legacy params
-        params.delete('supx');
-        params.delete('lx');
-        const qs = params.toString();
-        window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
-        // Restore saved year+month if available
-        if (preFilterDate.current) {
-            const { year, month: savedMonth } = preFilterDate.current;
-            preFilterDate.current = null;
-            if (year !== 'all') {
-                handleYearChange(year);
-                setMonth(savedMonth);
-                syncParamToUrl('m', savedMonth, String(new Date().getMonth()));
+        const editBatch = params.get('editBatch');
+        // Both the Deliveries and Usage tables are always mounted on /inventory and BOTH
+        // read `?editBatch=`. `editView` discriminates which one acts: only consume the
+        // param when it targets deliveries (a MISSING editView defaults to 'deliveries'
+        // for backward-compat with existing deep links). The Usage table early-returns on
+        // 'deliveries', so it leaves both params intact for us.
+        const editView = params.get('editView') ?? 'deliveries';
+        if (editView !== 'deliveries') return;
+        if (editBatch && data.length > 0) {
+            const matchingIds = data.filter(d => d.batch_code === editBatch).map(d => d.id);
+            if (matchingIds.length > 0) {
+                setSelectionMode(true);
+                setSelectedIds(new Set(matchingIds));
+                // Trigger bulk edit after a tick (let selection state settle)
+                setTimeout(() => {
+                    const matchingRows = data.filter(d => matchingIds.includes(d.id));
+                    setEditRows(matchingRows);
+                }, 100);
+                // Clean up URL — strip BOTH params so the matching consumer fully owns them.
+                params.delete('editBatch');
+                params.delete('editView');
+                const qs = params.toString();
+                window.history.replaceState(null, '', qs ? pathname + '?' + qs : pathname);
             }
         }
-    };
+    }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Fix #6: Memoize footer totals
+    // ─── Footer Totals ────────────────────────────────────────────────────────
+
     const filteredRows = table.getFilteredRowModel().rows;
-    const { totalWeight, totalSacks, totalAmount } = React.useMemo(() =>
+    const { totalWeight, totalAmount } = React.useMemo(() =>
         filteredRows.reduce(
             (acc, row) => {
                 const wt = parseFloat(String(row.original.weight_kg)) || 0;
@@ -1002,12 +1260,10 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         [filteredRows]
     );
 
-    // Fix #3: Compute all lab weighted averages in a single memoized pass
     const labAverages = React.useMemo(() => {
         const sums: Record<string, number> = {};
         LAB_COLUMNS.forEach(({ key }) => { sums[key] = 0; });
         let totalWt = 0;
-
         filteredRows.forEach(row => {
             const wt = parseFloat(String(row.original.weight_kg)) || 0;
             totalWt += wt;
@@ -1016,7 +1272,6 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                 sums[key] += val * wt;
             });
         });
-
         return LAB_COLUMNS.reduce((acc, { key }) => {
             acc[key] = totalWt > 0 ? sums[key] / totalWt : 0;
             return acc;
@@ -1024,14 +1279,13 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
     }, [filteredRows]);
 
     // Footer: count visible prefix columns for dynamic colSpan
-    const PREFIX_COLUMN_IDS = ['state', 'whse', 'transaction_date', 'supplier', 'batch_code', 'block_loc', 'truck_plate'];
-
     const visiblePrefixCount = React.useMemo(
-        () => PREFIX_COLUMN_IDS.filter(id => !hiddenColumns.has(id)).length,
-        [hiddenColumns]
+        () => PREFIX_COLUMN_IDS.filter(id => !hiddenColumnsSet.has(id)).length,
+        [hiddenColumnsSet]
     );
 
-    // Fix #7: Move statusText useMemo to top-level
+    // ─── Status Text ──────────────────────────────────────────────────────────
+
     const statusText = React.useMemo(() => {
         const count = filteredData.length;
         const displayYear = (yearParam === 'all' || search) ? 'All Years' : yearParam;
@@ -1046,9 +1300,216 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
         return <span><span className="font-semibold text-foreground">{count}</span> records &middot; <span className="font-semibold text-foreground">{MONTH_NAMES[parseInt(month)]} {displayYear}</span></span>;
     }, [filteredData.length, search, month, yearParam]);
 
+    // ─── Compute table minimum width ──────────────────────────────────────────
+
+    const tableMinWidth = React.useMemo(() => {
+        return columns.reduce((sum, col) => {
+            const id = col.id || (col as { accessorKey?: string }).accessorKey || '';
+            return sum + (columnSizing[id] || getDefaultColWidth(id, density));
+        }, 0);
+    }, [columns, columnSizing, density]);
+
+    // ─── Context menu item sets (shared Blackwood Table primitive) ─────────────
+    // The row menu has TWO modes: a single-row action set and a multi-row bulk set
+    // (when 2+ rows are selected and the right-clicked row is part of the selection).
+    // The ref is always the right-clicked delivery id; bulk actions read selectedIds
+    // from closure. Permission-gated Delete uses `hidden` (it was conditionally
+    // rendered before, never disabled). No dynamic Delete↔Restore here.
+
+    const SINGLE_ROW_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: 'View Details', icon: FileText,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) handleViewHistory(delivery);
+            },
+        },
+        {
+            kind: 'item', label: 'Edit Delivery', icon: Pencil,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) handleSingleEdit(delivery);
+            },
+        },
+        {
+            kind: 'item', label: 'Select Row', icon: CheckSquare,
+            onSelect: (id) => {
+                if (!selectionMode) {
+                    setSelectionMode(true);
+                    setSelectedIds(new Set([id]));
+                    cellSelection.clearSelection();
+                } else {
+                    toggleSelect(id);
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Copy Row', icon: Copy,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery) {
+                    const row = rows.find((r) => r.original.id === id);
+                    if (row) {
+                        const values = visibleColumns.map((_, colIdx) => getCellValue(row.index, colIdx));
+                        navigator.clipboard.writeText(values.join('\t')).then(() => {
+                            toast.success('Row copied to clipboard');
+                        });
+                    }
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Filter by Supplier', icon: Filter,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                if (delivery?.supplier) {
+                    const next = new Set(supIncluded);
+                    next.add(delivery.supplier);
+                    setFilters((prev) => ({ ...prev, supIncluded: next }));
+                    syncInclusionToUrl('sup', next);
+                    if (next.size > 0 && yearParam !== 'all') {
+                        if (preFilterDate.current === null) {
+                            preFilterDate.current = { year: yearParam, month };
+                        }
+                        handleYearChange('all', buildFilterOverrides('sup', next));
+                    }
+                }
+            },
+        },
+        {
+            kind: 'item', label: 'Filter by Batch', icon: Filter,
+            onSelect: (id) => {
+                const delivery = data.find((d) => d.id === id);
+                const loc = delivery?.block_loc || delivery?.batches?.location_ref;
+                if (loc) {
+                    const next = new Set(locIncluded);
+                    next.add(loc);
+                    setFilters((prev) => ({ ...prev, locIncluded: next }));
+                    syncInclusionToUrl('loc', next);
+                    if (next.size > 0 && yearParam !== 'all') {
+                        if (preFilterDate.current === null) {
+                            preFilterDate.current = { year: yearParam, month };
+                        }
+                        handleYearChange('all', buildFilterOverrides('loc', next));
+                    }
+                }
+            },
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Delete Delivery', icon: Trash2, variant: 'destructive',
+            hidden: () => !hasPermission('delete:all'),
+            onSelect: async (id) => {
+                if (confirm('Are you sure you want to delete this delivery?')) {
+                    const res = await deleteDelivery(id);
+                    if (res.success) {
+                        toast.success('Delivery deleted');
+                        handleRefresh();
+                    } else {
+                        errorToast('Delete failed: ' + res.message);
+                    }
+                }
+            },
+        },
+    ], [
+        data, rows, visibleColumns, selectionMode, supIncluded, locIncluded, yearParam, month,
+        handleViewHistory, handleSingleEdit, toggleSelect, getCellValue, syncInclusionToUrl,
+        handleYearChange, buildFilterOverrides, hasPermission, handleRefresh, cellSelection,
+    ]);
+
+    const MULTI_ROW_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: () => `Edit Selected (${selectedIds.size})`, icon: Pencil,
+            onSelect: () => handleBulkEdit(),
+        },
+        {
+            kind: 'item', label: () => `Copy Selected (${selectedIds.size})`, icon: Copy,
+            onSelect: () => {
+                const selectedRowData = rows.filter((r) => selectedIds.has(r.original.id));
+                const tsvLines = selectedRowData.map((r) =>
+                    visibleColumns.map((_, colIdx) => getCellValue(r.index, colIdx)).join('\t'),
+                );
+                navigator.clipboard.writeText(tsvLines.join('\n')).then(() => {
+                    toast.success(`${selectedIds.size} rows copied to clipboard`);
+                });
+            },
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Select All', icon: CheckSquare,
+            onSelect: () => setSelectedIds(new Set(rows.map((r) => r.original.id))),
+        },
+        {
+            kind: 'item', label: 'Deselect All', icon: Square,
+            onSelect: () => setSelectedIds(new Set()),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: () => `Delete Selected (${selectedIds.size})`, icon: Trash2, variant: 'destructive',
+            hidden: () => !hasPermission('delete:all'),
+            onSelect: () => handleBulkDelete(),
+        },
+    ], [selectedIds, rows, visibleColumns, getCellValue, handleBulkEdit, handleBulkDelete, hasPermission]);
+
+    // Which row-menu set to render: bulk when 2+ selected AND the clicked row is in
+    // the selection (mirrors the old `isMultiSelected` branch).
+    const rowMenuRef = rowMenu.state?.ref;
+    const rowMenuItems = React.useMemo<GridMenuItem<string>[]>(() => {
+        const isMultiSelected =
+            selectionMode && selectedIds.size > 1 && rowMenuRef != null && selectedIds.has(rowMenuRef);
+        return isMultiSelected ? MULTI_ROW_ITEMS : SINGLE_ROW_ITEMS;
+    }, [selectionMode, selectedIds, rowMenuRef, MULTI_ROW_ITEMS, SINGLE_ROW_ITEMS]);
+
+    // Column-header menu. The bold/italic/underline toggles keep the menu OPEN
+    // (keepOpen) and show a right-aligned Check (trailingIcon) when active — both
+    // reproduce the prior hand-rolled menu exactly.
+    const COLUMN_MENU_ITEMS = React.useMemo<GridMenuItem<string>[]>(() => [
+        {
+            kind: 'item', label: 'Sort Ascending', icon: ArrowUp,
+            onSelect: (colId) => table.getColumn(colId)?.toggleSorting(false),
+        },
+        {
+            kind: 'item', label: 'Sort Descending', icon: ArrowDown,
+            onSelect: (colId) => table.getColumn(colId)?.toggleSorting(true),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Bold', icon: Bold, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { bold: !settings.columnFormats[colId]?.bold }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.bold ? Check : null),
+        },
+        {
+            kind: 'item', label: 'Italic', icon: Italic, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { italic: !settings.columnFormats[colId]?.italic }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.italic ? Check : null),
+        },
+        {
+            kind: 'item', label: 'Underline', icon: Underline, keepOpen: true,
+            onSelect: (colId) => setColumnFormat(colId, { underline: !settings.columnFormats[colId]?.underline }),
+            trailingIcon: (colId) => (settings.columnFormats[colId]?.underline ? Check : null),
+        },
+        { kind: 'separator' },
+        {
+            kind: 'item', label: 'Hide Column', icon: EyeOff,
+            onSelect: (colId) => toggleColumn(colId),
+        },
+        {
+            kind: 'item', label: 'Reset Column Width', icon: RotateCcw,
+            onSelect: (colId) => {
+                const defaultWidth = getDefaultColWidth(colId, density);
+                setColumnSizing((prev) => ({ ...prev, [colId]: defaultWidth }));
+                setColumnWidth(colId, defaultWidth);
+            },
+        },
+    ], [table, settings.columnFormats, setColumnFormat, toggleColumn, density, setColumnWidth]);
+
+    // ─── Render ───────────────────────────────────────────────────────────────
+
     return (
-        <TooltipProvider>
-            <div className="flex flex-col h-full space-y-4">
+        <TooltipProvider delayDuration={200}>
+            <div className="flex flex-col h-full space-y-0">
+                {/* ─── Dialogs ─── */}
+
                 {/* Add Delivery Dialog */}
                 <Dialog open={isAddOpen} onOpenChange={(open) => { if (!open) handleCloseAdd(); }}>
                     <DialogContent
@@ -1056,12 +1517,10 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Add Deliveries</DialogTitle>
-                                <DialogDescription>
-                                    Enter delivery details below.
-                                </DialogDescription>
+                                <DialogDescription>Enter delivery details below.</DialogDescription>
                             </div>
                             <Button variant="ghost" size="icon" onClick={handleCloseAdd}>
                                 <X className="h-4 w-4" />
@@ -1071,7 +1530,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             <BulkDeliveryInput
                                 batches={batches}
                                 suppliers={allSuppliers}
-                                onSuccess={() => setIsAddOpen(false)}
+                                onSuccess={() => { setIsAddOpen(false); handleRefresh(); }}
                                 onDirtyChange={setIsInputDirty}
                             />
                         </div>
@@ -1085,12 +1544,10 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                         onInteractOutside={(e) => e.preventDefault()}
                         className="sm:max-w-[98vw] w-full p-0 overflow-hidden flex flex-col max-h-[95vh] border-none shadow-xl"
                     >
-                        <DialogHeader className="p-4 py-2 shrink-0 bg-background border-b z-50 flex flex-row items-center justify-between space-y-0">
+                        <DialogHeader className="p-4 py-2 shrink-0 bg-background/90 backdrop-blur-sm border-b z-50 flex flex-row items-center justify-between space-y-0">
                             <div>
                                 <DialogTitle>Edit Deliver{editRows?.length === 1 ? 'y' : 'ies'}</DialogTitle>
-                                <DialogDescription>
-                                    Modify delivery details below.
-                                </DialogDescription>
+                                <DialogDescription>Modify delivery details below.</DialogDescription>
                             </div>
                             <Button variant="ghost" size="icon" onClick={handleCloseEdit}>
                                 <X className="h-4 w-4" />
@@ -1103,7 +1560,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                     initialData={editRows}
                                     batches={batches}
                                     suppliers={allSuppliers}
-                                    onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); }}
+                                    onSuccess={() => { setEditRows(null); setSelectedIds(new Set()); handleRefresh(); }}
                                     onDirtyChange={setIsInputDirty}
                                 />
                             )}
@@ -1116,9 +1573,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     <DialogContent className="sm:max-w-[425px]">
                         <DialogHeader>
                             <DialogTitle>Unsaved Changes</DialogTitle>
-                            <DialogDescription>
-                                You have unsaved changes. Are you sure you want to discard them and exit?
-                            </DialogDescription>
+                            <DialogDescription>You have unsaved changes. Are you sure you want to discard them and exit?</DialogDescription>
                         </DialogHeader>
                         <div className="flex justify-end space-x-2 pt-4">
                             <Button variant="outline" onClick={() => setShowExitConfirmation(false)}>Cancel</Button>
@@ -1127,6 +1582,7 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     </DialogContent>
                 </Dialog>
 
+                {/* Delivery History Dialog */}
                 <DeliveryHistoryDialog
                     open={historyOpen}
                     deliveryId={historyDelivery?.id ?? null}
@@ -1134,310 +1590,107 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     onOpenChange={setHistoryOpen}
                 />
 
-                {/* Toolbar */}
-                <div className="flex-none flex items-center justify-between py-1">
+                {/* Settings Dialog */}
+                <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+                {/* ─── Toolbar ─── */}
+                <div className="flex-none h-10 px-4 flex items-center border-b bg-background gap-2 shrink-0">
+                    {/* Left group: Search + Clear filters */}
                     <div className="flex items-center gap-1.5">
-                        <div className="relative w-52">
-                            <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
+                        {/* Search */}
+                        <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                             <Input
-                                placeholder="Search deliveries..."
+                                placeholder="Search supplier, batch, truck..."
                                 value={searchTerm}
-                                onChange={(event) => handleSearchChange(event.target.value)}
+                                onChange={(e) => setSearchTerm(e.target.value)}
                                 onFocus={() => setIsSearchFocused(true)}
                                 onBlur={() => setIsSearchFocused(false)}
-                                className="pl-8 h-8 text-xs font-mono"
+                                className="h-7 w-[220px] pl-7 text-xs"
                             />
                         </div>
+                        {searchTerm && (
+                            <span className="bg-primary/10 text-primary text-[10px] rounded-full px-1.5 font-medium">
+                                {filteredData.length} found
+                            </span>
+                        )}
 
-                        {/* WHSE filter */}
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" className={cn(
-                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
-                                    whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length && "border-primary bg-primary/5"
-                                )}>
-                                    {whseExcluded.size === 0 || whseExcluded.size >= uniqueWhse.length
-                                        ? 'WHSE'
-                                        : `WHSE (${uniqueWhse.length - whseExcluded.size})`}
-                                    {whseExcluded.size > 0 && whseExcluded.size < uniqueWhse.length ? (
-                                        <span
-                                            onClick={(e) => { e.stopPropagation(); clearFilter('wx', setWhseExcluded); }}
-                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </span>
-                                    ) : (
-                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-                                    )}
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[180px] p-2" align="start">
-                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
-                                    <button onClick={() => selectAllFilter('wx', setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
-                                    <button onClick={() => deselectAllFilter('wx', uniqueWhse, setWhseExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
-                                </div>
-                                {uniqueWhse.map(w => (
-                                    <label key={w} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
-                                        <Checkbox
-                                            checked={!whseExcluded.has(w)}
-                                            onCheckedChange={(checked) => toggleFilterValue('wx', w, !checked, whseExcluded, setWhseExcluded)}
-                                            className="h-3.5 w-3.5"
-                                        />
-                                        {w}
-                                    </label>
-                                ))}
-                            </PopoverContent>
-                        </Popover>
-
-                        {/* STATE filter */}
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" className={cn(
-                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
-                                    stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length && "border-primary bg-primary/5"
-                                )}>
-                                    {stateExcluded.size === 0 || stateExcluded.size >= uniqueStates.length
-                                        ? 'State'
-                                        : `State (${uniqueStates.length - stateExcluded.size})`}
-                                    {stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length ? (
-                                        <span
-                                            onClick={(e) => { e.stopPropagation(); clearFilter('sx', setStateExcluded); }}
-                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </span>
-                                    ) : (
-                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-                                    )}
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[180px] p-2" align="start">
-                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
-                                    <button onClick={() => selectAllFilter('sx', setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Select All</button>
-                                    <button onClick={() => deselectAllFilter('sx', uniqueStates, setStateExcluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Deselect All</button>
-                                </div>
-                                {uniqueStates.map(s => (
-                                    <label key={s} className="flex items-center gap-2 px-1 py-1 text-xs font-mono rounded hover:bg-muted cursor-pointer">
-                                        <Checkbox
-                                            checked={!stateExcluded.has(s)}
-                                            onCheckedChange={(checked) => toggleFilterValue('sx', s, !checked, stateExcluded, setStateExcluded)}
-                                            className="h-3.5 w-3.5"
-                                        />
-                                        <span className={cn("uppercase", getStateClasses(s), "px-1 rounded-sm")}>{s}</span>
-                                    </label>
-                                ))}
-                            </PopoverContent>
-                        </Popover>
-
-                        {/* LOC filter (inclusion model) */}
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" className={cn(
-                                    "h-8 w-auto min-w-[60px] text-xs font-mono px-2",
-                                    locIncluded.size > 0 && "border-primary bg-primary/5"
-                                )}>
-                                    {locIncluded.size === 0
-                                        ? 'LOC'
-                                        : `LOC (${locIncluded.size})`}
-                                    {locIncluded.size > 0 ? (
-                                        <span
-                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('loc', setLocIncluded); }}
-                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </span>
-                                    ) : (
-                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-                                    )}
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[180px] p-0" align="start">
-                                {locIncluded.size > 0 && (
-                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
-                                        <button onClick={() => clearInclusionFilter('loc', setLocIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
-                                    </div>
-                                )}
-                                <Command>
-                                    <CommandInput placeholder="Search locations..." className="text-xs" />
-                                    <CommandList>
-                                        <CommandEmpty>No location found.</CommandEmpty>
-                                        <CommandGroup>
-                                            {allLocations.map(l => (
-                                                <CommandItem
-                                                    key={l}
-                                                    value={l}
-                                                    onSelect={() => toggleInclusionFilter('loc', l, locIncluded, setLocIncluded)}
-                                                    className="text-xs font-mono"
-                                                >
-                                                    <Checkbox checked={locIncluded.has(l)} className="mr-2 h-3.5 w-3.5" />
-                                                    {l}
-                                                </CommandItem>
-                                            ))}
-                                        </CommandGroup>
-                                    </CommandList>
-                                </Command>
-                            </PopoverContent>
-                        </Popover>
-
-                        {/* SUPPLIER filter (inclusion model) */}
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" className={cn(
-                                    "h-8 w-auto min-w-[80px] text-xs font-mono px-2",
-                                    supIncluded.size > 0 && "border-primary bg-primary/5"
-                                )}>
-                                    {supIncluded.size === 0
-                                        ? 'Supplier'
-                                        : `Supplier (${supIncluded.size})`}
-                                    {supIncluded.size > 0 ? (
-                                        <span
-                                            onClick={(e) => { e.stopPropagation(); clearInclusionFilter('sup', setSupIncluded); }}
-                                            className="ml-1 rounded-full p-0.5 hover:bg-muted"
-                                        >
-                                            <X className="h-3 w-3" />
-                                        </span>
-                                    ) : (
-                                        <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
-                                    )}
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[220px] p-0" align="start">
-                                {supIncluded.size > 0 && (
-                                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
-                                        <button onClick={() => clearInclusionFilter('sup', setSupIncluded)} className="text-[10px] text-muted-foreground hover:text-foreground">Clear</button>
-                                    </div>
-                                )}
-                                <Command>
-                                    <CommandInput placeholder="Search suppliers..." className="text-xs" />
-                                    <CommandList>
-                                        <CommandEmpty>No supplier found.</CommandEmpty>
-                                        <CommandGroup>
-                                            {allSuppliers.map(s => (
-                                                <CommandItem
-                                                    key={s}
-                                                    value={s}
-                                                    onSelect={() => toggleInclusionFilter('sup', s, supIncluded, setSupIncluded)}
-                                                    className="text-xs font-mono"
-                                                >
-                                                    <Checkbox checked={supIncluded.has(s)} className="mr-2 h-3.5 w-3.5" />
-                                                    {s}
-                                                </CommandItem>
-                                            ))}
-                                        </CommandGroup>
-                                    </CommandList>
-                                </Command>
-                            </PopoverContent>
-                        </Popover>
-
-                        {/* Clear all filters button */}
+                        {/* Clear all filters (only visible when any header filter is active) */}
                         {hasActiveFilters && (
                             <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
                                 onClick={clearAllFilters}
                             >
                                 <X className="mr-1 h-3 w-3" />
-                                Clear
+                                Clear filters
                             </Button>
                         )}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    {/* Spacer */}
+                    <div className="flex-1" />
+
+                    {/* Right group: Density + Columns + Settings + Select + Add + Refresh */}
+                    <div className="flex items-center gap-1">
+                        <DensityToggle value={density} onChange={setDensity} />
+
+                        <ColumnsPopover
+                            hiddenColumns={settings.hiddenColumns}
+                            onToggle={toggleColumn}
+                            onShowAll={showAllColumns}
+                        />
+
                         <Button
-                            variant={selectionMode ? "default" : "outline"}
+                            variant="ghost"
                             size="sm"
-                            className="h-8 gap-1"
+                            className="h-7 px-2 text-xs gap-1.5"
+                            onClick={() => setSettingsOpen(true)}
+                        >
+                            <SlidersHorizontal className="size-3.5" />
+                            Settings
+                        </Button>
+
+                        <Button
+                            variant={selectionMode ? "default" : "ghost"}
+                            size="sm"
+                            className="h-7 px-2 text-xs gap-1.5"
                             onClick={() => {
                                 setSelectionMode(prev => !prev);
                                 if (selectionMode) setSelectedIds(new Set());
                                 else cellSelection.clearSelection();
                             }}
                         >
+                            <CheckSquare className="size-3.5" />
                             Select
                         </Button>
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="outline" size="sm" className={cn("h-8 gap-1", hiddenColumns.size > 0 && "border-primary bg-primary/5")}>
-                                    <SlidersHorizontal className="h-3.5 w-3.5" /> Columns
-                                    {hiddenColumns.size > 0 && <span className="text-xs">({hiddenColumns.size})</span>}
-                                </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[200px] p-2" align="end">
-                                <div className="flex items-center justify-between mb-1 pb-1 border-b">
-                                    <span className="text-xs font-medium">Visible Columns</span>
-                                    {hiddenColumns.size > 0 && (
-                                        <button onClick={showAllColumns} className="text-[10px] text-muted-foreground hover:text-foreground">
-                                            Show All
-                                        </button>
-                                    )}
-                                </div>
-                                {hideableColumns.map(col => (
-                                    <label key={col.id} className="flex items-center gap-2 px-1 py-0.5 text-xs font-mono rounded hover:bg-muted cursor-pointer">
-                                        <Checkbox
-                                            checked={!hiddenColumns.has(col.id)}
-                                            onCheckedChange={() => toggleColumnVisibility(col.id)}
-                                            className="h-3.5 w-3.5"
-                                        />
-                                        {col.label}
-                                    </label>
-                                ))}
-                            </PopoverContent>
-                        </Popover>
-                        <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-8 gap-1">
-                            <Plus className="h-4 w-4" />
-                            Add Delivery
+
+                        <Button onClick={() => setIsAddOpen(true)} size="sm" className="h-7 px-2 text-xs gap-1.5">
+                            <Plus className="size-3.5" />
+                            Add
                         </Button>
 
-                        <Popover>
-                            <PopoverTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8">
-                                    <Settings className="h-4 w-4" />
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={handleRefresh}
+                                    disabled={refreshing}
+                                >
+                                    <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
                                 </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-80" align="end">
-                                <div className="grid gap-4">
-                                    <div className="space-y-2">
-                                        <h4 className="font-medium leading-none">View Options</h4>
-                                        <p className="text-sm text-muted-foreground">
-                                            Customize the table appearance.
-                                        </p>
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <div className="flex items-center justify-between">
-                                            <Label htmlFor="font-size">Font Size: {fontSize}px</Label>
-                                        </div>
-                                        <Slider
-                                            id="font-size"
-                                            min={9}
-                                            max={14}
-                                            step={1}
-                                            value={[fontSize]}
-                                            onValueChange={(value) => setFontSize(value[0])}
-                                        />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <div className="flex items-center justify-between">
-                                            <Label htmlFor="row-height">Row Height: {rowHeight}px</Label>
-                                        </div>
-                                        <Slider
-                                            id="row-height"
-                                            min={20}
-                                            max={60}
-                                            step={1}
-                                            value={[rowHeight]}
-                                            onValueChange={(value: number[]) => setRowHeight(value[0])}
-                                        />
-                                    </div>
-                                </div>
-                            </PopoverContent>
-                        </Popover>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">Refresh data</TooltipContent>
+                        </Tooltip>
                     </div>
                 </div>
 
-                {/* Floating Action Bar */}
+                {/* ─── Selection Mode Bar ─── */}
                 {selectionMode && (
-                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 rounded-md border bg-muted/50 text-sm">
+                    <div className="flex-none flex items-center gap-3 px-3 py-1.5 border-b bg-muted/50 text-sm animate-fade-up">
                         <span className="font-medium text-xs">{selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Click rows to select'}</span>
                         <div className="ml-auto flex gap-2">
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
@@ -1453,11 +1706,11 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     </div>
                 )}
 
-                {/* Scrollable Table */}
-                <div className="flex-1 min-h-0 rounded-md border overflow-hidden flex flex-col relative bg-background">
+                {/* ─── Scrollable Table ─── */}
+                <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative bg-background">
                     {/* Loading Overlay */}
                     {isYearLoading && (
-                        <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center">
+                        <div className="absolute inset-0 z-60 bg-background/50 backdrop-blur-sm flex items-center justify-center animate-blur-in">
                             <div className="flex flex-col items-center gap-2">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                 <span className="text-sm font-medium text-muted-foreground">Loading Data...</span>
@@ -1474,35 +1727,57 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                             handleCopyKeyDown(e);
                         }}
                     >
-                        {/* Fix #1: No key-based remounting — content updates in place */}
                         <div className="w-full h-full">
-                            <table className="w-full caption-bottom text-sm table-fixed relative border-collapse">
-                                <TableHeader className="bg-muted sticky top-0 z-50 shadow-sm border-b">
+                            <table
+                                className={cn('w-full caption-bottom table-fixed relative border-collapse', fontSizeClass)}
+                                style={{ minWidth: tableMinWidth }}
+                            >
+                                {/* ─── Header ─── */}
+                                <thead className="bg-muted/90 backdrop-blur-sm sticky top-0 z-20 shadow-sm border-b">
                                     {table.getHeaderGroups().map((headerGroup) => (
-                                        <TableRow key={headerGroup.id} className="hover:bg-transparent border-b" style={{ height: `${rowHeight}px` }}>
+                                        <tr key={headerGroup.id} className="border-b border-border/50">
                                             {headerGroup.headers.map((header) => {
+                                                const isNumeric = ['sacks', 'weight_kg', 'mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc', 'cost_basis', 'php_total'].includes(header.id);
                                                 return (
-
-
-                                                    <TableHead key={header.id} style={{ width: header.getSize(), height: `${rowHeight}px` }} className="px-1 bg-muted sticky top-0 z-50 font-bold text-foreground border-b border-foreground/20 shadow-none after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20 last:after:hidden">
-                                                        <div style={{ fontSize: `${fontSize}px` }} className="flex items-center justify-center h-full">
-                                                            {header.isPlaceholder
-                                                                ? null
-                                                                : flexRender(
-                                                                    header.column.columnDef.header,
-                                                                    header.getContext()
+                                                    <th
+                                                        key={header.id}
+                                                        className={cn(
+                                                            'h-8 font-semibold text-muted-foreground relative group border-r border-border/40 last:border-r-0',
+                                                            cellPaddingClass,
+                                                            isNumeric ? 'text-right' : 'text-left',
+                                                        )}
+                                                        style={{ width: header.getSize() }}
+                                                        onContextMenu={(e) => {
+                                                            e.preventDefault();
+                                                            columnMenu.open(header.column.id, e.clientX, e.clientY);
+                                                        }}
+                                                    >
+                                                        {header.isPlaceholder
+                                                            ? null
+                                                            : flexRender(header.column.columnDef.header, header.getContext())}
+                                                        {/* Column resize handle */}
+                                                        {header.column.getCanResize() && (
+                                                            <div
+                                                                onMouseDown={header.getResizeHandler()}
+                                                                onTouchStart={header.getResizeHandler()}
+                                                                className={cn(
+                                                                    'absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none',
+                                                                    'opacity-0 group-hover:opacity-100 transition-opacity duration-150',
+                                                                    header.column.getIsResizing() && 'opacity-100 bg-primary'
                                                                 )}
-                                                        </div>
-                                                    </TableHead>
+                                                            />
+                                                        )}
+                                                    </th>
                                                 );
                                             })}
-                                        </TableRow>
+                                        </tr>
                                     ))}
-                                </TableHeader>
-                                <TableBody>
+                                </thead>
+
+                                {/* ─── Body ─── */}
+                                <tbody>
                                     {rows.length ? (() => {
                                         const virtualRows = rowVirtualizer.getVirtualItems();
-                                        // Padding spacers keep rows in normal table flow for column alignment
                                         const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
                                         const paddingBottom = virtualRows.length > 0
                                             ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
@@ -1516,44 +1791,77 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                                 {virtualRows.map((virtualRow) => {
                                                     const row = rows[virtualRow.index];
                                                     const isSelected = selectedIds.has(row.original.id);
-                                                    const rowState = row.original.state || 'STORED';
+
                                                     return (
-                                                        <TableRow
+                                                        <tr
                                                             key={row.id}
                                                             data-state={isSelected ? "selected" : undefined}
                                                             className={cn(
-                                                                "hover:bg-muted/50 border-b last:border-0 transition-colors",
-                                                                getRowStateClasses(rowState),
-                                                                selectionMode && "cursor-pointer",
-                                                                isSelected && "bg-primary/5"
+                                                                rowHeightClass,
+                                                                'border-b border-border/30 transition-all duration-150 hover:bg-muted/50',
+                                                                selectionMode && 'cursor-pointer',
+                                                                isSelected && 'bg-primary/5'
                                                             )}
                                                             style={{ height: `${rowHeight}px` }}
-                                                            onClick={selectionMode ? () => toggleSelect(row.original.id) : undefined}
+                                                            onClick={() => {
+                                                                if (selectionMode) {
+                                                                    toggleSelect(row.original.id);
+                                                                }
+                                                            }}
+                                                            onContextMenu={(e) => {
+                                                                e.preventDefault();
+                                                                if (selectionMode && !selectedIds.has(row.original.id)) {
+                                                                    setSelectedIds(prev => new Set(prev).add(row.original.id));
+                                                                }
+                                                                openPopup(row.original.id, e.clientX, e.clientY);
+                                                            }}
                                                         >
-                                                            {row.getVisibleCells().map((cell, cellIndex) => (
-                                                                <TableCell
-                                                                    key={cell.id}
-                                                                    className={cn(
-                                                                        "px-1 py-0 border-r last:border-0",
-                                                                        !selectionMode && cellSelection.isSelected(virtualRow.index, cellIndex) && "bg-primary/10 dark:bg-primary/20",
-                                                                        !selectionMode && cellSelection.isAnchor(virtualRow.index, cellIndex) && "ring-2 ring-primary ring-inset"
-                                                                    )}
-                                                                    style={{ height: `${rowHeight}px` }}
-                                                                    onClick={cell.column.id === 'actions' ? (e) => e.stopPropagation() : undefined}
-                                                                    onMouseDown={cell.column.id !== 'actions' && !selectionMode ? (e) => {
-                                                                        e.preventDefault();
-                                                                        cellSelection.handleCellMouseDown(virtualRow.index, cellIndex, e);
-                                                                        tableContainerRef.current?.focus({ preventScroll: true });
-                                                                    } : undefined}
-                                                                    onMouseEnter={cellSelection.isDragging && !selectionMode ? () => cellSelection.handleCellMouseEnter(virtualRow.index, cellIndex) : undefined}
-                                                                >
-                                                                    {flexRender(
-                                                                        cell.column.columnDef.cell,
-                                                                        cell.getContext()
-                                                                    )}
-                                                                </TableCell>
-                                                            ))}
-                                                        </TableRow>
+                                                            {row.getVisibleCells().map((cell, cellIndex) => {
+                                                                const colId = cell.column.id;
+                                                                const isLabCol = LAB_KEYS.has(colId);
+                                                                let heatTintClass = '';
+                                                                if (isLabCol) {
+                                                                    const val = row.original.lab_results?.[colId as keyof DeliveryHistoryRow['lab_results']];
+                                                                    if (val != null) {
+                                                                        heatTintClass = getLabHighlightBg(colId as LabMetric, Number(val), labHighlights);
+                                                                    }
+                                                                }
+
+                                                                const isNumeric = ['sacks', 'weight_kg', 'mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc', 'cost_basis', 'php_total'].includes(colId);
+
+                                                                const fmt = settings.columnFormats[colId];
+                                                                const fmtClasses = cn(
+                                                                    fmt?.bold && 'font-bold',
+                                                                    fmt?.italic && 'italic',
+                                                                    fmt?.underline && 'underline',
+                                                                );
+
+                                                                return (
+                                                                    <td
+                                                                        key={cell.id}
+                                                                        className={cn(
+                                                                            cellPaddingClass,
+                                                                            'align-middle whitespace-nowrap border-r border-border/10',
+                                                                            isNumeric && 'font-mono text-right',
+                                                                            heatTintClass,
+                                                                            fmtClasses,
+                                                                            !selectionMode && cellSelection.isSelected(virtualRow.index, cellIndex) && 'bg-primary/10 dark:bg-primary/20',
+                                                                            !selectionMode && cellSelection.isAnchor(virtualRow.index, cellIndex) && 'ring-2 ring-primary ring-inset'
+                                                                        )}
+                                                                        style={{ height: `${rowHeight}px` }}
+                                                                        onMouseDown={!selectionMode ? (e) => {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            cellSelection.handleCellMouseDown(virtualRow.index, cellIndex, e);
+                                                                            tableContainerRef.current?.focus({ preventScroll: true });
+                                                                        } : undefined}
+                                                                        onMouseEnter={cellSelection.isDragging && !selectionMode ? () => cellSelection.handleCellMouseEnter(virtualRow.index, cellIndex) : undefined}
+                                                                    >
+                                                                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                                                    </td>
+                                                                );
+                                                            })}
+                                                        </tr>
                                                     );
                                                 })}
                                                 {paddingBottom > 0 && (
@@ -1562,116 +1870,112 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                                             </>
                                         );
                                     })() : (
-                                        <TableRow>
-                                            <TableCell
-                                                colSpan={columns.length}
-                                                className="h-24 text-center"
-                                            >
-                                                No results.
-                                            </TableCell>
-                                        </TableRow>
+                                        <tr>
+                                            <td colSpan={columns.length} className="h-24 text-center">
+                                                <span className="animate-fade-up text-muted-foreground">No results.</span>
+                                            </td>
+                                        </tr>
                                     )}
-                                </TableBody>
-                                <TableFooter className="bg-muted font-medium sticky bottom-0 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50">
-                                    <TableRow className="hover:bg-muted/50" style={{ height: `${rowHeight}px` }}>
-                                        {/* TOTALS label — dynamic colSpan based on visible prefix columns */}
-                                        {visiblePrefixCount > 0 && (
-                                            <TableCell colSpan={visiblePrefixCount} className="px-2 font-mono font-bold text-right py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                TOTALS
-                                            </TableCell>
-                                        )}
-                                        {/* WT */}
-                                        {!hiddenColumns.has('weight_kg') && (
-                                            <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {totalWeight > 0 ? (
-                                                    <Tooltip>
-                                                        <TooltipTrigger asChild>
-                                                            <span>{formatCompact(Math.round(totalWeight), 2)}</span>
-                                                        </TooltipTrigger>
-                                                        <TooltipContent side="top">
-                                                            {Math.round(totalWeight).toLocaleString()}
-                                                        </TooltipContent>
-                                                    </Tooltip>
-                                                ) : formatCompact(Math.round(totalWeight), 2)}
-                                            </TableCell>
-                                        )}
-                                        {/* SKS */}
-                                        {!hiddenColumns.has('sacks') && (
-                                            <TableCell className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                            </TableCell>
-                                        )}
-                                        {/* Lab weighted averages — only visible columns */}
-                                        {LAB_COLUMNS.filter(({ key }) => !hiddenColumns.has(key)).map(({ key, decimals }) => (
-                                            <TableCell key={key} className="px-1 text-center font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {labAverages[key] > 0 ? (
-                                                    <Tooltip>
-                                                        <TooltipTrigger asChild>
-                                                            <span>{formatCompact(labAverages[key], decimals)}</span>
-                                                        </TooltipTrigger>
-                                                        <TooltipContent side="top">
-                                                            {labAverages[key].toFixed(decimals)}
-                                                        </TooltipContent>
-                                                    </Tooltip>
-                                                ) : '-'}
-                                            </TableCell>
-                                        ))}
-                                        {/* REMARKS */}
-                                        {!hiddenColumns.has('remarks') && (
-                                            <TableCell className="py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" />
-                                        )}
-                                        {/* PHP/KG */}
-                                        {hasPermission('view:prices') && !hiddenColumns.has('cost_basis') && (
-                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {totalWeight > 0 ? (
-                                                    <Tooltip>
-                                                        <TooltipTrigger asChild>
-                                                            <div className="flex items-center justify-between">
-                                                                <span className="text-muted-foreground">₱</span>
-                                                                <span>{formatCompact(totalAmount / totalWeight, 2)}</span>
-                                                            </div>
-                                                        </TooltipTrigger>
-                                                        <TooltipContent side="top">
-                                                            {(totalAmount / totalWeight).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                        </TooltipContent>
-                                                    </Tooltip>
-                                                ) : (
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{formatCompact(0, 2)}</span>
-                                                    </div>
-                                                )}
-                                            </TableCell>
-                                        )}
-                                        {/* PHP TTL */}
-                                        {hasPermission('view:prices') && !hiddenColumns.has('php_ttl') && (
-                                            <TableCell className="px-1 font-mono font-bold py-0 relative after:absolute after:right-0 after:top-0 after:bottom-0 after:w-px after:bg-foreground/20" style={{ fontSize: `${fontSize}px` }}>
-                                                {totalAmount > 0 ? (
-                                                    <Tooltip>
-                                                        <TooltipTrigger asChild>
-                                                            <div className="flex items-center justify-between">
-                                                                <span className="text-muted-foreground">₱</span>
-                                                                <span>{formatCompact(totalAmount, 2)}</span>
-                                                            </div>
-                                                        </TooltipTrigger>
-                                                        <TooltipContent side="top">
-                                                            {totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                        </TooltipContent>
-                                                    </Tooltip>
-                                                ) : (
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-muted-foreground">₱</span>
-                                                        <span>{formatCompact(totalAmount, 2)}</span>
-                                                    </div>
-                                                )}
-                                            </TableCell>
-                                        )}
-                                        {/* Actions */}
-                                        <TableCell className="py-0" />
-                                    </TableRow>
-                                </TableFooter>
+                                </tbody>
+
+                                {/* ─── Conditional TOTALS Footer ─── */}
+                                {hasActiveFilters && (
+                                    <tfoot className="bg-muted/90 backdrop-blur-sm font-medium sticky bottom-0 z-20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] border-t border-border/50 animate-slide-up">
+                                        <tr className={cn(rowHeightClass, 'font-mono font-semibold')}>
+                                            {/* TOTALS label */}
+                                            {visiblePrefixCount > 0 && (
+                                                <td colSpan={visiblePrefixCount} className={cn(cellPaddingClass, 'text-right font-mono font-bold')}>
+                                                    TOTALS
+                                                </td>
+                                            )}
+                                            {/* Weight */}
+                                            {!hiddenColumnsSet.has('weight_kg') && (
+                                                <td className={cn(cellPaddingClass, 'text-right font-mono')}>
+                                                    {totalWeight > 0 ? (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <span>{formatCompact(Math.round(totalWeight), 2)}</span>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent side="top">{Math.round(totalWeight).toLocaleString()}</TooltipContent>
+                                                        </Tooltip>
+                                                    ) : '-'}
+                                                </td>
+                                            )}
+                                            {/* Sacks */}
+                                            {!hiddenColumnsSet.has('sacks') && (
+                                                <td className={cn(cellPaddingClass, 'text-right font-mono')} />
+                                            )}
+                                            {/* Lab weighted averages */}
+                                            {LAB_COLUMNS.filter(({ key }) => !hiddenColumnsSet.has(key)).map(({ key, decimals }) => (
+                                                <td key={key} className={cn(cellPaddingClass, 'text-right font-mono')}>
+                                                    {labAverages[key] > 0 ? (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <span>{formatCompact(labAverages[key], decimals)}</span>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent side="top">{labAverages[key].toFixed(decimals)}</TooltipContent>
+                                                        </Tooltip>
+                                                    ) : '-'}
+                                                </td>
+                                            ))}
+                                            {/* Remarks */}
+                                            {!hiddenColumnsSet.has('remarks') && (
+                                                <td className={cellPaddingClass} />
+                                            )}
+                                            {/* PHP/KG */}
+                                            {canViewPrices && !hiddenColumnsSet.has('cost_basis') && (
+                                                <td className={cn(cellPaddingClass, 'font-mono')}>
+                                                    {totalWeight > 0 ? (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <div className="flex items-center justify-between">
+                                                                    <span className="text-muted-foreground">&#8369;</span>
+                                                                    <span>{formatCompact(totalAmount / totalWeight, 2)}</span>
+                                                                </div>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent side="top">
+                                                                {(totalAmount / totalWeight).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                            </TooltipContent>
+                                                        </Tooltip>
+                                                    ) : (
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">&#8369;</span>
+                                                            <span>-</span>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            )}
+                                            {/* PHP Total */}
+                                            {canViewPrices && !hiddenColumnsSet.has('php_total') && (
+                                                <td className={cn(cellPaddingClass, 'font-mono')}>
+                                                    {totalAmount > 0 ? (
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <div className="flex items-center justify-between">
+                                                                    <span className="text-muted-foreground">&#8369;</span>
+                                                                    <span>{formatCompact(totalAmount, 2)}</span>
+                                                                </div>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent side="top">
+                                                                {totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                            </TooltipContent>
+                                                        </Tooltip>
+                                                    ) : (
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="text-muted-foreground">&#8369;</span>
+                                                            <span>-</span>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            )}
+                                        </tr>
+                                    </tfoot>
+                                )}
                             </table>
                         </div>
                     </div>
+
+                    {/* Footer Navigation */}
                     <DeliverySheetFooter
                         month={month}
                         year={searchParams.get('year') || String(new Date().getFullYear())}
@@ -1683,8 +1987,314 @@ export function DeliveryMasterTable({ data, batches, search, allSuppliers, allLo
                     />
                 </div>
 
+                {/* ─── Row Context Menu (shared Blackwood Table primitive) ─── */}
+                <GridContextMenu<string>
+                    state={rowMenu.state}
+                    onClose={rowMenu.close}
+                    items={rowMenuItems}
+                />
 
+                {/* ─── Column Context Menu (shared Blackwood Table primitive) ─── */}
+                <GridContextMenu<string>
+                    state={columnMenu.state}
+                    onClose={columnMenu.close}
+                    items={COLUMN_MENU_ITEMS}
+                />
             </div>
-        </TooltipProvider >
+        </TooltipProvider>
+    );
+}
+
+// ─── State Header Filter ──────────────────────────────────────────────────────
+
+interface StateHeaderFilterProps {
+    uniqueStates: string[];
+    stateExcluded: Set<string>;
+    onToggle: (value: string, exclude: boolean) => void;
+    onSelectAll: () => void;
+    onDeselectAll: () => void;
+    onClear: () => void;
+}
+
+function StateHeaderFilter({ uniqueStates, stateExcluded, onToggle, onSelectAll, onDeselectAll, onClear }: StateHeaderFilterProps) {
+    const isActive = stateExcluded.size > 0 && stateExcluded.size < uniqueStates.length;
+    const activeCount = uniqueStates.length - stateExcluded.size;
+
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button className="inline-flex items-center gap-1 cursor-pointer hover:text-foreground transition-colors duration-150 font-semibold text-muted-foreground">
+                    State
+                    <Filter className={cn(
+                        'size-2.5 transition-opacity duration-150',
+                        isActive ? 'opacity-100 text-primary' : 'opacity-40'
+                    )} />
+                    {isActive && (
+                        <span className="bg-primary/15 text-primary text-[9px] rounded-full px-1 font-semibold leading-none py-0.5">
+                            {activeCount}
+                        </span>
+                    )}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-[180px] p-2 z-30 bg-popover/95 backdrop-blur-lg">
+                <div className="flex items-center justify-between mb-1 pb-1 border-b">
+                    <button onClick={onSelectAll} className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer">Select All</button>
+                    <button onClick={onDeselectAll} className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer">Deselect All</button>
+                </div>
+                {uniqueStates.map(s => (
+                    <label key={s} className="flex items-center gap-2 px-1 py-1 text-xs rounded hover:bg-muted cursor-pointer">
+                        <Checkbox
+                            checked={!stateExcluded.has(s)}
+                            onCheckedChange={(checked) => onToggle(s, !checked)}
+                            className="h-3.5 w-3.5"
+                        />
+                        <span className="inline-flex items-center gap-1.5">
+                            <span className={cn('inline-block w-1.5 h-1.5 rounded-full shrink-0', getStateDotClass(s))} />
+                            <span className="uppercase text-[10px]">{s}</span>
+                        </span>
+                    </label>
+                ))}
+                {isActive && (
+                    <div className="mt-1 pt-1 border-t">
+                        <button onClick={onClear} className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer">Clear filter</button>
+                    </div>
+                )}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+// ─── Supplier Header Filter ──────────────────────────────────────────────────
+
+interface SupplierHeaderFilterProps {
+    allSuppliers: string[];
+    supIncluded: Set<string>;
+    onToggle: (value: string) => void;
+    onClear: () => void;
+}
+
+function SupplierHeaderFilter({ allSuppliers, supIncluded, onToggle, onClear }: SupplierHeaderFilterProps) {
+    const filterCount = supIncluded.size;
+
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button className="inline-flex items-center gap-1 cursor-pointer hover:text-foreground transition-colors duration-150 font-semibold text-muted-foreground">
+                    Supplier
+                    <Filter className={cn(
+                        'size-2.5 transition-opacity duration-150',
+                        filterCount > 0 ? 'opacity-100 text-primary' : 'opacity-40'
+                    )} />
+                    {filterCount > 0 && (
+                        <span className="bg-primary/15 text-primary text-[9px] rounded-full px-1 font-semibold leading-none py-0.5">
+                            {filterCount}
+                        </span>
+                    )}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-[220px] p-0 z-30 bg-popover/95 backdrop-blur-lg">
+                {filterCount > 0 && (
+                    <div className="flex items-center justify-end px-2 pt-2 pb-1 border-b">
+                        <button onClick={onClear} className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer">Clear</button>
+                    </div>
+                )}
+                <Command>
+                    <CommandInput placeholder="Search suppliers..." className="text-xs" />
+                    <CommandList>
+                        <CommandEmpty>No supplier found.</CommandEmpty>
+                        <CommandGroup>
+                            {allSuppliers.map(s => (
+                                <CommandItem
+                                    key={s}
+                                    value={s}
+                                    onSelect={() => onToggle(s)}
+                                    className="text-xs font-mono"
+                                >
+                                    <Checkbox checked={supIncluded.has(s)} className="mr-2 h-3.5 w-3.5" />
+                                    {s}
+                                </CommandItem>
+                            ))}
+                        </CommandGroup>
+                    </CommandList>
+                </Command>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+// ─── LOC Header Filter ────────────────────────────────────────────────────────
+
+interface LocHeaderFilterProps {
+    locsByWhse: Record<string, string[]>;
+    activeLocFilters: Set<string>;
+    onFiltersChange: (filters: Set<string>) => void;
+}
+
+function LocHeaderFilter({ locsByWhse, activeLocFilters, onFiltersChange }: LocHeaderFilterProps) {
+    const [locFilterOpen, setLocFilterOpen] = React.useState(false);
+    const filterCount = activeLocFilters.size;
+
+    return (
+        <Popover open={locFilterOpen} onOpenChange={setLocFilterOpen}>
+            <PopoverTrigger asChild>
+                <button className="inline-flex items-center gap-1 cursor-pointer hover:text-foreground transition-colors duration-150 font-semibold text-muted-foreground">
+                    LOC
+                    <Filter className={cn(
+                        'size-2.5 transition-opacity duration-150',
+                        filterCount > 0 ? 'opacity-100 text-primary' : 'opacity-40'
+                    )} />
+                    {filterCount > 0 && (
+                        <span className="bg-primary/15 text-primary text-[9px] rounded-full px-1 font-semibold leading-none py-0.5">
+                            {filterCount}
+                        </span>
+                    )}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-56 p-3 z-30 bg-popover/95 backdrop-blur-lg">
+                <LocFilterContent
+                    locsByWhse={locsByWhse}
+                    activeLocFilters={activeLocFilters}
+                    onFiltersChange={(next) => {
+                        onFiltersChange(next);
+                    }}
+                />
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+// ─── LOC Filter Content ───────────────────────────────────────────────────────
+
+interface LocFilterContentProps {
+    locsByWhse: Record<string, string[]>;
+    activeLocFilters: Set<string>;
+    onFiltersChange: (filters: Set<string>) => void;
+}
+
+function LocFilterContent({ locsByWhse, activeLocFilters, onFiltersChange }: LocFilterContentProps) {
+    const whseKeys = React.useMemo(() => Object.keys(locsByWhse).sort(), [locsByWhse]);
+    const [expandedWhse, setExpandedWhse] = React.useState<Set<string>>(new Set());
+    const filterCount = activeLocFilters.size;
+
+    const toggleWhseExpanded = React.useCallback((whse: string) => {
+        setExpandedWhse(prev => {
+            const next = new Set(prev);
+            if (next.has(whse)) next.delete(whse);
+            else next.add(whse);
+            return next;
+        });
+    }, []);
+
+    const isWhseFullySelected = React.useCallback(
+        (whse: string) => {
+            const locs = locsByWhse[whse] ?? [];
+            return locs.length > 0 && locs.every(loc => activeLocFilters.has(loc));
+        },
+        [locsByWhse, activeLocFilters]
+    );
+
+    const isWhsePartiallySelected = React.useCallback(
+        (whse: string) => {
+            const locs = locsByWhse[whse] ?? [];
+            const selectedCount = locs.filter(loc => activeLocFilters.has(loc)).length;
+            return selectedCount > 0 && selectedCount < locs.length;
+        },
+        [locsByWhse, activeLocFilters]
+    );
+
+    const toggleWhse = React.useCallback(
+        (whse: string) => {
+            const locs = locsByWhse[whse] ?? [];
+            const allSelected = locs.every(loc => activeLocFilters.has(loc));
+            const next = new Set(activeLocFilters);
+            if (allSelected) {
+                for (const loc of locs) next.delete(loc);
+            } else {
+                for (const loc of locs) next.add(loc);
+            }
+            onFiltersChange(next);
+        },
+        [locsByWhse, activeLocFilters, onFiltersChange]
+    );
+
+    const toggleLoc = React.useCallback(
+        (loc: string) => {
+            const next = new Set(activeLocFilters);
+            if (next.has(loc)) next.delete(loc);
+            else next.add(loc);
+            onFiltersChange(next);
+        },
+        [activeLocFilters, onFiltersChange]
+    );
+
+    const clearAll = React.useCallback(() => {
+        onFiltersChange(new Set());
+    }, [onFiltersChange]);
+
+    return (
+        <>
+            <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-muted-foreground">Filter by Location</p>
+                {filterCount > 0 && (
+                    <button
+                        onClick={clearAll}
+                        className="text-[10px] text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
+                    >
+                        Clear
+                    </button>
+                )}
+            </div>
+
+            <div className="flex flex-col gap-1 max-h-[320px] overflow-y-auto">
+                {whseKeys.map(whse => {
+                    const locs = locsByWhse[whse] ?? [];
+                    const isExpanded = expandedWhse.has(whse);
+                    const fullySelected = isWhseFullySelected(whse);
+                    const partiallySelected = isWhsePartiallySelected(whse);
+
+                    return (
+                        <div key={whse}>
+                            <div className="flex items-center gap-1.5 px-1 py-1 rounded hover:bg-muted/50">
+                                <button
+                                    className="size-4 flex items-center justify-center shrink-0 cursor-pointer"
+                                    onClick={() => toggleWhseExpanded(whse)}
+                                >
+                                    {isExpanded ? (
+                                        <ChevronDown className="size-3 text-muted-foreground" />
+                                    ) : (
+                                        <ChevronRight className="size-3 text-muted-foreground" />
+                                    )}
+                                </button>
+                                <Checkbox
+                                    checked={fullySelected ? true : partiallySelected ? 'indeterminate' : false}
+                                    onCheckedChange={() => toggleWhse(whse)}
+                                    className="size-3.5"
+                                />
+                                <span className="text-xs font-semibold">WHSE {whse}</span>
+                                <span className="text-[10px] text-muted-foreground ml-auto">{locs.length} locs</span>
+                            </div>
+
+                            {isExpanded && (
+                                <div className="ml-5 flex flex-col gap-0.5 mb-1">
+                                    {locs.map(loc => (
+                                        <label
+                                            key={loc}
+                                            className="flex items-center gap-2 px-1.5 py-0.5 rounded hover:bg-muted/50 cursor-pointer text-xs"
+                                        >
+                                            <Checkbox
+                                                checked={activeLocFilters.has(loc)}
+                                                onCheckedChange={() => toggleLoc(loc)}
+                                                className="size-3"
+                                            />
+                                            <span className="font-mono text-[11px]">{loc}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </>
     );
 }

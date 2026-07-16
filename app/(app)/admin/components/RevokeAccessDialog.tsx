@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 
 interface RevokeAccessDialogProps {
   userId: string;
@@ -43,7 +44,7 @@ export function RevokeAccessDialog({
         toast.success(result.message);
         onOpenChange(false);
       } else {
-        toast.error(result.message);
+        errorToast(result.message);
       }
     } finally {
       setIsLoading(false);

@@ -1,0 +1,50 @@
+{
+  "deliveries": [
+    {
+      "id": "g1",
+      "transaction_date": "2026-06-10",
+      "supplier": "ACME",
+      "batch_code": "JUNE-26-BLK1",
+      "block_loc": "A-1A",
+      "truck_plate": "ABC 111",
+      "sacks": 0,
+      "weight_kg": 10000.0,
+      "cost_basis": 30.0,
+      "remarks": null,
+      "lab_results": {
+        "mc": 11.5
+      }
+    },
+    {
+      "id": "g2",
+      "transaction_date": "2026-06-11",
+      "supplier": "ACME",
+      "batch_code": "JUNE-26-BLK2",
+      "block_loc": "A-2A",
+      "truck_plate": "ABC 222",
+      "sacks": 100,
+      "weight_kg": 20000.0,
+      "cost_basis": 31.0,
+      "remarks": null,
+      "lab_results": {
+        "mc": 12.0
+      }
+    }
+  ],
+  "rc_out": [
+    {
+      "id": "o1",
+      "transaction_date": "2026-06-10",
+      "batch_id": "bid-blk1",
+      "production_batch": "JUNE",
+      "destination": "MAIN",
+      "weight_kg": 3000.0,
+      "block_loc": "A-1A",
+      "remarks": null
+    }
+  ],
+  "batch_lookup": {
+    "JUNE-26-BLK1": "bid-blk1",
+    "JUNE-26-BLK7": "bid-blk7"
+  }
+}

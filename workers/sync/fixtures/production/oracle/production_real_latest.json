@@ -1,0 +1,702 @@
+{
+  "downtime": {
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no downtime row yet"
+        ],
+        "record": {
+          "_source_sheet": "07-01-26",
+          "dt_hrs": " num:0",
+          "dt_mins": " num:10",
+          "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, AND TANK 4X8; CHECK ROLLER MILL #1 GAP 2.3 MM",
+          "production_batch": "JULY",
+          "remarks": "Time ranges: 8:00 AM-8:10 AM",
+          "shift": "M",
+          "shift_hrs": " num:12",
+          "transaction_date": "2026-07-01",
+          "warnings": []
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert downtime"
+        ],
+        "record": {
+          "_source_sheet": "07-02-26",
+          "dt_hrs": " num:0",
+          "dt_mins": " num:10",
+          "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, AND TANK 4X8",
+          "production_batch": "JULY",
+          "remarks": "Time ranges: 8:00 AM-8:10 AM",
+          "shift": "M",
+          "shift_hrs": " num:12",
+          "transaction_date": "2026-07-02",
+          "warnings": []
+        },
+        "resolved_shift_id": null
+      }
+    ],
+    "summary": {
+      "duplicate_noop": " num:0",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:1",
+      "new": " num:2",
+      "value_changed": " num:0"
+    },
+    "table": "production_downtime"
+  },
+  "electricity": {
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:1",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "meter": "MAIN",
+          "reading_date": "2026-07-01"
+        },
+        "reasons": [
+          "natural key (reading_date, meter) not present in DB"
+        ],
+        "record": {
+          "end_kwh": " num:609.2",
+          "meter": "MAIN",
+          "meter_multiplier": " num:120",
+          "reading_date": "2026-07-01",
+          "remarks": null,
+          "start_kwh": " num:601.9"
+        }
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:1",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "meter": "MAIN",
+          "reading_date": "2026-07-02"
+        },
+        "reasons": [
+          "natural key (reading_date, meter) not present in DB"
+        ],
+        "record": {
+          "end_kwh": " num:616.3",
+          "meter": "MAIN",
+          "meter_multiplier": " num:120",
+          "reading_date": "2026-07-02",
+          "remarks": null,
+          "start_kwh": " num:609.2"
+        }
+      }
+    ],
+    "summary": {
+      "db_rows_in_window": " num:3",
+      "duplicate_noop": " num:0",
+      "extracted_total": " num:2",
+      "malformed": " num:0",
+      "new": " num:2",
+      "value_changed": " num:0"
+    },
+    "table": "electricity_readings"
+  },
+  "runs": {
+    "classifications": [
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:0",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no run for this customer+grade"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:8",
+          "_source_sheet": "07-01-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:630",
+          "shift": "M",
+          "transaction_date": "2026-07-01",
+          "ttl_kg": " num:16380",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:1",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no run for this customer+grade"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:9",
+          "_source_sheet": "07-01-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:218",
+          "shift": "M",
+          "transaction_date": "2026-07-01",
+          "ttl_kg": " num:5668",
+          "warnings": [
+            "unrecognized shift 'OVERTIME' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:4",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:8",
+          "_source_sheet": "07-02-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:660",
+          "shift": "M",
+          "transaction_date": "2026-07-02",
+          "ttl_kg": " num:17160",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:5",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "3X50",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:9",
+          "_source_sheet": "07-02-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "3X50",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:217",
+          "shift": "M",
+          "transaction_date": "2026-07-02",
+          "ttl_kg": " num:5642",
+          "warnings": [
+            "unrecognized shift 'OVERTIME' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:2",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "4X8",
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no run for this customer+grade"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:10",
+          "_source_sheet": "07-01-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "4X8",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:11",
+          "shift": "M",
+          "transaction_date": "2026-07-01",
+          "ttl_kg": " num:6325",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.97",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:3",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "4X8",
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "shift exists; no run for this customer+grade"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:11",
+          "_source_sheet": "07-01-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "4X8",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:3",
+          "shift": "M",
+          "transaction_date": "2026-07-01",
+          "ttl_kg": " num:1725",
+          "warnings": [
+            "unrecognized shift 'OVERTIME' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:6",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "4X8",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:10",
+          "_source_sheet": "07-02-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "4X8",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:10",
+          "shift": "M",
+          "transaction_date": "2026-07-02",
+          "ttl_kg": " num:5750",
+          "warnings": [
+            "unrecognized shift 'DAY SHIFT' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:7",
+        "natural_key": {
+          "customer": "CEBU",
+          "grade": "4X8",
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert run"
+        ],
+        "record": {
+          "_shift_defaulted": true,
+          "_source_row": " num:11",
+          "_source_sheet": "07-02-26",
+          "confidence": " num:0.9",
+          "customer": "CEBU",
+          "grade": "4X8",
+          "production_batch": "JULY",
+          "remarks": "shift defaulted to Morning (operator left blank)",
+          "sacks_bags": " num:4",
+          "shift": "M",
+          "transaction_date": "2026-07-02",
+          "ttl_kg": " num:2300",
+          "warnings": [
+            "unrecognized shift 'OVERTIME' — defaulted to Morning"
+          ]
+        },
+        "resolved_shift_id": null
+      }
+    ],
+    "summary": {
+      "duplicate_noop": " num:0",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:4",
+      "new": " num:8",
+      "value_changed": " num:0"
+    },
+    "table": "production_runs"
+  },
+  "trucks": {
+    "classifications": [],
+    "summary": {
+      "db_rows_in_window": " num:0",
+      "duplicate_noop": " num:0",
+      "extracted_total": " num:0",
+      "malformed": " num:0",
+      "new": " num:0",
+      "value_changed": " num:0"
+    },
+    "table": "truck_readings"
+  },
+  "waste": {
+    "classifications": [
+      {
+        "class": "DUPLICATE_NOOP",
+        "confidence": " num:0.99",
+        "diff": null,
+        "existing_id": "d8ae306b-5f2e-422d-b249-106fe4b0c5a5",
+        "idx": " num:0",
+        "natural_key": {
+          "shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "natural key present; all comparable fields equal"
+        ],
+        "record": {
+          "_source_row": " num:29",
+          "_source_sheet": "JUNE 2026",
+          "_summed_kg": " num:4261.5",
+          "bf_kg": " num:175",
+          "grit_kg": " num:30",
+          "production_batch": "JUNE",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:1504",
+          "rs1b_kg": " num:1486",
+          "rs23_kg": " num:765",
+          "rs5_kg": " num:181",
+          "shift": "M",
+          "transaction_date": "2026-06-26",
+          "trml1_kg": " num:120",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:4261.5",
+          "warnings": []
+        },
+        "resolved_shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc"
+      },
+      {
+        "class": "DUPLICATE_NOOP",
+        "confidence": " num:0.99",
+        "diff": null,
+        "existing_id": "5b4d39e5-3240-40ed-b683-f7a978fc201c",
+        "idx": " num:5",
+        "natural_key": {
+          "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "natural key present; all comparable fields equal"
+        ],
+        "record": {
+          "_source_row": " num:6",
+          "_source_sheet": "JULY 2026",
+          "_summed_kg": " num:6152.5",
+          "bf_kg": " num:315",
+          "grit_kg": " num:48",
+          "production_batch": "JULY",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:2370",
+          "rs1b_kg": " num:2486",
+          "rs23_kg": " num:607",
+          "rs5_kg": " num:226",
+          "shift": "M",
+          "transaction_date": "2026-07-01",
+          "trml1_kg": " num:100",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:6152.5",
+          "warnings": []
+        },
+        "resolved_shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487"
+      },
+      {
+        "class": "DUPLICATE_NOOP",
+        "confidence": " num:0.99",
+        "diff": null,
+        "existing_id": "cd7bcddc-7053-45c8-9b92-2765911ae083",
+        "idx": " num:2",
+        "natural_key": {
+          "shift_id": "e7cd956a-e988-4a81-b730-3ed3a1237f82"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "natural key present; all comparable fields equal"
+        ],
+        "record": {
+          "_source_row": " num:31",
+          "_source_sheet": "JUNE 2026",
+          "_summed_kg": " num:4547.75",
+          "bf_kg": " num:140",
+          "grit_kg": " num:50",
+          "production_batch": "JUNE",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:1959",
+          "rs1b_kg": " num:1522",
+          "rs23_kg": " num:616",
+          "rs5_kg": " num:176",
+          "shift": "M",
+          "transaction_date": "2026-06-29",
+          "trml1_kg": " num:84",
+          "trml2_kg": " num:0.75",
+          "ttl_waste_kg_reported": " num:4547.75",
+          "warnings": []
+        },
+        "resolved_shift_id": "e7cd956a-e988-4a81-b730-3ed3a1237f82"
+      },
+      {
+        "class": "DUPLICATE_NOOP",
+        "confidence": " num:0.99",
+        "diff": null,
+        "existing_id": "c67c0682-bdfa-4701-a68b-fa200377168c",
+        "idx": " num:3",
+        "natural_key": {
+          "shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "natural key present; all comparable fields equal"
+        ],
+        "record": {
+          "_source_row": " num:32",
+          "_source_sheet": "JUNE 2026",
+          "_summed_kg": " num:2734.5",
+          "bf_kg": " num:110",
+          "grit_kg": " num:28",
+          "production_batch": "JUNE",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:1040",
+          "rs1b_kg": " num:1040",
+          "rs23_kg": " num:332",
+          "rs5_kg": " num:109",
+          "shift": "M",
+          "transaction_date": "2026-06-30",
+          "trml1_kg": " num:75",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:2734.5",
+          "warnings": []
+        },
+        "resolved_shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989"
+      },
+      {
+        "class": "VALUE_CHANGED",
+        "confidence": " num:0.9",
+        "diff": {
+          "bf_kg": {
+            "db": " num:110",
+            "email": " num:35"
+          },
+          "grit_kg": {
+            "db": " num:28",
+            "email": " num:30"
+          },
+          "rs1a_kg": {
+            "db": " num:1040",
+            "email": " num:1038"
+          },
+          "rs1b_kg": {
+            "db": " num:1040",
+            "email": " num:784"
+          },
+          "rs23_kg": {
+            "db": " num:332",
+            "email": " num:137"
+          },
+          "rs5_kg": {
+            "db": " num:109",
+            "email": " num:71"
+          },
+          "trml1_kg": {
+            "db": " num:75",
+            "email": " num:50"
+          }
+        },
+        "existing_id": "c67c0682-bdfa-4701-a68b-fa200377168c",
+        "idx": " num:4",
+        "natural_key": {
+          "shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "7 field(s) differ: bf_kg, grit_kg, rs1a_kg, rs1b_kg, rs23_kg, rs5_kg, trml1_kg"
+        ],
+        "record": {
+          "_source_row": " num:5",
+          "_source_sheet": "JULY 2026",
+          "_summed_kg": " num:2145.5",
+          "bf_kg": " num:35",
+          "grit_kg": " num:30",
+          "production_batch": "JUNE",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:1038",
+          "rs1b_kg": " num:784",
+          "rs23_kg": " num:137",
+          "rs5_kg": " num:71",
+          "shift": "M",
+          "transaction_date": "2026-06-30",
+          "trml1_kg": " num:50",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:2145.5",
+          "warnings": [
+            "Carryover date 2026-06-30 in sheet 'JULY 2026' (sheet month=07) — extracted with true date"
+          ]
+        },
+        "resolved_shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989"
+      },
+      {
+        "class": "DUPLICATE_NOOP",
+        "confidence": " num:0.99",
+        "diff": null,
+        "existing_id": "8c6e5366-d82e-47f6-944e-f21479d4aef5",
+        "idx": " num:1",
+        "natural_key": {
+          "shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75"
+        },
+        "needs_shift_upsert": false,
+        "reasons": [
+          "natural key present; all comparable fields equal"
+        ],
+        "record": {
+          "_source_row": " num:30",
+          "_source_sheet": "JUNE 2026",
+          "_summed_kg": " num:5449.5",
+          "bf_kg": " num:195",
+          "grit_kg": " num:57",
+          "production_batch": "JUNE",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:2080",
+          "rs1b_kg": " num:2027",
+          "rs23_kg": " num:750",
+          "rs5_kg": " num:195",
+          "shift": "M",
+          "transaction_date": "2026-06-27",
+          "trml1_kg": " num:145",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:5449.5",
+          "warnings": []
+        },
+        "resolved_shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75"
+      },
+      {
+        "class": "NEW",
+        "confidence": " num:0.95",
+        "diff": null,
+        "existing_id": null,
+        "idx": " num:6",
+        "natural_key": {
+          "shift_id": null
+        },
+        "needs_shift_upsert": true,
+        "reasons": [
+          "parent shift absent; upsert shift then insert waste"
+        ],
+        "record": {
+          "_source_row": " num:7",
+          "_source_sheet": "JULY 2026",
+          "_summed_kg": " num:4674.5",
+          "bf_kg": " num:275",
+          "grit_kg": " num:59",
+          "production_batch": "JULY",
+          "remarks": "PCG/BUNAWAN/ZAMBAONGA",
+          "rs1a_kg": " num:1545",
+          "rs1b_kg": " num:1587",
+          "rs23_kg": " num:736",
+          "rs5_kg": " num:347",
+          "shift": "M",
+          "transaction_date": "2026-07-02",
+          "trml1_kg": " num:125",
+          "trml2_kg": " num:0.5",
+          "ttl_waste_kg_reported": " num:4674.5",
+          "warnings": []
+        },
+        "resolved_shift_id": null
+      }
+    ],
+    "summary": {
+      "duplicate_noop": " num:5",
+      "malformed": " num:0",
+      "needs_shift_upsert": " num:1",
+      "new": " num:1",
+      "value_changed": " num:1"
+    },
+    "table": "production_waste"
+  }
+}

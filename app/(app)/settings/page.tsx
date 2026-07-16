@@ -53,7 +53,7 @@ export default async function SettingsPage() {
               <div className="flex items-center gap-4">
                 <Avatar className="h-20 w-20">
                   {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
-                  <AvatarFallback className="text-lg bg-zinc-700 text-zinc-200">{initials}</AvatarFallback>
+                  <AvatarFallback className="text-lg bg-muted text-muted-foreground">{initials}</AvatarFallback>
                 </Avatar>
                 <div className="space-y-1">
                   <h3 className="font-medium text-lg">{displayName}</h3>

@@ -1,0 +1,2 @@
+- [Run log](project_run_log.md) — rolling EXECUTE-run log + LIVE watermark (shifts/waste: 2026-06-29; electricity: 2026-06-27; trucks: 2026-06-22 after 2026-06-30 run). Check FIRST for current DB state.
+- [First EXECUTE done](project_first_execute.md) — Production Manager's first real write landed 2026-05-29; pipeline proven end-to-end (historical)

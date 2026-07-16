@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import type { UserRole } from '@/components/providers/auth-context';
 
 export function InviteUserDialog() {
@@ -41,10 +42,10 @@ export function InviteUserDialog() {
         setRole('Production');
         setOpen(false);
       } else {
-        toast.error(result.message || 'Failed to invite user');
+        errorToast(result.message || 'Failed to invite user');
       }
     } catch {
-      toast.error('An unexpected error occurred');
+      errorToast('An unexpected error occurred');
     } finally {
       setIsLoading(false);
     }

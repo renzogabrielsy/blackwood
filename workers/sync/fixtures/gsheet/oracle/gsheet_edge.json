@@ -1,0 +1,232 @@
+{
+  "rc_in": {
+    "changed": [
+      {
+        "db_row": {
+          "batch_code": "JUNE-26-BLK2",
+          "block_loc": "A-2A",
+          "cost_basis": " num:31",
+          "lab_results": {
+            "mc": " num:12"
+          },
+          "remarks": null,
+          "sacks": " num:100",
+          "supplier": "ACME",
+          "transaction_date": "2026-06-11",
+          "truck_plate": "ABC 222",
+          "weight_kg": " num:20000"
+        },
+        "diff": [
+          {
+            "dbValue": null,
+            "field": "remarks",
+            "sheetValue": "CORRECTED"
+          }
+        ],
+        "index": " num:9",
+        "natural_key": [
+          "2026-06-11",
+          "JUNE-26-BLK2",
+          "A-2A",
+          " num:20000"
+        ],
+        "row": {
+          "_source_row": " num:9",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [
+            "JUN-26-BLK2"
+          ],
+          "batch_code_primary": "JUNE-26-BLK2",
+          "block_loc": "A-2A",
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": null,
+            "bd_astm": null,
+            "bd_jis": null,
+            "fc": null,
+            "grit": null,
+            "mc": " num:12",
+            "vm": null
+          },
+          "remarks": "CORRECTED",
+          "sacks": " num:100",
+          "supplier": "ACME",
+          "transaction_date": "2026-06-11",
+          "truck_plate": "ABC 222",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:20000"
+        }
+      }
+    ],
+    "flagged": [],
+    "malformed": [],
+    "mode": "rc_in",
+    "new": [],
+    "noop": [
+      {
+        "db_row": {
+          "batch_code": "JUNE-26-BLK1",
+          "block_loc": "A-1A",
+          "cost_basis": " num:30",
+          "lab_results": {
+            "mc": " num:11.5"
+          },
+          "remarks": null,
+          "sacks": " num:0",
+          "supplier": "ACME",
+          "transaction_date": "2026-06-10",
+          "truck_plate": "ABC 111",
+          "weight_kg": " num:10000"
+        },
+        "diff": [
+          {
+            "dbValue": " num:0",
+            "field": "sacks",
+            "sheetValue": null
+          }
+        ],
+        "immaterial_note": "immaterial: sacks(null↔0)",
+        "index": " num:8",
+        "natural_key": [
+          "2026-06-10",
+          "JUNE-26-BLK1",
+          "A-1A",
+          " num:10000"
+        ],
+        "row": {
+          "_source_row": " num:8",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [
+            "JUN-26-BLK1"
+          ],
+          "batch_code_primary": "JUNE-26-BLK1",
+          "block_loc": "A-1A",
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": null,
+            "bd_astm": null,
+            "bd_jis": null,
+            "fc": null,
+            "grit": null,
+            "mc": " num:11.5",
+            "vm": null
+          },
+          "remarks": null,
+          "sacks": null,
+          "supplier": "ACME",
+          "transaction_date": "2026-06-10",
+          "truck_plate": "ABC 111",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:10000"
+        }
+      }
+    ],
+    "since": "2025-01-01",
+    "summary": {
+      "changed_count": " num:1",
+      "db_rows_in_window": " num:2",
+      "extracted_total": " num:4",
+      "flagged_count": " num:0",
+      "in_scope_total": " num:3",
+      "malformed_count": " num:0",
+      "new_count": " num:0",
+      "noop_count": " num:1",
+      "out_of_scope_count": " num:1",
+      "unmapped_count": " num:1"
+    },
+    "unmapped": [
+      {
+        "index": " num:11",
+        "reason": "batch_code primary='JUNE-26-BLK7' + fallbacks=['JUN-26-BLK7'] not in DB",
+        "row": {
+          "_source_row": " num:11",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [
+            "JUN-26-BLK7"
+          ],
+          "batch_code_primary": "JUNE-26-BLK7",
+          "block_loc": "A-7A",
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": null,
+            "bd_astm": null,
+            "bd_jis": null,
+            "fc": null,
+            "grit": null,
+            "mc": " num:10",
+            "vm": null
+          },
+          "remarks": null,
+          "sacks": " num:300",
+          "supplier": "NEWCO",
+          "transaction_date": "2026-06-12",
+          "truck_plate": "NEW 777",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:15000"
+        }
+      }
+    ]
+  },
+  "rc_out": {
+    "changed": [],
+    "flagged": [],
+    "malformed": [],
+    "mode": "rc_out",
+    "new": [
+      {
+        "index": " num:6",
+        "row": {
+          "_source_row": " num:6",
+          "_source_tab": "RC OUT",
+          "batch_code_fallbacks": [
+            "JUN-26-BLK7"
+          ],
+          "batch_code_primary": "JUNE-26-BLK7",
+          "batch_code_resolved": "JUNE-26-BLK7",
+          "batch_id": "bid-blk7",
+          "block_loc": null,
+          "confidence": " num:1",
+          "destination": "MAIN",
+          "production_batch": "JUNE",
+          "remarks": null,
+          "transaction_date": "2026-06-12",
+          "warnings": [],
+          "weight_kg": " num:4000"
+        }
+      }
+    ],
+    "noop": [
+      {
+        "index": " num:5",
+        "natural_key": [
+          "2026-06-10",
+          "bid-blk1",
+          "MAIN"
+        ]
+      }
+    ],
+    "since": "2025-01-01",
+    "summary": {
+      "changed_count": " num:0",
+      "db_rows_in_window": " num:1",
+      "extracted_total": " num:2",
+      "flagged_count": " num:0",
+      "in_scope_total": " num:2",
+      "malformed_count": " num:0",
+      "new_count": " num:1",
+      "noop_count": " num:1",
+      "out_of_scope_count": " num:0",
+      "unmapped_count": " num:0"
+    },
+    "unmapped": []
+  }
+}

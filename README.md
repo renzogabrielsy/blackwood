@@ -1,6 +1,16 @@
 # Blackwood
 
-Industrial inventory management system for a charcoal processing plant. Tracks inbound deliveries, outbound usage, batch state, and user access through dense, spreadsheet-style interfaces.
+General-purpose modular business intelligence platform built around a composable widget dashboard. Charcoal plant operations (RC IN, RC OUT, Blocking) ship as the first tenant — a real-world proof of concept. The platform is designed to host any inventory or operational domain without a rewrite.
+
+## Architecture Philosophy
+
+**Ports & Adapters (Hexagonal Architecture).** Widgets declare typed data contracts ("ports") and are permanently isolated from whoever fills them. An adapter — today a static mock, tomorrow a live Supabase query — transforms raw data into the widget's data-agnostic interface. The widget sees no difference between sources.
+
+**Layer separation:**
+- **Platform layer** (`components/widgets/`, `components/dashboard/`) — source-agnostic, domain-neutral. Zero tenant knowledge allowed.
+- **Domain layer** (`app/(app)/inventory/`, `lib/widgets/adapters/`) — tenant-specific. Domain knowledge is expected and correct here.
+
+**Inspiration:** Grafana's data source model — the visualization layer consumes normalized data frames, never raw queries. Every widget interface (`ChartConfig`, `KPIData`, etc.) is Blackwood's equivalent of a data frame.
 
 ## Tech Stack
 
@@ -8,21 +18,36 @@ Industrial inventory management system for a charcoal processing plant. Tracks i
 - **Supabase** (PostgreSQL) with Row Level Security
 - **Tailwind CSS v4** with **Shadcn UI** (new-york style, zinc base)
 - **TanStack Table** + TanStack Virtual for virtualized data grids
+- **ReactGridLayout** for the composable widget dashboard
+- **Recharts** for charting in widgets
 - **date-fns** for date formatting, **cmdk** for command menus
 - **next-themes** for dark mode
 
 ## Modules
 
-### Inventory (`/inventory`)
+### Dashboard (`/`)
+
+Composable widget grid — drag, resize, add, like a Bloomberg terminal. Widgets are source-agnostic display components; data flows in via adapters. Current widgets:
+
+- **ChartWidget** — Multi-series price/quality chart with comparison slices and X/Y builder
+- **KPIStripWidget** — Responsive KPI chips adapting layout by size tier
+- **QualityScatterWidget** — SVG scatter plot (PHP/KG vs MC/ASH)
+- **WarehouseOccupancyWidget** — WHSE A/B/C/D occupancy bars
+
+### Inventory (`/inventory`) — Charcoal Tenant
+
+Domain-specific modules for charcoal plant operations. Industrial Spreadsheet UX — dense, keyboard-navigable tables that feel like Excel.
 
 - **Deliveries (RC IN)** — Inbound delivery logging with bulk grid input, quality tracking (lab results as JSONB), audit trail with resolve workflow
-- **Usage (RC OUT)** — Outbound consumption tracking, batch depletion, DB-computed pricing columns, infinite scroll
-- **Shared** — Tab-based navigation, DeliverySheetFooter with year/month selection, cell selection + clipboard copy
+- **Usage (RC OUT)** — Outbound consumption tracking, batch depletion, DB-computed pricing columns
+- **Blocking** — Warehouse grid visualization of 220 block locations across 4 warehouses (A/B/C/D) with heatmap coloring, spotlight filters, and slide-over detail panel
 
 ### Admin (`/admin`)
 
+Platform-level infrastructure — domain-neutral access control for all tenants.
+
 - User management — invite, revoke, reactivate
-- Role-based access — Owner, Admin, Dev, Employee
+- Role-based access — Owner, Admin, Dev, Accounting, Production
 - Supabase Auth integration with invite-only whitelist (`user_invites` table)
 
 ### Notifications
@@ -31,53 +56,57 @@ Industrial inventory management system for a charcoal processing plant. Tracks i
 - Audit trail subscriptions
 - Resolve request workflow notifications
 
-### Settings (`/settings`)
+## Data Flow
 
-- Profile management (display name, avatar)
-- Sign out
+**Platform layer (widgets):**
 
-## Architecture
+    Adapter → Data-Agnostic Interface (ChartConfig, KPIData, etc.) → Widget → Render
 
-    User Action -> Client Component -> Server Action -> Supabase -> revalidatePath() -> Re-render
+**Domain layer (inventory modules):**
 
-- **Server Components** (`page.tsx`) handle data fetching
-- **Client Components** (`'use client'`) handle interactivity
-- **Server Actions** (`actions.ts`) handle all mutations
-- DB triggers derive batch state (`status`, `avg_cost`, `current_weight`) automatically
-- URL search params for RC IN filters; internal React state for RC OUT
-- **"Separate Inputs, Unified State"** — each module captures data independently, the database unifies state via triggers and views
+    User Action → Client Component → Server Action → Supabase → revalidatePath() → Re-render
+
+DB triggers derive batch state (`status`, `avg_cost`, `current_weight`) automatically. Weighted averages and inventory balances are computed in SQL — never in TypeScript.
 
 ## Database
 
-**Tables:** `batches`, `deliveries`, `rc_out`, `profiles`, `audit_logs`, `audit_comments`, `notifications`, `notification_subscriptions`, `user_invites`
+**Tables:** `batches`, `deliveries`, `rc_out`, `profiles`, `audit_logs`, `audit_comments`, `notifications`, `notification_subscriptions`, `user_invites`, `user_dashboard_prefs` (per-user dashboard layout/settings, Supabase-primary persistence), `user_table_settings` (per-user per-module table display settings)
+
+**Views:** `view_rc_in_master`, `view_blocking_grid`
 
 **Key triggers:**
 - `fn_update_blackwood_state` — delivery inserts/updates → batch cost recalculation
 - `fn_process_blackwood_usage` — usage inserts → batch status and weight updates
 - `handle_new_user` — auth signup → profile creation from invite whitelist
 
-**Generated columns** on `rc_out` for `rc_out_avg_price` and `rc_out_avg_wtd_value`.
-
-**Views:** `view_rc_in_master` — joined delivery + batch data for the RC IN table.
+**Generated columns** on `rc_out`: `rc_out_avg_price`, `rc_out_avg_wtd_value`.
 
 ## Project Structure
 
 ```
 app/
   (app)/                    # Auth-protected routes
-    inventory/              # Inventory module
+    page.tsx                # Dashboard (platform layer)
+    inventory/              # Charcoal tenant domain modules
       components/           # Shared inventory components
       rc-in/                # Deliveries (inbound)
       rc-out/               # Usage (outbound)
-    admin/                  # User management
+      blocking/             # Warehouse grid visualization
+    admin/                  # User management (platform infrastructure)
     settings/               # Profile & preferences
     notifications/          # Notification center
   login/                    # Public auth page
   auth/callback/            # OAuth callback
 components/
   ui/                       # Shadcn primitives
+  widgets/                  # Widget registry + all widget components (platform layer)
+  dashboard/                # Dashboard shell: DashboardGrid, WidgetShell, WidgetPicker
   providers/                # Context providers (auth, theme)
 lib/
+  widgets/
+    mock-data.ts            # Static adapter (charcoal-shaped, fallback for dev/demo)
+    adapters/               # Live Supabase adapters: charcoal-kpi, charcoal-chart, charcoal-warehouse, charcoal-scatter
+  dashboard/                # Shared dashboard types (D6Prefs, LayoutItem) + profile-store (multi-profile localStorage)
   hooks/                    # Reusable hooks (cell selection, clipboard)
   supabase/                 # Client, server, admin Supabase clients
 types/                      # TypeScript type definitions

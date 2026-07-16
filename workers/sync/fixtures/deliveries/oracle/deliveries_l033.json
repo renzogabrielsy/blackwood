@@ -1,0 +1,90 @@
+{
+  "changed": [],
+  "dup_noops": [
+    {
+      "index": " num:6",
+      "natural_key": "2026-07-04|MAV 9202|20640.0",
+      "note": "L-033: same truckload already recorded as JUNE-26-BLK9 — extractor-derived name JULY-26-BLK9 is a month-boundary phantom."
+    }
+  ],
+  "flagged": [],
+  "malformed": [],
+  "new": [
+    {
+      "index": " num:7",
+      "notes": [
+        "L-033: batch re-mapped JULY-26-BLK9 → JUNE-26-BLK9 per remark 'PILED IN … BLOCK …'"
+      ],
+      "row": {
+        "_source_row": " num:7",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JUNE-26-BLK9",
+        "block_loc": "A-19C",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": null,
+        "lab_results": {
+          "ash": " num:3",
+          "bd_astm": " num:0.58",
+          "bd_jis": " num:0.6",
+          "fc": " num:82",
+          "grit": " num:3",
+          "mc": " num:11",
+          "vm": " num:13"
+        },
+        "operator_batch_label": "B09",
+        "remarks": "PILED IN JUNE BLOCK 9",
+        "sacks": " num:270",
+        "supplier": "Ornales",
+        "transaction_date": "2026-07-04",
+        "truck_plate": "CBN 2192",
+        "true_weight_kg": null,
+        "warnings": [
+          "Batch code translated heuristically: 'B09' -> 'JULY-26-BLK9' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:10870"
+      }
+    },
+    {
+      "index": " num:8",
+      "row": {
+        "_source_row": " num:8",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JULY-26-BLK2",
+        "block_loc": "D-19B",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": null,
+        "lab_results": {
+          "ash": " num:3",
+          "bd_astm": " num:0.58",
+          "bd_jis": " num:0.6",
+          "fc": " num:82",
+          "grit": " num:3",
+          "mc": " num:11",
+          "vm": " num:13"
+        },
+        "operator_batch_label": "B02",
+        "remarks": null,
+        "sacks": " num:286",
+        "supplier": "Tagat",
+        "transaction_date": "2026-07-05",
+        "truck_plate": "LFF 835",
+        "true_weight_kg": null,
+        "warnings": [
+          "Batch code translated heuristically: 'B02' -> 'JULY-26-BLK2' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:12725"
+      }
+    }
+  ],
+  "noop": [],
+  "summary": {
+    "changed_count": " num:0",
+    "db_rows_in_window": " num:1",
+    "extracted_total": " num:3",
+    "malformed_count": " num:0",
+    "new_count": " num:3",
+    "noop_count": " num:0"
+  }
+}

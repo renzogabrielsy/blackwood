@@ -8,13 +8,17 @@ export type RcOutRow = {
     remarks?: string;
     block_loc: string;       // Physical location snapshot
 
-    // Computed Columns
-    avg_price: number;
-    avg_wtd_value: number;
+    // Computed Columns.
+    // Nullable: price fields are nulled SERVER-SIDE for roles that can't view prices
+    // (Production, incl. impersonated) — see lib/auth.canViewPrices(). null = withheld.
+    avg_price: number | null;
+    avg_wtd_value: number | null;
 
     // Joined Fields
     batches?: {
         batch_code: string;
+        status: string;
+        location_ref: string;
     };
 
     created_at: string;

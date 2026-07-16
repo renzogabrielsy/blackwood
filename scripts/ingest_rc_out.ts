@@ -40,7 +40,7 @@ async function main() {
     const batchMap = new Map(batches.map(b => [b.batch_code, b.id]));
     console.log(`Loaded ${batchMap.size} batches.`);
 
-    const rows: any[] = [];
+    const rows: Record<string, string>[] = [];
 
     fs.createReadStream(CSV_FILE)
         .pipe(csv({
@@ -68,8 +68,6 @@ async function main() {
                 let transactionDate = row['DATE'];
 
                 if (!transactionDate) {
-                    // console.error(`Missing DATE...`);
-                    // errorCount++; 
                     continue; // Skip empty rows silently or log if needed
                 }
 
@@ -87,8 +85,6 @@ async function main() {
                 const batchId = batchMap.get(blockName);
 
                 if (!batchId) {
-                    // Special handling for "FEED" blocks or others
-                    // console.warn(`Batch not found: ${blockName}`); 
                     missingBatchCount++;
                     continue;
                 }

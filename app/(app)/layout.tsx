@@ -1,20 +1,20 @@
-'use client';
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { AppShell } from './app-shell'
 
-import dynamic from 'next/dynamic';
-import { FloatingStatusBar } from '@/components/floating-status-bar';
+export default async function AppLayout({
+    children,
+}: {
+    children: React.ReactNode
+}) {
+    const supabase = await createClient()
+    const {
+        data: { user },
+    } = await supabase.auth.getUser()
 
-const Navbar = dynamic(() => import('@/components/navbar').then(m => m.Navbar), {
-    ssr: false,
-});
+    if (!user) {
+        redirect('/login')
+    }
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
-    return (
-        <div className="flex flex-col h-screen">
-            <Navbar />
-            <div className="flex-1 min-h-0 flex flex-col">
-                {children}
-            </div>
-            <FloatingStatusBar />
-        </div>
-    );
+    return <AppShell>{children}</AppShell>
 }

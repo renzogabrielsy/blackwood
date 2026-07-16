@@ -8,7 +8,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: var(--font-geist-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -60,7 +60,7 @@
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
   --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
+  --muted-foreground: oklch(0.42 0.016 285.938);
   --accent: oklch(0.967 0.001 286.375);
   --accent-foreground: oklch(0.21 0.006 285.885);
   --destructive: oklch(0.577 0.245 27.325);
@@ -94,7 +94,7 @@
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
+  --muted-foreground: oklch(0.78 0.015 286.067);
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
@@ -122,8 +122,17 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-medium;
   }
+}
+
+/* Universal data-table numeric fix — font-mono now resolves to proportional
+   Geist, so force tabular (column-aligned) numerals on every existing
+   font-mono usage. Plain rule placed after @layer base so it wins the cascade
+   over Tailwind's font-mono utility, converting all numeric cells across the
+   app to Geist + tabular alignment without editing individual table files. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Remove arrows from number inputs */
@@ -135,4 +144,489 @@ input::-webkit-inner-spin-button {
 
 input[type=number] {
   -moz-appearance: textfield;
+}
+
+/* ─── Motion & Glass Design System ─── */
+
+/* Keyframes — compositor-only properties (transform, opacity, filter) */
+@keyframes bw-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bw-scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bw-blur-in {
+  from { opacity: 0; filter: blur(4px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+@keyframes bw-modal-enter {
+  0% { opacity: 0; transform: scale(0.95); }
+  60% { opacity: 1; transform: scale(1.01); }
+  100% { transform: scale(1); }
+}
+
+@keyframes bw-badge-pop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+/* Single element reveals */
+.animate-fade-up {
+  animation: bw-fade-up 250ms ease-out both;
+}
+
+.animate-scale-in {
+  animation: bw-scale-in 200ms ease-out both;
+}
+
+.animate-blur-in {
+  animation: bw-blur-in 300ms ease-out both;
+}
+
+.animate-modal-enter {
+  animation: bw-modal-enter 250ms ease-out both;
+}
+
+.animate-badge-pop {
+  animation: bw-badge-pop 250ms ease-out both;
+}
+
+@keyframes bw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: bw-fade-in 150ms ease-out both;
+}
+
+/* Staggered children — 6 slots, 250ms base + 50ms stagger */
+.stagger-children > * {
+  opacity: 0;
+  animation: bw-fade-up 250ms ease-out both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 50ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 100ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 150ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+/* Fast stagger — 200ms base + 30ms stagger */
+.stagger-fast > * {
+  opacity: 0;
+  animation: bw-fade-up 200ms ease-out both;
+}
+.stagger-fast > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-fast > *:nth-child(2) { animation-delay: 30ms; }
+.stagger-fast > *:nth-child(3) { animation-delay: 60ms; }
+.stagger-fast > *:nth-child(4) { animation-delay: 90ms; }
+.stagger-fast > *:nth-child(5) { animation-delay: 120ms; }
+.stagger-fast > *:nth-child(6) { animation-delay: 150ms; }
+
+/* Row fade — subtle opacity on virtual scroll recycle (100ms) */
+@keyframes bw-row-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-row-fade {
+  animation: bw-row-fade 100ms ease-out both;
+}
+
+/* Slide up — footer/bar reveal (250ms) */
+@keyframes bw-slide-up {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: bw-slide-up 250ms ease-out both;
+}
+
+/* Status bar grow — selection indicator entrance (200ms) */
+@keyframes bw-status-grow {
+  0% { opacity: 0; transform: scaleX(0.8) scaleY(0.9); }
+  60% { opacity: 1; transform: scaleX(1.02) scaleY(1.02); }
+  100% { transform: scaleX(1) scaleY(1); }
+}
+.animate-status-grow {
+  animation: bw-status-grow 200ms ease-out both;
+  transform-origin: right center;
+}
+
+/* KPI sticky bar — enter from top, exit to top */
+@keyframes bw-kpi-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bw-kpi-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-8px); }
+}
+
+.animate-kpi-enter {
+  animation: bw-kpi-enter 250ms ease-out both;
+}
+
+.animate-kpi-exit {
+  animation: bw-kpi-exit 200ms ease-in both;
+}
+
+/* Hover glow — card glow effect on hover */
+.hover-glow {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.hover-glow:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.08),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+:is(.dark) .hover-glow:hover {
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* Hover lift — cards/containers only, never table rows */
+.hover-lift {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.hover-lift:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+:is(.dark) .hover-lift:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Scroll fade — gradient at bottom edge of scrollable containers */
+.scroll-fade-bottom {
+  position: relative;
+}
+.scroll-fade-bottom::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: linear-gradient(to top, var(--background), transparent);
+  pointer-events: none;
+}
+
+/* ─── Reduced motion ───
+   Honor the OS "reduce motion" setting: neutralize the project's entrance /
+   stagger / grow utilities so nothing animates in for users who opt out. Placed
+   AFTER every animation utility above so it wins the cascade (equal specificity,
+   later rule). Compositor hover transitions (hover-lift) are collapsed to near-
+   instant rather than removed, so focus/hover affordances still register. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in,
+  .animate-scale-in,
+  .animate-blur-in,
+  .animate-modal-enter,
+  .animate-badge-pop,
+  .animate-row-fade,
+  .animate-slide-up,
+  .animate-status-grow,
+  .animate-kpi-enter,
+  .animate-kpi-exit,
+  .stagger-children > *,
+  .stagger-fast > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .hover-lift {
+    transition-duration: 1ms;
+  }
+}
+
+/* ─── Blocking Heatmap System ─── */
+
+/* Heatmap gradient backgrounds — same in both light/dark modes.
+   Default box-shadow is the lighter (light mode) version.
+   .dark overrides with glowier dark mode shadows. */
+
+.heat-critical {
+  background: linear-gradient(135deg, #991b1b 0%, #dc2626 50%, #b91c1c 100%);
+  border-color: rgba(239, 68, 68, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 3px rgba(239, 68, 68, 0.3);
+}
+.dark .heat-critical {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 12px rgba(239, 68, 68, 0.2);
+}
+
+.heat-depleting {
+  background: linear-gradient(135deg, #92400e 0%, #d97706 50%, #b45309 100%);
+  border-color: rgba(245, 158, 11, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 1px 3px rgba(245, 158, 11, 0.25);
+}
+.dark .heat-depleting {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 12px rgba(245, 158, 11, 0.15);
+}
+
+.heat-healthy {
+  background: linear-gradient(135deg, #2d5a3f 0%, #4a9a6a 50%, #3a7a55 100%);
+  border-color: rgba(74, 154, 106, 0.3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), 0 1px 3px rgba(74, 154, 106, 0.2);
+}
+.dark .heat-healthy {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 12px rgba(74, 154, 106, 0.12);
+}
+
+.heat-full {
+  background: linear-gradient(135deg, #1a3a2a 0%, #2d6a4f 50%, #1f4a35 100%);
+  border-color: rgba(45, 106, 79, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 3px rgba(45, 106, 79, 0.3);
+}
+.dark .heat-full {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 16px rgba(45, 106, 79, 0.15);
+}
+
+/* Blocking cell base styles */
+.blocking-cell {
+  position: relative;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.blocking-cell:hover {
+  transform: scale(1.08);
+  z-index: 20;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.blocking-cell.selected {
+  outline: 2px solid rgba(0, 0, 0, 0.5);
+  outline-offset: -1px;
+  z-index: 25;
+  transform: scale(1.04);
+}
+.dark .blocking-cell.selected {
+  outline-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Critical balance pulse */
+@keyframes blocking-critical-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.heat-critical .blocking-balance {
+  animation: blocking-critical-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Blocking Spotlight System ─── */
+
+.spotlight-dimmed {
+  opacity: 0.3;
+  pointer-events: none;
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+
+.spotlight-stored {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 0 12px rgba(59, 130, 246, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-stored {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.6), 0 0 16px rgba(59, 130, 246, 0.35);
+}
+
+.spotlight-in-use {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5), 0 0 12px rgba(245, 158, 11, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-in-use {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.6), 0 0 16px rgba(245, 158, 11, 0.35);
+}
+
+.spotlight-sundrying {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.5), 0 0 12px rgba(249, 115, 22, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-sundrying {
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.6), 0 0 16px rgba(249, 115, 22, 0.35);
+}
+
+.spotlight-sundried {
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.5), 0 0 12px rgba(139, 92, 246, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-sundried {
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.6), 0 0 16px rgba(139, 92, 246, 0.35);
+}
+
+.spotlight-empty {
+  box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.4), 0 0 8px rgba(161, 161, 170, 0.15);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-empty {
+  box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.5), 0 0 10px rgba(161, 161, 170, 0.2);
+}
+
+/* Single neutral card background for all occupied cells */
+.blocking-cell-occupied {
+  background: linear-gradient(135deg, #f0f0f3 0%, #fafafa 50%, #f0f0f3 100%);
+  border-color: rgba(161, 161, 170, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.dark .blocking-cell-occupied {
+  background: linear-gradient(135deg, #27272a 0%, #3f3f46 50%, #27272a 100%);
+  border-color: rgba(161, 161, 170, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 12px rgba(0, 0, 0, 0.25);
+}
+
+/* Critical balance pulse — standalone version for balance text color */
+.balance-critical {
+  animation: blocking-critical-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Lab Quality Spotlight System ─── */
+
+.spotlight-wet {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5), 0 0 12px rgba(59, 130, 246, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-wet {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.6), 0 0 16px rgba(59, 130, 246, 0.35);
+}
+
+.spotlight-ashy {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5), 0 0 12px rgba(245, 158, 11, 0.25);
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+:is(.dark) .spotlight-ashy {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.6), 0 0 16px rgba(245, 158, 11, 0.35);
+}
+
+/* ─── Frozen Panes (sticky rows/columns) ─────────────────────────────────────
+   CANONICAL technique for tables that freeze left columns and/or the header row
+   while the rest scrolls. A frozen surface sits ON TOP of scrolling content, so
+   it MUST be fully OPAQUE — never the glass pattern (no `/<opacity>` alpha, no
+   backdrop-blur). Glass is for surfaces floating over EMPTY space; a frozen
+   column/header/corner overlaps moving cells and any alpha lets them bleed
+   through. This is the opposite rule from the Motion & Glass system above.
+
+   Strict z-scale (low → high), applied consistently across every frozen table:
+     • normal scrolling body cell ......... auto / base (no class)
+     • sticky LEFT column body cell ....... .frozen-col          (z-index 10)
+     • sticky HEADER row cell ............. .frozen-row          (z-index 20)
+     • sticky FOOTER row cell ............. .frozen-row-bottom   (z-index 20)
+     • sticky TOP-LEFT CORNER cell ........ .frozen-corner       (z-index 30)
+     • sticky BOTTOM-LEFT CORNER cell ..... .frozen-corner-bottom (z-index 30)
+   A frozen corner is BOTH sticky-left and sticky-(top|bottom), so it must out-rank
+   both the scrolling header/footer row AND the frozen body column.
+
+   The footer mirrors the header, just pinned to the OPPOSITE edge: a sticky
+   <tfoot> uses `bottom: 0` instead of `top: 0`. Same opaque-only discipline —
+   footer cells use a SOLID `bg-muted`, the bottom-left corner cells (under the
+   frozen left columns) are BOTH sticky-left and sticky-bottom with the highest z.
+   The footer's TOP seam (the boundary with the scrolling body above it) is killed
+   with `.frozen-edge-top` (inset top border + upward shadow), the bottom-edge
+   analogue of `.frozen-edge`.
+
+   Backgrounds: use a SOLID theme token matched to the surface —
+     body row  → `bg-background` / `bg-card`
+     header    → `bg-muted` (solid, NOT bg-muted/90)
+   Apply the token in the markup; these utilities only own position + z + the
+   anti-seam right edge. Row state (hover/zebra/status tint) must be repainted
+   onto the frozen cells too — and the repaint MUST be a SOLID token, never an
+   `/<opacity>` value. A single element cannot layer two background-colors, so a
+   translucent `group-hover:bg-accent/40` REPLACES the opaque base and reopens
+   the bleed-through on hover. Use a solid `group-hover:bg-accent` (or bg-muted)
+   so pinned and scrolling cells track each other AND stay opaque.
+
+   Seam: a 1px sliver can bleed at the frozen↔scroll boundary. `.frozen-edge` on
+   the LAST frozen column paints a solid inset right border + soft shadow that
+   both hides the seam and visually separates the pinned region. */
+
+.frozen-col {
+  position: sticky;
+  z-index: 10;
+}
+
+.frozen-row {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.frozen-corner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+/* Footer mirror of .frozen-row — pinned to the BOTTOM edge of the scroll
+   container instead of the top. Same z-rank as the header row (20): it out-ranks
+   frozen body columns (10) so the summary row paints over them while scrolling. */
+.frozen-row-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+}
+
+/* Bottom-left corner — sticky on BOTH axes (left column + footer row), so it
+   must out-rank both, matching .frozen-corner's z-rank (30). */
+.frozen-corner-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+}
+
+/* Right edge of the last frozen column — solid 1px divider (no transparency)
+   plus a soft outward shadow. Kills the sub-pixel seam and separates the pinned
+   block from the scrolling region. */
+.frozen-edge {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    2px 0 4px rgba(0, 0, 0, 0.12);
+}
+:is(.dark) .frozen-edge {
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    2px 0 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Top edge of a sticky FOOTER row — the bottom-edge analogue of .frozen-edge.
+   Solid 1px divider (no transparency) plus a soft UPWARD shadow that kills the
+   sub-pixel seam where the scrolling body meets the pinned footer and separates
+   the summary band from the scrolling region. */
+.frozen-edge-top {
+  box-shadow:
+    inset 0 1px 0 0 var(--border),
+    0 -2px 4px rgba(0, 0, 0, 0.12);
+}
+:is(.dark) .frozen-edge-top {
+  box-shadow:
+    inset 0 1px 0 0 var(--border),
+    0 -2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Heatmap "no deliveries" cell — a muted diagonal hatch so empty months read as
+   ABSENT data, never as a cheap/zero value. Theme-aware via semantic tokens.
+   Used by the Price & Volume Analysis heatmap demo (/price-demos/demo3). */
+.heat-empty {
+  background-color: var(--muted);
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    color-mix(in oklab, var(--muted-foreground) 22%, transparent) 4px,
+    color-mix(in oklab, var(--muted-foreground) 22%, transparent) 5px
+  );
 }

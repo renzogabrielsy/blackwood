@@ -2,110 +2,27 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
-import { endOfMonth, format } from 'date-fns';
 import type { RcOutRow, RcOutInput } from '@/types/rc-out';
-
-export async function getRcOutRecords(
-    search?: string,
-    field?: string,
-    offset: number = 0,
-    limit: number = 15,
-    startDate?: string,
-    endDate?: string
-) {
-    const supabase = await createClient();
-
-    let query = supabase
-        .from('rc_out')
-        .select(`
-      id,
-      transaction_date,
-      batch_id,
-      production_batch,
-      destination,
-      weight_kg,
-      remarks,
-      block_loc,
-      created_at,
-      avg_price:rc_out_avg_price,
-      avg_wtd_value:rc_out_avg_wtd_value,
-      batches (
-        batch_code
-      )
-    `)
-        .order('transaction_date', { ascending: false })
-        .range(offset, offset + limit - 1);
-
-    if (startDate && endDate) {
-        query = query.gte('transaction_date', startDate).lte('transaction_date', endDate);
-    }
-
-    if (search) {
-        const term = `%${search}%`;
-        const searchField = field || 'all';
-
-        if (searchField === 'all') {
-            // Search local columns + batch_code via subquery
-            const { data: matchingBatches } = await supabase
-                .from('batches')
-                .select('id')
-                .ilike('batch_code', term);
-            const batchIds = (matchingBatches || []).map(b => b.id);
-
-            if (batchIds.length > 0) {
-                query = query.or(
-                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term},batch_id.in.(${batchIds.join(',')})`
-                );
-            } else {
-                query = query.or(
-                    `production_batch.ilike.${term},destination.ilike.${term},remarks.ilike.${term},block_loc.ilike.${term}`
-                );
-            }
-        } else if (searchField === 'batch_code') {
-            // Search via batches join
-            const { data: matchingBatches } = await supabase
-                .from('batches')
-                .select('id')
-                .ilike('batch_code', term);
-            const batchIds = (matchingBatches || []).map(b => b.id);
-            if (batchIds.length > 0) {
-                query = query.in('batch_id', batchIds);
-            } else {
-                query = query.in('batch_id', ['__no_match__']);
-            }
-        } else if (searchField === 'production_batch') {
-            query = query.ilike('production_batch', term);
-        } else if (searchField === 'destination') {
-            query = query.ilike('destination', term);
-        } else if (searchField === 'block_loc') {
-            query = query.ilike('block_loc', term);
-        } else if (searchField === 'remarks') {
-            query = query.ilike('remarks', term);
-        }
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-        console.error('Error fetching RC OUT:', JSON.stringify(error, null, 2));
-        // Fallback or re-throw
-        return [];
-    }
-
-    // Flatten the structure for the UI
-    return data.map((d: any) => ({
-        ...d,
-        // Flatten computed columns if they come back as objects/arrays (Supabase RPC behavior varies)
-        // Actually, computed cols in select usually come as direct values if scalar.
-        // Let's verify type.
-        avg_price: d.avg_price,
-        avg_wtd_value: d.avg_wtd_value,
-        batch_code: d.batches?.batch_code // Flatten for easier access
-    })) as RcOutRow[];
-}
+import type { Tables, Json } from '@/types/supabase';
+import { canViewPrices, getUserRole } from '@/lib/auth';
+import { PRIVILEGED_ROLES } from '@/types/auth';
+import { fetchAllRows } from '@/lib/supabase/paginate';
 
 export async function deleteRcOutRecord(id: string) {
     const supabase = await createClient();
+
+    // Server-side permission gate — only Owner/Admin/Dev (PRIVILEGED_ROLES) may
+    // delete, matching the client hasPermission('delete:all') check. The UI hides
+    // the button, but the action must re-check or the guard is skin-deep.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete usage records' };
+    }
+
     const { error } = await supabase.from('rc_out').delete().eq('id', id);
 
     if (error) {
@@ -117,19 +34,22 @@ export async function deleteRcOutRecord(id: string) {
 
 export async function bulkDeleteRcOut(ids: string[]) {
     const supabase = await createClient();
+
+    // Server-side permission gate (see deleteRcOutRecord).
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete usage records' };
+    }
+
     const { error } = await supabase.from('rc_out').delete().in('id', ids);
 
     if (error) {
         return { success: false, message: error.message };
     }
-    revalidatePath('/inventory');
-    return { success: true };
-}
-
-export async function createRcOutRecord(input: RcOutInput) {
-    const supabase = await createClient();
-    const { error } = await supabase.from('rc_out').insert(input);
-    if (error) return { success: false, message: error.message };
     revalidatePath('/inventory');
     return { success: true };
 }
@@ -150,9 +70,9 @@ export async function submitBulkUsage(rows: RcOutInput[]) {
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Submit Bulk Usage Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 
@@ -163,97 +83,175 @@ export async function bulkUpdateUsage(updates: { id: string; data: RcOutInput; c
 
     try {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
 
-        for (const { id, data, comment } of updates) {
-            // Set audit comment if provided
-            if (comment) {
-                await supabase.rpc('set_audit_comment', { comment });
-            } else {
-                await supabase.rpc('set_audit_comment', { comment: null });
-            }
+        // PERF-3: one transactional RPC instead of a per-row loop of
+        // (set_audit_comment -> update -> audit_logs lookup -> audit_comments insert).
+        // A mid-batch failure now rolls back the WHOLE batch. rc_out has no audit
+        // trigger, so fn_bulk_update_usage reproduces the exact old glue: set the GUC,
+        // partial-update the row, then attach the edit remark to the record's LATEST
+        // existing audit_log (identical to the prior post-update lookup + insert).
+        const payload = updates.map(({ id, data, comment }) => ({
+            id,
+            data,
+            comment: comment ?? null,
+        }));
 
-            const { error } = await supabase
-                .from('rc_out')
-                .update(data)
-                .eq('id', id);
+        const { error } = await supabase.rpc('fn_bulk_update_usage', {
+            rows: payload as unknown as Json,
+        });
 
-            if (error) {
-                throw new Error(`Update Error (${id}): ${error.message}`);
-            }
-
-            // Post the edit remark as a discussion comment on the new audit log
-            if (comment && user) {
-                const { data: latestLog } = await supabase
-                    .from('audit_logs')
-                    .select('id')
-                    .eq('record_id', id)
-                    .order('performed_at', { ascending: false })
-                    .limit(1)
-                    .single();
-
-                if (latestLog) {
-                    await supabase
-                        .from('audit_comments')
-                        .insert({
-                            audit_log_id: latestLog.id,
-                            user_id: user.id,
-                            body: comment,
-                        });
-                }
-            }
+        if (error) {
+            throw new Error(error.message);
         }
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Bulk Update Usage Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        return { success: false, message: error instanceof Error ? error.message : 'Unknown error occurred' };
     }
 }
 
 export async function fetchRcOutTabData() {
     const supabase = await createClient();
-    const now = new Date();
-    const year = String(now.getFullYear());
-    const month = String(now.getMonth()); // 0-indexed
 
-    // Same date logic as the old rc-out/page.tsx
-    const y = parseInt(year, 10);
-    const m = parseInt(month, 10);
-    const start = new Date(y, m, 1);
-    const end = endOfMonth(start);
-    const startDate = format(start, 'yyyy-MM-dd');
-    const endDate = format(end, 'yyyy-MM-dd');
+    // CANONICAL price gate — Production (incl. impersonated) must NOT receive ₱ data.
+    // Resolved ONCE here, then the avg_price / avg_wtd_value fields are nulled BEFORE
+    // the payload leaves the server (the security boundary). The returned canViewPrices
+    // boolean lets the client conditionally render without re-deriving the role.
+    const showPrices = await canViewPrices();
 
-    const [records, batchesRes, destinationsRes, productionBatchesRes] = await Promise.all([
-        getRcOutRecords(undefined, undefined, 0, 40, startDate, endDate),
-        supabase
-            .from('batches')
-            .select('id, batch_code, location_ref')
-            .order('batch_code'),
+    // Paginated fetch — shared helper bypasses PostgREST max_rows (1000). This
+    // module's reads are best-effort (the previous local copy swallowed page
+    // errors and returned whatever it had), so we keep that lenient contract by
+    // catching the helper's throw and returning the empty/partial set.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function fetchAll<T>(buildQuery: (from: number, to: number) => any): Promise<T[]> {
+        try {
+            return await fetchAllRows<T>((from, to) => buildQuery(from, to));
+        } catch {
+            return [];
+        }
+    }
+
+    // Fetch ALL rc_out records with batch join
+    const rcOutRaw = await fetchAll<any>((from, to) =>
         supabase
             .from('rc_out')
-            .select('destination')
-            .not('destination', 'is', null)
-            .order('destination'),
-        supabase
-            .from('rc_out')
-            .select('production_batch')
-            .not('production_batch', 'is', null)
-            .order('production_batch'),
-    ]);
+            .select(`
+                id,
+                transaction_date,
+                batch_id,
+                production_batch,
+                destination,
+                weight_kg,
+                remarks,
+                block_loc,
+                created_at,
+                avg_price:rc_out_avg_price,
+                avg_wtd_value:rc_out_avg_wtd_value,
+                batches (
+                    batch_code,
+                    status,
+                    location_ref
+                )
+            `)
+            .order('transaction_date', { ascending: false })
+            .range(from, to)
+    );
 
+    // Flatten the batches join
+    const records: RcOutRow[] = rcOutRaw.map((d) => {
+        const batchesArray = Array.isArray(d.batches) ? d.batches : (d.batches ? [d.batches] : []);
+        const batchCode = batchesArray[0]?.batch_code;
+
+        return {
+            id: d.id,
+            transaction_date: d.transaction_date,
+            batch_id: d.batch_id,
+            production_batch: d.production_batch,
+            destination: d.destination,
+            weight_kg: d.weight_kg,
+            remarks: d.remarks,
+            block_loc: d.block_loc,
+            created_at: d.created_at,
+            // Price fields nulled server-side when the role can't view prices —
+            // they never reach a Production user's network payload.
+            avg_price: showPrices ? d.avg_price : null,
+            avg_wtd_value: showPrices ? d.avg_wtd_value : null,
+            batches: batchCode ? { batch_code: batchCode, status: batchesArray[0]?.status || 'STORED', location_ref: batchesArray[0]?.location_ref || '' } : undefined,
+        } as RcOutRow;
+    });
+
+    // Fetch batches for bulk input resolution
+    const batchesRes = await supabase
+        .from('batches')
+        .select('id, batch_code, location_ref')
+        .order('batch_code');
     const batches = batchesRes.data ?? [];
-    const destinations = Array.from(new Set((destinationsRes.data ?? []).map(d => d.destination).filter(Boolean)));
-    const productionBatches = Array.from(new Set((productionBatchesRes.data ?? []).map(d => d.production_batch).filter(Boolean)));
+
+    // Fetch block_loc values from BOTH rc_out and batches.location_ref
+    const [blockLocsFromRcOut, blockLocsFromBatches] = await Promise.all([
+        fetchAll<{ block_loc: string }>((from, to) =>
+            supabase.from('rc_out').select('block_loc').not('block_loc', 'is', null).order('block_loc').range(from, to)
+        ),
+        fetchAll<{ location_ref: string }>((from, to) =>
+            supabase.from('batches').select('location_ref').not('location_ref', 'is', null).order('location_ref').range(from, to)
+        ),
+    ]);
+    const blockLocsSet = new Set<string>();
+    blockLocsFromRcOut.forEach(d => { if (d.block_loc) blockLocsSet.add(d.block_loc); });
+    blockLocsFromBatches.forEach(d => { if (d.location_ref) blockLocsSet.add(d.location_ref); });
+    // Natural sort: "A1" < "A10" < "B1"
+    const blockLocs = Array.from(blockLocsSet).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+    );
+
+    // Derive distinct destinations, batchOptions, and yearOptions from records
+    const destinations = Array.from(new Set(records.map(r => r.destination).filter(Boolean))).sort();
+    const MONTH_ORDER: Record<string, number> = {
+        JANUARY: 1, FEBRUARY: 2, MARCH: 3, APRIL: 4, MAY: 5, JUNE: 6,
+        JULY: 7, AUGUST: 8, SEPTEMBER: 9, OCTOBER: 10, NOVEMBER: 11, DECEMBER: 12,
+    };
+    const batchOptions = Array.from(new Set(records.map(r => r.production_batch).filter(Boolean)))
+        .sort((a, b) => (MONTH_ORDER[a.toUpperCase()] ?? 99) - (MONTH_ORDER[b.toUpperCase()] ?? 99));
+    const yearOptions = Array.from(
+        new Set(records.map(r => {
+            const yr = parseInt(r.transaction_date?.slice(0, 4) || '');
+            return isNaN(yr) ? null : yr;
+        }).filter(Boolean) as number[])
+    ).sort((a, b) => b - a); // descending
 
     return {
         records,
         batches,
         destinations,
-        productionBatches,
-        year,
-        month,
+        batchOptions,
+        yearOptions,
+        blockLocs,
+        // Canonical price-gate flag — drives conditional render on the client.
+        canViewPrices: showPrices,
     };
+}
+
+export async function fetchClosedBlocks(): Promise<{ rows: Tables<'view_rc_out_closed_blocks'>[]; canViewPrices: boolean; error?: string }> {
+    const supabase = await createClient();
+    const showPrices = await canViewPrices();
+
+    const { data, error } = await supabase
+        .from('view_rc_out_closed_blocks')
+        .select('*')
+        .order('close_date', { ascending: false });
+
+    if (error) {
+        return { rows: [], canViewPrices: showPrices, error: error.message };
+    }
+
+    // Price gate is the security boundary: null ₱ fields BEFORE the payload leaves the
+    // server so a Production user's network response never contains them.
+    const rows = (data ?? []).map((r) =>
+        showPrices ? r : { ...r, total_value: null, avg_price: null }
+    );
+
+    return { rows, canViewPrices: showPrices };
 }

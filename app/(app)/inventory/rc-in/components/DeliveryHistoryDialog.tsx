@@ -12,7 +12,7 @@ import {
 } from '@/lib/field-labels';
 import { useAuth } from '@/components/providers/auth-context';
 import { getDeliveryHistory, getAuditComments, addAuditComment } from '../actions';
-import type { AuditLogRow, AuditComment } from '@/types/rc-in';
+import type { AuditLogRow, AuditComment, DeliveryHistoryRow } from '@/types/rc-in';
 import { DiffDisplay, OperationBadge, getUserInitials, getUserName } from './audit-shared';
 import {
   Dialog,
@@ -43,6 +43,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { calculateWhse } from '@/lib/rc-utils';
 
 const LAB_KEYS = ['mc', 'grit', 'bd_astm', 'bd_jis', 'vm', 'ash', 'fc'];
+
+/** Whole-kg formatter for the display-only Weight Deduction block (no decimals). */
+function formatKg(value: number): string {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
 
 /** Popover for viewing/adding remarks on an audit log entry */
 function RemarkPopover({ entry }: { entry: AuditLogRow }) {
@@ -177,7 +182,7 @@ function RemarkPopover({ entry }: { entry: AuditLogRow }) {
               Comment
             </Button>
             <Link
-              href={`/inventory/rc-in/edit/${entry.id}`}
+              href={`/edit/${entry.id}`}
               className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
               onClick={() => setOpen(false)}
             >
@@ -198,7 +203,7 @@ export function DeliveryHistoryDialog({
   onOpenChange,
 }: {
   deliveryId: string | null;
-  initialData: Record<string, any> | null;
+  initialData: DeliveryHistoryRow | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -233,7 +238,7 @@ function DeliveryHistoryContent({
   initialData,
 }: {
   deliveryId: string | null;
-  initialData: Record<string, any> | null;
+  initialData: DeliveryHistoryRow | null;
 }) {
   const [loadingHistory, setLoadingHistory] = React.useState(true);
   const [history, setHistory] = React.useState<AuditLogRow[]>([]);
@@ -261,7 +266,7 @@ function DeliveryHistoryContent({
     };
   }, [deliveryId]);
 
-  const current = initialData || {};
+  const current = initialData || ({} as DeliveryHistoryRow);
 
   if (!initialData && !deliveryId) {
     return (
@@ -279,28 +284,28 @@ function DeliveryHistoryContent({
   const lastChangedLabKeys = new Set<string>();
   if (lastUpdate?.diff?.lab_results) {
     const labDiffs = flattenLabResultsDiff(
-      lastUpdate.diff.lab_results.old,
-      lastUpdate.diff.lab_results.new
+      lastUpdate.diff.lab_results.old as Record<string, unknown> | null,
+      lastUpdate.diff.lab_results.new as Record<string, unknown> | null
     );
     labDiffs.forEach((ld) => lastChangedLabKeys.add(ld.key));
   }
 
   const getPreviousValue = (key: string): string | null => {
     if (!lastUpdate?.diff?.[key]) return null;
-    return formatFieldValue(key, lastUpdate.diff[key].old);
+    return formatFieldValue(key, lastUpdate.diff[key].old as string | number | boolean | null);
   };
 
   const getPreviousLabValue = (subKey: string): string | null => {
     if (!lastUpdate?.diff?.lab_results) return null;
-    const oldLab = lastUpdate.diff.lab_results.old;
-    const newLab = lastUpdate.diff.lab_results.new;
+    const oldLab = lastUpdate.diff.lab_results.old as Record<string, unknown> | null;
+    const newLab = lastUpdate.diff.lab_results.new as Record<string, unknown> | null;
     if (JSON.stringify(oldLab?.[subKey]) === JSON.stringify(newLab?.[subKey])) return null;
-    return formatFieldValue(subKey, oldLab?.[subKey]);
+    return formatFieldValue(subKey, oldLab?.[subKey] as string | number | boolean | null);
   };
 
   const renderField = (
     key: string,
-    current: Record<string, any>,
+    current: DeliveryHistoryRow,
     lastChangedKeys: Set<string>,
     getPreviousValue: (k: string) => string | null,
     className?: string,
@@ -320,8 +325,8 @@ function DeliveryHistoryContent({
         <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">
           {labelOverride || getFieldLabel(key)}
         </div>
-        <div className="text-xs font-mono truncate" title={String(current[key] ?? '-')}>
-          {formatFieldValue(key, current[key])}
+        <div className="text-xs font-mono truncate" title={String((current as Record<string, unknown>)[key] ?? '-')}>
+          {formatFieldValue(key, (current as Record<string, unknown>)[key] as string | number | boolean | null)}
         </div>
       </div>
     );
@@ -343,7 +348,7 @@ function DeliveryHistoryContent({
 
   const renderLabField = (
     subKey: string,
-    labData: Record<string, any> | null,
+    labData: { mc: number; ash: number; bd_astm: number; bd_jis: number; grit: number; vm: number; fc: number } | null,
     isChanged: boolean,
     prev: string | null
   ) => {
@@ -359,7 +364,7 @@ function DeliveryHistoryContent({
           {getFieldLabel(subKey)}
         </div>
         <div className="text-xs font-mono truncate font-bold">
-          {formatFieldValue(subKey, labData?.[subKey])}
+          {formatFieldValue(subKey, labData ? (labData as Record<string, unknown>)[subKey] as string | number | boolean | null : null)}
         </div>
       </div>
     );
@@ -441,7 +446,7 @@ function DeliveryHistoryContent({
       <div className="flex-1 overflow-y-auto space-y-5 pr-1 pt-0">
         {/* Card Body */}
         <TooltipProvider>
-          <div className="space-y-3">
+          <div className="space-y-3 stagger-fast">
 
             {/* Row 1: Date - Supplier - Price */}
             <div className="grid grid-cols-3 gap-2">
@@ -495,6 +500,45 @@ function DeliveryHistoryContent({
 
             {canViewPrices && <div className="h-px bg-border/50" />}
 
+            {/* Weight Deduction (display-only — DEDUCTIONS_DESIGN.md). Rendered ONLY
+                when this delivery is tagged (true_weight_kg != null). Weight + note
+                lines are not gated; the effective ₱/kg line is canViewPrices-gated. */}
+            {current.true_weight_kg != null && (
+              <div>
+                <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Weight Deduction</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">True Weight</div>
+                    <div className="text-xs font-mono truncate">{formatKg(Number(current.true_weight_kg))} kg</div>
+                  </div>
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Recorded</div>
+                    <div className="text-xs font-mono truncate">{formatKg(Number(current.weight_kg))} kg</div>
+                  </div>
+                  <div className="rounded-md border px-2 py-1.5 overflow-hidden col-span-2">
+                    <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Deduction</div>
+                    <div className="text-xs font-mono">{current.deduction_note || '—'}</div>
+                  </div>
+                  {canViewPrices &&
+                    Number(current.true_weight_kg) > 0 &&
+                    current.cost_basis !== undefined &&
+                    current.cost_basis !== null && (
+                      <div className="rounded-md border px-2 py-1.5 overflow-hidden col-span-2">
+                        <div className="text-[10px] font-medium text-muted-foreground uppercase truncate">Effective ₱/kg</div>
+                        <div className="text-xs font-mono">
+                          <span className="inline-flex w-full justify-between">
+                            <span className="text-muted-foreground">&#8369;</span>
+                            <span>
+                              {(Number(current.cost_basis) / Number(current.true_weight_kg)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                </div>
+              </div>
+            )}
+
             <div className="h-px bg-border/50" />
 
             {/* Lab Results */}
@@ -502,7 +546,7 @@ function DeliveryHistoryContent({
               <div className="text-[10px] font-bold text-muted-foreground uppercase mb-2 tracking-wider">Lab Results</div>
               <div className="flex gap-1 justify-between">
                 {LAB_KEYS.map((subKey) => {
-                  const labData = current.lab_results as Record<string, any> | null;
+                  const labData = current.lab_results;
                   const isChanged = lastChangedLabKeys.has(subKey);
                   const prev = getPreviousLabValue(subKey);
                   return renderLabField(subKey, labData, isChanged, prev);
@@ -515,7 +559,7 @@ function DeliveryHistoryContent({
         <div className="h-px bg-border" />
 
         {/* History Feed */}
-        <div className="space-y-3">
+        <div className="space-y-3 stagger-children">
           <h4 className="text-sm font-medium flex items-center gap-2">
             Activity Log
           </h4>

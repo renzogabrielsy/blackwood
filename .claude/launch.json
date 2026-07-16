@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "blackwood-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["-u", "ANTHROPIC_API_KEY", "npm", "run", "dev"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

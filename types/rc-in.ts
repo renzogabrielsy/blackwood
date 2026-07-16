@@ -9,6 +9,10 @@ export type DeliveryRow = {
     weight_kg: number;
     cost_basis?: number;
     remarks?: string;
+    // Weight-deduction / true-weight annotation (display-only — see DEDUCTIONS_DESIGN.md).
+    // Additive + nullable so existing DeliveryRow/edit-shape construction is unaffected.
+    true_weight_kg?: number | null;
+    deduction_note?: string | null;
     lab_results: {
         mc: number;
         ash: number;
@@ -33,8 +37,8 @@ export type AuditLogRow = {
     id: string;
     record_id: string;
     operation: 'INSERT' | 'UPDATE' | 'DELETE';
-    diff: Record<string, { old: any; new: any }> | null;
-    snapshot: Record<string, any> | null;
+    diff: Record<string, { old: unknown; new: unknown }> | null;
+    snapshot: Record<string, unknown> | null;
     performed_by: string | null;
     performed_at: string;
     comment?: string | null;

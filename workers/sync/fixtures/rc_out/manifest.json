@@ -1,0 +1,44 @@
+{
+  "report_type": "rc_out",
+  "cases": [
+    {
+      "id": "rc_out_real_latest",
+      "kind": "real",
+      "covers": [
+        "natural-key-classify",
+        "batch-resolution-primary-fallback",
+        "production_batch-derivation",
+        "block-section-detection"
+      ],
+      "workbooks": {
+        "primary": "workbooks/rc_out_real_latest.xlsx",
+        "movement": "workbooks/rc_out_real_movement.xlsx"
+      },
+      "db_window": "db_window/rc_out_real_latest.json",
+      "opts": {
+        "since": "2025-01-01",
+        "watermark": null
+      },
+      "note": "Real PROPOSED DAILY REPORT JULY 2026 workbook classified against the real rc_out + batch_lookup snapshot. Watermark null (full-window classify). Gate reconciliation is orchestrator-level and not part of the classify oracle."
+    },
+    {
+      "id": "rc_out_edge",
+      "kind": "synthetic",
+      "covers": [
+        "UNMAPPED-batch",
+        "L-019-sub-watermark-flagged",
+        "block-section-detection",
+        "batch-resolution-primary-fallback"
+      ],
+      "workbooks": {
+        "primary": "workbooks/rc_out_edge.xlsx"
+      },
+      "db_window": "db_window/rc_out_edge.json",
+      "opts": {
+        "since": "2025-01-01",
+        "watermark": "2026-07-10"
+      },
+      "note": "PROPOSED JULY 4: a resolvable JULY-26-BLK9 section (sub-watermark 2026-07-04 <= watermark 2026-07-10 with no natural-key match -> FLAGGED per L-019) and a JULY-26-BLK99 section absent from batch_lookup -> UNMAPPED (checked before the sub-watermark guard)."
+    }
+  ]
+}

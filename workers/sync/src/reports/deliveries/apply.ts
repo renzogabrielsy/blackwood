@@ -1,0 +1,331 @@
+/**
+ * apply.ts — TS port of sync_deliveries.py::phase_apply (read the Python as spec).
+ * Behavioral law: specs/deliveries.md §5.
+ *
+ *   1. NEW → defensive batch upsert (only if the resolved batch_code doesn't already
+ *      exist), catching a location collision → held(reason:"location_occupied"),
+ *      NEVER auto-creating a batch beyond the already-resolved code (L-006: the trigger
+ *      owns current_weight — we insert current_weight=0 and never `+=`).
+ *   2. deliveries INSERT via insert_if_absent, natural key
+ *      (transaction_date, batch_code, truck_plate, weight_kg, sacks). 0 inserted → held.
+ *   3. On insert: stampIngestionAudit — L-001 (deliveries fires an audit TRIGGER on
+ *      INSERT; we UPDATE that row's provenance, never INSERT a 2nd). cost_basis is the
+ *      real value OR 0 placeholder (L-008) with the placeholder note in the comment.
+ *   4. VALUE_CHANGED → db.update, then stampIngestionAudit; if stamping returns false
+ *      (no trigger row found), fall back to writeIngestionAudit (manual audit).
+ *   5. FLAGGED (decision skip) + MALFORMED → held, never auto-written. dup_noops are
+ *      silent NOOPs (like noop) — not in the write buckets.
+ *   6. Label + watermark ONLY if `not errors`.
+ *
+ * DB via lib/db (DbClient). Gmail labeling injected as a callback (deps.labeler) —
+ * apply NEVER imports gmail (scope fence). Progress via lib/progress.
+ */
+import type { DbClient } from "../../lib/db.js";
+import type { ProgressEmitter } from "../../lib/progress.js";
+import type { DeliveryRow, LabResults } from "./extract.js";
+import type { FieldDiff } from "./classify.js";
+import { type HeldRow, type HeldKind, deliveriesKey } from "../held.js";
+
+/** The compact hand-off from classify → apply. */
+export interface DeliveriesCompact {
+  report_type: string;
+  since: string;
+  watermark: string | null;
+  source: {
+    email_subject?: string | null;
+    email_uid?: number | string | null;
+    email_thread_id?: string | null;
+  };
+  actionable: {
+    new: Array<{ index: unknown; row: DeliveryRow; notes?: string[] }>;
+    changed: Array<{ index: unknown; row: DeliveryRow; db_row: Record<string, unknown>; diff: FieldDiff[] }>;
+    flagged: Array<{ kind: string; index: unknown; reason?: string; decision?: string; row?: DeliveryRow }>;
+    dup_noops: Array<{ index: unknown; note?: string }>;
+    malformed: Array<{ reason?: string; row?: DeliveryRow }>;
+  };
+  batch_codes?: string[];
+}
+
+export interface DeliveriesApplyDeps {
+  db: DbClient;
+  labeler?: (uids: Array<number | string>) => Promise<boolean>;
+  progress?: ProgressEmitter;
+  noLabel?: boolean;
+  runTs?: string;
+  /** --only-clean semantics: FLAGGED (decision skip) → held when true (default true). */
+  onlyClean?: boolean;
+}
+
+export interface ApplyResult {
+  report_type: string;
+  ok: boolean;
+  inserts: number;
+  updates: number;
+  held: HeldRow[];
+  labeled: boolean;
+  watermark_updated: boolean;
+  errors: string[];
+}
+
+const REPORT_TYPE = "deliveries";
+
+/** The deliveries structured held-row payload. NEVER includes cost_basis (₱ gate). */
+function deliveriesHeldRow(r: DeliveryRow): Record<string, unknown> {
+  return {
+    transaction_date: r.transaction_date,
+    batch_code: r.batch_code ?? null,
+    block_loc: r.block_loc ?? null,
+    truck_plate: r.truck_plate ?? null,
+    weight_kg: r.weight_kg ?? null,
+    sacks: r.sacks ?? null,
+  };
+}
+
+/** Map a deliveries flagged classifier `kind` → the normalized HeldKind. */
+function deliveriesFlaggedKind(kind: string): HeldKind {
+  if (kind === "L033_cross_batch_loc_mismatch") return "cross_batch_reassignment";
+  if (kind === "L004_block_loc_correction") return "cross_batch_reassignment";
+  if (kind === "low_confidence") return "low_confidence";
+  return "flagged";
+}
+
+function prov(runTs: string, index: unknown, extra = ""): string {
+  const base =
+    `provenance=deliveries-sync | Ingested by sync_deliveries.py (lean orchestrator) ` +
+    `row ${index} on ${runTs}.`;
+  return base + (extra ? ` ${extra}` : "");
+}
+
+/** Local is_location_collision (orchestrator_common.is_location_collision parity):
+ *  a unique-violation (23505) on the active-batch-per-location index. */
+function isLocationCollision(e: unknown): boolean {
+  const s = e instanceof Error ? e.message : String(e);
+  return (
+    s.includes("23505") &&
+    (s.includes("idx_unique_active_batch_per_location") || s.includes("location_ref"))
+  );
+}
+
+/** Port of phase_apply. ok:false iff any errors. */
+export async function applyDeliveries(
+  compact: DeliveriesCompact,
+  deps: DeliveriesApplyDeps,
+): Promise<ApplyResult> {
+  const { db } = deps;
+  const emit = deps.progress;
+  const runTs = deps.runTs ?? new Date().toISOString();
+  const onlyClean = deps.onlyClean ?? true;
+  const held: ApplyResult["held"] = [];
+  const errors: string[] = [];
+
+  let inserts = 0;
+  let updates = 0;
+  const newRows = compact.actionable.new;
+  const chgRows = compact.actionable.changed;
+  const totalWrites = Math.max(1, newRows.length + chgRows.length);
+  const writeBatch = Math.max(1, Math.ceil(totalWrites / 10));
+  let done = 0;
+  await emit?.("apply", `Writing ${newRows.length} new and ${chgRows.length} changed delivery row(s)…`, 10);
+
+  // NEW → defensive batch upsert + deliveries INSERT + trigger-audit stamp (L-001).
+  for (const item of newRows) {
+    const r = item.row;
+    const bc = r.batch_code;
+    try {
+      // Defensive batch upsert: only if the resolved batch_code doesn't already exist.
+      if (bc) {
+        const existing = await db.selectOne("batches", { batch_code: `eq.${bc}` }, "batch_code");
+        if (!existing) {
+          try {
+            await db.insert("batches", [
+              {
+                batch_code: bc,
+                location_ref: r.block_loc ?? "",
+                status: "STORED",
+                current_weight: 0,
+                avg_cost: 0,
+              },
+            ]);
+          } catch (bexc) {
+            if (isLocationCollision(bexc)) {
+              held.push({
+                reason: "location_occupied",
+                natural_key: deliveriesKey(r),
+                detail:
+                  `block_loc ${r.block_loc ?? null} already holds an active batch; ` +
+                  `new batch ${bc} not created and this delivery was not written. ` +
+                  `Resolve which batch owns this slot (close the prior batch or fix the ` +
+                  `location) via the sync employee, then re-run.`,
+                kind: "location_occupied",
+                row: deliveriesHeldRow(r),
+                source_index: item.index as string | number,
+              });
+              continue;
+            }
+            throw bexc;
+          }
+        }
+      }
+
+      const payload: Record<string, unknown> = {
+        transaction_date: r.transaction_date,
+        supplier: r.supplier ?? null,
+        batch_code: bc,
+        block_loc: r.block_loc ?? null,
+        truck_plate: r.truck_plate ?? null,
+        sacks: r.sacks ?? null,
+        weight_kg: r.weight_kg,
+        cost_basis: r.cost_basis !== null && r.cost_basis !== undefined ? r.cost_basis : 0, // L-008
+        remarks: r.remarks ?? null,
+        lab_results: (r.lab_results as LabResults | null) ?? null,
+        true_weight_kg: r.true_weight_kg ?? null, // L-021
+        deduction_note: r.deduction_note ?? null, // L-021
+      };
+      const res = await db.insertIfAbsent("deliveries", [payload], [
+        "transaction_date",
+        "batch_code",
+        "truck_plate",
+        "weight_kg",
+        "sacks",
+      ]);
+      if (res.insertedCount === 0) {
+        held.push({
+          reason: "already_exists",
+          natural_key: deliveriesKey(r),
+          detail: "idempotent skip (natural key already in DB)",
+          kind: "already_exists",
+          row: deliveriesHeldRow(r),
+          source_index: item.index as string | number,
+        });
+        continue;
+      }
+      const newId = res.inserted[0].id as string;
+      inserts += 1;
+      const note =
+        r.cost_basis !== null && r.cost_basis !== undefined
+          ? ""
+          : "cost_basis=0 UNPRICED PLACEHOLDER (L-008) — deliveries pricing enrich pending.";
+      await db.stampIngestionAudit({
+        tableName: "deliveries",
+        recordId: newId,
+        comment: prov(runTs, item.index, note),
+        snapshot: payload,
+      });
+      done += 1;
+      if (done % writeBatch === 0 || done === totalWrites) {
+        await emit?.(
+          "apply",
+          `Writing ${done} of ${totalWrites} — ${bc} @ ${r.block_loc ?? null}`,
+          10 + Math.trunc((70 * done) / totalWrites),
+        );
+      }
+    } catch (exc) {
+      errors.push(`insert row ${item.index}: ${errMsg(exc)}`);
+    }
+  }
+
+  // VALUE_CHANGED → UPDATE differing fields, trigger-audit stamp (fallback manual).
+  for (const c of chgRows) {
+    try {
+      const patch: Record<string, unknown> = {};
+      for (const d of c.diff ?? []) patch[d.field] = d.emailValue;
+      if (!Object.keys(patch).length) continue;
+      await db.update("deliveries", { id: `eq.${c.db_row.id}` }, patch);
+      updates += 1;
+      done += 1;
+      if (done % writeBatch === 0 || done === totalWrites) {
+        await emit?.(
+          "apply",
+          `Writing ${done} of ${totalWrites} — updating a delivery`,
+          10 + Math.trunc((70 * done) / totalWrites),
+        );
+      }
+      const diffJson: Record<string, { old: unknown; new: unknown }> = {};
+      for (const d of c.diff) diffJson[d.field] = { old: d.dbValue, new: d.emailValue };
+      const stamped = await db.stampIngestionAudit({
+        tableName: "deliveries",
+        recordId: c.db_row.id as string,
+        comment: prov(runTs, c.index, `UPDATE diff=${JSON.stringify(diffJson)}`),
+      });
+      if (!stamped) {
+        await db.writeIngestionAudit({
+          tableName: "deliveries",
+          recordId: c.db_row.id as string,
+          operation: "UPDATE",
+          comment: prov(runTs, c.index, "UPDATE"),
+          diff: diffJson,
+        });
+      }
+    } catch (exc) {
+      errors.push(`update ${c.index}: ${errMsg(exc)}`);
+    }
+  }
+
+  // FLAGGED (decision skip under --only-clean) + MALFORMED → held. dup_noops are
+  // silent NOOPs (not written, not held — like the noop bucket).
+  for (const f of compact.actionable.flagged ?? []) {
+    if (onlyClean && (f.decision || "skip") === "skip") {
+      const row = f.row;
+      held.push({
+        reason: f.kind,
+        natural_key: row ? deliveriesKey(row) : String(f.index ?? ""),
+        detail: f.reason ?? "requires human decision — never auto-written",
+        kind: deliveriesFlaggedKind(f.kind),
+        ...(row ? { row: deliveriesHeldRow(row) } : {}),
+        source_index: f.index as string | number,
+      });
+    }
+  }
+  for (const m of compact.actionable.malformed ?? []) {
+    const row = m.row;
+    held.push({
+      reason: "malformed",
+      natural_key: row ? deliveriesKey(row) : "malformed row",
+      detail: m.reason ?? "malformed row held",
+      kind: "malformed",
+      ...(row ? { row: deliveriesHeldRow(row) } : {}),
+      ...(row?._source_row != null ? { source_index: row._source_row as string | number } : {}),
+    });
+  }
+
+  // Label + watermark ONLY if not errors. non_held_unapplied = bool(errors) (spec §5).
+  const nonHeldUnapplied = errors.length > 0;
+  let watermarkUpdated = false;
+  let labeled = false;
+  if (!errors.length) {
+    await emit?.("apply", "Updating the audit trail…", 88);
+    watermarkUpdated = await db.upsertIngestionWatermark(REPORT_TYPE, {
+      lastEmailId: compact.source?.email_thread_id ?? null,
+    });
+    if (!nonHeldUnapplied && !deps.noLabel && deps.labeler) {
+      const uid = compact.source?.email_uid;
+      if (uid) {
+        await emit?.("apply", "Marking the email as processed…", 94);
+        labeled = await deps.labeler([uid]);
+      }
+    }
+  }
+
+  if (errors.length) {
+    await emit?.("finalize", `Finished with ${errors.length} problem(s) — see details.`, 100, undefined, "warn");
+  } else if (inserts || updates) {
+    await emit?.("finalize", `Done — ${inserts} new, ${updates} updated.`, 100);
+  } else {
+    await emit?.("finalize", "Done — nothing new to write.", 100);
+  }
+
+  return {
+    report_type: REPORT_TYPE,
+    ok: errors.length === 0,
+    inserts,
+    updates,
+    held,
+    labeled,
+    watermark_updated: watermarkUpdated,
+    errors,
+  };
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}

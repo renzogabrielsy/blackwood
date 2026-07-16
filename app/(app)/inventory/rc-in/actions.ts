@@ -2,19 +2,35 @@
 
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
+import type { Json } from '@/types/supabase';
 import type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
 
-import { getUserRole } from '@/lib/auth';
+import { getUserRole, roleCanViewPrices } from '@/lib/auth';
 import { UserRole, PRIVILEGED_ROLES } from '@/types/auth';
+import { validateBlockLoc, normalizeBlockLoc } from '@/lib/validation';
 
 export type { DeliveryRow, AuditLogRow, AuditComment } from '@/types/rc-in';
+
+/** Translates raw DB constraint violation messages into user-friendly strings */
+function translateDbError(message: string): string {
+    if (message.includes('chk_block_loc_format')) {
+        return 'Invalid block location format. Expected format: A-1A, D-20D, etc.';
+    }
+    if (message.includes('chk_location_ref_format')) {
+        return 'Invalid location reference format on batch.';
+    }
+    if (message.includes('idx_unique_active_batch_per_location')) {
+        return 'Another active batch already occupies this location.';
+    }
+    return message;
+}
 
 /** Deduplicates and upserts batches from delivery rows */
 async function upsertBatchesFromRows(rows: DeliveryRow[]) {
     const supabase = await createClient();
     const batchUpserts = rows.map(row => ({
         batch_code: row.batch_code,
-        location_ref: row.block_loc,
+        location_ref: row.block_loc ? normalizeBlockLoc(row.block_loc) : '',
     }));
 
     const uniqueBatches = Array.from(
@@ -30,11 +46,90 @@ async function upsertBatchesFromRows(rows: DeliveryRow[]) {
     }
 }
 
+/**
+ * Shared block-location validation for the bulk INSERT (submitBulkDeliveries) and
+ * bulk UPDATE (bulkUpdateDeliveries) paths — previously copy-pasted in both.
+ *
+ * Runs two checks against the given rows and returns ALL errors at once (never
+ * short-circuits) so the caller can surface every problem in one message:
+ *   1. FORMAT — each row with a non-empty block_loc must pass validateBlockLoc().
+ *   2. OCCUPIED — for the format-valid rows, no submitted location may already be
+ *      held by a DIFFERENT active (STORED/IN-USE) batch.
+ *
+ * The occupied check is deliberately NON-FATAL on query error: if the lookup
+ * fails we proceed WITHOUT the occupied check (returning only format errors)
+ * rather than blocking the write — identical to the original inline behaviour.
+ *
+ * Row numbers in messages are 1-based over the input array order.
+ */
+async function validateBlockLocsForRows(rows: DeliveryRow[]): Promise<string[]> {
+    const validationErrors: string[] = [];
+
+    // 1. Format validation for each row with a block_loc
+    for (let i = 0; i < rows.length; i++) {
+        const loc = rows[i].block_loc?.trim();
+        if (!loc) continue;
+        const result = validateBlockLoc(loc);
+        if (!result.valid) {
+            validationErrors.push(`Row ${i + 1}: ${result.error}`);
+        }
+    }
+
+    // 2. Duplicate/occupied location check — only for rows with valid block_loc values
+    const rowsWithValidLocs = rows
+        .map((row, i) => ({ row, index: i }))
+        .filter(({ row }) => {
+            const loc = row.block_loc?.trim();
+            if (!loc) return false;
+            return validateBlockLoc(loc).valid;
+        });
+
+    if (rowsWithValidLocs.length > 0) {
+        const supabaseCheck = await createClient();
+        const uniqueLocs = [...new Set(rowsWithValidLocs.map(({ row }) => normalizeBlockLoc(row.block_loc)))];
+
+        const { data: activeBatches, error: checkError } = await supabaseCheck
+            .from('deliveries')
+            .select('block_loc, batch_code, batches!inner(status)')
+            .in('block_loc', uniqueLocs)
+            .in('batches.status', ['STORED', 'IN-USE']);
+
+        if (checkError) {
+            console.error('Error checking block location conflicts:', checkError);
+            // Non-fatal: proceed without duplicate check rather than blocking submission
+        } else if (activeBatches && activeBatches.length > 0) {
+            const locToBatches = new Map<string, Set<string>>();
+            for (const record of activeBatches) {
+                const loc = record.block_loc.toUpperCase();
+                if (!locToBatches.has(loc)) locToBatches.set(loc, new Set());
+                locToBatches.get(loc)!.add(record.batch_code);
+            }
+
+            for (const { row, index } of rowsWithValidLocs) {
+                const loc = normalizeBlockLoc(row.block_loc);
+                const existingBatches = locToBatches.get(loc);
+                if (!existingBatches) continue;
+                // Only flag if the existing batch is DIFFERENT from the one being submitted
+                for (const existingBatch of existingBatches) {
+                    if (existingBatch !== row.batch_code) {
+                        validationErrors.push(
+                            `Row ${index + 1}: Location ${loc} is occupied by batch ${existingBatch}`
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    return validationErrors;
+}
+
 /** Strips `state` and casts numerics for the deliveries table */
 function toDeliveryPayload(row: DeliveryRow) {
     const { state, ...deliveryData } = row;
     return {
         ...deliveryData,
+        block_loc: row.block_loc ? normalizeBlockLoc(row.block_loc) : null,
         weight_kg: Number(row.weight_kg),
         sacks: Number(row.sacks),
         cost_basis: row.cost_basis === undefined || row.cost_basis === null ? 0 : Number(row.cost_basis),
@@ -45,6 +140,16 @@ function toDeliveryPayload(row: DeliveryRow) {
 export async function submitBulkDeliveries(rows: DeliveryRow[]) {
     if (!rows || rows.length === 0) {
         return { success: false, message: 'No rows to submit' };
+    }
+
+    // --- Block location validation (format + occupied check; all errors at once) ---
+    const validationErrors = await validateBlockLocsForRows(rows);
+
+    if (validationErrors.length > 0) {
+        return {
+            success: false,
+            message: `Block location validation failed:\n${validationErrors.join('\n')}`,
+        };
     }
 
     try {
@@ -65,26 +170,43 @@ export async function submitBulkDeliveries(rows: DeliveryRow[]) {
         revalidatePath('/inventory');
         return { success: true };
 
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Submit Transaction Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
     }
 }
 
 export async function updateDelivery(id: string, data: Partial<DeliveryRow>) {
-    const supabase = await createClient();
-    const { error } = await supabase
-        .from('deliveries')
-        .update(data)
-        .eq('id', id);
-
-    if (error) {
-        console.error('Error updating delivery:', error);
-        return { success: false, message: error.message };
+    // Bug fix: validate block_loc format on single-delivery updates
+    if (data.block_loc) {
+        const result = validateBlockLoc(data.block_loc);
+        if (!result.valid) {
+            return { success: false, message: result.error };
+        }
+        // Normalize to uppercase before persisting
+        data = { ...data, block_loc: normalizeBlockLoc(data.block_loc) };
     }
 
-    revalidatePath('/inventory');
-    return { success: true };
+    const supabase = await createClient();
+    try {
+        const { error } = await supabase
+            .from('deliveries')
+            .update(data)
+            .eq('id', id);
+
+        if (error) {
+            console.error('Error updating delivery:', error);
+            return { success: false, message: translateDbError(error.message) };
+        }
+
+        revalidatePath('/inventory');
+        return { success: true };
+    } catch (error: unknown) {
+        console.error('Update Delivery Failed:', error);
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
+    }
 }
 
 export async function bulkUpdateDeliveries(updates: { id: string; data: DeliveryRow; comment?: string }[]) {
@@ -92,58 +214,50 @@ export async function bulkUpdateDeliveries(updates: { id: string; data: Delivery
         return { success: false, message: 'No rows to update' };
     }
 
+    // --- Block location validation (same rules as submitBulkDeliveries) ---
+    const rows = updates.map(u => u.data);
+    const validationErrors = await validateBlockLocsForRows(rows);
+
+    if (validationErrors.length > 0) {
+        return {
+            success: false,
+            message: `Block location validation failed:\n${validationErrors.join('\n')}`,
+        };
+    }
+
     try {
-        const rows = updates.map(u => u.data);
         await upsertBatchesFromRows(rows);
 
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
 
-        for (const { id, data, comment } of updates) {
-            // Set audit comment if provided
-            if (comment) {
-                await supabase.rpc('set_audit_comment', { comment });
-            } else {
-                await supabase.rpc('set_audit_comment', { comment: null });
-            }
+        // PERF-3: one transactional RPC instead of a per-row loop of
+        // (set_audit_comment -> update -> audit_logs lookup -> audit_comments insert).
+        // A mid-batch failure now rolls back the WHOLE batch. The payload is built here
+        // (same toDeliveryPayload transform + block_loc normalization as before), then
+        // fn_bulk_update_deliveries applies each partial update inside a single
+        // transaction. The deliveries AFTER trigger still fires per row, so the
+        // audit_logs trail is byte-for-byte identical to the old path; the RPC also
+        // reproduces the exact "attach comment to latest audit_log" glue.
+        const payload = updates.map(({ id, data, comment }) => ({
+            id,
+            data: toDeliveryPayload(data),
+            comment: comment ?? null,
+        }));
 
-            const payload = toDeliveryPayload(data);
-            const { error } = await supabase
-                .from('deliveries')
-                .update(payload)
-                .eq('id', id);
+        const { error } = await supabase.rpc('fn_bulk_update_deliveries', {
+            rows: payload as unknown as Json,
+        });
 
-            if (error) {
-                throw new Error(`Update Error (${id}): ${error.message}`);
-            }
-
-            // Also post the edit remark as a discussion comment on the new audit log
-            if (comment && user) {
-                const { data: latestLog } = await supabase
-                    .from('audit_logs')
-                    .select('id')
-                    .eq('record_id', id)
-                    .order('performed_at', { ascending: false })
-                    .limit(1)
-                    .single();
-
-                if (latestLog) {
-                    await supabase
-                        .from('audit_comments')
-                        .insert({
-                            audit_log_id: latestLog.id,
-                            user_id: user.id,
-                            body: comment,
-                        });
-                }
-            }
+        if (error) {
+            throw new Error(translateDbError(error.message));
         }
 
         revalidatePath('/inventory');
         return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Bulk Update Failed:', error);
-        return { success: false, message: error.message || 'Unknown error occurred' };
+        const rawMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+        return { success: false, message: translateDbError(rawMessage) };
     }
 }
 
@@ -153,6 +267,19 @@ export async function bulkDeleteDeliveries(ids: string[]) {
     }
 
     const supabase = await createClient();
+
+    // Server-side permission gate (mirrors the client hasPermission('delete:all')
+    // check — only Owner/Admin/Dev = PRIVILEGED_ROLES may delete). The UI hides
+    // the button, but the action must re-check or the guard is skin-deep.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete deliveries' };
+    }
+
     const { error } = await supabase
         .from('deliveries')
         .delete()
@@ -176,7 +303,9 @@ export async function getDeliveryHistory(deliveryId: string) {
         role = await getUserRole(user.id);
     }
 
-    const isProduction = role === 'Production';
+    // "Cannot view prices" — canonical gate (equivalent to the old `role === 'Production'`
+    // since Production is the only price-denied role today, but future-proof).
+    const isProduction = !roleCanViewPrices(role);
 
     // 1. Fetch delivery and raw audit logs (no join)
     const [deliveryRes, logsRes] = await Promise.all([
@@ -212,7 +341,7 @@ export async function getDeliveryHistory(deliveryId: string) {
     const userIds = Array.from(new Set(logs.map(log => log.performed_by).filter(Boolean)));
 
     // 3. Fetch profiles for these users
-    let profilesMap: Record<string, any> = {};
+    let profilesMap: Record<string, { display_name: string | null; email: string; avatar_url: string | null }> = {};
     if (userIds.length > 0) {
         const { data: profiles } = await supabase
             .from('profiles')
@@ -223,7 +352,7 @@ export async function getDeliveryHistory(deliveryId: string) {
             profilesMap = profiles.reduce((acc, p) => {
                 acc[p.id] = p;
                 return acc;
-            }, {} as Record<string, any>);
+            }, {} as Record<string, { display_name: string | null; email: string; avatar_url: string | null }>);
         }
     }
 
@@ -266,6 +395,18 @@ export async function getDeliveryHistory(deliveryId: string) {
 
 export async function deleteDelivery(id: string) {
     const supabase = await createClient();
+
+    // Server-side permission gate — only Owner/Admin/Dev (PRIVILEGED_ROLES) may
+    // delete, matching the client hasPermission('delete:all') check.
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { success: false, message: 'Not authenticated' };
+    }
+    const role = await getUserRole(user.id);
+    if (!PRIVILEGED_ROLES.includes(role)) {
+        return { success: false, message: 'Only Admin, Owner, or Dev can delete deliveries' };
+    }
+
     const { error } = await supabase
         .from('deliveries')
         .delete()
@@ -298,7 +439,7 @@ export async function getAuditComments(auditLogId: string): Promise<AuditComment
 
     // Fetch profiles for comment authors
     const userIds = Array.from(new Set(comments.map(c => c.user_id).filter(Boolean)));
-    let profilesMap: Record<string, any> = {};
+    let profilesMap: Record<string, { display_name: string | null; email: string; avatar_url: string | null }> = {};
     if (userIds.length > 0) {
         const { data: profiles } = await supabase
             .from('profiles')
@@ -309,7 +450,7 @@ export async function getAuditComments(auditLogId: string): Promise<AuditComment
             profilesMap = profiles.reduce((acc, p) => {
                 acc[p.id] = p;
                 return acc;
-            }, {} as Record<string, any>);
+            }, {} as Record<string, { display_name: string | null; email: string; avatar_url: string | null }>);
         }
     }
 
@@ -397,7 +538,7 @@ export async function resolveAuditLog(auditLogId: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
 
@@ -436,7 +577,7 @@ export async function requestResolveAuditLog(auditLogId: string, type: 'resolve'
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true };
 }
 
@@ -497,7 +638,7 @@ export async function approveResolveRequest(auditLogId: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true, resolved: nowResolved };
 }
 
@@ -554,7 +695,7 @@ export async function denyResolveRequest(auditLogId: string, reason: string) {
         });
 
     revalidatePath('/inventory');
-    revalidatePath(`/inventory/rc-in/edit/${auditLogId}`);
+    revalidatePath(`/edit/${auditLogId}`);
     return { success: true };
 }
 
@@ -565,7 +706,9 @@ export async function getAuditLogEntry(auditLogId: string) {
     if (user) {
         role = await getUserRole(user.id);
     }
-    const isProduction = role === 'Production';
+    // "Cannot view prices" — canonical gate (equivalent to the old `role === 'Production'`
+    // since Production is the only price-denied role today, but future-proof).
+    const isProduction = !roleCanViewPrices(role);
 
     const { data: log, error } = await supabase
         .from('audit_logs')
@@ -614,3 +757,9 @@ export async function getAuditLogEntry(auditLogId: string) {
         delivery,
     };
 }
+
+// Per-user table settings actions live in the neutral platform-layer module
+// lib/actions/table-settings.ts (so the globally-mounted TableSettingsProvider no
+// longer imports from this tenant module). A "use server" file may only export
+// async functions — NOT re-exports — so importers pull getTableSettings /
+// saveTableSettings straight from '@/lib/actions/table-settings'.

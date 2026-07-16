@@ -80,9 +80,9 @@ export async function inviteUser(
 
     revalidatePath('/admin');
     return { success: true, message: `Added ${email} to whitelist` };
-  } catch (err: any) {
-    console.error(`Invitation Exception: ${err.message}`);
-    return { success: false, message: `Exception: ${err.message}` };
+  } catch (err: unknown) {
+    console.error(`Invitation Exception: ${err instanceof Error ? err.message : String(err)}`);
+    return { success: false, message: `Exception: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 

@@ -1,0 +1,287 @@
+{
+  "shifts": [
+    {
+      "id": "8d0b8331-0828-44e6-89d1-6a2e3c792487",
+      "transaction_date": "2026-07-01",
+      "production_batch": "JULY",
+      "shift": "M"
+    },
+    {
+      "id": "e825d3ac-96f1-43bf-acbb-45b91c296989",
+      "transaction_date": "2026-06-30",
+      "production_batch": "JUNE",
+      "shift": "M"
+    },
+    {
+      "id": "a8b25cf2-be05-47c5-9a35-173211df61cf",
+      "transaction_date": "2026-06-30",
+      "production_batch": "JULY",
+      "shift": "M"
+    },
+    {
+      "id": "e7cd956a-e988-4a81-b730-3ed3a1237f82",
+      "transaction_date": "2026-06-29",
+      "production_batch": "JUNE",
+      "shift": "M"
+    },
+    {
+      "id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75",
+      "transaction_date": "2026-06-27",
+      "production_batch": "JUNE",
+      "shift": "M"
+    },
+    {
+      "id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc",
+      "transaction_date": "2026-06-26",
+      "production_batch": "JUNE",
+      "shift": "M"
+    },
+    {
+      "id": "59afee56-e84f-450b-bd9f-52aea3c2c980",
+      "transaction_date": "2026-06-25",
+      "production_batch": "JUNE",
+      "shift": "M"
+    }
+  ],
+  "runs": [
+    {
+      "id": "1f1d9f3b-5d9e-4fb4-a6b8-a50d794e19c2",
+      "shift_id": "59afee56-e84f-450b-bd9f-52aea3c2c980",
+      "customer": "CEBU",
+      "grade": "4X8",
+      "ttl_kg": 4600,
+      "sacks_bags": 8,
+      "remarks": "shift defaulted to Morning (operator left blank)"
+    },
+    {
+      "id": "a0064b0f-d808-4fe4-9c0f-269a52ab195e",
+      "shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc",
+      "customer": "CEBU",
+      "grade": "4X8",
+      "ttl_kg": 7475,
+      "sacks_bags": 13,
+      "remarks": "shift defaulted to Morning (operator left blank)"
+    },
+    {
+      "id": "fdda330e-9656-4b08-91c8-c9ff02f145a4",
+      "shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75",
+      "customer": "CEBU",
+      "grade": "4X8",
+      "ttl_kg": 8625,
+      "sacks_bags": 15,
+      "remarks": "shift defaulted to Morning (operator left blank)"
+    },
+    {
+      "id": "54405f15-7edb-4181-8008-95c04479da24",
+      "shift_id": "e7cd956a-e988-4a81-b730-3ed3a1237f82",
+      "customer": "CEBU",
+      "grade": "4X8",
+      "ttl_kg": 6325,
+      "sacks_bags": 11,
+      "remarks": "shift defaulted to Morning (operator left blank); L-026 combined two 4X8 segments (4600+1725 kg, 8+3 sacks)"
+    },
+    {
+      "id": "bdad5cd8-101a-4a25-bbe8-260ed91b00d6",
+      "shift_id": "59afee56-e84f-450b-bd9f-52aea3c2c980",
+      "customer": "CEBU",
+      "grade": "3X50",
+      "ttl_kg": 25350,
+      "sacks_bags": 975,
+      "remarks": "shift defaulted to Morning (operator left blank)"
+    },
+    {
+      "id": "baa735b5-9205-4a67-a2f2-001b69265c91",
+      "shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc",
+      "customer": "CEBU",
+      "grade": "3X50",
+      "ttl_kg": 21684,
+      "sacks_bags": 834,
+      "remarks": "shift defaulted to Morning (operator left blank)"
+    },
+    {
+      "id": "e8c6de48-08ff-4428-95c2-b6ed586f41ea",
+      "shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989",
+      "customer": "CEBU",
+      "grade": "3X50",
+      "ttl_kg": 18694,
+      "sacks_bags": 719,
+      "remarks": "shift defaulted to Morning (operator left blank); L-026 combined ENDING/STARTING segments (13234+5460 kg, 509+210 sacks)"
+    },
+    {
+      "id": "6d8428b4-2c2f-41a1-831b-7c73bce0f378",
+      "shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75",
+      "customer": "CEBU",
+      "grade": "3X50",
+      "ttl_kg": 21632,
+      "sacks_bags": 832,
+      "remarks": null
+    },
+    {
+      "id": "9dd305ff-b6f3-4fe5-940d-9614f727b388",
+      "shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989",
+      "customer": "CEBU",
+      "grade": "4X8",
+      "ttl_kg": 7475,
+      "sacks_bags": 13,
+      "remarks": "shift defaulted to Morning (operator left blank); L-026 combined ENDING/STARTING segments (5175+2300 kg, 9+4 sacks)"
+    },
+    {
+      "id": "36d8034b-db29-477f-8a68-b4712290e33d",
+      "shift_id": "e7cd956a-e988-4a81-b730-3ed3a1237f82",
+      "customer": "CEBU",
+      "grade": "3X50",
+      "ttl_kg": 23270.0,
+      "sacks_bags": 895,
+      "remarks": "shift defaulted to Morning (operator left blank); DAY SHIFT 16380 kg/630 sacks + OVERTIME 6890 kg/265 sacks combined (same shift/grade/customer)"
+    }
+  ],
+  "downtime": [
+    {
+      "id": "cab1d708-96ba-46bb-9251-37f47fbc4add",
+      "shift_id": "59afee56-e84f-450b-bd9f-52aea3c2c980",
+      "shift_hrs": 12,
+      "dt_hrs": 1,
+      "dt_mins": 27,
+      "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, AND CONTINUE REPAIR ROLLER CHAIN BUCKET ELEVATOR #3 ROLLER CHAIN JUMP TO GEAR DOWN; ADJUST ROLLER MILL #1 GAP TO 1.9MM; ADJUST ROLLER MILL #1 GAP TO 2.1MM; SINGLE FEEDER SCREW CONV. #8 ADJUST INVERTER TO 45; STOPPED SC #9 AND CHANGED MOTOR;ADJUST SC #8 TO INVERTER 29 AND SC #9 TO INVERTER 35 DUE TO HINAY ANG MOTOR"
+    },
+    {
+      "id": "ff317ec3-3661-4970-94bc-303a382f16ba",
+      "shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc",
+      "shift_hrs": 12,
+      "dt_hrs": 0,
+      "dt_mins": 25,
+      "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, ANG TANK 4X8; ADJUST GAP ROLLER MILL #1 TO 2.3 MM; SINGLE FEEDING SC #8 ADJUST INVERTER TO 45 AND CHANGED SPROCKET OF MOTOR FOR SC #9"
+    },
+    {
+      "id": "93a602d6-16d5-4f0c-800a-851efb7cf991",
+      "shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75",
+      "shift_hrs": 12,
+      "dt_hrs": 0,
+      "dt_mins": 8,
+      "dt_reason": "REPAIR | CLEANED SCREENS RS 2A, RS 2B, ANG TANK 4X8; STOP SC #9 CHANGED SPROCKET; SINGLE FEEDER ADJUST INVERTER TO 45 OF SC #8, NO STOP OPERATION THEN BACK TO NORMAL INVERTER 29:29; RS 2 CHANGED SPRING 1 PC | Time ranges: 8:00 AM-8:08 AM; 8:15 AM-8:35 AM; 9:25 AM-9:40 AM"
+    }
+  ],
+  "waste": [
+    {
+      "id": "5b4d39e5-3240-40ed-b683-f7a978fc201c",
+      "shift_id": "8d0b8331-0828-44e6-89d1-6a2e3c792487",
+      "rs1a_kg": 2370,
+      "rs1b_kg": 2486,
+      "bf_kg": 315,
+      "rs23_kg": 607,
+      "rs5_kg": 226,
+      "trml1_kg": 100,
+      "trml2_kg": 0.5,
+      "grit_kg": 48,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "84dfbd39-ffea-4d81-81de-871aeae5763b",
+      "shift_id": "59afee56-e84f-450b-bd9f-52aea3c2c980",
+      "rs1a_kg": 2756,
+      "rs1b_kg": 2529,
+      "bf_kg": 80,
+      "rs23_kg": 830,
+      "rs5_kg": 193,
+      "trml1_kg": 175,
+      "trml2_kg": 0.5,
+      "grit_kg": 29,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "d8ae306b-5f2e-422d-b249-106fe4b0c5a5",
+      "shift_id": "58626cf0-49f8-49ce-a96f-28c6cd4e0edc",
+      "rs1a_kg": 1504,
+      "rs1b_kg": 1486,
+      "bf_kg": 175,
+      "rs23_kg": 765,
+      "rs5_kg": 181,
+      "trml1_kg": 120,
+      "trml2_kg": 0.5,
+      "grit_kg": 30,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "8c6e5366-d82e-47f6-944e-f21479d4aef5",
+      "shift_id": "ed348e7d-a2cb-4406-97c3-dc202cdbfb75",
+      "rs1a_kg": 2080.0,
+      "rs1b_kg": 2027.0,
+      "bf_kg": 195.0,
+      "rs23_kg": 750.0,
+      "rs5_kg": 195.0,
+      "trml1_kg": 145.0,
+      "trml2_kg": 0.5,
+      "grit_kg": 57.0,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "cd7bcddc-7053-45c8-9b92-2765911ae083",
+      "shift_id": "e7cd956a-e988-4a81-b730-3ed3a1237f82",
+      "rs1a_kg": 1959.0,
+      "rs1b_kg": 1522.0,
+      "bf_kg": 140.0,
+      "rs23_kg": 616.0,
+      "rs5_kg": 176.0,
+      "trml1_kg": 84.0,
+      "trml2_kg": 0.75,
+      "grit_kg": 50.0,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "c67c0682-bdfa-4701-a68b-fa200377168c",
+      "shift_id": "e825d3ac-96f1-43bf-acbb-45b91c296989",
+      "rs1a_kg": 1040,
+      "rs1b_kg": 1040,
+      "bf_kg": 110,
+      "rs23_kg": 332,
+      "rs5_kg": 109,
+      "trml1_kg": 75,
+      "trml2_kg": 0.5,
+      "grit_kg": 28,
+      "remarks": "PCG/BUNAWAN/ZAMBAONGA"
+    },
+    {
+      "id": "6f44d94e-a38b-44a1-b799-89b2cdf00dd3",
+      "shift_id": "a8b25cf2-be05-47c5-9a35-173211df61cf",
+      "rs1a_kg": 1038,
+      "rs1b_kg": 784,
+      "bf_kg": 35,
+      "rs23_kg": 137,
+      "rs5_kg": 71,
+      "trml1_kg": 50,
+      "trml2_kg": 0.5,
+      "grit_kg": 30,
+      "remarks": "July-batch waste on the June\u2192July transition day; filed under its own 2026-06-30/JULY/M shift per Renzo"
+    }
+  ],
+  "electricity": [
+    {
+      "id": "6ca9017a-ad0b-44bd-97e0-835c1995e694",
+      "reading_date": "2026-06-27",
+      "meter": "MAIN",
+      "start_kwh": 579.7,
+      "end_kwh": 587.8,
+      "meter_multiplier": 120,
+      "remarks": null
+    },
+    {
+      "id": "ab2ec4d3-1a2e-46ce-a1bd-6c728fb2dbfb",
+      "reading_date": "2026-06-26",
+      "meter": "MAIN",
+      "start_kwh": 572.6,
+      "end_kwh": 579.7,
+      "meter_multiplier": 120,
+      "remarks": null
+    },
+    {
+      "id": "39fcaad7-1fec-4188-8739-101f891bd61a",
+      "reading_date": "2026-06-25",
+      "meter": "MAIN",
+      "start_kwh": 565.5,
+      "end_kwh": 572.6,
+      "meter_multiplier": 120,
+      "remarks": null
+    }
+  ],
+  "trucks": []
+}

@@ -24,6 +24,7 @@ import { UserStatusBadge } from './UserStatusBadge';
 import { RevokeAccessDialog } from './RevokeAccessDialog';
 import { InviteUserDialog } from './InviteUserDialog';
 import { toast } from 'sonner';
+import { errorToast } from '@/lib/toast';
 import type { UserRole } from '@/components/providers/auth-context';
 
 interface User {
@@ -58,7 +59,7 @@ export function UserManagementTable({
       if (result.success) {
         toast.success(result.message);
       } else {
-        toast.error(result.message);
+        errorToast(result.message);
       }
     } finally {
       setUpdatingUserId(null);

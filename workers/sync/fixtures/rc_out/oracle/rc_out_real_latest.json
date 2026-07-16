@@ -1,0 +1,769 @@
+{
+  "changed": [],
+  "flagged": [],
+  "malformed": [],
+  "new": [
+    {
+      "index": " num:16",
+      "row": {
+        "_source_row": " num:16",
+        "_source_sheet": "JULY 1",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JULY-25-BLK9",
+        "batch_code_resolved": "JULY-25-BLK9",
+        "batch_id": "e31928de-90ab-4cd5-96df-716afd99ced7",
+        "block_date": "2025-07-01",
+        "block_loc": "C-11B",
+        "block_no": " num:9",
+        "confidence": " num:1",
+        "day_total_kg": " num:12473",
+        "destination": "MAIN",
+        "end_bal_kg": " num:35508",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:9",
+        "pallets_count": [
+          " num:84",
+          " num:165",
+          " num:84",
+          " num:117",
+          " num:110",
+          " num:120",
+          " num:121",
+          " num:163",
+          " num:112"
+        ],
+        "pallets_gross": [
+          " num:1452",
+          " num:1286",
+          " num:1292",
+          " num:1376",
+          " num:1398",
+          " num:1407",
+          " num:1365",
+          " num:1383",
+          " num:1412"
+        ],
+        "pallets_net": [
+          " num:1368",
+          " num:1121",
+          " num:1208",
+          " num:1259",
+          " num:1288",
+          " num:1287",
+          " num:1244",
+          " num:1220",
+          " num:1300"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:47981",
+        "supplier": null,
+        "transaction_date": "2025-07-01",
+        "warnings": [],
+        "weight_kg": " num:12473",
+        "whse_label": "C-11B"
+      }
+    },
+    {
+      "index": " num:16",
+      "row": {
+        "_source_row": " num:16",
+        "_source_sheet": "JULY 2",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JULY-25-BLK9",
+        "batch_code_resolved": "JULY-25-BLK9",
+        "batch_id": "e31928de-90ab-4cd5-96df-716afd99ced7",
+        "block_date": "2025-07-01",
+        "block_loc": "C-11B",
+        "block_no": " num:9",
+        "confidence": " num:1",
+        "day_total_kg": " num:11831",
+        "destination": "MAIN",
+        "end_bal_kg": " num:23677",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:9",
+        "pallets_count": [
+          " num:114",
+          " num:118",
+          " num:126",
+          " num:116",
+          " num:118",
+          " num:114",
+          " num:114",
+          " num:118",
+          " num:121"
+        ],
+        "pallets_gross": [
+          " num:1306",
+          " num:1361",
+          " num:1186",
+          " num:1149",
+          " num:1313",
+          " num:1167",
+          " num:1314",
+          " num:1256",
+          " num:1452"
+        ],
+        "pallets_net": [
+          " num:1192",
+          " num:1243",
+          " num:1060",
+          " num:1033",
+          " num:1195",
+          " num:1053",
+          " num:1200",
+          " num:1138",
+          " num:1331"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:35508",
+        "supplier": null,
+        "transaction_date": "2025-07-02",
+        "warnings": [],
+        "weight_kg": " num:11831",
+        "whse_label": "C-11B"
+      }
+    },
+    {
+      "index": " num:17",
+      "row": {
+        "_source_row": " num:17",
+        "_source_sheet": "JUNE 30",
+        "batch_code_fallbacks": [
+          "MAR-26-BLK26"
+        ],
+        "batch_code_primary": "MARCH-26-BLK26",
+        "batch_code_resolved": "MARCH-26-BLK26",
+        "batch_id": "022d341f-282f-4753-832b-8fee9dc26385",
+        "block_date": "2026-03-01",
+        "block_loc": "A-5B",
+        "block_no": " num:26",
+        "confidence": " num:1",
+        "day_total_kg": " num:1203",
+        "destination": "MAIN",
+        "end_bal_kg": " num:36352",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:126"
+        ],
+        "pallets_gross": [
+          " num:1329"
+        ],
+        "pallets_net": [
+          " num:1203"
+        ],
+        "production_batch": "JUNE",
+        "remarks": null,
+        "strt_bal_kg": " num:37555",
+        "supplier": null,
+        "transaction_date": "2025-06-30",
+        "warnings": [],
+        "weight_kg": " num:1203",
+        "whse_label": "A-5B"
+      }
+    },
+    {
+      "index": " num:25",
+      "row": {
+        "_source_row": " num:25",
+        "_source_sheet": "JULY 1",
+        "batch_code_fallbacks": [
+          "OCTOBER-25-BLK25"
+        ],
+        "batch_code_primary": "OCT-25-BLK25",
+        "batch_code_resolved": "OCT-25-BLK25",
+        "batch_id": "397bc334-a44c-4090-ba1b-f51a31293c75",
+        "block_date": "2025-10-01",
+        "block_loc": "D-7B",
+        "block_no": " num:25",
+        "confidence": " num:1",
+        "day_total_kg": " num:5519",
+        "destination": "MAIN",
+        "end_bal_kg": " num:61701",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:4",
+        "pallets_count": [
+          " num:165",
+          " num:114",
+          " num:123",
+          " num:117"
+        ],
+        "pallets_gross": [
+          " num:1601",
+          " num:1528",
+          " num:1559",
+          " num:1350"
+        ],
+        "pallets_net": [
+          " num:1436",
+          " num:1414",
+          " num:1436",
+          " num:1233"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:67220",
+        "supplier": null,
+        "transaction_date": "2025-07-01",
+        "warnings": [],
+        "weight_kg": " num:5519",
+        "whse_label": "D-7B"
+      }
+    },
+    {
+      "index": " num:25",
+      "row": {
+        "_source_row": " num:25",
+        "_source_sheet": "JULY 2",
+        "batch_code_fallbacks": [
+          "OCTOBER-25-BLK25"
+        ],
+        "batch_code_primary": "OCT-25-BLK25",
+        "batch_code_resolved": "OCT-25-BLK25",
+        "batch_id": "397bc334-a44c-4090-ba1b-f51a31293c75",
+        "block_date": "2025-10-01",
+        "block_loc": "D-7B",
+        "block_no": " num:25",
+        "confidence": " num:1",
+        "day_total_kg": " num:4977",
+        "destination": "MAIN",
+        "end_bal_kg": " num:56724",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:4",
+        "pallets_count": [
+          " num:163",
+          " num:114",
+          " num:121",
+          " num:109"
+        ],
+        "pallets_gross": [
+          " num:1381",
+          " num:1439",
+          " num:1354",
+          " num:1310"
+        ],
+        "pallets_net": [
+          " num:1218",
+          " num:1325",
+          " num:1233",
+          " num:1201"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:61701",
+        "supplier": null,
+        "transaction_date": "2025-07-02",
+        "warnings": [],
+        "weight_kg": " num:4977",
+        "whse_label": "D-7B"
+      }
+    },
+    {
+      "index": " num:26",
+      "row": {
+        "_source_row": " num:26",
+        "_source_sheet": "JUNE 30",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JULY-25-BLK9",
+        "batch_code_resolved": "JULY-25-BLK9",
+        "batch_id": "e31928de-90ab-4cd5-96df-716afd99ced7",
+        "block_date": "2025-07-01",
+        "block_loc": "C-11B",
+        "block_no": " num:9",
+        "confidence": " num:1",
+        "day_total_kg": " num:11384",
+        "destination": "MAIN",
+        "end_bal_kg": " num:47981",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:9",
+        "pallets_count": [
+          " num:118",
+          " num:116",
+          " num:118",
+          " num:120",
+          " num:112",
+          " num:120",
+          " num:116",
+          " num:123",
+          " num:118"
+        ],
+        "pallets_gross": [
+          " num:1729",
+          " num:1391",
+          " num:1470",
+          " num:1288",
+          " num:1356",
+          " num:1234",
+          " num:1409",
+          " num:1243",
+          " num:1325"
+        ],
+        "pallets_net": [
+          " num:1611",
+          " num:1275",
+          " num:1352",
+          " num:1168",
+          " num:1244",
+          " num:1114",
+          " num:1293",
+          " num:1120",
+          " num:1207"
+        ],
+        "production_batch": "JUNE",
+        "remarks": null,
+        "strt_bal_kg": " num:59365",
+        "supplier": "OPEN MC:",
+        "transaction_date": "2025-06-30",
+        "warnings": [],
+        "weight_kg": " num:11384",
+        "whse_label": "C-11B"
+      }
+    },
+    {
+      "index": " num:34",
+      "row": {
+        "_source_row": " num:34",
+        "_source_sheet": "JULY 1",
+        "batch_code_fallbacks": [
+          "FEBRUARY-26-BLK4"
+        ],
+        "batch_code_primary": "FEB-26-BLK4",
+        "batch_code_resolved": "FEB-26-BLK4",
+        "batch_id": "a455437e-e4c7-4a56-a1f5-5e32fff885cb",
+        "block_date": "2026-02-01",
+        "block_loc": "A-7C",
+        "block_no": " num:4",
+        "confidence": " num:1",
+        "day_total_kg": " num:5658",
+        "destination": "MAIN",
+        "end_bal_kg": " num:57655",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:4",
+        "pallets_count": [
+          " num:114",
+          " num:120",
+          " num:160",
+          " num:167"
+        ],
+        "pallets_gross": [
+          " num:1559",
+          " num:1555",
+          " num:1602",
+          " num:1503"
+        ],
+        "pallets_net": [
+          " num:1445",
+          " num:1435",
+          " num:1442",
+          " num:1336"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:63313",
+        "supplier": null,
+        "transaction_date": "2025-07-01",
+        "warnings": [],
+        "weight_kg": " num:5658",
+        "whse_label": "A-7C"
+      }
+    },
+    {
+      "index": " num:34",
+      "row": {
+        "_source_row": " num:34",
+        "_source_sheet": "JULY 2",
+        "batch_code_fallbacks": [
+          "FEBRUARY-26-BLK4"
+        ],
+        "batch_code_primary": "FEB-26-BLK4",
+        "batch_code_resolved": "FEB-26-BLK4",
+        "batch_id": "a455437e-e4c7-4a56-a1f5-5e32fff885cb",
+        "block_date": "2026-02-01",
+        "block_loc": "A-7C",
+        "block_no": " num:4",
+        "confidence": " num:1",
+        "day_total_kg": " num:5430",
+        "destination": "MAIN",
+        "end_bal_kg": " num:52225",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:4",
+        "pallets_count": [
+          " num:114",
+          " num:120",
+          " num:121",
+          " num:117"
+        ],
+        "pallets_gross": [
+          " num:1472",
+          " num:1416",
+          " num:1512",
+          " num:1502"
+        ],
+        "pallets_net": [
+          " num:1358",
+          " num:1296",
+          " num:1391",
+          " num:1385"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:57655",
+        "supplier": null,
+        "transaction_date": "2025-07-02",
+        "warnings": [],
+        "weight_kg": " num:5430",
+        "whse_label": "A-7C"
+      }
+    },
+    {
+      "index": " num:35",
+      "row": {
+        "_source_row": " num:35",
+        "_source_sheet": "JUNE 30",
+        "batch_code_fallbacks": [
+          "OCTOBER-25-BLK25"
+        ],
+        "batch_code_primary": "OCT-25-BLK25",
+        "batch_code_resolved": "OCT-25-BLK25",
+        "batch_id": "397bc334-a44c-4090-ba1b-f51a31293c75",
+        "block_date": "2025-10-01",
+        "block_loc": "D-7B",
+        "block_no": " num:25",
+        "confidence": " num:1",
+        "day_total_kg": " num:2455",
+        "destination": "MAIN",
+        "end_bal_kg": " num:67220",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:2",
+        "pallets_count": [
+          " num:121",
+          " num:174"
+        ],
+        "pallets_gross": [
+          " num:1335",
+          " num:1415"
+        ],
+        "pallets_net": [
+          " num:1214",
+          " num:1241"
+        ],
+        "production_batch": "JUNE",
+        "remarks": null,
+        "strt_bal_kg": " num:69675",
+        "supplier": "OPEN MC:",
+        "transaction_date": "2025-06-30",
+        "warnings": [],
+        "weight_kg": " num:2455",
+        "whse_label": "D-7B"
+      }
+    },
+    {
+      "index": " num:43",
+      "row": {
+        "_source_row": " num:43",
+        "_source_sheet": "JULY 1",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JUNE-26-FEED7",
+        "batch_code_resolved": "JUNE-26-FEED7",
+        "batch_id": "3073164e-bdf5-4f7b-8b56-e10c49926e88",
+        "block_date": "2026-06-01",
+        "block_loc": null,
+        "block_no": " num:7",
+        "confidence": " num:1",
+        "day_total_kg": " num:10000",
+        "destination": "MAIN",
+        "end_bal_kg": " num:9425",
+        "is_closing": false,
+        "is_feed": true,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:0"
+        ],
+        "pallets_gross": [
+          " num:10000"
+        ],
+        "pallets_net": [
+          " num:10000"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:19425",
+        "supplier": "OPEN MC:",
+        "transaction_date": "2025-07-01",
+        "warnings": [],
+        "weight_kg": " num:10000",
+        "whse_label": "FEEDING AREA"
+      }
+    },
+    {
+      "index": " num:43",
+      "row": {
+        "_source_row": " num:43",
+        "_source_sheet": "JULY 2",
+        "batch_code_fallbacks": [],
+        "batch_code_primary": "JUNE-26-FEED7",
+        "batch_code_resolved": "JUNE-26-FEED7",
+        "batch_id": "3073164e-bdf5-4f7b-8b56-e10c49926e88",
+        "block_date": "2026-06-01",
+        "block_loc": null,
+        "block_no": " num:7",
+        "confidence": " num:1",
+        "day_total_kg": " num:6000",
+        "destination": "MAIN",
+        "end_bal_kg": " num:3425",
+        "is_closing": false,
+        "is_feed": true,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:0"
+        ],
+        "pallets_gross": [
+          " num:6000"
+        ],
+        "pallets_net": [
+          " num:6000"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:9425",
+        "supplier": null,
+        "transaction_date": "2025-07-02",
+        "warnings": [],
+        "weight_kg": " num:6000",
+        "whse_label": "FEEDING AREA"
+      }
+    },
+    {
+      "index": " num:44",
+      "row": {
+        "_source_row": " num:44",
+        "_source_sheet": "JUNE 30",
+        "batch_code_fallbacks": [
+          "FEBRUARY-26-BLK4"
+        ],
+        "batch_code_primary": "FEB-26-BLK4",
+        "batch_code_resolved": "FEB-26-BLK4",
+        "batch_id": "a455437e-e4c7-4a56-a1f5-5e32fff885cb",
+        "block_date": "2026-02-01",
+        "block_loc": "A-7C",
+        "block_no": " num:4",
+        "confidence": " num:1",
+        "day_total_kg": " num:2507",
+        "destination": "MAIN",
+        "end_bal_kg": " num:63313",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:2",
+        "pallets_count": [
+          " num:118",
+          " num:112"
+        ],
+        "pallets_gross": [
+          " num:1372",
+          " num:1365"
+        ],
+        "pallets_net": [
+          " num:1254",
+          " num:1253"
+        ],
+        "production_batch": "JUNE",
+        "remarks": null,
+        "strt_bal_kg": " num:65820",
+        "supplier": "OPEN MC:",
+        "transaction_date": "2025-06-30",
+        "warnings": [],
+        "weight_kg": " num:2507",
+        "whse_label": "A-7C"
+      }
+    },
+    {
+      "index": " num:7",
+      "row": {
+        "_source_row": " num:7",
+        "_source_sheet": "JULY 1",
+        "batch_code_fallbacks": [
+          "MAR-26-BLK26"
+        ],
+        "batch_code_primary": "MARCH-26-BLK26",
+        "batch_code_resolved": "MARCH-26-BLK26",
+        "batch_id": "022d341f-282f-4753-832b-8fee9dc26385",
+        "block_date": "2026-03-01",
+        "block_loc": "A-5B",
+        "block_no": " num:26",
+        "confidence": " num:1",
+        "day_total_kg": " num:2576",
+        "destination": "MAIN",
+        "end_bal_kg": " num:33776",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:2",
+        "pallets_count": [
+          " num:165",
+          " num:110"
+        ],
+        "pallets_gross": [
+          " num:1359",
+          " num:1492"
+        ],
+        "pallets_net": [
+          " num:1194",
+          " num:1382"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:36352",
+        "supplier": null,
+        "transaction_date": "2025-07-01",
+        "warnings": [],
+        "weight_kg": " num:2576",
+        "whse_label": "A-5B"
+      }
+    },
+    {
+      "index": " num:7",
+      "row": {
+        "_source_row": " num:7",
+        "_source_sheet": "JULY 2",
+        "batch_code_fallbacks": [
+          "MAR-26-BLK26"
+        ],
+        "batch_code_primary": "MARCH-26-BLK26",
+        "batch_code_resolved": "MARCH-26-BLK26",
+        "batch_id": "022d341f-282f-4753-832b-8fee9dc26385",
+        "block_date": "2026-03-01",
+        "block_loc": "A-5B",
+        "block_no": " num:26",
+        "confidence": " num:1",
+        "day_total_kg": " num:2754",
+        "destination": "MAIN",
+        "end_bal_kg": " num:31022",
+        "is_closing": false,
+        "is_feed": false,
+        "operator_remarks_raw": "FOR FEEDING",
+        "operator_status": null,
+        "pallet_count": " num:2",
+        "pallets_count": [
+          " num:121",
+          " num:112"
+        ],
+        "pallets_gross": [
+          " num:1437",
+          " num:1550"
+        ],
+        "pallets_net": [
+          " num:1316",
+          " num:1438"
+        ],
+        "production_batch": "JUL",
+        "remarks": null,
+        "strt_bal_kg": " num:33776",
+        "supplier": null,
+        "transaction_date": "2025-07-02",
+        "warnings": [],
+        "weight_kg": " num:2754",
+        "whse_label": "A-5B"
+      }
+    },
+    {
+      "index": " num:8",
+      "row": {
+        "_source_row": " num:8",
+        "_source_sheet": "JUNE 30",
+        "batch_code_fallbacks": [
+          "MAR-26-BLK9"
+        ],
+        "batch_code_primary": "MARCH-26-BLK9",
+        "batch_code_resolved": "MARCH-26-BLK9",
+        "batch_id": "a193a770-5e78-447a-97fd-211cbeecbe94",
+        "block_date": "2026-03-01",
+        "block_loc": "C-6A",
+        "block_no": " num:9",
+        "confidence": " num:1",
+        "day_total_kg": " num:1414",
+        "destination": "MAIN",
+        "end_bal_kg": " num:1945",
+        "is_closing": true,
+        "is_feed": false,
+        "operator_remarks_raw": "DONE",
+        "operator_status": null,
+        "pallet_count": " num:1",
+        "pallets_count": [
+          " num:84"
+        ],
+        "pallets_gross": [
+          " num:1498"
+        ],
+        "pallets_net": [
+          " num:1414"
+        ],
+        "production_batch": "JUNE",
+        "remarks": "CLOSED",
+        "strt_bal_kg": " num:3359",
+        "supplier": null,
+        "transaction_date": "2025-06-30",
+        "warnings": [],
+        "weight_kg": " num:1414",
+        "whse_label": "C-6A"
+      }
+    }
+  ],
+  "noop": [],
+  "soft_warnings": [],
+  "summary": {
+    "changed_count": " num:0",
+    "db_date_span": {
+      "max": "2026-07-02",
+      "min": "2025-01-02"
+    },
+    "db_rows_in_window": " num:1731",
+    "extract_date_span": {
+      "max": "2025-07-02",
+      "min": "2025-06-30"
+    },
+    "extracted_total": " num:15",
+    "flagged_count": " num:0",
+    "malformed_count": " num:0",
+    "new_count": " num:15",
+    "noop_count": " num:0",
+    "unmapped_count": " num:0",
+    "watermark": null
+  },
+  "unmapped": []
+}
