@@ -45,6 +45,7 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
     const [decisions, setDecisions] = React.useState<Record<number, RowDecision>>({})
     const [approving, setApproving] = React.useState(false)
     const [rejecting, setRejecting] = React.useState(false)
+    const [approveOpen, setApproveOpen] = React.useState(false)
     const [rejectOpen, setRejectOpen] = React.useState(false)
     const [rejectReason, setRejectReason] = React.useState('')
 
@@ -98,6 +99,7 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
                 parts.length > 0 ? parts.join(' · ') : 'Review approved',
                 { duration: 4000 }
             )
+            setApproveOpen(false)
             onDecided()
         } catch (err) {
             errorToast(
@@ -246,7 +248,8 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
                                 changedRows.length === 1 ? '' : 's'
                             }.`}
                     </p>
-                    <div className="flex items-center gap-2">
+                    {/* Review actions — desktop only (mobile scope: approve/reject stay desktop) */}
+                    <div className="hidden sm:flex items-center gap-2">
                         <Button
                             variant="outline"
                             size="sm"
@@ -260,7 +263,7 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
                         <Button
                             size="sm"
                             disabled={approving || rejecting || approvableCount === 0}
-                            onClick={handleApprove}
+                            onClick={() => setApproveOpen(true)}
                             className="gap-1.5"
                         >
                             {approving ? (
@@ -273,6 +276,10 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
                                 : `Approve ${approvableCount} row${approvableCount === 1 ? '' : 's'}`}
                         </Button>
                     </div>
+                    {/* Mobile placeholder — review actions are desktop-only */}
+                    <p className="sm:hidden shrink-0 text-[11px] text-muted-foreground">
+                        Review actions are available on desktop.
+                    </p>
                 </div>
             </div>
 
@@ -310,6 +317,40 @@ export function ReviewDetailPanel({ id, onBack, onDecided }: ReviewDetailPanelPr
                                 <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
                             ) : null}
                             Reject
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Approve confirm */}
+            <AlertDialog open={approveOpen} onOpenChange={(open) => !approving && setApproveOpen(open)}>
+                <AlertDialogContent className={cn(
+                    'bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80'
+                )}>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            Approve and write {approvableCount} row{approvableCount === 1 ? '' : 's'} to deliveries?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This inserts {newRows.length} new row{newRows.length === 1 ? '' : 's'} and applies{' '}
+                            {changedRows.length} change decision{changedRows.length === 1 ? '' : 's'} to the
+                            deliveries table. This can&apos;t be undone.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={approving}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                e.preventDefault()
+                                void handleApprove()
+                            }}
+                            disabled={approving}
+                            className="gap-1.5"
+                        >
+                            {approving ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                            ) : null}
+                            Approve {approvableCount} row{approvableCount === 1 ? '' : 's'}
                         </AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
