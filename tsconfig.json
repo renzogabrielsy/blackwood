@@ -39,6 +39,7 @@
   ],
   "exclude": [
     "node_modules",
-    "_archived"
+    "_archived",
+    "workers"
   ]
 }
