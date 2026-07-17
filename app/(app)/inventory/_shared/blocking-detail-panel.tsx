@@ -533,6 +533,8 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         <div
           className={cn(
             'fixed top-0 right-0 h-dvh w-full sm:w-[520px] z-50 bg-background border-l border-border',
+            // Safe-area insets — mirrors the populated panel below (kept in sync).
+            'safe-t safe-r safe-b',
             'transition-transform duration-250 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]',
             isOpen ? 'translate-x-0' : 'translate-x-full',
           )}
@@ -567,6 +569,12 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
       <div
         className={cn(
           'fixed top-0 right-0 h-dvh w-full sm:w-[520px] z-50 bg-background border-l border-border',
+          // SAFE AREA (viewport-fit=cover): this panel is a custom `fixed` overlay that
+          // bypasses the shell entirely, so it owns its own insets. It is anchored
+          // top+right and spans the full height, so it takes top (status bar), right
+          // (landscape notch) and bottom (home indicator) — but NOT left, which it never
+          // touches. `bg-background` still paints edge-to-edge behind the padding.
+          'safe-t safe-r safe-b',
           'transition-transform duration-250 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]',
           'overflow-hidden shadow-2xl flex flex-col',
           isOpen ? 'translate-x-0' : 'translate-x-full',

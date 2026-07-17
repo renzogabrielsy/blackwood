@@ -195,6 +195,36 @@ recur monthly and pollute campaign-keyed views/URLs until fixed)
   supabase-backend-engineer, `rc_out` has no audit trigger, verify row-count conservation
   before/after).
 
+## BUG-007 — Safe-area gaps left after the edge-to-edge rebuild (known, unfixed)
+**Status:** OPEN (known gaps, deliberately deferred) · **Effort:** S each · **Severity:** low
+
+Context: 2026-07-17 we re-enabled `viewport-fit=cover` (required — without it iOS
+PILLARBOXES the app in landscape, black bars both sides) and rebuilt safe-area handling
+**centrally**: `app/globals.css` defines `.safe-t/.safe-b/.safe-l/.safe-r/.safe-x`
+(deliberately UNLAYERED so they outrank Tailwind's cascade layer — a caller's `p-0` would
+otherwise silently tw-merge away a `pt-[env(...)]`), and only the shell + shared
+primitives apply them. Contract: **backgrounds paint edge-to-edge, content is padded
+clear; never re-apply `env()` at a call site — extend the primitive.**
+
+Surfaces still NOT covered (flagged by the implementing agent, not yet hit by a user):
+1. **Radix `DropdownMenuContent` / `PopoverContent` / `TooltipContent`** — portalled +
+   `fixed`, so they bypass the shell. Radix collision-detection keeps them inside the
+   *viewport*, which is NOT the *safe area* → a bottom-anchored dropdown can tuck under
+   the home indicator, and a landscape one under the notch. Fix: same treatment as
+   `sheet.tsx`/`dialog.tsx` — add insets to those three shared primitives.
+2. **Sonner `<Toaster position="bottom-right">`** (`app/layout.tsx`) — uncovered; a toast
+   may sit under the home indicator / notch in landscape. NOTE the Error-Toast HARD RULE
+   means errors persist until dismissed, so an unreachable Copy button is a real (if
+   unlikely) failure. Fix: Sonner accepts offset/style props.
+3. **`black-translucent` forces WHITE status-bar text.** Correct over the dark navbar, but
+   a full-height left/right Sheet or the blocking detail panel in LIGHT mode puts white
+   text over a light `bg-background`. Cosmetic contrast risk inherent to the
+   cover+translucent pairing. Fix options: dark scrim behind the status bar on those
+   surfaces, or reconsider the pairing.
+4. **`dialog.tsx`'s `max-h` clamp is inert** unless the caller sets `overflow-y-auto`
+   (most do). Global `overflow-y-auto` was deliberately NOT added — it computes
+   `overflow-x: auto` and risks spurious desktop scrollbars (violating "desktop unaffected").
+
 ---
 
 ## Fixed entries

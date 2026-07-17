@@ -61,7 +61,15 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg",
+          // SAFE AREA (viewport-fit=cover): a centered modal takes its insets as a
+          // size CLAMP, not as padding — padding would fight the caller's `p-6`/`p-0`
+          // and would offset the content inside a box that is itself still under the
+          // notch. Subtracting the horizontal insets from max-width keeps the whole
+          // dialog (border included) clear of the landscape notch on both sides, and
+          // the max-height clamp keeps it clear of the status bar + home indicator.
+          // Both are plain utilities, so a caller's explicit `sm:max-w-3xl` /
+          // `max-h-[85dvh]` still wins via tw-merge — by design.
+          "bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right))] max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg",
           className
         )}
         {...props}

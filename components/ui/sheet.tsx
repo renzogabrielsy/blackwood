@@ -48,13 +48,44 @@ function SheetOverlay({
   )
 }
 
+/**
+ * Per-side positioning + SAFE-AREA insets. Every Sheet in the app (nav menu, digest
+ * sheets, card-list details, sync sheet) inherits its insets from here — call sites
+ * must NOT add their own `env(safe-area-inset-*)` padding. See globals.css for the
+ * edge-to-edge contract.
+ *
+ * Insets are applied only on the side the panel actually TOUCHES: env() reports the
+ * VIEWPORT inset regardless of where the element sits, so e.g. a left-anchored sheet
+ * gets `.safe-l` but never `.safe-r` (that would inject a phantom landscape gutter).
+ * `left`/`right` are `inset-y-0` full-height, so they take top AND bottom too.
+ *
+ * The `.safe-*` classes are unlayered and therefore beat a caller's `p-0` — which is
+ * exactly why the six bottom-sheet call sites could drop their now-redundant
+ * `pb-[max(1rem,env(safe-area-inset-bottom))]`: that unanimous 1rem floor moved here
+ * as `[--safe-b-min:1rem]`. A caller that wants a different floor sets that var.
+ */
 const sideClasses: Record<Side, string> = {
   right:
-    "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
-  left: "inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm",
-  top: "inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top",
+    "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm safe-t safe-r safe-b",
+  left: "inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm safe-t safe-l safe-b",
+  top: "inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top safe-t safe-x",
   bottom:
-    "inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom",
+    "inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom safe-b safe-x [--safe-b-min:1rem]",
+}
+
+/**
+ * The default close button is `absolute`, which resolves against the content's PADDING
+ * box — i.e. it ignores the `.safe-*` padding above and would land under the status bar
+ * / notch. So it re-adds the insets to its own offsets. Only the sides the panel touches
+ * (a `left` sheet is nowhere near the right notch; a `bottom` sheet never reaches the
+ * status bar).
+ */
+const closeClasses: Record<Side, string> = {
+  right:
+    "top-[calc(0.75rem+env(safe-area-inset-top))] right-[calc(0.75rem+env(safe-area-inset-right))]",
+  left: "top-[calc(0.75rem+env(safe-area-inset-top))] right-3",
+  top: "top-[calc(0.75rem+env(safe-area-inset-top))] right-[calc(0.75rem+env(safe-area-inset-right))]",
+  bottom: "top-3 right-[calc(0.75rem+env(safe-area-inset-right))]",
 }
 
 interface SheetContentProps
@@ -86,7 +117,10 @@ function SheetContent({
         {showCloseButton && (
           <SheetPrimitive.Close
             data-slot="sheet-close-default"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-3 right-3 rounded-md opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 p-1"
+            className={cn(
+              "ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute rounded-md opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 p-1",
+              closeClasses[side]
+            )}
           >
             <XIcon />
             <span className="sr-only">Close</span>

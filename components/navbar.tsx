@@ -267,8 +267,14 @@ export function Navbar() {
         setTheme(isDark ? 'light' : 'dark');
     };
 
+    // Edge-to-edge bar (viewport-fit=cover): the dark background bleeds into the
+    // status-bar strip in portrait and into the notch side in landscape, while the
+    // CONTENT stays inside the safe area. Height is 3rem of content + the top inset
+    // that `.safe-t` pads away, so the bar's usable row is still exactly h-12.
+    // `.safe-x` replaces the old `px-4 sm:px-8` — the floor var keeps those paddings
+    // and max()'s them against the landscape notch inset. See globals.css.
     return (
-        <nav className="flex-none h-12 border-b border-zinc-700 bg-zinc-800 dark:bg-zinc-700 px-4 sm:px-8 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
+        <nav className="flex-none h-[calc(3rem+env(safe-area-inset-top))] safe-t safe-x [--safe-x-min:1rem] sm:[--safe-x-min:2rem] border-b border-zinc-700 bg-zinc-800 dark:bg-zinc-700 flex items-center shadow-[0_2px_8px_rgba(0,0,0,0.3)] z-10">
             {/* Left — hamburger (mobile, below sm) + breadcrumb (desktop, sm+) */}
             <div className="flex-1 flex items-center gap-2 min-w-0">
                 {/* Mobile-only navigation trigger — replaces the breadcrumb at <sm. */}

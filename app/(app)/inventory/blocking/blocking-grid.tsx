@@ -49,6 +49,39 @@ function writeShowPricesPref(value: boolean): void {
   }
 }
 
+// ─── Short-viewport (phone landscape) condensed header ───────────────────────
+//
+// Trigger is viewport HEIGHT, not width: a phone in landscape is ~390-430px TALL but
+// ~750-930px WIDE, so a width query (`max-sm`) never fires there while the sticky header
+// still eats a quarter of the screen. `max-height:500px` catches every phone landscape
+// (iPhone SE 320 → 15 Pro Max 430) and misses iPad mini landscape (744px tall), which
+// keeps the FULL header. These MUST stay literal strings — Tailwind scans raw source for
+// class candidates, so a runtime-concatenated variant would never be generated.
+//
+// What condenses: padding/gaps, the STAT figures (label+value collapse from a stacked
+// 2-line block into one inline line, with abbreviated labels), divider heights, and the
+// two toggle word-labels. What does NOT condense: the interactive chips/pills themselves
+// — their hit area stays exactly as-is so tap targets never degrade.
+const SHORT = {
+  /** Outer page wrapper — trim the vertical breathing room. */
+  page: '[@media(max-height:500px)]:px-2 [@media(max-height:500px)]:py-1.5 [@media(max-height:500px)]:gap-1.5',
+  /** Sticky header shell: tighter box, pack clusters left, tight row gap. */
+  header:
+    '[@media(max-height:500px)]:px-2 [@media(max-height:500px)]:py-1 [@media(max-height:500px)]:justify-start [@media(max-height:500px)]:gap-x-2 [@media(max-height:500px)]:gap-y-1',
+  /** Top-level cluster dividers — orphan-prone once rows wrap; drop them. */
+  topDivider: '[@media(max-height:500px)]:hidden',
+  /** Inline divider inside a cluster — shorten, don't remove. */
+  innerDivider: '[@media(max-height:500px)]:h-3',
+  /** Cluster gap tightening. */
+  clusterGap: '[@media(max-height:500px)]:gap-1',
+  /** Stats row gap tightening. */
+  statsGap: '[@media(max-height:500px)]:gap-2',
+  /** Shown only on tall viewports. */
+  tallOnly: '[@media(max-height:500px)]:hidden',
+  /** Shown only on short viewports. */
+  shortOnly: 'hidden [@media(max-height:500px)]:inline',
+} as const;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type StatusFilter = 'ALL' | 'STORED' | 'IN-USE' | 'SUNDRYING' | 'SUNDRIED' | 'EMPTY' | 'WET' | 'ASHY';
@@ -465,15 +498,24 @@ export function BlockingGrid({
   };
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-3">
+    <div className={cn('flex flex-col gap-3 px-4 py-3', SHORT.page)}>
       {/* ── Global Summary Header (sticky) ──
-          Desktop (sm+): the original wrapping, space-between cluster row.
+          Desktop (sm+, tall): the original wrapping, space-between cluster row.
           Below sm: a single horizontal-scroll strip (no wrap) so the many filter/
           stat clusters stay on one compact, swipeable line instead of ballooning
-          to a dozen rows; the orphan-prone top-level dividers are hidden there. */}
-      <div className="sticky top-0 z-30 bg-card/95 backdrop-blur-sm border border-border rounded-lg px-4 py-2.5 flex items-center justify-between flex-wrap gap-3 max-sm:flex-nowrap max-sm:justify-start max-sm:overflow-x-auto">
+          to a dozen rows; the orphan-prone top-level dividers are hidden there.
+          Short viewports (phone landscape, max-height:500px): same wrapping row,
+          but packed left and condensed — see the SHORT map above. The clusters
+          still WRAP (never horizontal-scroll) so the stat figures stay on screen
+          while the grid scrolls, which is the whole point of the sticky header. */}
+      <div
+        className={cn(
+          'sticky top-0 z-30 bg-card/95 backdrop-blur-sm border border-border rounded-lg px-4 py-2.5 flex items-center justify-between flex-wrap gap-3 max-sm:flex-nowrap max-sm:justify-start max-sm:overflow-x-auto',
+          SHORT.header,
+        )}
+      >
         {/* Warehouse filter chips */}
-        <div className="flex items-center gap-1.5 max-sm:shrink-0">
+        <div className={cn('flex items-center gap-1.5 max-sm:shrink-0', SHORT.clusterGap)}>
           <button
             onClick={handleSelectAllWarehouses}
             className={cn(
@@ -519,10 +561,10 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border max-sm:hidden" />
+        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
 
         {/* Status filter toggles */}
-        <div className="flex items-center gap-1.5 text-xs max-sm:shrink-0">
+        <div className={cn('flex items-center gap-1.5 text-xs max-sm:shrink-0', SHORT.clusterGap)}>
           <button
             onClick={() => handleToggleStatus('STORED')}
             className={cn(
@@ -585,7 +627,7 @@ export function BlockingGrid({
           </button>
 
           {/* Lab quality filter divider */}
-          <div className="h-5 w-px bg-border" />
+          <div className={cn('h-5 w-px bg-border', SHORT.innerDivider)} />
 
           {/* Lab quality filters */}
           <button
@@ -615,50 +657,45 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border max-sm:hidden" />
+        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
 
-        {/* Global stats */}
-        <div className="flex items-center gap-4 text-xs max-sm:shrink-0">
-          <div className="text-right">
-            <div className="text-muted-foreground font-medium">Total Balance</div>
-            <div className="text-foreground font-semibold font-mono">
-              {(global.totalBalance / 1000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} t
-            </div>
-          </div>
-          <div className="h-8 w-px bg-border" />
-          <div className="text-right">
-            <div className="text-muted-foreground font-medium">Occupied</div>
-            <div className="text-foreground font-semibold font-mono">
-              {global.totalOccupied} / {global.totalSlots}
-            </div>
-          </div>
-          <div className="h-8 w-px bg-border" />
-          <div className="text-right">
-            <div className="text-muted-foreground font-medium">Utilization</div>
-            <div className={cn('font-semibold font-mono', getUtilizationColor(parseFloat(global.utilization)))}>
-              {global.utilization}%
-            </div>
-          </div>
+        {/* Global stats — stacked label-over-value normally; collapse to a single
+            inline "LABEL value" line on short viewports (phone landscape). */}
+        <div className={cn('flex items-center gap-4 text-xs max-sm:shrink-0', SHORT.statsGap)}>
+          <GlobalStat
+            label="Total Balance"
+            shortLabel="BAL"
+            value={`${(global.totalBalance / 1000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} t`}
+          />
+          <StatDivider />
+          <GlobalStat
+            label="Occupied"
+            shortLabel="OCC"
+            value={`${global.totalOccupied} / ${global.totalSlots}`}
+          />
+          <StatDivider />
+          <GlobalStat
+            label="Utilization"
+            shortLabel="UTIL"
+            valueClass={getUtilizationColor(parseFloat(global.utilization))}
+            value={`${global.utilization}%`}
+          />
           {canViewPrices && global.totalValue > 0 && (
             <>
-              <div className="h-8 w-px bg-border" />
-              <div className="text-right">
-                <div className="text-muted-foreground font-medium">Total Value</div>
-                <div className="text-foreground font-semibold font-mono flex justify-between gap-1">
-                  <span className="text-muted-foreground font-normal">&#8369;</span>
-                  <span>{Math.round(global.totalValue).toLocaleString()}</span>
-                </div>
-              </div>
+              <StatDivider />
+              <GlobalStat
+                label="Total Value"
+                shortLabel="VAL"
+                value={<Peso>{Math.round(global.totalValue).toLocaleString()}</Peso>}
+              />
               {global.wtdAvgPhpKg !== null && (
                 <>
-                  <div className="h-8 w-px bg-border" />
-                  <div className="text-right">
-                    <div className="text-muted-foreground font-medium">Wtd Avg PHP/KG</div>
-                    <div className="text-foreground font-semibold font-mono flex justify-between gap-1">
-                      <span className="text-muted-foreground font-normal">&#8369;</span>
-                      <span>{global.wtdAvgPhpKg.toFixed(2)}</span>
-                    </div>
-                  </div>
+                  <StatDivider />
+                  <GlobalStat
+                    label="Wtd Avg PHP/KG"
+                    shortLabel="&#8369;/KG"
+                    value={<Peso>{global.wtdAvgPhpKg.toFixed(2)}</Peso>}
+                  />
                 </>
               )}
             </>
@@ -666,7 +703,7 @@ export function BlockingGrid({
         </div>
 
         {/* Divider */}
-        <div className="h-5 w-px bg-border max-sm:hidden" />
+        <div className={cn('h-5 w-px bg-border max-sm:hidden', SHORT.topDivider)} />
 
         {/* ── Prices visibility toggle (presenter/privacy) ── */}
         {/* Shown ONLY when the server allows prices. For a server-gated no-price user the
@@ -686,7 +723,9 @@ export function BlockingGrid({
             title={showPrices ? 'Hide all prices (presenter mode)' : 'Show prices'}
           >
             {showPrices ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            <span>Prices</span>
+            <span className={SHORT.tallOnly}>Prices</span>
+            {/* Short viewports: the Eye/EyeOff icon + ON/OFF pill already read as
+                "prices", so the word is dropped to buy wrap-width. Hit area unchanged. */}
             <span
               className={cn(
                 'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
@@ -712,7 +751,10 @@ export function BlockingGrid({
           title={blendMode ? 'Exit blend selection mode' : 'Select blocks to build a blend proposal'}
         >
           <Layers className="w-3.5 h-3.5" />
-          <span>Blend Proposal</span>
+          {/* Short viewports keep a word (a bare Layers icon is not self-evident),
+              just the shorter one. Hit area unchanged. */}
+          <span className={SHORT.tallOnly}>Blend Proposal</span>
+          <span className={SHORT.shortOnly}>Blend</span>
           <span
             className={cn(
               'ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold',
@@ -1246,6 +1288,66 @@ function EmptyCell({ locKey, spotlightClass }: EmptyCellProps) {
       <span className="font-mono font-semibold text-muted-foreground" style={{ fontSize: '9px' }}>
         {locKey}
       </span>
+    </div>
+  );
+}
+
+// ─── Global Stat (sticky header) ────────────────────────────────────────────
+
+/**
+ * Accounting-format currency value: ₱ pinned left, number pinned right.
+ * On short viewports the block shrinks to its content, so the pair reads as
+ * "₱ 42.00" — the ₱ stays left of the figure, which is what the format is for.
+ */
+function Peso({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="flex justify-between gap-1 [@media(max-height:500px)]:gap-0.5">
+      <span className="text-muted-foreground font-normal">&#8369;</span>
+      <span>{children}</span>
+    </span>
+  );
+}
+
+/** Vertical rule between global stats — full height normally, stubby when condensed. */
+function StatDivider() {
+  return <div className="h-8 w-px bg-border [@media(max-height:500px)]:h-3" />;
+}
+
+/**
+ * One figure in the sticky global stats row.
+ *
+ * Tall viewport (unchanged): right-aligned label stacked over the value (~32px tall).
+ * Short viewport (phone landscape): collapses to ONE inline baseline-aligned line —
+ * abbreviated uppercase label + value (~12px tall). This is where most of the
+ * condensed header's vertical saving comes from.
+ */
+function GlobalStat({
+  label,
+  shortLabel,
+  value,
+  valueClass,
+}: {
+  label: string;
+  /** Abbreviated label rendered instead of `label` on short viewports. */
+  shortLabel: string;
+  value: React.ReactNode;
+  valueClass?: string;
+}) {
+  return (
+    <div className="text-right [@media(max-height:500px)]:flex [@media(max-height:500px)]:items-baseline [@media(max-height:500px)]:gap-1">
+      <div className="text-muted-foreground font-medium [@media(max-height:500px)]:text-[9px] [@media(max-height:500px)]:leading-none [@media(max-height:500px)]:uppercase [@media(max-height:500px)]:tracking-wide">
+        <span className={SHORT.tallOnly}>{label}</span>
+        <span className={SHORT.shortOnly}>{shortLabel}</span>
+      </div>
+      <div
+        className={cn(
+          'font-semibold font-mono',
+          valueClass ?? 'text-foreground',
+          '[@media(max-height:500px)]:text-[10px] [@media(max-height:500px)]:leading-none',
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }

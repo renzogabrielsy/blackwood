@@ -135,6 +135,46 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Safe-area insets (the iOS edge-to-edge contract) ──────────────────────
+   `viewport-fit=cover` is ON (app/layout.tsx), so the webview spans the whole
+   display — including the status-bar / notch strip and the home-indicator strip.
+   'cover' is mandatory: without it iOS pillarboxes the app in landscape.
+
+   THE CONTRACT: backgrounds paint edge-to-edge, CONTENT is padded clear of the
+   insets, and that padding is owned by the shell + shared primitives — never
+   re-applied ad hoc at a call site. Current owners:
+
+     components/navbar.tsx                -> .safe-t + .safe-x  (the bar)
+     app/(app)/app-shell.tsx              -> .safe-x            (page content)
+     components/ui/sheet.tsx              -> per-side, SheetContent
+     components/ui/dialog.tsx             -> max-w/max-h clamp (not padding)
+     components/floating-status-bar.tsx   -> bottom + right (fixed, inline env())
+     app/(app)/inventory/_shared/blocking-detail-panel.tsx -> .safe-t/.safe-r/.safe-b
+
+   IMPORTANT — these rules are deliberately UNLAYERED. Tailwind v4 puts its
+   utilities in a cascade layer, and unlayered styles always beat layered ones,
+   so `.safe-b` survives a caller's `p-0` / `pb-4`. (Same trick as .font-mono
+   above.) The corollary: a caller CANNOT override these with a `pb-*` utility —
+   it must set the matching floor variable instead:
+
+     <SheetContent className="safe-b [--safe-b-min:1rem]" />   == max(1rem, inset)
+
+   Each floor defaults to 0px, so on desktop (where every env(safe-area-inset-*)
+   resolves to 0) these classes are complete no-ops.
+
+   Only apply an inset on a side the element actually TOUCHES — env() reports the
+   VIEWPORT's inset regardless of where the element sits, so putting .safe-r on a
+   left-anchored panel would inject a phantom 44px gutter in landscape.
+   ────────────────────────────────────────────────────────────────────────── */
+.safe-t { padding-top: max(var(--safe-t-min, 0px), env(safe-area-inset-top)); }
+.safe-b { padding-bottom: max(var(--safe-b-min, 0px), env(safe-area-inset-bottom)); }
+.safe-l { padding-left: max(var(--safe-l-min, 0px), env(safe-area-inset-left)); }
+.safe-r { padding-right: max(var(--safe-r-min, 0px), env(safe-area-inset-right)); }
+.safe-x {
+  padding-left: max(var(--safe-x-min, 0px), env(safe-area-inset-left));
+  padding-right: max(var(--safe-x-min, 0px), env(safe-area-inset-right));
+}
+
 /* Remove arrows from number inputs */
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {
