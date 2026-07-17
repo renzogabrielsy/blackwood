@@ -225,6 +225,85 @@ Surfaces still NOT covered (flagged by the implementing agent, not yet hit by a 
    (most do). Global `overflow-y-auto` was deliberately NOT added — it computes
    `overflow-x: auto` and risks spurious desktop scrollbars (violating "desktop unaffected").
 
+## BUG-008 — App-wide 2-3s "dead click" latency (region + round-trips + no pending UI)
+**Status:** ✅ FIXED (2026-07-17) — but see the OPEN follow-ups below · **Severity:** high (felt on every navigation)
+
+- **Symptom (Renzo, on-device):** click the home Digest↔Schedule toggle, or a digest block →
+  **2-3s of nothing** (no spinner, no animation), then it flips. App-wide, not one screen.
+  His theory: "Supabase calls take a bit — maybe they need spinners."
+- **Diagnosis (measured, and his instinct was right for a reason neither of us guessed):**
+  1. **Query execution was NEVER the problem** — `EXPLAIN ANALYZE view_blocking_grid` = 104ms.
+  2. **The functions were in the wrong hemisphere.** No `vercel.json` existed → per Vercel's
+     docs, *"Vercel Functions default to running in the `iad1` (Washington, D.C.) region"* —
+     while Supabase is `ap-northeast-1` (Tokyo). Every DB call crossed the Pacific (~180ms).
+  3. **~6 SEQUENTIAL round-trips per `/` navigation**: middleware `getUser()` → layout
+     `getUser()` → digest wave 1 → `subRes` → `truckRes` → schedule wave. 6 × 180ms ≈ 1.1s
+     of pure network before any query ran.
+  4. **Zero pending UI** — `home-view-toggle.tsx:54` called `router.replace()` bare; no
+     `useTransition`, and no `loading.tsx` on `/`, `/inventory`, `/summaries`, `/sync/cases`.
+     12 files wrote the URL with no feedback. So the app *looked* dead during the wait.
+- **Fixes shipped:**
+  1. `vercel.json` → `"regions": ["hnd1"]` — Tokyo, the **same AWS region as Supabase**
+     (`hnd1` == `ap-northeast-1`). Round-trips go ~180ms → single-digit ms. **The big one.**
+     Tokyo beats Singapore here: browser→function is paid ONCE, function→DB SIX times.
+  2. `lib/digest/queries.ts` — **4 waves → 2.** Waves 2/3/4 (`subRes`, `truckRes`, schedule)
+     all genuinely depend on `operationalDate` from wave 1, so they can't join it — but they
+     don't depend on *each other*, so they now fire as one `Promise.all`. Also: the schedule
+     queries used to run TWICE (7-day week + 10-day preview); the preview range contains the
+     week range, so `weekPlan` now slices the preview → **6 queries → 4**, identical rows.
+  3. `idx_rc_out_batch_id` (migration `20260717031201`) — the FK was unindexed; the blocking
+     view's correlated subquery was Seq Scanning `rc_out` **166 times** (~340k rows). After:
+     **exec 33.6→6.96ms, buffers 5,922→445 (13×)**, Seq Scan → Bitmap Index Scan.
+  4. `useTransition` + `useOptimistic` on the toggle, summaries switcher, blocking
+     `?block=`, and the rc-movement campaign picker → the target goes active **on the click's
+     frame**. Plus `loading.tsx` for the 4 uncovered routes.
+- ⚠️ **Route-group loading trap (caught during the fix, worth remembering):**
+  `app/(app)/loading.tsx` sits at the ROUTE-GROUP level, so every sibling without its own
+  loading file INHERITS it — the digest skeleton would have leaked onto `/settings`,
+  `/notifications`, `/price-demos`, `/edit/[auditLogId]`. Four containment skeletons were
+  added. **Any new route under `(app)` needs its own `loading.tsx` or it renders the digest
+  shape.** Documented in `app/(app)/CONTEXT.md`.
+
+## BUG-009 — `view_digest_operational_days` recomputed 10+ times per digest load
+**Status:** OPEN — the real remaining server-side lever · **Effort:** M · **Severity:** medium
+
+- **Finding (measured 2026-07-17, during the BUG-008 index work):**
+  `view_digest_operational_days` is **embedded in 9 of the 15 digest views**, and
+  `view_digest_daily_flow` evaluates it **twice internally** — so ONE `/` page load
+  recomputes it **10+ times**. Each evaluation is a WindowAgg over ~4,711 rows UNION'd
+  from 4 tables.
+- **Not an index problem** — it's structural. Options: materialize it (a matview refreshed
+  by the sync), or restructure the view graph so it's computed once and joined.
+- **Why deferred:** BUG-008 already changed 4 variables (region, waves, index, UI). Measure
+  after the region fix lands before restructuring the view graph on a guess.
+- Related, NOT worth fixing at current size (evidence gathered, no action): the digest's
+  audit flag-scan uses four **leading-wildcard** ILIKEs (`%flag%` etc.) over 3,078 rows —
+  a btree can never serve those; it'd need a `pg_trgm` GIN index. Fine at this scale.
+- Also found and NOT swept in: **`deliveries.batch_code` is an unindexed FK** — but every
+  consumer needs all deliveries and the planner correctly picks a Hash Join, so an index
+  would go unused. Deliberately not added (don't index-spam the schema).
+
+## BUG-010 — Hygiene backlog (small, known, deliberately deferred)
+**Status:** OPEN · **Effort:** S each · **Severity:** low
+
+1. **`middleware.ts` → `proxy.ts`** — Next.js 16 deprecation warning on every dev-server
+   start. Purely a naming convention change (Renzo asked 2026-07-17 whether it caused the
+   latency — **it does not**; renaming changes nothing about the `getUser()` round-trip that
+   lives there). Worth clearing before it hardens into an error in a future major. Read the
+   Next migration guide rather than guessing the export signature.
+2. **`types/supabase.ts` drift** — `view_digest_daily_hours` (migration `20260715120000`) is
+   applied to the DB but was never regenerated into the types file. Pre-existing; found
+   during the index work and deliberately not swept into an unrelated migration.
+3. **Double/triple `getUser()` per request** — `middleware.ts:31` AND
+   `app/(app)/layout.tsx:13` both call it (a network hop to Supabase Auth each), and
+   `sync/cases/page.tsx` makes a third. Cheap now that the function is colocated in `hnd1`;
+   was a meaningful slice of the 2-3s from `iad1`. Collapsing them is an **auth** change —
+   reason about it deliberately, don't fold it into a perf pass.
+4. **Supabase migration history is MCP-stamped, not CLI-stamped** — remote history
+   (`20260715031120`) doesn't match local CLI filenames (`20260715120000_...`), so
+   `supabase db push` would misread history. Use MCP `apply_migration` (what the 2026-07-17
+   index migration did) until this is reconciled.
+
 ---
 
 ## Fixed entries

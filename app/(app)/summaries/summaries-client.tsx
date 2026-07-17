@@ -15,8 +15,9 @@
  *                     <SupplierBriefClient .../> (see SUPPLIER_VIEW_SLOT below).
  */
 
-import { Suspense, useCallback } from 'react';
+import { Suspense, useCallback, useOptimistic, useTransition } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import AnalystBriefClient from '../price-demos/demo4/analyst-brief-client';
 import SupplierBriefClient from './supplier-brief-client';
 import type {
@@ -74,6 +75,13 @@ function SummariesShell({ period, supplier }: SummariesClientProps) {
   const raw = searchParams.get('view');
   const view: SummaryView = raw === 'supplier' ? 'supplier' : 'period';
 
+  // Writing `?view=` re-runs the SERVER page (this route is dynamic, so both
+  // analytics fetches re-execute), which is seconds of silence on a cold hop.
+  // useTransition + an optimistic segment gives the click instant feedback;
+  // React reverts `optimisticView` to `view` once the payload lands.
+  const [isPending, startTransition] = useTransition();
+  const [optimisticView, setOptimisticView] = useOptimistic(view);
+
   const setView = useCallback(
     (next: SummaryView) => {
       const params = new URLSearchParams(searchParams.toString());
@@ -84,9 +92,12 @@ function SummariesShell({ period, supplier }: SummariesClientProps) {
         params.set('view', next);
       }
       const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      startTransition(() => {
+        setOptimisticView(next);
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      });
     },
-    [router, pathname, searchParams],
+    [router, pathname, searchParams, setOptimisticView],
   );
 
   return (
@@ -96,10 +107,12 @@ function SummariesShell({ period, supplier }: SummariesClientProps) {
         <div
           role="tablist"
           aria-label="Summary view"
+          aria-busy={isPending}
           className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/50 p-0.5"
         >
           {VIEWS.map((v) => {
-            const active = view === v.id;
+            const active = optimisticView === v.id;
+            const busy = isPending && active;
             return (
               <button
                 key={v.id}
@@ -108,12 +121,13 @@ function SummariesShell({ period, supplier }: SummariesClientProps) {
                 aria-selected={active}
                 onClick={() => setView(v.id)}
                 className={cn(
-                  'rounded-sm px-3 py-1 text-xs font-medium transition-all duration-150',
+                  'flex items-center gap-1.5 rounded-sm px-3 py-1 text-xs font-medium transition-all duration-150',
                   active
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground',
                 )}
               >
+                {busy && <Loader2 className="h-3 w-3 shrink-0 animate-spin" />}
                 {v.label}
               </button>
             );
@@ -121,8 +135,12 @@ function SummariesShell({ period, supplier }: SummariesClientProps) {
         </div>
       </div>
 
-      {/* ---- Active view ---- */}
-      {view === 'period' ? (
+      {/* ---- Active view ----
+          Rendered off the OPTIMISTIC view, not the URL-derived one: both
+          payloads are already in props, so the surface can swap on the same
+          frame as the click. The in-flight `?view=` write only refreshes those
+          props (the spinner above owns that), it does not gate the switch. */}
+      {optimisticView === 'period' ? (
         <AnalystBriefClient
           years={period.years}
           byYear={period.byYear}

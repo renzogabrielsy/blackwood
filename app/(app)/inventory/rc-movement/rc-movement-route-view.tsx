@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useTransition } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { RcMovementMatrix } from './rc-movement-matrix';
 import { fetchRcMovementMatrix, type RcMovementMatrix as RcMovementMatrixData } from './actions';
 import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
@@ -36,12 +37,22 @@ export function RcMovementRouteView() {
     // react-hooks/set-state-in-effect). The matrix just swaps to the new campaign's data.
     const [loading, setLoading] = useState(true);
 
+    // Switching campaign is TWO waits stacked: the `?campaign=` write re-runs the
+    // (dynamic) server page, then the effect below re-fetches the matrix via the
+    // action. Neither showed anything, so the toolbar looked dead for seconds and
+    // then the whole grid swapped. `isPending` covers the navigation half;
+    // `switching` covers the action half (set on click, cleared when the rows land).
+    // Together they dim the outgoing matrix and float a spinner over it.
+    const [isPending, startTransition] = useTransition();
+    const [switching, setSwitching] = useState(false);
+
     useEffect(() => {
         let mounted = true;
         fetchRcMovementMatrix(campaignParam || undefined).then((result) => {
             if (mounted) {
                 setData(result);
                 setLoading(false);
+                setSwitching(false);
             }
         });
         return () => {
@@ -55,7 +66,10 @@ export function RcMovementRouteView() {
             if (campaign) params.set('campaign', campaign);
             else params.delete('campaign');
             const qs = params.toString();
-            router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            setSwitching(true);
+            startTransition(() => {
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
         },
         [router, pathname, searchParams],
     );
@@ -89,11 +103,33 @@ export function RcMovementRouteView() {
         );
     }
 
+    // Compositor-only feedback (opacity + a spinner overlay) — the matrix stays
+    // mounted and laid out, so nothing reflows and no row animates.
+    const busy = isPending || switching;
+
     return (
-        <RcMovementMatrix
-            data={data}
-            onCampaignChange={handleCampaignChange}
-            onNavigateToBatch={handleNavigateToBatch}
-        />
+        <div className="relative h-full w-full">
+            <div
+                aria-busy={busy}
+                className={cn(
+                    'h-full w-full transition-opacity duration-150',
+                    busy && 'pointer-events-none opacity-50',
+                )}
+            >
+                <RcMovementMatrix
+                    data={data}
+                    onCampaignChange={handleCampaignChange}
+                    onNavigateToBatch={handleNavigateToBatch}
+                />
+            </div>
+            {busy && (
+                <div className="pointer-events-none absolute inset-0 flex items-start justify-center pt-24">
+                    <div className="flex items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-1.5 shadow-sm backdrop-blur supports-backdrop-filter:bg-background/60">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">Loading campaign…</span>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

@@ -48,6 +48,15 @@ widget grid. The backend contract is fixed; the UI only shapes already-computed
 values into views.
 
 ## Files
+- `loading.tsx` — route-level skeleton for `/`, band-for-band matching `page.tsx`
+  (same `SHELL_CLS` container + band order), so it collapses into the real digest
+  without a jump. Static pulses only — no stagger, no row animation (CLAUDE.md).
+  **Blast radius:** this sits at the `(app)` GROUP level, so any sibling segment
+  WITHOUT its own `loading.tsx` inherits this digest-shaped skeleton. Every
+  sibling is therefore covered — `admin`, `cenapro`, `edit`, `inventory`,
+  `notifications`, `price-demos`, `production`, `review-queue`, `settings`,
+  `summaries`, `sync/cases`. **Adding a new route under `(app)` means adding its
+  `loading.tsx` too**, or it will render the digest skeleton.
 - `page.tsx` — **async Server Component**. Reads `searchParams` and branches on
   `?view=` (see above): `schedule` → the shared shell + `<HomeViewToggle
   view="schedule" />` + `<ScheduleMonthView month={month} basePath="/"
@@ -263,6 +272,19 @@ values into views.
   (server-only). Reads `view_digest_*` SQL views + `view_digest_audit_enriched`,
   the `truck_readings` table for the trucks band, `view_blocking_grid` for the
   open-blocks band, and `view_flecon_bag_balance` for the bag-inventory band.
+- **TWO round-trips, not four (perf).** `getDigestData()` is deliberately
+  structured as exactly two parallel waves, and new queries MUST land in one of
+  them rather than adding an `await`:
+  - **Wave 1** — one `Promise.all` of `canViewPrices()` + the 16 queries that
+    need no prior result.
+  - **Wave 2** — one `Promise.all` of the 4 queries that need `operationalDate`
+    (rc-in day stats, trucks, the `production_schedule` plan, actual tons).
+    `operationalDate` comes from wave 1's `view_digest_operational_days`, so
+    these genuinely cannot fold upward — but they don't depend on each other, so
+    they cost ONE round-trip between them, not four. `weekPlan` and
+    `schedulePreview` SLICE the same preview-window response (the preview range
+    contains the week range and selects a superset of columns) instead of
+    re-querying the narrower window.
   The contract in
   `lib/digest/types.ts` is intentionally stable — extend it deliberately (as with
   `trucks` / `GradePoint.shift`) and keep `queries.ts` to light mapping only (all

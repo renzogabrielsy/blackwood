@@ -1,0 +1,25 @@
+-- Index rc_out.batch_id — the FK back to batches.
+--
+-- WHY: view_blocking_grid's correlated subquery (the per-batch lab/remark aggregate)
+-- filters rc_out by `batch_id = b.id` once per active batch. With no index on the FK,
+-- Postgres ran a Seq Scan on rc_out inside the SubPlan — 166 loops x 2,057 rows
+-- (~340k rows scanned, Buffers: shared hit=5810) for a query that returns 166 rows.
+-- Measured before this migration:
+--   SubPlan 1 -> Seq Scan on rc_out r (actual time=0.163..0.164 rows=0 loops=166)
+--               Filter: (batch_id = b.id)  Rows Removed by Filter: 2057
+--   Execution Time: 33.612 ms (warm cache)
+-- It only looks cheap because rc_out is small today (2,057 rows). The subquery cost
+-- grows linearly with every feeding recorded, so this degrades as the table fills.
+--
+-- Postgres does NOT auto-create indexes for foreign keys (only for PK/UNIQUE), so
+-- rc_out had exactly one index — usage_pkey on (id) — before this.
+--
+-- NOT CONCURRENTLY: rc_out is 2,057 rows, so a plain build is effectively instant and
+-- the brief ACCESS SHARE-blocking lock is a non-event. CREATE INDEX CONCURRENTLY cannot
+-- run inside a transaction block, which would put this migration outside the migration
+-- runner's transaction and make a failed build leave an INVALID index behind. For a
+-- table this size the plain build is both safer and simpler.
+--
+-- Idempotent: IF NOT EXISTS, so re-running the migration set is a no-op.
+
+create index if not exists idx_rc_out_batch_id on public.rc_out using btree (batch_id);

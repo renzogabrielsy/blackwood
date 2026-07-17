@@ -25,6 +25,7 @@
 |------|------|
 | `layout.tsx` | **THIN** shared chrome for ALL `/inventory/*` routes — just the `bg-muted/20` full-bleed container + padded content area. It deliberately does NOT own the tab shell anymore (so the standalone routes don't inherit the Deliveries/Usage tab bar). |
 | `page.tsx` | Server component (the logs page). Fetches deliveries (year-scoped + paginated), batches, suppliers, locations; resolves `canViewPrices`. Wraps `<InventoryView>` in `<LogsShell>` inside a `<Suspense>` (the tab provider uses `useSearchParams`). |
+| `loading.tsx` | Route-level skeleton (toolbar + header + 14 rows). Covers `/inventory` AND — by inheritance — `blocking` / `rc-movement` / `flecon-bags`, which have no loading file of their own (all dense grid surfaces, so one shape fits). Static pulses only — no row animation. |
 | `components/logs-shell.tsx` | **NEW.** Client wrapper that owns the tab shell for the logs page ONLY: `InventoryTabProvider` + `Card` frame + `<InventorySheetTabs>` footer. Moved out of `layout.tsx` so the layout stays tab-shell-agnostic. |
 | `components/inventory-tab-context.tsx` | React context — `activeTab`/`setActiveTab`. **URL-driven (`?tab=`)** via `useSearchParams` + `router.replace`; localStorage fallback only. Tab union narrowed to `'deliveries' \| 'usage'`. **Hosts the navigation-event bridge:** a `window` listener for `INVENTORY_NAVIGATE_EVENT` (from the shared detail panel's "Edit All" when rendered in-shell) that flips the tab. The standalone routes wire `onNavigateToBatch` directly instead, so they don't depend on this bridge. |
 | `components/sheet-tabs.tsx` | Bottom tab bar with sliding indicator. Order: **Deliveries · Usage** (Blocking + Movement removed). |
@@ -52,6 +53,11 @@
 - Render their own full-height container inside the thin layout — **no tab-bar footer**.
 - Each route view repurposes the deleted lazy-tab's fetch/loading/error/retry logic but is shell-agnostic (does NOT use `useInventoryTab`).
 - "Edit All" from the shared detail panel navigates via `router.push('/inventory?tab=deliveries|usage&search=…&editBatch=…')` (wired through `onNavigateToBatch`), since there is no in-shell tab provider listening on these routes.
+
+### Pending UI on URL writes (both standalone routes)
+These routes are dynamic, so **every** `?param=` write costs a server round-trip (~1-3s) even when the data is already client-side. Both route views therefore wrap `router.replace` in `useTransition`; neither gave any feedback before, so a click looked dead and then the surface flipped.
+- **`blocking-route-view.tsx` (`?block=`):** selection is mirrored in `useOptimistic(urlBlock)`, so the cell highlights and the detail panel open on the SAME frame as the click; React reverts to the URL value once the navigation settles (Back / refresh / abandoned navigation all stay correct). `blocking-grid.tsx` is untouched — it stays a controlled component fed `selectedLocKey`.
+- **`rc-movement-route-view.tsx` (`?campaign=`):** TWO waits stack here — the navigation, then the `fetchRcMovementMatrix` action re-fetch in the effect. `isPending` covers the first, a `switching` flag (set on click, cleared when rows land) covers the second; together they dim the outgoing matrix (`opacity-50`, compositor-only) under a floating "Loading campaign…" spinner. The matrix stays mounted — nothing reflows, no row animates.
 
 ### Submodule catalog
 | Surface | Submodule | Module CONTEXT |
