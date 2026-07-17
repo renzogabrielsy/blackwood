@@ -36,8 +36,15 @@ Data-agnostic, generic over the row type `T`.
 - **Virtualized** via `@tanstack/react-virtual` `useVirtualizer` + `measureElement`
   (dynamic heights). Only visible cards mount — safe for thousands of rows.
 - **Tap a card → full-width bottom `Sheet`** (`side="bottom"`,
-  `max-h-[90dvh] rounded-t-2xl gap-0 overflow-y-auto p-0 pb-[max(1rem,env(safe-area-inset-bottom))]`,
-  sticky glass header). Mirrors `components/digest/schedule-preview-mobile.tsx`.
+  `max-h-[90dvh] rounded-t-2xl gap-0 overflow-y-auto p-0`, sticky glass header).
+  Mirrors `components/digest/schedule-preview-mobile.tsx`.
+- **Safe areas are NOT this component's job for the sheets** — `SheetContent` owns them
+  (`side="bottom"` → `.safe-b .safe-x [--safe-b-min:1rem]`). The old caller-side
+  `pb-[max(1rem,env(safe-area-inset-bottom))]` was removed here and at every other
+  bottom-sheet call site when `viewport-fit=cover` was re-enabled; do NOT re-add it
+  (it would just shadow the primitive). See the contract comment in `app/globals.css`.
+- The **"View full table" footer bar** is in-flow (not a portalled primitive), so it *does*
+  own its bottom inset: `py-2 safe-b [--safe-b-min:0.5rem]` clears the home indicator.
 - **Live re-read:** the open detail row is resolved from the live `items` array, so a
   refresh updates it in place (and closes the sheet if the row disappears).
 - **"View full table" escape hatch:** appears only when `fullTableSlot` is passed;

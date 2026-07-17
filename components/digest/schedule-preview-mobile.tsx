@@ -62,7 +62,7 @@ export function SchedulePreviewMobile({ rows }: { rows: SchedulePreviewRow[] }) 
         </SheetTrigger>
         <SheetContent
           side="bottom"
-          className="max-h-[88dvh] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="max-h-[88dvh] gap-0 rounded-t-2xl"
         >
           <SheetHeader className="px-4 pt-4">
             <SheetTitle>Production schedule · next 10 days</SheetTitle>

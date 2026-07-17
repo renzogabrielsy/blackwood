@@ -415,7 +415,7 @@ function RcOutFilterSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="bottom"
-        className="flex max-h-[90dvh] flex-col gap-0 rounded-t-2xl p-0 pb-[max(1rem,env(safe-area-inset-bottom))]"
+        className="flex max-h-[90dvh] flex-col gap-0 rounded-t-2xl p-0"
       >
         <SheetHeader className="shrink-0 flex-row items-center justify-between border-b bg-background/90 px-4 py-3 backdrop-blur-sm">
           <div>

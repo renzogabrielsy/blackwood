@@ -108,6 +108,22 @@ Cenapro · Cebu               ← uppercase tenant label
 - `z-10` with custom shadow `shadow-[0_2px_8px_rgba(0,0,0,0.3)]`
 - Theme toggle: `mounted` state guard prevents hydration mismatch (equivalent to `ssr: false`)
 
+## Safe Areas (edge-to-edge / iOS PWA)
+The app runs `viewport-fit=cover` + `statusBarStyle: 'black-translucent'` (`app/layout.tsx`), so the
+webview spans the whole display and the iOS status bar is a transparent overlay **on top of this bar**.
+'cover' is mandatory — without it iOS pillarboxes the app in landscape. The contract: the bar's dark
+background bleeds edge-to-edge, its CONTENT stays inside the safe area.
+
+- **Height:** `h-[calc(3rem+env(safe-area-inset-top))]` + `.safe-t` — the top inset is padding, so the
+  usable content row is still exactly `h-12`. Do NOT restore a bare `h-12`.
+- **Horizontal:** `.safe-x [--safe-x-min:1rem] sm:[--safe-x-min:2rem]` replaces the old `px-4 sm:px-8`.
+  The floor var preserves those paddings and `max()`es them against the landscape notch inset.
+- `.safe-*` classes are defined **unlayered** in `globals.css` (they beat Tailwind's utility layer, so a
+  `p-0` can't wipe them). Override the floor var, never with a `px-*`/`pt-*` utility.
+- The **mobile nav Sheet** inherits its own insets from `SheetContent` (`side="left"` → `.safe-t .safe-l
+  .safe-b`) — never re-pad it here.
+- Every `env(safe-area-inset-*)` resolves to 0 on desktop, so all of the above are desktop no-ops.
+
 ## Dependencies
 - `@/components/notification-bell` — `NotificationBell`
 - `@/components/providers/auth-context` — `useAuth()`, `UserRole`

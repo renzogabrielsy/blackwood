@@ -139,7 +139,11 @@ export function MobileCardList<T>({
       </div>
 
       {fullTableSlot ? (
-        <div className="shrink-0 border-t bg-background/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        // In-flow bottom bar (not a portalled primitive), so it owns its own bottom
+        // inset: the shell's safe-x covers horizontal only. `.safe-b` + the 0.5rem
+        // floor reproduces the old py-2 bottom padding while clearing the home
+        // indicator. See globals.css for the edge-to-edge contract.
+        <div className="shrink-0 border-t bg-background/95 px-3 py-2 safe-b [--safe-b-min:0.5rem] backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <button
             type="button"
             onClick={() => setFullTableOpen(true)}
@@ -160,7 +164,7 @@ export function MobileCardList<T>({
       >
         <SheetContent
           side="bottom"
-          className="max-h-[90dvh] gap-0 overflow-y-auto rounded-t-2xl p-0 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="max-h-[90dvh] gap-0 overflow-y-auto rounded-t-2xl p-0"
         >
           {activeItem ? (
             <>
@@ -187,7 +191,7 @@ export function MobileCardList<T>({
         <Sheet open={fullTableOpen} onOpenChange={setFullTableOpen}>
           <SheetContent
             side="bottom"
-            className="flex max-h-[90dvh] flex-col gap-0 rounded-t-2xl p-0 pb-[max(1rem,env(safe-area-inset-bottom))]"
+            className="flex max-h-[90dvh] flex-col gap-0 rounded-t-2xl p-0"
           >
             <SheetHeader className="shrink-0 border-b bg-background/90 px-4 py-3 backdrop-blur-sm">
               <SheetTitle>{fullTableTitle}</SheetTitle>

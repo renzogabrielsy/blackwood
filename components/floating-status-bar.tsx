@@ -78,7 +78,11 @@ export function FloatingStatusBar() {
   const hasNumericValues = cellAggregates && cellAggregates.numericCount > 0;
 
   return (
-    <div data-floating-status-bar className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-50 flex items-center gap-2 rounded-full bg-background/95 px-3 py-1.5 text-xs font-medium shadow-sm border backdrop-blur supports-backdrop-filter:bg-background/60">
+    // `fixed` bottom-right, so it owns its own insets (it is outside the shell's
+    // safe-x content region). bottom = home indicator, right = landscape notch.
+    // max() keeps the original 1rem gutter as the floor. Inline env() rather than
+    // the .safe-* classes because these are OFFSETS, not padding.
+    <div data-floating-status-bar className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] z-50 flex items-center gap-2 rounded-full bg-background/95 px-3 py-1.5 text-xs font-medium shadow-sm border backdrop-blur supports-backdrop-filter:bg-background/60">
       {/* Connection status */}
       <span
         className={`h-2 w-2 rounded-full ${getStatusColor(connectionStatus)} ${connectionStatus === 'CONNECTING' ? 'animate-pulse' : ''}`}
