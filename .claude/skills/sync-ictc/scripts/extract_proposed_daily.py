@@ -58,6 +58,15 @@ FALLBACK_MONTH_PREFIX = {
     10: "OCTOBER", 11: "NOVEMBER", 12: "DECEMBER",
 }
 
+# Canonical production_batch month names (BUG-005) — the FULL uppercase word for every
+# month. This is NOT the batch_code prefix above (which keeps its own mixed convention);
+# it is the rc_out.production_batch spelling, and it must stay identical to the TS port's
+# workers/sync/src/lib/months.ts MONTH_NAMES.
+MONTH_NAME_UPPER = {
+    1: "JANUARY", 2: "FEBRUARY", 3: "MARCH", 4: "APRIL", 5: "MAY", 6: "JUNE",
+    7: "JULY", 8: "AUGUST", 9: "SEPTEMBER", 10: "OCTOBER", 11: "NOVEMBER", 12: "DECEMBER",
+}
+
 # Sheet name -> month/day map
 MONTH_NAME_TO_NUM = {
     "JANUARY": 1, "JAN": 1, "FEBRUARY": 2, "FEB": 2,
@@ -298,15 +307,14 @@ def extract_block_section(
         # Preserve genuinely informational remarks; skip "FOR FEEDING" which is just status
         rc_remarks = remarks
 
-    # production_batch convention (e.g., "MAY" for transaction in May)
-    production_batch = transaction_date.strftime("%b").upper()
-    # Calendar abbreviation %b is "Jan", "Feb", etc. — but observed DB uses "MAY" (the actual word)
-    # for MAY entries. Conform to what we see.
-    if transaction_date.month == 5:
-        production_batch = "MAY"
-    elif transaction_date.month == 6:
-        production_batch = "JUNE"
-    # else: leave as 3-letter abbreviation
+    # production_batch convention: the FULL uppercase month name, for all 12 months
+    # (e.g. "JULY" for a transaction in July). BUG-005 (2026-07-17): this used to emit
+    # the %b 3-letter abbreviation with full-name overrides for May/June ONLY, while the
+    # Google Sheet writer wrote full names — so rc_out.production_batch held BOTH "JUL"
+    # and "JULY", splitting the RC Movement campaign picker into two phantom campaigns
+    # ("JUL-2026" vs "JULY-2026"). The Sheet's full-name spelling is canonical.
+    # Changed in lockstep with the TS port (workers/sync/src/lib/months.ts).
+    production_batch = MONTH_NAME_UPPER[transaction_date.month]
 
     confidence = max(0.0, 1.0 - 0.10 * len(warnings))
 

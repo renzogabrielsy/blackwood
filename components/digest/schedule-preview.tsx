@@ -1,7 +1,7 @@
 // Server component — the Home Digest's compact Production Schedule table band.
 // Presentation-only: renders the pre-resolved `schedulePreview` slice from
 // getDigestData() as a dense Excel-Standard table (a rolling ~2-week window),
-// complementing the full page at /production/schedule and the WeekStrip cards.
+// complementing the full month view at /?view=schedule and the WeekStrip cards.
 // No aggregation, no ₱ data → no price gating.
 //
 // Responsive: tablet/desktop show the full dense table inline (unchanged). On
@@ -37,7 +37,7 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
           <span className="text-[11px] text-muted-foreground">next 10 days</span>
         </div>
         <Link
-          href="/production/schedule"
+          href="/?view=schedule"
           className="text-[11px] font-medium text-primary hover:underline"
         >
           View full schedule →
@@ -46,7 +46,11 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
 
       {/* Tablet / desktop — full dense table inline (unchanged). */}
       <div className="hidden sm:block">
-        <ScheduleTable rows={rows} maxHeightClass="max-h-[340px]" />
+        <ScheduleTable
+          rows={rows}
+          maxHeightClass="max-h-[340px]"
+          minWidthClass="min-w-[820px]"
+        />
       </div>
 
       {/* Phone — condensed stacked list + tap-to-expand full table sheet. */}

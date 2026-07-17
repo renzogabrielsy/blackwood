@@ -150,7 +150,14 @@ function ComparisonTable({
 
   return (
     <div className="mt-2 overflow-x-auto rounded border border-border bg-background/50">
-      <table className="w-full table-fixed border-collapse text-[11px]">
+      {/* Never crush, always scroll: 130 + 92 + 84 + 120 fixed = 426px (+104px when
+          the Pick column shows) + a 184px floor for the flexible Provenance cell. */}
+      <table
+        className={cn(
+          'w-full table-fixed border-collapse text-[11px]',
+          showPickColumn ? 'min-w-[714px]' : 'min-w-[610px]',
+        )}
+      >
         <thead className="bg-muted/60 text-[10px] uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="w-[130px] px-2 py-1 text-left font-medium">Source</th>

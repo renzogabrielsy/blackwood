@@ -37,8 +37,10 @@ export function TrucksSummary({ trucks }: TrucksSummaryProps) {
         </span>
       </div>
 
-      <div className="overflow-hidden rounded-lg border">
-        <table className="w-full table-fixed text-xs">
+      {/* Never crush, always scroll: 110 + 90 fixed = 200px + a 120px floor for the
+          flexible Plate column → 320px, scrolled by the wrapper when narrower. */}
+      <div className="overflow-x-auto rounded-lg border">
+        <table className="w-full min-w-[320px] table-fixed text-xs">
           <thead>
             <tr className="border-b bg-muted/60">
               <th className="w-auto px-2 py-1 text-left font-medium text-muted-foreground">

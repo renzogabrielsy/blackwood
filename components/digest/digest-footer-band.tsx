@@ -71,9 +71,11 @@ function Flags({ flags }: { flags: Flag[] }) {
 // ---------------------------------------------------------------------
 
 function StreamTable({ streams }: { streams: StreamFreshness[] }) {
+  // Never crush, always scroll: 110 + 52 fixed = 162px + a 138px floor for the
+  // flexible Stream label → 300px, scrolled by the wrapper when narrower.
   return (
-    <div className="overflow-hidden rounded-lg border">
-      <table className="w-full table-fixed text-xs">
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full min-w-[300px] table-fixed text-xs">
         <thead>
           <tr className="border-b bg-muted/60">
             <th className="w-auto px-2 py-1 text-left font-medium text-muted-foreground">

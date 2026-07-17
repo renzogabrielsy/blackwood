@@ -74,7 +74,7 @@ export function SchedulePreviewMobile({ rows }: { rows: SchedulePreviewRow[] }) 
             <ScheduleTable
               rows={rows}
               maxHeightClass="max-h-[72dvh]"
-              minWidthClass="min-w-[640px]"
+              minWidthClass="min-w-[820px]"
             />
           </div>
         </SheetContent>

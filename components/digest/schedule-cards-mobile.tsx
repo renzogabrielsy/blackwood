@@ -1,9 +1,10 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ScheduleCardsMobile — the phone read layer for /production/schedule.
+// ScheduleCardsMobile — the phone read layer for the full-month schedule view
+// (`/?view=schedule`, rendered by <ScheduleMonthView />).
 //
-// Rendered `sm:hidden` by the schedule page; the desktop dense `<table>` is
+// Rendered `sm:hidden` by the month view; the desktop dense `<table>` is
 // `hidden sm:block` and untouched. Generalizes the digest's SchedulePreviewMobile
 // pattern: the SAME shared `ScheduleRowCard` row, but a FULL-MONTH list (no 5-row
 // preview slice) with the `Act hrs` / `Var` fields the digest omits.
