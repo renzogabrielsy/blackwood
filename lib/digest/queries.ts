@@ -420,39 +420,84 @@ export async function getDigestData(): Promise<DigestData> {
   const prodAvg7 = avg7(productionRows.map((r) => n(r.kg)));
   const powerAvg7 = avg7(powerRows.map((r) => n(r.kwh)));
 
-  // RC In sub-line: supplier + sack counts for the operational day.
+  // ===================================================================
+  // WAVE 2 — the operational-date-dependent queries, in ONE round-trip.
+  // ===================================================================
+  // Every query below needs `operationalDate` (only knowable after wave 1),
+  // so it CANNOT fold into the wave-1 Promise.all. But none of them depends
+  // on ANY other wave-1 result, and none depends on each other — so they all
+  // belong in a single parallel wave rather than the four sequential awaits
+  // this function used to do (rcInSub → trucks → the schedule batch).
+  //
+  // Window math is pure (addDaysUtc), so the ranges are computed here and the
+  // whole batch fires at once. The results are consumed further down, exactly
+  // where they were before.
+  //
+  // The operational date's week = 7 consecutive days STARTING at the
+  // operational date (today is the first, isToday). This matches the draft's
+  // WeekStrip and sidesteps the sheet's off-by-one weekday labels (its `dow`
+  // text runs one day ahead of the real calendar) — the plan is keyed by DATE,
+  // not weekday, so rest/shift detection is unaffected.
+  //
+  // Schedule-preview window: 10 days STARTING at the operational date (today
+  // first) — a SUPERSET of the week window, pulling the extra `source` (the
+  // plan-authority tag) + per-grade `grades` columns. The week's plan/actual
+  // rows are SLICED from these preview responses rather than re-queried: the
+  // preview ranges strictly contain the week ranges and select a superset of
+  // the columns, so the derived rows are byte-identical while costing two
+  // fewer queries.
+  const weekDates = operationalDate
+    ? Array.from({ length: 7 }, (_, i) => addDaysUtc(operationalDate, i))
+    : [];
+  const previewDates = operationalDate
+    ? Array.from({ length: 10 }, (_, i) => addDaysUtc(operationalDate, i))
+    : [];
+  const previewEnd = previewDates[9];
+
+  const [subRes, truckRes, previewSchedRes, previewActualRes] = operationalDate
+    ? await Promise.all([
+        // RC In sub-line: supplier + sack counts for the operational day.
+        supabase
+          .from("view_digest_rcin_daystats")
+          .select("*")
+          .eq("date", operationalDate)
+          .maybeSingle(),
+        // Trucks with a trip on the operational date. ttl_km is a GENERATED
+        // column (= end_km - start_km); > 0 means "had a trip". Keyed on the
+        // SAME operationalDate as the KPIs so the band stays in sync.
+        supabase
+          .from("truck_readings")
+          .select("plate_no, start_km, end_km, ttl_km, fuel_liters, remarks")
+          .eq("reading_date", operationalDate)
+          .gt("ttl_km", 0)
+          .order("ttl_km", { ascending: false }),
+        supabase
+          .from("production_schedule")
+          .select("plan_date, dow, shifts, setup, projected_tons, source, grades")
+          .gte("plan_date", operationalDate)
+          .lte("plan_date", previewEnd!),
+        supabase
+          .from("view_digest_prod_actual_tons")
+          .select("date, actual_tons")
+          .gte("date", operationalDate)
+          .lte("date", previewEnd!),
+      ])
+    : [null, null, null, null];
+
+  // ---------- RC In sub-line ----------
   let rcInSub: string | undefined;
-  if (operationalDate) {
-    const subRes = await supabase
-      .from("view_digest_rcin_daystats")
-      .select("*")
-      .eq("date", operationalDate)
-      .maybeSingle();
-    const stats = subRes.data as { suppliers: number; sacks: number } | null;
-    if (stats) {
-      rcInSub = `${stats.suppliers} supplier${stats.suppliers === 1 ? "" : "s"} · ${stats.sacks} sacks`;
-    }
+  const rcInDayStats = (subRes?.data as { suppliers: number; sacks: number } | null) ?? null;
+  if (rcInDayStats) {
+    rcInSub = `${rcInDayStats.suppliers} supplier${rcInDayStats.suppliers === 1 ? "" : "s"} · ${rcInDayStats.sacks} sacks`;
   }
 
   // ---------- trucks with a trip on the operational date ----------
-  // ttl_km is a GENERATED column (= end_km - start_km); > 0 means "had a trip".
-  // Keyed on the SAME operationalDate as the KPIs so the band stays in sync.
-  let trucks: TruckTrip[] = [];
-  if (operationalDate) {
-    const truckRes = await supabase
-      .from("truck_readings")
-      .select("plate_no, start_km, end_km, ttl_km, fuel_liters, remarks")
-      .eq("reading_date", operationalDate)
-      .gt("ttl_km", 0)
-      .order("ttl_km", { ascending: false });
-    const truckRows = (truckRes.data as TruckReadingRow[] | null) ?? [];
-    trucks = truckRows.map((t) => ({
-      plateNo: t.plate_no,
-      ttlKm: round(n(t.ttl_km)),
-      fuelLiters: t.fuel_liters == null ? null : round(n(t.fuel_liters)),
-      remarks: t.remarks,
-    }));
-  }
+  const trucks: TruckTrip[] = ((truckRes?.data as TruckReadingRow[] | null) ?? []).map((t) => ({
+    plateNo: t.plate_no,
+    ttlKm: round(n(t.ttl_km)),
+    fuelLiters: t.fuel_liters == null ? null : round(n(t.fuel_liters)),
+    remarks: t.remarks,
+  }));
 
   // ---------- open blocks (currently-occupied, STORED/IN-USE) ----------
   // Row-level passthrough of view_blocking_grid (all aggregation is the
@@ -707,51 +752,21 @@ export async function getDigestData(): Promise<DigestData> {
   let weekPlan: WeekDayPlan[] = [];
   let schedulePreview: SchedulePreviewRow[] = [];
   if (operationalDate) {
-    // The operational date's week = 7 consecutive days STARTING at the
-    // operational date (today is the first, isToday). This matches the draft's
-    // WeekStrip and sidesteps the sheet's off-by-one weekday labels (its `dow`
-    // text runs one day ahead of the real calendar) — the plan is keyed by DATE,
-    // not weekday, so rest/shift detection is unaffected.
-    const weekStart = operationalDate;
-    const weekDates = Array.from({ length: 7 }, (_, i) => addDaysUtc(weekStart, i));
-    const weekEnd = weekDates[6];
-
-    // Schedule-preview window: 10 days STARTING at the operational date (today
-    // first). A SUPERSET of the week window above, but fetched separately so it
-    // can also pull `source` (the plan-authority tag) + per-grade `grades`. Same
-    // two sources as weekPlan / the /production/schedule page. Trimmed from 14 →
-    // 10 to keep the digest band compact (it's now a half-width scroll card).
-    const previewDates = Array.from({ length: 10 }, (_, i) => addDaysUtc(weekStart, i));
-    const previewEnd = previewDates[9];
-
-    const [schedRes, actualRes, previewSchedRes, previewActualRes] = await Promise.all([
-      supabase
-        .from("production_schedule")
-        .select("plan_date, dow, shifts, setup, projected_tons")
-        .gte("plan_date", weekStart)
-        .lte("plan_date", weekEnd),
-      supabase
-        .from("view_digest_prod_actual_tons")
-        .select("date, actual_tons")
-        .gte("date", weekStart)
-        .lte("date", weekEnd),
-      supabase
-        .from("production_schedule")
-        .select("plan_date, dow, shifts, setup, projected_tons, source, grades")
-        .gte("plan_date", weekStart)
-        .lte("plan_date", previewEnd),
-      supabase
-        .from("view_digest_prod_actual_tons")
-        .select("date, actual_tons")
-        .gte("date", weekStart)
-        .lte("date", previewEnd),
-    ]);
-
-    const planRows = (schedRes.data as ProdSchedRow[] | null) ?? [];
-    const planByDate = new Map(planRows.map((p) => [p.plan_date, p]));
-    const actualByDate = new Map(
-      ((actualRes.data as ProdActualTonsRow[] | null) ?? []).map((a) => [a.date, n(a.actual_tons)])
+    // The plan + actual-tons rows for BOTH the week strip and the 10-day preview
+    // come from the single preview-window fetch in wave 2 above (the preview
+    // range contains the week range). `planByDate` / `actualByDate` are the same
+    // maps as before — the week's consumers just index them by the 7 week dates.
+    const previewPlanByDate = new Map(
+      ((previewSchedRes?.data as ProdSchedRow[] | null) ?? []).map((p) => [p.plan_date, p])
     );
+    const previewActualByDate = new Map(
+      ((previewActualRes?.data as ProdActualTonsRow[] | null) ?? []).map((a) => [
+        a.date,
+        n(a.actual_tons),
+      ])
+    );
+    const planByDate = previewPlanByDate;
+    const actualByDate = previewActualByDate;
     // Actual WORKED hours per date, from the already-fetched (120-day windowed)
     // view_digest_daily_hours rows — the window covers every forward date in the
     // week/preview ranges. Joined by date the same way actual tons are; a date
@@ -804,17 +819,8 @@ export async function getDigestData(): Promise<DigestData> {
       };
     });
 
-    // Rolling ~2-week schedule preview (op date → +13 days = 14 rows). Same
-    // plan-vs-actual join + resolved state as weekPlan, plus the `source` tag.
-    const previewPlanByDate = new Map(
-      ((previewSchedRes.data as ProdSchedRow[] | null) ?? []).map((p) => [p.plan_date, p])
-    );
-    const previewActualByDate = new Map(
-      ((previewActualRes.data as ProdActualTonsRow[] | null) ?? []).map((a) => [
-        a.date,
-        n(a.actual_tons),
-      ])
-    );
+    // Rolling 10-day schedule preview (op date → +9 days). Same plan-vs-actual
+    // join + resolved state as weekPlan, plus the `source` tag + per-grade tons.
     schedulePreview = previewDates.map((date) => {
       const row = previewPlanByDate.get(date);
       const plan: ProdSchedDay = row

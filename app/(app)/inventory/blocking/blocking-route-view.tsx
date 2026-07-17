@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useOptimistic, useRef, useState, useTransition } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { BlockingGrid } from './blocking-grid';
@@ -16,6 +16,14 @@ import type { BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
  * Selection lives in the URL as `?block=<block_loc>` (deep-linkable, refresh-safe,
  * browser Back closes the panel). The grid is driven controlled-style from that param.
  * "Edit All" from the detail panel navigates via `router.push('/inventory?tab=…')`.
+ *
+ * PENDING UI: this route is dynamic, so writing `?block=` costs a server round-trip
+ * (~1-3s) even though the grid data is already client-side — which meant a cell click
+ * did NOTHING visible until the payload landed. The param write is wrapped in a
+ * `useTransition` and the selection is mirrored in `useOptimistic`, so the cell
+ * highlights and the detail panel open on the SAME frame as the click. React reverts
+ * the optimistic value to the URL's once the navigation settles, so Back/refresh and
+ * an abandoned navigation both stay correct.
  */
 export function BlockingRouteView() {
     const router = useRouter();
@@ -51,8 +59,10 @@ export function BlockingRouteView() {
         loadData();
     }, [loadData]);
 
-    // ── URL-driven block selection (`?block=`) ──
-    const selectedBlock = searchParams.get('block');
+    // ── URL-driven block selection (`?block=`), optimistically mirrored ──
+    const urlBlock = searchParams.get('block');
+    const [, startTransition] = useTransition();
+    const [selectedBlock, setOptimisticBlock] = useOptimistic(urlBlock);
 
     const writeBlockParam = useCallback(
         (block: string | null) => {
@@ -60,9 +70,12 @@ export function BlockingRouteView() {
             if (block) params.set('block', block);
             else params.delete('block');
             const qs = params.toString();
-            router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            startTransition(() => {
+                setOptimisticBlock(block);
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
         },
-        [router, pathname, searchParams],
+        [router, pathname, searchParams, setOptimisticBlock],
     );
 
     // Toggle semantics: clicking the open block clears it; clicking another switches.

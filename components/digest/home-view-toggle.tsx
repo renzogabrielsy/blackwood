@@ -17,10 +17,18 @@
  * surface is fetched); this control's only job is to write the URL. The active
  * `view` is passed in from the server (already parsed) so the segment highlight
  * is correct on first paint.
+ *
+ * PENDING UI: writing the param re-runs the SERVER page (the digest re-queries
+ * Supabase), which takes ~1-3s. `router.replace` is therefore wrapped in a
+ * `useTransition` so the click has INSTANT feedback: the target segment adopts
+ * the active treatment immediately (optimistic) and shows a spinner until the
+ * server payload lands. Without this the toggle looked dead for seconds and then
+ * flipped. Mirrors `app/(app)/cenapro/production/period-picker.tsx`.
  */
 
-import { Suspense, useCallback } from 'react';
+import { Suspense, useCallback, useOptimistic, useTransition } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export type HomeView = 'digest' | 'schedule';
@@ -38,6 +46,11 @@ function HomeViewToggleShell({ view }: { view: HomeView }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
+  // Optimistic active segment. React holds this value for the life of the
+  // transition and reverts to the server-supplied `view` when it settles, so a
+  // failed/abandoned navigation can't leave the highlight lying.
+  const [optimisticView, setOptimisticView] = useOptimistic(view);
 
   const setView = useCallback(
     (next: HomeView) => {
@@ -51,21 +64,28 @@ function HomeViewToggleShell({ view }: { view: HomeView }) {
         params.set('view', next);
       }
       const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      startTransition(() => {
+        setOptimisticView(next);
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      });
     },
-    [router, pathname, searchParams],
+    [router, pathname, searchParams, setOptimisticView],
   );
 
   return (
     <div
       role="tablist"
       aria-label="Home view"
+      aria-busy={isPending}
       // Full-width segments on phones (the digest is the flagship phone surface —
       // 44px-tall, thumb-sized targets), inline pill from `sm` up.
       className="inline-flex w-full items-center gap-0.5 rounded-md border border-border bg-muted/50 p-0.5 sm:w-auto"
     >
       {VIEWS.map((v) => {
-        const active = view === v.id;
+        const active = optimisticView === v.id;
+        // The spinner rides the segment being navigated TO — i.e. the newly
+        // active one while the server payload is still in flight.
+        const busy = isPending && active;
         return (
           <button
             key={v.id}
@@ -74,12 +94,13 @@ function HomeViewToggleShell({ view }: { view: HomeView }) {
             aria-selected={active}
             onClick={() => setView(v.id)}
             className={cn(
-              'flex-1 rounded-sm px-3 py-2 text-xs font-medium transition-all duration-150 sm:flex-none sm:py-1',
+              'flex flex-1 items-center justify-center gap-1.5 rounded-sm px-3 py-2 text-xs font-medium transition-all duration-150 sm:flex-none sm:py-1',
               active
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
+            {busy && <Loader2 className="h-3 w-3 shrink-0 animate-spin" />}
             {v.label}
           </button>
         );
