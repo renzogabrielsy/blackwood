@@ -153,7 +153,28 @@ recur monthly and pollute campaign-keyed views/URLs until fixed)
 ---
 
 ## BUG-006 — `rc_out` rows with empty-string / NULL `production_batch` (legacy 2024)
-**Status:** OPEN — **needs a decision from Renzo, not a blind fix** · **Effort:** S (once decided) · **Severity:** low
+**Status:** ✅ FIXED (live DB backfill, 2026-07-17) — Renzo chose option (b), backfill from
+`transaction_date`'s month, conditional on "if it doesn't destroy/modify any modern data"
+· **Effort:** S · **Severity:** low
+
+> **Resolution (2026-07-17):** 178 rows backfilled (`UPDATE … SET production_batch =
+> UPPER(TO_CHAR(transaction_date,'FMMonth')) WHERE (production_batch IS NULL OR = '')
+> AND transaction_date < '2025-01-01'`) — doubly guarded so it could not touch a valued
+> or modern row. **Renzo's condition was PROVEN**: a before/after fingerprint of every
+> 2025+ campaign value came back byte-identical across all 12 months; blanks now 0; total
+> rows conserved 2,057→2,057; rowcount 178 read via a CTE-wrapped `RETURNING` (MCP
+> `execute_sql` returns no rowcount for a bare UPDATE — remember this).
+>
+> ⚠️ **These 178 labels are INFERRED, not recovered.** `production_batch` is a *campaign*
+> notion, not a calendar month — campaigns straddle month boundaries. Evidence found
+> during the backfill: a pre-existing 2024 row dated **2024-09-30 is labeled OCTOBER**
+> (left untouched — it had a value). The blank rows carried no campaign signal, so
+> month-from-date was the only available inference. Do not treat the backfilled 2024
+> labels as authoritative campaign assignments.
+>
+> No visible effect today: the picker filters `campaign_year >= 2025`, so 2024 is excluded
+> either way. This was hygiene. `rc_out` has no audit trigger (verified: 0 `audit_logs`
+> rows) — the pre-flight snapshot in the agent's report is the only recovery reference.
 
 - **Discovered:** 2026-07-17, incidentally, while sweeping for month abbreviations during
   the BUG-005 data repair. Not reported by a user; nothing is visibly broken today.
