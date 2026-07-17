@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { ArrowLeft, Factory, LogOut, Menu, Moon, Settings, Shield, Sun } from 'lucide-react';
 import { NotificationBell } from '@/components/notification-bell';
@@ -41,27 +41,47 @@ interface Breadcrumb {
 }
 
 /**
+ * The read-only slice of the query string a `test` may consult. Structural on purpose:
+ * both `URLSearchParams` and Next's `ReadonlyURLSearchParams` satisfy it.
+ */
+interface QueryParams {
+    get(key: string): string | null;
+}
+
+/**
  * Ordered breadcrumb registry. Each entry's `test` decides whether it applies to the
- * current pathname; the FIRST match wins, so MORE-SPECIFIC routes must come BEFORE their
- * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all, and
- * `/cenapro/production` precedes `/cenapro`). Replaces the old long if-chain.
+ * current pathname (plus, when a route hosts several URL-driven views, its query
+ * params); the FIRST match wins, so MORE-SPECIFIC routes must come BEFORE their
+ * parent catch-alls (e.g. `/inventory/blocking` precedes the `/inventory` catch-all,
+ * `/cenapro/production` precedes `/cenapro`, and `/?view=schedule` precedes the bare
+ * `/` — which deliberately has NO entry). Replaces the old long if-chain.
  */
 interface BreadcrumbEntry extends Breadcrumb {
-    test: (pathname: string) => boolean;
+    test: (pathname: string, params: QueryParams) => boolean;
 }
 
 const exact = (path: string) => (pathname: string) => pathname === path;
 const prefix = (path: string) => (pathname: string) => pathname.startsWith(path);
 
 const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
+    // `/` hosts two views (BUG-003): the bare digest board has NO breadcrumb (the
+    // dashboard shows none by design), but the schedule view is a distinct surface,
+    // so it gets a title + a "Back to Digest" escape that clears the view param.
+    {
+        test: (pathname, params) => pathname === '/' && params.get('view') === 'schedule',
+        backLabel: 'Back to Digest',
+        backHref: '/',
+        pageTitle: 'Production Schedule',
+        pageDescription: 'Month plan vs actual — projected tons & Joseph\'s authoritative schedule',
+    },
     { test: prefix('/edit/'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' },
     // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
     { test: prefix('/inventory/blocking'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Blocking', pageDescription: 'Warehouse grid — block occupancy & balances' },
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
-    // Production sub-routes — MUST precede the `/production` catch-all below.
-    { test: prefix('/production/schedule'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — projected tons & Joseph\'s authoritative schedule' },
+    // NOTE: `/production/schedule` has no entry — it is a redirect to `/?view=schedule`
+    // (handled by the first entry above), never a rendered surface.
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Price & Volume Analysis design concepts (planning-stage demos).
@@ -82,8 +102,8 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/sync/cases'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Sync Review', pageDescription: 'Held-row cases & investigations' },
 ];
 
-function getBreadcrumb(pathname: string): Breadcrumb | null {
-    const entry = BREADCRUMB_REGISTRY.find((e) => e.test(pathname));
+function getBreadcrumb(pathname: string, params: QueryParams): Breadcrumb | null {
+    const entry = BREADCRUMB_REGISTRY.find((e) => e.test(pathname, params));
     if (!entry) return null;
     const { backLabel, backHref, pageTitle, pageDescription } = entry;
     return { backLabel, backHref, pageTitle, pageDescription };
@@ -224,13 +244,16 @@ function MobileNav({ role, currentTitle }: { role: UserRole; currentTitle: strin
 export function Navbar() {
     const { user, role, dbRole, displayName, avatarUrl, setRole, signOut } = useAuth();
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const router = useRouter();
     const { setTheme, resolvedTheme } = useTheme();
     const [mounted, setMounted] = React.useState(false);
 
     React.useEffect(() => setMounted(true), []);
 
-    const breadcrumb = getBreadcrumb(pathname);
+    // Query params participate in breadcrumb resolution because `/` hosts two
+    // URL-driven views (digest board vs `?view=schedule`).
+    const breadcrumb = getBreadcrumb(pathname, searchParams);
     const initials = getInitials(displayName, user?.email ?? null);
     const canSwitchRoles = PRIVILEGED_ROLES.includes(dbRole);
     const isDark = resolvedTheme === 'dark';

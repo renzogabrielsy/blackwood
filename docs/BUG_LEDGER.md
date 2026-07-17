@@ -3,8 +3,11 @@
 > Persistent, structured bug ledger. Each entry is written to be executed **cold by a
 > future Opus session** — root cause with file:line evidence, an exact fix spec, effort,
 > and risks. Investigated read-only on 2026-07-17 (2× Sonnet agents, on-device iPhone
-> screenshots from Renzo as the trigger). **No fix below has been executed yet** unless
-> its Status says so. Update Status + add a dated note when a fix ships.
+> screenshots from Renzo as the trigger). Check each entry's **Status** — update it + add
+> a dated note when a fix ships.
+>
+> **2026-07-17: BUG-001…005 are all ✅ FIXED and shipped.** BUG-006 below is OPEN and
+> needs a decision from Renzo (not a bug to just go fix).
 >
 > House rules that bind every fix here: additive-only for mobile (`hidden sm:block` /
 > `sm:hidden`), desktop never regresses; `errorToast()` for errors; aggregations live in
@@ -30,7 +33,7 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
 ---
 
 ## BUG-001 — Schedule full-table sheet: Setup/Grades column crushed to ~20px
-**Status:** OPEN · **Effort:** S · **Severity:** high (flagship digest surface on phone)
+**Status:** ✅ FIXED (`3fd0d94`, 2026-07-17) · **Effort:** S · **Severity:** high (flagship digest surface on phone)
 
 - **Symptom (iPhone):** in the "Production schedule · next 10 days" bottom sheet, the
   Setup/Grades column renders ~1 character wide.
@@ -57,7 +60,7 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
   the card view; the min-width protects the `sm`+ table.)
 
 ## BUG-002 — Digest detail bottom-sheets hug the bottom on short content
-**Status:** OPEN · **Effort:** S · **Severity:** medium (UX polish, daily-use surface)
+**Status:** ✅ FIXED (`3fd0d94`, 2026-07-17) · **Effort:** S · **Severity:** medium (UX polish, daily-use surface)
 
 - **Symptom (iPhone):** tapping a KPI card or chart-expand opens a bottom Sheet whose
   content is short (one card / one chart) — it sits as a small bar pinned to the bottom
@@ -74,7 +77,7 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
   content → Sheet.
 
 ## BUG-003 — Production Schedule renders inside the production tab shell
-**Status:** OPEN · **Effort:** M (primary) / S (fallback) · **Severity:** medium (IA/UX)
+**Status:** ✅ FIXED (Wave B, 2026-07-17 — PRIMARY approach shipped) · **Effort:** M · **Severity:** medium (IA/UX)
 
 - **Symptom:** `/production/schedule` shows the Daily·Electricity·Trucks bottom tab bar
   under a page that isn't one of those tabs. Renzo wants the schedule to live in the
@@ -96,7 +99,7 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
   digest-toggle end-state; use only if (b) is too much scope in the moment.
 
 ## BUG-004 — Blocking grid on iPhone landscape: crushed cells, no horizontal scroll
-**Status:** OPEN · **Effort:** S · **Severity:** medium
+**Status:** ✅ FIXED (`3fd0d94`, 2026-07-17) · **Effort:** S · **Severity:** medium
 
 - **Symptom (iPhone landscape):** blocking cells clipped/"sides cut", grid won't h-scroll.
 - **Root cause (confirmed):** at ≥640px (landscape iPhone qualifies),
@@ -113,7 +116,7 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
   box. Visual-check both warehouse types at landscape width.
 
 ## BUG-005 — Duplicate campaign: "Jul 2026" AND "July 2026" in the RC Movement picker
-**Status:** OPEN · **Effort:** S–M · **Severity:** high (data canonicalization — will
+**Status:** ✅ FIXED (writer `3fd0d94` + live DB repair, 2026-07-17) · **Effort:** S–M · **Severity:** high (data canonicalization — will
 recur monthly and pollute campaign-keyed views/URLs until fixed)
 
 - **Symptom:** campaign picker lists `Jul 2026 8d` and `July 2026 6d` as two campaigns.
@@ -149,6 +152,49 @@ recur monthly and pollute campaign-keyed views/URLs until fixed)
 
 ---
 
+## BUG-006 — `rc_out` rows with empty-string / NULL `production_batch` (legacy 2024)
+**Status:** OPEN — **needs a decision from Renzo, not a blind fix** · **Effort:** S (once decided) · **Severity:** low
+
+- **Discovered:** 2026-07-17, incidentally, while sweeping for month abbreviations during
+  the BUG-005 data repair. Not reported by a user; nothing is visibly broken today.
+- **Finding (SQL-verified):** `rc_out.production_batch` has **118 rows = `''`** (empty
+  string, 2024-03-01→2024-09-28) and **60 rows = `NULL`** (2024-01-01→2024-06-01). All are
+  legacy 2024 rows predating the campaign convention. They are NOT abbreviations, so they
+  were deliberately left untouched by the BUG-005 repair (canonicalizing them would have
+  been guessing at what campaign they belong to).
+- **Why it matters (mildly):** these rows can't key into any campaign
+  (`encodeCampaign()` = `${production_batch}-${year}`), so they'd render as a blank/absent
+  campaign in the RC Movement picker. The picker already filters `campaign_year >= 2025`,
+  so 2024 rows are excluded today — which is why nothing is visibly broken.
+- **The decision needed:** are these (a) fine as-is (2024 predates campaigns; leave them),
+  (b) worth backfilling from `transaction_date`'s month, or (c) worth a distinct sentinel
+  (e.g. `LEGACY`)? **Do not pick one without asking Renzo** — it's a data-semantics call
+  about what those 2024 rows *meant*, not a canonicalization with an obviously-right answer.
+- **If backfilling is chosen:** the pattern mirrors BUG-005 step 2 (a targeted UPDATE via
+  supabase-backend-engineer, `rc_out` has no audit trigger, verify row-count conservation
+  before/after).
+
+---
+
 ## Fixed entries
 
-*(move entries here with the shipping commit hash when done)*
+All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept
+above (with their ✅ FIXED status + hash) rather than moved, since their root-cause
+analysis is the most useful record — this section is the index:
+
+| Bug | Shipped | Commit |
+|---|---|---|
+| BUG-001 — schedule sheet + 6 table min-width violators ("never crush, always scroll") | 2026-07-17 | `3fd0d94` |
+| BUG-002 — digest KPI/chart sheets → centered Dialogs | 2026-07-17 | `3fd0d94` |
+| BUG-003 — schedule moved into the digest world (`/?view=digest\|schedule`) | 2026-07-17 | Wave B |
+| BUG-004 — blocking grid `minmax(104px,1fr)` (scroll, don't crush) | 2026-07-17 | `3fd0d94` |
+| BUG-005 — month-name canonicalization (writer + live DB repair) | 2026-07-17 | `3fd0d94` + DB |
+
+**BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
+(was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none
+lost); zero abbreviated month names remain; Python oracle rebuilt, parity 12/12, 486 tests pass.
+
+**Still unverified on-device (the honest last mile):** BUG-004's landscape look at both a
+20-col and a 3-col PCA/PCB warehouse, and the two new digest Dialogs on a real phone.
+Everything was verified statically (tsc + lint + build green) — the 338px→340px cap
+arithmetic is exact, but a real-device pass is still the last word.

@@ -6,6 +6,36 @@ server-rendered operational + ingestion-health summary. It replaced the old
 modular widget dashboard (drag/resize ReactGridLayout grid), which is now
 **archived** at `_archived/dashboard-v1/` (restorable via git history).
 
+## `/` hosts TWO views — `?view=digest|schedule` (BUG-003)
+`/` is a **URL-driven view switcher**, house pattern (identical to Summaries'
+`?view=period|supplier`; `useSearchParams` + `router.replace`, **not** nuqs):
+
+| `?view=` | Surface | Notes |
+|---|---|---|
+| *(absent)* / `digest` | The digest bands (below) | **DEFAULT — the param is OMITTED** to keep `/` clean |
+| `schedule` | `<ScheduleMonthView />` — the full **month plan-vs-actual** table | Takes `?month=YYYY-MM` alongside `?view=schedule` |
+
+- **The branch happens SERVER-SIDE** in `page.tsx` (`searchParams.view`), so only
+  the selected surface's queries run — `getDigestData()` is never called for the
+  schedule view, and vice versa. `HomeViewToggle`'s only job is to write the URL.
+- **`components/digest/home-view-toggle.tsx`** — `'use client'`. The segmented
+  control ("Digest" | "Schedule"), rendered at the TOP of the shared page shell in
+  BOTH views (so it never shifts position when switching). Full-width, 44px-tall
+  segments on phones (`w-full … py-2`), inline pill from `sm` up (`sm:w-auto
+  sm:py-1`). Selecting "Digest" **drops both `view` AND `month`** (the month cursor
+  is schedule-only state — leaving it on a digest URL would be dead weight). Active
+  `view` is passed in as a prop (server-parsed) so the highlight is right on first
+  paint; the `Suspense` wrapper is mandatory for `useSearchParams`.
+- **Why the schedule lives here:** it used to be the `/production/schedule` route,
+  which inherited `app/(app)/production/layout.tsx` and so rendered under the
+  Daily·Electricity·Trucks tab bar it has nothing to do with. `/production/schedule`
+  is now a **redirect** to `/?view=schedule` (carrying a valid `?month=` through) —
+  one canonical URL, no second surface inside the production shell.
+- **Navbar:** bare `/` still returns `null` from `getBreadcrumb()` (no title, by
+  design), but `/?view=schedule` resolves to **"← Back to Digest / Production
+  Schedule"** — the registry's first entry now tests pathname **+ query params**.
+  See `components/NAVBAR.md`.
+
 The digest marries two views, stacked top→bottom (decision: "both, stacked"):
 1. **Today's operations** — the latest business day's numbers (RC In/Out,
    production, power, net flow), with trailing sparklines and deltas.
@@ -18,13 +48,18 @@ widget grid. The backend contract is fixed; the UI only shapes already-computed
 values into views.
 
 ## Files
-- `page.tsx` — **async Server Component**. Calls `getDigestData()` once and
-  composes the bands. Thin: fetch + layout only. No `'use client'`.
-  **Render order, top→bottom:** (DigestHeader + **SyncLauncher**) header row →
+- `page.tsx` — **async Server Component**. Reads `searchParams` and branches on
+  `?view=` (see above): `schedule` → the shared shell + `<HomeViewToggle
+  view="schedule" />` + `<ScheduleMonthView month={month} basePath="/"
+  extraParams={{ view: 'schedule' }} />` and RETURNS (no digest fetch); otherwise
+  `<DigestBoard />`, the async sub-component that calls `getDigestData()` once and
+  composes the bands. Thin: fetch + layout only. No `'use client'`. Both views share
+  the `SHELL_CLS` container constant.
+  **Render order, top→bottom:** **HomeViewToggle** → (DigestHeader + **SyncLauncher**) header row →
   **PlantStatusHeader** (operational-date running/rest status bar) →
   **WeekStrip** (this week · plan vs actual — surfaced near the TOP, right under
   the plant-status band; its heading carries a "View full schedule →" link to
-  `/production/schedule`) → **Snapshot row** (a `lg:grid-cols-2` grid pairing the
+  `/?view=schedule`) → **Snapshot row** (a `lg:grid-cols-2` grid pairing the
   compact rolling **10-day SchedulePreview TABLE** BESIDE **OpenBlocks** so two
   dense "current snapshot" bands share one row instead of stacking full-width;
   each cell renders only when it has content and a lone survivor spans full
@@ -108,7 +143,7 @@ values into views.
   pre-resolved `WeekDayPlan.state`. Rest days render dashed + "planned rest";
   today gets a `ring`. Rendered **near the top** (right under the plant-status
   band, above OpenBlocks; skipped when `weekPlan` is empty); its section heading
-  carries a "View full schedule →" link to the `/production/schedule` month
+  carries a "View full schedule →" link to the `/?view=schedule` month
   table. Presentation-only — states + tons come pre-resolved from the adapter.
 - `components/digest/schedule-preview.tsx` — **Server component**. Compact
   Excel-Standard **Production Schedule table** from `data.schedulePreview` (**10
@@ -371,9 +406,11 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 - **Trucks / Bag / Sync+Activity / Footer** — already stack + use `table-fixed
   w-full` / `flex-wrap`, so they reflow cleanly on phones (responsive-only, no
   condense/expand needed).
-- **`/production/schedule`** — the month table got `overflow-x-auto` +
-  `min-w-[1080px]` so columns keep their widths and scroll sideways on phones
-  instead of crushing.
+- **Schedule view (`/?view=schedule`)** — the toggle segments are full-width and
+  44px-tall on phones (inline pill at `sm`+). The month view itself renders
+  `ScheduleCardsMobile` (full-month condensed card list) below `sm` and the dense
+  `overflow-x-auto` + `min-w-[1080px]` table at `sm`+, so columns keep their widths
+  and scroll sideways instead of crushing.
 - **Reduced motion** — `globals.css` now has a `@media (prefers-reduced-motion:
   reduce)` guard that neutralizes the `animate-*` / `stagger-*` utilities and
   collapses `hover-lift` to near-instant.

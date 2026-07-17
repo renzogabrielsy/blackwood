@@ -1,8 +1,17 @@
 // No 'use client' — async Server Component (Daily Sync Digest).
 // Replaces the archived modular widget dashboard (see _archived/dashboard-v1).
+//
+// `/` hosts TWO surfaces, switched by `?view=digest|schedule` (default `digest`,
+// which OMITS the param). The branch happens HERE, server-side, so only the
+// selected surface's queries run — the toggle (HomeViewToggle) merely writes the
+// URL. The schedule surface used to be the `/production/schedule` route, which
+// wrongly inherited the production tab shell (BUG-003); that route now redirects
+// here.
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { getDigestData } from "@/lib/digest/queries";
+import { HomeViewToggle, type HomeView } from "@/components/digest/home-view-toggle";
+import { ScheduleMonthView } from "@/components/digest/schedule-month-view";
 import { DigestHeader } from "@/components/digest/digest-header";
 import { PlantStatusHeader } from "@/components/digest/plant-status-header";
 import { KpiHero } from "@/components/digest/kpi-hero";
@@ -17,7 +26,37 @@ import { OpenBlocks } from "@/components/digest/open-blocks";
 import { BagInventory } from "@/components/digest/bag-inventory";
 import { SyncLauncher } from "@/components/sync/SyncLauncher";
 
-export default async function DigestPage() {
+/** Shared page shell — same container for both views so the toggle never shifts. */
+const SHELL_CLS =
+  "mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5";
+
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string; month?: string }>;
+}) {
+  const { view: viewParam, month } = await searchParams;
+  // Default view is the digest — any unknown/absent value falls back to it.
+  const view: HomeView = viewParam === "schedule" ? "schedule" : "digest";
+
+  if (view === "schedule") {
+    return (
+      <div className={SHELL_CLS}>
+        <HomeViewToggle view="schedule" />
+        {/* Month nav keeps `view=schedule` alive alongside `?month=`. */}
+        <ScheduleMonthView
+          month={month}
+          basePath="/"
+          extraParams={{ view: "schedule" }}
+        />
+      </div>
+    );
+  }
+
+  return <DigestBoard />;
+}
+
+async function DigestBoard() {
   const data = await getDigestData();
 
   // Small presentational reads for the plant-status band (no aggregation).
@@ -27,7 +66,10 @@ export default async function DigestPage() {
   ).length;
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5">
+    <div className={SHELL_CLS}>
+      {/* A0. View switcher — digest board ↔ production schedule (URL-driven). */}
+      <HomeViewToggle view="digest" />
+
       {/* A. Header strip (sub-band — navbar owns the page title). The Daily Sync
           launcher (privileged-only modal trigger) lives in this top band,
           right-aligned, replacing the retired floating button. */}
@@ -69,7 +111,7 @@ export default async function DigestPage() {
                 from the PROD SCHED plan
               </span>
               <Link
-                href="/production/schedule"
+                href="/?view=schedule"
                 className="text-[11px] font-medium text-primary hover:underline"
               >
                 View full schedule →

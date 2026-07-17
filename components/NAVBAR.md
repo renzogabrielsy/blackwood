@@ -10,7 +10,10 @@ Persistent navigation bar (`components/navbar.tsx`). Owns ALL page titles/descri
 - **Center:** "Blackwood" logo (always visible, links to `/`)
 - **Right:** Modules dropdown (Factory icon), dev role switcher (Shield, privileged only), dark-mode toggle, notification bell, profile avatar
 
-The dashboard (`/`) returns `null` from `getBreadcrumb()` — no breadcrumb shown.
+The dashboard (`/`) returns `null` from `getBreadcrumb()` — no breadcrumb shown. **Exception:** `/`
+hosts a second, URL-driven view (`/?view=schedule`, the Production Schedule — see
+[Home Digest](../app/(app)/CONTEXT.md)), which DOES get a breadcrumb ("← Back to Digest / Production
+Schedule"). That is why `getBreadcrumb()` resolves on pathname **+ query params**, not pathname alone.
 
 ## Mobile Navigation (below `sm`)
 Additive, mobile-only. At 375px the desktop breadcrumb (fixed `shrink-0` parts ~180px) can't fit the narrow left region without clipping/overflow (Audit 10). Fix:
@@ -18,16 +21,19 @@ Additive, mobile-only. At 375px the desktop breadcrumb (fixed `shrink-0` parts ~
 - The desktop breadcrumb block is wrapped in `hidden sm:flex` → shows **only at `sm`+** (desktop navbar unchanged above `sm`).
 - Below `sm`, a `sm:hidden` hamburger (`Menu` icon) `Button` in the left region opens a shadcn `Sheet` (`side="left"`), rendered by the module-level **`MobileNav`** component.
 - The sheet is a normal `bg-background` surface (readable nav, per the sheet glass convention) — NOT the dark navbar theme. The **BAR itself stays dark** (`bg-zinc-800 dark:bg-zinc-700`), only the slide-out panel is a normal surface.
-- **Header:** shows the current `getBreadcrumb(pathname).pageTitle` (fallback `"Dashboard"` for `/`), since the breadcrumb text is now hidden on mobile. Same title resolution the breadcrumb uses.
+- **Header:** shows the current `getBreadcrumb(pathname, searchParams).pageTitle` (fallback `"Dashboard"` for the bare `/`; `/?view=schedule` reads "Production Schedule"), since the breadcrumb text is now hidden on mobile. Same title resolution the breadcrumb uses.
 - **Body:** REUSES the same three constants the desktop Modules dropdown renders — `ICTC_INVENTORY` / `ICTC_MODULES` / `CENAPRO_MODULES` — plus the identical `PRIVILEGED_ROLES` conditional section (Sync Review · Review Queue · Admin Panel). **No duplicated link list** — single source of truth. The nesting (ICTC · Davao → indented Inventory sub-group → sibling modules → Cenapro · Cebu → privileged) mirrors the dropdown structure.
 - **Close-on-navigate:** each live row is a module-level **`MobileNavItem`** that wraps its `Link` in `SheetClose asChild`, so a tap closes the sheet AND navigates in one gesture. Disabled modules (e.g. Accounting) render as inert `text-muted-foreground/50` text. Rows are `min-h-11` (44px touch targets).
 - `MobileNavItem` is hoisted to module level (never defined during render) to satisfy the `react-hooks/static-components` lint rule.
 
 ## Breadcrumb Registry (`BREADCRUMB_REGISTRY` → `getBreadcrumb()`)
-The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname)` predicate (built via the `exact()` / `prefix()` helpers); the FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb()` just `.find()`s the first matching entry.
+The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname, params)` predicate — `params` is the current query string (a structural `QueryParams = { get(key): string | null }`, satisfied by both `URLSearchParams` and Next's `ReadonlyURLSearchParams`), consulted only by routes that host several URL-driven views. Most entries ignore it and are built via the `exact()` / `prefix()` helpers. The FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/?view=schedule` precedes the bare `/`, which deliberately has NO entry; `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb(pathname, params)` just `.find()`s the first matching entry.
+
+`Navbar` therefore calls `useSearchParams()` alongside `usePathname()`. It is safe without an extra `Suspense` boundary because the navbar is mounted via `dynamic(..., { ssr: false })` in `app-shell.tsx` — it never participates in prerender.
 
 | Match | Back Label | Page Title | Description |
 |------|-----------|------------|-------------|
+| `/` **+ `?view=schedule`** | Back to Digest | Production Schedule | Month plan vs actual — projected tons & Joseph's authoritative schedule |
 | `prefix('/edit/')` | Back to Inventory | Edit Discussion | — |
 | `prefix('/inventory/blocking')` | Back to Inventory | Blocking | Warehouse grid — block occupancy & balances |
 | `prefix('/inventory/rc-movement')` | Back to Inventory | Movement | Daily feed matrix — campaign-scoped day × block |
@@ -47,6 +53,8 @@ The old long if-chain was refactored into an **ordered registry array**. Each en
 | `exact('/settings')` | Back to Dashboard | Settings | Your profile and sign-out |
 | `exact('/admin')` | Back to Dashboard | Admin Panel | Manage users and invitations |
 | `exact('/review-queue')` | Back to Dashboard | Review Queue | Pre-extracted rows from daily reports awaiting approval |
+
+> **No `/production/schedule` entry:** that route is a `redirect()` to `/?view=schedule` (BUG-003 — the schedule moved into the digest world), so it never renders. The FIRST registry entry (`/` + `?view=schedule`) titles it instead.
 
 > **Removed (stale):** the 9 `/draft1`–`/draft6` + `/rcindraft1`–`/rcindraft3` entries (their route dirs no longer exist) were deleted from the registry.
 
@@ -104,7 +112,7 @@ Cenapro · Cebu               ← uppercase tenant label
 - `@/components/notification-bell` — `NotificationBell`
 - `@/components/providers/auth-context` — `useAuth()`, `UserRole`
 - `next-themes` — `useTheme()` for dark mode toggle
-- `next/navigation` — `usePathname()` (breadcrumb), `useRouter()` (sign-out redirect)
+- `next/navigation` — `usePathname()` + `useSearchParams()` (breadcrumb resolution), `useRouter()` (sign-out redirect)
 - shadcn: Avatar, Button, DropdownMenu (incl. Label/Separator/Item), Tooltip, **Sheet** (incl. `SheetClose`/`SheetTrigger`/`SheetContent`/`SheetHeader`/`SheetTitle`/`SheetDescription` — mobile nav)
 - `lucide-react` — `Menu` icon (mobile hamburger)
 
