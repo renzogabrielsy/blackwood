@@ -16,13 +16,13 @@ import {
 } from "recharts";
 import { Maximize2 } from "lucide-react";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { fmtKg, fmtPhpNumber } from "./format";
 import { ProductionHoursChart } from "./production-hours-chart";
@@ -68,12 +68,15 @@ function ChartCard({
   className,
 }: ChartCardProps) {
   // On phones the 220px full-width chart is legible but tight; a mobile-only
-  // "expand" button opens the SAME chart taller in a bottom sheet. Reusing the
+  // "expand" button opens the SAME chart taller in a centered modal. Reusing the
   // `children` element in two places is safe — a React element is an immutable
   // description, so recharts just instantiates a second ResponsiveContainer. The
-  // sheet chart only mounts while open (Radix unmounts closed content).
+  // modal chart only mounts while open (Radix unmounts closed content).
+  // A Dialog (not a bottom Sheet) because the content is ONE short fixed-height
+  // chart — a sheet hugged the bottom under a dimmed void. The trigger is already
+  // `sm:hidden`, so the swap is unconditional (no useMediaQuery needed).
   return (
-    <Sheet>
+    <Dialog>
       <div
         className={cn(
           "hover-lift flex flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70",
@@ -92,7 +95,7 @@ function ChartCard({
               <span className="text-[11px] text-muted-foreground">{subtitle}</span>
             )}
             {!empty && (
-              <SheetTrigger asChild>
+              <DialogTrigger asChild>
                 <button
                   type="button"
                   aria-label={`Expand ${title} chart`}
@@ -100,7 +103,7 @@ function ChartCard({
                 >
                   <Maximize2 className="size-3.5" />
                 </button>
-              </SheetTrigger>
+              </DialogTrigger>
             )}
           </div>
         </div>
@@ -115,19 +118,16 @@ function ChartCard({
       </div>
 
       {!empty && (
-        <SheetContent
-          side="bottom"
-          className="max-h-[90dvh] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
-        >
-          <SheetHeader className="px-4 pt-4">
-            <SheetTitle>{title}</SheetTitle>
-            {subtitle && <SheetDescription>{subtitle}</SheetDescription>}
-          </SheetHeader>
-          {legend && <div className="px-4 pb-1 pt-1">{legend}</div>}
-          <div className="h-[68dvh] w-full px-3 pb-2 pt-1">{children}</div>
-        </SheetContent>
+        <DialogContent className="max-h-[85dvh] gap-0 p-4">
+          <DialogHeader className="pb-2">
+            <DialogTitle>{title}</DialogTitle>
+            {subtitle && <DialogDescription>{subtitle}</DialogDescription>}
+          </DialogHeader>
+          {legend && <div className="pb-1">{legend}</div>}
+          <div className="h-[56dvh] w-full pt-1">{children}</div>
+        </DialogContent>
       )}
-    </Sheet>
+    </Dialog>
   );
 }
 

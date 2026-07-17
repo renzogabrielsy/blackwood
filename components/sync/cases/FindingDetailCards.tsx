@@ -172,7 +172,9 @@ function BlockDiffDetail({ d }: { d: BlockDiff }) {
     >
       {/* The two balances + the delta, side by side. */}
       <div className="mt-2 overflow-x-auto rounded border border-border bg-background/50">
-        <table className="w-full table-fixed border-collapse text-[11px]">
+        {/* Never crush, always scroll: 3 × 110 fixed = 330px + a 150px floor for the
+            flexible Where column → 480px. */}
+        <table className="w-full min-w-[480px] table-fixed border-collapse text-[11px]">
           <thead className="bg-muted/60 text-[10px] uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-2 py-1 text-left font-medium">Where</th>
@@ -300,7 +302,9 @@ function AttributionDiffDetail({ a }: { a: AttributionDiff }) {
       title={`${fmtKg(a.weight_kg)} kg on ${a.transaction_date}${destPart}`}
     >
       <div className="mt-2 overflow-x-auto rounded border border-border bg-background/50">
-        <table className="w-full table-fixed border-collapse text-[11px]">
+        {/* Never crush, always scroll: 92px fixed + floors for the three flexible
+            columns (Source 140 + Batch 130 + Block 90) → 452px. */}
+        <table className="w-full min-w-[452px] table-fixed border-collapse text-[11px]">
           <thead className="bg-muted/60 text-[10px] uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-2 py-1 text-left font-medium">Source</th>

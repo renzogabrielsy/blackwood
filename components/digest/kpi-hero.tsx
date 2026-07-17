@@ -15,12 +15,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { fmtByUnit, fmtDeltaPct } from "./format";
 import { STATE_CHIP, STATE_LABEL, STATE_RAIL } from "./status-tokens";
@@ -406,26 +406,27 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
         ))}
       </div>
 
-      {/* Bottom-sheet detail for the tapped KPI (phone only — never mounts a
-          trigger on desktop). Reuses the exact full KpiCard / StateCard. */}
-      <Sheet open={openKey !== null} onOpenChange={(o) => !o && setOpenKey(null)}>
-        <SheetContent
-          side="bottom"
-          className="max-h-[85dvh] gap-0 rounded-t-2xl pb-[max(1rem,env(safe-area-inset-bottom))]"
-        >
+      {/* Centered-modal detail for the tapped KPI (phone only — the triggering
+          MobileKpiCard grid is `sm:hidden`, so no useMediaQuery is needed). The
+          content is SHORT and fixed-height (one card), so a Dialog is correct: a
+          bottom sheet would hug the bottom under a dimmed void. Tall SCROLLING
+          content (the schedule full table) keeps its bottom sheet. Reuses the
+          exact full KpiCard / StateCard. */}
+      <Dialog open={openKey !== null} onOpenChange={(o) => !o && setOpenKey(null)}>
+        <DialogContent className="max-h-[85dvh] gap-0 overflow-y-auto p-4">
           {openKpi && openStatus && (
             <>
-              <SheetHeader className="px-4 pt-4">
-                <SheetTitle className="uppercase tracking-wide">
+              <DialogHeader className="pb-2">
+                <DialogTitle className="uppercase tracking-wide">
                   {openKpi.label}
-                </SheetTitle>
-                <SheetDescription>
+                </DialogTitle>
+                <DialogDescription>
                   {openStatus.state === "reported"
                     ? "Operational-day value, delta and 7-day trend."
                     : "This stream has no active value today — here's why."}
-                </SheetDescription>
-              </SheetHeader>
-              <div className="px-4 pt-1">
+                </DialogDescription>
+              </DialogHeader>
+              <div>
                 {openStatus.state === "reported" ? (
                   <KpiCard kpi={openKpi} />
                 ) : (
@@ -440,8 +441,8 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
               </div>
             </>
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

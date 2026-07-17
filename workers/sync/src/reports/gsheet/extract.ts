@@ -16,6 +16,7 @@
  */
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
 import { coerceFloat, coerceDate, roundHalfToEven } from "../../lib/norm.js";
+import { canonicalMonthName } from "../../lib/months.js";
 import {
   detectDeduction,
   isRecoveryRowDict,
@@ -338,7 +339,12 @@ export function extractRcOut(sheet: LoadedSheet): ExtractResult {
       }
     }
 
-    const productionBatch = coerceStr(col(2));
+    // production_batch: canonicalized to the full uppercase month name (BUG-005).
+    // The Sheet has always written full names, so this is a no-op on real data —
+    // it exists so an abbreviated cell ("JUL") can never re-introduce the split
+    // campaign key this column suffered from. An unrecognized value passes through
+    // verbatim (canonicalMonthName only rewrites known month tokens).
+    const productionBatch = canonicalMonthName(coerceStr(col(2)));
     const remarks = coerceStr(col(6));
     const blockLoc = coerceStr(col(7));
 

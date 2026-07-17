@@ -955,7 +955,7 @@ function WarehouseSection({ whseKey, selectedLocKey, onCellClick, statusFilter, 
       {/* ── Grid ── */}
       <div className="p-2 overflow-x-auto">
         <div
-          className={cn('grid blocking-grid-cols', isPrepared && 'max-w-[280px]')}
+          className={cn('grid blocking-grid-cols', isPrepared && 'max-w-[340px]')}
           style={
             {
               '--blocking-cols': whse.cols,

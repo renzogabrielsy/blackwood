@@ -14,6 +14,7 @@
  */
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
 import { coerceFloat, coerceDate } from "../../lib/norm.js";
+import { monthName } from "../../lib/months.js";
 
 // ---------------------------------------------------------------------------
 // PROPOSED DAILY REPORT — batch_code prefix conventions (extract_proposed_daily.py:48-69)
@@ -58,8 +59,8 @@ const FEED_LABEL_RE = /\bFEED(?:ING)?\b/;
 const WEIGHT_KG_MIN = 0;
 const WEIGHT_KG_MAX = 200_000; // extract_proposed_daily.py:74-75
 
-// %b three-letter month abbreviations for production_batch (Python strftime("%b").upper()).
-const MONTH_ABBR_B = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+// production_batch month names come from lib/months.ts (BUG-005) — the ONE canonical
+// source shared with the gsheet extractor, so the two rc_out writers cannot diverge.
 
 /** A calendar date decoded to Y/M/D, mirroring Python's `datetime.date`. */
 interface CalDate { year: number; month: number; day: number; }
@@ -329,11 +330,12 @@ function extractBlockSection(
     rcRemarks = remarks;
   }
 
-  // production_batch: %b abbreviation, with ONLY May→"MAY"/June→"JUNE" overrides
-  // (extract_proposed_daily.py:292-300).
-  let productionBatch = MONTH_ABBR_B[txnDate.month - 1];
-  if (txnDate.month === 5) productionBatch = "MAY";
-  else if (txnDate.month === 6) productionBatch = "JUNE";
+  // production_batch: canonical FULL uppercase month name for all 12 months
+  // (BUG-005 — see lib/months.ts and PORTING_DECISIONS "Post-port business-rule
+  // changes". Was a %b 3-letter abbreviation with May/June-only full-name
+  // overrides, which split campaigns into JUL-2026 vs JULY-2026. Fixed in
+  // lockstep with extract_proposed_daily.py:302-310.)
+  const productionBatch = monthName(txnDate.month);
 
   const confidence = Math.max(0.0, 1.0 - 0.1 * warnings.length);
 

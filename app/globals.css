@@ -504,7 +504,11 @@ input[type=number] {
 }
 @media (min-width: 640px) {
   .blocking-grid-cols {
-    grid-template-columns: 20px repeat(var(--blocking-cols), minmax(0, 1fr));
+    /* Never crush, always scroll: keep the tuned 104px floor from the phone
+       block as the track MINIMUM so cells fill when roomy (wide desktop is
+       unchanged in practice) but the wrapper's overflow-x-auto finally engages
+       when the viewport is tight (landscape iPhone, narrow splits). */
+    grid-template-columns: 20px repeat(var(--blocking-cols), minmax(104px, 1fr));
   }
 }
 

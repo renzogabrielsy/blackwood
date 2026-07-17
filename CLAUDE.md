@@ -222,6 +222,21 @@ All data tables must feel like dense spreadsheets:
 - **Currency (Accounting format):** `flex justify-between` — ₱ symbol pinned left, number pinned right
 - **Remarks:** Truncate with `max-w-[200px] truncate`, show full text via Tooltip or Popover on hover
 
+### "Never crush, always scroll"
+
+> A dense data table/grid must never compress cell content below its intrinsic minimum.
+> Give every `table-fixed` table (and every CSS grid of data cells) an explicit
+> **min-width equal to the sum of its column minimums**, wrap it in `overflow-x-auto`,
+> and let the wrapper scroll horizontally when the viewport is narrower. **Never rely on
+> a bare `w-full` + one `w-auto`/unset/`minmax(0,1fr)` column to absorb leftover space —
+> that column is the one that silently crushes.** Fill when roomy, scroll when tight.
+
+Reference implementations: `rc-movement-matrix.tsx` (`width:'max-content'` + full
+colgroup), `flecon-bags-view.tsx` (computed `minWidth = W_DATE + W_PARTICULAR +
+n×MIN_BAG_W`), and `schedule-table.tsx` (explicit `minWidthClass` prop, required of
+every caller). The CSS-grid form of the rule is `.blocking-grid-cols` in `globals.css`
+— `minmax(104px, 1fr)`, never `minmax(0, 1fr)`.
+
 ## Error Toasts (HARD RULE)
 
 Every error toast — and every inline error UI — MUST persist until the user manually dismisses it and MUST include a Copy button that copies the full error text to the clipboard.

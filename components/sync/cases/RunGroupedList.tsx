@@ -226,11 +226,14 @@ export function RunGroupedList({
 
                   {/* Per-run table */}
                   {rows.length > 0 && (
-                    <table className="mt-1 w-full table-fixed border-collapse text-xs">
+                    // Never crush, always scroll: 28 + 92 + 120 fixed = 240px + a
+                    // 220px floor for the flexible natural-key column → 460px.
+                    <div className="mt-1 overflow-x-auto">
+                    <table className="w-full min-w-[460px] table-fixed border-collapse text-xs">
                       <colgroup>
                         <col className="w-[28px]" />
                         <col className="w-[92px]" />
-                        <col />
+                        <col className="min-w-[220px]" />
                         <col className="w-[120px]" />
                       </colgroup>
                       <tbody>
@@ -313,6 +316,7 @@ export function RunGroupedList({
                         })}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
               )

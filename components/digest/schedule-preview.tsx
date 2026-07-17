@@ -46,7 +46,11 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
 
       {/* Tablet / desktop — full dense table inline (unchanged). */}
       <div className="hidden sm:block">
-        <ScheduleTable rows={rows} maxHeightClass="max-h-[340px]" />
+        <ScheduleTable
+          rows={rows}
+          maxHeightClass="max-h-[340px]"
+          minWidthClass="min-w-[820px]"
+        />
       </div>
 
       {/* Phone — condensed stacked list + tap-to-expand full table sheet. */}

@@ -46,7 +46,7 @@ function mkRow(over: Partial<ProposedRow>): ProposedRow {
     end_bal_kg: null,
     weight_kg: 1414,
     destination: "MAIN",
-    production_batch: "JUL",
+    production_batch: "JULY",
     remarks: null,
     operator_status: null,
     operator_remarks_raw: null,

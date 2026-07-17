@@ -512,7 +512,10 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                     onPaste={handleGridPaste}
                     onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setActiveCell(null); setIsEditing(false); } }}
                 >
-                    <table className="w-full table-fixed text-xs border-collapse relative">
+                    {/* Never crush, always scroll: every column is fixed and they sum to
+                        688px (28+80+120+80+80+70+70+90+50+20) — pin that as the floor so
+                        the wrapper scrolls sideways instead of compressing all ten. */}
+                    <table className="w-full min-w-[688px] table-fixed text-xs border-collapse relative">
                         <TableHeader className="bg-muted/90 backdrop-blur-sm sticky top-0 z-50 shadow-sm">
                             <TableRow className="hover:bg-transparent border-b border-foreground/20" style={{ height: '28px' }}>
                                 <TableHead className="w-[28px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10">#</TableHead>
