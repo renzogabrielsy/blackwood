@@ -535,13 +535,31 @@ export interface BlockReconciliation {
 }
 
 /**
- * The top-level `result.reconciliation` channel. Both members are OPTIONAL: a run may
- * carry the rc_out same-fact reconciliation, the RB blocking cross-check, both, or (on a
- * shadow-stage failure) neither. The collect* folds guard each with optional chaining.
+ * One gsheet close-scan outcome (app-side MIRROR of the worker's
+ * `lib/gsheetCloseScan.ts::BatchClose`). `matched:true` = a batch was flipped IN-USE→CLOSED
+ * from a Google Sheet RC OUT close remark (info); `matched:false` = the Sheet asserted CLOSED
+ * but no live batch matched the code (attention). NEVER a ₱/cost field.
+ */
+export interface BatchClose {
+  batch_code: string | null
+  location_ref: string | null
+  transaction_date: string | null
+  block_loc: string | null
+  source_row: number | null
+  matched: boolean
+}
+
+/**
+ * The top-level `result.reconciliation` channel. All members are OPTIONAL: a run may carry
+ * the rc_out same-fact reconciliation, the RB blocking cross-check, the gsheet batch
+ * close-scan, any combination, or (on a shadow-stage failure) none. The collect* folds guard
+ * each with optional chaining.
  */
 export interface ReconciliationChannel {
   rc_out?: TableReconciliation
   blocking?: BlockReconciliation
+  /** Batches closed this run from Google Sheet RC OUT close remarks (+ unmatched warnings). */
+  batch_closes?: BatchClose[]
 }
 
 // ============================================================

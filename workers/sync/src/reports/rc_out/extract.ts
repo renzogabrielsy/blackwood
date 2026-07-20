@@ -15,6 +15,7 @@
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
 import { coerceFloat, coerceDate } from "../../lib/norm.js";
 import { monthName } from "../../lib/months.js";
+import { CLOSING_PHRASES } from "../../lib/closingRemarks.js";
 
 // ---------------------------------------------------------------------------
 // PROPOSED DAILY REPORT — batch_code prefix conventions (extract_proposed_daily.py:48-69)
@@ -224,8 +225,11 @@ export interface ProposedRow {
 
 /** Pallet-scan sentinel set (extract_proposed_daily.py:236, upper-cased). */
 const PALLET_SENTINELS = new Set(["REMARKS", "DONE", "DONE FEEDING", "FOR FEEDING", "MC AVERAGE:", ""]);
-/** Closing phrases (extract_proposed_daily.py:279), exact match after strip+upper. */
-const CLOSING_PHRASES = new Set(["DONE", "DONE FEEDING", "CLOSED"]);
+// Closing phrases (extract_proposed_daily.py:279) now live in lib/closingRemarks.ts — the
+// ONE canonical set shared with the gsheet close-scan AND kept in lockstep with the SQL
+// `fn_is_close_remark`, so the three readers can't drift. Exact match after strip+upper.
+// (The shared set adds "FEEDING DONE" over the historical {DONE, DONE FEEDING, CLOSED};
+// no fixture exercises it, so parity is unchanged.)
 
 /**
  * extract_proposed_daily.py:199-332 extract_block_section.

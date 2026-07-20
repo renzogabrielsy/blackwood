@@ -311,6 +311,24 @@ export class DbClient {
     return { id: String(existing.id), batch_code: String(existing.batch_code), created: false };
   }
 
+  /**
+   * Flip a batch to CLOSED via the SECURITY DEFINER `fn_close_batch(uuid)` RPC (the ONE
+   * place the close write lives — service-role-only EXECUTE). Idempotent + monotonic: the
+   * function only updates a batch that is NOT already CLOSED and NEVER re-opens one. Used by
+   * the gsheet close-scan (workflows/runSync.ts) to close a batch whose "CLOSED" remark lives
+   * in the Google Sheet RC OUT tab, which the R4b cutover otherwise drops. Returns true when a
+   * row was actually flipped (was non-CLOSED), false when it was already CLOSED / not found.
+   */
+  async closeBatch(batchId: string): Promise<boolean> {
+    const { data, error } = await this.sb.rpc("fn_close_batch", { p_batch_id: batchId });
+    if (error) {
+      throw new Error(
+        `fn_close_batch RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return Boolean(data);
+  }
+
   // -- rc_out date-settlement ledger (2026-07-12) ---------------------------
   /**
    * All settled `transaction_date`s (ISO "YYYY-MM-DD" strings) as a Set, for O(1)
