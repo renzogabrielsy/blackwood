@@ -304,6 +304,44 @@ Surfaces still NOT covered (flagged by the implementing agent, not yet hit by a 
    `supabase db push` would misread history. Use MCP `apply_migration` (what the 2026-07-17
    index migration did) until this is reconciled.
 
+## BUG-011 — Block closure should be a RECONCILED field (gsheet ⇄ PROPOSED cross-check)
+**Status:** OPEN — **vision/direction from Renzo 2026-07-17**, phased. Phase 1 (foundation)
+shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M–L · **Severity:** medium
+
+- **Context:** a block closes when a feeding remark says CLOSED (DB trigger
+  `fn_process_blackwood_usage` → `fn_is_close_remark`). The close remarks live in BOTH the
+  gsheet RC_OUT tab and the PROPOSED daily report, but under the **R4b cutover** the gsheet
+  stopped writing `rc_out`, so gsheet close remarks were being DROPPED (that's the immediate
+  bug — C-12A/AUG-25-BLK2 marked CLOSED on the gsheet 2026-07-08, still IN-USE in the DB).
+- **Renzo's stated end-goal (verbatim):** *"I do eventually want gsheet and proposed daily
+  to work hand in hand in identifying which block is closed or active. Hence why I want it
+  to crosscheck."* → closure/active is just ONE MORE field in the platform's existing
+  multi-source reconciliation model (extract → reconcile → diff-case → arbitrate), exactly
+  like RC IN / RC OUT / Blocking already are.
+- **Phase 1 ✅ SHIPPED 2026-07-17** (migration `20260720032956_harden_batch_close_close_only`,
+  applied live; verified the 460 existing CLOSED batches were UNCHANGED — hardening only
+  prevents future reopen, never re-evaluates existing rows; worker 497 tests + parity 12/12).
+  C-12A/AUG-25-BLK2 confirmed staged to auto-close on the next sync (gsheet close-scan reads
+  the whole RC OUT tab, no date window, not settlement-filtered). **Requires a Fly worker
+  redeploy for the scan to run.** Details:
+  `CLOSING_PHRASES` helper used by BOTH the gsheet close-scan and the PROPOSED extractor;
+  `fn_close_batch(batch_id)` as the single close primitive; the gsheet RC_OUT close-scan
+  writes `batches.status` ONLY (never rc_out — R4b sole-writer preserved); trigger hardened
+  close-only + exact-match. Result: EITHER witness can close a block (monotonic, uncontested
+  close = just close). These are the reusable primitives Phase 2 sits on.
+- **Phase 2 (THE CROSS-CHECK — target, NOT yet built):** make "closed?" a reconciled field:
+  - both witnesses agree closed → close, corroborated (high confidence);
+  - one closed, other silent → close, note the witness (Phase-1 behavior);
+  - **genuine conflict** (e.g. gsheet marks CLOSED on 7/8 but PROPOSED shows the block STILL
+    FED after that date) → NOT a close — a **disagreement → a Sync Review diff case** for
+    human arbitration, identical to how a value diff is handled today. Reuses the
+    adjudicator/case/Sync-Review machinery (see `SYNC_RECONCILIATION_MODEL.md`).
+  - Extends the existing Blocking per-block + grand-total cross-check to carry a
+    closed/active status column, so the operator sees agree/disagree at a glance.
+- **Why phased, not all-at-once:** Phase 1 unblocks the real dropped-signal today; Phase 2
+  is a reconciliation-model addition that should be designed against
+  `SYNC_RECONCILIATION_MODEL.md`, not bolted on.
+
 ---
 
 ## Fixed entries

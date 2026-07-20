@@ -77,6 +77,8 @@ const SHORT_KIND: Record<string, string> = {
   low_confidence: 'low confidence',
   unresolved_shift: 'unmatched shift',
   unresolved_batch_id: 'unknown batch',
+  batch_closed: 'closed',
+  batch_close_unmatched: 'close unmatched',
 }
 
 function fmtNumber(n: number): string {

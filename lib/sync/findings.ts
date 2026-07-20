@@ -20,6 +20,7 @@
 import type {
   AttributionDiff,
   AutoCreatedBatch,
+  BatchClose,
   BlockDiff,
   HeldRow,
   RcOutSource,
@@ -32,6 +33,7 @@ import type {
 import {
   collectAttributionDiffs,
   collectAutoCreatedBatches,
+  collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
   collectSingleSourceOverdue,
@@ -415,6 +417,56 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
   }
 }
 
+/** A batch closed (or a close asserted-but-unmatched) from a Google Sheet RC OUT close
+ *  remark (the R4b close-scan). matched → info "closed automatically"; unmatched →
+ *  attention "couldn't find the batch". */
+function fromBatchClose(bc: BatchClose): RunFinding {
+  const locParts = [bc.transaction_date, bc.block_loc].filter(Boolean) as string[]
+  const location = locParts.length ? locParts.join(' · ') : (bc.source_row != null ? `row ${bc.source_row}` : '—')
+  const code = bc.batch_code ?? '(unknown)'
+
+  if (bc.matched) {
+    return {
+      key: `batch_closed:${bc.batch_code}:${bc.transaction_date ?? ''}:${bc.block_loc ?? ''}`,
+      kind: 'batch_closed',
+      kindLabel: 'Batch closed automatically',
+      source: 'Google Sheet — RC OUT',
+      title: `Batch "${code}" closed — feeding marked done on the Sheet`,
+      location,
+      data: {
+        batch_code: bc.batch_code,
+        location_ref: bc.location_ref,
+        transaction_date: bc.transaction_date,
+        block_loc: bc.block_loc,
+        source_row: bc.source_row,
+      },
+      reason:
+        `The Google Sheet's RC OUT tab marked this batch closed, so the sync flipped its status ` +
+        `to CLOSED — a status-only change, nothing to do here.`,
+      severity: 'info',
+    }
+  }
+
+  return {
+    key: `batch_close_unmatched:${bc.batch_code}:${bc.transaction_date ?? ''}:${bc.block_loc ?? ''}`,
+    kind: 'batch_close_unmatched',
+    kindLabel: 'Close remark with no matching batch',
+    source: 'Google Sheet — RC OUT',
+    title: `Sheet marked "${code}" closed, but no such batch exists`,
+    location,
+    data: {
+      batch_code: bc.batch_code,
+      transaction_date: bc.transaction_date,
+      block_loc: bc.block_loc,
+      source_row: bc.source_row,
+    },
+    reason:
+      `The Sheet asked to close this batch, but its code doesn't match any batch in the ` +
+      `database — nothing was closed. Check the batch code on that row.`,
+    severity: 'attention',
+  }
+}
+
 // ============================================================================
 // The public API.
 // ============================================================================
@@ -453,6 +505,10 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   for (const { reportType, note } of collectAutoCreatedBatches(result)) {
     out.push(fromAutoCreatedBatch(reportType, note))
   }
+
+  // 7. Batches closed from a Google Sheet RC OUT close remark (R4b close-scan) — info for
+  //    an actual close, attention for a close asserted against an unknown batch.
+  for (const bc of collectBatchCloses(result)) out.push(fromBatchClose(bc))
 
   return out
 }

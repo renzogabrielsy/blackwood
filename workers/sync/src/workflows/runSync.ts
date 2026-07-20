@@ -69,6 +69,7 @@ import {
   type RecordExistsFn,
 } from "./creationRaceHolds.js";
 import { refreshProductionSchedule } from "../reports/prodSchedule/refresh.js";
+import { planGsheetCloses, toChannelBatchCloses, type BatchClose, type BatchDirEntry } from "../lib/gsheetCloseScan.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -277,10 +278,30 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // whole step is wrapped so any throw is a logged warning and the sync continues.
   await DBOS.runStep(() => refreshProdSchedule(runId), { name: "refresh:prod_schedule" });
 
-  // Merge the two orthogonal reconciliation channels (either may be absent).
+  // ── Stage 3d: gsheet batch close-scan — CLOSE-ONLY, monotonic, additive. Reads the
+  // Google Sheet RC OUT close remarks ("CLOSED"/"DONE"/…) and flips the named batch
+  // IN-USE→CLOSED via `fn_close_batch` (a batches.status-only write — NEVER writes rc_out,
+  // so the R4b cutover + PROPOSED-is-sole-rc_out-writer invariant hold). This closes the
+  // structural gap where, under the cutover, a "CLOSED" typed into the Sheet's RC OUT tab
+  // never reaches the DB close trigger. Runs AFTER the writers (Stage 2b) so a same-run
+  // PROPOSED MAIN feeding can't reopen what we just closed. A close is a machine-verifiable
+  // MONOTONIC state flip (the Sheet says CLOSED, nothing contradicts it), NOT a source
+  // disagreement — so it is a direct write, not a reconciliation diff case. Guarded
+  // end-to-end (any failure → empty list, never fails the run); a no-op on dryRun.
+  const batchCloses = await DBOS.runStep(
+    () => closeBatchesFromGsheet(runId, dryRun),
+    { name: "close:gsheet_batches" },
+  );
+
+  // Merge the orthogonal reconciliation channels (any may be absent).
+  const hasCloses = batchCloses.length > 0;
   const reconciliation: ReconciliationChannel | undefined =
-    rcOutRecon || blockingRecon
-      ? { ...(rcOutRecon ?? {}), ...(blockingRecon ? { blocking: blockingRecon } : {}) }
+    rcOutRecon || blockingRecon || hasCloses
+      ? {
+          ...(rcOutRecon ?? {}),
+          ...(blockingRecon ? { blocking: blockingRecon } : {}),
+          ...(hasCloses ? { batch_closes: batchCloses } : {}),
+        }
       : undefined;
 
   // ── Aggregate: any report failing either phase → the run is "partial".
@@ -593,6 +614,118 @@ async function reconcileRcOutShadow(
   } catch {
     // Shadow observer: a failure here must never fail the run or change a write.
     return null;
+  }
+}
+
+/**
+ * Stage 3d STEP — the gsheet batch close-scan. Re-downloads the Sheet, extracts its RC OUT
+ * rows, and closes each batch whose row carries a closing remark ("CLOSED"/"DONE"/…) via
+ * `fn_close_batch` — a `batches.status`-only write (the ONE close entry point). This is how
+ * a "CLOSED" typed into the Sheet reaches the DB under the R4b cutover: gsheet no longer
+ * writes rc_out, so the DB close trigger never sees the remark, and the batch would stay
+ * IN-USE forever. CLOSE-ONLY + MONOTONIC — `fn_close_batch` never re-opens, and the scan
+ * only flips batches that are not already CLOSED. A close is a machine-verifiable state flip
+ * (the Sheet says CLOSED, nothing contradicts it), so it writes directly and is NOT a
+ * reconciliation diff case. Returns the surfaced `BatchClose[]` (actually-flipped closes +
+ * unmatched warnings; already-closed no-ops are silent) for the run result / findings.
+ * Guarded end-to-end — any failure returns [] and never fails the run; a dry run writes
+ * nothing and returns [].
+ */
+async function closeBatchesFromGsheet(runId: string, dryRun: boolean): Promise<BatchClose[]> {
+  if (dryRun) return [];
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+
+    // Re-download + extract the Sheet's RC OUT rows (self-download; no Storage copy). A
+    // network failure just drops the scan for this run.
+    let gsheetRcOut: ReturnType<typeof extractGsheet>["rc_out"]["rows"] = [];
+    try {
+      const buf = await downloadGsheet(globalThis.fetch as unknown as FetchLike, GSHEET_EXPORT_URL);
+      gsheetRcOut = extractGsheet(await loadWorkbook(buf)).rc_out.rows;
+    } catch {
+      return [];
+    }
+    if (!gsheetRcOut.length) return [];
+
+    // Live batch directory keyed by batch_code → {id, status, location_ref}.
+    const batchByCode: Record<string, BatchDirEntry> = {};
+    try {
+      const rows = await db.readRows("batches", {
+        columns: ["batch_code", "id", "status", "location_ref"],
+        sinceColumn: null,
+      });
+      for (const b of rows) {
+        const code = b.batch_code;
+        if (code) {
+          batchByCode[String(code)] = {
+            id: String(b.id),
+            status: String(b.status ?? ""),
+            location_ref: b.location_ref == null ? null : String(b.location_ref),
+          };
+        }
+      }
+    } catch {
+      return []; // no directory → cannot safely resolve → skip (fail-safe)
+    }
+
+    const plan = planGsheetCloses(gsheetRcOut, batchByCode);
+    if (!plan.closes.length && !plan.unmatched.length) return [];
+
+    // Apply the closes (batches.status-only, monotonic) + audit each. Per-close guarded so a
+    // single failure never aborts the rest or the run.
+    const applied: typeof plan.closes = [];
+    for (const c of plan.closes) {
+      try {
+        const flipped = await db.closeBatch(c.batch_id);
+        if (!flipped) continue; // already CLOSED by the time we got here — nothing to report
+        applied.push(c);
+        try {
+          await db.writeIngestionAudit({
+            tableName: "batches",
+            recordId: c.batch_id,
+            operation: "UPDATE",
+            comment:
+              `provenance=gsheet close-scan | Closed batch ${c.batch_code} from a Google Sheet ` +
+              `RC OUT close remark (block ${c.block_loc ?? "?"}, ${c.transaction_date ?? "?"}, row ` +
+              `${c.source_row ?? "?"}). batches.status-only write — rc_out untouched (R4b cutover).`,
+            diff: { status: { new: "CLOSED" } },
+          });
+        } catch {
+          /* audit is provenance-only; a failure must not fail the close */
+        }
+        await emit(
+          "reconcile",
+          `Closed batch ${c.batch_code} — feeding marked done on the Sheet` +
+            (c.block_loc ? ` (block ${c.block_loc})` : ""),
+          97,
+          undefined,
+          "info",
+        );
+      } catch {
+        /* one close failing must not abort the scan */
+      }
+    }
+
+    for (const u of plan.unmatched) {
+      await emit(
+        "reconcile",
+        `Sheet marked ${u.requested_code ?? "a block"} CLOSED but no matching batch exists — skipped.`,
+        97,
+        `transaction_date=${u.transaction_date ?? "?"} block=${u.block_loc ?? "?"} row=${u.source_row ?? "?"}`,
+        "warn",
+      );
+    }
+
+    // Surface only ACTUALLY-flipped closes + unmatched warnings (already-closed no-ops stay
+    // silent) on the reconciliation channel.
+    return toChannelBatchCloses({
+      closes: applied,
+      alreadyClosed: plan.alreadyClosed,
+      unmatched: plan.unmatched,
+    });
+  } catch {
+    return [];
   }
 }
 

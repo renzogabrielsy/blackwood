@@ -27,6 +27,7 @@ import type { BatchLookup } from "../reports/rc_out/classify.js";
 import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
 import { isKnownPatioAlias, normalizeProposedBlock } from "./blockAliases.js";
 import type { BlockReconciliation } from "./blockBalance.js";
+import type { BatchClose } from "../lib/gsheetCloseScan.js";
 import {
   LAG_DAYS,
   type Agreement,
@@ -100,10 +101,13 @@ export interface RcOutReconciliation {
 /** The top-level reconciliation channel on the run result (extensible per table).
  *  `rc_out` is the same-fact rc_out reconciliation (R1–R4b). `blocking` is the RB
  *  block-balance cross-check (`./blockBalance.ts`) — an ORTHOGONAL, read-only net.
- *  Both are OPTIONAL: a run may carry either, both, or (on failure) neither. */
+ *  `batch_closes` is the gsheet close-scan outcome (`../lib/gsheetCloseScan.ts`) — batches
+ *  flipped IN-USE→CLOSED from a Google Sheet RC OUT close remark the R4b cutover would
+ *  drop. All are OPTIONAL: a run may carry any, all, or (on failure) none. */
 export interface ReconciliationChannel {
   rc_out?: RcOutReconciliation;
   blocking?: BlockReconciliation;
+  batch_closes?: BatchClose[];
 }
 
 const MAIN = "MAIN";

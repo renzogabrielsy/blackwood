@@ -11,6 +11,7 @@
 import type {
   AttributionDiff,
   AutoCreatedBatch,
+  BatchClose,
   BlockDiff,
   HeldRow,
   SingleSourceOverdue,
@@ -105,6 +106,15 @@ export function collectSingleSourceOverdue(result: SyncRunResult): SingleSourceO
  */
 export function collectBlockDiffs(result: SyncRunResult): BlockDiff[] {
   return result.reconciliation?.blocking?.blockDiffs ?? []
+}
+
+/**
+ * Flatten the gsheet close-scan outcomes (batches closed from a Google Sheet RC OUT close
+ * remark + unmatched warnings). Lives only in `result.reconciliation.batch_closes` (optional
+ * additive field — absent on runs that closed nothing or predate the close-scan). Pure.
+ */
+export function collectBatchCloses(result: SyncRunResult): BatchClose[] {
+  return result.reconciliation?.batch_closes ?? []
 }
 
 /**
