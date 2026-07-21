@@ -202,7 +202,7 @@ Context: 2026-07-17 we re-enabled `viewport-fit=cover` (required — without it 
 PILLARBOXES the app in landscape, black bars both sides) and rebuilt safe-area handling
 **centrally**: `app/globals.css` defines `.safe-t/.safe-b/.safe-l/.safe-r/.safe-x`
 (deliberately UNLAYERED so they outrank Tailwind's cascade layer — a caller's `p-0` would
-otherwise silently tw-merge away a `pt-[env(...)]`), and only the shell + shared
+otherwise silently tw-merge away a `pt-`&#91;`env(…)`&#93; class), and only the shell + shared
 primitives apply them. Contract: **backgrounds paint edge-to-edge, content is padded
 clear; never re-apply `env()` at a call site — extend the primitive.**
 

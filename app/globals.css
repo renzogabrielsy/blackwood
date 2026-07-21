@@ -2,6 +2,16 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* Exclude markdown docs from Tailwind's automatic content scanning. Project docs
+   (CONTEXT.md, BUG_LEDGER.md, TIMELINE.md, etc.) are never rendered with Tailwind,
+   but v4 scans them for class candidates by default — and a doc that quotes an
+   arbitrary-value class with invalid inner CSS (e.g. the literal `pt-[env(...)]`
+   placeholder in BUG_LEDGER.md) makes Tailwind emit `padding-top: env(...)`, which
+   Turbopack's strict CSS parser rejects → every dev route 500s. Scanning docs buys
+   us nothing and only risks this, so opt them all out. The glob is relative to THIS
+   file (app/), so `../**` reaches the whole repo (docs/, root, and app/ itself). */
+@source not "../**/*.md";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
