@@ -61,6 +61,18 @@ export interface LedgerWindow {
      * window is somehow empty it re-seeds from `latest`.
      */
     refreshNewest: () => Promise<void>;
+    /**
+     * Re-pulls the CURRENTLY-loaded window fresh from the server, keeping the viewport
+     * near the current top. Used AFTER a Save that touched COMMITTED rows (inline edits
+     * / deletes) — those can live on ANY loaded page, and a recv_date edit can even
+     * relocate a row in canonical order, so an append-only `refreshNewest` isn't enough.
+     * Re-seeds from the current top row's period anchor (falls back to `latest`), then
+     * re-paginates forward to restore the prior loaded depth. Crash-safe: it's a fresh
+     * server read, never an in-memory merge of stale overlays, so a relocated/vanished
+     * row simply lands in its new spot (or falls outside the window) without corrupting
+     * the pager. Re-seeds from `latest` if the window is empty.
+     */
+    refreshWindow: () => Promise<void>;
 }
 
 function cursorFrom(row: ProductionEventRow): LedgerCursor {
@@ -227,6 +239,78 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
         }
     }, [reset]);
 
+    const refreshWindow = React.useCallback(async (): Promise<void> => {
+        const seed = rowsRef.current;
+        if (seed.length === 0) {
+            await reset({ kind: 'latest' });
+            return;
+        }
+        // Anchor the fresh read on the current top row's period so the viewport stays
+        // near where the operator was editing (rather than teleporting to global latest).
+        const top = seed[0];
+        const targetCount = seed.length;
+        const anchor: LedgerAnchor =
+            top.batch && top.batch_year != null
+                ? { kind: 'period', batch_year: Number(top.batch_year), batch: top.batch }
+                : { kind: 'latest' };
+
+        // Block both edges while re-seeding.
+        loadingOlderRef.current = true;
+        loadingNewerRef.current = true;
+        setLoadingOlder(true);
+        setLoadingNewer(true);
+        try {
+            const firstPage = await fetchLedgerPage({ mode: 'anchor', anchor });
+            if (firstPage.error) {
+                errorToast(firstPage.error);
+                return;
+            }
+            const seen = new Set<string>();
+            const all: ProductionEventRow[] = [];
+            for (const r of firstPage.rows) {
+                const id = r.id ?? '';
+                if (!seen.has(id)) {
+                    seen.add(id);
+                    all.push(r);
+                }
+            }
+            const hasOlderLocal = firstPage.hasOlder;
+            let hasNewerLocal = firstPage.hasNewer;
+
+            // Restore the prior loaded depth so scrolling isn't stuck on a single page.
+            // Bounded (guard) so a pathological run can never spin forever.
+            for (let guard = 0; guard < 50 && all.length < targetCount && hasNewerLocal; guard++) {
+                const page = await fetchLedgerPage({
+                    mode: 'cursor',
+                    cursor: cursorFrom(all[all.length - 1]),
+                    direction: 'newer',
+                });
+                if (page.error) {
+                    errorToast(page.error);
+                    break;
+                }
+                for (const r of page.rows) {
+                    const id = r.id ?? '';
+                    if (!seen.has(id)) {
+                        seen.add(id);
+                        all.push(r);
+                    }
+                }
+                hasNewerLocal = page.hasNewer;
+            }
+
+            setRows(all);
+            setFirstItemIndex(FIRST_ITEM_BASE);
+            setHasOlder(hasOlderLocal);
+            setHasNewer(hasNewerLocal);
+        } finally {
+            loadingOlderRef.current = false;
+            loadingNewerRef.current = false;
+            setLoadingOlder(false);
+            setLoadingNewer(false);
+        }
+    }, [reset]);
+
     return {
         rows,
         firstItemIndex,
@@ -239,5 +323,6 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
         fetchNewer,
         reset,
         refreshNewest,
+        refreshWindow,
     };
 }

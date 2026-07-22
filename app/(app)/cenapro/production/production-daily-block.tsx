@@ -50,6 +50,7 @@ import {
 } from '@/lib/hooks/use-grid-keyboard-nav';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod } from './actions';
+import { type PlantView, SOURCE_SETS } from './production-sources';
 
 // ─── Daily Block view (EDITABLE PROD-2026 pivot, per production plant) ──────────────
 // Rebuilds the boss's "PROD 2026" spreadsheet from the SAME period rows the editable
@@ -81,10 +82,13 @@ import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod 
 // READ-ONLY layout intact: real-row merges/rowSpan, gridlines, day box, slim footer, badges,
 // fixed columns, Excel widths, frozen panes, 2-tier header. Section-level motion only.
 
-export type PlantView = 'W6' | 'W7';
+// `PlantView` + `SOURCE_SETS` now live in the pure `./production-sources` module (so the
+// SERVER day-window action can import the source filter without crossing a client
+// boundary). Re-exported here for back-compat with existing importers of this component.
+export type { PlantView };
 
-const EQUIPMENT_CODES = [...CRUSHER_CODES, ...KILN_CODES] as const;
-type EquipmentCode = (typeof EQUIPMENT_CODES)[number];
+export const EQUIPMENT_CODES = [...CRUSHER_CODES, ...KILN_CODES] as const;
+export type EquipmentCode = (typeof EQUIPMENT_CODES)[number];
 const SHIFT_ORDER = SHIFT_CODES; // ['M', 'E', 'N']
 const EDIT_COLUMNS: readonly EditColumn[] = [...EQUIPMENT_CODES, 'BAGGING'];
 
@@ -146,8 +150,8 @@ function findColInAdjacentRow(
 }
 
 // An editable column = one equipment code or the Bagging (FLEC) bucket.
-const BAGGING = 'BAGGING' as const;
-type EditColumn = EquipmentCode | typeof BAGGING;
+export const BAGGING = 'BAGGING' as const;
+export type EditColumn = EquipmentCode | typeof BAGGING;
 
 // Column → (disposition_kind, partner_equipment_code) — the write-back contract §3.
 function columnDisposition(col: EditColumn): { disposition_kind: string; partner_equipment_code: string } {
@@ -158,13 +162,13 @@ function columnDisposition(col: EditColumn): { disposition_kind: string; partner
 
 // Minimum DATA rows per day (TUNABLE) — a sparse day is padded with blank filler input slots
 // up to this count. PLUS there is ALWAYS at least one trailing empty slot beyond it.
-const MIN_DAY_ROWS = 6;
+// EXPORTED so the endless read-only pivots (production-endless-pivots.tsx) pad each day-block
+// to the SAME floor — one shared constant so the focus + endless views can never drift.
+export const MIN_DAY_ROWS = 6;
 
-// The allowed source set + display ORDER per plant variant. FLEC/DVO are absent from BOTH.
-const SOURCE_SETS: Record<PlantView, readonly string[]> = {
-    W6: ['TNK 1', 'TNK 2', 'TNK 3', 'TNK 4', 'W6'],
-    W7: ['W7'],
-};
+// The allowed source set + display ORDER per plant variant lives in `./production-sources`
+// (imported above) — FLEC/DVO are absent from BOTH. Kept in a pure module so the server
+// day-window action can share the exact same filter.
 
 interface ProductionDailyBlockProps {
     /** The same period-scoped event rows the ledger holds (typed DB fields). */
@@ -178,12 +182,12 @@ interface ProductionDailyBlockProps {
 }
 
 // ─── Pivot data model ──────────────────────────────────────────────────────────────
-interface CellSlot {
+export interface CellSlot {
     weight: number;
     eventIds: string[];
 }
 
-type CellMap = Record<EditColumn, CellSlot>;
+export type CellMap = Record<EditColumn, CellSlot>;
 
 function emptyCellMap(): CellMap {
     const m = {} as CellMap;
@@ -192,7 +196,7 @@ function emptyCellMap(): CellMap {
     return m;
 }
 
-interface RecvRow {
+export interface RecvRow {
     recvDate: string;
     prodDate: string;
     shift: string;
@@ -203,37 +207,37 @@ interface RecvRow {
     total: number;
 }
 
-interface SourceBlock {
+export interface SourceBlock {
     source: string;
     recvRows: RecvRow[];
 }
 
-interface GradeBlock {
+export interface GradeBlock {
     grade: string;
     sources: SourceBlock[];
     leafCount: number;
 }
 
-interface ShiftBlock {
+export interface ShiftBlock {
     shift: string;
     grades: GradeBlock[];
 }
 
-interface DailyTotals {
+export interface DailyTotals {
     equip: Record<EquipmentCode, number>;
     bagging: number;
     subTotal: number;
     total: number;
 }
 
-interface DateGroup {
+export interface DateGroup {
     date: string;
     shifts: ShiftBlock[];
     daily: DailyTotals;
 }
 
 // Thousands-separated; blank when 0/empty.
-function fmt(n: number): string {
+export function fmt(n: number): string {
     if (!n) return '';
     return Math.round(n).toLocaleString('en-US');
 }
@@ -245,13 +249,13 @@ function parseWeight(raw: string): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
-function formatDayLabel(date: string): string {
+export function formatDayLabel(date: string): string {
     const d = parseISO(date);
     if (!isValidDate(d)) return date;
     return formatDate(d, 'EEE · MMM d');
 }
 
-function formatRecvLabel(date: string): string {
+export function formatRecvLabel(date: string): string {
     const d = parseISO(date);
     if (!isValidDate(d)) return date;
     return formatDate(d, 'MMM d');
@@ -259,7 +263,7 @@ function formatRecvLabel(date: string): string {
 
 // Pivot flat rows → prod_date → shift → grade → source → recv_date, recording per-column
 // event ids (for edit/delete targeting + collision lock). Pure.
-function buildDateGroups(
+export function buildDateGroups(
     rows: ProductionEventRow[],
     plantView: PlantView,
 ): { groups: DateGroup[] } {
@@ -367,46 +371,49 @@ function buildDateGroups(
 }
 
 // ─── Column geometry (matched to the boss's PROD 2026 sheet) ───────────────────────
-const W_DATE = 108;
-const W_SHIFT = 48;
-const W_GRADE = 100;
-const W_SOURCE = 140;
-const W_RECV = 80;
-const LEFT_DATE = 0;
-const LEFT_SHIFT = W_DATE;
-const LEFT_GRADE = W_DATE + W_SHIFT;
-const LEFT_SOURCE = W_DATE + W_SHIFT + W_GRADE;
-const LEFT_RECV = W_DATE + W_SHIFT + W_GRADE + W_SOURCE;
-const W_EQUIP = 56;
-const W_BAG = 66;
-const W_SUB = 70;
-const W_TOTAL = 84;
-const IDENTITY_WIDTH = W_DATE + W_SHIFT + W_GRADE + W_SOURCE + W_RECV;
+// Exported so the ENDLESS read-only pivot renderer (production-endless-pivots.tsx) shares
+// the EXACT same widths / frozen offsets — its day-blocks must line up under one shared
+// 2-tier header. Any width change here propagates to both variants automatically.
+export const W_DATE = 108;
+export const W_SHIFT = 48;
+export const W_GRADE = 100;
+export const W_SOURCE = 140;
+export const W_RECV = 80;
+export const LEFT_DATE = 0;
+export const LEFT_SHIFT = W_DATE;
+export const LEFT_GRADE = W_DATE + W_SHIFT;
+export const LEFT_SOURCE = W_DATE + W_SHIFT + W_GRADE;
+export const LEFT_RECV = W_DATE + W_SHIFT + W_GRADE + W_SOURCE;
+export const W_EQUIP = 56;
+export const W_BAG = 66;
+export const W_SUB = 70;
+export const W_TOTAL = 84;
+export const IDENTITY_WIDTH = W_DATE + W_SHIFT + W_GRADE + W_SOURCE + W_RECV;
 
-const ACTIVE_EQUIP: readonly EquipmentCode[] = EQUIPMENT_CODES;
-const CRUSHER_COUNT = CRUSHER_CODES.length;
+export const ACTIVE_EQUIP: readonly EquipmentCode[] = EQUIPMENT_CODES;
+export const CRUSHER_COUNT = CRUSHER_CODES.length;
 
 // ─── Color systems ──────────────────────────────────────────────────────────────────
-const SHIFT_LETTER: Record<string, string> = {
+export const SHIFT_LETTER: Record<string, string> = {
     M: 'text-amber-600 dark:text-amber-400',
     E: 'text-violet-600 dark:text-violet-400',
     N: 'text-indigo-600 dark:text-indigo-400',
 };
-const SHIFT_LABEL: Record<string, string> = { M: 'Morning', E: 'Evening', N: 'Night' };
+export const SHIFT_LABEL: Record<string, string> = { M: 'Morning', E: 'Evening', N: 'Night' };
 
-const GRADE_CHIP: Record<string, string> = {
+export const GRADE_CHIP: Record<string, string> = {
     '3X50': 'bg-sky-500/15 text-sky-700 ring-sky-500/30 dark:text-sky-300',
     '2X6': 'bg-teal-500/15 text-teal-700 ring-teal-500/30 dark:text-teal-300',
     '3.5': 'bg-amber-500/15 text-amber-700 ring-amber-500/30 dark:text-amber-300',
     '4X8': 'bg-rose-500/15 text-rose-700 ring-rose-500/30 dark:text-rose-300',
 };
 
-const pillBase = 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold leading-none ring-1 ring-inset';
+export const pillBase = 'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold leading-none ring-1 ring-inset';
 
 // ─── Border tokens (spreadsheet feel) ───────────────────────────────────────────────
-const GRID = 'border-b border-r border-border';
-const GROUP = 'border-l-2 border-l-border';
-const BOX = 'border-border';
+export const GRID = 'border-b border-r border-border';
+export const GROUP = 'border-l-2 border-l-border';
+export const BOX = 'border-border';
 
 // Active-cell highlight — MATCHES the production ledger's selected-cell look
 // (`ring-2 ring-primary ring-inset`). An INSET ring takes NO layout space (it's a
@@ -423,8 +430,8 @@ const ACTIVE_RING = 'z-20 ring-2 ring-primary ring-inset';
 // Applied to the <tr> (`ROW_H`) so no row is taller than another. Cells use vertical
 // padding only via the shared CELL_PAD so the editing input (which matches the static
 // metrics exactly) can never grow the row.
-const ROW_H = 'h-7'; // 28px — the single canonical row height
-const CELL_PAD = 'px-1.5 py-0.5';
+export const ROW_H = 'h-7'; // 28px — the single canonical row height
+export const CELL_PAD = 'px-1.5 py-0.5';
 
 // `EDIT_INPUT` (the canonical inline-edit input class — static cell + EditInput share it so
 // switching to edit changes ONLY the caret, never the row height) is now the single source

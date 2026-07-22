@@ -2,10 +2,12 @@ import {
     fetchProductionEvents,
     fetchCenaproPeriods,
     fetchLedgerPage,
+    fetchDailyPivotWindow,
     type LedgerAnchor,
 } from './actions';
 import { ProductionView } from './production-view';
 import { ProductionEndlessSheet } from './production-endless-sheet';
+import { ProductionEndlessPivots } from './production-endless-pivots';
 import { parseScope, parseViewMode, plantViewOf } from './ledger-url';
 
 // Server component — the Cenapro production ledger is governed by TWO orthogonal URL
@@ -18,9 +20,8 @@ import { parseScope, parseViewMode, plantViewOf } from './ledger-url';
 //
 // Routing (six combinations, no dead-ends):
 //   1. endless + ledger        → the endless sheet (server-prefetched anchored window).
-//   2. endless + daily-w6/w7   → Phase-1 fallback: the month-scoped daily block (option
-//      (b), "transparently fall back to focus rendering") + a courtesy hint. Phase 2 will
-//      replace this with the true day-windowed endless pivot.
+//   2. endless + daily-w6/w7   → the endless DAY-WINDOWED PIVOT (Phase 2B): server-prefetch
+//      the first anchored day-window, render the virtualized day-blocks. Read-only.
 //   3. focus + any view        → the existing month-scoped, EDITABLE ProductionView
 //      (which itself switches ledger/W6/W7 on `?view=`). Unchanged behavior inside focus.
 //
@@ -84,11 +85,42 @@ export default async function CenaproProductionPage({
         );
     }
 
-    // ── Everything else → the month-scoped ProductionView. This serves FOCUS (any view)
-    // AND the endless + daily-w6/w7 fallback (Phase 1). The grid's own toolbar carries the
-    // view switcher + scope toggle, so the axis framework stays reachable here too. ─────
+    // ── endless + daily-w6/w7 → the endless DAY-WINDOWED PIVOT. Anchor-first: prefetch the
+    // FIRST day-window server-side (already anchored at the period's first day / newest
+    // days), then render the virtualized day-blocks. Keyed by the anchor so a dropdown jump
+    // forces a clean remount (fresh window + firstItemIndex), mirroring the endless ledger. ─
+    if (scope === 'endless' && plantView) {
+        const anchor: LedgerAnchor = urlPeriodValid
+            ? { kind: 'period', batch_year: urlYear, batch: urlBatch! }
+            : { kind: 'latest' };
+
+        const dayWindow = await fetchDailyPivotWindow({ mode: 'anchor', anchor, plant: plantView });
+        const anchorKey = anchor.kind === 'latest' ? 'latest' : `${anchor.batch_year}:${anchor.batch}`;
+
+        return (
+            <ProductionEndlessPivots
+                key={`${plantView}:${anchorKey}`}
+                initialWindow={{
+                    events: dayWindow.events,
+                    hasOlder: dayWindow.hasOlder,
+                    hasNewer: dayWindow.hasNewer,
+                    notice: dayWindow.notice,
+                }}
+                anchor={anchor}
+                plantView={plantView}
+                view={view}
+                periods={periods}
+                selectedPeriod={selectedPeriod}
+                loadError={dayWindow.error ?? periodsResult.error ?? null}
+            />
+        );
+    }
+
+    // ── focus + any view → the month-scoped, EDITABLE ProductionView. The grid's own
+    // toolbar carries the view switcher + scope toggle, so the axis framework stays
+    // reachable here too. ─────────────────────────────────────────────────────────────
     const result = await fetchProductionEvents(selectedPeriod ?? undefined);
-    const view3 = (
+    return (
         <ProductionView
             rows={result.data ?? []}
             periods={periods}
@@ -96,21 +128,4 @@ export default async function CenaproProductionPage({
             loadError={result.error ?? periodsResult.error ?? null}
         />
     );
-
-    // In the endless + daily fallback, surface a small honest hint that the true endless
-    // (cross-month) pivot is still coming — the block below is month-scoped this phase.
-    if (scope === 'endless' && plantView) {
-        return (
-            <div className="flex h-full flex-col">
-                <div className="flex flex-none items-center gap-2 border-b bg-muted/20 px-2 py-1 md:px-3">
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                        Endless {plantView} · coming in a later pass — showing this month
-                    </span>
-                </div>
-                <div className="min-h-0 flex-1">{view3}</div>
-            </div>
-        );
-    }
-
-    return view3;
 }

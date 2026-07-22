@@ -33,11 +33,10 @@ import {
     type GridRangeSlot,
 } from '@/lib/hooks/use-grid-keyboard-nav';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
-import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import { CenaproPeriodPicker } from './period-picker';
 import { ViewModeSwitcher, ScopeToggle } from './ledger-controls';
 import { useLedgerWindow, type InitialLedgerPage } from './use-ledger-window';
-import { DraftRowCells, DraftDatalists, type DraftCellCommonProps, type DraftCellSelProps } from './draft-entry-zone';
+import { DraftRowCells, CommittedRowCells, DraftDatalists, type DraftCellCommonProps, type DraftCellSelProps } from './draft-entry-zone';
 import { saveProductionEvents, type LedgerAnchor, type CenaproPeriod, type ProductionEventDirtyRow } from './actions';
 import {
     BULK_COLUMN_MAP,
@@ -107,14 +106,79 @@ const BLANK_TRIGGER = 12;
 const BLANK_GROW_BATCH = 25;
 
 // localStorage key for the draft mirror — namespaced by surface + version + user id.
-const DRAFT_STORAGE_VERSION = 'v1';
+// v2 (Phase 3a): the shape grew from a bare draft array to `{ drafts, edits, deletes }`
+// (drafts + pending committed inline-edits + pending committed deletions). The version
+// bump means old v1 payloads live under a different key and are simply ignored (no
+// migration needed — worst case a user loses a stale pre-3a draft backup on first load).
+const DRAFT_STORAGE_VERSION = 'v2';
 const draftStorageKey = (userId: string | null | undefined) => `cenapro-ledger-drafts:${DRAFT_STORAGE_VERSION}:${userId ?? 'anon'}`;
+
+// Pending committed inline-edit — the FULL merged BulkRow of an edited committed row,
+// keyed (in the parent-owned Map) by the row's stable event `id`. Storing the full row
+// (not just the changed fields) makes the Save payload + the localStorage mirror
+// self-contained: a pending edit survives the row scrolling out of the loaded window,
+// a reload, or the base row not being loaded at all — it's addressed purely by id.
+type CommittedEdit = BulkRow;
+
+// The full localStorage mirror shape (v2).
+interface StoredDraftState {
+    drafts: BulkRow[];
+    edits: [string, CommittedEdit][];
+    deletes: string[];
+}
 
 // Best-effort BulkRow coercion for restore — fold each parsed object onto a fresh empty
 // row so a missing/older key defaults to '' rather than undefined.
 function coerceStoredRows(parsed: unknown): BulkRow[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.map((r) => ({ ...createEmptyRow(), ...(r && typeof r === 'object' ? r : {}) }) as BulkRow);
+}
+
+// Coerce a stored v2 payload → the three pending structures. Tolerant of shape drift.
+function coerceStoredState(parsed: unknown): { drafts: BulkRow[]; edits: Map<string, CommittedEdit>; deletes: Set<string> } {
+    const empty = { drafts: [] as BulkRow[], edits: new Map<string, CommittedEdit>(), deletes: new Set<string>() };
+    if (!parsed || typeof parsed !== 'object') return empty;
+    const p = parsed as Partial<StoredDraftState>;
+    const drafts = coerceStoredRows(p.drafts);
+    const edits = new Map<string, CommittedEdit>();
+    if (Array.isArray(p.edits)) {
+        for (const entry of p.edits) {
+            if (Array.isArray(entry) && typeof entry[0] === 'string' && entry[1] && typeof entry[1] === 'object') {
+                edits.set(entry[0], { ...createEmptyRow(), ...(entry[1] as object) } as CommittedEdit);
+            }
+        }
+    }
+    const deletes = new Set<string>(Array.isArray(p.deletes) ? p.deletes.filter((x): x is string => typeof x === 'string') : []);
+    return { drafts, edits, deletes };
+}
+
+// A committed ProductionEventRow → its 12-field BulkRow view (the merge/edit base).
+function bulkFromCommitted(r: ProductionEventRow): BulkRow {
+    const g = toGridRow(r);
+    return {
+        recv_date: g.recv_date,
+        prod_date: g.prod_date,
+        batch: g.batch,
+        shift_code: g.shift_code,
+        grade_code: g.grade_code,
+        plant_code: g.plant_code,
+        warehouse_code: g.warehouse_code,
+        source_location_code: g.source_location_code,
+        weight_kg: g.weight_kg,
+        ccc_flec: g.ccc_flec,
+        flec_count: g.flec_count,
+        whse_side: g.whse_side,
+    };
+}
+
+const BULK_FIELDS: BulkField[] = [
+    'recv_date', 'prod_date', 'batch', 'shift_code', 'grade_code', 'plant_code',
+    'warehouse_code', 'source_location_code', 'weight_kg', 'ccc_flec', 'flec_count', 'whse_side',
+];
+
+function bulkEqual(a: BulkRow, b: BulkRow): boolean {
+    for (const f of BULK_FIELDS) if ((a[f] ?? '') !== (b[f] ?? '')) return false;
+    return true;
 }
 
 function ColGroup() {
@@ -140,9 +204,15 @@ type LedgerItem =
 // what keeps the active ring + edited values current on non-virtualized-safe rows.
 interface LedgerCtx {
     firstItemIndex: number;
+    unlocked: boolean;
     committed: ProductionEventRow[];
     draftRows: BulkRow[];
-    errorRowIndices: Set<number>;
+    /** Pending committed inline-edits, keyed by event id (recycle- + prepend-safe). */
+    editedRows: Map<string, CommittedEdit>;
+    /** Committed rows marked for deletion, keyed by event id. */
+    deletedIds: Set<string>;
+    /** Validation-error highlight keys: `d:<draftIndex>` for drafts, `c:<id>` for committed. */
+    errorKeys: Set<string>;
     commonCellProps: DraftCellCommonProps;
     selProps: (rowIdx: number, colIdx: number) => DraftCellSelProps;
     updateRow: (index: number, field: BulkField, value: string) => void;
@@ -295,7 +365,7 @@ const EndlessTableHead = React.forwardRef<HTMLTableSectionElement, React.Compone
 // get a distinct amber-primary draft tint (+ a destructive wash on a validation error).
 const EndlessTableRow = ({ item, context, children, style, ...props }: ItemProps<LedgerItem> & { context?: LedgerCtx }) => {
     if (item.kind === 'draft') {
-        const hasError = context?.errorRowIndices.has(item.draftIndex) ?? false;
+        const hasError = context?.errorKeys.has(`d:${item.draftIndex}`) ?? false;
         return (
             <tr
                 {...props}
@@ -309,12 +379,25 @@ const EndlessTableRow = ({ item, context, children, style, ...props }: ItemProps
             </tr>
         );
     }
-    const dir = rowDirection(toGridRow(item.row));
+    // Committed row. When LOCKED it renders read-only with the base IN/OUT direction tint
+    // (dormant restored edits/deletes do NOT paint until unlocked). When UNLOCKED, a pending
+    // delete strikes/rose-washes it, a pending edit amber-washes it, else the (live, merged)
+    // direction tint shows — the tint re-computes off the EDITED value so it re-colors as the
+    // operator retypes a recognized CCC/FLEC or moves the row between warehouses.
+    const id = item.row.id ?? '';
+    const edited = context?.unlocked ? context.editedRows.get(id) : undefined;
+    const isDeleted = (context?.unlocked && context.deletedIds.has(id)) ?? false;
+    const hasError = (context?.unlocked && context.errorKeys.has(`c:${id}`)) ?? false;
+    const dir = rowDirection(edited ? { ...toGridRow(item.row), ...edited } : toGridRow(item.row));
     return (
         <tr
             {...props}
             style={{ ...style, height: ROW_H }}
-            className={cn('group border-b border-border/30 transition-colors duration-150 hover:bg-muted', rowDirectionTint(dir))}
+            className={cn(
+                'group border-b border-border/30 transition-colors duration-150 hover:bg-muted',
+                isDeleted ? 'bg-rose-50 line-through opacity-40 dark:bg-rose-950/40' : edited ? 'bg-amber-500/[0.07]' : rowDirectionTint(dir),
+                hasError && 'bg-destructive/[0.06]',
+            )}
         >
             {children}
         </tr>
@@ -349,7 +432,17 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     // ─── Lock / draft state ─────────────────────────────────────────────────────────
     const [unlocked, setUnlocked] = React.useState(false);
     const [draftRows, setDraftRows] = React.useState<BulkRow[]>([]);
-    const [errorRowIndices, setErrorRowIndices] = React.useState<Set<number>>(new Set());
+    // ── Committed-row inline-edit state (Phase 3a) — PARENT-OWNED + keyed by event id ──
+    // The non-negotiable recycle-/prepend-safety guarantee: a modified committed cell and
+    // a deleted committed row live in these two structures keyed by the row's stable event
+    // `id`, NEVER in a recycled virtual row's local state. A row edited, scrolled off-screen
+    // and back, rehydrates its pending value from `editedRows` by id (the virtual row is
+    // pure presentation). Prepending older pages (fetchOlder) shifts array indices but NOT
+    // ids, so pending edits stay attached to the right row. `editedRows` stores the FULL
+    // merged BulkRow per id (self-contained → saveable even for rows not in the window).
+    const [editedRows, setEditedRows] = React.useState<Map<string, CommittedEdit>>(new Map());
+    const [deletedIds, setDeletedIds] = React.useState<Set<string>>(new Set());
+    const [errorKeys, setErrorKeys] = React.useState<Set<string>>(new Set());
     const [isSaving, setIsSaving] = React.useState(false);
     const [discardOpen, setDiscardOpen] = React.useState(false);
     const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
@@ -368,10 +461,30 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     const growGuardRef = React.useRef(false);
 
     const draftCount = React.useMemo(() => draftRows.filter((r) => !isBlankRow(r)).length, [draftRows]);
+    // Committed dirty counts. A deleted row counts ONLY as deleted (delete wins over edit).
+    const deletedCount = deletedIds.size;
+    const modifiedCount = React.useMemo(
+        () => [...editedRows.keys()].filter((id) => !deletedIds.has(id)).length,
+        [editedRows, deletedIds],
+    );
+    // Total pending work across the unified dirty model (new drafts + modified + deleted).
+    const totalDirty = draftCount + modifiedCount + deletedCount;
+    // Compact one-line breakdown for the Save button + hints ("3 new · 2 mod · 1 del").
+    const dirtySummary = [
+        draftCount > 0 ? `${draftCount} new` : null,
+        modifiedCount > 0 ? `${modifiedCount} mod` : null,
+        deletedCount > 0 ? `${deletedCount} del` : null,
+    ]
+        .filter(Boolean)
+        .join(' · ');
+
+    const C = committed.length; // count of committed rows currently loaded (region boundary)
 
     const gridRef = React.useRef<HTMLDivElement>(null);
     const virtuosoRef = React.useRef<TableVirtuosoHandle>(null);
     const pendingScrollBottomRef = React.useRef(false);
+    // After a committed-edit save, re-anchor the viewport near this event id (best-effort).
+    const pendingScrollToIdRef = React.useRef<string | null>(null);
     const endEditRef = React.useRef<() => void>(() => {});
 
     // ─── Blank-pool maintenance ─────────────────────────────────────────────────────
@@ -391,25 +504,30 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         if (hydratedRef.current || authLoading) return;
         hydratedRef.current = true;
 
-        let restored: BulkRow[] = [];
+        let stored = { drafts: [] as BulkRow[], edits: new Map<string, CommittedEdit>(), deletes: new Set<string>() };
         try {
             const raw = window.localStorage.getItem(storageKey);
-            if (raw) restored = coerceStoredRows(JSON.parse(raw));
+            if (raw) stored = coerceStoredState(JSON.parse(raw));
         } catch {
             /* corrupt / unavailable — ignore, start clean */
         }
 
         const wantAdd = searchParams.get('add') === '1';
-        const nonBlank = restored.filter((r) => !isBlankRow(r));
-        const hasDrafts = nonBlank.length > 0;
-        // Restore the drafts into state but keep them DORMANT (locked → blanks/drafts aren't
-        // rendered as editable rows yet). Nothing auto-unlocks when drafts exist — the operator
-        // must explicitly Resume or Discard via the prompt below (restore is now consented).
-        if (restored.length > 0) setDraftRows(restored);
-        if (hasDrafts) {
+        const nonBlank = stored.drafts.filter((r) => !isBlankRow(r));
+        // Total pending work = new drafts + pending committed edits + pending committed deletes.
+        const pendingCount = nonBlank.length + stored.edits.size + stored.deletes.size;
+        const hasPending = pendingCount > 0;
+        // Restore all three pending structures into state but keep them DORMANT (locked →
+        // blanks/drafts aren't rendered and committed overlays don't paint until unlocked).
+        // Nothing auto-unlocks when pending work exists — the operator must explicitly Resume
+        // or Discard via the prompt below (restore is consented).
+        if (stored.drafts.length > 0) setDraftRows(stored.drafts);
+        if (stored.edits.size > 0) setEditedRows(stored.edits);
+        if (stored.deletes.size > 0) setDeletedIds(stored.deletes);
+        if (hasPending) {
             // Surface the Resume/Discard prompt; remember any concurrent ?add=1 intent so a
             // Discard still opens a fresh add session (see handleDiscardResume).
-            setResumePrompt({ count: nonBlank.length, wantAdd });
+            setResumePrompt({ count: pendingCount, wantAdd });
         } else if (wantAdd) {
             // Explicit "add now" intent + NO stale drafts → unlock directly (unchanged, no prompt).
             // Unlocking triggers the blank-pool maintenance effect (seeds/tops up) + the
@@ -426,27 +544,33 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         }
     }, [authLoading, storageKey, searchParams, router, pathname]);
 
-    // ─── Mirror drafts → localStorage (debounced) ────────────────────────────────────
+    // ─── Mirror pending work → localStorage (debounced) ──────────────────────────────
+    // Loss-proof across the WHOLE unified dirty model now: new drafts + pending committed
+    // inline-edits + pending committed deletions, all keyed so a reload restores every one.
     React.useEffect(() => {
         if (!hydratedRef.current) return;
         const t = setTimeout(() => {
             try {
-                if (draftRows.some((r) => !isBlankRow(r))) {
-                    window.localStorage.setItem(storageKey, JSON.stringify(draftRows.filter((r) => !isBlankRow(r))));
+                const drafts = draftRows.filter((r) => !isBlankRow(r));
+                const edits = [...editedRows.entries()];
+                const deletes = [...deletedIds];
+                if (drafts.length > 0 || edits.length > 0 || deletes.length > 0) {
+                    const payload: StoredDraftState = { drafts, edits, deletes };
+                    window.localStorage.setItem(storageKey, JSON.stringify(payload));
                 } else {
                     window.localStorage.removeItem(storageKey);
                 }
             } catch {
-                /* quota / private mode — drafts still live in state */
+                /* quota / private mode — pending work still lives in state */
             }
         }, 300);
         return () => clearTimeout(t);
-    }, [draftRows, storageKey]);
+    }, [draftRows, editedRows, deletedIds, storageKey]);
 
     // Clear the validation-error rails whenever the operator edits anything.
     React.useEffect(() => {
-        setErrorRowIndices((prev) => (prev.size === 0 ? prev : new Set()));
-    }, [draftRows]);
+        setErrorKeys((prev) => (prev.size === 0 ? prev : new Set()));
+    }, [draftRows, editedRows, deletedIds]);
 
     // Keep the trailing blank pool full as the operator types/pastes (not only on scroll).
     // ensureBlankBuffer is idempotent (appends only when trailing < BLANK_TRIGGER, lands
@@ -494,10 +618,12 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     const handleDiscardResume = React.useCallback(() => {
         const wantAdd = resumePrompt?.wantAdd ?? false;
         setResumePrompt(null);
-        setErrorRowIndices(new Set());
+        setErrorKeys(new Set());
         setActiveCell(null);
         clearDraftMirror(); // explicit key removal (the mirror else-branch also removes it on [])
         setDraftRows([]);
+        setEditedRows(new Map());
+        setDeletedIds(new Set());
         if (wantAdd) {
             // Fresh add: unlock → ensureBlankBuffer seeds a full blank pool, scroll to the edge.
             setUnlocked(true);
@@ -524,25 +650,47 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         pendingScrollBottomRef.current = true;
     }, [unlocked, hasNewer, win, ensureBlankBuffer]);
 
-    // ─── Draft grid hooks (coordinate space = the draftRows array) ──────────────────
+    // ─── Unified grid hooks (ONE coordinate space over committed + draft regions) ────
+    // Phase 3a folds committed rows into the SAME coordinate grid as the draft rows so the
+    // shared selection / keyboard-nav / edit / paste hooks address both under one unlock.
+    // Row coordinate = committed position [0 .. C-1] for committed rows, then C+draftIndex
+    // for draft rows — which equals the row's index into virtuoso's `items` array (committed
+    // items precede draft items), so `activeCell.row` doubles as the scroll data-index.
+    // Reads/writes always route through the CURRENT `committed` array → an event id, so
+    // prepending older pages (index shift) never corrupts a pending edit (it's id-keyed).
+    const totalRows = C + draftRows.length;
     const isSelectableColumn = React.useCallback((c: number) => c !== 0 && BULK_COLUMN_MAP[c] !== null, []);
     const cellSelection = useCellSelection({
-        rowCount: draftRows.length,
+        rowCount: totalRows,
         colCount: BULK_COL_COUNT,
         isSelectableColumn,
         scrollContainerRef: gridRef,
         enabled: unlocked,
     });
 
+    // Merged (base ⊕ pending-edit) BulkRow view of a committed row by coordinate index.
+    const mergedCommittedRow = React.useCallback(
+        (rowIdx: number): BulkRow | null => {
+            const base = committed[rowIdx];
+            if (!base) return null;
+            const id = base.id ?? '';
+            return editedRows.get(id) ?? bulkFromCommitted(base);
+        },
+        [committed, editedRows],
+    );
+
     const getCellValue = React.useCallback(
         (rowIdx: number, colIdx: number): string => {
-            const row = draftRows[rowIdx];
-            if (!row) return '';
             const field = BULK_COLUMN_MAP[colIdx];
             if (!field) return '';
-            return String(row[field] ?? '');
+            if (rowIdx < C) {
+                const merged = mergedCommittedRow(rowIdx);
+                return merged ? String(merged[field] ?? '') : '';
+            }
+            const row = draftRows[rowIdx - C];
+            return row ? String(row[field] ?? '') : '';
         },
-        [draftRows],
+        [C, draftRows, mergedCommittedRow],
     );
 
     const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
@@ -588,17 +736,68 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         [cellSelection],
     );
 
-    const removeRow = React.useCallback((index: number) => {
-        setDraftRows((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : [createEmptyRow()]));
-    }, []);
+    // ── Committed-region mutators — write into the id-keyed overlay / delete set ──────
+    const updateCommittedCell = React.useCallback(
+        (rowIdx: number, field: BulkField, value: string) => {
+            const base = committed[rowIdx];
+            const id = base?.id;
+            if (!id) return;
+            setEditedRows((prev) => {
+                const next = new Map(prev);
+                const baseBulk = bulkFromCommitted(base);
+                const cur = next.get(id) ?? baseBulk;
+                const updated: CommittedEdit = { ...cur, [field]: value };
+                // Reverting every cell back to base un-modifies the row (drop it from the map).
+                if (bulkEqual(updated, baseBulk)) next.delete(id);
+                else next.set(id, updated);
+                return next;
+            });
+        },
+        [committed],
+    );
 
-    const updateRow = React.useCallback((index: number, field: BulkField, value: string) => {
-        setDraftRows((prev) => {
-            const next = [...prev];
-            next[index] = { ...next[index], [field]: value };
-            return next;
-        });
-    }, []);
+    const toggleDeleteCommitted = React.useCallback(
+        (rowIdx: number) => {
+            const id = committed[rowIdx]?.id;
+            if (!id) return;
+            setDeletedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+            });
+        },
+        [committed],
+    );
+
+    // ── Unified mutators — route by region: committed [< C] vs draft [>= C] ───────────
+    const removeRow = React.useCallback(
+        (index: number) => {
+            if (index < C) {
+                toggleDeleteCommitted(index);
+                return;
+            }
+            const di = index - C;
+            setDraftRows((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== di) : [createEmptyRow()]));
+        },
+        [C, toggleDeleteCommitted],
+    );
+
+    const updateRow = React.useCallback(
+        (index: number, field: BulkField, value: string) => {
+            if (index < C) {
+                updateCommittedCell(index, field, value);
+                return;
+            }
+            const di = index - C;
+            setDraftRows((prev) => {
+                const next = [...prev];
+                next[di] = { ...next[di], [field]: value };
+                return next;
+            });
+        },
+        [C, updateCommittedCell],
+    );
 
     const clearCell = React.useCallback(
         (rowIdx: number, colIdx: number) => {
@@ -612,18 +811,27 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     // re-applies it at save as a safety net; this is the live, visible normalization.
     const commitDateCell = React.useCallback(
         (rowIdx: number, field: BulkField) => {
+            const yr = selectedPeriod?.batch_year ?? new Date().getFullYear();
+            if (rowIdx < C) {
+                const merged = mergedCommittedRow(rowIdx);
+                const raw = merged?.[field];
+                if (raw == null) return;
+                const norm = normalizeTypedDate(raw, yr);
+                if (norm !== raw) updateCommittedCell(rowIdx, field, norm);
+                return;
+            }
+            const di = rowIdx - C;
             setDraftRows((prev) => {
-                const raw = prev[rowIdx]?.[field];
+                const raw = prev[di]?.[field];
                 if (raw == null) return prev;
-                const yr = selectedPeriod?.batch_year ?? new Date().getFullYear();
                 const norm = normalizeTypedDate(raw, yr);
                 if (norm === raw) return prev;
                 const next = [...prev];
-                next[rowIdx] = { ...next[rowIdx], [field]: norm };
+                next[di] = { ...next[di], [field]: norm };
                 return next;
             });
         },
-        [selectedPeriod?.batch_year],
+        [C, selectedPeriod?.batch_year, mergedCommittedRow, updateCommittedCell],
     );
 
     const DATE_FIELDS = React.useMemo(() => new Set<BulkField>(['recv_date', 'prod_date']), []);
@@ -680,8 +888,8 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     }, [editSession]);
 
     const baseResolver = React.useMemo(
-        () => createCoordinateNavResolver({ rowCount: draftRows.length, columnMap: BULK_COLUMN_MAP }),
-        [draftRows.length],
+        () => createCoordinateNavResolver({ rowCount: totalRows, columnMap: BULK_COLUMN_MAP }),
+        [totalRows],
     );
     const resolver = React.useMemo<NavResolver<CoordinateId>>(
         () => ({
@@ -757,24 +965,85 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         [unlocked, activeCell, isEditing, handleNavKeyDown],
     );
 
-    // Paste engine — grows draftRows past the pool when a paste is taller; top up after.
-    const { handleSmartPaste, handleGridPaste: handleGridPasteAt } = useGridPaste<BulkRow>({
-        columnMap: BULK_COLUMN_MAP,
-        setRows: setDraftRows,
-        createEmptyRow,
-        cleanCellValue: cleanBulkPasteValue,
-    });
+    // ─── Unified paste engine (routes across the committed + draft regions) ──────────
+    // Distributes a pasted Excel/TSV block from the active cell: rows landing on committed
+    // coordinates write the id-keyed overlay; rows landing on (or overflowing into) the
+    // draft region write the draft array, auto-extending the blank pool when the paste is
+    // taller than it. Mirrors the focus grid's handleSmartPaste, split by region boundary C.
+    const handleSmartPaste = React.useCallback(
+        (e: React.ClipboardEvent, startRow: number, startCol: number) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData('text');
+            if (!text) return;
+            const clip = text.split(/\r\n|\n|\r/).filter((r) => r.trim() !== '');
+            if (!clip.length) return;
+
+            // Committed writes → overlay map (rows whose target coordinate is < C).
+            setEditedRows((prev) => {
+                const next = new Map(prev);
+                clip.forEach((line, r) => {
+                    const targetRow = startRow + r;
+                    if (targetRow >= C) return;
+                    const base = committed[targetRow];
+                    const id = base?.id;
+                    if (!id) return;
+                    const baseBulk = bulkFromCommitted(base);
+                    let cur: CommittedEdit = next.get(id) ?? baseBulk;
+                    line.split('\t').forEach((cell, cOffset) => {
+                        const targetCol = startCol + cOffset;
+                        if (targetCol >= BULK_COL_COUNT) return;
+                        const field = BULK_COLUMN_MAP[targetCol];
+                        if (!field) return;
+                        cur = { ...cur, [field]: cleanBulkPasteValue(cell, field) };
+                    });
+                    if (bulkEqual(cur, baseBulk)) next.delete(id);
+                    else next.set(id, cur);
+                });
+                return next;
+            });
+
+            // Draft writes → draft array (rows whose target coordinate is >= C), auto-extend.
+            setDraftRows((prev) => {
+                let touched = false;
+                const next = [...prev];
+                clip.forEach((line, r) => {
+                    const targetRow = startRow + r;
+                    if (targetRow < C) return;
+                    const di = targetRow - C;
+                    while (di >= next.length) next.push(createEmptyRow());
+                    const row = { ...next[di] };
+                    line.split('\t').forEach((cell, cOffset) => {
+                        const targetCol = startCol + cOffset;
+                        if (targetCol >= BULK_COL_COUNT) return;
+                        const field = BULK_COLUMN_MAP[targetCol];
+                        if (!field) return;
+                        row[field] = cleanBulkPasteValue(cell, field);
+                    });
+                    next[di] = row;
+                    touched = true;
+                });
+                return touched ? next : prev;
+            });
+
+            toast.success(`Pasted ${clip.length} row${clip.length !== 1 ? 's' : ''}`);
+        },
+        [C, committed],
+    );
+
     const handleGridPaste = React.useCallback(
         (e: React.ClipboardEvent) => {
-            if (!unlocked || isEditing) return;
-            handleGridPasteAt(e, activeCell, () => cellSelection.clearSelection());
+            if (!unlocked || isEditing || !activeCell) return;
+            handleSmartPaste(e, activeCell.row, activeCell.col);
+            cellSelection.clearSelection();
         },
-        [unlocked, isEditing, activeCell, handleGridPasteAt, cellSelection],
+        [unlocked, isEditing, activeCell, handleSmartPaste, cellSelection],
     );
 
     // ─── Nav to a cell that isn't rendered yet → scroll it into view ────────────────
     // With a generous bottom overscan the next few blanks are already rendered, but if
     // nav lands on a far row, bring it into view so the ring + (on edit) the input show.
+    // `activeCell.row` is the UNIFIED coordinate = the row's data index into virtuoso's
+    // `items` (committed rows first, then drafts), so it scrolls into view directly.
     const prevActiveRowRef = React.useRef<number | null>(null);
     React.useEffect(() => {
         if (!unlocked || !activeCell) {
@@ -783,35 +1052,70 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         }
         if (prevActiveRowRef.current !== activeCell.row) {
             prevActiveRowRef.current = activeCell.row;
-            const listIndex = committed.length + activeCell.row;
-            virtuosoRef.current?.scrollIntoView({ index: listIndex });
+            virtuosoRef.current?.scrollIntoView({ index: activeCell.row });
         }
-    }, [unlocked, activeCell, committed.length]);
+    }, [unlocked, activeCell]);
+
+    // After a committed-edit save, re-anchor the viewport near the row we were editing.
+    // The freshly-refetched window may place it at a new index (a recv_date edit relocates
+    // it) or drop it entirely — both are fine: scroll only if it's still present.
+    React.useEffect(() => {
+        const id = pendingScrollToIdRef.current;
+        if (!id) return;
+        const idx = committed.findIndex((r) => (r.id ?? '') === id);
+        if (idx >= 0) {
+            pendingScrollToIdRef.current = null;
+            requestAnimationFrame(() => virtuosoRef.current?.scrollToIndex({ index: idx, align: 'start' }));
+        }
+    }, [committed]);
 
     // ─── Save ────────────────────────────────────────────────────────────────────────
-    const handleSaveDrafts = React.useCallback(async () => {
-        const filled = draftRows.filter((r) => !isBlankRow(r));
-        if (filled.length === 0) {
-            toast.warning('Nothing to save — fill in at least one row.');
+    // ─── Unified Save (new drafts + modified + deleted committed rows, ONE round-trip) ─
+    const handleSave = React.useCallback(async () => {
+        const filledDrafts = draftRows.filter((r) => !isBlankRow(r));
+        const hadDrafts = filledDrafts.length > 0;
+        const hadCommittedChanges = editedRows.size > 0 || deletedIds.size > 0;
+        if (!hadDrafts && !hadCommittedChanges) {
+            toast.warning('Nothing to save — add, edit, or delete a row first.');
             return;
         }
 
         const dirtyRows: ProductionEventDirtyRow[] = [];
         const rowErrors: string[] = [];
-        const badIdx = new Set<number>();
+        const badKeys = new Set<string>();
+
+        // 1) New draft rows (INSERT — no id).
         draftRows.forEach((r, idx) => {
             if (isBlankRow(r)) return;
             const { row, errors } = mapBulkRowToDirty(r, selectedPeriod?.batch_year);
             if (errors.length > 0) {
                 rowErrors.push(`${rowLabel(r, idx)}: ${errors.join('; ')}`);
-                badIdx.add(idx);
+                badKeys.add(`d:${idx}`);
             } else if (row) {
                 dirtyRows.push(row);
             }
         });
 
+        // 2) Modified committed rows (UPDATE — carry the id). Built from the id-keyed map
+        //    DIRECTLY (not the visible window) so a pending edit to an off-screen / not-loaded
+        //    row still saves. A deleted row's edit is dropped (delete wins).
+        editedRows.forEach((bulk, id) => {
+            if (deletedIds.has(id)) return;
+            const { row, errors } = mapBulkRowToDirty(bulk, selectedPeriod?.batch_year);
+            const label = bulk.batch.trim() ? `edited row "${bulk.batch.trim()}"` : `edited row ${id.slice(0, 8)}`;
+            if (errors.length > 0) {
+                rowErrors.push(`${label}: ${errors.join('; ')}`);
+                badKeys.add(`c:${id}`);
+            } else if (row) {
+                dirtyRows.push({ ...row, id });
+            }
+        });
+
+        // 3) Deleted committed rows.
+        const deleted = [...deletedIds];
+
         if (rowErrors.length > 0) {
-            setErrorRowIndices(badIdx);
+            setErrorKeys(badKeys);
             errorToast(`${rowErrors.length} row${rowErrors.length !== 1 ? 's' : ''} can't be saved yet.`, {
                 description:
                     'Fix the values below, then Save again. Categoricals must match the lookup codes ' +
@@ -822,38 +1126,67 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
             return;
         }
 
+        if (dirtyRows.length === 0 && deleted.length === 0) {
+            toast.info('No changes to save.');
+            return;
+        }
+
+        // Remember where we were (committed-only viewport re-anchor) before the save.
+        const topId = committed[0]?.id ?? null;
+
         setIsSaving(true);
         try {
-            const res = await saveProductionEvents(dirtyRows, []);
+            const res = await saveProductionEvents(dirtyRows, deleted);
             if (!res.ok) {
                 errorToast(res.error ?? 'Failed to save production rows.');
                 return;
             }
-            const n = res.upserted ?? dirtyRows.length;
+            const savedN = (res.upserted ?? 0) + (res.deleted ?? 0);
+            // Clear the ENTIRE unified dirty model + the device mirror.
             setDraftRows(Array.from({ length: BLANK_TARGET }, createEmptyRow));
-            setErrorRowIndices(new Set());
+            setEditedRows(new Map());
+            setDeletedIds(new Set());
+            setErrorKeys(new Set());
             setActiveCell(null);
             clearDraftMirror();
-            toast.success(`Saved ${n} production row${n !== 1 ? 's' : ''}`);
-            // Chrome-only success cue in the toolbar (fades up, auto-clears).
-            setSavedFlash(n);
+
+            // Success cue (chrome-only, fades up, auto-clears).
+            const parts: string[] = [];
+            if (res.upserted) parts.push(`${res.upserted} saved`);
+            if (res.deleted) parts.push(`${res.deleted} deleted`);
+            toast.success(parts.length ? `Saved — ${parts.join(', ')}` : 'Saved');
+            setSavedFlash(savedN);
             if (savedFlashTimerRef.current) clearTimeout(savedFlashTimerRef.current);
             savedFlashTimerRef.current = setTimeout(() => setSavedFlash(null), 2500);
-            pendingScrollBottomRef.current = true;
-            await win.refreshNewest();
+
+            // Post-save refresh — the pager holds client-side pages (revalidatePath won't
+            // touch them). New rows always append at the newest end, so when drafts were
+            // added we re-seed from the page anchor + scroll to the bottom entry edge. When
+            // ONLY committed rows changed, refetch the loaded window in place + re-anchor the
+            // viewport near where we were editing (a recv_date edit may relocate the row —
+            // that's accepted; the fresh read can't crash on a relocation).
+            if (hadDrafts) {
+                pendingScrollBottomRef.current = anchor.kind === 'latest';
+                await win.reset(anchor);
+            } else {
+                pendingScrollToIdRef.current = topId;
+                await win.refreshWindow();
+            }
         } catch (err) {
             errorToast('Unexpected error: ' + (err instanceof Error ? err.message : String(err)));
         } finally {
             setIsSaving(false);
         }
-    }, [draftRows, selectedPeriod?.batch_year, clearDraftMirror, win]);
+    }, [draftRows, editedRows, deletedIds, selectedPeriod?.batch_year, committed, clearDraftMirror, win, anchor]);
 
     const handleDiscardConfirm = React.useCallback(() => {
         setDiscardOpen(false);
-        setErrorRowIndices(new Set());
+        setErrorKeys(new Set());
         setActiveCell(null);
         clearDraftMirror();
         setDraftRows(Array.from({ length: BLANK_TARGET }, createEmptyRow));
+        setEditedRows(new Map());
+        setDeletedIds(new Set());
     }, [clearDraftMirror]);
 
     // ─── Virtuoso wiring ─────────────────────────────────────────────────────────────
@@ -890,9 +1223,12 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     // the active ring + edited values stay current across the (recycling) virtual rows.
     const context: LedgerCtx = {
         firstItemIndex,
+        unlocked,
         committed,
         draftRows,
-        errorRowIndices,
+        editedRows,
+        deletedIds,
+        errorKeys,
         commonCellProps,
         selProps,
         updateRow,
@@ -904,17 +1240,42 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     const itemContent = React.useCallback((index: number, item: LedgerItem, ctx: LedgerCtx) => {
         if (item.kind === 'committed') {
             const pos = index - ctx.firstItemIndex;
-            const prev = pos > 0 ? ctx.committed[pos - 1] : undefined;
-            const monthStart = isMonthBoundary(prev, item.row);
-            return renderCommittedCells(item.row, pos + 1, monthStart, monthStart ? monthLabelOf(item.row) : null);
+            // LOCKED → read-only frozen render (with month separators), exactly as before.
+            if (!ctx.unlocked) {
+                const prev = pos > 0 ? ctx.committed[pos - 1] : undefined;
+                const monthStart = isMonthBoundary(prev, item.row);
+                return renderCommittedCells(item.row, pos + 1, monthStart, monthStart ? monthLabelOf(item.row) : null);
+            }
+            // UNLOCKED → inline-editable committed row. The pending edit (if any) is merged
+            // in by event id — recycle-safe: this reads the parent-owned map, never local state.
+            const id = item.row.id ?? '';
+            const edited = ctx.editedRows.get(id);
+            const row = edited ?? bulkFromCommitted(item.row);
+            return (
+                <CommittedRowCells
+                    rowIdx={pos}
+                    rowNum={pos + 1}
+                    row={row}
+                    isModified={!!edited}
+                    isDeleted={ctx.deletedIds.has(id)}
+                    hasError={ctx.errorKeys.has(`c:${id}`)}
+                    onToggleDelete={() => ctx.removeRow(pos)}
+                    updateRow={ctx.updateRow}
+                    onPaste={ctx.onPaste}
+                    onCommitDate={ctx.onCommitDate}
+                    commonCellProps={ctx.commonCellProps}
+                    selProps={ctx.selProps}
+                />
+            );
         }
         const di = item.draftIndex;
+        const unifiedRow = ctx.committed.length + di;
         const row = ctx.draftRows[di] ?? createEmptyRow();
         return (
             <DraftRowCells
-                draftIndex={di}
+                rowIdx={unifiedRow}
                 row={row}
-                hasError={ctx.errorRowIndices.has(di)}
+                hasError={ctx.errorKeys.has(`d:${di}`)}
                 updateRow={ctx.updateRow}
                 removeRow={ctx.removeRow}
                 onPaste={ctx.onPaste}
@@ -991,9 +1352,9 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         Saved {savedFlash} row{savedFlash !== 1 ? 's' : ''}
                     </span>
                 )}
-                {!unlocked && draftCount > 0 && (
+                {!unlocked && totalDirty > 0 && (
                     <span className="hidden text-[10px] font-medium text-amber-600 dark:text-amber-400 sm:inline">
-                        {draftCount} draft{draftCount !== 1 ? 's' : ''} kept
+                        {totalDirty} unsaved kept
                     </span>
                 )}
                 {!unlocked && (
@@ -1001,19 +1362,20 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         Read-only · oldest → newest
                     </span>
                 )}
-                {/* Unlocked status hint — fades in with the drafting state (chrome, not a row). */}
+                {/* Unlocked status hint — fades in with the editing state (chrome, not a row). */}
                 {unlocked && (
                     <span
                         className="animate-fade-in hidden font-mono text-[10px] text-muted-foreground/70 sm:inline"
-                        title="Drafts are kept on this device until you Save"
+                        title="Drafts and edits are kept on this device until you Save"
                     >
-                        {draftCount > 0 ? `${draftCount} ready` : 'Type or paste below'}
+                        {totalDirty > 0 ? dirtySummary : 'Type, edit, or paste'}
                     </span>
                 )}
                 {/* Relocated Save / Discard — beside the Add-rows toggle, only when unlocked
-                    with ≥1 non-blank draft. Scales in on unlock, out on lock. Discard is the
-                    ONE destructive action (AlertDialog confirm). Replaces the old floating bar. */}
-                {unlocked && draftCount > 0 && (
+                    with pending work (new drafts, modified, or deleted committed rows). Scales
+                    in on unlock, out on lock. Discard is the ONE destructive action (AlertDialog
+                    confirm). Replaces the old floating bar. */}
+                {unlocked && totalDirty > 0 && (
                     <div className="animate-scale-in flex items-center gap-1.5">
                         <Button
                             variant="ghost"
@@ -1027,19 +1389,18 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         <Button
                             size="sm"
                             className="h-6 gap-1 px-3 text-[11px] transition-colors duration-150"
-                            onClick={handleSaveDrafts}
+                            onClick={handleSave}
                             disabled={isSaving}
                         >
                             <Save className="h-3 w-3" />
                             {isSaving ? (
                                 'Saving…'
                             ) : (
-                                <span>
-                                    Save{' '}
-                                    <span key={draftCount} className="animate-badge-pop inline-block tabular-nums">
-                                        {draftCount}
-                                    </span>{' '}
-                                    row{draftCount !== 1 ? 's' : ''}
+                                <span className="inline-flex items-center gap-1">
+                                    Save
+                                    <span key={dirtySummary} className="animate-badge-pop inline-block tabular-nums">
+                                        {dirtySummary}
+                                    </span>
                                 </span>
                             )}
                         </Button>
@@ -1066,7 +1427,7 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                     <span className="min-w-0 flex-1 text-xs text-muted-foreground">
                         You have{' '}
                         <span className="font-semibold text-foreground tabular-nums">{resumePrompt.count}</span> unsaved
-                        draft row{resumePrompt.count !== 1 ? 's' : ''} from a previous session.
+                        change{resumePrompt.count !== 1 ? 's' : ''} (new / edited / deleted rows) from a previous session.
                     </span>
                     <div className="flex items-center gap-1.5">
                         <Button
@@ -1184,10 +1545,10 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
             <AlertDialog open={discardOpen} onOpenChange={setDiscardOpen}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
-                        <AlertDialogTitle>Discard all draft rows?</AlertDialogTitle>
+                        <AlertDialogTitle>Discard all unsaved changes?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            This permanently clears the {draftCount} unsaved draft row{draftCount !== 1 ? 's' : ''} on the sheet
-                            (and the device backup). This can&apos;t be undone.
+                            This permanently clears the {totalDirty} unsaved change{totalDirty !== 1 ? 's' : ''} on the sheet
+                            — new drafts, cell edits, and pending deletions — plus the device backup. This can&apos;t be undone.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
