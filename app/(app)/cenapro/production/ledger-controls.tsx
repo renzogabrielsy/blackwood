@@ -25,7 +25,16 @@ const SEG_IDLE = 'text-muted-foreground hover:text-foreground';
 // ─── View-mode switcher (ledger | daily-w6 | daily-w7) ───────────────────────────
 // Drives `?view=`. `ledger` omits the param (default → clean URL). Available in BOTH
 // scopes — the switcher is never scope-exclusive.
-export function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
+export function ViewModeSwitcher({
+    mode,
+    disabled,
+    disabledHint,
+}: {
+    mode: ViewMode;
+    /** Blocked while an editor has unsaved changes (switching view would discard them). */
+    disabled?: boolean;
+    disabledHint?: string;
+}) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -33,6 +42,7 @@ export function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
 
     const select = React.useCallback(
         (next: ViewMode) => {
+            if (disabled) return;
             if (next === mode) return;
             const sp = new URLSearchParams(searchParams.toString());
             if (next === 'ledger') sp.delete('view'); // default → keep the URL clean
@@ -42,20 +52,27 @@ export function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
                 router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
             });
         },
-        [mode, searchParams, router, pathname],
+        [disabled, mode, searchParams, router, pathname],
     );
 
     return (
-        <div className={SEG_WRAP} role="tablist" aria-label="Production view mode">
+        <div
+            className={cn(SEG_WRAP, disabled && 'opacity-60')}
+            role="tablist"
+            aria-label="Production view mode"
+            title={disabled ? disabledHint : undefined}
+        >
             {VIEW_MODES.map((m) => (
                 <button
                     key={m}
                     type="button"
                     role="tab"
                     aria-selected={mode === m}
+                    disabled={disabled}
                     onClick={() => select(m)}
                     className={cn(
                         'h-5 rounded px-2 text-[11px] font-medium transition-colors duration-150',
+                        disabled && 'cursor-not-allowed',
                         mode === m ? SEG_ACTIVE : SEG_IDLE,
                     )}
                 >
@@ -71,7 +88,16 @@ export function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
 // Drives `?scope=`. `endless` omits the param (default → clean URL); `focus` writes
 // `?scope=focus`. Clears the legacy `?focus` param on any change (back-compat cleanup).
 // Preserves `view`/`year`/`batch` so a scope switch keeps the current view + period.
-export function ScopeToggle({ scope }: { scope: Scope }) {
+export function ScopeToggle({
+    scope,
+    disabled,
+    disabledHint,
+}: {
+    scope: Scope;
+    /** Blocked while an editor has unsaved changes (switching scope would discard them). */
+    disabled?: boolean;
+    disabledHint?: string;
+}) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -79,6 +105,7 @@ export function ScopeToggle({ scope }: { scope: Scope }) {
 
     const select = React.useCallback(
         (next: Scope) => {
+            if (disabled) return;
             if (next === scope) return;
             const sp = new URLSearchParams(searchParams.toString());
             sp.delete('focus'); // retire the legacy param whenever the toggle is used
@@ -89,19 +116,26 @@ export function ScopeToggle({ scope }: { scope: Scope }) {
                 router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
             });
         },
-        [scope, searchParams, router, pathname],
+        [disabled, scope, searchParams, router, pathname],
     );
 
     return (
-        <div className={SEG_WRAP} role="tablist" aria-label="Production history scope">
+        <div
+            className={cn(SEG_WRAP, disabled && 'opacity-60')}
+            role="tablist"
+            aria-label="Production history scope"
+            title={disabled ? disabledHint : undefined}
+        >
             <button
                 type="button"
                 role="tab"
                 aria-selected={scope === 'endless'}
+                disabled={disabled}
                 onClick={() => select('endless')}
-                title="Endless — the full history as one continuous, cursor-guided sheet"
+                title={disabled ? disabledHint : 'Endless — the full history as one continuous, cursor-guided sheet'}
                 className={cn(
                     'flex h-5 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors duration-150',
+                    disabled && 'cursor-not-allowed',
                     scope === 'endless' ? SEG_ACTIVE : SEG_IDLE,
                 )}
             >
@@ -112,10 +146,12 @@ export function ScopeToggle({ scope }: { scope: Scope }) {
                 type="button"
                 role="tab"
                 aria-selected={scope === 'focus'}
+                disabled={disabled}
                 onClick={() => select('focus')}
-                title="Focus — clamp to the selected period only"
+                title={disabled ? disabledHint : 'Focus — clamp to the selected period only'}
                 className={cn(
                     'flex h-5 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors duration-150',
+                    disabled && 'cursor-not-allowed',
                     scope === 'focus' ? SEG_ACTIVE : SEG_IDLE,
                 )}
             >

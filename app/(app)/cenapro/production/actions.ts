@@ -493,6 +493,15 @@ export interface ProductionEventDirtyRow {
     partner_equipment_code: string;
     flec_count: string;
     whse_side: string;
+    /**
+     * OPTIONAL explicit period year. Normally OMITTED — the base trigger derives
+     * `batch_year` from `YEAR(recv_date)` (see the write-back contract §1). The endless
+     * W6/W7 pivots send it EXPLICITLY per new pull (= the pull's own prod_date year) so a
+     * pull entered in a cross-year window lands in its OWN period, not one derived from a
+     * global selection or a straddling recv_date. When present + parseable it overrides the
+     * trigger's derive; when absent behavior is unchanged. NEVER send `unique_tag`.
+     */
+    batch_year?: string;
 }
 
 // ─── Coercion helpers ────────────────────────────────────────────────────────────
@@ -566,6 +575,11 @@ export async function saveProductionEvents(
                 flec_count: numOrNull(r.flec_count),
                 whse_side: textOrNull(r.whse_side),
             };
+            // Explicit period-year override (endless pivots only). Send it when the client
+            // supplied a parseable year, so a cross-year pull lands in its own period rather
+            // than the trigger's recv_date-derived year. Omitted rows keep the trigger derive.
+            const explicitYear = numOrNull(r.batch_year ?? '');
+            if (explicitYear != null) base.batch_year = explicitYear;
             const id = textOrNull(r.id);
             return id ? { ...base, id } : base;
         });

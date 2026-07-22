@@ -394,6 +394,31 @@ shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M
 
 ---
 
+## BUG-013 — Cenapro focus Daily Block silently discards unsaved edits on a view/scope/period switch ✅ FIXED (2026-07-22)
+
+- **Where:** `app/(app)/cenapro/production/production-daily-block.tsx` (the focus-scope W6/W7
+  editable pivot) rendered inside `production-ledger-grid.tsx`. Surfaced as the **severe finding**
+  of the 2026-07-22 Phase-3b pre-analysis (virtualization/gap audit).
+- **Symptom:** The Daily Block owns its OWN unsaved-edit state in its INNER `DailyBlockToolbar`
+  (Save/Discard). The OUTER grid toolbar's axis controls (`CenaproPeriodPicker` /
+  `ViewModeSwitcher` / `ScopeToggle`) only guarded on the LEDGER grid's `isDirty` (`rows`), which
+  stays false in daily view. So with unsaved pivot edits, clicking a different view/scope or a new
+  period `router.replace`d the URL → the page remounted the block → **all unsaved edits vanished
+  with no warning.**
+- **Root cause:** the block's dirty signal never reached the controls that navigate away from it.
+- **Fix:** lift a dirty signal. `ProductionDailyBlock` gained an `onDirtyChange?(dirty)` prop
+  (reports `hasChanges`, clears on unmount); `production-ledger-grid.tsx` tracks `dailyDirty` and
+  guards all three axis controls with `guardDirty = isDirty || dailyDirty`. `ViewModeSwitcher` /
+  `ScopeToggle` gained `disabled`/`disabledHint` (matching the period picker's existing pattern) —
+  a dirty block now dims + blocks the switch with a "Save or discard your edits before switching…"
+  hint instead of silently discarding. The SAME guard pattern is applied to the new endless pivot
+  editor (its own `totalDirty`).
+- **Files:** `production-daily-block.tsx`, `production-ledger-grid.tsx`, `ledger-controls.tsx`.
+- **Verification:** `npm run build` ✓, lint clean. Live-verify PENDING (Google-OAuth-gated route —
+  can't sign in from tooling; validated via build + code walkthrough).
+
+---
+
 ## Fixed entries
 
 All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept
@@ -408,6 +433,7 @@ analysis is the most useful record — this section is the index:
 | BUG-004 — blocking grid `minmax(104px,1fr)` (scroll, don't crush) | 2026-07-17 | `3fd0d94` |
 | BUG-005 — month-name canonicalization (writer + live DB repair) | 2026-07-17 | `3fd0d94` + DB |
 | BUG-012 — Cenapro Bulk Add modal draft-loss → retired for a loss-proof draft entry zone | 2026-07-21 | `3848145` |
+| BUG-013 — Cenapro focus Daily Block silent edit-loss on view/scope/period switch → lifted dirty-nav guard | 2026-07-22 | _(uncommitted — Phase 3b)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none

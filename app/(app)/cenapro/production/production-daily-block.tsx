@@ -90,15 +90,15 @@ export type { PlantView };
 export const EQUIPMENT_CODES = [...CRUSHER_CODES, ...KILN_CODES] as const;
 export type EquipmentCode = (typeof EQUIPMENT_CODES)[number];
 const SHIFT_ORDER = SHIFT_CODES; // ['M', 'E', 'N']
-const EDIT_COLUMNS: readonly EditColumn[] = [...EQUIPMENT_CODES, 'BAGGING'];
+export const EDIT_COLUMNS: readonly EditColumn[] = [...EQUIPMENT_CODES, 'BAGGING'];
 
 // ─── Keyboard-navigation column model ────────────────────────────────────────────────
 // Every NAVIGABLE cell is addressed by a colKey. Identity cols are editable on FILLER rows
 // only; weight cols (equip + BAGGING) on real (unless collision-locked) AND filler rows.
 // The left→right order here is the Tab order within a row (identity first, then weights).
-type NavColKey = 'shift' | 'grade' | 'source' | 'recv' | EditColumn;
-const NAV_COL_ORDER: readonly NavColKey[] = ['shift', 'grade', 'source', 'recv', ...EQUIPMENT_CODES, 'BAGGING'];
-const navColIndex = (c: NavColKey): number => NAV_COL_ORDER.indexOf(c);
+export type NavColKey = 'shift' | 'grade' | 'source' | 'recv' | EditColumn;
+export const NAV_COL_ORDER: readonly NavColKey[] = ['shift', 'grade', 'source', 'recv', ...EQUIPMENT_CODES, 'BAGGING'];
+export const navColIndex = (c: NavColKey): number => NAV_COL_ORDER.indexOf(c);
 
 // Build the cell `data-navid` (rowKey | colKey). Inputs carry it so the grid-level keydown
 // can read the ordered cell list straight from the DOM (document order == render order),
@@ -154,7 +154,7 @@ export const BAGGING = 'BAGGING' as const;
 export type EditColumn = EquipmentCode | typeof BAGGING;
 
 // Column → (disposition_kind, partner_equipment_code) — the write-back contract §3.
-function columnDisposition(col: EditColumn): { disposition_kind: string; partner_equipment_code: string } {
+export function columnDisposition(col: EditColumn): { disposition_kind: string; partner_equipment_code: string } {
     if (col === BAGGING) return { disposition_kind: 'flec_bagging', partner_equipment_code: '' };
     if ((CRUSHER_CODES as readonly string[]).includes(col)) return { disposition_kind: 'partner_crusher', partner_equipment_code: col };
     return { disposition_kind: 'partner_kiln', partner_equipment_code: col }; // RK1–RK4
@@ -179,6 +179,13 @@ interface ProductionDailyBlockProps {
     selectedPeriod: CenaproPeriod | null;
     /** Called after a successful save so the parent can refresh (router.refresh remount). */
     onSaveSuccess: () => void;
+    /**
+     * Reports this block's unsaved-changes signal UP to the grid toolbar so the axis
+     * controls (period picker / view switcher / scope toggle) can GUARD a navigation that
+     * would silently discard the pivot's edits (the audit's severe finding — the block's own
+     * Save/Discard live in its inner toolbar, invisible to the outer switchers). Optional.
+     */
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
 // ─── Pivot data model ──────────────────────────────────────────────────────────────
@@ -242,7 +249,7 @@ export function fmt(n: number): string {
     return Math.round(n).toLocaleString('en-US');
 }
 
-function parseWeight(raw: string): number | null {
+export function parseWeight(raw: string): number | null {
     const t = raw.replace(/[,\s]/g, '').trim();
     if (t === '') return null;
     const n = Number(t);
@@ -446,7 +453,7 @@ export const CELL_PAD = 'px-1.5 py-0.5';
 // prefix-filters the valid set case-insensitively, renders a compact glass popover anchored
 // under the cell, ArrowUp/Down move the highlight, Enter/Tab/click accept, Esc dismisses.
 // The valid set per identity column (drives BOTH the typeahead options + recognized styling):
-function identityOptions(col: NavColKey, plantView: PlantView): readonly string[] {
+export function identityOptions(col: NavColKey, plantView: PlantView): readonly string[] {
     if (col === 'shift') return SHIFT_CODES;
     if (col === 'grade') return GRADE_CODES;
     if (col === 'source') return SOURCE_SETS[plantView];
@@ -454,7 +461,7 @@ function identityOptions(col: NavColKey, plantView: PlantView): readonly string[
 }
 
 // Is a committed value a recognized member of its valid set? (drives the "tagged" styling)
-function isRecognizedIdentity(col: NavColKey, value: string, plantView: PlantView): boolean {
+export function isRecognizedIdentity(col: NavColKey, value: string, plantView: PlantView): boolean {
     const v = value.trim();
     if (!v) return false;
     return identityOptions(col, plantView).some((o) => o === v);
@@ -463,7 +470,7 @@ function isRecognizedIdentity(col: NavColKey, value: string, plantView: PlantVie
 // Case-insensitive normalize of a typed identity value against an allowed set, with a few
 // friendly aliases (e.g. "t1"/"tnk1"/"tank 1" → "TNK 1"). Returns the canonical value when
 // it matches cleanly, else the trimmed raw text (kept so the user sees it but it won't stage).
-function normalizeIdentity(raw: string, options: readonly string[]): string {
+export function normalizeIdentity(raw: string, options: readonly string[]): string {
     const t = raw.trim();
     if (!t) return '';
     const up = t.toUpperCase().replace(/\s+/g, ' ');
@@ -480,13 +487,13 @@ function normalizeIdentity(raw: string, options: readonly string[]): string {
 }
 
 // ─── Edit-state types ────────────────────────────────────────────────────────────────
-interface StagedInsert {
+export interface StagedInsert {
     cellKey: string;
     row: ProductionEventDirtyRow;
 }
 
 // Per-bagging-cell warehouse fields (captured via the small popover on a draft row).
-interface BaggingMeta {
+export interface BaggingMeta {
     warehouse: string; // '' = unplaced
     side: string;      // '' = none
     flec: string;      // '' = none
@@ -494,7 +501,7 @@ interface BaggingMeta {
 
 // A FILLER / NEW-DAY draft = one un-saved pull. Holds the typed identity + per-column
 // weights (strings) + per-bagging-cell warehouse meta. Keyed by a stable local id.
-interface FillerDraft {
+export interface FillerDraft {
     key: string;
     dayDate: string;   // the prod_date (the day block it sits in) — fixed
     shift: string;
@@ -505,11 +512,11 @@ interface FillerDraft {
     bagging?: BaggingMeta; // only relevant for the Bagging column
 }
 
-function draftIdentityComplete(d: FillerDraft): boolean {
+export function draftIdentityComplete(d: FillerDraft): boolean {
     return !!(d.shift.trim() && d.grade.trim() && d.source.trim() && d.recvDate.trim());
 }
 
-function draftHasWeights(d: FillerDraft): boolean {
+export function draftHasWeights(d: FillerDraft): boolean {
     return EDIT_COLUMNS.some((c) => {
         const w = parseWeight(d.weights[c] ?? '');
         return w != null && w > 0;
@@ -576,7 +583,7 @@ interface EditContext {
     unregisterCell: (navId: string) => void;
 }
 
-export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSuccess }: ProductionDailyBlockProps) {
+export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSuccess, onDirtyChange }: ProductionDailyBlockProps) {
     const { groups } = React.useMemo(() => buildDateGroups(rows, plantView), [rows, plantView]);
 
     // ─── Edit state (Phase 1) ──────────────────────────────────────────────────────
@@ -793,6 +800,13 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
 
     const dirtyCount = modified.size + staged.size + deleted.size + draftInsertRows.length;
     const hasChanges = dirtyCount > 0;
+
+    // Report the dirty signal UP so the grid toolbar's axis controls guard navigation that
+    // would silently discard these edits (the audit's severe finding). Cleared on unmount.
+    React.useEffect(() => {
+        onDirtyChange?.(hasChanges);
+    }, [hasChanges, onDirtyChange]);
+    React.useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
     const handleSave = React.useCallback(async () => {
         const dirtyRows: ProductionEventDirtyRow[] = [];
@@ -1516,7 +1530,7 @@ function CellEditor({
 //     bubble to the grid which reverts to the pre-edit snapshot.
 //
 // Matches EditInput's blur/placeholder/escapedRef contract so the commit path is identical.
-function IdentitySuggestInput({
+export function IdentitySuggestInput({
     value,
     onChange,
     onCommit,
@@ -1658,7 +1672,7 @@ function IdentitySuggestInput({
 // that is NOT recognized renders in a clear "unrecognized" amber style so the operator can
 // tell it didn't tag. This is the "it's tagged" confirmation (Issue 2b).
 const UNRECOGNIZED_CLASS = 'text-amber-600 dark:text-amber-400';
-function renderRecognizedIdentity(col: NavColKey, value: string, plantView: PlantView): React.ReactNode {
+export function renderRecognizedIdentity(col: NavColKey, value: string, plantView: PlantView): React.ReactNode {
     const v = value.trim();
     if (!v) return value;
     const recognized = isRecognizedIdentity(col, v, plantView);
@@ -1892,7 +1906,7 @@ function FillerWeightCell({
 
 
 // ─── Bagging-meta popover for a FILLER bagging cell (source already chosen on the row) ──
-function BaggingMetaPopover({
+export function BaggingMetaPopover({
     weight,
     source,
     onConfirm,
@@ -2078,7 +2092,7 @@ function columnKindLabel(col: EditColumn): string {
 }
 
 // ─── INSERT popover — COLUMN-AWARE (Phase 1 real-row blank cells) ───────────────────
-function InsertPopover({
+export function InsertPopover({
     weight,
     col,
     leaf,
@@ -2310,4 +2324,4 @@ function AddDayButton({
 }
 
 // Month-name → index (0-11) for the "Add day" period check (batch names are month names).
-const MONTHS = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+export const MONTHS = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];

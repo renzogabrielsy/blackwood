@@ -1332,36 +1332,19 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         <div className="flex h-full flex-col">
             {/* Toolbar */}
             <div className="flex flex-none flex-wrap items-center gap-2 border-b bg-muted/30 px-2 py-1.5 md:px-3">
-                <CenaproPeriodPicker periods={periods} selected={selectedPeriod} />
-                <span className="h-4 w-px bg-border/60" />
-                <ViewModeSwitcher mode="ledger" />
-                <span className="h-4 w-px bg-border/60" />
-                <ScopeToggle scope="endless" />
-                <span className="h-4 w-px bg-border/60" />
-                <span className="font-mono text-[11px] text-muted-foreground/70">
-                    {committed.length.toLocaleString('en-US')} loaded
-                    {(hasOlder || hasNewer) && <span className="ml-1 text-muted-foreground/50">· scroll to load more</span>}
-                </span>
-                <div className="flex-1" />
-                {/* Post-save success cue (chrome-only, fades up then auto-clears). */}
-                {savedFlash !== null && (
-                    <span
-                        key={savedFlash}
-                        className="animate-fade-up hidden text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 sm:inline"
-                    >
-                        Saved {savedFlash} row{savedFlash !== 1 ? 's' : ''}
-                    </span>
-                )}
-                {!unlocked && totalDirty > 0 && (
-                    <span className="hidden text-[10px] font-medium text-amber-600 dark:text-amber-400 sm:inline">
-                        {totalDirty} unsaved kept
-                    </span>
-                )}
-                {!unlocked && (
-                    <span className="hidden text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 md:inline">
-                        Read-only · oldest → newest
-                    </span>
-                )}
+                {/* Edit controls live on the LEFT (near the eye) — the Add-rows/lock toggle,
+                    then the editing actions; the period/view/scope nav sits to their right. */}
+                {/* Single control — unlock/reveal-blanks (jump-to-latest first if needed) or re-lock. */}
+                <Button
+                    variant={unlocked ? 'default' : 'outline'}
+                    size="sm"
+                    className="h-6 gap-1 px-2 text-[11px] transition-colors duration-150"
+                    onClick={handleToggle}
+                    title={unlocked ? 'Lock the sheet (drafts are kept)' : 'Add rows — jumps to the newest end and opens blank rows below'}
+                >
+                    {unlocked ? <LockOpen className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
+                    {unlocked ? 'Unlocked' : 'Add rows'}
+                </Button>
                 {/* Unlocked status hint — fades in with the editing state (chrome, not a row). */}
                 {unlocked && (
                     <span
@@ -1406,17 +1389,36 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         </Button>
                     </div>
                 )}
-                {/* Single control — unlock/reveal-blanks (jump-to-latest first if needed) or re-lock. */}
-                <Button
-                    variant={unlocked ? 'default' : 'outline'}
-                    size="sm"
-                    className="h-6 gap-1 px-2 text-[11px] transition-colors duration-150"
-                    onClick={handleToggle}
-                    title={unlocked ? 'Lock the sheet (drafts are kept)' : 'Add rows — jumps to the newest end and opens blank rows below'}
-                >
-                    {unlocked ? <LockOpen className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
-                    {unlocked ? 'Unlocked' : 'Add rows'}
-                </Button>
+                {/* Post-save success cue (chrome-only, fades up then auto-clears). */}
+                {savedFlash !== null && (
+                    <span
+                        key={savedFlash}
+                        className="animate-fade-up hidden text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 sm:inline"
+                    >
+                        Saved {savedFlash} row{savedFlash !== 1 ? 's' : ''}
+                    </span>
+                )}
+                {!unlocked && totalDirty > 0 && (
+                    <span className="hidden text-[10px] font-medium text-amber-600 dark:text-amber-400 sm:inline">
+                        {totalDirty} unsaved kept
+                    </span>
+                )}
+                {!unlocked && (
+                    <span className="hidden text-[10px] font-medium uppercase tracking-wide text-muted-foreground/60 md:inline">
+                        Read-only · oldest → newest
+                    </span>
+                )}
+                <span className="h-4 w-px bg-border/60" />
+                <CenaproPeriodPicker periods={periods} selected={selectedPeriod} />
+                <span className="h-4 w-px bg-border/60" />
+                <ViewModeSwitcher mode="ledger" />
+                <span className="h-4 w-px bg-border/60" />
+                <ScopeToggle scope="endless" />
+                <div className="flex-1" />
+                <span className="font-mono text-[11px] text-muted-foreground/70">
+                    {committed.length.toLocaleString('en-US')} loaded
+                    {(hasOlder || hasNewer) && <span className="ml-1 text-muted-foreground/50">· scroll to load more</span>}
+                </span>
             </div>
 
             {/* Resume/Discard prompt — restored unsaved drafts from a previous session. Inline,

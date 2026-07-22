@@ -50,6 +50,16 @@ export interface DailyPivotWindowState {
     fetchNewer: () => Promise<void>;
     /** Drops the window and re-seeds from a fresh anchor (used for a manual jump). */
     reset: (anchor: LedgerAnchor) => Promise<void>;
+    /**
+     * Re-pulls the CURRENTLY-loaded day-window fresh from the server, restoring the prior
+     * loaded depth, then re-anchors near the pre-refresh viewport. Used AFTER a Save that
+     * touched committed events (weight edits / deletes / pull re-tags / new pulls) — those
+     * can live on any loaded day, and a recv/prod-date pull-edit can re-bucket a row into a
+     * different day. Crash-safe: a fresh server read + re-pivot, never a stale-overlay merge,
+     * so a re-bucketed / vanished row simply lands in its new spot (or falls outside the
+     * window) without corrupting the pager. Re-seeds from `latest` when the window is empty.
+     */
+    refreshWindow: () => Promise<void>;
 }
 
 // Number of DISTINCT prod_dates in an event list = the number of day-blocks it produces
@@ -182,6 +192,71 @@ export function useDailyPivotWindow(
         }
     }, []);
 
+    const refreshWindow = React.useCallback(async (): Promise<void> => {
+        const seed = eventsRef.current;
+        if (seed.length === 0) {
+            await reset({ kind: 'latest' });
+            return;
+        }
+        // Anchor the fresh read on the current top event's period so the viewport stays near
+        // where the operator was editing (rather than teleporting to global latest). Restore
+        // the prior loaded day-depth by paging forward.
+        const top = seed[0];
+        const targetDays = distinctDayCount(seed);
+        const anchor: LedgerAnchor =
+            top.batch && top.batch_year != null
+                ? { kind: 'period', batch_year: Number(top.batch_year), batch: top.batch }
+                : { kind: 'latest' };
+
+        loadingOlderRef.current = true;
+        loadingNewerRef.current = true;
+        setLoadingOlder(true);
+        setLoadingNewer(true);
+        try {
+            const firstPage = await fetchDailyPivotWindow({ mode: 'anchor', anchor, plant: plantRef.current });
+            if (firstPage.error) {
+                errorToast(firstPage.error);
+                return;
+            }
+            const seen = new Set<string>();
+            const all: ProductionEventRow[] = [];
+            for (const r of firstPage.events) {
+                const id = r.id ?? '';
+                if (!seen.has(id)) { seen.add(id); all.push(r); }
+            }
+            const hasOlderLocal = firstPage.hasOlder;
+            let hasNewerLocal = firstPage.hasNewer;
+
+            // Restore the prior loaded day-depth (bounded guard against a pathological run).
+            for (let guard = 0; guard < 50 && distinctDayCount(all) < targetDays && hasNewerLocal; guard++) {
+                const cursor = (all[all.length - 1]?.prod_date ?? '').trim();
+                if (!cursor) break;
+                const page = await fetchDailyPivotWindow({
+                    mode: 'cursor',
+                    cursor,
+                    direction: 'newer',
+                    plant: plantRef.current,
+                });
+                if (page.error) { errorToast(page.error); break; }
+                for (const r of page.events) {
+                    const id = r.id ?? '';
+                    if (!seen.has(id)) { seen.add(id); all.push(r); }
+                }
+                hasNewerLocal = page.hasNewer;
+            }
+
+            setEvents(all);
+            setFirstItemIndex(FIRST_ITEM_BASE);
+            setHasOlder(hasOlderLocal);
+            setHasNewer(hasNewerLocal);
+        } finally {
+            loadingOlderRef.current = false;
+            loadingNewerRef.current = false;
+            setLoadingOlder(false);
+            setLoadingNewer(false);
+        }
+    }, [reset]);
+
     return {
         events,
         firstItemIndex,
@@ -193,5 +268,6 @@ export function useDailyPivotWindow(
         fetchOlder,
         fetchNewer,
         reset,
+        refreshWindow,
     };
 }

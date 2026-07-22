@@ -190,12 +190,16 @@ where present.
 - **Phase 2B — endless W6/W7 pivots** (day-windowed keyset pagination + pivot per
   window + virtualized day-blocks + scroll anchor). Focus W6/W7 = existing daily
   block. Prompt: `cenapro-ledger-phase2-endless-pivots.md`.
-- **Phase 3 — inline edit of committed rows everywhere** (scope-independent
-  unlock): editing committed ledger rows on the endless sheet + extending the
-  daily-block editing to the endless pivots + unifying the lock across focus.
-  (The draft entry zone from Phase 2A already retired the modal.) Prompt:
-  `cenapro-ledger-phase3-editing-everywhere.md` (the draft-zone sections there are
-  now delivered by Phase 2A; that prompt's remaining scope is committed-row edit).
+- **Phase 3a (DONE, 2026-07-22)** — inline edit of committed rows on the ENDLESS
+  LEDGER: id-keyed `editedRows`/`deletedIds`, unified Save, v2 mirror,
+  `refreshWindow()`. (Delivered the ledger half of
+  `cenapro-ledger-phase3-editing-everywhere.md`.)
+- **Phase 3b (FINAL)** — fully-featured editing on the ENDLESS PIVOTS + the
+  dirty-navigation guards (incl. fixing the focus daily block's silent-loss
+  bug). Informed by the 2026-07-22 three-agent analysis (focus-pivot gap audit,
+  virtualization seam audit, pivot-writeback prior art). Prompt:
+  `cenapro-ledger-phase3b-pivot-editing.md` — that prompt supersedes the pivot
+  sections of `cenapro-ledger-phase3-editing-everywhere.md`.
 
 Each phase leaves the app fully working; the siloed intermediate is never shipped
 (Phase 1 already makes W6/W7 reachable in both scopes via the switcher, even

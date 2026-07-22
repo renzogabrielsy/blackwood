@@ -1268,6 +1268,13 @@ export function ProductionLedgerGrid({
         return false;
     });
 
+    // The Daily Block (W6/W7 focus pivot) owns its OWN unsaved-edit state in its inner
+    // toolbar. Lift its dirty signal so the axis controls below GUARD a view/scope/period
+    // switch that would silently discard those pivot edits (the audit's severe finding).
+    const [dailyDirty, setDailyDirty] = React.useState(false);
+    const guardDirty = isDirty || dailyDirty;
+    const guardHint = 'Save or discard your edits before switching';
+
     const handleDiscard = React.useCallback(() => {
         setRows(buildGridRows(initialRows, dateSortKey, dateSortDir));
         setActiveCell(null);
@@ -1495,15 +1502,16 @@ export function ProductionLedgerGrid({
                 <CenaproPeriodPicker
                     periods={periods}
                     selected={selectedPeriod}
-                    disabled={isDirty}
-                    disabledHint="Save or discard your edits before switching period"
+                    disabled={guardDirty}
+                    disabledHint={guardHint + ' period'}
                 />
                 <span className="h-4 w-px bg-border/60" />
-                {/* View-mode switcher — stays visible in every mode. */}
-                <ViewModeSwitcher mode={viewMode} />
+                {/* View-mode switcher — stays visible in every mode. Guarded while the daily
+                    block (or ledger) has unsaved edits (fixes the silent-loss-on-switch bug). */}
+                <ViewModeSwitcher mode={viewMode} disabled={guardDirty} disabledHint={guardHint + ' view'} />
                 <span className="h-4 w-px bg-border/60" />
                 {/* Scope toggle — jump back to the endless sheet; preserves view/period. */}
-                <ScopeToggle scope={currentScope} />
+                <ScopeToggle scope={currentScope} disabled={guardDirty} disabledHint={guardHint + ' scope'} />
                 {!isDailyView && (
                     <>
                         <span className="h-4 w-px bg-border/60" />
@@ -1584,6 +1592,7 @@ export function ProductionLedgerGrid({
                     plantView={plantView}
                     selectedPeriod={selectedPeriod}
                     onSaveSuccess={onSaveSuccess}
+                    onDirtyChange={setDailyDirty}
                 />
             )}
 
