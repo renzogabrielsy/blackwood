@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { toast } from 'sonner';
 import {
     Save,
@@ -64,87 +64,16 @@ import {
     formatCccFlec,
 } from '../types';
 import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod } from './actions';
-import { BulkAddModal } from './bulk-add-modal';
 import { CenaproPeriodPicker } from './period-picker';
 import { ProductionDailyBlock } from './production-daily-block';
 import { CenaproLedgerCardsMobile } from './production-ledger-cards-mobile';
+import { parseViewMode, plantViewOf, parseScope, type Scope } from './ledger-url';
+import { ViewModeSwitcher, ScopeToggle } from './ledger-controls';
 
-// ─── View modes ───────────────────────────────────────────────────────────────────
-// The production screen has multiple ways to look at one period's rows. 'ledger' is the
-// editable Industrial-Spreadsheet grid (default); 'daily-w6' / 'daily-w7' are the two
-// read-only Daily Block variants (boss "PROD 2026" layout, split by production plant —
-// W6 = the tank+W6 sources, W7 = the W7 source). More modes will be added later — a
-// typed union + a switch in the render keeps that extensible.
-const VIEW_MODES = ['ledger', 'daily-w6', 'daily-w7'] as const;
-type ViewMode = (typeof VIEW_MODES)[number];
-
-function parseViewMode(raw: string | null): ViewMode {
-    // Backward-compat: the legacy single Daily Block (`?view=daily`) maps to W6.
-    if (raw === 'daily') return 'daily-w6';
-    return raw && (VIEW_MODES as readonly string[]).includes(raw) ? (raw as ViewMode) : 'ledger';
-}
-
-const VIEW_MODE_LABELS: Record<ViewMode, string> = {
-    ledger: 'Ledger',
-    'daily-w6': 'Daily W6',
-    'daily-w7': 'Daily W7',
-};
-
-// Map a daily view mode → the plant variant the Daily Block renders.
-function plantViewOf(mode: ViewMode): 'W6' | 'W7' | null {
-    if (mode === 'daily-w6') return 'W6';
-    if (mode === 'daily-w7') return 'W7';
-    return null;
-}
-
-// ─── View-mode switcher (segmented control in the toolbar) ──────────────────────────
-// Drives the `?view=` URL param, preserving the existing year/batch params (the module's
-// URL-state convention). useTransition surfaces a pending state during the navigation.
-// The data doesn't re-fetch on a view change — the same period rows feed every mode —
-// so this is a client-side display toggle written to the URL for shareability/back-button.
-function ViewModeSwitcher({ mode }: { mode: ViewMode }) {
-    const router = useRouter();
-    const pathname = usePathname();
-    const searchParams = useSearchParams();
-    const [isPending, startTransition] = React.useTransition();
-
-    const select = React.useCallback(
-        (next: ViewMode) => {
-            if (next === mode) return;
-            const sp = new URLSearchParams(searchParams.toString());
-            if (next === 'ledger') sp.delete('view'); // default → keep the URL clean
-            else sp.set('view', next);
-            const qs = sp.toString();
-            startTransition(() => {
-                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-            });
-        },
-        [mode, searchParams, router, pathname],
-    );
-
-    return (
-        <div className="inline-flex h-6 items-center rounded-md border border-border/60 bg-background p-0.5" role="tablist" aria-label="Production view mode">
-            {VIEW_MODES.map((m) => (
-                <button
-                    key={m}
-                    type="button"
-                    role="tab"
-                    aria-selected={mode === m}
-                    onClick={() => select(m)}
-                    className={cn(
-                        'h-5 rounded px-2 text-[11px] font-medium transition-colors duration-150',
-                        mode === m
-                            ? 'bg-zinc-800 text-zinc-50 dark:bg-zinc-200 dark:text-zinc-900'
-                            : 'text-muted-foreground hover:text-foreground',
-                    )}
-                >
-                    {VIEW_MODE_LABELS[m]}
-                </button>
-            ))}
-            {isPending && <Loader2 className="ml-1 mr-0.5 h-3 w-3 animate-spin text-muted-foreground" />}
-        </div>
-    );
-}
+// The view axis (`?view=`) + its switcher now live in the shared `ledger-url.ts` (pure
+// helpers) + `ledger-controls.tsx` (`ViewModeSwitcher`), so the server page and this
+// grid share one source of truth. `parseViewMode` / `plantViewOf` / `ViewModeSwitcher`
+// are imported above.
 
 // ─── Editable fields ─────────────────────────────────────────────────────────────
 // The writable columns (id/unique_tag/batch_year are read-only/computed). Order here
@@ -233,7 +162,7 @@ export interface GridRow {
 // PostgREST types all VIEW columns nullable; coalesce to '' for the string grid. The
 // `id` is non-null at runtime (the upsert key) but typed nullable, so coalesce too. The
 // CCC/FLEC cell is seeded from the two normalized DB fields (disposition + equipment).
-function toGridRow(r: ProductionEventRow): GridRow {
+export function toGridRow(r: ProductionEventRow): GridRow {
     return {
         _state: 'existing',
         id: r.id ?? '',
@@ -352,7 +281,7 @@ type RowDirection = 'in' | 'out' | 'dvo' | null;
 //     counted as "taken out of a real warehouse").
 //   • A real placed warehouse (WHSE 1/2/5/7) → disposition decides: bagged-IN = GREEN,
 //     any withdrawal (crusher/kiln) = RED.
-function rowDirection(row: GridRow): RowDirection {
+export function rowDirection(row: GridRow): RowDirection {
     const wh = (row.warehouse_code ?? '').toString().trim().toUpperCase();
     // 1. Unplaced ALWAYS wins → no tint
     if (wh === '') return null;
@@ -365,7 +294,7 @@ function rowDirection(row: GridRow): RowDirection {
 }
 
 // Scrolling-cell tint — translucent so hover/selection still blend through.
-function rowDirectionTint(dir: RowDirection): string {
+export function rowDirectionTint(dir: RowDirection): string {
     if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/40';
     if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/40';
     if (dir === 'dvo') return 'bg-blue-50 dark:bg-blue-950/40';
@@ -377,7 +306,7 @@ function rowDirectionTint(dir: RowDirection): string {
 // matching the row's IN/OUT color so there's no seam between frozen and scrolling parts.
 // Light mode uses the same -50 wash over the opaque base; dark uses a denser -950/60 so
 // it reads against the dark surface and isn't see-through.
-function rowDirectionFrozenTint(dir: RowDirection): string {
+export function rowDirectionFrozenTint(dir: RowDirection): string {
     if (dir === 'in') return 'bg-emerald-50 dark:bg-emerald-950/60';
     if (dir === 'out') return 'bg-rose-50 dark:bg-rose-950/60';
     if (dir === 'dvo') return 'bg-blue-50 dark:bg-blue-950/60';
@@ -905,6 +834,33 @@ export function ProductionLedgerGrid({
     const viewMode = parseViewMode(viewSearchParams.get('view'));
     const plantView = plantViewOf(viewMode); // 'W6' | 'W7' | null
     const isDailyView = plantView !== null;
+    // Scope axis (`?scope=`, legacy `?focus=1`). This grid renders for FOCUS (any view)
+    // AND for the endless+daily fallback (Phase 1 shows the month-scoped daily block until
+    // the endless pivot lands in Phase 2). The Scope toggle mirrors the real URL state so
+    // it never lies about which scope you're in; it preserves view/year/batch on a switch.
+    const currentScope: Scope = viewSearchParams.get('focus') === '1'
+        ? 'focus'
+        : parseScope(viewSearchParams.get('scope'));
+
+    // Bulk entry moved to the endless sheet's loss-proof draft zone (Phase 2A — the
+    // fragile Bulk Add modal was retired). This affordance switches to endless + ledger
+    // and carries a one-shot `?add=1` so the sheet opens UNLOCKED with the entry zone
+    // ready. It drops year/batch so the sheet anchors at the TRUE latest (newest end) —
+    // the only place new rows can append — rather than mid-history where the zone would
+    // hide behind a "jump to latest" affordance.
+    const router = useRouter();
+    const pathname = usePathname();
+    const goAddInSheet = React.useCallback(() => {
+        const sp = new URLSearchParams(viewSearchParams.toString());
+        sp.delete('focus'); // retire the legacy silo param
+        sp.delete('scope'); // endless is the default (clean URL)
+        sp.delete('view'); // ledger is the default
+        sp.delete('year'); // → anchor resolves to `latest` (the append edge)
+        sp.delete('batch');
+        sp.set('add', '1'); // one-shot: unlock the draft entry zone on arrival
+        const qs = sp.toString();
+        router.push(qs ? `${pathname}?${qs}` : pathname);
+    }, [viewSearchParams, router, pathname]);
 
     // Date sort — clickable on EITHER date header. Default: newest-first by recv_date
     // (operators care about recent activity most); clicking the Prod header switches the
@@ -921,7 +877,6 @@ export function ProductionLedgerGrid({
 
     const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
     const [isSaving, setIsSaving] = React.useState(false);
-    const [bulkAddOpen, setBulkAddOpen] = React.useState(false);
 
     // Live refs to `rows` + `activeCell`, synced during render. These let the cell
     // callbacks (`startEditing`, `revertChanges`) read current values WITHOUT listing
@@ -1546,6 +1501,9 @@ export function ProductionLedgerGrid({
                 <span className="h-4 w-px bg-border/60" />
                 {/* View-mode switcher — stays visible in every mode. */}
                 <ViewModeSwitcher mode={viewMode} />
+                <span className="h-4 w-px bg-border/60" />
+                {/* Scope toggle — jump back to the endless sheet; preserves view/period. */}
+                <ScopeToggle scope={currentScope} />
                 {!isDailyView && (
                     <>
                         <span className="h-4 w-px bg-border/60" />
@@ -1568,11 +1526,16 @@ export function ProductionLedgerGrid({
                             variant="outline"
                             size="sm"
                             className="h-6 gap-1 px-2 text-[11px]"
-                            onClick={() => setBulkAddOpen(true)}
-                            title="Open a fresh grid for fast multi-row entry — paste from Excel/Sheets"
+                            onClick={goAddInSheet}
+                            disabled={isDirty}
+                            title={
+                                isDirty
+                                    ? 'Save or discard your edits before switching to the sheet'
+                                    : 'Add rows in the endless sheet — a loss-proof draft zone (paste from Excel/Sheets)'
+                            }
                         >
                             <Sparkles className="h-3 w-3" />
-                            Bulk Add
+                            Add rows in the sheet →
                         </Button>
                         {isDirty && (
                             <Button variant="ghost" size="sm" className="h-6 gap-1 px-2 text-[11px]" onClick={handleDiscard} disabled={isSaving}>
@@ -1699,24 +1662,27 @@ export function ProductionLedgerGrid({
                         </tr>
                     </thead>
                     <tbody>
-                        {/* Empty state — the selected period has zero data rows. Adds now
-                            happen via Bulk Add or right-click Insert (no trailing input row). */}
+                        {/* Empty state — the selected period has zero data rows. Bulk entry
+                            now lives in the endless sheet's loss-proof draft zone; per-row
+                            adds still work via right-click Insert. */}
                         {rows.length === 0 && (
                             <tr>
                                 <td colSpan={COL_COUNT} className="py-10 text-center">
                                     <div className="flex flex-col items-center justify-center gap-2 text-center">
                                         <Inbox className="h-8 w-8 text-muted-foreground/30" />
                                         <p className="text-sm text-muted-foreground">
-                                            No production events in this period. Use <span className="font-medium">Bulk Add</span> to enter rows, or right-click a row to insert.
+                                            No production events in this period. Use <span className="font-medium">Add rows in the sheet</span> for fast multi-row entry, or right-click a row to insert.
                                         </p>
                                         <Button
                                             variant="outline"
                                             size="sm"
                                             className="h-6 gap-1 px-2 text-[11px]"
-                                            onClick={() => setBulkAddOpen(true)}
+                                            onClick={goAddInSheet}
+                                            disabled={isDirty}
+                                            title={isDirty ? 'Save or discard your edits first' : undefined}
                                         >
                                             <Sparkles className="h-3 w-3" />
-                                            Bulk Add
+                                            Add rows in the sheet →
                                         </Button>
                                     </div>
                                 </td>
@@ -1837,10 +1803,6 @@ export function ProductionLedgerGrid({
                 {CCC_FLEC_OPTIONS.map((o) => <option key={o} value={o} />)}
             </datalist>
 
-            {/* Bulk Add modal — the fast multi-row entry path. Opens with a fresh 8-row
-                sheet that takes Excel/Sheets paste; on success it refreshes the page data
-                (via onSaveSuccess → router.refresh) so the new rows land in this grid. */}
-            <BulkAddModal open={bulkAddOpen} onOpenChange={setBulkAddOpen} onInserted={onSaveSuccess} defaultYear={selectedPeriod?.batch_year} />
             </>
             )}
         </div>

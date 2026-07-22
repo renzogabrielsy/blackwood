@@ -1,14 +1,15 @@
-// Bulk-Add paste + canonicalization layer for the Cenapro Production grid.
+// Bulk paste + canonicalization layer for the Cenapro Production draft entry zone.
 //
-// This is the "paste-friendly" brain behind the Bulk Add modal. The modal's grid
-// cells are plain text (so Excel/Sheets paste flows in unmangled — strict dropdowns
-// fight paste), and this module turns whatever the operator typed/pasted into the
-// canonical lookup `code` the DB FKs require. It mirrors RC IN's `paste-utils.ts`
+// This is the "paste-friendly" brain behind the endless Ledger's draft entry zone
+// (`draft-entry-zone.tsx`, Phase 2A — it replaced the retired Bulk Add modal). The
+// zone's grid cells are plain text (so Excel/Sheets paste flows in unmangled — strict
+// dropdowns fight paste), and this module turns whatever the operator typed/pasted into
+// the canonical lookup `code` the DB FKs require. It mirrors RC IN's `paste-utils.ts`
 // (COLUMN_MAP + cleanCellValue) but adds the categorical canonicalization the cenapro
 // production columns need, including the disposition⇄equipment co-derivation.
 //
-// Keeping this here (not in the component) keeps `bulk-add-modal.tsx` lean and makes
-// the mapping logic unit-reviewable in isolation.
+// Keeping this here (not in the component) keeps the entry zone lean and makes the
+// mapping logic unit-reviewable in isolation.
 
 import { parseExcelDate, trimCellValue, normalizeTypedDate } from '@/lib/paste-utils';
 import {

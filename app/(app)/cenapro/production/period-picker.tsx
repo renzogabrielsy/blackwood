@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import {
     Select,
@@ -33,6 +33,7 @@ interface CenaproPeriodPickerProps {
 export function CenaproPeriodPicker({ periods, selected, disabled, disabledHint }: CenaproPeriodPickerProps) {
     const router = useRouter();
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     // Own the navigation transition so the toolbar can show a pending state while the
     // server re-fetches the new period's rows (the page then remounts the grid).
     const [isPending, startTransition] = React.useTransition();
@@ -58,16 +59,19 @@ export function CenaproPeriodPicker({ periods, selected, disabled, disabledHint 
 
     // Push a new (year, batch) to the URL → server re-fetch. When the year changes, snap
     // to that year's newest batch (the current batch may not exist in the new year).
+    // PRESERVE the other axis params (view/scope) so a period jump keeps the current
+    // view + scope — the dropdown is a jump-to anchor (endless) / clamp selector (focus),
+    // never a reset to the default view.
     const go = React.useCallback(
         (year: number, batch: string) => {
-            const sp = new URLSearchParams();
+            const sp = new URLSearchParams(searchParams.toString());
             sp.set('year', String(year));
             sp.set('batch', batch);
             startTransition(() => {
                 router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
             });
         },
-        [router, pathname],
+        [router, pathname, searchParams],
     );
 
     const onYearChange = React.useCallback(

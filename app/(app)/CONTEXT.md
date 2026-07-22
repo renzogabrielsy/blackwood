@@ -83,6 +83,20 @@ values into views.
   `components/sync/`) sits right-aligned. **This is where the Daily Sync launcher
   lives** — a privileged-only "Run Sync" button that opens the sync **modal**,
   replacing the retired floating button. See `app/(app)/sync/CONTEXT.md`.
+  **`<DigestAutoRefresh />`** is also mounted once at the top of the digest
+  branch's `SHELL_CLS` container (renders `null`) — it keeps the server-rendered
+  board fresh after a sync finishes without a full reload (see below).
+- `components/digest/digest-auto-refresh.tsx` — `'use client'`, renders `null`.
+  Subscribes ONCE to Supabase Realtime on `public.sync_runs` (INSERT + UPDATE) and
+  calls `router.refresh()` when a run reaches a TERMINAL status
+  (`isTerminalRunStatus`) — re-running `getDigestData()` (the RSC) and patching the
+  DOM in place, so the digest never shows stale pre-sync numbers (esp. on the
+  installed PWA, which has no service worker). Idempotent per run id via a
+  `useRef(Set)` (Realtime UPDATE payloads carry only the PK, so the prior status
+  can't be read) + an ~800ms debounce coalescing the queued→running→terminal burst
+  into one refresh. No polling, no mount-time catch-up query (Realtime fires only
+  for post-subscribe changes → an already-terminal run at load never refresh-loops).
+  Rendered ONLY on the digest branch, not the schedule branch.
 - `components/digest/format.ts` — pure display formatters (`fmtKg`, `fmtKwh`,
   `fmtPhpNumber`, `fmtDeltaPct`, `fmtByUnit`, `relativeTime`, `diffValue`).
   No aggregation (HARD RULE — that lives in SQL views).

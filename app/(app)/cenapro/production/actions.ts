@@ -121,6 +121,178 @@ export async function fetchProductionEvents(period?: {
     return { data: data ?? [] };
 }
 
+// ─── Endless sheet: keyset-paginated ledger reads ───────────────────────────────
+// The "endless sheet" (production-endless-sheet.tsx) is ONE continuous, virtualized,
+// read-only view of the ENTIRE cenapro_production_events history, ordered oldest-first
+// (`recv_date ASC, id ASC`), lazy-loaded bidirectionally with keyset (cursor)
+// pagination. The dropdown period picker is a JUMP-TO anchor, NOT a filter — the first
+// query is already anchored at the selected period, never "load from the beginning then
+// teleport".
+//
+// Cursor = the composite `(recv_date, id)` of a boundary row — `recv_date` primary,
+// `id` (a stable uuid string) as the tiebreaker. The view has NO created_at, so this
+// pair is the canonical total order. PostgREST types all view columns nullable; real
+// rows are non-null, and we coalesce defensively when building filter strings.
+
+const LEDGER_PAGE_SIZE = 100;
+
+// An anchor selects WHERE the initial window opens.
+//   • 'latest' → the newest rows (bottom of the oldest-first sheet) — the default.
+//   • 'period' → the first (oldest) row of a (batch_year, batch) period, loading forward.
+export type LedgerAnchor =
+    | { kind: 'latest' }
+    | { kind: 'period'; batch_year: number; batch: string };
+
+// The boundary row a subsequent page pages off of.
+export interface LedgerCursor {
+    recv_date: string;
+    id: string;
+}
+
+// One page request: either an initial anchored page, or a cursored older/newer page.
+export type LedgerPageInput =
+    | { mode: 'anchor'; anchor: LedgerAnchor }
+    | { mode: 'cursor'; cursor: LedgerCursor; direction: 'older' | 'newer' };
+
+// One page result. `rows` is ALWAYS oldest-first (canonical order), regardless of the
+// direction fetched (DESC fetches are reversed in memory before returning). `hasOlder` /
+// `hasNewer` report whether more rows exist beyond each edge of THIS page — the client
+// hook consumes only the flag relevant to the direction it just fetched. `notice` is an
+// optional info string (e.g. an empty jumped-to period). `error` (when present) is a
+// single copyable string for errorToast (HARD RULE: persistent + Copy).
+export interface LedgerPage {
+    rows: ProductionEventRow[];
+    hasOlder: boolean;
+    hasNewer: boolean;
+    notice?: string;
+    error?: string;
+}
+
+// The single-string-literal column list. MUST match fetchProductionEvents exactly and
+// stay a lone literal passed straight to `.select(...)` — the typed PostgREST client
+// parses it at the type level to infer ProductionEventRow; a const/concatenated string
+// defeats that inference (falls back to an error type).
+async function ledgerErr(msg: string): Promise<LedgerPage> {
+    return { rows: [], hasOlder: false, hasNewer: false, error: msg };
+}
+
+export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPage> {
+    const supabase = await createClient();
+
+    // ── Initial anchored page ────────────────────────────────────────────────────
+    if (input.mode === 'anchor') {
+        const anchor = input.anchor;
+
+        // 'latest' → load the FINAL page (query DESC, limit, then reverse to asc) so the
+        // view opens at the BOTTOM (newest rows). No newer rows exist beyond the end;
+        // a full page implies there's older history above.
+        if (anchor.kind === 'latest') {
+            const { data, error } = await supabase
+                .from('cenapro_production_events')
+                .select(
+                    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+                )
+                .order('recv_date', { ascending: false })
+                .order('id', { ascending: false })
+                .limit(LEDGER_PAGE_SIZE);
+            if (error) return ledgerErr(`Failed to load ledger page: ${error.message}`);
+            const fetched = data ?? [];
+            const hasOlder = fetched.length === LEDGER_PAGE_SIZE;
+            return { rows: fetched.reverse(), hasOlder, hasNewer: false };
+        }
+
+        // 'period' → anchor at the period's FIRST (oldest, canonical-order) row, then
+        // load forward INCLUSIVE (>= that row). The period is a jump target only; the
+        // window still spans all history in both directions from there.
+        const { data: firstRows, error: firstErr } = await supabase
+            .from('cenapro_production_events')
+            .select(
+                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+            )
+            .eq('batch_year', anchor.batch_year)
+            .eq('batch', anchor.batch)
+            .order('recv_date', { ascending: true })
+            .order('id', { ascending: true })
+            .limit(1);
+        if (firstErr) return ledgerErr(`Failed to resolve period anchor: ${firstErr.message}`);
+
+        const first = firstRows?.[0];
+        if (!first) {
+            // Empty jumped-to period (edge case — the picker only offers periods that
+            // exist in data). Show nothing but an inline notice rather than a blank void.
+            return {
+                rows: [],
+                hasOlder: false,
+                hasNewer: false,
+                notice: `No entries in ${anchor.batch} ${anchor.batch_year}`,
+            };
+        }
+
+        const d = first.recv_date ?? '';
+        const i = first.id ?? '';
+        const { data, error } = await supabase
+            .from('cenapro_production_events')
+            .select(
+                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+            )
+            .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gte.${i})`)
+            .order('recv_date', { ascending: true })
+            .order('id', { ascending: true })
+            .limit(LEDGER_PAGE_SIZE + 1);
+        if (error) return ledgerErr(`Failed to load ledger page: ${error.message}`);
+        const fetched = data ?? [];
+        const hasNewer = fetched.length > LEDGER_PAGE_SIZE;
+        const rows = fetched.slice(0, LEDGER_PAGE_SIZE);
+
+        // hasOlder: anything strictly BEFORE the period's first row (older months)?
+        const { count, error: probeErr } = await supabase
+            .from('cenapro_production_events')
+            .select('id', { count: 'exact', head: true })
+            .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`);
+        if (probeErr) return ledgerErr(`Failed to probe ledger history: ${probeErr.message}`);
+
+        return { rows, hasOlder: (count ?? 0) > 0, hasNewer };
+    }
+
+    // ── Cursored older/newer page ────────────────────────────────────────────────
+    const { recv_date: d, id: i } = input.cursor;
+
+    if (input.direction === 'older') {
+        // Rows strictly BEFORE the cursor. Fetch DESC (limit+1 to probe), then reverse
+        // to canonical asc for return.
+        const { data, error } = await supabase
+            .from('cenapro_production_events')
+            .select(
+                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+            )
+            .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`)
+            .order('recv_date', { ascending: false })
+            .order('id', { ascending: false })
+            .limit(LEDGER_PAGE_SIZE + 1);
+        if (error) return ledgerErr(`Failed to load earlier entries: ${error.message}`);
+        const fetched = data ?? [];
+        const hasOlder = fetched.length > LEDGER_PAGE_SIZE;
+        const rows = fetched.slice(0, LEDGER_PAGE_SIZE).reverse();
+        return { rows, hasOlder, hasNewer: false };
+    }
+
+    // direction === 'newer' → rows strictly AFTER the cursor, already canonical asc.
+    const { data, error } = await supabase
+        .from('cenapro_production_events')
+        .select(
+            'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+        )
+        .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gt.${i})`)
+        .order('recv_date', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(LEDGER_PAGE_SIZE + 1);
+    if (error) return ledgerErr(`Failed to load newer entries: ${error.message}`);
+    const fetched = data ?? [];
+    const hasNewer = fetched.length > LEDGER_PAGE_SIZE;
+    const rows = fetched.slice(0, LEDGER_PAGE_SIZE);
+    return { rows, hasOlder: false, hasNewer };
+}
+
 // ─── Dirty-row payload (client → server) ─────────────────────────────────────────
 // One entry per new/modified grid row. The client sends raw editable fields as
 // strings (grid cells are text); the server coerces numbers/dates and strips empties

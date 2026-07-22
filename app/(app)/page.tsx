@@ -24,6 +24,7 @@ import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
 import { OpenBlocks } from "@/components/digest/open-blocks";
 import { BagInventory } from "@/components/digest/bag-inventory";
+import { DigestAutoRefresh } from "@/components/digest/digest-auto-refresh";
 import { SyncLauncher } from "@/components/sync/SyncLauncher";
 
 /** Shared page shell — same container for both views so the toggle never shifts. */
@@ -67,6 +68,11 @@ async function DigestBoard() {
 
   return (
     <div className={SHELL_CLS}>
+      {/* Auto-refresh the RSC when a sync run finishes (Realtime → router.refresh),
+          so the board never shows stale pre-sync numbers — critical on the PWA.
+          Renders null; position is cosmetic. */}
+      <DigestAutoRefresh />
+
       {/* A0. View switcher — digest board ↔ production schedule (URL-driven). */}
       <HomeViewToggle view="digest" />
 
