@@ -458,7 +458,9 @@ Read .agents/prompts/<filename>.md and follow the instructions.
 
 ## Git Workflow
 
-- **`main`** — protected, production-ready
+- **`main`** — protected, production-ready. **Vercel deploys the PRODUCTION app (the live URL) from `main`** (project `blackwood`, org `team_TmPJkyEy…`, region `hnd1`; no production-branch override in `vercel.json`, so it defaults to the repo default branch `main`).
 - **`dev`** — staging/integration branch
 - **`feat/*`** — feature branches, branched from `dev`
 - Use **conventional commits**: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`
+
+**Deploying to the live site (READ THIS before "push to live" / "make it live"):** pushing a `feat/*` branch only produces a Vercel **preview** deployment — it does NOT touch the live URL. To ship live you must land the work on **`main`** (merge `feat/* → main`, or `feat/* → dev → main`), then push `main`; Vercel auto-deploys production on that push. Merging to `main` is protected + hard-to-reverse — confirm scope with the user first, do it via the `git-branch-guardian` subagent, never force-push, and stop + report if the merge isn't clean.

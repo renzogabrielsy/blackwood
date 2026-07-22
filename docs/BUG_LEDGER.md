@@ -202,7 +202,7 @@ Context: 2026-07-17 we re-enabled `viewport-fit=cover` (required — without it 
 PILLARBOXES the app in landscape, black bars both sides) and rebuilt safe-area handling
 **centrally**: `app/globals.css` defines `.safe-t/.safe-b/.safe-l/.safe-r/.safe-x`
 (deliberately UNLAYERED so they outrank Tailwind's cascade layer — a caller's `p-0` would
-otherwise silently tw-merge away a `pt-[env(...)]`), and only the shell + shared
+otherwise silently tw-merge away a `pt-`&#91;`env(…)`&#93; class), and only the shell + shared
 primitives apply them. Contract: **backgrounds paint edge-to-edge, content is padded
 clear; never re-apply `env()` at a call site — extend the primitive.**
 
@@ -344,6 +344,81 @@ shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M
 
 ---
 
+## BUG-012 — Cenapro Bulk Add modal destroys drafted rows (no close-guard + reset-on-reopen)
+**Status:** ✅ FIXED (code landed 2026-07-21, `feat/mobile-pwa`, `3848145`) · **Effort:** M · **Severity:** high (repeated real data loss — Renzo lost ~20 drafted production rows more than once)
+
+- **Symptom:** while drafting a batch of Cenapro production rows in the **Bulk Add modal**
+  (`app/(app)/cenapro/production/bulk-add-modal.tsx`), pressing Escape or clicking outside
+  the Dialog wiped everything typed; reopening the modal showed a blank 8-row sheet with no
+  recovery. Renzo lost ~20 drafted rows on multiple occasions.
+- **Root cause (two independent bugs, both in the modal):**
+  1. **No close-guard.** The shadcn `Dialog`'s `onOpenChange` was wired straight to the
+     parent's close setter, so Escape and outside-click fired `onOpenChange(false)`
+     unconditionally — no "you have unsaved rows" gate. `bulk-add-modal.tsx:435`
+     (`<Dialog open={open} onOpenChange={onOpenChange}>`).
+  2. **Reset-on-reopen.** A `useEffect(() => { if (open) setRows(Array.from({length: 8}, createEmptyRow)); … }, [open])` (`bulk-add-modal.tsx:96-102`) reset the draft rows to
+     8 blanks every time `open` became `true` — so even if you reopened to recover, the
+     drafts were already destroyed with no backup anywhere (state-only, never persisted).
+- **Fix (Phase 2A — modal RETIRED, entry moved to a loss-proof IN-LIST draft zone):**
+  - Deleted `bulk-add-modal.tsx`. Bulk entry is now IN-LIST blank rows on the endless Ledger
+    (the "Google Sheets" model): a single toolbar **"Add rows"** button reveals a maintained
+    pool of blank draft rows appended below the last committed row IN THE SAME `TableVirtuoso`
+    list (scroll DOWN into an effectively-infinite, self-topping-up supply). They render
+    through the same `itemContent` as committed rows (`DraftRowCells`), so columns align, and
+    it's **INLINE (no Dialog)** so Escape/outside-click have nothing to close (Escape only
+    reverts the current cell).
+  - **Recycling-safe (the non-negotiable):** draft data lives in the endless sheet's
+    PARENT-OWNED `draftRows` array (keyed by position) — NEVER row-local — so virtuoso
+    recycling an off-screen half-typed row rehydrates it from the array (the flat-list
+    equivalent of `production-daily-block.tsx`'s parent-owned drafts Map). `firstItemIndex`
+    (top prepend) and the bottom blank-append are orthogonal.
+  - **Mirrored to `localStorage`** (`cenapro-ledger-drafts:v1:<user-id>`, debounced 300ms,
+    storage-versioned, restored on mount, cleared ONLY on a confirmed Save/Discard) →
+    tab-close, crash, navigation, reload, and lock/unlock all preserve drafts.
+  - Save validates via `mapBulkRowToDirty` (persistent copyable `errorToast` + red rails on
+    offending rows, HARD RULE) and commits via the EXISTING
+    `saveProductionEvents(dirtyRows, [])`; on success it clears drafts + mirror and calls
+    the new `useLedgerWindow.refreshNewest()` so the saved rows land at the bottom without a
+    full reload. Discard-all is the ONE destructive action (gated behind an `AlertDialog`).
+  - **One-button behavior:** the "Add rows" button jumps to the true latest first
+    (`reset({kind:'latest'})`) if you're on an old month, THEN reveals blanks — so drafts
+    never append to a mid-history window (no separate "jump to latest" affordance).
+- **Files:** NEW `app/(app)/cenapro/production/draft-entry-zone.tsx`; edited
+  `production-endless-sheet.tsx` (lock/unlock + draft state + localStorage + Save bar),
+  `use-ledger-window.ts` (`refreshNewest`), `production-ledger-grid.tsx` (retired the modal
+  mount + button → "Add rows in the sheet →" affordance); DELETED `bulk-add-modal.tsx`.
+- **Verification:** `npm run build` ✓, lint clean on the changed files. The interactive
+  draft-loss gauntlet (Escape/click-out/lock/reload survival, Save-lands-at-bottom, invalid-row
+  block, Discard confirm, period-jump gate) is **live-verify PENDING** — the route is behind
+  Google OAuth and the agent can't sign in; reasoned static walkthrough only.
+
+---
+
+## BUG-013 — Cenapro focus Daily Block silently discards unsaved edits on a view/scope/period switch ✅ FIXED (2026-07-22)
+
+- **Where:** `app/(app)/cenapro/production/production-daily-block.tsx` (the focus-scope W6/W7
+  editable pivot) rendered inside `production-ledger-grid.tsx`. Surfaced as the **severe finding**
+  of the 2026-07-22 Phase-3b pre-analysis (virtualization/gap audit).
+- **Symptom:** The Daily Block owns its OWN unsaved-edit state in its INNER `DailyBlockToolbar`
+  (Save/Discard). The OUTER grid toolbar's axis controls (`CenaproPeriodPicker` /
+  `ViewModeSwitcher` / `ScopeToggle`) only guarded on the LEDGER grid's `isDirty` (`rows`), which
+  stays false in daily view. So with unsaved pivot edits, clicking a different view/scope or a new
+  period `router.replace`d the URL → the page remounted the block → **all unsaved edits vanished
+  with no warning.**
+- **Root cause:** the block's dirty signal never reached the controls that navigate away from it.
+- **Fix:** lift a dirty signal. `ProductionDailyBlock` gained an `onDirtyChange?(dirty)` prop
+  (reports `hasChanges`, clears on unmount); `production-ledger-grid.tsx` tracks `dailyDirty` and
+  guards all three axis controls with `guardDirty = isDirty || dailyDirty`. `ViewModeSwitcher` /
+  `ScopeToggle` gained `disabled`/`disabledHint` (matching the period picker's existing pattern) —
+  a dirty block now dims + blocks the switch with a "Save or discard your edits before switching…"
+  hint instead of silently discarding. The SAME guard pattern is applied to the new endless pivot
+  editor (its own `totalDirty`).
+- **Files:** `production-daily-block.tsx`, `production-ledger-grid.tsx`, `ledger-controls.tsx`.
+- **Verification:** `npm run build` ✓, lint clean. Live-verify PENDING (Google-OAuth-gated route —
+  can't sign in from tooling; validated via build + code walkthrough).
+
+---
+
 ## Fixed entries
 
 All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept
@@ -357,6 +432,8 @@ analysis is the most useful record — this section is the index:
 | BUG-003 — schedule moved into the digest world (`/?view=digest\|schedule`) | 2026-07-17 | Wave B |
 | BUG-004 — blocking grid `minmax(104px,1fr)` (scroll, don't crush) | 2026-07-17 | `3fd0d94` |
 | BUG-005 — month-name canonicalization (writer + live DB repair) | 2026-07-17 | `3fd0d94` + DB |
+| BUG-012 — Cenapro Bulk Add modal draft-loss → retired for a loss-proof draft entry zone | 2026-07-21 | `3848145` |
+| BUG-013 — Cenapro focus Daily Block silent edit-loss on view/scope/period switch → lifted dirty-nav guard | 2026-07-22 | _(uncommitted — Phase 3b)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none
