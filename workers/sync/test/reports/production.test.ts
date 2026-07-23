@@ -18,7 +18,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { loadProductionWorkbook } from "../../src/reports/production/sheet.js";
-import { extractMc, type DowntimeRow } from "../../src/reports/production/extractMc.js";
+import { extractMc, type DowntimeRow, type RunRow } from "../../src/reports/production/extractMc.js";
 import { extractIvy } from "../../src/reports/production/extractIvy.js";
 import { classifyRuns, classifyWaste, type ShiftDbRow } from "../../src/reports/production/classify.js";
 import {
@@ -27,6 +27,7 @@ import {
   type ProductionSections,
 } from "../../src/reports/production/apply.js";
 import type { DbClient, Row, InsertIfAbsentResult } from "../../src/lib/db.js";
+import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../src/lib/xlsx.js";
 
 const FX = join(__dirname, "../../fixtures/production/workbooks");
 
@@ -306,7 +307,144 @@ describe("empty-side extract", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// NO-PRODUCTION day — a VALID-grade run row whose TOTAL-kg cell is genuinely
+// BLANK means nothing was produced that shift. It must classify as a benign
+// SKIPPED_NO_OUTPUT — never MALFORMED, never held, never gating the run — so a
+// no-production day (e.g. 2026-07-17) can't choke the production sync. A present-
+// but-unparseable or NEGATIVE ttl_kg is a real data error and STAYS malformed.
+// ---------------------------------------------------------------------------
+describe("no-production day — blank ttl_kg is a benign skip, not malformed", () => {
+  const shifts: ShiftDbRow[] = [
+    { id: "SID-1", transaction_date: "2026-07-17", production_batch: "JULY", shift: "M" },
+  ];
+
+  it("valid grade + genuinely blank kg → SKIPPED_NO_OUTPUT (not malformed, not new)", () => {
+    const res = classifyRuns([runRow({ ttl_kg: null, _ttl_blank: true })], [], shifts);
+    const c = res.classifications[0];
+    expect(c.class).toBe("SKIPPED_NO_OUTPUT");
+    expect(res.summary.malformed).toBe(0);
+    expect(res.summary.new).toBe(0);
+    expect(res.summary.skipped_no_output).toBe(1);
+  });
+
+  it("valid grade + present-but-unparseable kg (null, NOT flagged blank) → still MALFORMED", () => {
+    const res = classifyRuns([runRow({ ttl_kg: null })], [], shifts); // no _ttl_blank
+    const c = res.classifications[0];
+    expect(c.class).toBe("MALFORMED");
+    expect(c.reasons as string[]).toContain("ttl_kg not a non-negative number");
+    expect(res.summary.malformed).toBe(1);
+    expect(res.summary.skipped_no_output).toBeUndefined();
+  });
+
+  it("valid grade + NEGATIVE kg → still MALFORMED", () => {
+    const res = classifyRuns([runRow({ ttl_kg: -5 })], [], shifts);
+    expect(res.classifications[0].class).toBe("MALFORMED");
+    expect(res.summary.malformed).toBe(1);
+  });
+
+  it("runs summary with no blank-kg rows OMITS skipped_no_output (parity: byte-identical)", () => {
+    const res = classifyRuns([runRow({ ttl_kg: 16380 })], [], shifts);
+    expect(res.classifications[0].class).not.toBe("SKIPPED_NO_OUTPUT");
+    expect("skipped_no_output" in res.summary).toBe(false);
+  });
+
+  it("apply HOLDS nothing and writes nothing for a SKIPPED_NO_OUTPUT row (run stays clean)", async () => {
+    const inserted: Row[] = [];
+    const db = mockDb({
+      onInsertIfAbsent: (_t, rows) => {
+        inserted.push(rows[0]);
+        return okInsert(rows[0]);
+      },
+    });
+    const sections = emptySections();
+    sections.runs = [skippedRunClass()];
+    const res = await applyProduction(compactWith(sections), { db });
+    expect(inserted).toHaveLength(0);
+    expect(res.held).toEqual([]);
+    expect(res.inserts).toBe(0);
+    expect(res.ok).toBe(true);
+    expect(res.errors).toEqual([]);
+  });
+
+  it("extractor: a blank TOTAL-kg cell sets _ttl_blank; a junk (#VALUE!) cell does NOT", () => {
+    const wb = fakeMcWorkbook("07-17-26", [
+      { grade: "3X50", shift: "MORNING SHIFT", ttl: null }, // no-production → blank
+      { grade: "3X50", shift: "MORNING SHIFT", ttl: "#VALUE!" }, // junk → malformed-bound
+    ]);
+    const mc = extractMc(wb, 2026, "2026-01-01");
+    expect(mc.runs).toHaveLength(2);
+    const [blank, junk] = mc.runs;
+    expect(blank.ttl_kg).toBeNull();
+    expect(blank._ttl_blank).toBe(true);
+    expect(junk.ttl_kg).toBeNull();
+    expect(junk._ttl_blank).toBeUndefined();
+  });
+});
+
 // ── fixtures/helpers ─────────────────────────────────────────────────────────
+function runRow(overrides: Partial<RunRow>): RunRow {
+  return {
+    transaction_date: "2026-07-17",
+    production_batch: "JULY",
+    shift: "M",
+    customer: "CEBU",
+    grade: "3X50",
+    ttl_kg: null,
+    sacks_bags: null,
+    remarks: null,
+    _shift_defaulted: false,
+    _source_sheet: "07-17-26",
+    _source_row: 8,
+    warnings: [],
+    confidence: 1.0,
+    ...overrides,
+  };
+}
+
+function skippedRunClass() {
+  return {
+    idx: 0,
+    class: "SKIPPED_NO_OUTPUT",
+    natural_key: { shift_id: null, customer: "CEBU", grade: "3X50" },
+    resolved_shift_id: null,
+    needs_shift_upsert: false,
+    existing_id: null,
+    diff: null,
+    record: runRow({ _ttl_blank: true }),
+    reasons: ["no production output this shift (TOTAL kg blank) — skipped, not written"],
+    confidence: 1.0,
+  };
+}
+
+/** Minimal in-memory MC workbook exposing only the runs-block cells the extractor
+ *  reads (grade=D, sacks=E, ttl=G, shift=H, rows 8+). All other sections resolve
+ *  to empty (no anchors, null fallback cells). */
+function fakeMcWorkbook(
+  sheetName: string,
+  runs: Array<{ grade: CellValue; shift: CellValue; ttl: CellValue; sacks?: CellValue }>,
+): LoadedWorkbook {
+  const cells = new Map<string, CellValue>();
+  runs.forEach((rr, i) => {
+    const row = 8 + i; // RUNS_FIRST_DATA_ROW
+    cells.set(`${row},4`, rr.grade);
+    cells.set(`${row},5`, rr.sacks ?? null);
+    cells.set(`${row},7`, rr.ttl);
+    cells.set(`${row},8`, rr.shift);
+  });
+  const sheet: LoadedSheet = {
+    name: sheetName,
+    rowCount: 100,
+    columnCount: 20,
+    cell: (row: number, col: number) => cells.get(`${row},${col}`) ?? null,
+  };
+  return {
+    sheetNames: [sheetName],
+    sheet: (n: string) => (n === sheetName ? sheet : null),
+    sheetAt: (i: number) => (i === 0 ? sheet : null),
+  };
+}
+
 function row3x50(date: string) {
   return {
     transaction_date: date,

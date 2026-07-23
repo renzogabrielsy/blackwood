@@ -155,6 +155,22 @@ function coerceInt(value: CellValue): number | null {
   return f !== null ? Math.trunc(f) : null;
 }
 
+/**
+ * True when a cell is genuinely EMPTY — nothing was entered — as opposed to
+ * present-but-unparseable. Both collapse to `null` under coerceFloat, so this is
+ * the ONLY way to tell "no production this shift" (blank) apart from a real data
+ * error (text / date / boolean / Excel error / negative). Used so a valid-grade
+ * runs row with a blank TOTAL-kg cell becomes a benign no-output skip rather than
+ * MALFORMED. NOTE: the xlsx loader already collapses Excel error cells (#VALUE!,
+ * #DIV/0! …) to `null`, so an error formula in the kg cell reads as blank here —
+ * an accepted edge; the common real case is a genuinely empty cell.
+ */
+function isBlankCell(value: CellValue): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim() === "";
+  return false;
+}
+
 function coerceStr(value: CellValue): string | null {
   if (value === null || value === undefined) return null;
   const s = cellToStr(value).trim();
@@ -269,6 +285,14 @@ export interface RunRow {
   _source_row: number;
   warnings: string[];
   confidence: number;
+  /**
+   * True ONLY when the TOTAL-kg cell was genuinely EMPTY (no production this
+   * shift). Lets classifyRuns treat a valid-grade no-output row as a benign
+   * SKIPPED_NO_OUTPUT instead of MALFORMED. Optional and OMITTED when false so a
+   * real (produced) row's classify `record` stays byte-identical to the Python
+   * oracle for parity — no existing fixture carries a blank-kg row.
+   */
+  _ttl_blank?: boolean;
 }
 
 export interface DowntimeRow {
@@ -346,7 +370,11 @@ function extractRuns(
     const { customer, grade, keep } = routeGrade(rawGrade);
     if (!keep || grade === null || customer === null) continue;
 
-    const ttlKg = coerceFloat(ws.cell(r, COL_RUN_TTL_KG));
+    const ttlCell = ws.cell(r, COL_RUN_TTL_KG);
+    const ttlKg = coerceFloat(ttlCell);
+    // Genuinely-empty kg cell = no production this shift (benign). A present-but-
+    // unparseable/negative value still holds — see classifyRuns.
+    const ttlBlank = ttlKg === null && isBlankCell(ttlCell);
     const sacks = coerceInt(ws.cell(r, COL_RUN_SACKS));
     const { code: shiftCode, defaulted: shiftDefaulted, warn: shiftWarn } = resolveRunShift(
       ws.cell(r, COL_RUN_SHIFT),
@@ -360,7 +388,7 @@ function extractRuns(
     const remarks = shiftDefaulted ? appendNote(null, SHIFT_DEFAULT_NOTE) : null;
     const confidence = Math.max(0.0, 1.0 - 0.1 * rowWarnings.length);
 
-    runs.push({
+    const runRow: RunRow = {
       transaction_date: txnIso,
       production_batch: productionBatch,
       shift: shiftCode,
@@ -374,7 +402,10 @@ function extractRuns(
       _source_row: r,
       warnings: rowWarnings,
       confidence: round3(confidence),
-    });
+    };
+    // Set ONLY when true so the record stays parity-identical for produced rows.
+    if (ttlBlank) runRow._ttl_blank = true;
+    runs.push(runRow);
   }
   return runs;
 }

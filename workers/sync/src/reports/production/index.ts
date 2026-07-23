@@ -307,10 +307,15 @@ export async function runReport(
   const insert = count("NEW");
   const update = count("VALUE_CHANGED");
   const flagged = count("MALFORMED");
+  // Informational only: valid-grade runs rows with a blank TOTAL-kg cell (a
+  // no-production shift). Never held, never gates — reported so the day is visible.
+  const skippedNoOutput = count("SKIPPED_NO_OUTPUT");
 
   await emit?.(
     "classify",
-    `${noop} already recorded · ${insert} new · ${update} changed` + (flagged ? ` · ${flagged} to review` : ""),
+    `${noop} already recorded · ${insert} new · ${update} changed` +
+      (flagged ? ` · ${flagged} to review` : "") +
+      (skippedNoOutput ? ` · ${skippedNoOutput} no-output day(s) skipped` : ""),
     92,
   );
 

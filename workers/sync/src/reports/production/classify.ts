@@ -182,7 +182,7 @@ export function classifyRuns(rows: RunRow[], dbRows: RunDbRow[], shifts: ShiftDb
   }
 
   const classifications: Record<string, unknown>[] = [];
-  const counts = { new: 0, value_changed: 0, duplicate_noop: 0, malformed: 0, needs_shift_upsert: 0 };
+  const counts = { new: 0, value_changed: 0, duplicate_noop: 0, malformed: 0, needs_shift_upsert: 0, skipped_no_output: 0 };
 
   rows.forEach((ex, idx) => {
     const rawShift = ex.shift;
@@ -201,6 +201,26 @@ export function classifyRuns(rows: RunRow[], dbRows: RunDbRow[], shifts: ShiftDb
     const grade = normKeyPart(ex.grade);
     if (grade === null || !VALID_GRADES.has(grade)) {
       reasons.push(`grade '${ex.grade}' not in ${JSON.stringify([...VALID_GRADES].sort())}`);
+    }
+    // Benign no-production: a VALID-grade row whose TOTAL-kg cell was genuinely
+    // BLANK means nothing was produced this shift. It is NOT malformed, NOT
+    // written, and does NOT hold or gate the run — surfaced only as an
+    // informational SKIPPED_NO_OUTPUT. A present-but-unparseable or negative
+    // ttl_kg (below) is a real data error and still MALFORMED. This is an
+    // intentional TS-only divergence from the (unported) Python, which held such
+    // a row as MALFORMED; no existing parity fixture carries a blank-kg row, so
+    // parity stays green.
+    if (reasons.length === 0 && ex._ttl_blank === true) {
+      classifications.push({
+        idx, class: "SKIPPED_NO_OUTPUT",
+        natural_key: { shift_id: null, customer: ex.customer, grade: ex.grade },
+        resolved_shift_id: null, needs_shift_upsert: false, existing_id: null, diff: null,
+        record: ex,
+        reasons: ["no production output this shift (TOTAL kg blank) — skipped, not written"],
+        confidence: 1.0,
+      });
+      counts.skipped_no_output++;
+      return;
     }
     const ttl = normNum(ex.ttl_kg);
     if (ttl === null || ttl < 0) reasons.push("ttl_kg not a non-negative number");
@@ -264,13 +284,18 @@ export function classifyRuns(rows: RunRow[], dbRows: RunDbRow[], shifts: ShiftDb
     }
   });
 
+  const summary: Record<string, number> = {
+    new: counts.new, value_changed: counts.value_changed, duplicate_noop: counts.duplicate_noop,
+    malformed: counts.malformed, needs_shift_upsert: counts.needs_shift_upsert,
+  };
+  // Additive-only: omit when 0 so runs summaries with no blank-kg rows stay
+  // byte-identical to the Python oracle (parity).
+  if (counts.skipped_no_output > 0) summary.skipped_no_output = counts.skipped_no_output;
+
   return {
     table: "production_runs",
     classifications,
-    summary: {
-      new: counts.new, value_changed: counts.value_changed, duplicate_noop: counts.duplicate_noop,
-      malformed: counts.malformed, needs_shift_upsert: counts.needs_shift_upsert,
-    },
+    summary,
   };
 }
 
