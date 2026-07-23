@@ -462,6 +462,15 @@ condense heavy widgets on phones and offer **tap-to-expand into a shadcn `Sheet`
 - **Reduced motion** — `globals.css` now has a `@media (prefers-reduced-motion:
   reduce)` guard that neutralizes the `animate-*` / `stagger-*` utilities and
   collapses `hover-lift` to near-instant.
+- **Document horizontal-overflow backstop (platform-wide, BUG-014)** — the
+  `app/(app)/app-shell.tsx` main-content wrapper carries `min-w-0 overflow-x-clip`
+  so NO page can ever scroll the whole DOCUMENT sideways (the iPad-Mini-portrait
+  navbar "black bar" at `640 ≤ w < 1024`). `clip` (not `hidden`) keeps vertical
+  scroll + descendant `position: sticky` working. Wide tables still scroll inside
+  their own `overflow-x-auto` wrappers — unaffected. Bands must still be internally
+  contained (don't lean on the clamp): e.g. `ShipmentsBand`'s incomplete-row
+  customer name is `min-w-0 max-w-[45%] shrink truncate` (was `shrink-0`, the
+  original overflower) so a long name can't push the row past the card.
 
 ## Dependencies
 - `lib/digest/queries.ts` / `lib/digest/types.ts` — data contract (do not edit).

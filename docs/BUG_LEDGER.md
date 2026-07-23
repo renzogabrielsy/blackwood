@@ -419,6 +419,45 @@ shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M
 
 ---
 
+## BUG-014 — Home digest scrolls the whole document sideways in iPad-Mini portrait (navbar "black bar") ✅ FIXED (2026-07-23, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** S · **Severity:** medium (flagship home surface on tablet portrait)
+
+- **Symptom (iPad Mini, ~744px portrait; also ~768px iPad portrait):** the home digest (`/`)
+  overflows horizontally — the entire DOCUMENT scrolls sideways. Tell: the always-dark navbar
+  shows a **black bar on its right** (navbar bg is viewport-wide, document is wider, scrolling
+  right reveals empty space past it). Only in the `640px ≤ w < 1024px` band (`sm` on, `lg` off),
+  where the desktop digest layout is active but some element exceeds the viewport width.
+- **Root cause (two parts):**
+  1. **No document-level horizontal clamp anywhere.** `app/(app)/app-shell.tsx` wrapped
+     `{children}` in `flex-1 min-h-0 flex flex-col safe-x` — no `min-w-0`, no `overflow-x` guard.
+     So ANY overflowing descendant dragged the whole document wide. (globals.css / layouts add no
+     clamp either.)
+  2. **Best-supported specific overflower (pending on-device confirmation):** the newly-added
+     `components/digest/shipments-band.tsx` incomplete-shipment row — the customer-name span was
+     `shrink-0` (un-truncated), so a long customer name summed with the readiness chip past the
+     card width and forced the row (→ card → section → document) wider than the viewport. All other
+     wide digest bands were verified statically as already contained (schedule-preview / trucks /
+     footer tables each scroll inside their own `overflow-x-auto`; charts + week strip collapse to
+     one column / `min-w-0` cards below `lg`; open-blocks lab row is `grid-cols-6` = `minmax(0,1fr)`,
+     shrinkable).
+- **Fix:**
+  1. **Backstop (guaranteed):** `app-shell.tsx` wrapper → add `min-w-0 overflow-x-clip`. `clip`
+     (not `hidden`) on purpose: it does not create a scroll container and does not force
+     `overflow-y: auto`, so vertical page scroll and descendant `position: sticky` (frozen table
+     headers/footers) keep working. Wide tables scroll inside their own wrappers, so clamping the
+     outer document does not touch their internal horizontal scroll.
+  2. **Root-cause (defensive):** `shipments-band.tsx` customer span `shrink-0` → `min-w-0
+     max-w-[45%] shrink truncate`; readiness chip capped `max-w-[45%] shrink`. Row can no longer
+     force overflow regardless of customer-name length.
+- **Files:** `app/(app)/app-shell.tsx`, `components/digest/shipments-band.tsx`.
+- **Verification:** `npm run build` ✓ (compiled successfully). Live-verify PENDING — the digest is
+  Google-SSO-gated AND `getDigestData()` needs Supabase Postgres (unreachable from the sandbox), so
+  the 744px render could not be driven from tooling. Part 1 is high-confidence from code reasoning;
+  **Renzo must confirm on the iPad Mini (portrait) that the navbar black bar is gone AND that no
+  band's right edge is now clipped** (esp. ShipmentsBand).
+
+---
+
 ## Fixed entries
 
 All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept

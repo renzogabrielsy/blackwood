@@ -92,10 +92,13 @@ export async function ShipmentsBand() {
                 className="group flex items-center gap-2 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-muted/50"
               >
                 {s.prefix && (
-                  <span className="font-mono text-[11px] font-semibold tabular-nums text-primary">{s.prefix}</span>
+                  <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-primary">{s.prefix}</span>
                 )}
-                <span className="shrink-0 font-medium">{s.readiness.customer ?? "Unknown"}</span>
-                <ReadinessChip readiness={s.readiness} />
+                {/* Customer name may be long — cap + truncate so it can never push
+                    the row past the card width (the un-min-w-0'd flex child that
+                    let the whole document scroll sideways). */}
+                <span className="min-w-0 max-w-[45%] shrink truncate font-medium">{s.readiness.customer ?? "Unknown"}</span>
+                <ReadinessChip readiness={s.readiness} className="max-w-[45%] shrink" />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground" title={s.readiness.missing.join(", ")}>
                   {s.readiness.hasRequirementSet ? `missing ${s.readiness.missing.join(", ")}` : "no doc set"}
                 </span>

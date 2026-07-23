@@ -27,7 +27,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 portrait. The div paints no background of its own, so page/body
                 backgrounds still reach the physical screen edge — backgrounds
                 edge-to-edge, content inset. Root stays h-dvh. */}
-            <div className="flex-1 min-h-0 flex flex-col safe-x">{children}</div>
+            {/* Horizontal containment backstop (platform-wide): `min-w-0` lets this
+                flex child shrink below its content's intrinsic width, and
+                `overflow-x-clip` guarantees NO page can ever scroll the DOCUMENT
+                sideways (the iPad-Mini-portrait navbar "black bar" bug). `clip` is
+                used over `hidden` on purpose — it does NOT create a scroll container
+                and does NOT force `overflow-y: auto`, so vertical page scroll and
+                any descendant `position: sticky` keep working. Every legitimately
+                wide table already scrolls inside its OWN `overflow-x-auto` wrapper
+                ("never crush, always scroll"), so it is unaffected by this clamp. */}
+            <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-x-clip safe-x">{children}</div>
             <FloatingStatusBar />
         </div>
     )
