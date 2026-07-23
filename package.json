@@ -23,6 +23,7 @@
     "cmdk": "^1.1.1",
     "csv-parser": "^3.2.0",
     "date-fns": "^4.1.0",
+    "fflate": "^0.8.3",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.563.0",
@@ -36,6 +37,7 @@
     "react-virtuoso": "^4.18.11",
     "recharts": "^3.7.0",
     "remark-gfm": "^4.0.1",
+    "server-only": "^0.0.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "xlsx": "^0.18.5"

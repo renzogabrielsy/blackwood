@@ -84,6 +84,9 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // (handled by the first entry above), never a rendered surface.
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
+    // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
+    // (`/shipments/<cardId>`) matches the same prefix; the shared title is fine.
+    { test: prefix('/shipments'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Shipments', pageDescription: 'Export-doc readiness & one-click ZIP — per Trello shipment card' },
     // Price & Volume Analysis design concepts (planning-stage demos).
     // Specific demo routes MUST precede the `/price-demos` index catch-all.
     { test: prefix('/price-demos/demo1'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Terminal', pageDescription: 'Dual-axis volume × price command view (concept 1 of 4)' },
@@ -143,6 +146,7 @@ const ICTC_INVENTORY: Module[] = [
 const ICTC_MODULES: Module[] = [
     { name: 'Production', href: '/production' },
     { name: 'Summaries', href: '/summaries' },
+    { name: 'Shipments', href: '/shipments' },
     { name: 'Accounting', href: '/accounting', disabled: true },
 ];
 

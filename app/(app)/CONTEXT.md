@@ -75,6 +75,7 @@ values into views.
   width — no `lg:grid-cols-2`; both stack single-column on mobile) → KpiHero
   (state-aware) →
   DigestCharts (rest-day-aware flow) → TrucksSummary → **BagInventory** →
+  **ShipmentsBand** (Trello export-doc readiness, in its OWN `<Suspense>`) →
   (SyncSummary + ActivityFeed) → DigestFooterBand. The page computes two small
   presentational reads for the plant-status band — `fedKg` (the rc_out KPI value)
   and `streamsBehind` (count of `meta.streams` with `status === 'warn'`).
@@ -257,6 +258,17 @@ values into views.
   **Renders `null` when there are no bag types.** Rendered between the trucks
   band and the sync band in `page.tsx`. Source: `data.fleconBags` (balances from
   `view_flecon_bag_balance`; see Data below).
+- `components/digest/shipments-band.tsx` — **async Server component**, but NOT part
+  of the `getDigestData()` adapter. It fetches **Trello** (`listShipments()` from
+  `lib/shipments/trello.ts`) INDEPENDENTLY and is wrapped in `<Suspense>` (fallback
+  `ShipmentsBandFallback`) by `page.tsx`, so it **streams in on its own** — the
+  Supabase-only digest above never waits on Trello (slow/down Trello = a late band or
+  a quiet "temporarily unavailable" note, never a blocked home page). Surfaces the
+  shipments still missing customer send-out docs first (most actionable), each linking
+  to `/shipments/<cardId>`; links to the full `/shipments` module. Reuses
+  `ReadinessChip` from `app/(app)/shipments/`. **No ₱ in this domain → nothing gated.**
+  Deliberately kept OUT of `getDigestData()` (which is the Supabase adapter, two
+  round-trips, perf-critical). See `app/(app)/shipments/CONTEXT.md`.
 - `components/digest/sync-summary.tsx` — Server component. Compact header from
   `data.latestSync`: "{date} · {n} new · {n} updated (· {n} removed)" + per-
   employee count chips (`byEmployee`).

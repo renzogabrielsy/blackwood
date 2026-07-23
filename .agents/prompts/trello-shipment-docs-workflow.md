@@ -32,12 +32,29 @@ by Opus 4.8 with Renzo in the loop.
    attachment id → local path) in a manifest JSON; re-runs skip anything already
    fetched, so running twice can never duplicate or clobber.
 
-## Observed folder conventions (from a 2026-07-22 scan — Phase 1 formalizes this)
+## Folder-naming convention (CONFIRMED with Renzo 2026-07-22 — this is the RULE)
 
-- **Shipment folder:** `YYMMDD [- ]CUSTOMER GRADE NVANS (MONTHS)` — e.g.
-  `260512 - KC 3x50 5VANS (JUNE)`, `250714 MAEHATA 8X50 2 VANS (SEPT OCT)`.
-  The YYMMDD prefix sorts chronologically.
-- **Multi-departure shipments** get per-van SUBFOLDERS: `250822 MAEHATA 8X50 1 VAN`.
+**Format:** `YYMMDD - CUST GRADE NVAN(S) (MONTH)`
+e.g. `260715 - KC 3x50 5VANS (JULY)`, `260120 - MH 8x50 1VAN (FEBRUARY)`.
+
+**The two fields — the load-bearing rule (Renzo-confirmed):**
+- **`YYMMDD` (the DATE) = the actual SHIP DATE** — the "Shipped on Board" date on
+  the Bill of Lading (when the cargo actually sailed).
+- **`(MONTH)` = the ESTIMATED DEPARTURE month from the PO (ETD).**
+
+These two **legitimately differ** whenever a shipment sails in a different month
+than the PO's ETD estimate (a late-month sailing whose PO estimated the next
+month). That gap is BY DESIGN, not an error — do NOT "correct" the month to match
+the ship date. Verified: `260512` sailed May 12 (date) but its PO ETD was June
+(month); `260120` sailed Jan 20 but ETD'd February. When the tool auto-names,
+derive the DATE from the BL ship-on-board date and the MONTH from the PO's ETD.
+(Legacy exception: `250408`'s prefix is a paperwork date, not the ship date — the
+one folder that predates this rule; left as-is, never re-based.)
+
+**Other field rules:** `CUST` = customer code `KC` (KURARAY) / `MH` (MAEHATA);
+`GRADE` lowercase-x (`3x50`, `8x50`); `NVAN`/`NVANS` (singular for 1, plural for
+2+). Structure is FLAT — one folder per shipment/van, no subfolders (Renzo
+flattened the old nested layout 2026-07-22). Prefix sorts chronologically.
 - **File convention (the TARGET, per the newest shipment 260512):**
   `YYMMDD DOCTYPE [REFERENCE].pdf` — e.g. `260512 COMMERCIAL INVOICE.pdf`,
   `260512 CERTIFICATE OF ORIGIN 11337-26.pdf`,

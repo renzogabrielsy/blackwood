@@ -72,12 +72,41 @@ def main():
     ap.add_argument("--prefix", required=True)
     ap.add_argument("--dest", required=True)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="download even if this shipment (by BL#) is already housed elsewhere")
     a = ap.parse_args()
     key, tok = load_creds()
 
     atts = api_get(f"/1/cards/{a.card}/attachments", key, tok,
                    fields="name,bytes,mimeType,url,idAttachment")
     hdr = {"Authorization": f'OAuth oauth_consumer_key="{key}", oauth_token="{tok}"'}
+
+    # ── BL#-dedup guard ────────────────────────────────────────────────────────────
+    # The reliable shipment identity is the Bill-of-Lading number (MEDUPH####), NOT
+    # the card title (a title like "OCT 15" once pointed at a September shipment we
+    # already had, and a naive download duplicated it). Before writing anything, scan
+    # the Shipments archive (the PARENT of --dest) for these BL#s; if the shipment is
+    # already housed in a DIFFERENT folder, refuse to duplicate it (override: --force).
+    bls = sorted({m.upper() for n in (at["name"] for at in atts)
+                  for m in re.findall(r"MEDUPH\d+", n.upper())})
+    if bls and a.apply and not a.force:
+        ship_root = os.path.dirname(os.path.normpath(a.dest))
+        dest_norm = os.path.normpath(a.dest)
+        housed = {}
+        for dp, _, files in os.walk(ship_root):
+            if os.path.normpath(dp).startswith(dest_norm):
+                continue  # our own target folder doesn't count
+            for f in files:
+                up = f.upper()
+                for bl in bls:
+                    if bl in up:
+                        housed.setdefault(bl, os.path.relpath(dp, ship_root))
+        if housed:
+            print("⛔ ABORT — this shipment appears ALREADY HOUSED (matched by BL#):")
+            for bl, folder in housed.items():
+                print(f"     {bl}  →  already in “{folder}”")
+            print("   Not downloading (would duplicate). Re-run with --force to override.")
+            return
 
     print(f"{'APPLY' if a.apply else 'DRY RUN'} · card {a.card} · {len(atts)} attachments")
     print(f"dest: {a.dest}\n")

@@ -10,7 +10,7 @@
       "docs": ["Certificate of Origin", "Commercial Invoice", "Packing List", "Halal Certificate", "Fumigation", "BL / Non-Nego", "CoA"]
     },
     "MAEHATA": {
-      "confirmed": false,
+      "confirmed": true,
       "docs": ["Certificate of Origin", "Commercial Invoice", "Packing List", "Fumigation", "BL / Non-Nego", "CoA", "Record of Weight"]
     }
   }

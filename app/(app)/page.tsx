@@ -7,6 +7,7 @@
 // URL. The schedule surface used to be the `/production/schedule` route, which
 // wrongly inherited the production tab shell (BUG-003); that route now redirects
 // here.
+import { Suspense } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { getDigestData } from "@/lib/digest/queries";
@@ -24,6 +25,7 @@ import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
 import { OpenBlocks } from "@/components/digest/open-blocks";
 import { BagInventory } from "@/components/digest/bag-inventory";
+import { ShipmentsBand, ShipmentsBandFallback } from "@/components/digest/shipments-band";
 import { DigestAutoRefresh } from "@/components/digest/digest-auto-refresh";
 import { SyncLauncher } from "@/components/sync/SyncLauncher";
 
@@ -179,6 +181,16 @@ async function DigestBoard() {
       {/* C3. FLECON bag inventory snapshot */}
       <section>
         <BagInventory fleconBags={data.fleconBags} />
+      </section>
+
+      {/* C4. Export shipments readiness (Trello). Its own <Suspense> boundary so
+          the Trello fetch STREAMS in independently — the digest above is
+          Supabase-only and never waits on Trello (slow/down Trello = late band,
+          not a blocked home page). */}
+      <section>
+        <Suspense fallback={<ShipmentsBandFallback />}>
+          <ShipmentsBand />
+        </Suspense>
       </section>
 
       {/* D. Sync band — what the last sync brought in */}
