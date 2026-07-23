@@ -28,7 +28,7 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
   if (!rows.length) return null;
 
   return (
-    <div className="hover-lift flex flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70">
+    <div className="hover-lift flex min-w-0 flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70">
       <div className="mb-3 flex items-baseline justify-between gap-2">
         <div className="flex items-baseline gap-2">
           <h3 className="text-sm font-semibold tracking-tight">
@@ -44,8 +44,11 @@ export function SchedulePreview({ rows }: SchedulePreviewProps) {
         </Link>
       </div>
 
-      {/* Tablet / desktop — full dense table inline (unchanged). */}
-      <div className="hidden sm:block">
+      {/* Tablet / desktop — full dense table inline (unchanged). `min-w-0` so the
+          card's flex chain can shrink below the 820px table's intrinsic width,
+          letting the inner `overflow-auto` engage (scroll inside the card) instead
+          of forcing the whole band wide (→ clipped by the app-shell overflow-clip). */}
+      <div className="hidden min-w-0 sm:block">
         <ScheduleTable
           rows={rows}
           maxHeightClass="max-h-[340px]"

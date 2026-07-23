@@ -132,7 +132,7 @@ export function OpenBlocks({ openBlocks, operationalDate }: OpenBlocksProps) {
   const showPrice = openBlocks.some((b) => b.phpKg !== null);
 
   return (
-    <div className="hover-lift animate-fade-up flex flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70">
+    <div className="hover-lift animate-fade-up flex min-w-0 flex-col rounded-xl border bg-card/95 p-4 backdrop-blur supports-backdrop-filter:bg-card/70">
       <div className="mb-3 flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-semibold tracking-tight">Open Blocks</h3>
         <span className="font-mono text-[11px] text-muted-foreground">

@@ -456,6 +456,35 @@ shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M
   **Renzo must confirm on the iPad Mini (portrait) that the navbar black bar is gone AND that no
   band's right edge is now clipped** (esp. ShipmentsBand).
 
+### 2026-07-23 follow-up — two bands were still clipping (the `min-w-0`-chain fix)
+- **On-device result (Renzo, iPad Mini portrait ~744px):** Part 1 backstop CONFIRMED working — no
+  document side-scroll, no navbar black bar. BUT two bands still overflowed their card and were
+  **clipped** by `overflow-x-clip` (poked past the card right edge): (1) the **Production schedule**
+  snapshot band, (2) **Open Blocks**.
+- **Root cause (the classic missing-`min-w-0`):** both are grid items of the A4 snapshot `<section
+  className="grid …">` in `app/(app)/page.tsx`. Grid items default to `min-width: auto`, so each
+  item's **min-content forced the grid track wide**: for SchedulePreview that's the `min-w-[820px]`
+  table (its own `overflow-auto` never engaged because the ancestor chain wasn't width-constrained),
+  for OpenBlocks the 2-up (`sm:grid-cols-2`) card row's intrinsic width. With no document scroll
+  (Part 1) the excess simply clipped.
+- **Fix (add `min-w-0` down the chain so items can shrink to the section width):**
+  - `app/(app)/page.tsx` — A4 `<section>` grid: `grid` → `grid min-w-0`.
+  - `components/digest/schedule-preview.tsx` — card root `flex flex-col` → `flex min-w-0 flex-col`;
+    the `hidden sm:block` wrapper around `<ScheduleTable>` → `hidden min-w-0 sm:block`. Now the card
+    shrinks to 696px and the 820px table **scrolls horizontally inside its own `overflow-auto` card**
+    (the intended "never crush, always scroll" behavior — swipe left/right within the card).
+  - `components/digest/open-blocks.tsx` — card root `flex flex-col` → `flex min-w-0 flex-col`. The
+    grid item now shrinks; internally the band is `grid-cols-1 sm:grid-cols-2` (`minmax(0,1fr)`,
+    shrinkable) so at 744px each card is ~342px (roomier than its ~305px desktop half-width column) —
+    it **fits, no clip**. Internals audited: `grid-cols-6` lab row = `minmax(0,1fr)` ✓, header's
+    variable part (batch code) already `min-w-0 truncate` ✓, kg figure + bar are short/`w-full` — no
+    further sub-element needed a guard.
+- **Part 1 UNTOUCHED** — the `min-w-0 overflow-x-clip` backstop on `app-shell.tsx` remains exactly
+  as shipped; this follow-up only makes the two bands contain properly so nothing clips.
+- **Verification:** `npm run build` ✓ (compiled successfully in 6.5s). Live re-verify PENDING —
+  Renzo re-checks on the iPad Mini after deploy: schedule table should swipe-scroll within its card,
+  Open Blocks should fit, nothing clipped at any card's right edge.
+
 ---
 
 ## Fixed entries

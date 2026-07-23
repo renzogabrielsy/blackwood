@@ -139,7 +139,11 @@ async function DigestBoard() {
       {(data.schedulePreview.length > 0 || data.openBlocks.length > 0) && (
         <section
           className={cn(
-            "grid items-start gap-4 sm:gap-6",
+            // `min-w-0` so this grid (a flex item of the shell column) can shrink
+            // below its items' intrinsic width; the SchedulePreview / OpenBlocks
+            // grid items carry their own `min-w-0` so they contain (table scrolls
+            // inside its card; open-block cards shrink to fit) instead of clipping.
+            "grid min-w-0 items-start gap-4 sm:gap-6",
             data.schedulePreview.length > 0 &&
               data.openBlocks.length > 0 &&
               "lg:grid-cols-2"
