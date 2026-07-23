@@ -2,14 +2,17 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Exclude markdown docs from Tailwind's automatic content scanning. Project docs
-   (CONTEXT.md, BUG_LEDGER.md, TIMELINE.md, etc.) are never rendered with Tailwind,
-   but v4 scans them for class candidates by default — and a doc that quotes an
-   arbitrary-value class with invalid inner CSS (e.g. the literal `pt-[env(...)]`
-   placeholder in BUG_LEDGER.md) makes Tailwind emit `padding-top: env(...)`, which
-   Turbopack's strict CSS parser rejects → every dev route 500s. Scanning docs buys
-   us nothing and only risks this, so opt them all out. The glob is relative to THIS
-   file (app/), so `../**` reaches the whole repo (docs/, root, and app/ itself). */
+/* Try to exclude markdown docs from Tailwind's automatic content scanning. Project
+   docs (CONTEXT.md, BUG_LEDGER.md, TIMELINE.md, handoffs/*, etc.) are never rendered
+   with Tailwind, but v4 scans them for class candidates by default — and a doc that
+   quotes a bracketed arbitrary-value padding token whose inner value is an invalid
+   or empty env() makes Tailwind emit e.g. `padding-bottom: env()`, which Turbopack's
+   strict CSS parser rejects → every dev route 500s.
+   NOTE: this `@source not` is kept, but has proven UNRELIABLE under Turbopack (a doc
+   token still broke the dev server on 2026-07-22). The load-bearing rule is therefore
+   in the docs themselves: never write such a bracketed token verbatim — describe the
+   class in prose. The glob is relative to THIS file (app/), so `../**` reaches the
+   whole repo. */
 @source not "../**/*.md";
 
 @custom-variant dark (&:is(.dark *));

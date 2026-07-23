@@ -1,0 +1,17 @@
+{
+  "_comment": "The CUSTOMER SEND-OUT set per buyer — the docs that go to the customer, NOT every internal/process doc. Seeded 2026-07-22 from completed-shipment history + Renzo's 260512 KURARAY email. KURARAY is CONFIRMED (the 7 Renzo emailed). MAEHATA is a DRAFT derived from folders — Renzo to prune/correct. Labels must match report.py's doc_type() output. Customer resolved from card title via aliases.",
+  "aliases": {
+    "KURARAY": "KURARAY", "KC": "KURARAY",
+    "MAEHATA": "MAEHATA", "MH": "MAEHATA"
+  },
+  "requirements": {
+    "KURARAY": {
+      "confirmed": true,
+      "docs": ["Certificate of Origin", "Commercial Invoice", "Packing List", "Halal Certificate", "Fumigation", "BL / Non-Nego", "CoA"]
+    },
+    "MAEHATA": {
+      "confirmed": false,
+      "docs": ["Certificate of Origin", "Commercial Invoice", "Packing List", "Fumigation", "BL / Non-Nego", "CoA", "Record of Weight"]
+    }
+  }
+}
