@@ -224,6 +224,18 @@ describe("apply — L-018 decision honoring on CHANGED rows (PD #3)", () => {
         inserts.push({ table, rows });
         return rows.map((_, i) => ({ id: `new-${i}` }));
       },
+      // BUG-016: NEW deliveries/rc_out rows now go through the last-instant guard.
+      // Nothing pre-exists in these fixtures, so every row inserts — the recorded
+      // `inserts` list keeps the exact meaning it had before.
+      async insertIfAbsent(table: string, rows: unknown[]) {
+        inserts.push({ table, rows });
+        return {
+          inserted: rows.map((r, i) => ({ ...(r as object), id: `new-${i}` })),
+          skipped: [],
+          insertedCount: rows.length,
+          skippedCount: 0,
+        };
+      },
       async selectOne() {
         return { batch_code: "X" }; // batch already exists (skip creation)
       },
@@ -287,6 +299,14 @@ describe("apply — safety gates return a proper envelope (PD #2)", () => {
   const stub = {
     async insert(_t: string, rows: unknown[]) {
       return (rows as unknown[]).map((_, i) => ({ id: `n${i}` }));
+    },
+    async insertIfAbsent(_t: string, rows: unknown[]) {
+      return {
+        inserted: (rows as unknown[]).map((r, i) => ({ ...(r as object), id: `n${i}` })),
+        skipped: [],
+        insertedCount: (rows as unknown[]).length,
+        skippedCount: 0,
+      };
     },
     async selectOne() {
       return { batch_code: "X" };
@@ -365,6 +385,17 @@ describe("apply — R4b rc_out cutover (SYNC_RCOUT_RECONCILE_CUTOVER)", () => {
       async insert(table: string, rows: unknown[]) {
         inserts.push({ table, rows });
         return rows.map((_, i) => ({ id: `${table}-new-${i}` }));
+      },
+      // BUG-016: NEW rows now route through the last-instant guard. Recorded the same
+      // way, so the cutover assertions below still measure exactly what was written.
+      async insertIfAbsent(table: string, rows: unknown[]) {
+        inserts.push({ table, rows });
+        return {
+          inserted: rows.map((r, i) => ({ ...(r as object), id: `${table}-new-${i}` })),
+          skipped: [],
+          insertedCount: rows.length,
+          skippedCount: 0,
+        };
       },
       async update(table: string, filters: unknown, patch: unknown) {
         updates.push({ table, filters, patch });
@@ -502,6 +533,14 @@ describe("apply — UNMAPPED held row carries batch_code (Fix 2)", () => {
       },
       async insert() {
         return [{ id: "x" }];
+      },
+      async insertIfAbsent(_t: string, rows: unknown[]) {
+        return {
+          inserted: (rows as unknown[]).map((r) => ({ ...(r as object), id: "x" })),
+          skipped: [],
+          insertedCount: (rows as unknown[]).length,
+          skippedCount: 0,
+        };
       },
       async update() {
         return [{ id: "u" }];

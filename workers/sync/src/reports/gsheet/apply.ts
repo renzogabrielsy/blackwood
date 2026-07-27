@@ -15,9 +15,34 @@
  *       though the extractor computes them. The TS port WRITES them (aligning to the
  *       deliveries email pipeline + L-021 intent).
  *
- * Idempotency divergence PRESERVED (gsheet.md §5 / SHARED trap #4): gsheet uses PLAIN
- * db.insert(), NOT insertIfAbsent — the classifier's fresh-DB-window decision is the
- * idempotency guard. We do NOT "helpfully" re-check before insert. never-delete holds.
+ * Idempotency divergence RETIRED (2026-07-27, BUG-016 — human decision by Renzo; the
+ * spec's own §5 note flagged this as "a possible improvement opportunity"). gsheet now
+ * uses insertIfAbsent for BOTH `deliveries` and `rc_out` NEW rows, with the SAME natural
+ * keys the email writers use, so the two paths agree on what "the same row" means:
+ *     deliveries → (transaction_date, batch_code, truck_plate, weight_kg, sacks)
+ *                  — identical to reports/deliveries/apply.ts
+ *     rc_out     → (transaction_date, batch_id, destination)
+ *                  — identical to reports/rc_out/apply.ts
+ *
+ * WHY the old "classifier's fresh-DB-window decision is the idempotency guard" reasoning
+ * was wrong: it holds only while gsheet is the SOLE writer of a table. It is not. The
+ * email pipelines write `deliveries` (and `rc_out`) too, so the classifier's DB snapshot
+ * — read at the START of the run — is a time-of-check/time-of-use window, not an
+ * authority. On 2026-07-15 the email path inserted a C-11B delivery at 01:36 and gsheet,
+ * still acting on its pre-01:36 snapshot, blind-inserted a second identical copy at
+ * 03:43, inflating that block by 24,024 kg. A snapshot cannot see a writer that arrives
+ * after it was taken; only a last-instant re-check can. never-delete still holds.
+ *
+ * A guard hit is NOT silent success: the row is surfaced as a held row with the email
+ * path's existing vocabulary (reason + kind `already_exists`) so an operator can see that
+ * the Sheet tried to write a row that was already there. No new HeldKind is invented.
+ *
+ * TRADE-OFF (inherited, deliberate — lib/db.ts:13): the natural key cannot distinguish
+ * two genuinely-identical truckloads on the same date/batch/truck/weight/sacks, so a real
+ * second truckload matching all five fields is suppressed. The email path has always
+ * accepted this, and a suppressed row is HELD (visible + re-appliable by a human), never
+ * dropped — whereas the pre-fix blind insert produced a silent, invisible duplicate. The
+ * two paths now fail the same way, which is the point.
  */
 import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
@@ -166,7 +191,12 @@ export interface ModeApplyResult {
   updated_ids: string[];
   new_batches_created: string[];
   flagged_resolved: Array<{ index: unknown; reason: string; detail: string; held?: EnrichedHeld }>;
-  skipped: Array<{ index: unknown; why: string; held?: EnrichedHeld }>;
+  /**
+   * `reason` is the CONTRACT `HeldRow.reason` string to surface (BUG-016). Omitted =
+   * the historical default "skipped"; the idempotency guard sets it to "already_exists"
+   * so a gsheet guard hit reads EXACTLY like the email path's guard hit.
+   */
+  skipped: Array<{ index: unknown; why: string; held?: EnrichedHeld; reason?: string }>;
   /** Present only when a safety gate tripped (PD-2). */
   gate_failure?: { gate: string; detail: string; indexes?: unknown[] };
   /** Batches auto-created THIS MODE from a pattern-valid unmapped batch_code
@@ -188,6 +218,17 @@ interface EnrichedHeld {
   row?: Record<string, unknown>;
 }
 
+/**
+ * The outcome of ONE guarded row write (BUG-016). `already_exists` is a DISTINCT,
+ * non-error outcome — the last-instant guard found the row was written by another
+ * path between classify and now — so callers can surface it with the `already_exists`
+ * held vocabulary instead of an opaque "write failed".
+ */
+type WriteOutcome =
+  | { ok: true; id: string }
+  | { ok: false; reason: "already_exists" }
+  | { ok: false; reason: "error"; message: string };
+
 export interface GsheetApplyResult {
   report_type: "gsheet";
   ok: boolean;
@@ -204,6 +245,28 @@ export interface GsheetApplyResult {
 }
 
 const REPORT_TYPE = "gsheet" as const;
+
+/**
+ * The last-instant idempotency natural keys (BUG-016). These MUST stay byte-identical to
+ * the email writers' keys — reports/deliveries/apply.ts and reports/rc_out/apply.ts — or
+ * the two writers would disagree about what "the same row" is and the guard would leak.
+ */
+export const GSHEET_DELIVERIES_NATURAL_KEY = [
+  "transaction_date",
+  "batch_code",
+  "truck_plate",
+  "weight_kg",
+  "sacks",
+] as const;
+
+export const GSHEET_RC_OUT_NATURAL_KEY = [
+  "transaction_date",
+  "batch_id",
+  "destination",
+] as const;
+
+/** The shared detail string for a guard hit — same wording as the email writers'. */
+const ALREADY_EXISTS_DETAIL = "idempotent skip (natural key already in DB)";
 
 function provenanceComment(mode: string, index: unknown, runTs: string, noteExtra = ""): string {
   const tab = mode === "rc_in" ? "RC IN" : "RC OUT";
@@ -287,7 +350,7 @@ async function writeRcInDelivery(
   nr: CompactNewRcIn,
   bc: string,
   runTs: string,
-): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+): Promise<WriteOutcome> {
   const payload: Record<string, unknown> = {
     transaction_date: nr.date,
     supplier: nr.supplier,
@@ -303,8 +366,12 @@ async function writeRcInDelivery(
     deduction_note: nr.deduction_note ?? null,
   };
   try {
-    const ins = await db.insert("deliveries", [payload]);
-    const newId = ins[0].id as string;
+    // BUG-016: last-instant guard, same natural key as the email deliveries writer.
+    const res = await db.insertIfAbsent("deliveries", [payload], [
+      ...GSHEET_DELIVERIES_NATURAL_KEY,
+    ]);
+    if (res.insertedCount === 0) return { ok: false, reason: "already_exists" };
+    const newId = res.inserted[0].id as string;
     await db.stampIngestionAudit({
       tableName: "deliveries",
       recordId: newId,
@@ -319,7 +386,7 @@ async function writeRcInDelivery(
     });
     return { ok: true, id: newId };
   } catch (exc) {
-    return { ok: false, message: exc instanceof Error ? exc.message : String(exc) };
+    return { ok: false, reason: "error", message: exc instanceof Error ? exc.message : String(exc) };
   }
 }
 
@@ -330,7 +397,7 @@ async function writeRcOutRow(
   nr: CompactNewRcOut,
   batchId: string,
   runTs: string,
-): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+): Promise<WriteOutcome> {
   const payload: Record<string, unknown> = {
     transaction_date: nr.date,
     batch_id: batchId,
@@ -341,8 +408,10 @@ async function writeRcOutRow(
     production_batch: nr.production_batch,
   };
   try {
-    const ins = await db.insert("rc_out", [payload]);
-    const newId = ins[0].id as string;
+    // BUG-016: last-instant guard, same natural key as the email rc_out writer.
+    const res = await db.insertIfAbsent("rc_out", [payload], [...GSHEET_RC_OUT_NATURAL_KEY]);
+    if (res.insertedCount === 0) return { ok: false, reason: "already_exists" };
+    const newId = res.inserted[0].id as string;
     await db.writeIngestionAudit({
       tableName: "rc_out",
       recordId: newId,
@@ -357,7 +426,7 @@ async function writeRcOutRow(
     });
     return { ok: true, id: newId };
   } catch (exc) {
-    return { ok: false, message: exc instanceof Error ? exc.message : String(exc) };
+    return { ok: false, reason: "error", message: exc instanceof Error ? exc.message : String(exc) };
   }
 }
 
@@ -468,8 +537,22 @@ export async function applyFromCompact(
         true_weight_kg: nr.true_weight_kg ?? null,
         deduction_note: nr.deduction_note ?? null,
       };
-      const ins = await db.insert("deliveries", [payload]);
-      const newId = ins[0].id as string;
+      // BUG-016: last-instant idempotency guard (was a blind db.insert). The classifier's
+      // start-of-run DB snapshot cannot see the email writer's later insert; only this
+      // re-check can. A hit is HELD (already_exists), never a silent skip.
+      const res = await db.insertIfAbsent("deliveries", [payload], [
+        ...GSHEET_DELIVERIES_NATURAL_KEY,
+      ]);
+      if (res.insertedCount === 0) {
+        skipped.push({
+          index: nr.index,
+          why: ALREADY_EXISTS_DETAIL,
+          reason: "already_exists",
+          held: enrichedNew(mode, nr, "already_exists"),
+        });
+        continue;
+      }
+      const newId = res.inserted[0].id as string;
       insertedIds.push(newId);
       await db.stampIngestionAudit({
         tableName: "deliveries",
@@ -501,8 +584,21 @@ export async function applyFromCompact(
         block_loc: nr.block_loc,
         production_batch: nr.production_batch,
       };
-      const ins = await db.insert("rc_out", [payload]);
-      const newId = ins[0].id as string;
+      // BUG-016: same last-instant guard as rc_in. See the rc_out finding in the header —
+      // under the default cutover this mode is skipped whole in `applyGsheet`, but with
+      // SYNC_RCOUT_RECONCILE_CUTOVER=off gsheet and the PROPOSED writer both target
+      // rc_out, which is the identical two-writer race.
+      const res = await db.insertIfAbsent("rc_out", [payload], [...GSHEET_RC_OUT_NATURAL_KEY]);
+      if (res.insertedCount === 0) {
+        skipped.push({
+          index: nr.index,
+          why: ALREADY_EXISTS_DETAIL,
+          reason: "already_exists",
+          held: enrichedNew(mode, nr, "already_exists"),
+        });
+        continue;
+      }
+      const newId = res.inserted[0].id as string;
       insertedIds.push(newId);
       await db.writeIngestionAudit({
         tableName: "rc_out",
@@ -668,6 +764,18 @@ export async function applyFromCompact(
           insertedIds.push(writeRes.id);
           continue;
         }
+        if (writeRes.reason === "already_exists") {
+          // BUG-016: the batch resolved/was created, but another writer had already
+          // landed this exact row. Surface it with the email path's vocabulary, NOT as
+          // an unmapped_batch_code hold — the code mapped fine; the row was just a dup.
+          skipped.push({
+            index: r.index,
+            why: ALREADY_EXISTS_DETAIL,
+            reason: "already_exists",
+            held: { ...enriched, kind: "already_exists" },
+          });
+          continue;
+        }
         skipped.push({
           index: r.index,
           why: `batch auto-created (${outcome.resolvedCode}) but the row write failed: ${writeRes.message}`,
@@ -781,7 +889,9 @@ export async function applyGsheet(
       totalUpdates += res.updated;
       for (const sk of res.skipped) {
         held.push({
-          reason: "skipped",
+          // BUG-016: honor a per-entry reason so an idempotency-guard hit surfaces as
+          // "already_exists" (the email path's word), not the generic "skipped".
+          reason: sk.reason ?? "skipped",
           natural_key: sk.held?.natural_key ?? `${mode}:${sk.index}`,
           detail: sk.why,
           kind: sk.held?.kind ?? "flagged",
