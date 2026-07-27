@@ -67,7 +67,17 @@ cp .env.example .env      # fill in the secrets (see below)
 
 ### Required env (see `.env.example`)
 
-- `GMAIL_USER`, `GMAIL_APP_PASSWORD` — Gmail App Password (never OAuth).
+- `GMAIL_USER` — the single sync mailbox. **Required.**
+- `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET`, `GMAIL_OAUTH_REFRESH_TOKEN` —
+  **preferred** Gmail auth (OAuth2/XOAUTH2 over IMAP, since 2026-07-27). The OAuth
+  client must be a **Desktop app** client with the broad `https://mail.google.com/`
+  scope — narrower scopes cannot do IMAP STORE, which would break the
+  `Blackwood-Processed` label write. Mint the refresh token once with
+  `npm run gmail:mint`, verify with `npm run gmail:check`.
+- `GMAIL_APP_PASSWORD` — **legacy fallback only.** Used when the OAuth trio is absent.
+  Google refused App-Password IMAP auth on 2026-07-27 and blocked the sync entirely;
+  the fallback exists so old deployments/local dev keep booting, not as the target
+  state. (This reverses the 2026-05-27 "App Password only — never OAuth" decision.)
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — service role (bypasses RLS).
 - `DBOS_DATABASE_URL` — **direct** Postgres for DBOS checkpoints. **Not** the
   transaction-mode pooler. Use the Supabase **session-mode** pooler (port 5432) or
@@ -306,7 +316,8 @@ Postgres (that is what was used to verify this milestone). See `.env.example`.
 ```bash
 flyctl launch --no-deploy          # or edit fly.toml's `app`/region
 flyctl secrets set \
-  GMAIL_USER=… GMAIL_APP_PASSWORD=… \
+  GMAIL_USER=… \
+  GMAIL_OAUTH_CLIENT_ID=… GMAIL_OAUTH_CLIENT_SECRET=… GMAIL_OAUTH_REFRESH_TOKEN=… \
   SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… \
   DBOS_DATABASE_URL=… SYNC_KICK_SECRET=…
 flyctl deploy

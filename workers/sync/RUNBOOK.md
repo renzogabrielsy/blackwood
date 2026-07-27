@@ -132,20 +132,38 @@ Someone hit **Stop** (or the CLI `/cancel`). This is NOT an error — it's a del
 neutral terminal. **Every row written before the stop was kept** (no rollback). Nothing
 to do; run a fresh sync when ready.
 
-### Gmail auth expired / "authentication failed"
+### Gmail auth expired / "authentication failed" / "Command failed"
 
-The worker uses a Gmail **App Password** (never OAuth). If Gmail rejects the login:
+Since **2026-07-27** the worker authenticates with **OAuth2 (XOAUTH2)** over IMAP.
+App Password is a legacy fallback only — Google refused it outright on 2026-07-27
+(`imapflow: Error: Command failed` at connect) and blocked every sync, which is why
+this reversed the earlier "App Password only, never OAuth" rule.
 
-1. Generate a new App Password: https://myaccount.google.com/apppasswords (requires 2FA
-   on the account). 16 characters, spaces stripped.
-2. Update the worker secret:
+Env the worker reads (see `src/lib/gmail.ts`): `GMAIL_USER` **plus either** the OAuth
+trio `GMAIL_OAUTH_CLIENT_ID` + `GMAIL_OAUTH_CLIENT_SECRET` + `GMAIL_OAUTH_REFRESH_TOKEN`
+(preferred), **or** the legacy `GMAIL_APP_PASSWORD`.
+
+If Gmail rejects the login:
+
+1. **Diagnose locally first** — from `workers/sync`, `npm run gmail:check`. It prints
+   which auth mode resolved and the mailbox, connects read-only, and runs one search.
+2. **If the refresh token was revoked** (`invalid_grant` in the error) — re-mint it:
    ```bash
-   flyctl secrets set GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx
+   npm run gmail:mint          # opens Google consent, prints a new refresh token
+   flyctl secrets set -a blackwood-sync GMAIL_OAUTH_REFRESH_TOKEN=<new token>
    ```
-   (This restarts the worker; DBOS recovers any in-flight run on restart.)
-3. Re-run the sync.
+   A refresh token dies on: password change, revoking the app at
+   https://myaccount.google.com/permissions, or ~6 months of disuse while the OAuth
+   consent screen is still in **Testing** (publish the app to avoid the 7-day/testing
+   expiry surprises).
+3. **If the whole OAuth client changed** — set all three secrets together.
+4. **Scope check:** the client MUST have `https://mail.google.com/`. A narrower scope
+   connects but then fails at `markProcessed` (IMAP STORE / `+X-GM-LABELS`).
+5. Re-run the sync. (Each `flyctl secrets set` restarts the worker; DBOS recovers any
+   in-flight run on restart.)
 
-The account itself is in `GMAIL_USER`. If the whole account changed, set both.
+The account itself is in `GMAIL_USER`. If the whole mailbox changed, re-mint against
+the new account and set `GMAIL_USER` too.
 
 ### Supabase went down mid-run
 
@@ -218,7 +236,8 @@ All secrets live as Fly secrets (never in the repo). Rotate by setting the new v
 each `flyctl secrets set` restarts the worker, and DBOS recovers any in-flight run:
 
 ```bash
-flyctl secrets set GMAIL_APP_PASSWORD=…            # Gmail App Password (see above)
+flyctl secrets set GMAIL_OAUTH_REFRESH_TOKEN=…     # re-minted via `npm run gmail:mint` (see above)
+flyctl secrets set GMAIL_OAUTH_CLIENT_SECRET=…     # only if the OAuth client itself was rotated
 flyctl secrets set SUPABASE_SERVICE_ROLE_KEY=…     # if the service role key is rotated
 flyctl secrets set SYNC_KICK_SECRET=…              # MUST also update the app's SYNC_KICK_SECRET
 flyctl secrets set DBOS_DATABASE_URL=…             # DB password change → new connection string
@@ -247,7 +266,9 @@ Set the secrets (one time, and on any rotation):
 ```bash
 flyctl secrets set \
   GMAIL_USER=you@gmail.com \
-  GMAIL_APP_PASSWORD=xxxxxxxxxxxxxxxx \
+  GMAIL_OAUTH_CLIENT_ID=<oauth-desktop-client-id> \
+  GMAIL_OAUTH_CLIENT_SECRET=<oauth-client-secret> \
+  GMAIL_OAUTH_REFRESH_TOKEN=<from `npm run gmail:mint`> \
   SUPABASE_URL=https://<project-ref>.supabase.co \
   SUPABASE_SERVICE_ROLE_KEY=<service_role_jwt> \
   DBOS_DATABASE_URL=<direct-postgres-url> \
