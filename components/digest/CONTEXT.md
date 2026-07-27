@@ -35,7 +35,7 @@ in order is `app/(app)/page.tsx` (an async Server Component).
 | `schedule-row-card.tsx` | `'use client'` | — | The shared phone schedule `<li>` row (extracted from `schedule-preview-mobile.tsx`) so BOTH the digest preview list AND the full-month `ScheduleCardsMobile` list render identical rows. Props: `ScheduleRowCardData` (date/dow/shifts/setup/gradeTons/projected/actual/state/isToday + **optional** `actualHrs`/`variance`, which the digest preview omits and the month view supplies). No ₱ → no gating. |
 | `week-strip.tsx` | Server | `weekPlan` | This-week plan-vs-actual strip — one card per day of the operational date's week: dow + date, setup, a violet planned bar over a chart-1 actual bar, and a state chip (Reported / Today / Planned). Rest days render dashed + "planned rest"; today gets a `ring`. Uses the pre-resolved `WeekDayPlan.state`. Rendered **near the top** of the digest (under the plant-status band); its heading links to `/?view=schedule`. |
 | `trucks-summary.tsx` | `'use client'` | `trucks` | Excel-Standard dense table of trucks that logged a trip (`ttl_km > 0`) on the operational date, busiest first. Renders `null` on a no-movement day. A truck's `remarks`, when present, are revealed by tapping the underlined plate — a **tap-native `Popover`** (not a hover-only `Tooltip`) so touch users can read them too. |
-| `bag-inventory.tsx` | Server | `fleconBags` | Compact chip group — one chip per FLECON bag type (label + balance), `sort_order` ascending. Zero-balance chips dimmed. No price data. Renders `null` when no bag types. |
+| `bag-inventory.tsx` | Server | `fleconBags` | Dense **Excel-Standard stock summary table** — one row per FLECON bag type, `sort_order` ascending (the workbook's C→P sheet-column order = the operator's mental model; NEVER re-sorted). Columns: **Bag type · Opening · In · Out · Balance · Last move** — i.e. the movement workbook's `Forwarded Balance → movements → Current Balance` collapsed to one row per type. Replaced the old `flex-wrap` chip group, which showed ONLY `balance` and threw away the other four fields the adapter already supplies. Numeric vocabulary is borrowed verbatim from the full ledger (`flecon-bags-view.tsx`) so the band and the page read as one product: `fmtInt` **blank-for-zero** (Excel blanks-are-zero) on Opening/In/Out, emerald `In`, red `Out` rendered with the REAL minus glyph `−` (U+2212) over the view's POSITIVE `total_out` magnitude, `Balance` emphasized (`font-semibold`, red when negative). `Last move` is `MM-dd` via date-fns `parseISO`+`format` (parseISO, never `new Date()`, so a date-only string can't drift a day), em-dash when the type has never moved. Zero-balance rows keep their POSITION (row-order stability matters to spreadsheet users) but render dimmed. Card header links to `/inventory/flecon-bags` ("Full ledger →"). **No per-row animation** (CLAUDE.md forbids animating table rows — the old `stagger-fast` was removed); card keeps `animate-fade-up`, rows get `transition-all duration-150` hover only. Card carries `min-w-0` so the table scrolls INSIDE its card instead of widening the page. No aggregation, no totals row (summing different bag capacities is meaningless). No price data. Renders `null` when no bag types. |
 | `sync-summary.tsx` | Server | `latestSync` | Compact header: "{date} · {n} new · {n} updated (· {n} removed)" + per-employee count chips (`byEmployee`). Owns the `employeeLabel()` key→friendly-name map. |
 | `activity-feed.tsx` | `'use client'` | `activity` | The changelog: up to ~40 recent `ActivityItem`s — op pill (INSERT/UPDATE/DELETE) + relative time + employee + provenance + table + note + diff chips. NOT animated per-row (single container fade). |
 | `digest-footer-band.tsx` | Server | `flags`, `monthToDate` (+ `meta.streams` for freshness) | 3-col final band: Flags (severity chips), Stream freshness (dense table), Month-to-date card. |
@@ -84,7 +84,9 @@ a centered `Dialog` or a bottom `Sheet` — see the rule below. Per-band:
   `digest-footer-band`** — responsive-only (already `table-fixed w-full` /
   `flex-wrap` / stacking grids); no condense/expand needed. (`trucks-summary`
   remarks use a tap-native `Popover`, not a hover-only `Tooltip`, so touch users
-  can read them.)
+  can read them.) `bag-inventory`'s 6-column table is narrow enough
+  (`min-w-[592px]`) to sideways-scroll inside its own card on a phone — no
+  separate mobile component, unlike the 14-column full ledger.
 See `app/(app)/CONTEXT.md` → "Mobile / responsive" for the page-shell details and
 the `prefers-reduced-motion` guard added to `globals.css`.
 
@@ -107,7 +109,12 @@ its fixed-column sum + a floor for the flexible column, inside `overflow-x-auto`
 `schedule-preview.tsx` caller and the mobile sheet — never omitted, since the lone
 `w-auto` Setup column is what crushed); `trucks-summary` `min-w-[320px]` (200 + 120
 plate floor); `digest-footer-band`'s `StreamTable` `min-w-[300px]` (162 + 138 stream
-floor).
+floor); `bag-inventory` **`min-w-[604px]`** (`MIN_W`, = 424px of fixed numeric
+columns + a **180px floor for the flexible Bag type column** — the one column with
+no explicit width, therefore the one that would crush). Each of these tables ALSO
+needs its card to carry `min-w-0`, or the flex/grid parent sizes to the table's
+min-content and the PAGE scrolls sideways on tablet portrait instead of the table
+scrolling inside its own card (commits `9471122` / `5d92772`).
 
 ## Data
 - **Single source:** `getDigestData(): Promise<DigestData>` (`lib/digest/queries.ts`,
@@ -129,8 +136,10 @@ floor).
   "No data / —" placeholder; nothing crashes on missing streams.
 - **Motion (per `CLAUDE.md` Motion & Glass rules).** Glass card frames
   (`bg-card/95 backdrop-blur … hover-lift`); `animate-fade-up` on band reveals;
-  `stagger-children` on the KPI grid; `stagger-fast` on the small open-blocks /
-  bag-inventory groups (allowed — ≤ a handful, NOT the 100+-instance table case);
+  `stagger-children` on the KPI grid; `stagger-fast` on the small open-blocks
+  card group (allowed — ≤ a handful, NOT the 100+-instance table case; it was
+  REMOVED from `bag-inventory` when that band became a TABLE — table rows are
+  never animated);
   the open-block volume bar grows from the left via `animate-status-grow`
   (`transform: scaleX`, `origin-left` — never animates width). The activity feed is
   a single container fade with per-row `transition-colors` hover only.
