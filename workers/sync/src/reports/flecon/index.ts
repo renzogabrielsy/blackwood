@@ -73,6 +73,8 @@ export const classifyCase: ClassifyCase = async (
       {
         filename: "",
         sheet: "",
+        sheet_year: null,
+        flagged_rows: [],
         since,
         rows: [],
         opening_balances: {},
@@ -163,6 +165,13 @@ export interface RunReportResult {
   classified: FleconClassified | null;
   apply: FleconApplyResult | null;
   note?: string;
+  /**
+   * HARD stops that prevented this report from writing (BUG-015 defect C1). flecon
+   * previously never emitted any — its classify was always `ok:true`. The stale-workbook
+   * refusal is the first, and it must reach the panel card as a gate failure, not as a
+   * silent zero-row apply. Empty array = no gate tripped (the normal case).
+   */
+  gate_failures: Array<{ gate: string; detail: string }>;
 }
 
 const REPORT_TYPE = "flecon";
@@ -200,7 +209,13 @@ export async function runReport(
   const wbMeta = await deps.fetchLatestWorkbook(GMAIL_QUERY.replace("{since}", sinceGmail));
   if (!wbMeta) {
     await deps.progress("finalize", "Nothing new today — no FLECON BAGGED report waiting.", 100);
-    return { ok: true, classified: null, apply: null, note: "No FLECON BAGGED email in window." };
+    return {
+      ok: true,
+      classified: null,
+      apply: null,
+      note: "No FLECON BAGGED email in window.",
+      gate_failures: [],
+    };
   }
   await deps.progress("fetch", `Found the report: ${wbMeta.subject ?? "FLECON BAGGED"}`, 18);
 
@@ -242,6 +257,30 @@ export async function runReport(
     90,
   );
 
+  // ── BUG-015 defect C1: refuse a workbook OLDER than what the DB already holds. ──
+  // The fetcher takes the newest EMAIL carrying an xlsx; that attachment can still be an
+  // older REVISION of the cumulative workbook. Its missing days classify DATE_CHANGED
+  // with an empty movement list, which REPLACE-BY-DATE used to honour by wiping the day
+  // (confirmed 3x in production — see docs/BUG_LEDGER.md BUG-015).
+  const workbookMaxDate = extract.summary.date_max;
+  const stale =
+    watermark !== null && (workbookMaxDate === null || workbookMaxDate < watermark)
+      ? { workbookMaxDate, dbWatermark: watermark }
+      : null;
+
+  // ── BUG-015 defect A: every date the DB holds, so the apply can tell a benign
+  // settled-history drop from a dropped date that was never recorded at all. ──
+  let dbDates: string[] | undefined;
+  try {
+    const allDates = await deps.db.readRows("flecon_bag_movements", {
+      columns: ["transaction_date"],
+      sinceColumn: null,
+    });
+    dbDates = allDates.map((r) => String(r.transaction_date ?? "").slice(0, 10));
+  } catch {
+    dbDates = undefined; // read failed → skip the benign/never-recorded split, never crash
+  }
+
   const applyResult = await applyFlecon(
     {
       db: deps.db,
@@ -254,10 +293,28 @@ export async function runReport(
       emailUid: wbMeta.uid ?? null,
       emailThreadId: wbMeta.threadId ?? null,
       noLabel: manifest.noLabel ?? false,
+      flaggedRows: extract.flagged_rows,
+      dbDates,
+      staleWorkbook: stale,
     },
   );
 
-  return { ok: applyResult.ok, classified, apply: applyResult };
+  return {
+    ok: applyResult.ok,
+    classified,
+    apply: applyResult,
+    gate_failures: stale
+      ? [
+          {
+            gate: "stale_workbook",
+            detail:
+              `The FLECON BAGGED attachment only carries bag movements up to ` +
+              `${stale.workbookMaxDate ?? "(no dated rows)"}, but the app already has them through ` +
+              `${stale.dbWatermark}. This is an older copy of the workbook — nothing was written.`,
+          },
+        ]
+      : [],
+  };
 }
 
 /** YYYY-MM-DD minus N days (UTC), mirroring date.fromisoformat(...) - timedelta(days=N). */

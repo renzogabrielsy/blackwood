@@ -92,6 +92,18 @@ export function makeDryRunDb(real: DbClient): DbClient {
     insert: async (_table: string, _rows: Row[]): Promise<Row[]> => [],
     update: async (_table: string, _filters: Record<string, string>, _patch: Row): Promise<Row[]> => [],
     deleteByDate: async (_table: string, _date: string): Promise<void> => {},
+    // flecon's ATOMIC replace-by-date RPC. MUST be listed here: an unassigned method
+    // would fall through to DbClient.prototype (this proxy is Object.create'd from it)
+    // and hit the REAL Supabase client with `sb` — writing during a "dry" run.
+    replaceFleconDate: async (
+      _date: string,
+      _rows: Row[]
+    ): Promise<{ deleted: number; deletedFirstId: string | null; inserted: number; firstId: string | null }> => ({
+      deleted: 0,
+      deletedFirstId: null,
+      inserted: 0,
+      firstId: null,
+    }),
     insertIfAbsent: async (_table: string, rows: Row[], _nk: string[]): Promise<InsertIfAbsentResult> => ({
       inserted: [],
       skipped: rows,

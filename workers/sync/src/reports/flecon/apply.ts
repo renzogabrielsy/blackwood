@@ -10,23 +10,48 @@
  * Held reasons: unmapped_or_missing_columns (standing), below_since_floor,
  *   unmapped_bag_type_code (whole date). Never auto-creates a bag type.
  *
+ * BUG-015 (2026-07-27) added four more, all using EXISTING HeldKinds (the kind enum is
+ * frontend-locked — app/(app)/sync/types.ts + three exhaustive Record maps):
+ *   out_of_year_date                 (malformed)         — a date outside the tab's year
+ *   dropped_before_since_unrecorded  (below_since_floor) — a dropped date the DB never had
+ *   balance_crosscheck_drift         (flagged)           — the informational drift, surfaced
+ *   delete_to_empty_blocked          (gate_failure)      — refuse to wipe a day to empty
+ *   stale_workbook                   (gate_failure)      — refuse an older workbook outright
+ *
  * Label + watermark: watermark only if `not errors`; label only if `not errors` AND
  *   no held entry with reason unmapped_bag_type_code / unmapped_or_missing_columns —
  *   STRICTER than other pipelines (flecon.md §5). Gmail labeling is an INJECTED
  *   callback so this module never imports gmail (deps wired by the workflow layer).
  *
- * PORTING TRAP #1: the Python reaches into db._session.delete(...) raw. We surface an
- * explicit `deleteByDate` method on the deps' db instead, preserving the exact
- * semantics (unconditional DELETE WHERE transaction_date = eq.{d}, return=minimal).
+ * PORTING TRAP #1: the Python reaches into db._session.delete(...) raw. The port first
+ * surfaced an explicit `deleteByDate` method on the deps' db; since BUG-015 the pair is
+ * ONE transactional RPC (`replaceFleconDate` → `fn_flecon_replace_date`), because the
+ * DELETE and the INSERT being two independent HTTP calls is exactly what let a failure
+ * between them leave a day deleted with no rows and no audit trail.
  */
 import type { FleconClassified, PerDateEntry } from "./classify.js";
+import type { FleconFlaggedRow } from "./extract.js";
 import { type HeldRow, fleconKey } from "../held.js";
 
 export interface FleconApplyDeps {
   db: {
-    /** Unconditional DELETE FROM flecon_bag_movements WHERE transaction_date = eq.{d}. */
-    deleteByDate(table: string, date: string): Promise<void>;
-    insert(table: string, rows: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
+    /**
+     * ATOMIC replace-by-date (BUG-015 defect C, 2026-07-27). DELETE + INSERT for one
+     * date inside ONE transaction via the `fn_flecon_replace_date` RPC. The previous
+     * shape was `deleteByDate(...)` then `insert(...)` — two independent HTTP calls, so
+     * a failure between them left the date DELETED with nothing inserted and no audit
+     * row. Returns the counts + a marker id from EITHER side so the audit row can
+     * always be written (including a delete-only outcome).
+     */
+    replaceFleconDate(
+      date: string,
+      rows: Array<Record<string, unknown>>,
+    ): Promise<{
+      deleted: number;
+      deletedFirstId: string | null;
+      inserted: number;
+      firstId: string | null;
+    }>;
     writeIngestionAudit(args: {
       tableName: string;
       recordId: string;
@@ -51,11 +76,37 @@ export interface FleconApplyDeps {
   labelProcessed: (uid: string) => Promise<boolean>;
 }
 
+/**
+ * Set when the fetched workbook is an OLDER revision than what the DB already holds
+ * (BUG-015 defect C1). A stale workbook's missing days classify DATE_CHANGED with an
+ * empty movement list, which used to DELETE a real day down to nothing. When present,
+ * the apply refuses outright: no writes, no watermark, no Gmail label.
+ */
+export interface FleconStaleWorkbook {
+  /** MAX(transaction_date) the workbook itself carries (null = it carried none). */
+  workbookMaxDate: string | null;
+  /** MAX(flecon_bag_movements.transaction_date) already in the DB. */
+  dbWatermark: string;
+}
+
 export interface FleconApplyOpts {
   reportType: string;
   emailUid: string | null;
   emailThreadId: string | null;
   noLabel: boolean;
+  /**
+   * Extractor telemetry (BUG-015 defect A) — rows dropped by the `since` floor and/or
+   * dated outside the tab's own year. NEVER auto-corrected; surfaced as held rows.
+   */
+  flaggedRows?: FleconFlaggedRow[];
+  /**
+   * Every `transaction_date` the DB already holds (ALL history, not just >= since).
+   * Lets the apply tell a benign settled-history drop (the date is already recorded)
+   * from a dropped date the DB has NEVER seen. Omit → the benign class is not raised.
+   */
+  dbDates?: string[];
+  /** Non-null → refuse the whole apply (see FleconStaleWorkbook). */
+  staleWorkbook?: FleconStaleWorkbook | null;
 }
 
 /** Retained as an alias so anything importing HeldEntry still resolves; the
@@ -80,6 +131,157 @@ function prov(runTs: string, d: string, cls: string, extra = ""): string {
   return base + (extra ? ` ${extra}` : "");
 }
 
+/** Thousands-free compact signed qty for a held detail line ("+128" / "−1"). */
+function signed(n: number): string {
+  return n < 0 ? `−${Math.abs(n)}` : `+${n}`;
+}
+
+/** "rows 75-79" for a contiguous run, "rows 75, 78" otherwise. */
+function rowRange(rows: number[]): string {
+  const uniq = [...new Set(rows)].sort((a, b) => a - b);
+  if (uniq.length === 0) return "";
+  const contiguous = uniq[uniq.length - 1] - uniq[0] === uniq.length - 1;
+  if (uniq.length === 1) return `row ${uniq[0]}`;
+  return contiguous ? `rows ${uniq[0]}–${uniq[uniq.length - 1]}` : `rows ${uniq.join(", ")}`;
+}
+
+/** "ECOPACK_BEIGE +100, ZAMBOANGA_BAG +127" — net qty per bag type, code-sorted. */
+function netByCode(rows: FleconFlaggedRow[]): string {
+  const net = new Map<string, number>();
+  for (const r of rows) net.set(r.bag_type_code, (net.get(r.bag_type_code) ?? 0) + r.qty_delta);
+  return [...net.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([code, n]) => `${code} ${signed(n)}`)
+    .join(", ");
+}
+
+/**
+ * BUG-015 defect A — turn the extractor's silently-swallowed drops into held rows.
+ *
+ * TWO distinct classes, deliberately kept apart:
+ *   1. `out_of_year_date` — the row's date year is NOT the tab's year (e.g. `2025-01-31`
+ *      typed inside the `JANUARY 2026` tab). This is categorically an operator TYPO, not
+ *      settled history: the row will never be ingested under ANY watermark. Held as
+ *      `malformed` (attention-level) so it reaches a person. NEVER auto-corrected.
+ *   2. `dropped_before_since_unrecorded` — an in-year row below the `since` floor whose
+ *      DATE the database has never recorded at all. Ordinary settled history (a dropped
+ *      date the DB already holds) is NOT raised — that is the benign, every-run case.
+ *
+ * One held row per DATE (not per sheet row) so a five-row typo is one case, not five.
+ */
+export function buildFlaggedRowHolds(
+  flagged: FleconFlaggedRow[],
+  dbDates?: string[],
+): HeldRow[] {
+  if (!flagged.length) return [];
+  const known = dbDates ? new Set(dbDates.map((d) => String(d).slice(0, 10))) : null;
+  const out: HeldRow[] = [];
+
+  const byDate = new Map<string, FleconFlaggedRow[]>();
+  for (const r of flagged) {
+    const arr = byDate.get(r.transaction_date) ?? [];
+    arr.push(r);
+    byDate.set(r.transaction_date, arr);
+  }
+
+  for (const d of [...byDate.keys()].sort()) {
+    const rows = byDate.get(d)!;
+    const outOfYear = rows.filter((r) => r.out_of_year);
+    const plainDropped = rows.filter((r) => !r.out_of_year && r.dropped);
+
+    if (outOfYear.length) {
+      const where = rowRange(outOfYear.map((r) => r.source_row));
+      out.push({
+        reason: "out_of_year_date",
+        natural_key: fleconKey(d, `${where} — date is outside this sheet's year`),
+        detail:
+          `${where} of the bag sheet carry the date ${d}, which is not in this tab's year. ` +
+          `That is almost certainly a typo in the date cell. These rows were NOT imported and ` +
+          `never will be while the date reads ${d}: ${netByCode(outOfYear)}. ` +
+          `Fix the date in the source sheet — the sync will not guess it.`,
+        kind: "malformed",
+        row: {
+          transaction_date: d,
+          source_rows: [...new Set(outOfYear.map((r) => r.source_row))].sort((a, b) => a - b),
+          bag_type_codes: [...new Set(outOfYear.map((r) => r.bag_type_code))].sort(),
+          movements: outOfYear.map((r) => ({
+            source_row: r.source_row,
+            particular: r.particular,
+            bag_type_code: r.bag_type_code,
+            qty_delta: r.qty_delta,
+          })),
+        },
+      });
+    }
+
+    if (plainDropped.length && known && !known.has(d)) {
+      const where = rowRange(plainDropped.map((r) => r.source_row));
+      out.push({
+        reason: "dropped_before_since_unrecorded",
+        natural_key: fleconKey(d, `${where} — older than the sync window and never saved`),
+        detail:
+          `${where} of the bag sheet are dated ${d}, which is older than this run's window, so ` +
+          `they were skipped — but the database has no bag movements for ${d} at all, so these ` +
+          `rows have never been saved: ${netByCode(plainDropped)}.`,
+        kind: "below_since_floor",
+        row: {
+          transaction_date: d,
+          source_rows: [...new Set(plainDropped.map((r) => r.source_row))].sort((a, b) => a - b),
+          bag_type_codes: [...new Set(plainDropped.map((r) => r.bag_type_code))].sort(),
+        },
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * BUG-015 defect B — the balance cross-check has been computed on every run since the
+ * port and thrown away. Any non-zero drift between the DB's own balance view and the
+ * sheet's own running-balance row now becomes ONE held row naming every drifting bag
+ * type and both numbers.
+ *
+ * Deliberately a FINDING, never a write gate — flecon is single-source and specs/
+ * flecon.md §4 fixes the cross-check as INFORMATIONAL. Nothing here blocks a write.
+ */
+export function buildBalanceDriftHold(classified: FleconClassified): HeldRow | null {
+  const cc = classified.balance_crosscheck;
+  if (!cc || !cc.available) return null;
+  const drifting = (cc.rows ?? []).filter((r) => typeof r.drift === "number" && r.drift !== 0);
+  if (!drifting.length) return null;
+
+  const codes = drifting.map((r) => r.code).sort();
+  const lines = drifting
+    .slice()
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0))
+    .map(
+      (r) =>
+        `${r.code}: app says ${r.db_view_balance}, the sheet says ${r.sheet_snapshot_balance} ` +
+        `(off by ${signed(r.drift as number)})`,
+    );
+
+  return {
+    reason: "balance_crosscheck_drift",
+    natural_key: `FLECON bag balance drift — ${drifting.length} bag type(s): ${codes.join(", ")}`,
+    detail:
+      `The app's bag balances disagree with the balance row on the operator's own sheet for ` +
+      `${drifting.length} bag type(s). ${lines.join("; ")}. Nothing was blocked because of this ` +
+      `— it is a cross-check, not a gate — but a persistent gap usually means rows are ` +
+      `missing from, or duplicated in, the app.`,
+    kind: "flagged",
+    row: {
+      drifting_count: drifting.length,
+      bag_type_codes: codes,
+      rows: drifting.map((r) => ({
+        code: r.code,
+        db_view_balance: r.db_view_balance,
+        sheet_snapshot_balance: r.sheet_snapshot_balance,
+        drift: r.drift,
+      })),
+    },
+  };
+}
+
 export async function applyFlecon(
   deps: FleconApplyDeps,
   classified: FleconClassified,
@@ -96,9 +298,54 @@ export async function applyFlecon(
   let replacedDates = 0;
   let inserts = 0;
 
+  // ── Defect C1: a STALE workbook is refused outright, before anything is written. ──
+  if (opts.staleWorkbook) {
+    const s = opts.staleWorkbook;
+    const detail =
+      `The bag report we just read only goes up to ${s.workbookMaxDate ?? "(no dated rows)"}, ` +
+      `but the database already has bag movements through ${s.dbWatermark}. That means this ` +
+      `attachment is an OLDER copy of the workbook than the one we already loaded. Applying it ` +
+      `would blank out the days it is missing, so NOTHING was written. Ask for the current ` +
+      `FLECON BAGGED file, or re-send today's report.`;
+    held.push({
+      reason: "stale_workbook",
+      natural_key: `FLECON workbook is older than the database (${s.workbookMaxDate ?? "no dates"} < ${s.dbWatermark})`,
+      detail,
+      kind: "gate_failure",
+      row: {
+        workbook_max_date: s.workbookMaxDate,
+        db_watermark: s.dbWatermark,
+        days_in_workbook: perDate.length,
+      },
+    });
+    await deps.progress(
+      "finalize",
+      "Stopped — the bag report is an older copy than what we already have. Nothing written.",
+      100,
+      undefined,
+      "warn",
+    );
+    return {
+      ok: false,
+      inserts: 0,
+      replaced_dates: 0,
+      held,
+      labeled: false,
+      watermark_updated: false,
+      errors: [],
+    };
+  }
+
   const total = Math.max(1, perDate.length);
   const batch = Math.max(1, Math.ceil(total / 10));
   await deps.progress("apply", `Rewriting bag movements for ${perDate.length} day(s)…`, 12);
+
+  // ── Defect A: rows the EXTRACTOR dropped / mis-dated become LOUD held rows. ──
+  held.push(...buildFlaggedRowHolds(opts.flaggedRows ?? [], opts.dbDates));
+
+  // ── Defect B: the informational balance cross-check finally REACHES the operator. ──
+  const driftHold = buildBalanceDriftHold(classified);
+  if (driftHold) held.push(driftHold);
 
   // Column flags → held (never auto-create a bag type).
   const colFlags = classified.column_flags ?? { flagged: false };
@@ -163,24 +410,54 @@ export async function applyFlecon(
       });
       continue;
     }
+    // ── Defect C2: a date that resolves to ZERO rows is a HOLD, never a delete. ──
+    // A stale/short workbook reports an absent section as "this day has no movements",
+    // which REPLACE-BY-DATE would honour by deleting the day down to empty. We never
+    // delete a day on the strength of an absent section — the human arbitrates.
+    if (rows.length === 0) {
+      held.push({
+        reason: "delete_to_empty_blocked",
+        natural_key: fleconKey(d, "no movements in this report"),
+        detail:
+          `The report shows NO bag movements at all for ${d}, but the database has ` +
+          `${p.db_movement_count} row(s) saved for that day. Wiping a day clean on the strength of ` +
+          `a missing section is almost always a short/older copy of the workbook, so nothing was ` +
+          `changed for ${d}. If the day genuinely had no bag movement, clear it by hand.`,
+        kind: "gate_failure",
+        row: {
+          transaction_date: d,
+          db_movement_count: p.db_movement_count,
+          sheet_movement_count: p.sheet_movement_count,
+          classified_as: p.class,
+        },
+      });
+      continue;
+    }
     try {
-      // REPLACE-BY-DATE: DELETE this date then INSERT the sheet's current movements.
-      await deps.db.deleteByDate("flecon_bag_movements", d);
-      let ins: Array<Record<string, unknown>> = [];
-      if (rows.length) {
-        ins = await deps.db.insert("flecon_bag_movements", rows);
-        inserts += ins.length;
-      }
+      // REPLACE-BY-DATE, now ATOMIC: DELETE + INSERT in ONE transaction (defect C3).
+      const res = await deps.db.replaceFleconDate(d, rows);
+      inserts += res.inserted;
       replacedDates += 1;
-      // One manual audit row per replaced date (no audit trigger on flecon).
-      const markerId = rows.length && ins.length ? (ins[0].id as string) : null;
+      // ALWAYS write the manual audit row (no audit trigger on flecon) — the marker
+      // falls back to a DELETED row's id so even a delete-heavy replace is traceable.
+      const markerId = res.firstId ?? res.deletedFirstId;
       if (markerId) {
         await deps.db.writeIngestionAudit({
           tableName: "flecon_bag_movements",
           recordId: markerId,
           operation: "REPLACE",
-          comment: prov(runTs, d, p.class, `${rows.length} movements`),
-          snapshot: { transaction_date: d, movement_count: rows.length },
+          comment: prov(
+            runTs,
+            d,
+            p.class,
+            `${res.deleted} row(s) removed, ${res.inserted} movement(s) written.`,
+          ),
+          snapshot: {
+            transaction_date: d,
+            movement_count: rows.length,
+            deleted_count: res.deleted,
+            inserted_count: res.inserted,
+          },
         });
       }
       if (seen % batch === 0 || seen === total) {

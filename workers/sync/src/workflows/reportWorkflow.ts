@@ -175,8 +175,10 @@ async function runOneReport(params: ReportWorkflowParams): Promise<ReportEnvelop
         reportType: "flecon",
         classify: {
           report_type: "flecon",
-          ok: r.ok,
-          gate_failures: [],
+          // A tripped gate (stale workbook) must settle the card to 'gate-failed', not
+          // to a silent zero-row success — BUG-015 defect C1.
+          ok: r.ok && r.gate_failures.length === 0,
+          gate_failures: r.gate_failures,
           counts: {
             noop: s?.duplicate_noop_days ?? 0,
             insert: s?.new_days ?? 0,
