@@ -12,6 +12,15 @@ File: `.claude/skills/sync-ictc/scripts/fetch_gmail.py` (573 lines).
 
 ### 1.1 Auth
 
+> **PORTED BEHAVIOR DIVERGES (2026-07-27).** This section describes the *Python oracle's*
+> App-Password login. The TS worker (`src/lib/gmail.ts`) no longer matches it: Google
+> refused App-Password IMAP auth on 2026-07-27 and blocked every sync, so the worker
+> now authenticates with **OAuth2/XOAUTH2** (`GMAIL_USER` + `GMAIL_OAUTH_CLIENT_ID` +
+> `GMAIL_OAUTH_CLIENT_SECRET` + `GMAIL_OAUTH_REFRESH_TOKEN`, scope
+> `https://mail.google.com/`), keeping `GMAIL_APP_PASSWORD` only as a fallback. This
+> reverses the "App Password ONLY — never OAuth" rule. Everything else in this section
+> (X-GM-RAW search, X-GM-LABELS, folder, query strings) is unchanged parity.
+
 - Credentials: `~/.config/sync-ictc/credentials.env` (default; overridable via `--credentials-path`), keys `GMAIL_USER` + `GMAIL_APP_PASSWORD` (fetch_gmail.py:55, 65-125).
 - **Hard permission check** (fetch_gmail.py:83-97): file mode must not have group/other bits (`mode & 0o077`), else exit 1 with an error JSON on stderr telling the user to `chmod 600`.
 - IMAP: `imaplib.IMAP4_SSL("imap.gmail.com", 993)`, plain login (fetch_gmail.py:53-54, 131-152). IMAP4 login failure → stderr JSON `{error, hint}`, exit 1.
@@ -125,7 +134,9 @@ Two SECURITY DEFINER Postgres RPCs exist because the service-role PostgREST key 
 | `electricity_readings` | `(reading_date, meter)` | sync_production.py:391 |
 | `truck_readings` | `(reading_date, plate_no)` | sync_production.py:391 |
 
-Note `sync_gsheet.py`'s legacy `_apply_from_compact` uses plain `db.insert()` (NOT `insert_if_absent`) for both `deliveries` and `rc_out` NEW rows (sync_gsheet.py:362, 386) — idempotency there is enforced upstream by the classifier's NEW/NOOP decision against a freshly-queried DB window, not by a second per-row re-check at write time. This is a **deliberate asymmetry** a TS porter must preserve: gsheet's apply path does NOT re-check-then-insert; it trusts the classify-time decision.
+Note `sync_gsheet.py`'s legacy `_apply_from_compact` uses plain `db.insert()` (NOT `insert_if_absent`) for both `deliveries` and `rc_out` NEW rows (sync_gsheet.py:362, 386) — idempotency there is enforced upstream by the classifier's NEW/NOOP decision against a freshly-queried DB window, not by a second per-row re-check at write time.
+
+> **The TS port NO LONGER preserves this asymmetry (2026-07-27, BUG-016).** `src/reports/gsheet/apply.ts` now calls `insertIfAbsent` for both tables, reusing the SAME natural keys listed in the table above (`deliveries` from sync_deliveries.py:343, `rc_out` from sync_rc_out.py:265) — exported as `GSHEET_DELIVERIES_NATURAL_KEY` / `GSHEET_RC_OUT_NATURAL_KEY`. The upstream-only guard was unsound because gsheet is NOT the sole writer of `deliveries`: the classifier's start-of-run snapshot is a TOCTOU window, and on 2026-07-15 it let gsheet blind-insert a duplicate of a delivery the email path had written 2h07m earlier (+24,024 kg phantom inventory). A guard hit surfaces as a held row with `reason`/`kind` `already_exists` — the same words the email writers use. See `gsheet.md` §5 "Idempotency mechanism" and PORTING_DECISIONS.md.
 
 ---
 

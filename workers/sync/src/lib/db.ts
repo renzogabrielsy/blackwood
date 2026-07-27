@@ -270,6 +270,46 @@ export class DbClient {
   }
 
   /**
+   * ATOMIC flecon REPLACE-BY-DATE (BUG-015 defect C3, 2026-07-27). Calls the
+   * `fn_flecon_replace_date` RPC, which DELETEs one date's `flecon_bag_movements` rows
+   * and INSERTs the supplied replacements inside ONE transaction.
+   *
+   * The old shape was `deleteByDate()` then `insert()` — two independent HTTP calls, so
+   * a failure (or a stop) between them left the date DELETED with nothing inserted and,
+   * because the audit row was only written when the insert returned rows, NO audit trail
+   * of the wipe. This RPC makes the pair all-or-nothing and returns a marker id from
+   * EITHER side so the caller can always write its audit row.
+   */
+  async replaceFleconDate(
+    date: string,
+    rows: Row[]
+  ): Promise<{
+    deleted: number;
+    deletedFirstId: string | null;
+    inserted: number;
+    firstId: string | null;
+  }> {
+    const { data, error } = await this.sb.rpc("fn_flecon_replace_date", {
+      p_date: date,
+      p_rows: rows,
+    });
+    if (error) {
+      throw new Error(
+        `fn_flecon_replace_date RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    const o = (data ?? {}) as Record<string, unknown>;
+    const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+    const s = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+    return {
+      deleted: n(o.deleted),
+      deletedFirstId: s(o.deleted_first_id),
+      inserted: n(o.inserted),
+      firstId: s(o.first_id),
+    };
+  }
+
+  /**
    * Idempotent, RACE-SAFE batch creation (2026-07-11 auto-create policy). Upserts one
    * `batches` row keyed on the UNIQUE `batch_code` column with ON CONFLICT DO NOTHING
    * (`ignoreDuplicates: true`), then re-SELECTs — so two PARALLEL writer lanes (e.g.

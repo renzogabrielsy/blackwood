@@ -54,7 +54,9 @@ is just a fallback for it — don't set both).
 ```bash
 fly secrets set \
   GMAIL_USER="…" \
-  GMAIL_APP_PASSWORD="…" \
+  GMAIL_OAUTH_CLIENT_ID="…" \
+  GMAIL_OAUTH_CLIENT_SECRET="…" \
+  GMAIL_OAUTH_REFRESH_TOKEN="…" \
   SUPABASE_URL="https://taadqhgdsmxvkhhniwgm.supabase.co" \
   NEXT_PUBLIC_SUPABASE_URL="https://taadqhgdsmxvkhhniwgm.supabase.co" \
   SUPABASE_SERVICE_ROLE_KEY="…" \
@@ -93,7 +95,10 @@ Redeploy the Vercel app. The **Run Sync** button now kicks the cloud worker.
 
 | Secret | Where it comes from |
 |---|---|
-| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Gmail App Password (2FA → myaccount.google.com/apppasswords) |
+| `GMAIL_USER` | The single sync mailbox address |
+| `GMAIL_OAUTH_CLIENT_ID` / `GMAIL_OAUTH_CLIENT_SECRET` | Google Cloud Console → Credentials → OAuth client ID, type **Desktop app** (Gmail API enabled) |
+| `GMAIL_OAUTH_REFRESH_TOKEN` | One-time mint: `npm run gmail:mint` (scope `https://mail.google.com/`) |
+| `GMAIL_APP_PASSWORD` | **Legacy fallback only** — superseded by OAuth on 2026-07-27 after Google refused App-Password IMAP auth |
 | `SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (same value) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → service_role key |
 | `DBOS_DATABASE_URL` | Session-mode pooler URL (port 5432) + Supabase DB password |

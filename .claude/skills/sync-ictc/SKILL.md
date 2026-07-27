@@ -90,6 +90,14 @@ reference implementation for RC IN/RC OUT from the Google Sheet.
 
 ## Pre-flight checks (do these first, abort on failure)
 
+> **Auth note (2026-07-27):** the production **sync worker** (`workers/sync`) migrated to
+> **OAuth2/XOAUTH2** — Google refused App-Password IMAP logins that day and blocked every
+> sync, reversing the old "App Password ONLY, never OAuth" rule. This skill's Python
+> fallback path still logs in with an App Password; if Gmail refuses it here too, use the
+> worker instead (`npm run gmail:check` in `workers/sync` proves the OAuth path) rather
+> than regenerating another App Password. The worker's env is `GMAIL_USER` +
+> `GMAIL_OAUTH_CLIENT_ID` + `GMAIL_OAUTH_CLIENT_SECRET` + `GMAIL_OAUTH_REFRESH_TOKEN`.
+
 1. **Gmail App Password file exists.** Check `~/.config/sync-ictc/credentials.env`. If missing, tell Renzo: *"Gmail credentials aren't set up. Create the file with: `mkdir -p ~/.config/sync-ictc && chmod 700 ~/.config/sync-ictc && printf 'GMAIL_USER=you@gmail.com\\nGMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\\n' > ~/.config/sync-ictc/credentials.env && chmod 600 ~/.config/sync-ictc/credentials.env`. Generate the App Password at https://myaccount.google.com/apppasswords."* and stop.
 
 2. **Credentials file has safe permissions.** `stat -f '%Lp' ~/.config/sync-ictc/credentials.env` should return `600`. If it's looser, tell Renzo to run `chmod 600 ~/.config/sync-ictc/credentials.env` and stop. (The fetch_gmail.py script also enforces this — it refuses to run on world/group readable files.)

@@ -76,9 +76,41 @@ export interface MissingColumn {
   source_column: unknown;
 }
 
+/**
+ * A sheet row the extractor did NOT emit as a movement, or emitted under a date that
+ * cannot belong to this tab. Added 2026-07-27 (BUG-015 defect A): the extractor used to
+ * silently swallow every `< since` row behind a bare `dropped_before_since` COUNTER, so
+ * an operator year-typo (`2025-01-31` typed inside the `JANUARY 2026` tab) fell below the
+ * floor on every run and was never ingested, never flagged, never visible.
+ *
+ * This list is EXTRACTION-ONLY telemetry: it changes nothing about which rows are
+ * emitted (an out-of-year date is still NOT rewritten and NOT imported — CLAUDE.md
+ * "extraction must be exact / disagreements are never auto-resolved"). It exists so
+ * apply.ts can raise a LOUD held row instead of a swallowed integer.
+ */
+export interface FleconFlaggedRow {
+  /** The effective (carried-forward) date the row would have been written under. */
+  transaction_date: string;
+  source_row: number;
+  particular: string | null;
+  bag_type_code: string;
+  qty_delta: number;
+  /** The row fell below the `--since` floor and was NOT emitted. */
+  dropped: boolean;
+  /** The date's YEAR differs from the tab's own year → an operator typo, not history. */
+  out_of_year: boolean;
+}
+
 export interface FleconExtract {
   filename: string;
   sheet: string;
+  /** The tab's own 4-digit year (parsed from the sheet name), or null if unparseable. */
+  sheet_year: number | null;
+  /**
+   * Rows dropped by the `since` floor and/or dated outside the tab's year. Purely
+   * additive telemetry — never consumed by classify (the parity envelope is unchanged).
+   */
+  flagged_rows: FleconFlaggedRow[];
   since: string | null;
   rows: FleconMovement[];
   opening_balances: Record<string, number>;
@@ -460,13 +492,16 @@ function extractMovements(
   colToCode: Map<number, string>,
   since: string | null,
   warnings: string[],
+  sheetYear: number | null,
 ): {
   movements: FleconMovement[];
   balanceSnapshot: Record<string, number> | null;
   droppedBeforeSince: number;
   skippedMarkers: number;
+  flaggedRows: FleconFlaggedRow[];
 } {
   const movements: FleconMovement[] = [];
+  const flaggedRows: FleconFlaggedRow[] = [];
   let balanceSnapshot: Record<string, number> | null = null;
   let carriedDate: string | null = null;
   let droppedBeforeSince = 0;
@@ -525,8 +560,29 @@ function extractMovements(
       continue;
     }
 
+    // A date whose YEAR is not the tab's own year is an operator TYPO, never settled
+    // history (BUG-015 defect A). We record it — we NEVER rewrite it (CLAUDE.md: the
+    // extractor captures what the source literally says; the human arbitrates).
+    const outOfYear = sheetYear !== null && Number(carriedDate.slice(0, 4)) !== sheetYear;
+
     // --since tail-scope: drop rows dated before the watermark.
-    if (since !== null && carriedDate < since) {
+    const dropped = since !== null && carriedDate < since;
+
+    if (dropped || outOfYear) {
+      for (const [c, qty] of cols) {
+        flaggedRows.push({
+          transaction_date: carriedDate,
+          source_row: r,
+          particular,
+          bag_type_code: colToCode.get(c) as string,
+          qty_delta: qty,
+          dropped,
+          out_of_year: outOfYear,
+        });
+      }
+    }
+
+    if (dropped) {
       droppedBeforeSince += cols.length;
       continue;
     }
@@ -543,7 +599,13 @@ function extractMovements(
     }
   }
 
-  return { movements, balanceSnapshot, droppedBeforeSince, skippedMarkers };
+  return { movements, balanceSnapshot, droppedBeforeSince, skippedMarkers, flaggedRows };
+}
+
+/** Parse the tab's own 4-digit year from its sheet name ("JANUARY 2026" → 2026). */
+export function parseSheetYear(sheetName: string): number | null {
+  const m = String(sheetName).match(/(19|20)\d{2}/);
+  return m ? Number(m[0]) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -620,12 +682,9 @@ export function extractFlecon(
   }
 
   const openingBalances = extractOpeningBalances(ws, colToCode);
-  const { movements, balanceSnapshot, droppedBeforeSince, skippedMarkers } = extractMovements(
-    ws,
-    colToCode,
-    since,
-    warnings,
-  );
+  const sheetYear = parseSheetYear(sheetName);
+  const { movements, balanceSnapshot, droppedBeforeSince, skippedMarkers, flaggedRows } =
+    extractMovements(ws, colToCode, since, warnings, sheetYear);
 
   // Confidence: 1.0 − 0.05 per warning, floored at 0.5, round to 3dp (line 623).
   const overallConfidence = roundHalfToEven(Math.max(0.5, 1.0 - 0.05 * warnings.length), 3);
@@ -641,6 +700,8 @@ export function extractFlecon(
   return {
     filename,
     sheet: sheetName,
+    sheet_year: sheetYear,
+    flagged_rows: flaggedRows,
     since,
     rows: movements,
     opening_balances: openingBalances,

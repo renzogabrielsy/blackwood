@@ -8,6 +8,15 @@ identical-looking rows within a day with no stable per-row natural key.
 
 Read SHARED.md first.
 
+> **2026-07-27 — the TS port now DIVERGES from the Python on three safety points (BUG-015).**
+> The Python (and the original port) silently dropped every `< since` row behind a bare
+> counter, computed `balance_crosscheck` and threw it away, and did REPLACE-BY-DATE as a
+> non-transactional DELETE-then-INSERT that could wipe a day with no audit row. Those three
+> defects caused real data loss in production. §2a, §3a and §5a below are the TS behaviour;
+> the Python remains the ORACLE for the classify envelope only, which is unchanged (parity
+> 12/12 — every addition is extract-level telemetry or apply-level guarding, never a
+> classify-envelope field).
+
 ---
 
 ## 1. Pipeline narrative (`sync_flecon.py`)
@@ -75,6 +84,30 @@ Walk `FIRST_DATA_ROW (8)` to `ws.max_row`:
 7. **`--since` tail-scope**: `if since is not None and carried_date < since: dropped_before_since += len(cols); continue` — dropped BEFORE emission, tallied by COLUMN COUNT (`len(cols)`, i.e. counts each populated column on that row separately), not by ROW count.
 8. **Emission**: one movement PER populated matched column (handles the rare multi-column row — a blend/recount touching two bag types on the same date): `{transaction_date, particular (verbatim, both ZAMBOANGA spellings preserved distinctly), bag_type_code, qty_delta (signed int), source_row}`.
 
+### §2a. TS-ONLY — dropped/mis-dated row telemetry (BUG-015 defect A, 2026-07-27)
+
+`dropped_before_since` is still tallied exactly as the Python does (by COLUMN count), and no
+row's date is ever rewritten. What is NEW is that the TS extractor also returns:
+
+- `sheet_year` — the tab's own 4-digit year, parsed from the sheet name (`JANUARY 2026` → 2026).
+- `flagged_rows: FleconFlaggedRow[]` — one entry per (row, populated column) that was
+  **dropped by the `since` floor** and/or dated **outside the tab's own year**, carrying
+  `{transaction_date, source_row, particular, bag_type_code, qty_delta, dropped, out_of_year}`.
+
+Neither field is consumed by `classify` — the classify envelope is byte-identical, so parity
+is unaffected. `apply` turns them into held rows (§5a).
+
+**Why:** the `JANUARY 2026` tab's cell **A75 reads `2025-01-31`** (an operator year-typo;
+rows 76–79 inherit it by date carry-forward). `2025-01-31` is below every watermark, so those
+five real movements — ECOPACK_BEIGE +100, ZAMBOANGA_BAG +127, KOREA_WHITE_SUNDRY +4 — were
+dropped on every run since January and were the entire cause of the app showing a physically
+impossible **ZAMBOANGA_BAG = −127**. The extractor was RIGHT to refuse them; it was wrong to
+refuse them silently.
+
+**The rule stays "extract exactly, never interpret"** (CLAUDE.md § Sync Integrity): an
+out-of-year date is reported, never corrected, and never imported. The permanent fix is the
+operator correcting A75.
+
 ### Marker-row spelling preservation (explicit design decision)
 
 Both `"RS 1 ZAMBOANGA"` and `"RS 1 ZAMBAONGA"` (a genuine operator typo) are kept VERBATIM, never auto-corrected — this matters because `classify_flecon_bags.py`'s day-multiset comparison keys on the normalized `particular` text, so preserving the exact (even mis-spelled) text is what allows the classifier to detect a genuine spelling-fix EDIT as a real day-change rather than silently canonicalizing it away.
@@ -121,6 +154,18 @@ For each `transaction_date` in `set(ex_by_date) | set(db_by_date)`:
 
 If the extractor located a `balance_snapshot` (the sheet's own running-balance row), compares it per-code against `view_flecon_bag_balance` (a SQL view, read via `lib/db.py`). `drift = db_view_balance - sheet_snapshot_balance` per code, reported but NEVER blocking. If no snapshot was found, `available: False` with a note.
 
+### §3a. TS-ONLY — the cross-check is no longer thrown away (BUG-015 defect B, 2026-07-27)
+
+The computation above is unchanged (still per-code, still `db − sheet`, still recorded on the
+classify envelope). What changed is that **something finally reads it**: `apply` raises ONE
+held row (`balance_crosscheck_drift`, kind `flagged`) naming every bag type whose `drift` is a
+non-zero number, with both balances. Before this, `grep balance_crosscheck` outside
+`reports/flecon` returned zero hits — it had been correctly reporting the −100 / −4 / −127
+drift caused by defect A for three weeks, to nobody.
+
+**It remains INFORMATIONAL and MUST stay that way** — flecon is single-source, and a drift
+never blocks a write. It is a finding, not a gate.
+
 ### Bag-type ID resolution for the EXECUTE payload
 
 `code_to_id` built from `flecon_bag_types` (`{code.upper(): id}`) — echoed in the classified JSON's top level so `sync_flecon.py`'s apply phase doesn't need to re-fetch it.
@@ -163,7 +208,30 @@ NOT `insert_if_absent` — flecon's write is DELETE-then-INSERT (whole-day repla
 
 ### Label + watermark
 
-Watermark upsert: only if `not errors`. Label: only if `not errors` AND no held entry with reason `unmapped_bag_type_code` or `unmapped_or_missing_columns` — STRICTER than other pipelines (which only check `not errors`).
+Watermark upsert: only if `not errors`. Label: only if `not errors` AND no held entry with reason `unmapped_bag_type_code` or `unmapped_or_missing_columns` — STRICTER than other pipelines (which only check `not errors`). The BUG-015 held reasons below are deliberately NOT in that list (except via the stale-workbook early return, which skips both) — an out-of-year typo recurs on every run until the operator fixes the sheet, and blocking the label forever would stall the pipeline.
+
+### §5a. TS-ONLY — the three write guards (BUG-015, 2026-07-27)
+
+All five new held reasons reuse EXISTING `HeldKind`s — the kind enum is frontend-locked
+(`app/(app)/sync/types.ts` plus three exhaustive `Record<HeldKind, …>` maps in `components/`
+and `app/(app)/sync/adjudication.ts`). Reclassify via `reason`/`detail`/`row`, never a new kind.
+
+| Held reason | Kind | When |
+|---|---|---|
+| `out_of_year_date` | `malformed` | A dropped row whose date-year ≠ the tab's year (defect A). One row per DATE, naming the sheet rows, the bag types, and the net qty. |
+| `dropped_before_since_unrecorded` | `below_since_floor` | An in-year row below the floor whose DATE the DB has **never** recorded. Ordinary settled history (a dropped date the DB already holds) is silent — that is the benign every-run case. Requires the `dbDates` opt. |
+| `balance_crosscheck_drift` | `flagged` | Any non-zero per-code drift (defect B). Never gates. |
+| `delete_to_empty_blocked` | `gate_failure` | A `NEW`/`DATE_CHANGED` date that resolves to ZERO rows (defect C2). The date is NOT deleted. A day is never wiped on the strength of an absent section. |
+| `stale_workbook` | `gate_failure` | The workbook's own `date_max` is older than `MAX(flecon_bag_movements.transaction_date)` (defect C1). The WHOLE apply refuses: no writes, no watermark, no Gmail label, and `runReport` also returns a `gate_failures` entry so the panel card settles to *gate-failed* rather than a silent zero-row success. |
+
+**Atomic replace (defect C3).** The DELETE + INSERT pair is now ONE transaction via the
+`fn_flecon_replace_date(p_date date, p_rows jsonb)` RPC (migration
+`20260727060000_fn_flecon_replace_date.sql`), surfaced as `DbClient.replaceFleconDate`. It
+returns `{deleted, deleted_first_id, inserted, first_id}` so the manual `REPLACE` audit row is
+written on **every** replace, falling back to a DELETED row's id when the insert returns none —
+previously the audit was skipped whenever `ins.length === 0`, which is exactly the wipe case.
+The dry-run write-blocking proxy (`reportDeps.makeDryRunDb`) MUST list this method: the proxy
+is `Object.create(DbClient.prototype)`, so an unlisted method falls through to the real client.
 
 ---
 
@@ -177,6 +245,9 @@ Watermark upsert: only if `not errors`. Label: only if `not errors` AND no held 
 | unmapped-column-flagged | classify_flecon_bags.py `column_flags` | An unmapped column with real data is surfaced in `unmapped_columns`, never silently dropped, never auto-registered. |
 | never-auto-create-bag-type | sync_flecon.py apply (no bag-type INSERT logic exists anywhere in this file) | Confirm the TS port has NO code path that creates a `flecon_bag_types` row from an unmapped column — it must remain a pure hold. |
 | REPLACE audit operation | lib/db.py `insert_manual_audit`, migration 20260703043000 | An audit_logs row with `operation='REPLACE'` inserts successfully (requires the widened CHECK constraint in the target schema). |
+| never-wipe-a-day (BUG-015 C2) | TS apply.ts `delete_to_empty_blocked` | A `DATE_CHANGED` date whose movement list is EMPTY is HELD — `replaceFleconDate` is never called for it. |
+| refuse-a-stale-workbook (BUG-015 C1) | TS index.ts + apply.ts `stale_workbook` | A workbook whose `date_max` < the DB watermark writes NOTHING, updates no watermark, applies no label, and reports a classify `gate_failure`. |
+| mis-dated-rows-are-loud (BUG-015 A) | TS extract.ts `flagged_rows` + apply.ts `out_of_year_date` | The real `flecon_real_latest` fixture (A75 = `2025-01-31` inside the `JANUARY 2026` tab) yields exactly 5 out-of-year flagged rows (75–79) and ONE held row — and still emits ZERO movements for that date. |
 
 ---
 

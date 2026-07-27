@@ -1637,6 +1637,14 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_daily_hours: {
+        Row: {
+          date: string | null
+          downtime_hrs: number | null
+          work_hrs: number | null
+        }
+        Relationships: []
+      }
       view_digest_daily_power: {
         Row: {
           date: string | null
@@ -2259,6 +2267,11 @@ export type Database = {
       }
       fn_bulk_update_deliveries: { Args: { rows: Json }; Returns: undefined }
       fn_bulk_update_usage: { Args: { rows: Json }; Returns: undefined }
+      fn_close_batch: { Args: { p_batch_id: string }; Returns: boolean }
+      fn_flecon_replace_date: {
+        Args: { p_date: string; p_rows?: Json }
+        Returns: Json
+      }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
       is_admin: { Args: { user_id: string }; Returns: boolean }
       rc_out_avg_price: {

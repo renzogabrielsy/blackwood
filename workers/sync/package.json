@@ -19,6 +19,8 @@
     "proof:dryrun": "tsx scripts/dryrun-proof.ts",
     "proof:dryrun-crash-resume": "tsx scripts/dryrun-crash-resume.ts",
     "mailclerk:live": "tsx scripts/mailclerk-live-test.ts",
+    "gmail:mint": "tsx scripts/gmail-oauth-mint.ts",
+    "gmail:check": "tsx scripts/gmail-auth-check.ts",
     "parity": "tsx test/parity/runner.ts",
     "build:oracle": "python3 scripts/build_oracle.py",
     "fixtures:build": "python3 scripts/build_fixtures.py",

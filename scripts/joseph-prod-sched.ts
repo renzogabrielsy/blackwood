@@ -407,9 +407,18 @@ export async function loadJosephSchedule(
  * file). Uses GMAIL_USER / GMAIL_APP_PASSWORD from workers/sync/.env and the
  * imapflow + mailparser installed under workers/sync (dynamically resolved so
  * this root script carries no new dependency).
+ *
+ * NOTE (2026-07-27): this one-off local script still authenticates with the legacy
+ * Gmail **App Password**. The sync worker migrated to OAuth2/XOAUTH2 that day
+ * (`workers/sync/src/lib/gmail.ts`) because Google started refusing App-Password
+ * IMAP logins. The worker's own copy of this fetch — `workers/sync/src/reports/
+ * prodSchedule/josephEmail.ts`, which goes through GmailClient — is already on OAuth
+ * and is what production uses. Left as-is deliberately (no rewire); if this local
+ * path is ever revived and Google refuses it, do the same auth swap here (build the
+ * ImapFlow with `auth: { user, accessToken }` from GmailClient's token helper).
  */
 export async function fetchLatestJosephScheduleViaImap(): Promise<JosephSource | null> {
-  // Load Gmail creds from the worker env file (App Password only).
+  // Load Gmail creds from the worker env file (legacy App Password path — see note above).
   loadWorkerEnv();
   const user = process.env.GMAIL_USER;
   const pass = process.env.GMAIL_APP_PASSWORD;

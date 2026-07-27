@@ -487,6 +487,346 @@ shipping now; Phase 2 (reconciliation) is the target. · **Effort:** Phase 2 = M
 
 ---
 
+## BUG-015 — FLECON bag sync silently dropped rows, discarded its own cross-check, and could WIPE a day ✅ FIXED (2026-07-27, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** M · **Severity:** HIGH (silent production data loss + a wrong inventory balance shown for 6 months)
+
+Three independent defects in the same pipeline. Together they let real bag movements go
+missing, made the app show a **physically impossible `ZAMBOANGA_BAG = −127`**, and let an
+older copy of the workbook delete a real day with no audit trail.
+
+### A — Silent drop of out-of-window rows (the data bug)
+- **Symptom:** `ZAMBOANGA_BAG` balance of **−127** (a negative physical bag count) on
+  `/inventory/flecon-bags` and in the home digest's bag band.
+- **Root cause:** `workers/sync/src/reports/flecon/extract.ts` dropped every row dated before
+  `since` and only bumped a bare counter, `droppedBeforeSince`. That counter never became a
+  warning, a held row, or a run finding, and never reached `sync_runs.result`. The operator's
+  `JANUARY 2026` tab has a **year typo in cell A75** — it reads `2025-01-31` instead of
+  `2026-01-31`, and rows 76–79 inherit it by date carry-forward. `2025-01-31` is below every
+  watermark, so five real movements were refused on every run since January and nobody was told:
+
+  | Sheet row | Particular | Bag type | Qty |
+  |---|---|---|---|
+  | 75 | FIBC "ECOPACK" BEIGE … (BRANDNEW) | ECOPACK_BEIGE | +100 |
+  | 76 | ZAMBOANGA DELIVERED EMPTY BAG | ZAMBOANGA_BAG | +128 |
+  | 77 | RS 1 ZAMBOANGA | ZAMBOANGA_BAG | −1 |
+  | 78 | RETURNED BAG FROM BAGGED 3X50 TO PP SACKS | KOREA_WHITE_SUNDRY | +18 |
+  | 79 | USED BAG OF SUNDRY | KOREA_WHITE_SUNDRY | −14 |
+
+  Net +100 / +127 / +4 — matching the measured drift against the sheet's own balance row exactly.
+- **Fix (extraction stays exact — the typo is NEVER auto-corrected):** the extractor now also
+  returns `sheet_year` and `flagged_rows[]` (row, particular, bag type, qty, `dropped`,
+  `out_of_year`). `apply.ts` turns them into held rows: `out_of_year_date` (kind `malformed`) for
+  a date outside the tab's year — the loud one — and `dropped_before_since_unrecorded` (kind
+  `below_since_floor`) for an in-year sub-floor date **the DB has never recorded**. Ordinary
+  settled history stays silent, so the everyday run is unchanged.
+
+### B — `balance_crosscheck` computed on every run and thrown away
+- **Root cause:** `classify.ts` computed DB-view-balance minus the sheet's own running-balance
+  row per bag type on **every** run and had been correctly emitting −100 / −4 / −127 for three
+  weeks. `grep balance_crosscheck` outside `reports/flecon` returned **zero hits**;
+  `normalizeReport.ts` never carried it into the run result. This single gap is why defect A ran
+  for six months instead of one day.
+- **Fix:** any non-zero drift now raises ONE held row (`balance_crosscheck_drift`, kind
+  `flagged`) naming every drifting bag type and both numbers. **Still a finding, never a write
+  gate** — flecon is single-source and `specs/flecon.md` §4 fixes the cross-check as informational.
+
+### C — A stale workbook could silently WIPE a day (most dangerous)
+- **Root cause (three compounding parts):**
+  1. `makeFleconFetcher` takes the newest **email** carrying an xlsx — which can still be an
+     older **revision** of the cumulative workbook. Days it lacks classify `DATE_CHANGED` with
+     `movements: []`.
+  2. `apply.ts` then did `deleteByDate(...)` followed by a *conditional* insert — **two separate
+     HTTP calls, not transactional**.
+  3. The audit row was only written when `ins.length > 0`, so a zero-row wipe left **nothing**
+     behind.
+- **Confirmed fired in production 3×**, signature `applied {inserts: 0, replaced_dates: 1}` with
+  `counts {update: 1}`: 2026-07-06 03:04 and 03:35 (stored workbook shrank 368234 → 367607 →
+  367589 bytes), and **2026-07-23 06:43, which wiped 2026-07-22** (383843 → 383775 bytes) — that
+  date showed zero movements in the app for ~19 hours. Each self-healed only because the wiped
+  date happened to stay inside the next run's `watermark − 3 days` window. **A wiped middle date
+  would have been gone permanently.**
+- **Fix (all three):**
+  1. **Refuse a stale workbook** — if the attachment's `date_max` is older than
+     `MAX(flecon_bag_movements.transaction_date)`, the whole apply refuses: no writes, no
+     watermark, no Gmail label, plus a `stale_workbook` held row (kind `gate_failure`) and a
+     classify `gate_failures` entry so the panel card settles to *gate-failed*.
+  2. **A date that resolves to zero rows is a HOLD, not a write** (`delete_to_empty_blocked`,
+     kind `gate_failure`). A day is never deleted on the strength of an absent section.
+  3. **Atomic replace + always audit** — new RPC `fn_flecon_replace_date(p_date, p_rows)`
+     (migration `20260727060000`, mirroring the transactional `fn_bulk_update_*` RPCs) does the
+     DELETE + INSERT in ONE transaction and returns `{deleted, deleted_first_id, inserted,
+     first_id}`, so the `REPLACE` audit row is written for **every** replace — falling back to a
+     DELETED row's id when the insert returns none, i.e. exactly the wipe case.
+
+### One-time data repair (2026-07-27)
+The 5 mis-dated movements were inserted by hand at `transaction_date = 2026-01-31` with
+`source_row` 75–79, under a double-guarded `WHERE` (no-op on re-run), with a
+`write_ingestion_audit` row recording it as a human-arbitrated backfill and quoting the A75 typo.
+Audit log id **`a6293bf8-26b2-4207-98a4-6134f0f08fb7`**. Balances moved exactly as predicted and
+nothing else changed (543 pre-existing rows untouched, 548 total):
+
+| Bag type | Before | After | Sheet's own balance row |
+|---|---|---|---|
+| ECOPACK_BEIGE | 0 | **100** | 100 |
+| KOREA_WHITE_SUNDRY | 302 | **306** | 306 |
+| ZAMBOANGA_BAG | **−127** | **0** | 0 |
+
+No bag type has a negative balance any more.
+
+### Known limitation (deliberate)
+A normal run's `since` (`watermark − 3 days`) never reaches January, so the backfilled rows are
+safe day to day. **A watermark reset would re-run from 2026-01-01 and replace-by-date would
+delete them again**, because the extractor still (correctly) refuses to import the mis-dated
+rows. That is not silent any more: defect A's `out_of_year_date` hold fires loudly in exactly
+that scenario. **The permanent fix is still the operator correcting cell A75** — we are simply
+no longer blocked on it, and no longer blind to it.
+
+### Files
+`workers/sync/src/reports/flecon/{extract,apply,index}.ts` · `workers/sync/src/lib/db.ts`
+(`replaceFleconDate`) · `workers/sync/src/workflows/{reportDeps,reportWorkflow}.ts` ·
+`supabase/migrations/20260727060000_fn_flecon_replace_date.sql` ·
+`workers/sync/test/reports/flecon-guards.test.ts` (11 tests) · `workers/sync/specs/flecon.md`
+(§2a / §3a / §5a) · `app/(app)/inventory/flecon-bags/CONTEXT.md`.
+
+**Verification:** worker `npm run typecheck` ✓ · `npm test` 528/528 ✓ · `npm run parity` 12/12 ✓
+(classify envelope untouched by design) · root `npx tsc --noEmit` ✓ · `verify-findings` 12 ✓ ·
+`verify-sync-reducer` 22 ✓ · `verify-adjudication` 10 ✓ · RPC round-trip proven on a scratch date
+and cleaned up.
+
+**Note for the next agent:** all five new held reasons reuse **existing** `HeldKind` values. The
+kind enum is frontend-locked — `app/(app)/sync/types.ts` plus three exhaustive
+`Record<HeldKind, …>` maps (`components/sync/cases/labels.ts`, `lib/sync/findings.ts`,
+`app/(app)/sync/adjudication.ts`). Reclassify via `reason`/`detail`/`row`, never a new kind.
+
+---
+
+## BUG-016 — Two writers, one guard: the Sheet path blind-inserted a duplicate delivery ✅ FIXED (2026-07-27, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** S · **Severity:** HIGH (silent phantom inventory + inflated RC IN / MTD totals, undetectable from the app)
+
+A time-of-check/time-of-use race between the two pipelines that both write `deliveries`.
+It produced a real duplicate that inflated a block by **24,024 kg** and would have kept
+producing more on any day both writers touched the same row.
+
+### Symptom
+Block **C-11B** read **84,753 kg** in the app (`view_blocking_grid`) against **60,729 kg**
+on the Google Sheet — a 24,024 kg gap, exactly one truckload. RC IN and month-to-date
+totals were inflated by the same amount. Nothing in the app flagged it: both rows were
+individually valid, so no gate, no held row, no finding fired.
+
+### Root cause (confirmed, with timestamps)
+Two rows existed for `2026-07-14` / Ornales / `JULY-26-BLK7` / `C-11B` / truck `MAV 9202`
+/ 24,024 kg / 685 sacks. **Both carried the identical remark describing ONE weighing** —
+`"MAV 9202 net kilos of 24,385 - 1.48%(ASH) = 24,024"` — so this was one physical truck,
+not two deliveries:
+
+| id | created_at | cost_basis | writer |
+|---|---|---|---|
+| `8a5e95f3-d4a8-4af0-9b3b-e618a4e36360` | 2026-07-15 01:36:01Z | 36.00 | email path (`reports/deliveries/apply.ts`) |
+| `a10720f4-a21a-42f3-9f38-de8cc5395478` | 2026-07-15 03:43:56Z | 0.00 | Sheet path (`reports/gsheet/apply.ts`) |
+
+Only ONE of the two write paths guarded against duplicates:
+
+- `reports/deliveries/apply.ts:184` (email) → `db.insertIfAbsent("deliveries", …, ["transaction_date","batch_code","truck_plate","weight_kg","sacks"])` — re-queries the DB **immediately before** inserting.
+- `reports/gsheet/apply.ts` (Sheet) → plain `db.insert("deliveries", …)` with **no last-instant check**. The file's own header comment asserted this was deliberate: *"db.insert(), NOT insertIfAbsent — the classifier's fresh-DB-window decision is the idempotency guard."*
+
+That reasoning holds only while gsheet is the **sole** writer of the table. It is not. The
+Sheet path decides "this row is NEW" from a DB snapshot read at the **start** of its run,
+then writes blind. The email path inserted at 01:36; the Sheet path — still acting on its
+pre-01:36 snapshot — inserted the second copy 2h07m later. **A snapshot cannot see a
+writer that arrives after it was taken; only a last-instant re-check can.**
+
+Both `workers/sync/specs/gsheet.md` (§5 "Idempotency mechanism", porting trap #4) and
+`specs/SHARED.md` §2.5 documented the asymmetry as intentional — and gsheet.md explicitly
+flagged that fixing it "would ALSO fix a latent race-condition risk … a possible
+improvement opportunity", requiring "an explicit human decision". Renzo made that decision
+on 2026-07-27, after the latent risk turned into real data.
+
+### Data repair (done)
+Deleted `a10720f4-…` (the **unpriced** copy — keeping the priced row preserves cost data).
+Verified before/after: C-11B `84,753 → 60,729` (matches the Sheet), all 165 other blocks
+byte-identical (md5 of `view_blocking_grid` unchanged), all 688 other batches unchanged,
+row count for that date+block now 1. `deliveries` has an AFTER DELETE audit trigger
+(`log_delivery_changes`) which wrote the `audit_logs` DELETE row with a full snapshot; its
+`comment` was then stamped with the authorization + root cause.
+
+> **Trigger defect found while verifying — ✅ FIXED 2026-07-27, see BUG-016a below.**
+> `fn_update_blackwood_state` is a **BEFORE** DELETE trigger, and its DELETE branch
+> recomputed `current_weight` as `SUM(deliveries WHERE batch_code = OLD.batch_code)` —
+> **without excluding `OLD.id`**. At BEFORE-DELETE time the row still exists, so the
+> recompute included the row being deleted and landed one row stale: after this delete it
+> wrote `current_weight = 84,753` (the pre-delete sum) instead of 60,729.
+
+### Fix (shipped in this changeset)
+`workers/sync/src/reports/gsheet/apply.ts` — the Sheet path now uses `insertIfAbsent` for
+NEW rows, with the **same natural keys** the email writers use so both paths agree on what
+"the same delivery" is (exported as `GSHEET_DELIVERIES_NATURAL_KEY` /
+`GSHEET_RC_OUT_NATURAL_KEY`). The 2026-07-11 auto-create helpers
+(`writeRcInDelivery`/`writeRcOutRow`) are guarded too.
+
+**A skip is not silent success.** A guard hit surfaces as a held row using the email path's
+**existing** vocabulary — `reason` and `kind` both `already_exists`, detail
+`"idempotent skip (natural key already in DB)"`. No new `HeldKind` was invented (that enum
+is frontend-locked — see the BUG-015 note above). `ModeApplyResult.skipped[]` gained an
+optional `reason` so `applyGsheet` passes that word through instead of the generic
+`"skipped"`; every other skip is unchanged. In the auto-create path a duplicate now holds
+as `already_exists` rather than being mis-reported as `unmapped_batch_code`, which would
+have sent an operator down the wrong diagnosis.
+
+**Inherited trade-off (deliberate, `lib/db.ts:13`):** the natural key cannot distinguish
+two genuinely-identical truckloads on the same date/batch/truck/weight/sacks, so a real
+second truckload matching all five fields is suppressed. The email path has always
+accepted this; matching it keeps the two paths consistent. Crucially a suppressed row is
+**HELD — visible and re-appliable by a human** — whereas the pre-fix blind insert produced
+a silent, invisible duplicate. The two paths now fail the same way, which is the point.
+
+**rc_out finding — guarded, but inert today (stated rather than blindly mirrored).** Under
+the default `SYNC_RCOUT_RECONCILE_CUTOVER=on`, `applyGsheet` skips the rc_out mode
+**whole** (R4b cutover), so gsheet does not write `rc_out` in production and the race is
+not currently live there. The guard was still added because that flag is a documented
+one-line revert: with `SYNC_RCOUT_RECONCILE_CUTOVER=off`, gsheet's rc_out loop and the
+PROPOSED writer (`reports/rc_out/apply.ts`, already using `insertIfAbsent`) both target
+`rc_out` — the identical two-writer shape that caused this bug. Cost is zero while the
+path is skipped and correct when it isn't.
+
+### Files
+- `workers/sync/src/reports/gsheet/apply.ts` — the guard + held surfacing + rewritten header comment
+- `workers/sync/test/reports/gsheet-idempotency.test.ts` (new, 12 tests) — suppression, surfacing, key-parity with the email writers, no-regression, the real race replayed, and the cutover-still-skips case
+- `workers/sync/test/reports/gsheet.test.ts`, `workers/sync/test/reports/gsheet-autocreate.test.ts` — stubs gained `insertIfAbsent` (they only implemented `insert`)
+- `workers/sync/specs/gsheet.md`, `specs/SHARED.md`, `specs/PORTING_DECISIONS.md` — the asymmetry is now recorded as retired
+
+**Gates:** worker `typecheck` clean · `vitest` 540/540 · `npm run parity` 12/12 (apply-layer
+only; `classify.ts` untouched, so no `expected-deviations.json` entry is required).
+
+---
+
+## BUG-016a — `fn_update_blackwood_state`'s DELETE branch left `current_weight` one row stale ✅ FIXED (2026-07-27, migration applied live)
+**Status:** ✅ FIXED (migration applied to prod + drifted batches backfilled) · **Effort:** S · **Severity:** medium (stored-field corruption on every delivery delete; no user-facing number was wrong)
+
+The defect BUG-016's verification pass turned up, fixed under Renzo's explicit authorization
+on 2026-07-27.
+
+### Root cause
+`tr_blackwood_delivery` is `BEFORE INSERT OR UPDATE OR DELETE ON deliveries`. In the DELETE
+branch the two `deliveries` sub-selects aggregated **without excluding `OLD.id`**. Because the
+trigger fires *before* the row is removed, the deleted row was still visible to them, so every
+delivery delete wrote a `current_weight` too high by exactly that row's `weight_kg` and an
+`avg_cost` still weighted by it. The same function's location-clearing branch, a few lines
+below, already filtered `AND id != OLD.id` and carried a comment naming this exact hazard — the
+weight/avg_cost recompute simply never got the same treatment.
+
+### Fix
+`supabase/migrations/20260727070000_fix_blackwood_state_delete_excludes_old_row.sql` —
+`CREATE OR REPLACE`, adding `AND id <> OLD.id` to the two `deliveries` sub-selects in the DELETE
+branch and nothing else. The `rc_out` sub-select in that branch is deliberately untouched
+(deleting a delivery changes no rc_out row). INSERT / UPDATE / location-clearing branches
+reproduced byte-for-byte; `prosecdef = false` and `SET search_path = public` verified preserved
+after apply. Applied via MCP `apply_migration` (remote history is MCP-stamped — see BUG-010 #4).
+
+### Empirical proof the fix works
+Insert → observe → delete → observe, inside a `DO` block terminated by `RAISE EXCEPTION` so the
+whole transaction (including the audit rows the insert generated) rolled back:
+
+```
+weight:   pre=60729.00  post_insert=61729.00  post_delete=60729.00   restored ✓
+avg_cost: pre=36.00     post_insert=37.02     post_delete=36.00      restored ✓
+```
+
+`post_insert` is precisely what the OLD code computed on delete (it summed every row including
+the one being deleted), so the pre-fix result would have been 61,729 / 37.02 — the fix is what
+changed the outcome.
+
+### Backfill (4 batches, 83,308 kg of drift removed)
+Corrected from SQL truth (`SUM(deliveries.weight_kg) − SUM(rc_out.weight_kg)`), derived entirely
+in one guarded `UPDATE … FROM` — never in TypeScript:
+
+| Batch | Status | `current_weight` before | after | drift removed |
+|---|---|---|---|---|
+| `FEB-26-BLK23` | CLOSED | 37,265.00 | **119.00** | 37,146.00 |
+| `JULY-26-BLK6` | STORED | 94,739.00 | **70,715.00** | 24,024.00 |
+| `JULY-26-FEED1` | CLOSED | −19,605.00 | **0.00** | −19,605.00 |
+| `JAN-26-SUNDRY7` | CLOSED | −5,069.00 | **−2,536.00** | −2,533.00 |
+
+Proof of containment: 689 batches total, the other **685 are byte-identical** (md5 of
+`batch_code:current_weight:avg_cost:status` unchanged at `3992fd83…`); post-sweep
+`batches_still_drifting = 0`. `batches` has **no** audit trigger, so four
+`write_ingestion_audit` rows carry the trail: `d226ecf7-5a7d-48cd-9013-36c50891af24`,
+`7a0bf904-d3d5-43cf-889e-9ffd0b7034a6`, `cd404c08-6d87-4dad-ae6b-ba6da4aa1cca`,
+`04e2a437-245a-41ed-a261-35981d144880`.
+
+**Not drift, deliberately untouched:** `NOV-25-BLK7` (block `D-15A`) is CLOSED holding
+5,418 kg — and 51,315 − 45,897 = 5,418 exactly, i.e. it *matches* SQL truth. A closed batch
+legitimately retains residual logged weight (evaporation loss / *resiko*, confirmed by Renzo).
+A drift-based sweep never surfaces it.
+
+**This drift had been resynced twice before without the root cause being fixed** —
+migrations `20260531041615_resync_current_weight_for_drifted_active_batches` and
+`20260605063716_resync_current_weight_post_rc_out_reassign_jun`. The 2026-05-31 one explicitly
+flagged `JAN-26-SUNDRY7 −2,533` as drift it was "intentionally NOT auto-fixing… flagged for
+human review" — the same batch, the same −2,533, still drifting 8 weeks later, now corrected.
+That is what a symptom-only repair buys you; this entry fixes the writer.
+
+**`avg_cost` deliberately NOT backfilled.** None of the four batches' `avg_cost` divergence
+traces to the fixed DELETE defect, and **208 of 689 batches** diverge from the delivery-weighted
+average because the INSERT branch maintains a *running* average against `current_weight` (net of
+rc_out) while the DELETE/UPDATE branches recompute a *delivery-weighted* average — two competing
+definitions. Correcting 4 of 208 would have created an arbitrary partial state in a user-visible
+₱ field (the blocking detail panel reads `batches.avg_cost`). See BUG-018.
+
+### Blast radius
+None user-facing. `view_blocking_grid` computes balance live from
+`SUM(deliveries) − SUM(rc_out)` and does **not** read `current_weight` (the 2026-05-31
+phantom-inventory fix). This was hygiene on a stored field.
+
+---
+
+## BUG-017 — Same BEFORE-trigger staleness in the UPDATE branch's `batch_code`-change path
+**Status:** OPEN — found 2026-07-27 while backfilling BUG-016a; **deliberately not fixed** (out of the authorized scope, and not fixable with the one-line idiom) · **Effort:** S–M · **Severity:** medium
+
+- **Finding:** in `fn_update_blackwood_state`'s UPDATE branch, when `batch_code` changes, both
+  recomputes read `deliveries` *before* the row has moved:
+  - the **OLD** batch's recompute still sees the departing row → left **too high** by its weight;
+  - the **NEW** batch's recompute cannot see it yet → left **too low** by its weight.
+- **Proof it fires in production:** delivery `a10720f4-…` was UPDATEd on 2026-07-22 from
+  `JULY-26-BLK6`/`C-11A` → `JULY-26-BLK7`/`C-11B` (audit `ebf06243-005d-49d6-9fc2-6f44ff2019d4`).
+  `JULY-26-BLK6` was left **+24,024 kg** high — one of the four batches backfilled in BUG-016a.
+  (`JULY-26-BLK7`'s matching −24,024 was masked by the later BUG-016 hand-correction.)
+- **Why not folded into the BUG-016a migration:** the OLD side is a one-liner (`AND id <> OLD.id`),
+  but the NEW side is **not** — it needs the not-yet-visible NEW row folded into the sum, which
+  the existing idiom cannot express. Rewriting a second branch of a core production trigger
+  inside a targeted fix to a different branch is exactly the regression risk that migration warns
+  against. Renzo's 2026-07-27 authorization named the DELETE branch specifically.
+- **Fix spec (for whoever picks this up):** in the `OLD.batch_code IS DISTINCT FROM NEW.batch_code`
+  block, add `AND id <> OLD.id` to the OLD-batch `deliveries` sub-selects, and for the NEW batch
+  add `NEW.weight_kg` / `NEW.cost_basis * NEW.weight_kg` to the respective sums (equivalently: move
+  the whole recompute to an AFTER trigger, where both sides are simply true — the cleaner fix, but
+  a bigger change since the function also handles INSERT/DELETE and returns OLD/NEW).
+  Then re-run the drift sweep and backfill.
+
+---
+
+## BUG-018 — `batches.avg_cost` has two competing definitions (208 of 689 batches diverge)
+**Status:** OPEN — data-semantics call, needs Renzo (do not "fix" unilaterally) · **Effort:** S (repair) / M (decide) · **Severity:** low
+
+- **Finding (2026-07-27, sweeping for BUG-016a):** the INSERT branch of
+  `fn_update_blackwood_state` maintains `avg_cost` as a **running** weighted average blended
+  against `current_weight` (which is net of rc_out consumption), while the DELETE and UPDATE
+  branches **recompute** it as a plain delivery-weighted average
+  (`SUM(cost_basis × weight_kg) / SUM(weight_kg)`). The two disagree whenever a batch has been fed
+  from, so a batch's `avg_cost` depends on which branch last touched it. **208 of 689 batches**
+  currently differ from the delivery-weighted average.
+- **Why it mostly doesn't bite:** the pricing views deliberately avoid this column and recompute
+  from `deliveries.cost_basis` — `view_rc_out_closed_blocks`, the rc_movement fed-price and
+  campaign views all say so in their migration headers ("NOT batches.avg_cost, which is stale").
+- **Where it IS visible:** the blocking detail slide-over (`app/(app)/inventory/blocking/actions.ts`
+  reads `batches.avg_cost`, role-gated), `view_rc_movement`'s `php_per_kg` (`MAX(b.avg_cost)`),
+  and Jarvis batch lists.
+- **The decision needed:** pick ONE definition. Delivery-weighted (matching every other price
+  surface) is the obvious candidate, which would mean changing the INSERT branch to recompute
+  rather than blend, plus a 208-row backfill. That changes ₱ numbers a user can see, so it is
+  Renzo's call, not an agent's.
+
+---
+
 ## Fixed entries
 
 All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept
@@ -502,6 +842,7 @@ analysis is the most useful record — this section is the index:
 | BUG-005 — month-name canonicalization (writer + live DB repair) | 2026-07-17 | `3fd0d94` + DB |
 | BUG-012 — Cenapro Bulk Add modal draft-loss → retired for a loss-proof draft entry zone | 2026-07-21 | `3848145` |
 | BUG-013 — Cenapro focus Daily Block silent edit-loss on view/scope/period switch → lifted dirty-nav guard | 2026-07-22 | _(uncommitted — Phase 3b)_ |
+| BUG-016a — `fn_update_blackwood_state` DELETE branch excluded `OLD.id`; 4 batches / 83,308 kg backfilled | 2026-07-27 | migration `20260727070000` (applied live) |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none

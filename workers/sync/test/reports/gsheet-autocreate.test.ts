@@ -42,6 +42,20 @@ function stubDb(opts: { existingBatches?: Record<string, string> } = {}) {
       if (table === "rc_out") calls.insertRcOut.push(...rows);
       return rows.map((_, i) => ({ id: `row-${table}-${i + 1}` }));
     },
+    // BUG-016: deliveries/rc_out writes now go through the last-instant idempotency
+    // guard. These fixtures have no pre-existing rows, so every row inserts and the
+    // recorded call lists keep their original meaning. Duplicate-suppression itself
+    // is covered by gsheet-idempotency.test.ts.
+    async insertIfAbsent(table: string, rows: Array<Record<string, unknown>>) {
+      if (table === "deliveries") calls.insertDeliveries.push(...rows);
+      if (table === "rc_out") calls.insertRcOut.push(...rows);
+      return {
+        inserted: rows.map((r, i) => ({ ...r, id: `row-${table}-${i + 1}` })),
+        skipped: [],
+        insertedCount: rows.length,
+        skippedCount: 0,
+      };
+    },
     async stampIngestionAudit(args: { tableName: string; recordId: string }) {
       calls.stampIngestionAudit.push(args);
       return true;
