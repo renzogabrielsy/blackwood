@@ -23,6 +23,15 @@
  * `connect()`, run every search/download/label through that one client, then
  * `close()`. Do NOT open a client per report.
  *
+ * ── ENFORCEMENT (2026-07-28, BUG-019) ──────────────────────────────────────────
+ * That rule was stated here but NOT enforced: `reportDeps.makeLabeler` opened a fresh
+ * session on EVERY label application, `makeFleconFetcher` opened its own, and
+ * `prodSchedule/josephEmail` opened another — so one run could open 7+ sessions and
+ * blow Gmail's ~15 simultaneous-connection cap. The rule is now enforced by
+ * `lib/gmailSession.ts` (a process-scoped, reference-counted broker): NOTHING in the
+ * worker constructs a GmailClient directly any more — every caller goes through
+ * `withGmailSession()`, and `runSync` pins ONE session for the whole run.
+ *
  * ── AUTH (changed 2026-07-27: OAuth2/XOAUTH2 preferred, App Password fallback) ──
  * The old policy was "App Password only — never OAuth". That is REVERSED: on
  * 2026-07-27 Google started refusing the worker's App-Password IMAP login outright
@@ -200,31 +209,219 @@ export async function getGmailAccessToken(
   return payload.access_token;
 }
 
+// ---------------------------------------------------------------------------
+// IMAP error classification + observability (BUG-019, 2026-07-28)
+// ---------------------------------------------------------------------------
 /**
- * True when an imapflow throw looks like an AUTH rejection (as opposed to a network
- * or protocol failure). imapflow raises `AuthenticationFailure` with
- * `authenticationFailed: true`; Gmail's text is AUTHENTICATIONFAILED / "Invalid
- * credentials".
+ * The structured fields imapflow hangs off a failed-command Error (imap-flow.js:805-822).
+ * `new Error("Command failed")` carries NO useful text — the diagnosis lives here.
  */
-export function isAuthFailure(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const e = err as {
-    authenticationFailed?: boolean;
-    serverResponseCode?: string;
-    response?: string;
-    responseText?: string;
-    message?: string;
+export interface ImapErrorDetail {
+  /** Gmail's human text, e.g. "Too many simultaneous connections. (Failure)". */
+  responseText: string | null;
+  /** The response code in brackets, e.g. "ALERT" / "AUTHENTICATIONFAILED". */
+  serverResponseCode: string | null;
+  /** "NO" | "BAD". */
+  responseStatus: string | null;
+  /** The command we sent, with credential atoms REDACTED. */
+  executedCommand: string | null;
+  /** imapflow's own `authenticationFailed` boolean — UNRELIABLE, kept for the record. */
+  authenticationFailed: boolean | null;
+  /** True when the XOAUTH2 SASL exchange itself returned an error payload. */
+  hasOauthError: boolean;
+}
+
+/**
+ * Redact a logged IMAP command. imapflow already compiles `executedCommand` with
+ * `isLogging: true` (masks atoms flagged `sensitive`, so the XOAUTH2 blob becomes
+ * `"(* value hidden *)"`), but we NEVER rely on someone else's masking for a credential:
+ * any AUTHENTICATE / LOGIN command has its arguments dropped outright here.
+ */
+export function redactImapCommand(cmd: unknown): string | null {
+  if (typeof cmd !== "string" || !cmd.trim()) return null;
+  const redacted = cmd.replace(
+    /^(\s*\S+\s+)(AUTHENTICATE|LOGIN)\b[\s\S]*$/i,
+    (_m, head: string, verb: string) => `${head}${verb.toUpperCase()} <redacted>`
+  );
+  return redacted.length > 300 ? `${redacted.slice(0, 300)}…` : redacted;
+}
+
+/**
+ * Pull the diagnosable fields off an imapflow throw. NEVER returns the access token,
+ * refresh token, app password or the XOAUTH2 payload (see redactImapCommand).
+ */
+export function describeImapError(err: unknown): ImapErrorDetail {
+  const e = (err ?? {}) as {
+    responseText?: unknown;
+    serverResponseCode?: unknown;
+    responseStatus?: unknown;
+    executedCommand?: unknown;
+    authenticationFailed?: unknown;
+    oauthError?: unknown;
   };
-  if (e.authenticationFailed === true) return true;
-  const hay = [e.serverResponseCode, e.response, e.responseText, e.message]
+  const s = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+  return {
+    responseText: s(e.responseText),
+    serverResponseCode: s(e.serverResponseCode),
+    responseStatus: s(e.responseStatus),
+    executedCommand: redactImapCommand(e.executedCommand),
+    authenticationFailed: typeof e.authenticationFailed === "boolean" ? e.authenticationFailed : null,
+    hasOauthError: e.oauthError != null && e.oauthError !== false,
+  };
+}
+
+/** The searchable haystack for text-based classification (upper-cased). */
+function errorHaystack(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return typeof err === "string" ? err.toUpperCase() : "";
+  }
+  const e = err as {
+    serverResponseCode?: unknown;
+    response?: unknown;
+    responseText?: unknown;
+    message?: unknown;
+  };
+  return [e.serverResponseCode, e.response, e.responseText, e.message]
     .filter((s): s is string => typeof s === "string")
     .join(" ")
     .toUpperCase();
+}
+
+/**
+ * True when the server refused because the mailbox already has too many simultaneous
+ * IMAP connections (Gmail caps at ~15 per account and answers
+ * `NO [ALERT] Too many simultaneous connections. (Failure)`).
+ *
+ * THE 2026-07-27 MISDIAGNOSIS: imapflow's `handleAuthError` stamps
+ * `authenticationFailed = true` on this error because it surfaces during the auth
+ * exchange — so `isAuthFailure` said "auth problem", `connect()` force-re-minted the
+ * OAuth token and immediately opened a SECOND connection, doubling connection burn on
+ * the exact failure caused by too many connections. It also triggered a whole-day
+ * App-Password → OAuth migration that fixed nothing. This predicate is now checked
+ * FIRST and always wins.
+ */
+export function isConnectionLimitFailure(err: unknown): boolean {
+  const hay = errorHaystack(err);
+  if (!hay) return false;
   return (
+    hay.includes("TOO MANY SIMULTANEOUS CONNECTIONS") ||
+    hay.includes("TOO MANY CONNECTIONS") ||
+    hay.includes("MAXIMUM NUMBER OF CONNECTIONS") ||
+    hay.includes("EXCEEDED THE MAXIMUM NUMBER OF CONNECTIONS")
+  );
+}
+
+/**
+ * True when an imapflow throw is a genuine AUTH rejection (bad/expired credentials) —
+ * the ONLY condition that justifies burning a forced OAuth token re-mint + a retry.
+ *
+ * Discriminator order (most reliable first):
+ *   1. A connection-limit refusal is NEVER an auth failure, whatever imapflow says.
+ *   2. `oauthError` — set ONLY when the XOAUTH2/OAUTHBEARER SASL exchange itself
+ *      returned Google's base64 JSON error payload (imapflow authenticate.js:20). That
+ *      is a definitive "the token was rejected" signal.
+ *   3. Gmail's own response text (AUTHENTICATIONFAILED / "Invalid credentials").
+ *   4. `authenticationFailed` — imapflow sets this for ANY failure raised during the
+ *      auth phase, including the connection-limit refusal. WEAKEST signal; last.
+ */
+export function isAuthFailure(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  if (isConnectionLimitFailure(err)) return false;
+  const e = err as { authenticationFailed?: boolean; oauthError?: unknown };
+  if (e.oauthError != null && e.oauthError !== false) return true;
+  const hay = errorHaystack(err);
+  if (
     hay.includes("AUTHENTICATIONFAILED") ||
     hay.includes("AUTHENTICATION FAILED") ||
     hay.includes("INVALID CREDENTIALS")
-  );
+  ) {
+    return true;
+  }
+  return e.authenticationFailed === true;
+}
+
+/** Operator-facing sentence for the connection-limit case. Read by the Sync panel. */
+export const GMAIL_CONNECTION_LIMIT_MESSAGE =
+  "Gmail connection limit hit — the sync mailbox already has too many IMAP connections " +
+  "open, so Gmail refused this one. Nothing was fetched or changed. Wait a few minutes " +
+  "and run the sync again.";
+
+/**
+ * A Gmail/IMAP failure with the SERVER'S OWN diagnosis in the message. Replaces
+ * imapflow's opaque `Error: Command failed`, which hid
+ * "Too many simultaneous connections" for a full day (BUG-019).
+ */
+export class GmailOperationError extends Error {
+  readonly operation: string;
+  readonly detail: ImapErrorDetail;
+  /** True when the server refused for exceeding the simultaneous-connection cap. */
+  readonly connectionLimit: boolean;
+
+  constructor(operation: string, cause: unknown) {
+    const detail = describeImapError(cause);
+    const connectionLimit = isConnectionLimitFailure(cause);
+    super(buildGmailErrorMessage(operation, cause, detail, connectionLimit), { cause });
+    this.name = "GmailOperationError";
+    this.operation = operation;
+    this.detail = detail;
+    this.connectionLimit = connectionLimit;
+  }
+}
+
+/**
+ * Compose the readable message. Shape:
+ *   "<plain sentence> [IMAP <op> · <status> · <code> · "<server text>" · cmd: <redacted>]"
+ * The bracketed block is what was missing: it is the difference between
+ * "Command failed" and "Too many simultaneous connections".
+ */
+function buildGmailErrorMessage(
+  operation: string,
+  cause: unknown,
+  detail: ImapErrorDetail,
+  connectionLimit: boolean
+): string {
+  const raw = cause instanceof Error ? cause.message : String(cause ?? "unknown error");
+  const head = connectionLimit
+    ? GMAIL_CONNECTION_LIMIT_MESSAGE
+    : `Gmail ${operation} failed: ${detail.responseText ?? raw}`;
+  const bits = [
+    `IMAP ${operation}`,
+    detail.responseStatus,
+    detail.serverResponseCode,
+    detail.responseText ? `"${detail.responseText}"` : null,
+    detail.executedCommand ? `cmd: ${detail.executedCommand}` : null,
+  ].filter((b): b is string => Boolean(b));
+  return `${head} [${bits.join(" · ")}]`;
+}
+
+/** True when `err` is (or wraps) a connection-limit refusal, at any nesting depth. */
+export function isGmailConnectionLimit(err: unknown): boolean {
+  if (err instanceof GmailOperationError) return err.connectionLimit;
+  return isConnectionLimitFailure(err);
+}
+
+/**
+ * Wrap any throw from an IMAP call so the useful fields reach the logs/run result.
+ * A GmailOperationError passes through unchanged (never double-wrapped).
+ */
+function wrapGmailError(operation: string, err: unknown): GmailOperationError {
+  if (err instanceof GmailOperationError) return err;
+  return new GmailOperationError(operation, err);
+}
+
+/** Backoff schedule for a connection-limit refusal. Bounded: 2 retries, then give up. */
+export const CONNECTION_LIMIT_BACKOFF_MS: readonly number[] = [5_000, 15_000];
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Injectable knobs for connect() — the defaults are what production uses. */
+export interface GmailConnectOptions {
+  /** Bounded backoff before re-attempting after a connection-limit refusal. */
+  connectionLimitBackoffMs?: readonly number[];
+  /** Test seam so the retry path runs without real wall-clock sleeps. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface DownloadedAttachment {
@@ -293,6 +490,17 @@ export class GmailClient {
     return this.auth.user;
   }
 
+  /**
+   * Is this session still alive and safe to run a command on? The shared-session
+   * broker (lib/gmailSession.ts) checks this before handing the client to the next
+   * caller: a run can idle for minutes between the Mail Clerk and the labelers, and
+   * imapflow drops the socket after `socketTimeout`. False → the broker tears down
+   * (releasing the socket) and opens a fresh session. Never more than one at a time.
+   */
+  get usable(): boolean {
+    return this.connected && this.client?.usable === true;
+  }
+
   /** Null-safe accessor — every public method guards on `connected` first. */
   private get imap(): ImapFlow {
     if (!this.client) throw new Error("GmailClient used before connect()");
@@ -315,7 +523,12 @@ export class GmailClient {
     });
   }
 
-  /** Best-effort teardown of a client whose connect() threw. */
+  /**
+   * Best-effort teardown of a client whose connect() threw. `close()` on imapflow
+   * destroys the socket synchronously and never throws for us — a client we are
+   * discarding MUST release its file descriptor, or we leak exactly the resource
+   * whose exhaustion is BUG-019.
+   */
   private discardClient(): void {
     try {
       this.client?.close();
@@ -323,11 +536,48 @@ export class GmailClient {
       /* best-effort */
     }
     this.client = null;
+    this.connected = false;
   }
 
-  async connect(): Promise<void> {
-    if (this.connected) return;
+  /**
+   * Open the session. ONE attempt per auth path, plus:
+   *   - a BOUNDED backoff retry when the server refuses for the connection cap
+   *     (`CONNECTION_LIMIT_BACKOFF_MS`, 2 retries) — strictly sequential, and the
+   *     previous socket is fully discarded before the next attempt, so the retry can
+   *     never itself add to the connection count;
+   *   - exactly ONE forced token re-mint retry on a GENUINE auth failure (OAuth only).
+   *
+   * A connection-limit refusal must NEVER take the re-mint path — that path opens a
+   * SECOND socket, which is the last thing to do when the server just said there are
+   * too many. `isAuthFailure` now returns false for it (BUG-019 Fix 2).
+   */
+  async connect(opts: GmailConnectOptions = {}): Promise<void> {
+    if (this.usable) return;
+    // A half-dead client (connected flag set, socket gone) must be released first.
+    if (this.client) this.discardClient();
 
+    const backoff = opts.connectionLimitBackoffMs ?? CONNECTION_LIMIT_BACKOFF_MS;
+    const sleep = opts.sleep ?? defaultSleep;
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.connectOnce();
+        return;
+      } catch (err) {
+        const wrapped = wrapGmailError("connect", err);
+        // Only the connection-cap case is retryable here, and only `backoff.length`
+        // times. Every other failure (auth, network, protocol) surfaces immediately.
+        if (!wrapped.connectionLimit || attempt >= backoff.length) throw wrapped;
+        // The failed attempt's socket is already discarded (connectOnce guarantees it),
+        // so waiting here strictly REDUCES our connection count — it cannot add to it.
+        await sleep(backoff[attempt]);
+      }
+    }
+  }
+
+  /** ONE connect attempt (incl. the OAuth re-mint retry). Always leaves the socket
+   *  released on failure. */
+  private async connectOnce(): Promise<void> {
     if (this.auth.kind === "appPassword") {
       this.client = this.buildClient({ pass: this.auth.appPassword });
       try {
@@ -348,6 +598,8 @@ export class GmailClient {
       await this.client.connect();
     } catch (err) {
       this.discardClient();
+      // NOT an auth failure (e.g. the connection cap, a network drop) → do not re-mint
+      // and do NOT open another socket. Let connect()'s bounded backoff decide.
       if (!isAuthFailure(err)) throw err;
       const fresh = await getGmailAccessToken(oauth, { forceRefresh: true });
       this.client = this.buildClient({ accessToken: fresh });
@@ -361,17 +613,35 @@ export class GmailClient {
     this.connected = true;
   }
 
+  /**
+   * Release the session — ALWAYS, and at most once. The old implementation early-
+   * returned when `connected` was false, so a client whose `connect()` threw part-way
+   * (or one whose socket died) never released its file descriptor: a leaked connection,
+   * which is the exact resource BUG-019 exhausted. This now tears down ANY constructed
+   * ImapFlow: `logout()` when the session is live, a hard `close()` otherwise — and a
+   * hard `close()` again after logout, which imapflow tolerates. Idempotent (the second
+   * call sees no client) and it never throws.
+   */
   async close(): Promise<void> {
-    if (!this.connected || !this.client) {
-      this.connected = false;
-      return;
+    const client = this.client;
+    const wasUsable = this.usable;
+    // Detach FIRST so a concurrent/duplicate close() is a no-op and can't double-logout.
+    this.client = null;
+    this.connected = false;
+    if (!client) return;
+
+    if (wasUsable) {
+      try {
+        await client.logout();
+      } catch {
+        // Best-effort — mirror the Python's try/except logout().
+      }
     }
     try {
-      await this.client.logout();
+      // Unconditional: releases the socket whether logout ran, threw, or was skipped.
+      client.close();
     } catch {
-      // Best-effort — mirror the Python's try/except logout().
-    } finally {
-      this.connected = false;
+      /* best-effort — close() must never throw into a finally block */
     }
   }
 
@@ -398,6 +668,20 @@ export class GmailClient {
     ).map((p) => p.toLowerCase());
     const limit = opts.limit ?? 50;
 
+    try {
+      return await this.searchImpl(gmailQuery, patterns, limit, opts.outDir ?? null);
+    } catch (err) {
+      // Surface the SERVER's diagnosis, not imapflow's opaque "Command failed".
+      throw wrapGmailError("search", err);
+    }
+  }
+
+  private async searchImpl(
+    gmailQuery: string,
+    patterns: string[],
+    limit: number,
+    outDir: string | null
+  ): Promise<GmailSearchResult> {
     const lock = await this.imap.getMailboxLock(ALL_MAIL);
     try {
       // X-GM-RAW search. imapflow returns UIDs (numbers) when { uid: true }.
@@ -438,7 +722,7 @@ export class GmailClient {
         const attachments = await saveMatchingAttachments(
           parsed.attachments ?? [],
           patterns,
-          opts.outDir ?? null,
+          outDir,
           uid
         );
 
@@ -493,6 +777,18 @@ export class GmailClient {
     ).map((p) => p.toLowerCase());
     const limit = opts.limit ?? 50;
 
+    try {
+      return await this.searchLatestAttachmentImpl(gmailQuery, patterns, limit);
+    } catch (err) {
+      throw wrapGmailError("search", err);
+    }
+  }
+
+  private async searchLatestAttachmentImpl(
+    gmailQuery: string,
+    patterns: string[],
+    limit: number
+  ): Promise<GmailSearchResult> {
     const lock = await this.imap.getMailboxLock(ALL_MAIL);
     try {
       const found = await this.imap.search({ gmraw: gmailQuery }, { uid: true });
@@ -578,15 +874,19 @@ export class GmailClient {
     if (!this.connected) throw new Error("markProcessed called before connect()");
     const clean = uids.map((u) => String(u)).filter(Boolean);
     if (!clean.length) return false;
-    const lock = await this.imap.getMailboxLock(ALL_MAIL);
     try {
-      const ok = await this.imap.messageFlagsAdd(clean.join(","), [PROCESSED_LABEL], {
-        uid: true,
-        useLabels: true,
-      });
-      return Boolean(ok);
-    } finally {
-      lock.release();
+      const lock = await this.imap.getMailboxLock(ALL_MAIL);
+      try {
+        const ok = await this.imap.messageFlagsAdd(clean.join(","), [PROCESSED_LABEL], {
+          uid: true,
+          useLabels: true,
+        });
+        return Boolean(ok);
+      } finally {
+        lock.release();
+      }
+    } catch (err) {
+      throw wrapGmailError("label", err);
     }
   }
 }

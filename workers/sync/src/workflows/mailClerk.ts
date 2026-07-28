@@ -6,6 +6,12 @@
  * Per-report workflows then read from Storage (survives crashes; kills the Gmail
  * burst-EOF problem at the source — no more 4 parallel IMAP logins).
  *
+ * That session now comes from the SHARED broker (`lib/gmailSession.ts`), not from a
+ * client this file constructs: `runSync` pins one lease for the whole run, so the
+ * clerk's session is the SAME one the labelers / flecon fetcher / schedule fetcher
+ * reuse later. Before 2026-07-28 those three opened their own and a run reached 7+
+ * simultaneous IMAP logins, past Gmail's ~15 cap — see specs/SHARED.md §1.8 (BUG-019).
+ *
  * The Gmail queries are copied VERBATIM from the Python orchestrators (read as spec):
  *   sync_deliveries.py : GMAIL_OP  label:"Work/ICTC Daily" subject:"RC DELIVERIES" after:{since} -label:"Blackwood-Processed"
  *                        GMAIL_CZ  from:czarinaloumaximoictc@gmail.com newer_than:5d   (price enrichment)
@@ -24,7 +30,8 @@
  * resumes from the last completed upload.
  */
 import { DBOS } from "../dbos.js";
-import { GmailClient, type FetchedEmail } from "../lib/gmail.js";
+import { isGmailConnectionLimit, type FetchedEmail } from "../lib/gmail.js";
+import { withGmailSession, describeGmailFailure } from "../lib/gmailSession.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { DbClient } from "../lib/db.js";
 import { makeEmitter } from "../lib/progress.js";
@@ -304,59 +311,78 @@ async function fetchAllOverOneSession(
     }
   };
 
-  const gmail = GmailClient.fromEnv();
   const out: Record<string, { query: string; emails: FetchedEmail[] }> = {};
   const queries = mailQueries();
   const total = queries.length;
 
   await emit("Connecting to Gmail…", FETCH_PCT_START);
-  await gmail.connect();
+  // ONE session for every query — and, because runSync pins a run-lease around the whole
+  // run, the SAME session the labelers/fetchers reuse later (BUG-019). The broker owns
+  // connect/close; this function never opens or closes a socket itself.
   try {
-    let done = 0;
-    // Honest pct: FETCH_PCT_START at connect, climbing to FETCH_PCT_END as reports land.
-    const pctFor = (completed: number) =>
-      FETCH_PCT_START +
-      Math.round((FETCH_PCT_END - FETCH_PCT_START) * (completed / total));
+    return await withGmailSession(async (gmail) => {
+      let done = 0;
+      // Honest pct: FETCH_PCT_START at connect, climbing to FETCH_PCT_END as reports land.
+      const pctFor = (completed: number) =>
+        FETCH_PCT_START +
+        Math.round((FETCH_PCT_END - FETCH_PCT_START) * (completed / total));
 
-    for (const q of queries) {
-      const query = q.query.replace("{since}", since);
-      const label = reportLabel(q.key);
-      await emit(`Looking for ${label}…`, pctFor(done));
+      for (const q of queries) {
+        const query = q.query.replace("{since}", since);
+        const label = reportLabel(q.key);
+        await emit(`Looking for ${label}…`, pctFor(done));
 
-      let emails: FetchedEmail[];
-      try {
-        // FAST path — metadata-first, download only the newest xlsx part.
-        const res = await gmail.searchLatestAttachment(query, {
-          patterns: ["*.xlsx", "*.xls"],
-        });
-        emails = res.emails;
-      } catch {
-        // Fallback for THIS report — full-source parse (slower but robust).
-        await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
-        const res = await gmail.search(query, {
-          outDir: null,
-          patterns: ["*.xlsx", "*.xls"],
-        });
-        emails = res.emails;
+        let emails: FetchedEmail[];
+        try {
+          // FAST path — metadata-first, download only the newest xlsx part.
+          const res = await gmail.searchLatestAttachment(query, {
+            patterns: ["*.xlsx", "*.xls"],
+          });
+          emails = res.emails;
+        } catch (err) {
+          // The slow fallback exists for per-message STRUCTURE/PART edge cases. A
+          // connection-level refusal (the Gmail cap) is NOT one of those — retrying it
+          // on a refused/dead session just burns another command, so let it out.
+          if (isGmailConnectionLimit(err)) throw err;
+          // Fallback for THIS report — full-source parse (slower but robust).
+          await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
+          const res = await gmail.search(query, {
+            outDir: null,
+            patterns: ["*.xlsx", "*.xls"],
+          });
+          emails = res.emails;
+        }
+        out[q.key] = { query, emails };
+
+        // Report what we found (real filename + size from the chosen attachment).
+        const latest = pickLatestXlsx(emails);
+        if (latest) {
+          await emit(
+            `Found ${label} (${humanSize(latest.attachment.sizeBytes)})`,
+            pctFor(done),
+            latest.attachment.filename
+          );
+        }
+        done += 1;
+        await emit(`Downloaded ${done} of ${total} reports…`, pctFor(done));
       }
-      out[q.key] = { query, emails };
-
-      // Report what we found (real filename + size from the chosen attachment).
-      const latest = pickLatestXlsx(emails);
-      if (latest) {
-        await emit(
-          `Found ${label} (${humanSize(latest.attachment.sizeBytes)})`,
-          pctFor(done),
-          latest.attachment.filename
-        );
-      }
-      done += 1;
-      await emit(`Downloaded ${done} of ${total} reports…`, pctFor(done));
-    }
-  } finally {
-    await gmail.close();
+      return out;
+    });
+  } catch (err) {
+    // OBSERVABILITY (BUG-019 Fix 4): the whole run is about to fail on this. Emit the
+    // SERVER'S OWN diagnosis as a plain-English warn beat — an operator must read
+    // "Gmail connection limit hit — wait and retry", never "Command failed".
+    const detail = describeGmailFailure(err);
+    await emit(
+      isGmailConnectionLimit(err)
+        ? "Gmail refused the connection — too many are open right now. Wait a few minutes and run the sync again."
+        : "Couldn't read the mailbox this run.",
+      FETCH_PCT_START,
+      detail,
+      "warn"
+    );
+    throw err;
   }
-  return out;
 }
 
 function pickLatestXlsx(

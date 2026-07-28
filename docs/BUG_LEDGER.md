@@ -827,6 +827,100 @@ phantom-inventory fix). This was hygiene on a stored field.
 
 ---
 
+## BUG-019 — The sync opened 7 IMAP sessions per run and blew Gmail's connection cap ✅ FIXED (2026-07-28, uncommitted)
+**Status:** ✅ FIXED · **Effort:** M · **Severity:** critical (every sync run failed in 3–5s; production outage)
+
+### Symptom
+Every sync run failed after 3–5 seconds. `imapflow` threw a generic `Error: Command
+failed`. The real error object, extracted by hand:
+
+```
+serverResponseCode:   ALERT
+response:             3 NO [ALERT] Too many simultaneous connections. (Failure)
+responseText:         Too many simultaneous connections. (Failure)
+responseStatus:       NO
+authenticationFailed: true      ← imapflow sets this even though it is NOT an auth failure
+```
+
+### Root cause — the rule the code stated but never enforced
+`workers/sync/src/lib/gmail.ts` has carried this header since Wave 4A:
+
+> *SINGLE-CONNECTION SESSION REUSE: the Mail Clerk depends on ONE IMAP session for all
+> four report types … Do NOT open a client per report.*
+
+Nothing enforced it. Three call sites each built their own `GmailClient.fromEnv()`:
+
+| Call site | Sessions per run |
+|---|---|
+| `workflows/mailClerk.ts:307` — the intended shared session | 1 ✅ |
+| `workflows/reportDeps.ts::makeLabeler` — a NEW session on EVERY label application | 4 ❌ |
+| `workflows/reportDeps.ts::makeFleconFetcher` — its own | 1 ❌ |
+| `reports/prodSchedule/josephEmail.ts` — its own ("one extra sequential login is harmless") | 1 ❌ |
+
+**7+ per run**, against Gmail's ~15-simultaneous-connection cap per account. Two
+compounding defects made it worse:
+
+- **`isAuthFailure` believed `authenticationFailed`.** imapflow's `handleAuthError`
+  stamps that boolean on ANY failure raised during the auth phase — including this
+  refusal. So `connect()` took the genuine-auth path: it force-re-minted the OAuth token
+  and **opened a SECOND connection**, doubling connection burn on the exact failure
+  caused by too many connections.
+- **`close()` early-returned when `this.connected` was false.** A client whose
+  `connect()` threw part-way never released its socket — leaking the very resource
+  being exhausted.
+
+### The misdiagnosis it caused (the expensive part)
+Because the informative text never reached the logs — `Error: Command failed` is all
+anyone saw — and because `authenticationFailed: true` pointed at auth, this was
+diagnosed as an **auth failure for a full day**. It triggered an unnecessary
+**App Password → OAuth2/XOAUTH2 migration** (2026-07-27, see `specs/SHARED.md` §1.1),
+which fixed nothing because auth was never broken. *The lesson: when a library hands you
+a generic message, log its structured fields before believing any boolean it sets.*
+
+### The fix (four parts)
+1. **One session per run, enforced.** New `workers/sync/src/lib/gmailSession.ts` — a
+   process-scoped, reference-counted broker. Nothing in `src/` constructs a
+   `GmailClient` any more; every caller uses `withGmailSession(fn)`, and
+   `runSync.ts::runSyncGuarded` wraps the run body in `withGmailRunLease(...)` so ONE
+   session spans Stage 1 → the parallel writers → Stage 3c, closed exactly once in a
+   `finally`. Threading the clerk's live client through was not possible: each report is
+   its own DBOS child workflow with serializable-only params. Concurrency-safe because
+   the broker serializes the connect decision and every `GmailClient` method holds
+   `imap.getMailboxLock` across its whole critical section.
+2. **Connection limit ≠ auth failure.** `isConnectionLimitFailure()` is checked first and
+   always wins; `isAuthFailure()` now leads with `err.oauthError` (set only when the
+   XOAUTH2 SASL exchange itself failed — the reliable discriminator) and treats
+   `authenticationFailed` as the weakest, last signal. The refusal gets a **bounded**
+   backoff instead (`[5s, 15s]`, 2 retries, strictly sequential with the prior socket
+   discarded first) and never a token re-mint.
+3. **`close()` always releases the socket.** Unconditional teardown of any constructed
+   `ImapFlow` — LOGOUT when live, hard `close()` otherwise, `close()` after a logout too.
+   Idempotent, never throws.
+4. **The real error is surfaced.** `GmailOperationError` carries `responseText` /
+   `serverResponseCode` / `responseStatus` / `executedCommand` and puts them in the
+   message. A connection-limit failure produces a plain-English progress beat and a
+   `gate_failure` held row ("Gmail refused the connection — too many are open … wait a
+   few minutes and run the sync again") so it lands in `flattenRunFindings`.
+   `redactImapCommand()` drops `AUTHENTICATE`/`LOGIN` arguments outright — credentials
+   are never logged, and `logger: true` is explicitly NOT the way to debug IMAP.
+
+### Files
+`workers/sync/src/lib/gmailSession.ts` (new) · `workers/sync/src/lib/gmail.ts` ·
+`workers/sync/src/workflows/mailClerk.ts` · `workers/sync/src/workflows/reportDeps.ts` ·
+`workers/sync/src/workflows/reportWorkflow.ts` · `workers/sync/src/workflows/normalizeReport.ts` ·
+`workers/sync/src/workflows/runSync.ts` · `workers/sync/src/reports/prodSchedule/josephEmail.ts` ·
+`workers/sync/specs/SHARED.md` §1.8–1.9.
+
+### Verification
+26 new tests (`test/lib/gmailSession.test.ts`, `test/lib/gmailConnectionLimit.test.ts`) —
+`imapflow` and the client are mocked, **zero live IMAP calls** (Gmail was at its ceiling;
+every attempt would have prolonged the outage). Proven by test, not asserted: a full
+run's Gmail work opens **1** session with the lease and **7** without it; peak live
+sessions never exceeds 1; the connection-limit error mints the token exactly ONCE.
+Worker: typecheck clean, **566 tests pass** (was 540), **parity 12/12**.
+
+---
+
 ## Fixed entries
 
 All of BUG-001…BUG-005 shipped 2026-07-17 on `feat/mobile-pwa`. Full entries are kept
@@ -843,6 +937,7 @@ analysis is the most useful record — this section is the index:
 | BUG-012 — Cenapro Bulk Add modal draft-loss → retired for a loss-proof draft entry zone | 2026-07-21 | `3848145` |
 | BUG-013 — Cenapro focus Daily Block silent edit-loss on view/scope/period switch → lifted dirty-nav guard | 2026-07-22 | _(uncommitted — Phase 3b)_ |
 | BUG-016a — `fn_update_blackwood_state` DELETE branch excluded `OLD.id`; 4 batches / 83,308 kg backfilled | 2026-07-27 | migration `20260727070000` (applied live) |
+| BUG-019 — 7 IMAP sessions per run blew Gmail's connection cap; "too many connections" misread as an auth failure | 2026-07-28 | _(uncommitted)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none

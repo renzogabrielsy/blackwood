@@ -76,6 +76,75 @@ File: `.claude/skills/sync-ictc/scripts/fetch_gmail.py` (573 lines).
 - **Startup jitter**: once per process, before the FIRST Gmail fetch, sleeps `random.Random(os.getpid()).uniform(0.0, 2.5)` seconds (orchestrator_common.py:252-261, `_gmail_startup_jitter`) — deterministic per-PID, meant to de-sync 4 parallel orchestrators hammering Gmail simultaneously. **Porting trap**: this uses `os.getpid()` as a seed, which a TS port cannot reproduce identically — the intent (spread out concurrent starts) matters more than exact reproducibility; a TS port should use an equivalent per-process random delay, not try to match Python's `Random(pid)` stream.
 - `_run_json_gmail` vs plain `run_json` (orchestrator_common.py:200-217): non-Gmail child scripts (extract_*/classify_*/reconcile_*) use the plain `run_json` with NO retry — only Gmail fetch/mark-processed go through the retry wrapper.
 
+### 1.8 ONE IMAP SESSION PER RUN — the enforced worker rule (2026-07-28, BUG-019)
+
+> **This is a WORKER rule, not a Python-parity rule.** The Python oracle ran four
+> separate orchestrator processes, each with its own IMAP login (which is exactly why
+> §1.7's startup jitter exists). The TS worker replaced that with a single Mail Clerk
+> session — and this section is the contract that keeps it single.
+
+**The rule:** a sync run opens **exactly ONE** Gmail IMAP session. Gmail caps an account
+at roughly **15 simultaneous connections** and answers past that with
+`NO [ALERT] Too many simultaneous connections. (Failure)`.
+
+**Why it needed enforcing.** `src/lib/gmail.ts` had stated the rule in its header since
+Wave 4A, but nothing checked it, and three call sites quietly violated it — the labelers
+(`makeLabeler`, a NEW session on every label application, ×4 writers), the flecon
+workbook fetcher (`makeFleconFetcher`) and the production-schedule fetcher
+(`prodSchedule/josephEmail.ts`). A single run reached **7+ sessions** and every run
+started failing in 3–5s. See `docs/BUG_LEDGER.md` BUG-019 for the full post-mortem,
+including the day-long misdiagnosis it caused.
+
+**How it is enforced.** `src/lib/gmailSession.ts` — a process-scoped, reference-counted
+broker:
+
+| Rule | Mechanism |
+|---|---|
+| Nothing constructs a `GmailClient` | Every caller in `src/` uses `withGmailSession(fn)`. The ONE exception is `scripts/gmail-auth-check.ts` (a manual CLI outside the run lifecycle, whose purpose is the raw connect path). |
+| One session spans the whole run | `runSync.ts::runSyncGuarded` wraps the run body in `withGmailRunLease(...)` — a lease that PINS the session without forcing a connect. |
+| Closed exactly once, always | The last lease release tears down, in a `finally` — success, failure and DBOS cancellation alike. |
+| Safe under concurrency | Stage 2b runs four writers in parallel. The broker serializes the acquire/connect decision (N racing callers → ONE `connect()`), and every `GmailClient` method holds `imap.getMailboxLock(ALL_MAIL)` across its whole critical section (search + fetch + attachment download, stream fully buffered before release) — imapflow's documented mechanism for driving one connection from several concurrent code paths. |
+| A dead socket never becomes a second live one | Before handing the client out the broker checks `client.usable` (a run can idle past `socketTimeout`); a dead session is CLOSED, then replaced. |
+| A failed connect is not a stampede | The connect failure is remembered for the rest of the lease generation and re-thrown to later callers WITHOUT opening another socket. |
+
+**Threading the Mail Clerk's live client through instead is NOT possible**: every report
+runs as its own DBOS child workflow whose params must be serializable (a live socket
+cannot cross a crash boundary), and the clerk's session is a checkpointed step that has
+already returned by the time the writers label.
+
+### 1.9 IMAP error classification (2026-07-28, BUG-019)
+
+imapflow throws a bare `new Error("Command failed")` for every tagged `NO`/`BAD`; the
+diagnosis lives on **fields**, not the message (`imap-flow.js:805-822`):
+`responseText`, `serverResponseCode`, `responseStatus`, `executedCommand`.
+
+- **`isConnectionLimitFailure(err)`** — matches the server's refusal text. It is checked
+  **FIRST** and always wins.
+- **`isAuthFailure(err)`** — discriminators in reliability order: (1) never true for a
+  connection-limit refusal; (2) `err.oauthError`, set ONLY when the XOAUTH2 SASL exchange
+  itself returned Google's error payload (`imapflow/lib/commands/authenticate.js:20`) —
+  the reliable signal; (3) Gmail's `AUTHENTICATIONFAILED` / "Invalid credentials" text;
+  (4) `err.authenticationFailed`, which imapflow sets for ANY failure raised during the
+  auth phase **including the connection-limit refusal** — the weakest signal, checked
+  last. Only a genuine auth failure gets the ONE forced token re-mint + retry.
+- **`connect()` backoff** — a connection-limit refusal is retried on
+  `CONNECTION_LIMIT_BACKOFF_MS = [5s, 15s]` (bounded, 2 retries). Strictly sequential:
+  the failed attempt's socket is discarded before the wait, so a retry can never add to
+  the connection count.
+- **`close()`** — unconditional teardown of any constructed `ImapFlow` (LOGOUT when the
+  session is live, hard `close()` otherwise, and `close()` after a logout too).
+  Idempotent, never throws. It must NEVER early-return on a "not connected" flag: a
+  client whose `connect()` failed part-way still holds a file descriptor.
+- **Never log** the XOAUTH2 payload, access token, refresh token or app password.
+  `redactImapCommand()` drops the arguments of any `AUTHENTICATE`/`LOGIN` outright rather
+  than trusting imapflow's own masking. Do **not** set `logger: true` to debug IMAP —
+  that prints credentials.
+- **Operator surface** — a connection-limit failure produces a plain-English progress
+  beat plus a `gate_failure` held row ("Gmail refused the connection — too many are open
+  … wait a few minutes and run the sync again"), so it appears in
+  `flattenRunFindings`. `HeldKind` is FRONTEND-LOCKED — reclassify via `reason`/`detail`,
+  never a new kind.
+
 ---
 
 ## 2. `lib/db.py` — PostgREST client contract

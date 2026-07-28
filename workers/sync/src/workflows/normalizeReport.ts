@@ -357,7 +357,19 @@ export function toReportResult(params: {
  * renders an error (not a crash) — classify present with ok:false so the reducer's
  * `deriveCardStatus` settles to 'error'/'gate-failed', `applied` zeros present.
  */
-export function failedReportResult(reportType: string, message: string): SyncRunReportResult {
+export function failedReportResult(
+  reportType: string,
+  message: string,
+  /**
+   * Optional held rows to surface alongside the failure. `apply.errors` is NOT part of
+   * the panel's honest findings list (`lib/sync/findings.ts::flattenRunFindings` reads
+   * held rows + the reconciliation channels), so a failure that an operator must ACT on
+   * — e.g. "Gmail connection limit hit, wait and retry" — passes one `gate_failure` row
+   * here to become a visible finding. Uses the EXISTING HeldKind vocabulary; that enum
+   * is frontend-locked, so new categories are expressed via `reason`/`detail`.
+   */
+  held: HeldRow[] = [],
+): SyncRunReportResult {
   return {
     classify: {
       report_type: reportType,
@@ -373,7 +385,7 @@ export function failedReportResult(reportType: string, message: string): SyncRun
       report_type: reportType,
       ok: false,
       applied: { inserts: 0, updates: 0, replaced_dates: 0 },
-      held: [],
+      held,
       labeled: false,
       watermark_updated: false,
       errors: [message],

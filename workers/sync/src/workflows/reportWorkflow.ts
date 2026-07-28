@@ -31,8 +31,10 @@ import {
 import {
   toReportResult,
   failedReportResult,
+  type HeldRow,
   type SyncRunReportResult,
 } from "./normalizeReport.js";
+import { gmailFailureHeldRows } from "../lib/gmailSession.js";
 
 import { runReport as runDeliveries } from "../reports/deliveries/index.js";
 import { runReport as runRcOut } from "../reports/rc_out/index.js";
@@ -275,7 +277,10 @@ async function reportWorkflowBody(params: ReportWorkflowParams): Promise<ReportE
     // Contract-shaped failure result (classify ok:false + apply with zeroed applied)
     // so the card renders an error state — never a missing-field crash. Key it to the
     // panel card so the reducer folds it into the right card.
-    return failedReportResult(cardKey, message);
+    // BUG-019 Fix 4: a Gmail connection-limit failure also becomes a readable held-row
+    // FINDING (not just an error string the findings list never reads).
+    const held: HeldRow[] = gmailFailureHeldRows(cardKey, err);
+    return failedReportResult(cardKey, message, held);
   }
 }
 
