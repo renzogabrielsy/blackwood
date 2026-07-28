@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 import { DbClient, type Row, type ReadRowsOptions, type InsertIfAbsentResult } from "../lib/db.js";
-import { GmailClient } from "../lib/gmail.js";
+import { withGmailSession, type GmailSessionRunner } from "../lib/gmailSession.js";
 import { makeEmitter, type ProgressEmitter } from "../lib/progress.js";
 import { SYNC_INBOX_BUCKET } from "./mailClerk.js";
 
@@ -120,33 +120,38 @@ export function makeDryRunDb(real: DbClient): DbClient {
 
 // ---------------------------------------------------------------------------
 // Gmail labeler — a callback the apply layers invoke on full success. No-op in dryRun.
-// A live labeler opens ONE session, applies the label, closes. Kept lazy: only the
-// two reports that label (writers with a Gmail thread) construct one.
+//
+// BUG-019 (2026-07-28): this used to call `GmailClient.fromEnv() + connect()` on EVERY
+// label application — up to four reports label, so four fresh IMAP logins per run on top
+// of the Mail Clerk's, the flecon fetcher's and the schedule fetcher's. That is how a run
+// reached 7+ simultaneous sessions and tripped Gmail's ~15-connection cap. It now runs on
+// THE shared session (lib/gmailSession.ts), which `runSync` pins for the whole run.
 // ---------------------------------------------------------------------------
-export function makeLabeler(dryRun: boolean): (uids: Array<number | string>) => Promise<boolean> {
+export function makeLabeler(
+  dryRun: boolean,
+  /** Test seam — defaults to the shared-session broker. */
+  runGmail: GmailSessionRunner = withGmailSession,
+): (uids: Array<number | string>) => Promise<boolean> {
   if (dryRun) return async () => false;
   return async (uids: Array<number | string>): Promise<boolean> => {
     if (!uids || uids.length === 0) return false;
-    const gmail = GmailClient.fromEnv();
-    await gmail.connect();
-    try {
-      return await gmail.markProcessed(uids);
-    } finally {
-      await gmail.close();
-    }
+    return runGmail((gmail) => gmail.markProcessed(uids));
   };
 }
 
 /** flecon's labeler takes a single uid string (its own deps shape). */
-export function makeSingleLabeler(dryRun: boolean): (uid: string) => Promise<boolean> {
-  const multi = makeLabeler(dryRun);
+export function makeSingleLabeler(
+  dryRun: boolean,
+  runGmail: GmailSessionRunner = withGmailSession,
+): (uid: string) => Promise<boolean> {
+  const multi = makeLabeler(dryRun, runGmail);
   return async (uid: string): Promise<boolean> => multi([uid]);
 }
 
 // ---------------------------------------------------------------------------
 // flecon re-fetches the latest FLECON BAGGED xlsx over Gmail itself (its runReport
 // takes a `fetchLatestWorkbook(query)` callback, not a manifest). We honour that by
-// opening one Gmail session, running the query, saving the newest xlsx to tmp.
+// running the query on THE shared session — it used to open its own (BUG-019).
 // ---------------------------------------------------------------------------
 export interface FleconWorkbookMeta {
   path: string;
@@ -155,11 +160,12 @@ export interface FleconWorkbookMeta {
   threadId?: string | null;
 }
 
-export function makeFleconFetcher(): (gmailQuery: string) => Promise<FleconWorkbookMeta | null> {
-  return async (gmailQuery: string): Promise<FleconWorkbookMeta | null> => {
-    const gmail = GmailClient.fromEnv();
-    await gmail.connect();
-    try {
+export function makeFleconFetcher(
+  /** Test seam — defaults to the shared-session broker. */
+  runGmail: GmailSessionRunner = withGmailSession,
+): (gmailQuery: string) => Promise<FleconWorkbookMeta | null> {
+  return async (gmailQuery: string): Promise<FleconWorkbookMeta | null> =>
+    runGmail(async (gmail) => {
       const dir = await mkdtemp(join(tmpdir(), "bw-sync-flecon-"));
       const res = await gmail.search(gmailQuery, { outDir: dir, patterns: ["*.xlsx", "*.xls"] });
       // Walk newest→oldest for the first email carrying an xlsx (orchestrator_common.latest_xlsx).
@@ -178,10 +184,7 @@ export function makeFleconFetcher(): (gmailQuery: string) => Promise<FleconWorkb
         }
       }
       return null;
-    } finally {
-      await gmail.close();
-    }
-  };
+    });
 }
 
 // ---------------------------------------------------------------------------

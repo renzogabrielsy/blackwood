@@ -9,26 +9,33 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FetchedEmail } from "../../src/lib/gmail.js";
 
-// ── Mock the Gmail client so no network is touched. ─────────────────────────
+// ── Mock ONLY the GmailClient class so no network is touched. The rest of
+// src/lib/gmail.js (error classification helpers used by gmailSession.ts) stays real.
 const searchLatestAttachment = vi.fn();
 const search = vi.fn();
 const connect = vi.fn(async () => {});
 const close = vi.fn(async () => {});
 
-vi.mock("../../src/lib/gmail.js", () => {
+vi.mock("../../src/lib/gmail.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/gmail.js")>();
   class FakeGmailClient {
     static fromEnv() {
       return new FakeGmailClient();
     }
+    usable = true;
     connect = connect;
     close = close;
     searchLatestAttachment = searchLatestAttachment;
     search = search;
   }
-  return { GmailClient: FakeGmailClient };
+  return { ...actual, GmailClient: FakeGmailClient };
 });
 
 import { runMailClerk, mailQueries } from "../../src/workflows/mailClerk.js";
+import {
+  gmailSessionStats,
+  _resetGmailSessionForTest,
+} from "../../src/lib/gmailSession.js";
 
 function emailWith(uid: number, filename: string, sizeBytes: number): FetchedEmail {
   return {
@@ -54,6 +61,7 @@ function emailWith(uid: number, filename: string, sizeBytes: number): FetchedEma
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetGmailSessionForTest();
   // Every query returns one email carrying a distinct xlsx.
   searchLatestAttachment.mockImplementation(async (query: string) => ({
     ok: true,
@@ -102,6 +110,15 @@ describe("runMailClerk live progress (FIX 1)", () => {
     await runMailClerk({ runId: "r", since: "2026/05/01", dryRun: true });
     expect(searchLatestAttachment).toHaveBeenCalledTimes(mailQueries().length);
     expect(search).not.toHaveBeenCalled();
+  });
+
+  it("opens exactly ONE IMAP session for all seven queries, and closes it (BUG-019)", async () => {
+    await runMailClerk({ runId: "r", since: "2026/05/01", dryRun: true });
+    expect(searchLatestAttachment).toHaveBeenCalledTimes(mailQueries().length);
+    // 7 queries, ONE connect, ONE close — the clerk never opens a client per report.
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(gmailSessionStats()).toMatchObject({ opens: 1, closes: 1, leases: 0, open: false });
   });
 
   it("falls back to full-source search for a report whose fast path throws", async () => {

@@ -9,6 +9,13 @@
  *               error text on a whole-run failure). Status writes go through the
  *               service-role db (its own DBOS steps, so they are checkpointed).
  *
+ *   ONE IMAP SESSION PER RUN (2026-07-28, BUG-019): the whole body runs inside
+ *   `withGmailRunLease` (lib/gmailSession.ts), which pins the shared Gmail session for
+ *   the run. Stage 1 opens it; the labelers (2b), the flecon fetcher (2b) and the
+ *   schedule fetcher (3c) reuse it instead of opening their own. Released in a
+ *   `finally`, so it closes exactly once on success, failure and cancellation alike.
+ *   See specs/SHARED.md §1.8.
+ *
  *   Stage 1 — Mail Clerk (child workflow): ONE Gmail session → all report files into
  *             Supabase Storage. gsheet is NOT an email — its download is storage-ized
  *             inside the gsheet report (download.ts), so every report reads from a
@@ -46,6 +53,7 @@ import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./repor
 import { failedReportResult } from "./normalizeReport.js";
 import { makeStorageFetcher } from "./reportDeps.js";
 import { DbClient } from "../lib/db.js";
+import { withGmailRunLease } from "../lib/gmailSession.js";
 import { makeEmitter } from "../lib/progress.js";
 import { loadWorkbook } from "../lib/xlsx.js";
 import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
@@ -944,7 +952,13 @@ function defaultSince(): string {
  */
 async function runSyncGuarded(params: RunSyncParams): Promise<RunSyncResult> {
   try {
-    return await runSyncBody(params);
+    // ── ONE IMAP SESSION PER RUN (BUG-019). The lease PINS the shared Gmail session
+    // (lib/gmailSession.ts) for the whole run without forcing a connect: the Mail Clerk
+    // opens it in Stage 1, and the labelers (Stage 2b), the flecon fetcher and the
+    // schedule fetcher (Stage 3c) all reuse that same connection instead of opening
+    // their own. `withGmailRunLease` releases in a `finally`, so the session is closed
+    // exactly once — on success, on failure, and on a DBOS cancellation alike.
+    return await withGmailRunLease(() => runSyncBody(params));
   } catch (err) {
     // A cancellation (Stop button) is NOT a crash: settle 'cancelled', keep every
     // already-written row, and re-throw so DBOS records the terminal CANCELLED state.

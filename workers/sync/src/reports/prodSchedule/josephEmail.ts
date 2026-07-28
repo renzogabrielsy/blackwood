@@ -9,16 +9,20 @@
  * "PROD SCHED"; the newest email carrying an xlsx wins. Revision label is derived from
  * the subject line (parseJosephRev).
  *
- * This opens its own short-lived session. The Mail Clerk's single session (Stage 1) is
- * already closed by the time the schedule step runs, so this is a fresh guarded login —
- * exactly what the verified root script does. One extra sequential login (NOT four
- * parallel ones) does not reintroduce the Gmail burst-EOF problem the Mail Clerk solved.
+ * SESSION (corrected 2026-07-28, BUG-019): this used to open its OWN short-lived session,
+ * on the reasoning that the Mail Clerk's session was already closed by the time the
+ * schedule step ran. That reasoning was right about the ORDER and wrong about the COST —
+ * combined with the four labelers and the flecon fetcher, which also opened their own, a
+ * run reached 7+ IMAP logins and tripped Gmail's ~15 simultaneous-connection cap. It now
+ * runs on THE shared session (lib/gmailSession.ts), which `runSync` pins for the whole
+ * run, so the Mail Clerk's session is still open when this step arrives.
  *
  * Returns null when no matching email is found. THROWS on connect/auth failure; the
  * caller (refresh.ts) treats ANY throw or null as "Joseph unavailable" and falls back to
  * a Renzo-only refresh — the schedule band must never fail the daily sync.
  */
-import { GmailClient, latestXlsx } from "../../lib/gmail.js";
+import { latestXlsx } from "../../lib/gmail.js";
+import { withGmailSession, type GmailSessionRunner } from "../../lib/gmailSession.js";
 import { parseJosephRev, type JosephRev } from "./parse.js";
 
 const JOSEPH_SENDER = "kitz323@yahoo.com";
@@ -34,16 +38,14 @@ export interface JosephSource {
 }
 
 /**
- * Fetch the latest Joseph schedule workbook over a fresh guarded Gmail session.
- * `clientFactory` is injectable so tests can stub the whole IMAP path. Returns null
- * when the search finds no matching xlsx; throws only on a connection/auth failure.
+ * Fetch the latest Joseph schedule workbook over THE shared Gmail session.
+ * `runGmail` is injectable so tests can stub the whole IMAP path. Returns null when the
+ * search finds no matching xlsx; throws only on a connection/auth failure.
  */
 export async function fetchLatestJosephSchedule(
-  clientFactory: () => GmailClient = () => GmailClient.fromEnv(),
+  runGmail: GmailSessionRunner = withGmailSession,
 ): Promise<JosephSource | null> {
-  const client = clientFactory();
-  await client.connect();
-  try {
+  return runGmail(async (client) => {
     const result = await client.search(JOSEPH_QUERY, {
       outDir: null,
       patterns: ["*.xlsx", "*.xls"],
@@ -56,7 +58,5 @@ export async function fetchLatestJosephSchedule(
       rev: parseJosephRev(subject),
       origin: `IMAP "${subject}"`,
     };
-  } finally {
-    await client.close();
-  }
+  });
 }

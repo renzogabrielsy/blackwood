@@ -10,6 +10,13 @@
  *
  * Creds: same loader as scripts/mailclerk-live-test.ts — env first, then
  * ~/.config/sync-ictc/credentials.env, then workers/sync/.env.
+ *
+ * THE ONE SANCTIONED DIRECT `GmailClient` USE (BUG-019). Everything inside a sync run
+ * goes through `lib/gmailSession.ts::withGmailSession` so a run opens exactly ONE IMAP
+ * session. This script is deliberately outside that lifecycle: it is a manual, one-shot
+ * CLI whose entire PURPOSE is to exercise the raw connect path and report the resolved
+ * auth mode before connecting, and it opens exactly one connection and closes it.
+ * Do NOT copy this pattern into `src/`.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

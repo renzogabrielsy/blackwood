@@ -336,4 +336,29 @@ neutrally instead of crashing the home page.
 
 ---
 
+## L-038 — A stated rule with no enforcement is not a rule; and never trust a library's error boolean (2026-07-28)
+
+The sync was down for a day. Cause: `NO [ALERT] Too many simultaneous connections.` — one run
+was opening **7+ IMAP sessions** against Gmail's ~15-per-account cap. Full post-mortem in
+`docs/BUG_LEDGER.md` BUG-019. Two lessons worth more than the fix:
+
+- **The rule was already written down — in the very file that broke it.** `lib/gmail.ts`'s
+  header had said "ONE IMAP session … Do NOT open a client per report" since Wave 4A. Three
+  later call sites (`makeLabeler`, `makeFleconFetcher`, `josephEmail`) each opened their own
+  anyway, and each one's comment explained why *its* extra session was harmless. Each was
+  locally true and collectively fatal. **A rule that lives only in a doc comment gets violated
+  by the next person who reads only their own file** — the fix was to remove the ability to
+  violate it (a broker: nothing in `src/` may construct a `GmailClient`), not to restate it.
+- **`Error: Command failed` cost a day.** imapflow puts the real diagnosis on FIELDS
+  (`responseText`, `serverResponseCode`, `responseStatus`, `executedCommand`), never in the
+  message. It also sets `authenticationFailed: true` on ANY failure during the auth phase —
+  including this one, which is not an auth failure at all. Believing that boolean sent us into
+  an unnecessary App Password → OAuth migration, AND made `connect()` re-mint the token and open
+  a **second** socket on the exact failure caused by too many sockets. **Log the structured
+  fields before believing any classification a library hands you** — and when a retry path
+  consumes the same resource the error is about, make sure the classifier can't route into it.
+  (Do NOT reach for `logger: true` to debug IMAP: it prints credentials.)
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*
