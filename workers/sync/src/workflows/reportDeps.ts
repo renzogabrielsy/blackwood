@@ -104,6 +104,16 @@ export function makeDryRunDb(real: DbClient): DbClient {
       inserted: 0,
       firstId: null,
     }),
+    // flecon's DATE-SETTLEMENT LEDGER writer (2026-07-29). Same prototype fall-through
+    // hazard as replaceFleconDate above: unlisted → the real service-role write runs.
+    // A dry run must not durably settle a date (settling is permanent protection).
+    insertFleconSettlements: async (
+      rows: Array<Record<string, unknown>>
+    ): Promise<{ insertedCount: number; insertedDates: string[]; skippedCount: number }> => ({
+      insertedCount: 0,
+      insertedDates: [],
+      skippedCount: rows.length,
+    }),
     insertIfAbsent: async (_table: string, rows: Row[], _nk: string[]): Promise<InsertIfAbsentResult> => ({
       inserted: [],
       skipped: rows,

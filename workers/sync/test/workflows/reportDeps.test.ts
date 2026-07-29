@@ -23,6 +23,7 @@ function fakeReal(): DbClient {
     update: vi.fn(async () => [{ id: "SHOULD-NOT-HAPPEN" }]),
     deleteByDate: vi.fn(async () => {}),
     insertIfAbsent: vi.fn(async () => ({ inserted: [{ id: "X" }], skipped: [], insertedCount: 1, skippedCount: 0 })),
+    insertFleconSettlements: vi.fn(async () => ({ insertedCount: 1, insertedDates: ["2026-01-31"], skippedCount: 0 })),
     writeIngestionAudit: vi.fn(async () => ({ id: "REAL" })),
     stampIngestionAudit: vi.fn(async () => true),
     upsertIngestionWatermark: vi.fn(async () => true),
@@ -65,6 +66,18 @@ describe("makeDryRunDb — write-blocking proxy", () => {
     expect(real.insert).not.toHaveBeenCalled();
     expect(real.update).not.toHaveBeenCalled();
     expect(real.deleteByDate).not.toHaveBeenCalled();
+  });
+
+  it("NO-OPs insertFleconSettlements — a dry run must not permanently settle a date", async () => {
+    const real = fakeReal();
+    const dry = makeDryRunDb(real);
+    const res = await dry.insertFleconSettlements([
+      { transaction_date: "2026-01-31", db_movement_count: 5, db_net_qty: 231 },
+    ]);
+    expect(res.insertedCount).toBe(0);
+    expect(res.insertedDates).toEqual([]);
+    expect(res.skippedCount).toBe(1);
+    expect(real.insertFleconSettlements).not.toHaveBeenCalled();
   });
 
   it("NO-OPs insertIfAbsent — reports all rows skipped, none inserted", async () => {

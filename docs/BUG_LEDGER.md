@@ -573,13 +573,13 @@ nothing else changed (543 pre-existing rows untouched, 548 total):
 
 No bag type has a negative balance any more.
 
-### Known limitation (deliberate)
-A normal run's `since` (`watermark − 3 days`) never reaches January, so the backfilled rows are
-safe day to day. **A watermark reset would re-run from 2026-01-01 and replace-by-date would
+### ~~Known limitation (deliberate)~~ → CLOSED by BUG-020 (2026-07-29)
+A normal run's `since` (`watermark − 3 days`) never reaches January, so the backfilled rows were
+safe day to day — but **a watermark reset would re-run from 2026-01-01 and replace-by-date would
 delete them again**, because the extractor still (correctly) refuses to import the mis-dated
-rows. That is not silent any more: defect A's `out_of_year_date` hold fires loudly in exactly
-that scenario. **The permanent fix is still the operator correcting cell A75** — we are simply
-no longer blocked on it, and no longer blind to it.
+rows. Renzo has since decided **NOT** to have cell A75 corrected (the present-day totals are
+already accurate and chasing a months-old cell edit is not worth it), so the arbitration was made
+durable in the database instead — see **BUG-020** below (`flecon_bag_date_settlements`).
 
 ### Files
 `workers/sync/src/reports/flecon/{extract,apply,index}.ts` · `workers/sync/src/lib/db.ts`
@@ -947,3 +947,83 @@ lost); zero abbreviated month names remain; Python oracle rebuilt, parity 12/12,
 20-col and a 3-col PCA/PCB warehouse, and the two new digest Dialogs on a real phone.
 Everything was verified statically (tsc + lint + build green) — the 338px→340px cap
 arithmetic is exact, but a real-device pass is still the last word.
+
+---
+
+## BUG-020 — FLECON: the January backfill was undeletable-by-luck, the balance cross-check read too early, and the out-of-year warning lied ✅ FIXED (2026-07-29, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** M · **Severity:** HIGH (latent data loss) + MEDIUM (two recurring false alarms)
+
+Three related defects, all in the BUG-015 code shipped 2026-07-27/28. They are corrections
+to that work, not new ground.
+
+### 1 — A watermark reset would have deleted the hand-backfilled January rows
+- **Root cause:** the five movements repaired on 2026-07-27 (`2026-01-31`, `source_row`
+  75–79, audit `a6293bf8-26b2-4207-98a4-6134f0f08fb7`) survived only because a normal run's
+  `since` (`watermark − 3 days`) never reaches January. Reset the watermark and the flecon
+  first-run floor drops to `2026-01-01`; the extractor again (correctly) refuses the rows
+  the sheet dates `2025-01-31`, so `2026-01-31` resolves to the sheet's contents alone and
+  REPLACE-BY-DATE deletes the backfill. **Renzo has decided NOT to have cell A75 corrected**
+  — the present-day totals are already right — so the arbitration had to become a DB fact.
+- **Fix:** new table **`flecon_bag_date_settlements`** (migration
+  `20260729060000_flecon_bag_date_settlements.sql`), the direct sibling of
+  `rc_out_date_settlements`: PK `transaction_date`, corroboration columns
+  (`db_movement_count`, `db_net_qty`), `reason`, `settled_at`, `settled_by_run_id`
+  **and** `settled_by_audit_log_id` (both FK `ON DELETE SET NULL` — losing a pruned run or
+  audit row must never un-settle a date). RLS on, `authenticated` SELECT only, service role
+  is the sole writer. **Seeded with `2026-01-31`**, pointing at the arbitration audit log.
+  A settled date is skipped **entirely**: `reports/flecon/index.ts::runReport` filters it out
+  of BOTH the extract rows and the DB compare-set before classify (filtering only the sheet
+  side would leave an empty-day `DATE_CHANGED`, i.e. `delete_to_empty_blocked`, not a skip),
+  and `apply.ts` carries a defence-in-depth skip so "never deleted" is true of the apply on
+  its own.
+- **Automatic settlement is deliberately narrow.** flecon is single-source — there is no
+  second per-date witness the way rc_out has the RC MOVEMENT sheet — so NOOP days are never
+  auto-settled (the sheet is editable history; settling a NOOP would freeze out a legitimate
+  future edit). The worker settles by itself in exactly one machine-verifiable case: an
+  out-of-year sheet-row group whose movements **already exist in the DB, movement for
+  movement, under the tab's own year** — i.e. the arbitration provably already happened.
+  Pure core `workers/sync/src/reports/flecon/settlement.ts::computeFleconSettlements`.
+
+### 2 — The balance cross-check compared PRE-write app balances to a POST-write sheet
+- **Root cause:** `balance_crosscheck` is computed in `classify.ts` from
+  `view_flecon_bag_balance` read **before** the run's own writes, and compared against the
+  sheet's **already-updated** running-balance row. Every run that imported new movements
+  therefore reported phantom drift. Proven on run `da9f2714-8836-418f-8594-1ec4883ea98e`
+  (2026-07-29): FG_ALL_BLACK "app 6 vs sheet 156", KOREA_WHITE_SUNDRY "app 306 vs sheet 282",
+  ZAMBOANGA_BAG "app 0 vs sheet 160" — the live DB now reads **156 / 282 / 160**, matching
+  the sheet exactly on all three. All three had movements dated 2026-07-27, the day that run
+  imported.
+- **Fix:** the finding is now produced **after** the write loop, against a **fresh** balance
+  read injected as `FleconApplyDeps.readBalances` (apply.ts still never imports a DB
+  singleton). `recomputeCrosscheckRows()` swaps the app side and recomputes
+  `drift = app − sheet` over the same code set. **The tolerance was NOT widened** — any
+  non-zero drift is still reported; only the read moved. Classify's envelope is untouched, so
+  parity is unaffected. An offline caller with no `readBalances` keeps the old rows.
+
+### 3 — The out-of-year warning asserted something that was no longer true
+- **Root cause:** `out_of_year_date`'s detail read *"These rows were NOT imported and never
+  will be while the date reads 2025-01-31"*. False since 2026-07-27 — they were backfilled.
+- **Fix:** once the CORRECTED (tab-year) date is settled, the finding is **suppressed
+  entirely** — the arbitration is on record and the rows are protected. Suppression maps the
+  mis-dated row through `correctedDate(row.date, sheet_year)`, because the flagged row carries
+  the TYPO date, not the settled one. A genuinely new, un-arbitrated out-of-year date still
+  fires at full volume (pinned by test).
+
+### Files
+`supabase/migrations/20260729060000_flecon_bag_date_settlements.sql` ·
+`workers/sync/src/reports/flecon/{settlement.ts (new),index.ts,apply.ts}` ·
+`workers/sync/src/lib/db.ts` (`readFleconSettledDates`, `insertFleconSettlements`) ·
+`workers/sync/src/workflows/reportDeps.ts` (dry-run proxy must block the new writer — same
+prototype fall-through hazard as `replaceFleconDate`) ·
+`workers/sync/test/reports/flecon-settlement.test.ts` (19 tests) ·
+`workers/sync/test/workflows/reportDeps.test.ts` · `workers/sync/specs/flecon.md` (§6a) ·
+`app/(app)/inventory/flecon-bags/CONTEXT.md` · `CLAUDE.md` · `types/supabase.ts`.
+
+**Verification:** migration applied live via MCP and seeded (2026-01-31, 5 movements, net
++231, audit `a6293bf8-…`) · the 5 backfill rows still present · balances ECOPACK_BEIGE 100 /
+FG_ALL_BLACK 156 / KOREA_WHITE_SUNDRY 282 / ZAMBOANGA_BAG 160 · worker `npm run typecheck` ✓ ·
+`npm test` **586/586** ✓ (was 566) · `npm run parity` **12/12** ✓ · root `npx tsc --noEmit` ✓.
+
+**Note for the next agent:** settlement is a **one-way ratchet**, same accepted edge case as
+`rc_out_date_settlements` — a later correction to a settled date needs a manual `DELETE FROM
+flecon_bag_date_settlements`. No new `HeldKind` was added (the enum is frontend-locked).
