@@ -437,6 +437,78 @@ export class DbClient {
     }
   }
 
+  // -- flecon date-settlement ledger (2026-07-29) ---------------------------
+  /**
+   * All settled flecon `transaction_date`s as a Set, for O(1) membership checks while
+   * filtering extracted rows / DB movements. Sibling of `readSettledDates` (rc_out); the
+   * ledger is tiny (one row per arbitrated date) and read once per flecon run.
+   */
+  async readFleconSettledDates(): Promise<Set<string>> {
+    const rows = await this.readRows("flecon_bag_date_settlements", {
+      columns: ["transaction_date"],
+      sinceColumn: null,
+    });
+    const out = new Set<string>();
+    for (const r of rows) {
+      const d = r.transaction_date;
+      if (d) out.add(String(d).slice(0, 10));
+    }
+    return out;
+  }
+
+  /**
+   * Idempotent insert of newly-qualifying flecon settlements. Same shape and same trap as
+   * `insertSettlements`: `flecon_bag_date_settlements` has NO `id` column (PK =
+   * transaction_date), so this CANNOT go through `insertIfAbsent` (that helper hardcodes
+   * `.select("id")`, which PostgREST 400s on an id-less table). Upserts directly on the
+   * PK with `ignoreDuplicates: true`, so a re-run naming an already-settled date is a
+   * silent skip. `.select()` after an `ignoreDuplicates` upsert returns ONLY the rows
+   * PostgREST actually inserted, so `insertedDates` is the true set. Best-effort /
+   * non-fatal — a failure here must never fail the run (settlement is protection, and its
+   * absence degrades to the pre-existing behavior, never to a wrong write).
+   */
+  async insertFleconSettlements(
+    rows: Array<{
+      transaction_date: string;
+      db_movement_count: number;
+      db_net_qty: number;
+      reason?: string;
+      note?: string | null;
+      settled_by_run_id?: string | null;
+    }>,
+  ): Promise<{ insertedCount: number; insertedDates: string[]; skippedCount: number }> {
+    if (!rows.length) return { insertedCount: 0, insertedDates: [], skippedCount: 0 };
+    try {
+      const { data, error } = await this.sb
+        .from("flecon_bag_date_settlements")
+        .upsert(rows, { onConflict: "transaction_date", ignoreDuplicates: true })
+        .select("transaction_date");
+      if (error) {
+        throw new Error(
+          `insert_settlements flecon_bag_date_settlements failed ${error.code ?? ""}: ${sliceMsg(
+            error.message,
+          )}`,
+        );
+      }
+      const insertedDates = (data ?? []).map((r) =>
+        String((r as unknown as Row).transaction_date ?? "").slice(0, 10),
+      );
+      return {
+        insertedCount: insertedDates.length,
+        insertedDates,
+        skippedCount: rows.length - insertedDates.length,
+      };
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[warn] flecon_bag_date_settlements insert failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return { insertedCount: 0, insertedDates: [], skippedCount: rows.length };
+    }
+  }
+
   // -- production plan (production_schedule) --------------------------------
   /**
    * Replace-by-date upsert of the production PLAN into `production_schedule` (PK =

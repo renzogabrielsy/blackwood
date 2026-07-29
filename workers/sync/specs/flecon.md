@@ -97,6 +97,10 @@ row's date is ever rewritten. What is NEW is that the TS extractor also returns:
 Neither field is consumed by `classify` — the classify envelope is byte-identical, so parity
 is unaffected. `apply` turns them into held rows (§5a).
 
+**2026-07-29 (BUG-020):** a flagged row whose tab-year correction is SETTLED is suppressed —
+see §6a. The rows below were hand-backfilled, so asserting they were "never imported" became
+false; the ledger, not the wording, is what makes that honest.
+
 **Why:** the `JANUARY 2026` tab's cell **A75 reads `2025-01-31`** (an operator year-typo;
 rows 76–79 inherit it by date carry-forward). `2025-01-31` is below every watermark, so those
 five real movements — ECOPACK_BEIGE +100, ZAMBOANGA_BAG +127, KOREA_WHITE_SUNDRY +4 — were
@@ -165,6 +169,24 @@ drift caused by defect A for three weeks, to nobody.
 
 **It remains INFORMATIONAL and MUST stay that way** — flecon is single-source, and a drift
 never blocks a write. It is a finding, not a gate.
+
+**2026-07-29 TIMING FIX (BUG-020) — the app side is re-read AFTER the writes.** The
+computation above runs inside `classify`, from a `view_flecon_bag_balance` read taken
+BEFORE this run's own writes, and compares it against the sheet's **already-updated**
+balance row. Every run that imported new movements therefore reported phantom drift (run
+`da9f2714-8836-418f-8594-1ec4883ea98e`, 2026-07-29: FG_ALL_BLACK "app 6 vs sheet 156",
+KOREA_WHITE_SUNDRY "app 306 vs sheet 282", ZAMBOANGA_BAG "app 0 vs sheet 160" — the DB now
+reads 156 / 282 / 160, matching the sheet exactly; all three had movements dated 2026-07-27,
+the day that run imported).
+
+The classify envelope is UNCHANGED (parity-frozen). What moved is where the FINDING is
+produced: `apply.ts` now builds it **after** the per-date write loop, from a fresh balance
+read injected as `FleconApplyDeps.readBalances` (optional — an offline caller keeps the
+classify-time rows), via the pure `recomputeCrosscheckRows(rows, freshBalances)` which swaps
+the app side and recomputes `drift = app − sheet` over the same code set. **The tolerance was
+NOT widened** — any non-zero drift is still reported. A code missing from the fresh read
+yields a null balance and a null drift (un-comparable, never counted as drift), the same
+convention classify uses.
 
 ### Bag-type ID resolution for the EXECUTE payload
 
@@ -235,6 +257,79 @@ is `Object.create(DbClient.prototype)`, so an unlisted method falls through to t
 
 ---
 
+## 6a. § Settlement — the FLECON DATE-SETTLEMENT LEDGER (2026-07-29, BUG-020)
+
+The direct sibling of rc_out's ledger (`rc_out.md` §4b). Table
+**`flecon_bag_date_settlements`** (migration `20260729060000_flecon_bag_date_settlements.sql`).
+Once a `transaction_date` is SETTLED, every future flecon run skips it **entirely** — no
+extract-compare, no classify, no REPLACE-BY-DATE, and critically **no DELETE**.
+
+**Why flecon needs one.** The five A75-typo movements (§2a) were HAND-BACKFILLED into
+`2026-01-31` on 2026-07-27 (audit `a6293bf8-26b2-4207-98a4-6134f0f08fb7`). They survived only
+because a normal run's `since` (`watermark − 3 days`) never reaches January. A watermark reset
+drops `since` to the `2026-01-01` first-run floor; the extractor again (correctly) refuses the
+mis-dated rows, so `2026-01-31` resolves to the sheet's contents alone and REPLACE-BY-DATE
+deletes the backfill. Renzo decided **NOT** to have cell A75 corrected, so the arbitration is
+made durable in the database instead. **Do not design anything here that depends on the sheet
+being fixed.**
+
+**Settle criterion — deliberately narrow, because flecon is SINGLE-SOURCE.** There is no
+independent second witness per date the way rc_out has the RC MOVEMENT sheet, so we do not
+invent corroboration. A `DUPLICATE_NOOP` day is **never** auto-settled: the sheet is editable
+history and settling a NOOP would freeze out a legitimate future edit. The worker settles by
+itself in exactly ONE machine-verifiable case:
+
+> an out-of-year flagged row group (§2a) whose movements ALREADY EXIST in the DB, movement
+> for movement, under the tab's own year — i.e. the arbitration provably already happened.
+
+Formally, for each out-of-year date `D`: `D' = correctedDate(D, sheet_year)` (same month/day,
+tab's year; null if the year already matches, the tab year is unknown, or `D'` is not a real
+calendar date — Feb 29 into a non-leap year is refused, never rolled over). Settle `D'` iff
+`D'` is not already settled, the DB holds ≥1 movement for `D'`, and the DB's multiset of
+`movementSig` (the SAME `(particular, bag_type_code, qty_delta)` identity the day-set
+classifier uses) EXACTLY equals the mis-dated sheet rows' multiset. An empty DB day, a missing
+row, or a changed quantity does NOT settle — silence is never agreement. Pure core:
+`src/reports/flecon/settlement.ts::computeFleconSettlements` (mirrors the
+`workflows/settlement.ts` pure/IO split). Everything else is settled by a human seeding the
+ledger directly.
+
+**Where it's written.** Inside `reports/flecon/index.ts::runReport`, right after extract and
+before classify, guarded end to end (any failure is a silent no-op — settlement is protection,
+and its absence degrades to the previous behavior, never to a wrong write). Writer:
+`DbClient.insertFleconSettlements` (service role; upsert on the `transaction_date` PK with
+`ignoreDuplicates`, and `.select()` returns only the rows actually inserted — the same id-less
+table trap `insertSettlements` hit, since this table has NO `id` column). Because it runs
+before the skip filter, a date that settles during a run is already skipped on that SAME run.
+**`makeDryRunDb` MUST list `insertFleconSettlements`** — the proxy is
+`Object.create(DbClient.prototype)`, so an unlisted method falls through to the real client and
+a "dry" run would permanently settle a date.
+
+**Skip chokepoint — BOTH sides, not just the sheet.** `runReport` filters settled dates out of
+`extract.rows` AND the DB compare-set (`flecon_bag_movements` since the window) AND
+`extract.flagged_rows`. Filtering only the sheet side would leave the date present in
+`db_by_date` with an empty sheet day, which classifies `DATE_CHANGED`-to-zero and lands in
+`delete_to_empty_blocked` — a held row, not a skip. `applyFlecon` additionally carries
+`opts.settledDates` and skips any such `per_date` entry outright (counted in
+`settled_dates_skipped`, no held row — silence by design), so "a settled date is never
+deleted" is true of the apply on its own. `classifyCase` (the parity-frozen entrypoint) is
+untouched; the filter lives only in the live orchestrator, which has DB access it does not.
+
+**Interaction with §5a's `out_of_year_date`.** A settled date SUPPRESSES the finding entirely
+(the assertion "these rows were NOT imported and never will be" became false the moment they
+were backfilled). Suppression maps the flagged row through `correctedDate` because the flagged
+row carries the TYPO date (`2025-01-31`), not the settled one (`2026-01-31`). A genuinely NEW,
+un-arbitrated out-of-year date still fires at full volume.
+
+**One-way ratchet** — same accepted edge case as `rc_out_date_settlements`: a later correction
+to a settled date needs a manual `DELETE FROM flecon_bag_date_settlements`.
+
+**Tests:** `test/reports/flecon-settlement.test.ts` (19) — the pure criterion and its refusals,
+the apply-level "settled ⇒ never replaced" with a control proving the delete path is live
+without the ledger, the end-to-end January-floor `runReport` (SETTLED / AUTO-SETTLE / CONTROL),
+the cross-check timing fix, and the out-of-year suppress-vs-fire split.
+
+---
+
 ## 6. Rule checklist
 
 | Rule | Where | Parity test must assert |
@@ -248,6 +343,9 @@ is `Object.create(DbClient.prototype)`, so an unlisted method falls through to t
 | never-wipe-a-day (BUG-015 C2) | TS apply.ts `delete_to_empty_blocked` | A `DATE_CHANGED` date whose movement list is EMPTY is HELD — `replaceFleconDate` is never called for it. |
 | refuse-a-stale-workbook (BUG-015 C1) | TS index.ts + apply.ts `stale_workbook` | A workbook whose `date_max` < the DB watermark writes NOTHING, updates no watermark, applies no label, and reports a classify `gate_failure`. |
 | mis-dated-rows-are-loud (BUG-015 A) | TS extract.ts `flagged_rows` + apply.ts `out_of_year_date` | The real `flecon_real_latest` fixture (A75 = `2025-01-31` inside the `JANUARY 2026` tab) yields exactly 5 out-of-year flagged rows (75–79) and ONE held row — and still emits ZERO movements for that date. |
+| settled-date-is-never-deleted (BUG-020, §6a) | TS index.ts skip filter + apply.ts `opts.settledDates` | A re-run scoped back to `2026-01-01` with `2026-01-31` settled never calls `replaceFleconDate` for it and produces no `per_date` entry; the same run without the ledger DOES (control). |
+| settled-date-suppresses-out-of-year (BUG-020, §6a) | apply.ts `buildFlaggedRowHolds(…, {dates, sheetYear})` | With `2026-01-31` settled, the `2025-01-31` typo group raises NO held row; a different, un-arbitrated out-of-year date still raises one. |
+| crosscheck-reads-post-write (BUG-020, §3a) | apply.ts `recomputeCrosscheckRows` + `readBalances` | A run that imports the movements reports ZERO drift once balances are re-read; a genuine 1-bag gap after the write STILL reports. |
 
 ---
 

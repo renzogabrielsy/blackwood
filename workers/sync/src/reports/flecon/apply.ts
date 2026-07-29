@@ -29,8 +29,10 @@
  * DELETE and the INSERT being two independent HTTP calls is exactly what let a failure
  * between them leave a day deleted with no rows and no audit trail.
  */
-import type { FleconClassified, PerDateEntry } from "./classify.js";
+import type { FleconClassified, PerDateEntry, BalanceCrosscheckRow } from "./classify.js";
 import type { FleconFlaggedRow } from "./extract.js";
+import { correctedDate } from "./settlement.js";
+import { roundHalfToEven } from "../../lib/norm.js";
 import { type HeldRow, fleconKey } from "../held.js";
 
 export interface FleconApplyDeps {
@@ -74,6 +76,19 @@ export interface FleconApplyDeps {
   ) => Promise<void>;
   /** Injected Gmail labeler — apply.ts NEVER imports gmail. */
   labelProcessed: (uid: string) => Promise<boolean>;
+  /**
+   * POST-WRITE balance re-read (2026-07-29 fix). `classified.balance_crosscheck` was
+   * computed from balances read BEFORE this run's own writes, and compared against the
+   * sheet's ALREADY-UPDATED balance row — so every run that imported new movements
+   * reported phantom drift (proven on run da9f2714: FG_ALL_BLACK "app 6 vs sheet 156",
+   * KOREA_WHITE_SUNDRY "app 306 vs sheet 282", ZAMBOANGA_BAG "app 0 vs sheet 160", all
+   * three matching the sheet exactly once the day's movements landed).
+   *
+   * Injected rather than imported so apply.ts still never reaches a DB singleton, and
+   * OPTIONAL so an offline caller keeps the old (pre-write) rows. Returns
+   * `view_flecon_bag_balance` rows.
+   */
+  readBalances?: () => Promise<Array<{ code?: unknown; balance?: unknown }>>;
 }
 
 /**
@@ -107,6 +122,16 @@ export interface FleconApplyOpts {
   dbDates?: string[];
   /** Non-null → refuse the whole apply (see FleconStaleWorkbook). */
   staleWorkbook?: FleconStaleWorkbook | null;
+  /**
+   * The DATE-SETTLEMENT LEDGER (`flecon_bag_date_settlements`, 2026-07-29). A settled
+   * date is skipped ENTIRELY — never replaced, never deleted. `runReport` already filters
+   * settled dates out of both the extract and the DB compare-set before classify, so
+   * nothing settled should ever reach here; this is the defence-in-depth backstop that
+   * makes "a settled date is never deleted" true of `applyFlecon` on its own.
+   */
+  settledDates?: ReadonlySet<string>;
+  /** The tab's own year — lets a settled date suppress its MIS-DATED sheet rows too. */
+  sheetYear?: number | null;
 }
 
 /** Retained as an alias so anything importing HeldEntry still resolves; the
@@ -121,6 +146,8 @@ export interface FleconApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
+  /** How many per-date entries were skipped because the date is SETTLED (see opts). */
+  settled_dates_skipped: number;
 }
 
 /** provenance comment builder (sync_flecon.py::_prov, lines 130-133). */
@@ -168,17 +195,36 @@ function netByCode(rows: FleconFlaggedRow[]): string {
  *      date the DB already holds) is NOT raised — that is the benign, every-run case.
  *
  * One held row per DATE (not per sheet row) so a five-row typo is one case, not five.
+ *
+ * SETTLED DATES ARE SUPPRESSED (2026-07-29). The `out_of_year_date` detail used to assert
+ * "These rows were NOT imported and never will be while the date reads 2025-01-31" — which
+ * became FALSE the moment those rows were hand-backfilled to 2026-01-31. Once the
+ * corrected (tab-year) date is in `flecon_bag_date_settlements`, the arbitration is on
+ * record and the rows are protected, so the finding stops firing entirely. A genuinely NEW
+ * out-of-year date — one nobody has arbitrated — still fires exactly as loudly as before.
  */
 export function buildFlaggedRowHolds(
   flagged: FleconFlaggedRow[],
   dbDates?: string[],
+  settled?: { dates?: ReadonlySet<string>; sheetYear?: number | null },
 ): HeldRow[] {
   if (!flagged.length) return [];
   const known = dbDates ? new Set(dbDates.map((d) => String(d).slice(0, 10))) : null;
+  const settledDates = settled?.dates;
+  const sheetYear = settled?.sheetYear ?? null;
   const out: HeldRow[] = [];
+
+  /** A row is silenced when its own date, or its tab-year correction, is settled. */
+  const isSettled = (row: FleconFlaggedRow): boolean => {
+    if (!settledDates || settledDates.size === 0) return false;
+    if (settledDates.has(row.transaction_date)) return true;
+    const corrected = correctedDate(row.transaction_date, sheetYear);
+    return corrected !== null && settledDates.has(corrected);
+  };
 
   const byDate = new Map<string, FleconFlaggedRow[]>();
   for (const r of flagged) {
+    if (isSettled(r)) continue;
     const arr = byDate.get(r.transaction_date) ?? [];
     arr.push(r);
     byDate.set(r.transaction_date, arr);
@@ -244,10 +290,14 @@ export function buildFlaggedRowHolds(
  * Deliberately a FINDING, never a write gate — flecon is single-source and specs/
  * flecon.md §4 fixes the cross-check as INFORMATIONAL. Nothing here blocks a write.
  */
-export function buildBalanceDriftHold(classified: FleconClassified): HeldRow | null {
+export function buildBalanceDriftHold(
+  classified: FleconClassified,
+  rowsOverride?: BalanceCrosscheckRow[],
+): HeldRow | null {
   const cc = classified.balance_crosscheck;
   if (!cc || !cc.available) return null;
-  const drifting = (cc.rows ?? []).filter((r) => typeof r.drift === "number" && r.drift !== 0);
+  const source = rowsOverride ?? cc.rows ?? [];
+  const drifting = source.filter((r) => typeof r.drift === "number" && r.drift !== 0);
   if (!drifting.length) return null;
 
   const codes = drifting.map((r) => r.code).sort();
@@ -282,6 +332,44 @@ export function buildBalanceDriftHold(classified: FleconClassified): HeldRow | n
   };
 }
 
+/**
+ * Rebuild the cross-check rows against a FRESH (post-write) balance read.
+ *
+ * The sheet side (`sheet_snapshot_balance`) is the operator's own balance row and is
+ * already up to date with everything the workbook contains; the app side must therefore be
+ * read AFTER this run's writes or the comparison is apples-to-oranges. This swaps in the
+ * fresh `view_flecon_bag_balance` numbers and recomputes `drift = app − sheet` on exactly
+ * the same code set the classifier produced. A code missing from the fresh read yields a
+ * null balance and a null drift (un-comparable, never reported as drift) — the same
+ * convention classify.ts uses.
+ *
+ * PURE + exported so the timing fix is unit-testable without a DB.
+ */
+export function recomputeCrosscheckRows(
+  rows: BalanceCrosscheckRow[],
+  freshBalances: Array<{ code?: unknown; balance?: unknown }>,
+): BalanceCrosscheckRow[] {
+  const fresh = new Map<string, number | null>();
+  for (const b of freshBalances) {
+    const code = String(b.code ?? "").trim().toUpperCase();
+    if (!code) continue;
+    const raw = b.balance;
+    const n = typeof raw === "number" ? raw : Number(String(raw ?? "").trim());
+    fresh.set(code, Number.isFinite(n) ? Math.trunc(roundHalfToEven(n, 0)) : null);
+  }
+  return rows.map((r) => {
+    const code = String(r.code ?? "").trim().toUpperCase();
+    const dbBal = fresh.has(code) ? fresh.get(code)! : null;
+    const sheetBal = r.sheet_snapshot_balance;
+    const drift =
+      typeof dbBal === "number" && Number.isInteger(dbBal) &&
+      typeof sheetBal === "number" && Number.isInteger(sheetBal)
+        ? dbBal - sheetBal
+        : null;
+    return { code: r.code, db_view_balance: dbBal, sheet_snapshot_balance: sheetBal, drift };
+  });
+}
+
 export async function applyFlecon(
   deps: FleconApplyDeps,
   classified: FleconClassified,
@@ -297,6 +385,8 @@ export async function applyFlecon(
   const errors: string[] = [];
   let replacedDates = 0;
   let inserts = 0;
+  let settledSkipped = 0;
+  const settledDates = opts.settledDates;
 
   // ── Defect C1: a STALE workbook is refused outright, before anything is written. ──
   if (opts.staleWorkbook) {
@@ -333,6 +423,7 @@ export async function applyFlecon(
       labeled: false,
       watermark_updated: false,
       errors: [],
+      settled_dates_skipped: 0,
     };
   }
 
@@ -341,11 +432,17 @@ export async function applyFlecon(
   await deps.progress("apply", `Rewriting bag movements for ${perDate.length} day(s)…`, 12);
 
   // ── Defect A: rows the EXTRACTOR dropped / mis-dated become LOUD held rows. ──
-  held.push(...buildFlaggedRowHolds(opts.flaggedRows ?? [], opts.dbDates));
+  // (Settled dates are suppressed — the arbitration is on record; see buildFlaggedRowHolds.)
+  held.push(
+    ...buildFlaggedRowHolds(opts.flaggedRows ?? [], opts.dbDates, {
+      dates: settledDates,
+      sheetYear: opts.sheetYear ?? null,
+    }),
+  );
 
-  // ── Defect B: the informational balance cross-check finally REACHES the operator. ──
-  const driftHold = buildBalanceDriftHold(classified);
-  if (driftHold) held.push(driftHold);
+  // NOTE: the balance cross-check finding is built AFTER the write loop (2026-07-29) —
+  // comparing pre-write app balances against the sheet's already-updated balance row
+  // reported phantom drift on every run that imported anything. See below.
 
   // Column flags → held (never auto-create a bag type).
   const colFlags = classified.column_flags ?? { flagged: false };
@@ -368,6 +465,14 @@ export async function applyFlecon(
   for (const p of perDate) {
     const d = p.transaction_date;
     seen += 1;
+    // ── DATE-SETTLEMENT LEDGER (2026-07-29): a settled date is skipped ENTIRELY. ──
+    // No replace, no DELETE, no held row — the arbitration already happened and is
+    // recorded in flecon_bag_date_settlements. runReport filters these out before
+    // classify; this is the backstop that makes the guarantee true of apply alone.
+    if (settledDates?.has(d)) {
+      settledSkipped += 1;
+      continue;
+    }
     if (since && d < since) {
       // Bounded floor — never touch settled history.
       held.push({
@@ -472,6 +577,23 @@ export async function applyFlecon(
     }
   }
 
+  // ── Defect B + the 2026-07-29 TIMING fix: the informational balance cross-check.
+  // It is produced HERE, after the write loop, and against a FRESH balance read — the
+  // sheet's balance row already includes everything the workbook carries, so comparing it
+  // to pre-write app balances manufactured drift on every importing run. The tolerance is
+  // untouched (any non-zero drift is still reported); only the read moved.
+  let ccRows: BalanceCrosscheckRow[] | undefined;
+  if (deps.readBalances && classified.balance_crosscheck?.available) {
+    try {
+      const fresh = await deps.readBalances();
+      ccRows = recomputeCrosscheckRows(classified.balance_crosscheck.rows ?? [], fresh);
+    } catch {
+      ccRows = undefined; // re-read failed → fall back to the classify-time rows
+    }
+  }
+  const driftHold = buildBalanceDriftHold(classified, ccRows);
+  if (driftHold) held.push(driftHold);
+
   let watermarkUpdated = false;
   let labeled = false;
   if (!errors.length) {
@@ -508,5 +630,6 @@ export async function applyFlecon(
     labeled,
     watermark_updated: watermarkUpdated,
     errors,
+    settled_dates_skipped: settledSkipped,
   };
 }

@@ -309,6 +309,61 @@ export type Database = {
         }
         Relationships: []
       }
+      flecon_bag_date_settlements: {
+        Row: {
+          db_movement_count: number
+          db_net_qty: number
+          note: string | null
+          reason: string
+          settled_at: string
+          settled_by_audit_log_id: string | null
+          settled_by_run_id: string | null
+          transaction_date: string
+        }
+        Insert: {
+          db_movement_count: number
+          db_net_qty: number
+          note?: string | null
+          reason?: string
+          settled_at?: string
+          settled_by_audit_log_id?: string | null
+          settled_by_run_id?: string | null
+          transaction_date: string
+        }
+        Update: {
+          db_movement_count?: number
+          db_net_qty?: number
+          note?: string | null
+          reason?: string
+          settled_at?: string
+          settled_by_audit_log_id?: string | null
+          settled_by_run_id?: string | null
+          transaction_date?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "flecon_bag_date_settlements_settled_by_audit_log_id_fkey"
+            columns: ["settled_by_audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "audit_logs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "flecon_bag_date_settlements_settled_by_audit_log_id_fkey"
+            columns: ["settled_by_audit_log_id"]
+            isOneToOne: false
+            referencedRelation: "view_digest_audit_enriched"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "flecon_bag_date_settlements_settled_by_run_id_fkey"
+            columns: ["settled_by_run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       flecon_bag_movements: {
         Row: {
           bag_type_id: string
