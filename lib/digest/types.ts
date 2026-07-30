@@ -339,4 +339,10 @@ export interface DigestData {
    *  Feeds the compact schedule-preview table band. Empty when there is no
    *  operational date. */
   schedulePreview: SchedulePreviewRow[];
+  /** How many production-schedule days carry an unarbitrated upstream proposal
+   *  the sync withheld because a human owns the day
+   *  (COUNT over `view_production_schedule_conflicts`). Surfaced as a quiet
+   *  indicator on the schedule band so a stale conflict cannot sit unread on the
+   *  schedule route. 0 = render nothing. Not price data. */
+  schedulePendingConflicts: number;
 }

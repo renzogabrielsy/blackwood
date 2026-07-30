@@ -282,6 +282,7 @@ export async function getDigestData(): Promise<DigestData> {
     zeroCostRes,
     blockingRes,
     fleconBagsRes,
+    schedConflictsRes,
   ] = await Promise.all([
     canViewPrices(),
     supabase.from("view_digest_operational_days").select("*").maybeSingle(),
@@ -328,6 +329,13 @@ export async function getDigestData(): Promise<DigestData> {
       .from("view_flecon_bag_balance")
       .select("*")
       .order("sort_order", { ascending: true }),
+    // Production-schedule days carrying an unarbitrated upstream proposal.
+    // COUNT ONLY (head:true → no rows transferred; the partial index
+    // idx_production_schedule_pending_upstream serves it). No operationalDate
+    // dependency, so it belongs in this first wave — no extra round-trip.
+    supabase
+      .from("view_production_schedule_conflicts")
+      .select("plan_date", { count: "exact", head: true }),
   ]);
 
   const opDays = (opDaysRes.data as OperationalDaysRow | null) ?? {
@@ -872,6 +880,7 @@ export async function getDigestData(): Promise<DigestData> {
     dayStatus,
     weekPlan,
     schedulePreview,
+    schedulePendingConflicts: schedConflictsRes.count ?? 0,
   };
 }
 

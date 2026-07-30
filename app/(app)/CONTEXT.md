@@ -13,7 +13,7 @@ modular widget dashboard (drag/resize ReactGridLayout grid), which is now
 | `?view=` | Surface | Notes |
 |---|---|---|
 | *(absent)* / `digest` | The digest bands (below) | **DEFAULT — the param is OMITTED** to keep `/` clean |
-| `schedule` | `<ScheduleMonthView />` — the full **month plan-vs-actual** table | Takes `?month=YYYY-MM` alongside `?view=schedule` |
+| `schedule` | `<ScheduleMonthView />` — the full **month plan-vs-actual** table, **inline-editable** (Phase B) | Takes `?month=YYYY-MM` alongside `?view=schedule` |
 
 - **The branch happens SERVER-SIDE** in `page.tsx` (`searchParams.view`), so only
   the selected surface's queries run — `getDigestData()` is never called for the
@@ -183,8 +183,12 @@ values into views.
   clean dash. Today's row accent-tinted; Status chip reuses
   `STATE_CHIP`/`STATE_LABEL`, Src chip is violet **Joseph** when `source` starts
   with `joseph:` else muted **Sheet**. Card header "Production schedule · next 10
-  days" + right-aligned "View full schedule →" link. Skipped when
-  `schedulePreview` is empty. No ₱ → no gating.
+  days" + right-aligned "View full schedule →" link. Takes an optional
+  `pendingConflicts` prop (`DigestData.schedulePendingConflicts`) rendered as a
+  quiet amber "N pending upstream change(s)" chip in the header, linking to
+  `/?view=schedule`; **0 renders nothing**. The band now also renders for a
+  non-zero count alone (tables omitted when `rows` is empty), so a parked conflict
+  is never invisible. No ₱ → no gating.
   **Grade-by-shift:** `GradePoint` now carries an optional `shift` ('M'|'E'|'N',
   from `view_digest_grades.shift`). `pivotGrades` segments a grade into per-shift
   series (`grade·shift` keys, e.g. `3X50·M`) ONLY when that grade has >1 distinct
@@ -317,7 +321,8 @@ values into views.
   aggregation stays in SQL views per the HARD RULE).
 - **Contract shape** (`lib/digest/types.ts`): `DigestData = { meta, kpis, flow,
   price, grades, productionHours, latestSync, activity, flags, monthToDate, trucks,
-  openBlocks, fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview }`.
+  openBlocks, fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview,
+  schedulePendingConflicts }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
     `streams[]` (per-stream `throughDate` + `ok|warn`).
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
@@ -390,17 +395,28 @@ values into views.
     null`, grade → projected tons; `projectedTons` stays the day TOTAL). Feeds the
     `SchedulePreview` table band. Empty when there is no op date.
 
-### Production-schedule ownership (2026-07-30, Phase A — data layer only)
+### Production-schedule ownership (2026-07-30)
 `production_schedule` is no longer sync-owned. Each `plan_date` has an **owner**
 (`joseph` | `gsheet` | `human` | `actual`) and the sync writes only the days it is
 allowed to: an unchanged upstream revision writes **nothing**, a day with reported
 production is frozen, and a day a human edited in-app is never overwritten — the
-upstream value is parked in `pending_upstream` for the operator to arbitrate. The
-digest's read path is UNCHANGED (`getDigestData()` still selects the same plan
-columns from the table).
+upstream value is parked in `pending_upstream` for the operator to arbitrate.
 
-**The pending-conflict count** — the number the digest should surface so a stale
-conflict cannot sit unread — is one head-count read, no new adapter plumbing:
+**Phase A (data layer)** — migration `20260730060000_production_schedule_ownership.sql`:
+the `owner` / `source_rev` / `pending_upstream` / `row_version` /
+`human_edited_at` / `human_edited_by` columns, `view_production_schedule_state`
+(adds `effective_owner` + `is_reported`; `actual` is DERIVED from a
+`production_shifts` row existing, never stored),
+`view_production_schedule_conflicts` (one row per parked proposal, carrying BOTH
+sides + `changed_fields`), `fn_apply_schedule_upstream` (sync-only, service_role)
+and `fn_save_schedule_day` (the in-app write path).
+
+**Phase B (the in-app editing UI) — BUILT.** See "Schedule view" below and
+`app/(app)/production/CONTEXT.md` → "Production Schedule (Phase B)".
+
+**The pending-conflict count** is read in `getDigestData()`'s **wave 1** (it needs
+no `operationalDate`, so no extra round-trip) and lands on `DigestData` as
+`schedulePendingConflicts`:
 
 ```ts
 const { count } = await supabase
@@ -408,12 +424,10 @@ const { count } = await supabase
   .select('plan_date', { count: 'exact', head: true })
 ```
 
-It belongs in `getDigestData()`'s **wave 1** (it needs no `operationalDate`), and the
-detail rows of the same view (both sides of each disagreement) are what the schedule
-month view would render. `view_production_schedule_state` additionally exposes
-`owner` / `effective_owner` / `is_reported` / `row_version` per day for the future
-in-app editor. **Phase B (the editing UI) is NOT built** — the write path already
-exists as `fn_save_schedule_day(plan_date, expected_row_version, patch)`.
+`SchedulePreview` renders it as a quiet amber chip linking to `/?view=schedule`
+(**nothing at all when 0**), and the digest's snapshot-row condition in `page.tsx`
+includes `schedulePendingConflicts > 0` so a parked conflict is still surfaced on a
+day with no rolling schedule window.
 See `workers/sync/specs/prod_schedule.md`.
 
 ## Key Behaviors

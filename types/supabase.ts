@@ -2485,6 +2485,10 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_release_schedule_day: {
+        Args: { p_expected_row_version: number; p_plan_date: string }
+        Returns: Json
+      }
       fn_save_schedule_day: {
         Args: {
           p_clear_pending?: boolean

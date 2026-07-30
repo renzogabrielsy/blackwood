@@ -138,6 +138,46 @@ clear_pending)` is the **in-app write path** (Phase B): it flips `owner` to `hum
 the same version + freeze guards in its own UPDATE's WHERE. `p_clear_pending` defaults to
 **false** — an unrelated edit must not silently discard a parked proposal.
 
+### 5a. `fn_release_schedule_day(plan_date, expected_row_version)` — the way BACK
+
+`fn_save_schedule_day` unconditionally sets `owner='human'`, so ownership only ever
+ratchets one way: without a counterpart the calendar slowly freezes into "touched once,
+mine forever". `fn_release_schedule_day` (migration
+`20260730070000_fn_release_schedule_day.sql`) is the sanctioned reverse move, and it is
+the **only** RPC the app may use for it — `fn_apply_schedule_upstream` is service-role-only
+and its op contract carries an upstream payload the app does not have.
+
+Releasing a day:
+
+- restores `owner` from the row's `source` prefix — `'joseph:%'` → `joseph`, else `gsheet`
+  — **the same derivation Phase A's backfill used**, so the two can never disagree;
+- **nulls `source_rev`** (load-bearing: rule 1 no-ops on a matching rev, so a stale rev
+  would hand the day back in name only and the human's values would survive under a
+  `joseph` label — a NULL rev forces the next run to RE-APPLY for real);
+- nulls `pending_upstream` (it is about to be applied for real; keeping it would leave a
+  phantom row in `view_production_schedule_conflicts` and in the digest count);
+- nulls `human_edited_at` / `human_edited_by`, and bumps `row_version`;
+- leaves every **plan field** alone. Release is a statement about OWNERSHIP, not values;
+  the human's numbers stand until the next run actually applies Joseph's.
+
+Its three guards are the same three, in the single UPDATE's own WHERE:
+`row_version = p_expected_row_version`, `owner = 'human'`, and
+`NOT EXISTS (production_shifts on that date)`.
+
+| success outcome | refusal outcomes |
+|---|---|
+| `reclaimed` | `frozen`, `version_conflict`, `missing` |
+
+**No new outcome string.** `reclaimed` is Phase A's own word for "clear the parked value
+and hand ownership back to the upstream owner" (rule 4) — identical end state, only the
+initiator differs. A **non-`human` day** returns `version_conflict`, folding the ownership
+miss into the version miss exactly as `fn_apply_schedule_upstream`'s classifier does (its
+final `ELSE` catches both). The app surfaces `reclaimed` to its UI as `released`; that one
+rename is the only translation at the boundary.
+
+Grants match `fn_save_schedule_day`: SECURITY INVOKER, `search_path = public`, EXECUTE
+revoked from `PUBLIC`/`anon`, granted to `authenticated` + `service_role`.
+
 ---
 
 ## 6. What the operator sees
@@ -179,6 +219,8 @@ served by the partial index `idx_production_schedule_pending_upstream`.
 | `test/reports/prodSchedule-conditional.test.ts` | the six race conditions (26 tests) |
 | `scripts/prod-schedule-proof.ts` | live end-to-end proof — also goes through the planner, so it cannot clobber either |
 | `supabase/migrations/20260730060000_production_schedule_ownership.sql` | the schema + both RPCs + both views |
+| `supabase/migrations/20260730070000_fn_release_schedule_day.sql` | `fn_release_schedule_day` — the in-app REVERT path (§5a) |
+| `app/(app)/production/schedule/actions.ts` | the app's four write actions; every one is an RPC call, no read-then-write |
 
 ---
 
@@ -193,5 +235,10 @@ served by the partial index `idx_production_schedule_pending_upstream`.
   one, because it has no Python oracle (the root scripts were the spec, and they are
   already ported byte-for-byte and pinned by `prodSchedule.test.ts`).
 - Phase B (the in-app editor) needs only: read `view_production_schedule_state`, call
-  `fn_save_schedule_day` with the loaded `row_version`, and surface
-  `view_production_schedule_conflicts`. The data layer is done.
+  `fn_save_schedule_day` with the loaded `row_version`, call `fn_release_schedule_day`
+  (§5a) to hand a day back, and surface `view_production_schedule_conflicts`. The data
+  layer is done.
+- **Every writer of this table enforces its guards inline.** If you add another write path,
+  it must be an RPC whose UPDATE re-checks `row_version` + ownership + the
+  `production_shifts` freeze in its own WHERE. A conditional PostgREST UPDATE cannot
+  express the freeze, so it is never sufficient on its own.

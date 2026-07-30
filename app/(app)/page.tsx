@@ -136,7 +136,11 @@ async function DigestBoard() {
           full-width — reclaiming vertical space at the top of the digest. Each
           renders only when it has content; a lone survivor spans the full width
           (no lg:grid-cols-2). Both stack in a single column on mobile. */}
-      {(data.schedulePreview.length > 0 || data.openBlocks.length > 0) && (
+      {(data.schedulePreview.length > 0 ||
+        data.openBlocks.length > 0 ||
+        // A parked upstream conflict must be visible even on a day with no
+        // rolling schedule window, or it sits unread on the schedule route.
+        data.schedulePendingConflicts > 0) && (
         <section
           className={cn(
             // `min-w-0` so this grid (a flex item of the shell column) can shrink
@@ -144,13 +148,18 @@ async function DigestBoard() {
             // grid items carry their own `min-w-0` so they contain (table scrolls
             // inside its card; open-block cards shrink to fit) instead of clipping.
             "grid min-w-0 items-start gap-4 sm:gap-6",
-            data.schedulePreview.length > 0 &&
+            (data.schedulePreview.length > 0 ||
+              data.schedulePendingConflicts > 0) &&
               data.openBlocks.length > 0 &&
               "lg:grid-cols-2"
           )}
         >
-          {data.schedulePreview.length > 0 && (
-            <SchedulePreview rows={data.schedulePreview} />
+          {(data.schedulePreview.length > 0 ||
+            data.schedulePendingConflicts > 0) && (
+            <SchedulePreview
+              rows={data.schedulePreview}
+              pendingConflicts={data.schedulePendingConflicts}
+            />
           )}
           {data.openBlocks.length > 0 && (
             <OpenBlocks

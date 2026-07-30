@@ -12,6 +12,7 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
 | `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
 | `electricity/electricity-cards-mobile.tsx` | **Phone read layer** for Electricity (`sm:hidden`). Simplest `MobileCardList` — card headline `date · meter · TTL KWH · [start→end]`, detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns (`diff_kwh`, `consumption_kwh`). |
+| `schedule/actions.ts` | **The in-app write path for `production_schedule`** (Phase B, 2026-07-30). Server actions only — the client never touches Supabase. `saveScheduleDay` (edit → `fn_save_schedule_day`, flips the WHOLE DAY to `owner='human'`), `takeUpstreamProposal` / `keepMineClearPending` (the two conflict resolutions — the ONLY callers that pass `p_clear_pending: true`), `releaseScheduleDay` (hand a human day back to the sync). Every value-bearing mutation goes through `fn_save_schedule_day` with the `row_version` the client READ, so a save racing the sync returns `version_conflict` and is surfaced as "reload", never force-written. `revalidatePath('/')` after each success (the schedule lives at `/?view=schedule`). Exports `SchedulePatch`, `SaveOutcome`, `ScheduleWriteResult`. **Schema gap, reported not patched:** no RPC exists to return ownership to the sync, so `releaseScheduleDay` uses a conditional PostgREST UPDATE guarded on `row_version` + `owner='human'` in the same statement (the actuals freeze is read first from `view_production_schedule_state` — advisory, since the real freeze is re-checked inside `fn_apply_schedule_upstream` / `fn_save_schedule_day`). A `fn_release_schedule_day(p_plan_date, p_expected_row_version)` belongs in a later migration. |
 | `schedule/page.tsx` | **MOVED OUT — this is now a REDIRECT only** (BUG-003). The Production Schedule left the production module: it lived under `layout.tsx` and so wrongly rendered inside the Daily·Electricity·Trucks tab shell. It is now a **view on the Home Digest** — `/?view=schedule` — and the month table itself lives in `components/digest/schedule-month-view.tsx` (`<ScheduleMonthView month basePath extraParams />`, unchanged queries/columns/frozen panes). This file validates a `?month=YYYY-MM` deep link and `redirect()`s to `/?view=schedule&month=…`, so old links keep working and the tab bar never paints. Its phone card list moved to `components/digest/schedule-cards-mobile.tsx`. See `app/(app)/CONTEXT.md` → "`/` hosts TWO views". |
 | `layout.tsx` | Client layout — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
 | `error.tsx` | Error boundary |
@@ -47,6 +48,40 @@ All 5 grids share the same pattern (modelled after `bulk-delivery-input.tsx`):
 
 ## Daily Tab Layout (as of 2026-05-28)
 ONE unified ledger inside `overflow-x-auto`. `table minWidth: 1800px`. Columns grouped into sections: Identity (blue) · Production (green) · Downtime (amber) · Waste (red). Each ledger row = one `production_runs` entry. Downtime/Waste columns appear only on the primary grade row per shift; secondary rows have muted gray cells. See `daily/CONTEXT.md` for full column order and multi-grade rendering rules.
+
+## Production Schedule (Phase B — in-app editing, 2026-07-30)
+
+The schedule **UI** lives in `components/digest/` (it renders at `/?view=schedule`),
+but its **server actions** stay here at `app/(app)/production/schedule/actions.ts`
+— this is the plan's domain module.
+
+**Ownership model** (`production_schedule.owner`, migration
+`20260730060000_production_schedule_ownership.sql`):
+
+| owner | meaning | editable in-app? | sync may write it? |
+|---|---|---|---|
+| `joseph` | following Joseph Go's emailed schedule | yes | yes |
+| `gsheet` | Renzo's PROD SCHED baseline | yes | yes |
+| `human` | edited in the app | yes | **no** — upstream is parked in `pending_upstream` |
+| `actual` | production reported for the date (DERIVED, never stored) | **no — frozen** | no |
+
+**Rules the UI enforces (and the DB re-enforces):**
+- **Editing any cell takes the WHOLE DAY.** Approved lock granularity; there is no
+  separate lock toggle. `fn_save_schedule_day` sets `owner='human'` +
+  `human_edited_at/by` regardless of which field changed. The grid makes this
+  legible BEFORE the commit (owner-chip flip preview + sky row rail + a save bar
+  that names the days losing their upstream owner and reads "Take ownership &
+  save N").
+- **`row_version` is echoed on every write.** The RPC's own WHERE does the check;
+  a `version_conflict` is reported as "this day changed since you loaded it,
+  reload", never retried or forced.
+- **`p_clear_pending` defaults to FALSE.** An unrelated edit must never silently
+  discard a parked proposal — only the two explicit resolve actions clear it.
+- **Ownership must be reversible.** `releaseScheduleDay` hands a human day back
+  (owner → `joseph`/`gsheet` from the `source` prefix, `source_rev` cleared so the
+  next run RE-APPLIES rather than no-opping). Without it ownership only ratchets
+  one way and the calendar slowly freezes.
+- **Grades (JSONB) are read-only** in Phase B — no JSON editor yet.
 
 ## Shared Types
 `BulkSavePayload<TInsert, TUpdate>` — now defined locally in `electricity/actions.ts` and `trucks/actions.ts` (no longer shared from `daily/actions.ts` — the daily module was rewritten with a different atomic save pattern).
