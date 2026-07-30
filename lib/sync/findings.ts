@@ -24,6 +24,7 @@ import type {
   BlockDiff,
   HeldRow,
   RcOutSource,
+  ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
   SyncReportType,
@@ -36,6 +37,7 @@ import {
   collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
+  collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
   collectUnresolvedBatches,
@@ -467,6 +469,65 @@ function fromBatchClose(bc: BatchClose): RunFinding {
   }
 }
 
+/** Plain phrase per production-plan field (no column names in the operator's face). */
+const SCHEDULE_FIELD_LABEL: Record<string, string> = {
+  shifts: 'shifts',
+  setup: 'line setup',
+  projected_tons: 'planned tons',
+  grades: 'per-grade tons',
+  remarks: 'notes',
+}
+
+/** "shifts and line setup" / "shifts, line setup and planned tons". */
+function fieldList(fields: readonly string[]): string {
+  const words = fields.map((f) => SCHEDULE_FIELD_LABEL[f] ?? f)
+  if (words.length <= 1) return words[0] ?? 'this day'
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
+}
+
+/** Rightwards arrow (written as an escape so the source stays byte-clean, per the
+ *  serializer convention further down this file). */
+const ARROW = '\u2192'
+
+/** Compact "shifts 2 → 0" pairs for the plain reason line. */
+function fieldDeltas(c: ScheduleConflict): string {
+  return c.changed_fields
+    .map((f) => {
+      const show = (v: unknown) =>
+        v == null || v === '' ? 'none' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+      return `${SCHEDULE_FIELD_LABEL[f] ?? f} ${show(c.current?.[f])} ${ARROW} ${show(c.proposed?.[f])}`
+    })
+    .join('; ')
+}
+
+/**
+ * A production-PLAN day the sync refused to overwrite because a human edited it in the
+ * app. Joseph's proposed value is PARKED (`production_schedule.pending_upstream`), not
+ * applied — the operator picks. `attention`, never auto-resolved: this is the schedule's
+ * instance of the project-wide "disagreements are arbitrated by a human" rule.
+ */
+function fromScheduleConflict(c: ScheduleConflict): RunFinding {
+  return {
+    key: `schedule_conflict:${c.plan_date}`,
+    kind: 'schedule_conflict',
+    kindLabel: 'Schedule day you edited — the plan email disagrees',
+    source: 'Production schedule (Joseph Go)',
+    title: `${c.plan_date}: your edit was kept — Joseph's schedule proposes a different ${fieldList(c.changed_fields)}`,
+    location: c.plan_date,
+    data: {
+      plan_date: c.plan_date,
+      source_rev: c.source_rev,
+      changed_fields: c.changed_fields,
+      current: c.current,
+      proposed: c.proposed,
+    },
+    reason:
+      `You edited this day in the app, so the sync did NOT overwrite it. Joseph's latest ` +
+      `schedule proposes ${fieldDeltas(c)}. Nothing changed — pick which one stands.`,
+    severity: 'attention',
+  }
+}
+
 // ============================================================================
 // The public API.
 // ============================================================================
@@ -509,6 +570,9 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 7. Batches closed from a Google Sheet RC OUT close remark (R4b close-scan) — info for
   //    an actual close, attention for a close asserted against an unknown batch.
   for (const bc of collectBatchCloses(result)) out.push(fromBatchClose(bc))
+
+  // 8. Production-plan days the sync withheld because a human owns them (Stage 3c).
+  for (const c of collectScheduleConflicts(result)) out.push(fromScheduleConflict(c))
 
   return out
 }
@@ -564,6 +628,7 @@ const SHORT_KIND: Record<string, string> = {
   unresolved_shift: 'unmatched shift',
   unresolved_batch_id: 'unknown batch',
   batch_auto_created: 'batch created',
+  schedule_conflict: 'schedule day held',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -575,6 +640,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   block_diff: 'Block balance mismatch',
   run_triage: 'Run summary',
   batch_auto_created: 'New batch created automatically',
+  schedule_conflict: 'Schedule day you edited — the plan email disagrees',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

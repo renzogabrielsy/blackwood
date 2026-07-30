@@ -14,6 +14,7 @@ import type {
   BatchClose,
   BlockDiff,
   HeldRow,
+  ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
   SyncReportType,
@@ -115,6 +116,17 @@ export function collectBlockDiffs(result: SyncRunResult): BlockDiff[] {
  */
 export function collectBatchCloses(result: SyncRunResult): BatchClose[] {
   return result.reconciliation?.batch_closes ?? []
+}
+
+/**
+ * Flatten the production-PLAN conflicts (Stage 3c: days a human edited in-app whose
+ * upstream/Joseph value the sync WITHHELD and parked in
+ * `production_schedule.pending_upstream`). Lives only in
+ * `result.reconciliation.schedule_conflicts` (optional additive field — absent on runs
+ * that parked nothing and on every run predating the conditional refresh). Pure, guarded.
+ */
+export function collectScheduleConflicts(result: SyncRunResult): ScheduleConflict[] {
+  return result.reconciliation?.schedule_conflicts ?? []
 }
 
 /**

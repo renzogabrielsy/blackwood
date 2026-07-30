@@ -390,6 +390,32 @@ values into views.
     null`, grade → projected tons; `projectedTons` stays the day TOTAL). Feeds the
     `SchedulePreview` table band. Empty when there is no op date.
 
+### Production-schedule ownership (2026-07-30, Phase A — data layer only)
+`production_schedule` is no longer sync-owned. Each `plan_date` has an **owner**
+(`joseph` | `gsheet` | `human` | `actual`) and the sync writes only the days it is
+allowed to: an unchanged upstream revision writes **nothing**, a day with reported
+production is frozen, and a day a human edited in-app is never overwritten — the
+upstream value is parked in `pending_upstream` for the operator to arbitrate. The
+digest's read path is UNCHANGED (`getDigestData()` still selects the same plan
+columns from the table).
+
+**The pending-conflict count** — the number the digest should surface so a stale
+conflict cannot sit unread — is one head-count read, no new adapter plumbing:
+
+```ts
+const { count } = await supabase
+  .from('view_production_schedule_conflicts')
+  .select('plan_date', { count: 'exact', head: true })
+```
+
+It belongs in `getDigestData()`'s **wave 1** (it needs no `operationalDate`), and the
+detail rows of the same view (both sides of each disagreement) are what the schedule
+month view would render. `view_production_schedule_state` additionally exposes
+`owner` / `effective_owner` / `is_reported` / `row_version` per day for the future
+in-app editor. **Phase B (the editing UI) is NOT built** — the write path already
+exists as `fn_save_schedule_day(plan_date, expected_row_version, patch)`.
+See `workers/sync/specs/prod_schedule.md`.
+
 ## Key Behaviors
 - **Freshness pill** — green pulsing dot when synced today, amber within ~3 d,
   muted otherwise; relative time recomputed client-side.

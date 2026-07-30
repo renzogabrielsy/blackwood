@@ -24,6 +24,7 @@
 import { latestXlsx } from "../../lib/gmail.js";
 import { withGmailSession, type GmailSessionRunner } from "../../lib/gmailSession.js";
 import { parseJosephRev, type JosephRev } from "./parse.js";
+import { messageTagFor } from "./plan.js";
 
 const JOSEPH_SENDER = "kitz323@yahoo.com";
 /** Gmail X-GM-RAW: sender + either subject phrase + must carry an attachment. */
@@ -35,6 +36,17 @@ export interface JosephSource {
   rev: JosephRev;
   /** human description of where the workbook came from (subject line). */
   origin: string;
+  /**
+   * Gmail's identity for the email this workbook came from: `gm<threadId>.<uid>`.
+   *
+   * It is one half of `production_schedule.source_rev` (see plan.ts::computeSourceRev),
+   * which is what lets the conditional refresh answer "have I already applied THIS
+   * revision?" and write nothing when the answer is yes. `FetchedEmail` carries no
+   * RFC-822 Message-ID — adding one means changing the live IMAP fetch in lib/gmail.ts,
+   * which we cannot test against Gmail — and threadId+uid has the property that actually
+   * matters: it is stable across re-fetches of the same message.
+   */
+  messageTag: string;
 }
 
 /**
@@ -57,6 +69,7 @@ export async function fetchLatestJosephSchedule(
       buffer: latest.attachment.content,
       rev: parseJosephRev(subject),
       origin: `IMAP "${subject}"`,
+      messageTag: messageTagFor(latest.email)!,
     };
   });
 }

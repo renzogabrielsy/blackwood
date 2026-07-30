@@ -10,15 +10,30 @@
  *   3. Fetch Joseph's latest schedule email, parseJosephSchedule() + mergeSchedules()
  *      his scheduling over Renzo's tonnages. If Joseph is unavailable / unparseable →
  *      fall back to a Renzo-only refresh (still writes the plan).
- *   4. Upsert `production_schedule` by plan_date (replace-by-date, idempotent).
+ *   4. CONDITIONALLY write `production_schedule` — see below.
+ *
+ * STEP 4 CHANGED 2026-07-30 (Phase A of the schedule "master plotter"). It used to be an
+ * UNCONDITIONAL `upsertProductionSchedule` of EVERY plan_date on EVERY run, which
+ * re-applied the same Joseph email over and over — harmless while the plan was sync-owned,
+ * a silent-overwrite machine the moment it becomes editable in-app. It is now:
+ *
+ *      stamp source_rev  →  snapshot view_production_schedule_state
+ *                        →  plan PURELY (./plan.ts, the six rules)
+ *                        →  fn_apply_schedule_upstream (atomic, guards re-checked in SQL)
+ *
+ * The load-bearing rule: when the incoming revision already matches what a row carries,
+ * the sync writes NOTHING for that day. The steady state of this step is a ZERO-WRITE run.
+ * A human-owned day whose upstream value differs is never written — the proposal is parked
+ * in `pending_upstream` and returned as a `ScheduleConflict` for the run's findings list.
  *
  * NON-FATAL by contract: refreshProductionSchedule swallows every failure and returns a
  * result flagged `ok:false` + a warning list. The caller (runSync) must never let a
  * schedule failure fail the daily sync — the plan band is decorative, not load-bearing.
  *
- * The pure planning (download-free, DB-free) lives in computeMergedSchedule so it can be
- * unit-tested against the saved Joseph fixture + a live/stub gsheet buffer without any
- * DB or Gmail. The parse/merge functions themselves are the verbatim port in ./parse.ts.
+ * The pure planning (download-free, DB-free) lives in computeMergedSchedule + ./plan.ts so
+ * it can be unit-tested against the saved Joseph fixture + a live/stub gsheet buffer
+ * without any DB or Gmail. The parse/merge functions themselves are the verbatim port in
+ * ./parse.ts.
  */
 import type { DbClient } from "../../lib/db.js";
 import { downloadGsheet, GSHEET_EXPORT_URL, type FetchLike } from "../gsheet/download.js";
@@ -30,6 +45,13 @@ import {
   type JosephRev,
 } from "./parse.js";
 import { fetchLatestJosephSchedule, type JosephSource } from "./josephEmail.js";
+import {
+  planScheduleUpstream,
+  stampSourceRevs,
+  toScheduleStateRow,
+  type ScheduleConflict,
+  type SchedulePlan,
+} from "./plan.js";
 
 export interface JosephDiag {
   origin: string;
@@ -102,14 +124,44 @@ export interface RefreshDeps {
 export interface RefreshResult {
   ok: boolean;
   parsed: number;
+  /**
+   * Rows actually WRITTEN this run (inserted + applied + reclaimed + parked, as confirmed
+   * by the RPC's outcomes — not the number we asked for). In the steady state this is 0.
+   */
   upserted: number;
   minDate: string | null;
   maxDate: string | null;
   joseph: JosephDiag | null;
   josephSkippedReason?: string;
+  /** Per-decision breakdown from the pure planner + the RPC's confirmed outcomes. */
+  plan: {
+    unchanged: number;
+    frozen: number;
+    inserted: number;
+    applied: number;
+    reclaimed: number;
+    parked: number;
+    /** Ops the RPC refused because the row moved underneath us (never clobbered). */
+    versionConflicts: number;
+    /** Ops the RPC refused because production has since been reported for the date. */
+    frozenAtWrite: number;
+  };
+  /** Human-owned days whose upstream value was withheld → the run's schedule findings. */
+  conflicts: ScheduleConflict[];
   /** Populated when ok:false — a human, copy-pastable failure reason. */
   error?: string;
 }
+
+const EMPTY_PLAN = {
+  unchanged: 0,
+  frozen: 0,
+  inserted: 0,
+  applied: 0,
+  reclaimed: 0,
+  parked: 0,
+  versionConflicts: 0,
+  frozenAtWrite: 0,
+};
 
 const EMPTY_FAIL = (error: string): RefreshResult => ({
   ok: false,
@@ -118,13 +170,16 @@ const EMPTY_FAIL = (error: string): RefreshResult => ({
   minDate: null,
   maxDate: null,
   joseph: null,
+  plan: { ...EMPTY_PLAN },
+  conflicts: [],
   error,
 });
 
 /**
  * Full refresh: get Renzo's workbook → parse → overlay Joseph (guarded, Renzo-only
- * fallback) → upsert production_schedule by plan_date. NON-FATAL: any failure is caught
- * and returned as ok:false; it never throws. Idempotent (replace-by-date).
+ * fallback) → CONDITIONALLY write production_schedule (plan.ts's six rules, applied
+ * atomically by fn_apply_schedule_upstream). NON-FATAL: any failure is caught and
+ * returned as ok:false; it never throws. Idempotent — and in the steady state, a no-op.
  */
 export async function refreshProductionSchedule(deps: RefreshDeps): Promise<RefreshResult> {
   try {
@@ -155,24 +210,67 @@ export async function refreshProductionSchedule(deps: RefreshDeps): Promise<Refr
       merged.josephSkippedReason = josephSkippedReason;
     }
 
-    // 4) upsert by plan_date (replace-by-date). updated_at refreshes each run.
-    const nowIso = new Date().toISOString();
-    const payload = merged.rows.map((r) => ({ ...r, updated_at: nowIso }));
-    await deps.db.upsertProductionSchedule(payload);
+    // 4) CONDITIONAL write. Stamp each day's source_rev, snapshot current ownership state,
+    //    plan purely, then hand the ops to the atomic RPC. NOTHING here can delete a day,
+    //    and a day the plan no longer mentions is simply never named in an op (rule 5).
+    const nowIso = (deps.now ?? new Date()).toISOString();
+    const stamped = stampSourceRevs(merged.rows, josephSource?.messageTag ?? null);
+    const dates = stamped.map((r) => r.plan_date).sort();
 
-    const dates = merged.rows.map((r) => r.plan_date).sort();
+    const stateRaw = await deps.db.readScheduleState(dates);
+    const state = stateRaw.map((r) => toScheduleStateRow(r as Record<string, unknown>));
+    const plan: SchedulePlan = planScheduleUpstream(stamped, state, nowIso);
+
+    // `row` carries source_rev (harmless extra key) — the RPC reads named fields only.
+    const outcomes = plan.ops.length
+      ? await deps.db.applyScheduleUpstream(
+          plan.ops.map((op) => ({
+            plan_date: op.plan_date,
+            action: op.action,
+            expected_row_version: op.expected_row_version,
+            expected_owner: op.expected_owner,
+            source_rev: op.source_rev,
+            new_owner: op.new_owner,
+            row: op.row as unknown as Record<string, unknown>,
+            pending: op.pending ?? null,
+          })),
+        )
+      : [];
+
+    // Count what the DB actually did, not what we asked for. A row the RPC refused
+    // (version_conflict / frozen / missing / exists) was NOT written.
+    const tally = { ...EMPTY_PLAN, unchanged: plan.counts.unchanged, frozen: plan.counts.frozen };
+    for (const o of outcomes) {
+      if (o.outcome === "inserted") tally.inserted++;
+      else if (o.outcome === "applied") tally.applied++;
+      else if (o.outcome === "reclaimed") tally.reclaimed++;
+      else if (o.outcome === "parked") tally.parked++;
+      else if (o.outcome === "frozen") tally.frozenAtWrite++;
+      else tally.versionConflicts++; // version_conflict | missing | exists
+    }
+    const written = tally.inserted + tally.applied + tally.reclaimed + tally.parked;
+
+    // Only report a conflict the DB actually parked — one the RPC refused is not a
+    // durable pending value and must not be announced as one.
+    const parkedDates = new Set(
+      outcomes.filter((o) => o.outcome === "parked").map((o) => o.plan_date),
+    );
+    const conflicts = plan.conflicts.filter((c) => parkedDates.has(c.plan_date));
+
     return {
       ok: true,
       parsed: merged.rows.length,
-      upserted: payload.length,
+      upserted: written,
       minDate: dates[0] ?? null,
       maxDate: dates[dates.length - 1] ?? null,
       joseph: merged.joseph,
       josephSkippedReason: merged.josephSkippedReason,
+      plan: tally,
+      conflicts,
     };
   } catch (err) {
     return EMPTY_FAIL(err instanceof Error ? err.message : String(err));
   }
 }
 
-export type { ProdScheduleRow, JosephRev };
+export type { ProdScheduleRow, JosephRev, ScheduleConflict };

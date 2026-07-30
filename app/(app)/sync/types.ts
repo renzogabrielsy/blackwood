@@ -549,17 +549,42 @@ export interface BatchClose {
   matched: boolean
 }
 
+/** The plan-bearing fields of one production-schedule day. */
+export type SchedulePlanField =
+  | 'shifts'
+  | 'setup'
+  | 'projected_tons'
+  | 'grades'
+  | 'remarks'
+
+/**
+ * One production-PLAN day the sync REFUSED to write because a human owns it (app-side
+ * MIRROR of the worker's `reports/prodSchedule/plan.ts::ScheduleConflict`). Joseph's
+ * proposed value was parked in `production_schedule.pending_upstream` instead of being
+ * applied; the operator arbitrates it. Never a ₱/cost field — this is a plan, not pricing.
+ */
+export interface ScheduleConflict {
+  plan_date: string
+  /** The upstream revision that wanted in ("joseph:REV6|gm<thread>.<uid>|<hash>"). */
+  source_rev: string
+  changed_fields: SchedulePlanField[]
+  current: Record<string, unknown>
+  proposed: Record<string, unknown>
+}
+
 /**
  * The top-level `result.reconciliation` channel. All members are OPTIONAL: a run may carry
  * the rc_out same-fact reconciliation, the RB blocking cross-check, the gsheet batch
- * close-scan, any combination, or (on a shadow-stage failure) none. The collect* folds guard
- * each with optional chaining.
+ * close-scan, the production-plan conflicts, any combination, or (on a shadow-stage
+ * failure) none. The collect* folds guard each with optional chaining.
  */
 export interface ReconciliationChannel {
   rc_out?: TableReconciliation
   blocking?: BlockReconciliation
   /** Batches closed this run from Google Sheet RC OUT close remarks (+ unmatched warnings). */
   batch_closes?: BatchClose[]
+  /** Production-plan days the sync withheld because a human owns them (Stage 3c). */
+  schedule_conflicts?: ScheduleConflict[]
 }
 
 // ============================================================

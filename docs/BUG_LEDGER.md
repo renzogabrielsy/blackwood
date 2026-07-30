@@ -938,6 +938,8 @@ analysis is the most useful record — this section is the index:
 | BUG-013 — Cenapro focus Daily Block silent edit-loss on view/scope/period switch → lifted dirty-nav guard | 2026-07-22 | _(uncommitted — Phase 3b)_ |
 | BUG-016a — `fn_update_blackwood_state` DELETE branch excluded `OLD.id`; 4 batches / 83,308 kg backfilled | 2026-07-27 | migration `20260727070000` (applied live) |
 | BUG-019 — 7 IMAP sessions per run blew Gmail's connection cap; "too many connections" misread as an auth failure | 2026-07-28 | _(uncommitted)_ |
+| BUG-020 — flecon date settlement: January backfill protected, cross-check reads post-write, out-of-year warning suppressed once settled | 2026-07-29 | _(uncommitted)_ |
+| BUG-021 — `production_schedule` ownership + conditional sync (no more unconditional upsert of the whole calendar) | 2026-07-30 | _(uncommitted)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none
@@ -1027,3 +1029,96 @@ FG_ALL_BLACK 156 / KOREA_WHITE_SUNDRY 282 / ZAMBOANGA_BAG 160 · worker `npm run
 **Note for the next agent:** settlement is a **one-way ratchet**, same accepted edge case as
 `rc_out_date_settlements` — a later correction to a settled date needs a manual `DELETE FROM
 flecon_bag_date_settlements`. No new `HeldKind` was added (the enum is frontend-locked).
+
+---
+
+## BUG-021 — `production_schedule` had no owner, so the sync re-applied Joseph's email over every day, every run ✅ FIXED (2026-07-30, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** M · **Severity:** HIGH-latent (guaranteed silent data loss the day the plan becomes editable; today: pointless write churn + no provenance)
+
+Found while building Phase A of the schedule "master plotter". Not a live data-loss
+incident — there is no in-app write path yet, so nothing was destroyed. It is the exact
+mechanism that WOULD have destroyed every in-app edit on the next sync, and it is the
+same shape as BUG-015 (flecon) and BUG-016 (gsheet TOCTOU): a writer with no idea whether
+someone else owns what it is about to overwrite.
+
+### 1 — The refresh was unconditional
+- **Root cause:** `workers/sync/src/reports/prodSchedule/refresh.ts` ended in
+  `db.upsertProductionSchedule(rows)` — a blind `.upsert(…, {onConflict:'plan_date'})` of
+  the WHOLE calendar (273 rows today, 2026-01-01 → 09-30) on EVERY run, whether or not
+  Joseph had sent anything new. The table carried no `owner`, no revision identity, and no
+  version token, so the writer could not have known any better.
+- **Why it matters beyond churn:** the confirmed product direction (agent memory
+  `production_schedule_master_plotter.md`, 2026-07-15) is to make this table the editable
+  master. Ship the editor on top of an unconditional upsert and every edit dies on the next
+  6am run, silently, with no audit trail — CLAUDE.md's "Sync Integrity" rule violated by
+  construction.
+- **Fix:** ownership + a conditional writer.
+  - Migration **`20260730060000_production_schedule_ownership.sql`**: `owner`
+    (`joseph|gsheet|human|actual`, CHECKed, NOT NULL, backfilled from the existing `source`
+    tag → 91 joseph / 182 gsheet), `source_rev`, `pending_upstream` jsonb, `row_version`
+    (NOT NULL default 1), `human_edited_at`, `human_edited_by` (FK→profiles).
+  - New PURE planner `workers/sync/src/reports/prodSchedule/plan.ts` implementing the six
+    rules (unchanged-revision → no write; reported → frozen; human+differs → park;
+    human+equal → reclaim; omitted → untouched; every write version-guarded).
+  - **`db.upsertProductionSchedule` was DELETED**, not deprecated. Nothing can write this
+    table unconditionally again without adding the method back on purpose.
+
+### 2 — There was no way to know whether a revision had already been applied
+- **Root cause:** the row recorded `source` (`joseph:REV5`) but not WHICH email or WHICH
+  content it came from, so "is this the same thing I already wrote?" was unanswerable and
+  the only safe answer was "rewrite it".
+- **Fix:** `source_rev = "<source>|gm<threadId>.<uid>|<sha256(day payload)[0:12]>"` — a
+  PER-DAY content address plus Gmail's message identity. (`lib/gmail.ts`'s `FetchedEmail`
+  exposes no RFC-822 Message-ID; adding one means changing the live IMAP fetch, which
+  cannot be tested against Gmail — see BUG-019 — and threadId+uid has the only property
+  rule 1 needs: stability across re-fetches.) Per-day, not per-workbook, so a one-day
+  change rewrites one row. Renzo-only days omit the message tag so a new Joseph email
+  cannot churn the part of the calendar he never mentioned.
+
+### 3 — Read-then-write was the only available shape
+- **Root cause:** a blind upsert cannot express "only if nobody touched this".
+- **Fix:** **`fn_apply_schedule_upstream(p_ops jsonb)`** — all three writes (insert,
+  apply/reclaim, park) plus the outcome classification in ONE statement via data-modifying
+  CTEs, with `row_version = expected`, `owner = expected` and `NOT EXISTS (production_shifts
+  on that date)` **inside each write's own WHERE**. The planner's snapshot is advisory; the
+  guards are the truth. A refused row comes back labelled (`version_conflict` / `frozen` /
+  `missing` / `exists`) and is never silently applied. Counterpart
+  **`fn_save_schedule_day`** is the in-app path, guarded the same way.
+  The function has **no DELETE at all**, so the BUG-015 "a date the sheet stopped
+  describing gets wiped" class is structurally impossible here.
+
+### Visibility
+A parked day surfaces three ways: `view_production_schedule_conflicts` (both sides),
+a **`schedule_conflict`** run finding (`result.reconciliation.schedule_conflicts` →
+`lib/sync/cases-fold.ts` → `lib/sync/findings.ts`, severity `attention`), and a `warn`
+progress beat. **No new `HeldKind`** — that enum is frontend-locked; this is a
+reconciliation kind, like `block_diff`/`batch_closed`. The digest's pending count is
+`view_production_schedule_conflicts` with `{count:'exact', head:true}`, served by a partial
+index.
+
+### Files
+`supabase/migrations/20260730060000_production_schedule_ownership.sql` ·
+`workers/sync/src/reports/prodSchedule/{plan.ts (new),refresh.ts,josephEmail.ts}` ·
+`workers/sync/src/lib/db.ts` (`readScheduleState`, `applyScheduleUpstream`;
+`upsertProductionSchedule` REMOVED) · `workers/sync/src/workflows/runSync.ts` (Stage 3c
+now returns conflicts) · `workers/sync/src/reconcile/rcOutStage.ts` (channel type) ·
+`workers/sync/scripts/prod-schedule-proof.ts` (also goes through the planner now) ·
+`workers/sync/test/reports/prodSchedule-conditional.test.ts` (26 tests) ·
+`workers/sync/specs/prod_schedule.md` (new) · `app/(app)/sync/types.ts` ·
+`lib/sync/{cases-fold,findings}.ts` · `scripts/verify-schedule-conflict-fold.ts` (new) ·
+`app/(app)/CONTEXT.md` · `CLAUDE.md` · `TIMELINE.md` · `types/supabase.ts`.
+
+**Verification:** migration applied live via MCP; every guard proven against the real
+database in a **rolled-back `DO` block** (insert / apply / stale-version refusal / human
+save / stale save refusal / park-leaves-plan-fields-alone / reclaim / frozen-apply /
+frozen-save / missing / never-named-day-identical / empty-ops) — 273 rows and every
+`row_version` unchanged afterwards · worker `npm run typecheck` ✓ · `npm test` **612/612**
+(was 586) ✓ · `npm run parity` **12/12** ✓ · `npx tsx scripts/verify-schedule-conflict-fold.ts`
+**6/6** ✓ · root `npx tsc --noEmit` ✓ · `npm run build` ✓.
+
+**Note for the next agent:** the FIRST run after this migration re-stamps every row once
+(`source_rev` was NULL and NULL never equals an incoming rev) — expected, happens exactly
+once, and every run after it is a zero-write run. Phase B (the editing UI) needs only the
+three pieces already in place: read `view_production_schedule_state`, call
+`fn_save_schedule_day` with the loaded `row_version`, render
+`view_production_schedule_conflicts`.

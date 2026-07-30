@@ -510,32 +510,84 @@ export class DbClient {
   }
 
   // -- production plan (production_schedule) --------------------------------
+  //
+  // REMOVED 2026-07-30: `upsertProductionSchedule(rows)`, a blind replace-by-plan_date
+  // upsert of the WHOLE calendar on every run. It was the clobber mechanism the schedule
+  // "master plotter" Phase A exists to kill — nothing may write this table unconditionally
+  // any more. The pair below is the replacement: snapshot state, plan purely, apply
+  // atomically. Do NOT reintroduce a blanket upsert here.
   /**
-   * Replace-by-date upsert of the production PLAN into `production_schedule` (PK =
-   * plan_date). Idempotent: re-running with the same rows overwrites in place, so the
-   * schedule-refresh step is safe to run every sync. Service-role write (bypasses RLS),
-   * matching the verified root routine scripts/sync-prod-schedule.ts. Chunked so a very
-   * large payload never trips a PostgREST body limit (the plan is ~year-sized, but the
-   * chunking is cheap insurance). Throws on a hard PostgREST error — the caller
-   * (refreshProductionSchedule) is fully guarded and downgrades any throw to non-fatal.
+   * Snapshot `view_production_schedule_state` for the given plan_dates — the ADVISORY
+   * read the conditional-refresh planner works from (ownership, the stored/parked
+   * source_rev, row_version, the actuals-freeze flag, and the current plan values).
+   *
+   * Chunked at 400 dates per request: a plan is ~year-sized (273 rows today) but a single
+   * `in.(…)` list of a whole year is a long URL, and PostgREST caps a response at 1000
+   * rows regardless. Returns whatever it can read; a hard error throws (the caller,
+   * refreshProductionSchedule, is fully guarded and downgrades any throw to non-fatal).
    */
-  async upsertProductionSchedule(rows: Row[]): Promise<{ upsertedCount: number }> {
-    if (!rows.length) return { upsertedCount: 0 };
-    const CHUNK = 500;
-    let upsertedCount = 0;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const slice = rows.slice(i, i + CHUNK);
-      const { error } = await this.sb
-        .from("production_schedule")
-        .upsert(slice, { onConflict: "plan_date" });
+  async readScheduleState(planDates: string[]): Promise<Row[]> {
+    if (!planDates.length) return [];
+    const CHUNK = 400;
+    const out: Row[] = [];
+    for (let i = 0; i < planDates.length; i += CHUNK) {
+      const slice = planDates.slice(i, i + CHUNK);
+      const { data, error } = await this.sb
+        .from("view_production_schedule_state")
+        .select(
+          "plan_date, shifts, setup, projected_tons, grades, remarks, source, owner, " +
+            "source_rev, row_version, pending_source_rev, is_reported",
+        )
+        .in("plan_date", slice);
       if (error) {
         throw new Error(
-          `upsert production_schedule failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
+          `read view_production_schedule_state failed ${error.code ?? ""}: ${sliceMsg(
+            error.message,
+          )}`,
         );
       }
-      upsertedCount += slice.length;
+      out.push(...((data ?? []) as unknown as Row[]));
     }
-    return { upsertedCount };
+    return out;
+  }
+
+  /**
+   * CONDITIONAL production-schedule write via the atomic RPC `fn_apply_schedule_upstream`.
+   *
+   * Replaces the old unconditional `upsertProductionSchedule`. The worker plans purely
+   * (reports/prodSchedule/plan.ts) and hands the planned ops here; the RPC re-checks
+   * row_version + owner + the production_shifts actuals freeze IN THE SAME STATEMENT as
+   * each write, so a human save that landed between the snapshot and this call wins and
+   * comes back as `version_conflict` rather than being clobbered.
+   *
+   * Chunked at 200 ops (each op carries a full row payload). Returns the flat outcome
+   * list. Throws on a hard PostgREST error — the caller is guarded.
+   */
+  async applyScheduleUpstream(
+    ops: Row[],
+  ): Promise<Array<{ plan_date: string; action: string; outcome: string }>> {
+    if (!ops.length) return [];
+    const CHUNK = 200;
+    const out: Array<{ plan_date: string; action: string; outcome: string }> = [];
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const slice = ops.slice(i, i + CHUNK);
+      const { data, error } = await this.sb.rpc("fn_apply_schedule_upstream", {
+        p_ops: slice,
+      });
+      if (error) {
+        throw new Error(
+          `fn_apply_schedule_upstream RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
+        );
+      }
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+        out.push({
+          plan_date: String(r.plan_date ?? "").slice(0, 10),
+          action: String(r.action ?? ""),
+          outcome: String(r.outcome ?? ""),
+        });
+      }
+    }
+    return out;
   }
 
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
