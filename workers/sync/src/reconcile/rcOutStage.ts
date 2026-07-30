@@ -28,6 +28,7 @@ import { reconcileRcOut, proposedLegsSelfConsistent } from "./rcOut.js";
 import { isKnownPatioAlias, normalizeProposedBlock } from "./blockAliases.js";
 import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
+import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
 import {
   LAG_DAYS,
   type Agreement,
@@ -103,11 +104,15 @@ export interface RcOutReconciliation {
  *  block-balance cross-check (`./blockBalance.ts`) — an ORTHOGONAL, read-only net.
  *  `batch_closes` is the gsheet close-scan outcome (`../lib/gsheetCloseScan.ts`) — batches
  *  flipped IN-USE→CLOSED from a Google Sheet RC OUT close remark the R4b cutover would
- *  drop. All are OPTIONAL: a run may carry any, all, or (on failure) none. */
+ *  drop. `schedule_conflicts` is the production-PLAN Stage-3c outcome
+ *  (`../reports/prodSchedule/plan.ts`) — days a human owns whose upstream (Joseph) value
+ *  the sync WITHHELD and parked instead of applying. All are OPTIONAL: a run may carry
+ *  any, all, or (on failure) none. */
 export interface ReconciliationChannel {
   rc_out?: RcOutReconciliation;
   blocking?: BlockReconciliation;
   batch_closes?: BatchClose[];
+  schedule_conflicts?: ScheduleConflict[];
 }
 
 const MAIN = "MAIN";

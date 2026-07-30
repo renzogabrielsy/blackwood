@@ -7,7 +7,9 @@
  * Exercises the SAME code the sync worker runs (reports/prodSchedule/refresh.ts): it
  * downloads Renzo's Sheet, fetches Joseph's latest schedule email over the worker's
  * imapflow GmailClient, computes the merge, prints the July slice + diagnostics, and
- * (unless --dry) upserts production_schedule by plan_date via the service-role DbClient.
+ * (unless --dry) writes CONDITIONALLY through the same planner + atomic RPC the worker
+ * uses — plan.ts's six rules, `fn_apply_schedule_upstream`. It CANNOT clobber a
+ * human-owned or already-reported day, and in the steady state it writes nothing.
  *
  * Env is read from workers/sync/.env (GMAIL_USER / GMAIL_APP_PASSWORD / SUPABASE_URL /
  * SUPABASE_SERVICE_ROLE_KEY). Writes bypass RLS via the service role — never expose.
@@ -19,6 +21,11 @@ import { DbClient } from "../src/lib/db.js";
 import { downloadGsheet, GSHEET_EXPORT_URL, type FetchLike } from "../src/reports/gsheet/download.js";
 import { fetchLatestJosephSchedule } from "../src/reports/prodSchedule/josephEmail.js";
 import { computeMergedSchedule } from "../src/reports/prodSchedule/refresh.js";
+import {
+  planScheduleUpstream,
+  stampSourceRevs,
+  toScheduleStateRow,
+} from "../src/reports/prodSchedule/plan.js";
 
 /** Load workers/sync/.env into process.env without clobbering existing keys. */
 function loadEnv(): void {
@@ -84,9 +91,41 @@ async function main(): Promise<void> {
   }
 
   const nowIso = new Date().toISOString();
-  const payload = merged.rows.map((r) => ({ ...r, updated_at: nowIso }));
-  const { upsertedCount } = await db.upsertProductionSchedule(payload);
-  console.log(`\n[proof] upserted ${upsertedCount} rows into production_schedule.`);
+  const stamped = stampSourceRevs(merged.rows, joseph?.messageTag ?? null);
+  const dates = stamped.map((r) => r.plan_date).sort();
+  const state = (await db.readScheduleState(dates)).map((r) =>
+    toScheduleStateRow(r as Record<string, unknown>),
+  );
+  const plan = planScheduleUpstream(stamped, state, nowIso);
+  console.log(
+    `\n[proof] plan: unchanged=${plan.counts.unchanged} frozen=${plan.counts.frozen} ` +
+      `insert=${plan.counts.inserted} apply=${plan.counts.applied} ` +
+      `reclaim=${plan.counts.reclaimed} park=${plan.counts.parked}`,
+  );
+  for (const c of plan.conflicts) {
+    console.log(`  [conflict] ${c.plan_date} — human-owned; withheld ${c.changed_fields.join(", ")}`);
+  }
+  if (!plan.ops.length) {
+    console.log("[proof] nothing to write — the DB already carries this revision.");
+    return;
+  }
+  const outcomes = await db.applyScheduleUpstream(
+    plan.ops.map((op) => ({
+      plan_date: op.plan_date,
+      action: op.action,
+      expected_row_version: op.expected_row_version,
+      expected_owner: op.expected_owner,
+      source_rev: op.source_rev,
+      new_owner: op.new_owner,
+      row: op.row as unknown as Record<string, unknown>,
+      pending: op.pending ?? null,
+    })),
+  );
+  const tally = outcomes.reduce<Record<string, number>>((acc, o) => {
+    acc[o.outcome] = (acc[o.outcome] ?? 0) + 1;
+    return acc;
+  }, {});
+  console.log(`[proof] applied: ${JSON.stringify(tally)}`);
 }
 
 main()
