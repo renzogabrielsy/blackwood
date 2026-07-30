@@ -45,12 +45,39 @@ every `plan_date` one day early on a UTC+8 host.
 | `joseph` | following the email | **yes** |
 | `gsheet` | Renzo's baseline, no Joseph coverage | **yes** |
 | `human` | edited in the app | **NO** — the upstream value is parked |
-| `actual` | production already reported for the date | **NO** — frozen for everyone |
+| `actual` | production already reported for the date | **NO** — frozen **for the sync** |
 
 `actual` is **derived, never stored**. The authoritative freeze signal is *"a
 `production_shifts` row exists for that `transaction_date`"*, exposed as
 `view_production_schedule_state.is_reported` / `.effective_owner`. It is re-evaluated on
 every read AND inside every write statement, so it can never go stale.
+
+### 2a. Reportedness freezes the SYNC, not the HUMAN (2026-07-30)
+
+Migration `20260730090000_human_may_edit_reported_days.sql` split a distinction Phase A
+had conflated by applying one freeze to all three writers:
+
+| | may write a REPORTED day? |
+|---|---|
+| `fn_apply_schedule_upstream` (the sync) | **NO — unchanged.** Joseph's forecast must never rewrite history. |
+| `fn_save_schedule_day` (the human) | **YES.** Correcting a past plan is legitimate. |
+| `fn_release_schedule_day` (the human) | **YES** — see §5a. |
+
+**`is_reported` is still true, still exposed, and the UI must still SHOW it** — it is now
+purely *informational* for the editor and remains the sync's hard freeze. **Editability and
+reportedness are two independent facts; do not re-conflate them.** Concretely: 166 of the
+calendar's 273 days are reported, and before this change every one of them was unreachable
+in-app with no remedy.
+
+Because `effective_owner` collapses to `'actual'` on any reported day, a human who edits
+one would vanish from the read model. `view_production_schedule_state` therefore gained one
+**additive** column — `human_edit_after_report` (`owner = 'human' AND is_reported`) — the
+signal `effective_owner` masks. `is_reported` and `effective_owner` are **unchanged**;
+both existing consumers name their columns explicitly, so nothing broke.
+
+The audit of such an edit is `human_edited_at` + `human_edited_by = auth.uid()`, stamped by
+`fn_save_schedule_day` on every successful save (there is no audit trigger on
+`production_schedule` — those two columns plus `row_version` are the trail, by design).
 
 Editing in-app is what flips ownership to `human` — there is no separate lock toggle.
 **Lock granularity is the whole day** (approved decision): any field edit takes the date.
@@ -134,9 +161,12 @@ as the human left it.
 
 The counterpart `fn_save_schedule_day(plan_date, expected_row_version, patch,
 clear_pending)` is the **in-app write path** (Phase B): it flips `owner` to `human`, stamps
-`human_edited_at`/`human_edited_by = auth.uid()`, bumps `row_version`, and is subject to
-the same version + freeze guards in its own UPDATE's WHERE. `p_clear_pending` defaults to
-**false** — an unrelated edit must not silently discard a parked proposal.
+`human_edited_at`/`human_edited_by = auth.uid()`, bumps `row_version`, and re-checks
+`row_version` in its own UPDATE's WHERE. `p_clear_pending` defaults to **false** — an
+unrelated edit must not silently discard a parked proposal. Since 2026-07-30 it has **no
+actuals freeze** (§2a), so its outcomes are `saved | missing | version_conflict` —
+**`frozen` can no longer come from a human write path**. `fn_apply_schedule_upstream` is
+now the only function that can return it, which is exactly the point.
 
 ### 5a. `fn_release_schedule_day(plan_date, expected_row_version)` — the way BACK
 
@@ -160,13 +190,18 @@ Releasing a day:
 - leaves every **plan field** alone. Release is a statement about OWNERSHIP, not values;
   the human's numbers stand until the next run actually applies Joseph's.
 
-Its three guards are the same three, in the single UPDATE's own WHERE:
-`row_version = p_expected_row_version`, `owner = 'human'`, and
-`NOT EXISTS (production_shifts on that date)`.
+Its guards live in the single UPDATE's own WHERE. As of **2026-07-30** there are **two**,
+not three: `row_version = p_expected_row_version` and `owner = 'human'`. The actuals freeze
+was removed to mirror `fn_save_schedule_day` (§2a) — **a human who can TAKE a reported day
+must be able to give it back**, or §2a would re-create the one-way ratchet this function
+exists to prevent, on precisely the 166 days it just unlocked. Releasing a reported day is
+inert rather than dangerous: release never touches a plan field, and the sync still cannot
+write the date afterwards (planner rule 2 + `fn_apply_schedule_upstream`'s own freeze both
+hold), so the end state is identical to any reported day nobody ever edited.
 
 | success outcome | refusal outcomes |
 |---|---|
-| `reclaimed` | `frozen`, `version_conflict`, `missing` |
+| `reclaimed` | `version_conflict`, `missing` |
 
 **No new outcome string.** `reclaimed` is Phase A's own word for "clear the parked value
 and hand ownership back to the upstream owner" (rule 4) — identical end state, only the
@@ -220,6 +255,10 @@ served by the partial index `idx_production_schedule_pending_upstream`.
 | `scripts/prod-schedule-proof.ts` | live end-to-end proof — also goes through the planner, so it cannot clobber either |
 | `supabase/migrations/20260730060000_production_schedule_ownership.sql` | the schema + both RPCs + both views |
 | `supabase/migrations/20260730070000_fn_release_schedule_day.sql` | `fn_release_schedule_day` — the in-app REVERT path (§5a) |
+| `supabase/migrations/20260730080000_production_setups.sql` | `production_setups` — the SETUP LIBRARY (app-side; the sync neither reads nor writes it) |
+| `supabase/migrations/20260730090000_human_may_edit_reported_days.sql` | drops the actuals freeze from the two HUMAN write paths (§2a) + the additive `human_edit_after_report` column |
+| `lib/production/setup-projection.ts` | PURE `(grade_mix, shifts) -> (grades, projected_tons)`. The ONE implementation; app-side only |
+| `scripts/verify-setup-projection.ts` | 9 framework-free checks incl. a guard that no SECOND implementation appears |
 | `app/(app)/production/schedule/actions.ts` | the app's four write actions; every one is an RPC call, no read-then-write |
 
 ---
@@ -239,6 +278,15 @@ served by the partial index `idx_production_schedule_pending_upstream`.
   (§5a) to hand a day back, and surface `view_production_schedule_conflicts`. The data
   layer is done.
 - **Every writer of this table enforces its guards inline.** If you add another write path,
-  it must be an RPC whose UPDATE re-checks `row_version` + ownership + the
-  `production_shifts` freeze in its own WHERE. A conditional PostgREST UPDATE cannot
-  express the freeze, so it is never sufficient on its own.
+  it must be an RPC whose UPDATE re-checks `row_version` (and, for a SYNC path, ownership +
+  the `production_shifts` freeze) in its own WHERE. A conditional PostgREST UPDATE cannot
+  express the freeze, so it is never sufficient for a sync writer.
+- **`production_setups` is NOT foreign-keyed to `production_schedule.setup`, deliberately.**
+  `setup` stays free text so a new setup name arriving from Joseph or the PROD SCHED tab
+  lands as data instead of failing Stage 3c (§0), and so retiring a setup cannot invalidate
+  history. Do not add that FK.
+- **Do not add a SQL projection function.** `(grade_mix, shifts) -> (grades,
+  projected_tons)` lives once, in `lib/production/setup-projection.ts`; the editor needs it
+  per keystroke, and `fn_save_schedule_day` stores whatever patch it is handed (which is
+  what makes per-day overrides possible). A SQL twin would have no caller and would drift.
+  `scripts/verify-setup-projection.ts` check 9 fails the build if one appears.

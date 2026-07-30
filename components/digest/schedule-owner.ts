@@ -12,7 +12,9 @@
 //   muted   = the Sheet baseline
 //   sky     = a human hand touched it (deliberately NOT amber — amber already
 //             means "today / awaiting report" in this table)
-//   emerald = reported/actual, i.e. settled and frozen
+//   emerald = reported/actual, i.e. production happened. NOT "frozen" — the
+//             sync can never write these days, but the human still can
+//             (migration 20260730090000); see the note at the bottom of this file.
 
 export type ScheduleOwner = 'joseph' | 'gsheet' | 'human' | 'actual';
 
@@ -56,11 +58,31 @@ export const OWNER_HINT: Record<ScheduleOwner, string> = {
   human:
     'Edited in the app. The sync will NOT overwrite this day — a differing upstream value is parked for you to arbitrate.',
   actual:
-    'Production has already been reported for this date. The plan is frozen for everyone, including the sync.',
+    'Production has been reported for this date. The sync will never write it again — but you can still correct the plan.',
 };
 
-/** Whether a day can be edited in-app at all. `actual` is frozen; the RPC would
- *  refuse the write anyway, so the UI must not pretend otherwise. */
-export function isScheduleDayEditable(effectiveOwner: ScheduleOwner): boolean {
-  return effectiveOwner !== 'actual';
-}
+// ---------------------------------------------------------------------
+// REPORTEDNESS IS NOT A LOCK  (migration 20260730090000)
+// ---------------------------------------------------------------------
+// `isScheduleDayEditable(effectiveOwner)` used to live here and return false for
+// `'actual'`. It is GONE, deliberately, rather than changed to `return true` —
+// a predicate that is constant is an invitation to re-introduce the bug it
+// caused. Both human RPCs (`fn_save_schedule_day`, `fn_release_schedule_day`)
+// dropped their actuals freeze; only `fn_apply_schedule_upstream` (the SYNC,
+// which this app never calls) still has one. Before that, 166 of the calendar's
+// 273 days were unreachable in-app with no remedy.
+//
+// **Editability and reportedness are now independent facts. Do not re-conflate
+// them.** The UI must keep SHOWING reportedness — it is exactly why an edit here
+// is consequential — but must never gate an input on it.
+
+/** Hover sentence for the "production reported" marker on the date cell. */
+export const REPORTED_HINT =
+  'Production has been reported for this date. The plan stays editable so you can correct it — but you are changing plan-vs-actual history, and the daily sync will never write this day.';
+
+/** Hover sentence for the badge on a day whose plan was corrected AFTER the
+ *  fact — the signal `effective_owner` hides, since it collapses to 'actual'
+ *  the moment a day is reported. Backed by
+ *  `view_production_schedule_state.human_edit_after_report`. */
+export const HUMAN_EDIT_AFTER_REPORT_HINT =
+  'The plan for this day was corrected in the app after production had already been reported.';

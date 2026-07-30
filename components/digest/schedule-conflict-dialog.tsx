@@ -46,10 +46,18 @@ const FIELD_LABEL: Record<string, string> = {
   source: 'Source',
 };
 
-/** Fields the in-app editor can write. `grades` is read-only in Phase B, so a
- *  grades-only conflict can still be arbitrated — "take Joseph's" simply cannot
- *  carry the grades across, which the dialog says out loud. */
-const WRITABLE = new Set(['shifts', 'setup', 'projected_tons', 'remarks']);
+/** Fields "take Joseph's" can write. `grades` JOINED this set once the setup
+ *  library gave the app a writer for it (see `SchedulePatch` in
+ *  `schedule/actions.ts`) — a grades difference is now carried across like any
+ *  other, so the dialog no longer has to apologise for dropping it. `source` is
+ *  provenance, not a plan value, and stays read-only. */
+const WRITABLE = new Set([
+  'shifts',
+  'setup',
+  'projected_tons',
+  'grades',
+  'remarks',
+]);
 
 /** Render one side's value for a field as compact display text. */
 function fmtField(side: ScheduleConflictSide | null, field: string): string {
@@ -103,7 +111,9 @@ export function ScheduleConflictDialog({
     return changed.length > 0 ? changed : [...WRITABLE];
   }, [conflict.changedFields]);
 
-  const gradesOnly = fields.length > 0 && fields.every((f) => !WRITABLE.has(f));
+  /** Nothing on this conflict can be written by "take Joseph's" (only `source`
+   *  differs). Rare, but the dialog must not promise a write it cannot make. */
+  const readOnlyOnly = fields.length > 0 && fields.every((f) => !WRITABLE.has(f));
 
   async function run(kind: 'mine' | 'joseph') {
     setBusy(kind);
@@ -117,6 +127,7 @@ export function ScheduleConflictDialog({
                 shifts: conflict.proposed?.shifts ?? 0,
                 setup: conflict.proposed?.setup ?? null,
                 projected_tons: conflict.proposed?.projected_tons ?? null,
+                grades: conflict.proposed?.grades ?? null,
                 remarks: conflict.proposed?.remarks ?? null,
               },
             })
@@ -229,12 +240,11 @@ export function ScheduleConflictDialog({
         </div>
 
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          {gradesOnly ? (
+          {readOnlyOnly ? (
             <>
-              Only read-only fields differ. &ldquo;Take Joseph&apos;s&rdquo;
-              cannot write <span className="font-medium">grades</span> from the
-              app yet, so it will clear the parked proposal and let the next sync
-              re-apply it in full.
+              Only read-only fields differ, so &ldquo;Take Joseph&apos;s&rdquo;
+              has nothing to write — it will clear the parked proposal and let
+              the next sync re-apply it in full.
             </>
           ) : (
             <>

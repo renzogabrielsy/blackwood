@@ -12,8 +12,11 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
 | `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
 | `electricity/electricity-cards-mobile.tsx` | **Phone read layer** for Electricity (`sm:hidden`). Simplest `MobileCardList` — card headline `date · meter · TTL KWH · [start→end]`, detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns (`diff_kwh`, `consumption_kwh`). |
-| `schedule/actions.ts` | **The in-app write path for `production_schedule`** (Phase B, 2026-07-30). Server actions only — the client never touches Supabase. `saveScheduleDay` (edit → `fn_save_schedule_day`, flips the WHOLE DAY to `owner='human'`), `takeUpstreamProposal` / `keepMineClearPending` (the two conflict resolutions — the ONLY callers that pass `p_clear_pending: true`), `releaseScheduleDay` (hand a human day back to the sync). Every value-bearing mutation goes through `fn_save_schedule_day` with the `row_version` the client READ, so a save racing the sync returns `version_conflict` and is surfaced as "reload", never force-written. `revalidatePath('/')` after each success (the schedule lives at `/?view=schedule`). Exports `SchedulePatch`, `SaveOutcome`, `ScheduleWriteResult`. **Schema gap, reported not patched:** no RPC exists to return ownership to the sync, so `releaseScheduleDay` uses a conditional PostgREST UPDATE guarded on `row_version` + `owner='human'` in the same statement (the actuals freeze is read first from `view_production_schedule_state` — advisory, since the real freeze is re-checked inside `fn_apply_schedule_upstream` / `fn_save_schedule_day`). A `fn_release_schedule_day(p_plan_date, p_expected_row_version)` belongs in a later migration. |
+| `schedule/actions.ts` | **The in-app write path for `production_schedule`** (Phase B, 2026-07-30). Server actions only — the client never touches Supabase. `saveScheduleDay` (edit → `fn_save_schedule_day`, flips the WHOLE DAY to `owner='human'`), `takeUpstreamProposal` / `keepMineClearPending` (the two conflict resolutions — the ONLY callers that pass `p_clear_pending: true`), `releaseScheduleDay` (hand a human day back to the sync). Every value-bearing mutation goes through `fn_save_schedule_day` with the `row_version` the client READ, so a save racing the sync returns `version_conflict` and is surfaced as "reload", never force-written. `revalidatePath('/')` after each success (the schedule lives at `/?view=schedule`). Exports `SchedulePatch`, `SaveOutcome`, `ScheduleWriteResult`. **Schema gap CLOSED:** `releaseScheduleDay` now calls the real RPC `fn_release_schedule_day(p_plan_date, p_expected_row_version)` (migration `20260730070000`), so there is no read-then-write left anywhere in this file. Since `20260730090000` neither human RPC has an actuals freeze — see "Reportedness freezes the SYNC, not the HUMAN" below; the `'frozen'` arm of `SaveOutcome` is now unreachable from this file, and `releaseScheduleDay` no longer needs its advisory pre-read of `view_production_schedule_state`. |
 | `schedule/page.tsx` | **The `/production/schedule` route — renders the editable month grid** (no longer a redirect; 2026-07-30). Historical note (BUG-003). The Production Schedule left the production module: it lived under `layout.tsx` and so wrongly rendered inside the Daily·Electricity·Trucks tab shell. It is now a **view on the Home Digest** — `/?view=schedule` — and the month table itself lives in `components/digest/schedule-month-view.tsx` (`<ScheduleMonthView month basePath extraParams />`, unchanged queries/columns/frozen panes). **The redirect was removed** because the schedule became reachable ONLY via a toggle on `/`, so the shipped editor read as "never built". This file now renders `<ScheduleMonthView month basePath="/production/schedule" />` inside the shared `HOME_SHELL_CLS` (`components/digest/shell.ts`) — the SAME component, container and data loading `/?view=schedule` uses. **Two doors, one surface; no fork.** BUG-003 stays fixed by the `(tabs)` ROUTE GROUP: `layout.tsx` + `page.tsx` + `error.tsx` + `loading.tsx` moved into `app/(app)/production/(tabs)/` (URLs unchanged), so the Daily·Electricity·Trucks shell can no longer reach this sibling route. The page renders NO title header — the navbar owns it (`exact('/production/schedule')` in `getBreadcrumb()`). Its phone card list moved to `components/digest/schedule-cards-mobile.tsx`. See `app/(app)/CONTEXT.md` → "`/` hosts TWO views". |
+| `setups/page.tsx` | **The `/production/setups` route — the SETUP LIBRARY.** Server component: loads `production_setups` (**ACTIVE *and* RETIRED** — that is the point of the screen), maps via `parseGradeMix`, hands `SetupLibraryRow[]` to `SetupsManager`. Sits OUTSIDE `(tabs)/` for the same reason `schedule/` does — it is not a Daily · Electricity · Trucks tab and must not inherit their shell (BUG-003). Renders no title header; the navbar owns it (`exact('/production/setups')` in `getBreadcrumb()`, plus a `Setup Library` entry in `ICTC_MODULES`). |
+| `setups/setups-manager.tsx` | `'use client'` — add · edit · **retire / restore** · reorder, Excel Standard (`table-fixed`, explicit px summing to `min-w-[1112px]` inside `overflow-x-auto`, `px-2 py-1`, `h-8`, mono right-aligned numerics). **There is no delete anywhere**: retiring flips `active=false`, which only removes the setup from the day-grid dropdown — retired rows stay listed (dimmed, struck-through, under their own sub-header) and restorable, because `production_schedule.setup` is free text with no FK and every historical plan row keeps its label forever. Reorder is ↑/↓ within the ACTIVE block, sent as the whole ordered id list. The per-row `t / shift` figure is `projectSetup(mix, 1).projectedTons` — the ONE implementation, never a local `reduce()`. **"Editing a mix is not retroactive"** is said in three places (banner, edit dialog, retire confirm) because it is the one genuinely surprising behaviour. Errors via `errorToast()` / inline Copy blocks (HARD RULE). |
+| `setups/actions.ts` | Server actions for `production_setups` — `createProductionSetup` (returns the written `code` so the day grid can apply it in the same motion), `updateProductionSetup`, `setProductionSetupActive` (retire/restore; **no delete action exists in this file**), `reorderProductionSetups` (rewrites `sort_order` as 10, 20, 30… from the client's ordered id list — immune to the drift a swap-with-neighbour scheme accumulates when two rows share a `sort_order`, which the seeded data can). Plain PostgREST, no RPC — there is no ownership model to protect (RLS gives `authenticated` full CRUD). Validation is mirrored server-side, and `readableDbError()` turns the UNIQUE violation on `code` (`23505`) into a sentence instead of leaking `duplicate key value violates unique constraint "production_setups_code_key"`. Revalidates `/production/setups`, `/production/schedule` and `/`. |
 | `(tabs)/layout.tsx` | Client layout for the TAB surfaces only (inside the URL-invisible `(tabs)` route group, so `/production/schedule` opts out) — wraps in `ProductionTabProvider` + `ProductionPeriodProvider` + Card shell. Mounts the universal `<PeriodPicker />` header bar above tab content + `<ProductionSheetTabs />` footer |
 | `error.tsx` | Error boundary |
 | `loading.tsx` | Loading skeleton |
@@ -63,7 +66,86 @@ but its **server actions** stay here at `app/(app)/production/schedule/actions.t
 | `joseph` | following Joseph Go's emailed schedule | yes | yes |
 | `gsheet` | Renzo's PROD SCHED baseline | yes | yes |
 | `human` | edited in the app | yes | **no** — upstream is parked in `pending_upstream` |
-| `actual` | production reported for the date (DERIVED, never stored) | **no — frozen** | no |
+| `actual` | production reported for the date (DERIVED, never stored) | **yes** (since 2026-07-30) | **no — frozen** |
+
+### Reportedness freezes the SYNC, not the HUMAN (2026-07-30)
+
+Migration `20260730090000_human_may_edit_reported_days.sql` removed the actuals freeze from
+the two HUMAN write paths (`fn_save_schedule_day`, `fn_release_schedule_day`) and left it
+**untouched** in `fn_apply_schedule_upstream`. Two different things had been conflated:
+a stale forecast rewriting history is a bug; an operator correcting a past plan is the
+point of the feature. Before this, 166 of the calendar's 273 days were unreachable in-app.
+
+**`is_reported` and editability are now INDEPENDENT — do not re-conflate them in the UI.**
+
+| field on `view_production_schedule_state` | meaning after this change |
+|---|---|
+| `is_reported` | production reported for the date. **Still exposed, still SHOWN.** The sync's freeze; purely informational for the editor. **Never gate an input on it.** |
+| `effective_owner` | `'actual'` when reported, else the stored owner. **Unchanged.** Note it MASKS a human owner on a reported day. |
+| `human_edit_after_report` | **NEW, additive.** `owner = 'human' AND is_reported` — the operator corrected the plan after the fact. This is the badge signal `effective_owner` hides. |
+
+Consequences for the frontend:
+
+- `SaveOutcome`'s `'frozen'` branch in `schedule/actions.ts` is now **dead** for both
+  `saveScheduleDay` and `releaseScheduleDay` — neither RPC can return it any more
+  (`fn_apply_schedule_upstream` still can, but the app never calls that). Harmless to leave
+  typed; the message it renders is now unreachable and misleading if it ever surfaces.
+- `releaseScheduleDay`'s **read-then-write is gone**: the actuals freeze it used to pre-read
+  from `view_production_schedule_state` no longer exists, so the RPC's own WHERE
+  (`row_version` + `owner='human'`) is the whole guard. Drop the advisory pre-read.
+- `row_version` optimistic concurrency is **unchanged on every path**.
+
+## Setup library + projection (2026-07-30)
+
+`public.production_setups` — reference data the operator maintains. One row per named
+**per-shift grade mix**: `code` (the literal string that goes into
+`production_schedule.setup`), `label`, `grade_mix` (jsonb), `active`, `sort_order`, `notes`,
+`created_at` / `created_by` → `profiles(id)` / `updated_at`. RLS on, `authenticated` has
+full read + write (plain PostgREST, no RPC — there is no ownership model to protect),
+`anon` nothing. **No FK from `production_schedule.setup`** — that column stays free text so
+an unrecognized upstream setup name can never fail the sync and retiring a setup can never
+invalidate history.
+
+Five setups seeded from the table's own history (see the migration header for the
+row-by-row provenance): `SOLID 3X50` `{"3X50":25}` · `3X50 / 6X50` `{"3X50":20,"6X50":6}` ·
+`3X50 / 4X8` `{"3X50":21,"4X8":5}` · `3X50 / 2X6` `{"3X50":10,"2X6":15}` ·
+`3X50 / 8X50` `{"3X50":20,"8X50":6}`.
+
+**The projection lives in exactly one place: `lib/production/setup-projection.ts` (PURE, no
+imports, client- and server-safe).** It applies three rules verified on every historical
+row: a setup is a per-shift mix; it scales linearly with `shifts`; `projected_tons` is the
+sum of the grade values (enforced by construction — the total is the sum of the rounded
+parts). Whole-ton rounding, half away from zero. `shifts <= 0` or an empty mix →
+`{grades: null, projectedTons: 0}`, exactly matching the 56 rest-day rows.
+
+```ts
+import {
+  projectSetup, projectSetupByCode, toProductionSetup, isOnTemplate,
+  type ProductionSetup, type SetupProjection, type GradeMix,
+} from '@/lib/production/setup-projection'
+
+// load the library once (server component / server action)
+const { data } = await supabase
+  .from('production_setups')
+  .select('code, label, grade_mix, active, sort_order, notes')
+  .eq('active', true)
+  .order('sort_order', { ascending: true })
+const setups: ProductionSetup[] = (data ?? []).map(toProductionSetup)
+
+// live preview, per keystroke, no round-trip
+const { grades, projectedTons } = projectSetupByCode(setups, setupCode, shifts)
+// then send them in the patch — fn_save_schedule_day STORES what it is given
+```
+
+**Per-day overrides are normal and must stay freely editable after the projection fills the
+fields.** History proves it: `SOLID 3X50` ran 25 t on 127 days and 30 t on 2;
+`3X50 / 4X8` ran 26 t on 16 days and 24 t on 2. `isOnTemplate(projection, storedGrades,
+storedTons)` is provided purely so the grid can badge an override — it is **not** a
+validation error. The projection is a form default, not a derivation: `projected_tons` and
+`grades` are STORED plan facts, and must stay stored so that editing the library tomorrow
+never rewrites what was planned last February. This is why there is deliberately **no SQL
+projection function** — `scripts/verify-setup-projection.ts` (9 checks,
+`npx tsx scripts/verify-setup-projection.ts`) fails if a second implementation appears.
 
 **Rules the UI enforces (and the DB re-enforces):**
 - **Editing any cell takes the WHOLE DAY.** Approved lock granularity; there is no
@@ -81,7 +163,30 @@ but its **server actions** stay here at `app/(app)/production/schedule/actions.t
   (owner → `joseph`/`gsheet` from the `source` prefix, `source_rev` cleared so the
   next run RE-APPLIES rather than no-opping). Without it ownership only ratchets
   one way and the calendar slowly freezes.
-- **Grades (JSONB) are read-only** in Phase B — no JSON editor yet.
+- **Grades (JSONB) are never hand-typed** — there is still no JSON editor. They are
+  written ONLY by the projection, which fills `grades` + `projected_tons` together.
+  The grid's Grades column is read-only but LIVE: it re-renders from the projection
+  draft the moment a setup or shift count changes. `SchedulePatch.grades` and the
+  conflict dialog's `WRITABLE` set both gained `grades` for the same reason.
+
+### Where the projection is wired (frontend, 2026-07-30)
+
+| File | Role |
+|---|---|
+| `components/digest/schedule-setup-cell.tsx` | The Setup **dropdown** over the active library (+ a pinned "not in library" row for a legacy string, a per-option `t/shift` hint, and a `+ New setup…` action). Controlled `open` so F2 / Space still reach it from the keyboard. |
+| `components/production/setup-form-dialog.tsx` | ONE create/edit dialog, TWO callers (the grid's inline `+ New setup…` and the library screen), so the two can never disagree about what a setup is. Shows the live `perShiftTons` as the operator types — again `projectSetup(mix, 1)`, not a second `reduce()`. |
+| `components/digest/schedule-month-grid.tsx` | Owns the recompute rule (A / B / C) — see `components/digest/CONTEXT.md`. |
+
+**THE RECOMPUTE RULE, stated once here and once in the grid header:**
+**(A)** picking a library setup ALWAYS recomputes `grades` + `projected_tons` at the
+day's current shift count, overwriting what was there — choosing a template is an
+explicit request for that template. **(B)** changing `shifts` recomputes **only if
+the day was still `isOnTemplate()` at the OLD shift count** — that is exactly what
+`isOnTemplate` is for, and it is why bumping a shift count cannot silently destroy a
+deliberate override (`SOLID 3X50` at 30 t stays 30 t). **(C)** neither "— No setup"
+nor re-picking a legacy string recomputes, because neither names a template; "— No
+setup" clears the LABEL only, since a 2-shift day with no setup name is a labelling
+gap, not a rest day, and zeroing its tonnage would be destructive.
 
 ## Shared Types
 `BulkSavePayload<TInsert, TUpdate>` — now defined locally in `electricity/actions.ts` and `trucks/actions.ts` (no longer shared from `daily/actions.ts` — the daily module was rewritten with a different atomic save pattern).

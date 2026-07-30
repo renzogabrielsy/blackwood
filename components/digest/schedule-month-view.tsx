@@ -35,6 +35,11 @@ import {
 } from "@/components/digest/schedule-cards-mobile";
 import { ScheduleMonthGrid } from "@/components/digest/schedule-month-grid";
 import { toScheduleOwner } from "@/components/digest/schedule-owner";
+import {
+  parseGradeMix,
+  toProductionSetup,
+  type ProductionSetup,
+} from "@/lib/production/setup-projection";
 import type {
   ScheduleConflict,
   ScheduleConflictSide,
@@ -205,11 +210,12 @@ export async function ScheduleMonthView({
 
   // Plan STATE (ownership-aware read model) + parked conflicts + actual tons +
   // actual worked hours for the month, all joined by date.
-  const [schedRes, conflictRes, actualRes, hoursRes] = await Promise.all([
+  const [schedRes, conflictRes, actualRes, hoursRes, setupRes] =
+    await Promise.all([
     supabase
       .from("view_production_schedule_state")
       .select(
-        "plan_date, dow, shifts, setup, projected_tons, grades, remarks, source, owner, effective_owner, is_reported, row_version, human_edited_at"
+        "plan_date, dow, shifts, setup, projected_tons, grades, remarks, source, owner, effective_owner, is_reported, human_edit_after_report, row_version, human_edited_at"
       )
       .gte("plan_date", bounds.start)
       .lte("plan_date", bounds.end)
@@ -231,7 +237,20 @@ export async function ScheduleMonthView({
       .select("date, work_hrs")
       .gte("date", bounds.start)
       .lte("date", bounds.end),
+    // The SETUP LIBRARY — ACTIVE rows only. A retired setup must vanish from the
+    // day-grid dropdown while staying valid on every historical plan row
+    // (`production_schedule.setup` is free text with no FK) and visible on the
+    // management screen. Loaded here, once, per month render: the grid needs it
+    // in memory to project as the operator types (a round-trip per keystroke is
+    // not a design option).
+    supabase
+      .from("production_setups")
+      .select("code, label, grade_mix, active, sort_order, notes")
+      .eq("active", true)
+      .order("sort_order", { ascending: true }),
   ]);
+
+  const setups: ProductionSetup[] = (setupRes.data ?? []).map(toProductionSetup);
 
   const actualByDate = new Map<string, number>();
   for (const a of actualRes.data ?? []) {
@@ -294,6 +313,10 @@ export async function ScheduleMonthView({
         shifts,
         setup: r.setup,
         gradeTons: parseGradeTons(r.grades),
+        grades: (() => {
+          const mix = parseGradeMix(r.grades);
+          return Object.keys(mix).length > 0 ? mix : null;
+        })(),
         projectedTons,
         actualTons,
         actualHrs,
@@ -305,6 +328,7 @@ export async function ScheduleMonthView({
         owner: toScheduleOwner(r.owner),
         effectiveOwner: toScheduleOwner(r.effective_owner),
         isReported: r.is_reported === true,
+        humanEditAfterReport: r.human_edit_after_report === true,
         // row_version is NOT NULL on the table; the view types it nullable.
         rowVersion: r.row_version ?? 1,
         humanEditedAt: r.human_edited_at ?? null,
@@ -389,9 +413,15 @@ export async function ScheduleMonthView({
             <span className="inline-block h-2 w-2 rounded-sm bg-sky-500/60" />
             You
           </span>
-          <span className="inline-flex items-center gap-1.5">
+          {/* NOT "frozen" any more — reportedness freezes the SYNC, not the
+              human (migration 20260730090000). Saying "frozen" here is exactly
+              the conflation that locked 166 days out of reach. */}
+          <span
+            className="inline-flex items-center gap-1.5"
+            title="Production reported. The sync will never write these days; you still can."
+          >
             <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500/60" />
-            Actual (frozen)
+            Actual (reported)
           </span>
         </div>
       </div>
@@ -420,6 +450,7 @@ export async function ScheduleMonthView({
           <div className="hidden min-w-0 sm:block">
             <ScheduleMonthGrid
               rows={rows}
+              setups={setups}
               totals={{
                 projected: totalProjected,
                 actual: totalActual,

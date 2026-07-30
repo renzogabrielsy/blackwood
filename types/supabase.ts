@@ -935,6 +935,53 @@ export type Database = {
           },
         ]
       }
+      production_setups: {
+        Row: {
+          active: boolean
+          code: string
+          created_at: string
+          created_by: string | null
+          grade_mix: Json
+          id: string
+          label: string | null
+          notes: string | null
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          code: string
+          created_at?: string
+          created_by?: string | null
+          grade_mix: Json
+          id?: string
+          label?: string | null
+          notes?: string | null
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          code?: string
+          created_at?: string
+          created_by?: string | null
+          grade_mix?: Json
+          id?: string
+          label?: string | null
+          notes?: string | null
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_setups_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       production_shifts: {
         Row: {
           created_at: string
@@ -1922,6 +1969,7 @@ export type Database = {
           effective_owner: string | null
           grades: Json | null
           has_pending_upstream: boolean | null
+          human_edit_after_report: boolean | null
           human_edited_at: string | null
           human_edited_by: string | null
           is_reported: boolean | null
@@ -1945,6 +1993,7 @@ export type Database = {
           effective_owner?: never
           grades?: Json | null
           has_pending_upstream?: never
+          human_edit_after_report?: never
           human_edited_at?: string | null
           human_edited_by?: string | null
           is_reported?: never
@@ -1968,6 +2017,7 @@ export type Database = {
           effective_owner?: never
           grades?: Json | null
           has_pending_upstream?: never
+          human_edit_after_report?: never
           human_edited_at?: string | null
           human_edited_by?: string | null
           is_reported?: never
