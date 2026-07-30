@@ -1,10 +1,13 @@
 // Async Server Component — the Production Schedule MONTH view (plan vs actual),
 // now the EDITING surface for the plan (Phase B of the master plotter).
 //
-// It lives in the DIGEST world: rendered by `/` under `?view=schedule` (see
-// app/(app)/page.tsx + components/digest/home-view-toggle.tsx). The route
-// `/production/schedule` redirects here, so the production tab shell (Daily ·
-// Electricity · Trucks) no longer wraps it.
+// TWO DOORS, ONE SURFACE. This component is rendered by BOTH entry points, in the
+// same `HOME_SHELL_CLS` container, with the same data loading — there is no fork:
+//   • `/` under `?view=schedule`  (app/(app)/page.tsx + home-view-toggle.tsx)
+//   • `/production/schedule`      (its own route — the URL a user naturally tries)
+// The production tab shell (Daily · Electricity · Trucks) reaches NEITHER: it now
+// lives in the `app/(app)/production/(tabs)/` route group, which the schedule
+// route sits outside of. That is what BUG-003 was actually about.
 //
 // Domain layer (charcoal-shaped): queries `view_production_schedule_state` (the
 // ownership-aware read model), `view_production_schedule_conflicts` (parked
@@ -404,8 +407,12 @@ export async function ScheduleMonthView({
               production surfaces). */}
           <div className="sm:hidden flex flex-col gap-2">
             <ScheduleCardsMobile rows={mobileRows} />
+            {/* Honest about the one place editing genuinely does not exist:
+                below `sm` this is a read-only card list, so the hint points at
+                the screen size rather than at a grid that isn't rendered. */}
             <p className="text-[11px] text-muted-foreground">
-              Editing the plan is available on a larger screen.
+              Read-only on this screen — the plan is editable on a tablet or
+              desktop, where the full month grid replaces these cards.
             </p>
           </div>
 

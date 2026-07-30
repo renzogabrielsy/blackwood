@@ -4,9 +4,10 @@
 // `/` hosts TWO surfaces, switched by `?view=digest|schedule` (default `digest`,
 // which OMITS the param). The branch happens HERE, server-side, so only the
 // selected surface's queries run — the toggle (HomeViewToggle) merely writes the
-// URL. The schedule surface used to be the `/production/schedule` route, which
-// wrongly inherited the production tab shell (BUG-003); that route now redirects
-// here.
+// URL. `/production/schedule` renders the SAME `<ScheduleMonthView />` in the same
+// shell — two doors, one surface. (BUG-003 was the production TAB SHELL leaking
+// onto the schedule, not the URL; the shell now lives in a `(tabs)` route group
+// that the schedule route sits outside of.)
 import { Suspense } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -28,10 +29,10 @@ import { BagInventory } from "@/components/digest/bag-inventory";
 import { ShipmentsBand, ShipmentsBandFallback } from "@/components/digest/shipments-band";
 import { DigestAutoRefresh } from "@/components/digest/digest-auto-refresh";
 import { SyncLauncher } from "@/components/sync/SyncLauncher";
-
-/** Shared page shell — same container for both views so the toggle never shifts. */
-const SHELL_CLS =
-  "mx-auto flex w-full max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-5";
+// Shared page shell — same container for both views so the toggle never shifts,
+// AND the same container `/production/schedule` uses, so the two doors onto the
+// schedule are pixel-identical.
+import { HOME_SHELL_CLS as SHELL_CLS } from "@/components/digest/shell";
 
 export default async function HomePage({
   searchParams,
@@ -120,9 +121,11 @@ async function DigestBoard() {
               </span>
               <Link
                 href="/?view=schedule"
+                title="Open the full month plan — Setup, Shifts, Projected tons and Remarks are editable there (tablet/desktop)."
                 className="text-[11px] font-medium text-primary hover:underline"
               >
-                View full schedule →
+                <span className="hidden sm:inline">Open month plan to edit →</span>
+                <span className="sm:hidden">Open full month plan →</span>
               </Link>
             </div>
           </div>

@@ -97,6 +97,21 @@ Correct reference implementations already in-repo: `rc-movement-matrix.tsx`
   (+ `production/page.tsx`'s ProductionView) into `app/(app)/production/(tabs)/`;
   `schedule/` stays outside the group, URL unchanged, tab bar gone. Doesn't achieve the
   digest-toggle end-state; use only if (b) is too much scope in the moment.
+- **Follow-up shipped 2026-07-30 — BOTH approaches now, not either/or.** The PRIMARY fix
+  left `/production/schedule` as a `redirect()`, which made the digest toggle the ONLY
+  way in: Renzo tried the obvious URL, got bounced to the home page, and concluded the
+  inline editor had never shipped. That is a discoverability regression, not a new bug in
+  the fix's logic — the ledger's own spec already permitted a "deep-link alias". So the
+  Fallback (S) route-group escape was ALSO applied: `layout.tsx` + `page.tsx` +
+  `error.tsx` + `loading.tsx` moved into `app/(app)/production/(tabs)/` (URLs unchanged —
+  `daily/ electricity/ trucks/` are NOT routes, only lazy tab components, so they stayed
+  put), and `/production/schedule` now renders the SAME `<ScheduleMonthView />` in the
+  SAME `HOME_SHELL_CLS` shell as `/?view=schedule`. **Two doors, one surface, no fork.**
+  The original symptom stays fixed: the tab shell is scoped to the `(tabs)` group and
+  cannot reach the schedule route. Shipped alongside it: a hover affordance on editable
+  cells (`cursor-cell` + sky tint/hairline, suppressed on the active cell, absent on
+  frozen days) and a hint line naming the four editable columns and the
+  click/type · F2 · Enter · Esc model.
 
 ## BUG-004 — Blocking grid on iPhone landscape: crushed cells, no horizontal scroll
 **Status:** ✅ FIXED (`3fd0d94`, 2026-07-17) · **Effort:** S · **Severity:** medium

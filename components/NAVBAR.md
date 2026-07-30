@@ -33,12 +33,13 @@ The old long if-chain was refactored into an **ordered registry array**. Each en
 
 | Match | Back Label | Page Title | Description |
 |------|-----------|------------|-------------|
-| `/` **+ `?view=schedule`** | Back to Digest | Production Schedule | Month plan vs actual — projected tons & Joseph's authoritative schedule |
+| `/` **+ `?view=schedule`** | Back to Digest | Production Schedule | Month plan vs actual — click a cell to edit the plan |
 | `prefix('/edit/')` | Back to Inventory | Edit Discussion | — |
 | `prefix('/inventory/blocking')` | Back to Inventory | Blocking | Warehouse grid — block occupancy & balances |
 | `prefix('/inventory/rc-movement')` | Back to Inventory | Movement | Daily feed matrix — campaign-scoped day × block |
 | `prefix('/inventory/flecon-bags')` | Back to Inventory | Bag Inventory | FLECON bag stock — balances & movement ledger |
 | `prefix('/inventory')` | Back to Dashboard | Inventory | Raw charcoal deliveries, usage & tracking |
+| `exact('/production/schedule')` | Back to Production | Production Schedule | Month plan vs actual — click a cell to edit the plan |
 | `prefix('/production')` | Back to Dashboard | Production | Daily runs, downtime, waste, electricity & trucks |
 | `prefix('/summaries')` | Back to Dashboard | Summaries | Delivery price & volume analysis — by period or supplier |
 | `prefix('/price-demos/demo1')` | Back to Demos | Terminal | Dual-axis volume × price command view (concept 1 of 4) |
@@ -54,7 +55,7 @@ The old long if-chain was refactored into an **ordered registry array**. Each en
 | `exact('/admin')` | Back to Dashboard | Admin Panel | Manage users and invitations |
 | `exact('/review-queue')` | Back to Dashboard | Review Queue | Pre-extracted rows from daily reports awaiting approval |
 
-> **No `/production/schedule` entry:** that route is a `redirect()` to `/?view=schedule` (BUG-003 — the schedule moved into the digest world), so it never renders. The FIRST registry entry (`/` + `?view=schedule`) titles it instead.
+> **`/production/schedule` has its OWN entry** (2026-07-30) and it MUST precede the `prefix('/production')` catch-all. The route no longer redirects: it renders the SAME `<ScheduleMonthView />` as `/?view=schedule` (two doors, one surface — see `app/(app)/production/schedule/page.tsx`). BUG-003 stays fixed because the production tab shell moved into the `app/(app)/production/(tabs)/` route group, which the schedule route sits outside of. Both entries carry the same title/description so the two doors read identically; only `backLabel`/`backHref` differ (Digest vs Production).
 
 > **Removed (stale):** the 9 `/draft1`–`/draft6` + `/rcindraft1`–`/rcindraft3` entries (their route dirs no longer exist) were deleted from the registry.
 
@@ -66,7 +67,7 @@ A nested information architecture grouped by tenant. The dropdown is built from 
 | Constant | Section | Items |
 |----------|---------|-------|
 | `ICTC_INVENTORY` | ICTC · Davao → **Inventory** sub-group (indented) | Blocking (`/inventory/blocking`) · Deliveries (`/inventory?tab=deliveries`) · Usage (`/inventory?tab=usage`) · Movement (`/inventory/rc-movement`) · Bag Inventory (`/inventory/flecon-bags`) |
-| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · Summaries (`/summaries`) · Accounting (disabled) |
+| `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · **Prod Schedule (`/production/schedule`)** · Summaries (`/summaries`) · Shipments (`/shipments`) · Accounting (disabled) |
 | `CENAPRO_MODULES` | Cenapro · Cebu | Production (`/cenapro/production`) · Flec Inventory (`/cenapro/inventory`) |
 
 Render structure inside `DropdownMenuContent`:

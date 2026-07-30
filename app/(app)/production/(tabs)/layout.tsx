@@ -1,10 +1,18 @@
 'use client';
 
+// Tab shell for the Daily · Electricity · Trucks surfaces ONLY.
+//
+// It lives inside the `(tabs)` ROUTE GROUP (URL-invisible) rather than at
+// `production/` so that sibling production routes can opt OUT of it. That is the
+// whole point of the group: `/production/schedule` sits OUTSIDE it and therefore
+// renders the schedule with no PeriodPicker header and no bottom tab bar — the
+// original BUG-003 symptom — while `/production` keeps its URL and its shell.
+// See docs/BUG_LEDGER.md → BUG-003 (Fallback S, the "route-group escape").
 import { Card, CardContent } from '@/components/ui/card';
-import { ProductionSheetTabs } from './components/sheet-tabs';
-import { ProductionTabProvider } from './components/production-tab-context';
-import { ProductionPeriodProvider } from './components/production-period-context';
-import { PeriodPicker } from './components/period-picker';
+import { ProductionSheetTabs } from '../components/sheet-tabs';
+import { ProductionTabProvider } from '../components/production-tab-context';
+import { ProductionPeriodProvider } from '../components/production-period-context';
+import { PeriodPicker } from '../components/period-picker';
 
 export default function ProductionLayout({ children }: { children: React.ReactNode }) {
     return (

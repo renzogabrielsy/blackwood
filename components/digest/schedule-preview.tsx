@@ -56,11 +56,17 @@ export function SchedulePreview({
             </Link>
           )}
         </div>
+        {/* The link is the main way anyone discovers that the month plan is
+            EDITABLE, so it names the action rather than reading as a passive
+            "view". It stays honest below `sm`, where the month surface is a
+            read-only card list (see ScheduleMonthView). */}
         <Link
           href="/?view=schedule"
+          title="Open the full month plan — Setup, Shifts, Projected tons and Remarks are editable there (tablet/desktop)."
           className="text-[11px] font-medium text-primary hover:underline"
         >
-          View full schedule →
+          <span className="hidden sm:inline">Open month plan to edit →</span>
+          <span className="sm:hidden">Open full month plan →</span>
         </Link>
       </div>
 
