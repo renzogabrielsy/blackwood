@@ -11,6 +11,7 @@
 import type { ScheduleRowState } from '@/lib/digest/day-status';
 import type { GradeTon } from '@/components/digest/format';
 import type { ScheduleOwner } from '@/components/digest/schedule-owner';
+import type { GradeMix } from '@/lib/production/setup-projection';
 
 /** One side of a parked conflict — the shape of both
  *  `pending_upstream.proposed` and the view's `current_values`. */
@@ -42,8 +43,12 @@ export interface ScheduleGridRow {
   dow: string;
   shifts: number;
   setup: string | null;
-  /** per-grade projected tonnage, heaviest first. READ-ONLY in Phase B. */
+  /** per-grade projected tonnage, heaviest first. DISPLAY shape. */
   gradeTons: GradeTon[];
+  /** The SAME grades as a keyed mix — what `isOnTemplate` compares against.
+   *  `gradeTons` is sorted-for-display and lossy about ordering; this is the
+   *  value. Never hand-typed: written only by the setup projection. */
+  grades: GradeMix | null;
   projectedTons: number | null;
   actualTons: number | null;
   actualHrs: number | null;
@@ -57,10 +62,16 @@ export interface ScheduleGridRow {
   // --- ownership (Phase A) ---
   /** The STORED owner. */
   owner: ScheduleOwner;
-  /** `actual` when production has been reported for the date, else `owner`. */
+  /** `actual` when production has been reported for the date, else `owner`.
+   *  NOTE it MASKS a human owner on a reported day — see `humanEditAfterReport`. */
   effectiveOwner: ScheduleOwner;
-  /** True when a `production_shifts` row exists — the authoritative freeze. */
+  /** True when a `production_shifts` row exists. Freezes the SYNC, **not** the
+   *  human (migration 20260730090000) — informational for the editor, and never
+   *  a reason to disable an input. */
   isReported: boolean;
+  /** `owner = 'human' AND is_reported` — the plan was corrected after the fact.
+   *  The signal `effectiveOwner` hides. */
+  humanEditAfterReport: boolean;
   /** Optimistic-concurrency token; every write must echo the value read here. */
   rowVersion: number;
   humanEditedAt: string | null;
@@ -77,11 +88,16 @@ export type ScheduleEditableField =
   | 'remarks';
 
 /** Visual column index → editable field (null = read-only / skipped by nav).
- *  MUST stay in lockstep with the <th>/<td> order in schedule-month-grid.tsx. */
+ *  MUST stay in lockstep with the <th>/<td> order in schedule-month-grid.tsx.
+ *
+ *  `setup` (col 2) is in the map so arrow/Tab navigation REACHES it, but it is
+ *  edited by a dropdown, not an inline text editor — the grid's own resolver
+ *  overrides `isEditable` for it and routes F2/Enter to opening the menu. Same
+ *  shape as the Cenapro ledger's dropdown columns. */
 export const SCHEDULE_COLUMN_MAP: readonly (ScheduleEditableField | null)[] = [
   null, // 0  Date
   null, // 1  Day
-  'setup', // 2  Setup
+  'setup', // 2  Setup (dropdown — see above)
   null, // 3  Grades (read-only JSONB)
   'shifts', // 4  Shifts
   'projected_tons', // 5  Proj t

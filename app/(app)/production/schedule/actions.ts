@@ -13,8 +13,9 @@
 //   • releaseScheduleDay   → fn_release_schedule_day(plan_date, version)    (revert)
 //
 // Every mutation goes through an RPC with the `row_version` the client read; the
-// RPC re-checks version + the actuals freeze INSIDE its own UPDATE, so a save
-// racing the sync is rejected, never merged.
+// RPC re-checks that version INSIDE its own UPDATE, so a save racing the sync is
+// rejected, never merged. (It no longer re-checks an actuals freeze — see the
+// REPORTEDNESS note below.)
 //
 // `p_clear_pending` defaults to FALSE on purpose: an unrelated edit must never
 // silently discard Joseph's parked proposal. Only the two explicit resolve
@@ -23,10 +24,17 @@
 // The schema gap this file used to document is CLOSED:
 // `fn_release_schedule_day` (migration
 // `20260730070000_fn_release_schedule_day.sql`) is now the sanctioned way to
-// hand a human-owned day back to the sync, and it enforces all three guards —
-// row_version, owner='human', and the `production_shifts` actuals freeze —
-// inside the single UPDATE's own WHERE. There is no read-then-write left in this
-// module.
+// hand a human-owned day back to the sync. There is no read-then-write left in
+// this module.
+//
+// REPORTEDNESS FREEZES THE SYNC, NOT THE HUMAN (migration
+// `20260730090000_human_may_edit_reported_days.sql`). Both human RPCs dropped
+// their actuals freeze; only `fn_apply_schedule_upstream` — which this app never
+// calls — still has one. So the guards left on these paths are `row_version`
+// (both) and `owner = 'human'` (release only), and **`'frozen'` is no longer a
+// reachable outcome here**: it has been removed from `SaveOutcome` rather than
+// left typed, because a dead arm whose message reads "the plan is frozen" would
+// be actively misleading if anything ever surfaced it.
 //
 // This module writes NO ₱ data — the schedule carries tons only — so it never
 // touches `canViewPrices()`.
@@ -39,12 +47,20 @@ import type { Json } from '@/types/supabase';
 // Contracts
 // ---------------------------------------------------------------------
 
-/** The four fields the in-app editor may patch. `grades` (JSONB) stays
- *  read-only in Phase B — there is no JSON editor yet. */
+/** The fields the in-app editor may patch.
+ *
+ *  `grades` is NOT hand-typed — there is still no JSON editor. It is written
+ *  ONLY by the setup projection (`lib/production/setup-projection.ts`), which
+ *  fills `grades` + `projected_tons` together from a chosen setup and a shift
+ *  count. `fn_save_schedule_day` has always accepted a `grades` key (it stores
+ *  the object verbatim when `jsonb_typeof(...) = 'object'`); the app simply had
+ *  nothing to put in it until the setup library existed. */
 export interface SchedulePatch {
   shifts?: number | null;
   setup?: string | null;
   projected_tons?: number | null;
+  /** Per-grade tonnage for the DAY (already scaled by shifts). */
+  grades?: Record<string, number> | null;
   remarks?: string | null;
 }
 
@@ -60,12 +76,7 @@ export type ScheduleUpstreamOwner = 'joseph' | 'gsheet';
  *  ownership back to the upstream owner" — and this module surfaces it to the UI
  *  as `released`, the app-facing name for the same event. No other outcome is
  *  renamed. */
-export type SaveOutcome =
-  | 'saved'
-  | 'frozen'
-  | 'missing'
-  | 'version_conflict'
-  | 'released';
+export type SaveOutcome = 'saved' | 'missing' | 'version_conflict' | 'released';
 
 export interface ScheduleWriteResult {
   ok: boolean;
@@ -83,8 +94,6 @@ function messageFor(outcome: SaveOutcome, planDate: string): string | undefined 
   switch (outcome) {
     case 'version_conflict':
       return `${planDate} changed since you loaded it (the sync or another operator wrote it first). Reload the page and redo your edit — nothing was saved.`;
-    case 'frozen':
-      return `${planDate} already has reported production, so the plan is frozen. Nothing was saved.`;
     case 'missing':
       return `${planDate} has no schedule row. The sync creates the calendar; a day it never planned cannot be edited in-app.`;
     default:
@@ -116,6 +125,9 @@ function toPatchJson(patch: SchedulePatch): Record<string, Json> {
   if (patch.setup !== undefined) out.setup = patch.setup;
   if (patch.projected_tons !== undefined)
     out.projected_tons = patch.projected_tons;
+  // `grades` must reach the RPC as a real JSON object (or null for a rest day),
+  // never a stringified blob — the function branches on `jsonb_typeof`.
+  if (patch.grades !== undefined) out.grades = patch.grades as Json;
   if (patch.remarks !== undefined) out.remarks = patch.remarks;
   return out;
 }
@@ -179,12 +191,16 @@ export async function takeUpstreamProposal(input: {
   expectedRowVersion: number;
   proposed: SchedulePatch;
 }): Promise<ScheduleWriteResult> {
-  // Every editable field is written explicitly (including nulls) so "take
-  // Joseph's" means "match Joseph", not "merge with mine".
+  // Every writable field is written explicitly (including nulls) so "take
+  // Joseph's" means "match Joseph", not "merge with mine". `grades` is included
+  // now that the RPC's grades key has an app-side writer (see SchedulePatch) —
+  // before the setup library existed, a grades difference could not be carried
+  // across and the dialog had to say so.
   const patch: Record<string, Json> = {
     shifts: input.proposed.shifts ?? 0,
     setup: input.proposed.setup ?? null,
     projected_tons: input.proposed.projected_tons ?? null,
+    grades: (input.proposed.grades ?? null) as Json,
     remarks: input.proposed.remarks ?? null,
   };
   return callSaveDay(input.planDate, input.expectedRowVersion, patch, true);

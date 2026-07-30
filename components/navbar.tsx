@@ -84,6 +84,10 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // (two doors, one surface) — so it needs its own entry, and it MUST precede the
     // `/production` catch-all below.
     { test: exact('/production/schedule'), backLabel: 'Back to Production', backHref: '/production', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — click a cell to edit the plan' },
+    // The reference data behind the schedule's Setup dropdown. Its "back" points
+    // at the schedule, not at Production — the schedule is where you came from
+    // and where the setups are used.
+    { test: exact('/production/setups'), backLabel: 'Back to Schedule', backHref: '/production/schedule', pageTitle: 'Setup Library', pageDescription: 'Named per-shift grade mixes — add, edit, retire & reorder' },
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
@@ -151,6 +155,10 @@ const ICTC_MODULES: Module[] = [
     // production tab — the only other way in is the Schedule toggle on `/`, which
     // is easy to miss entirely.
     { name: 'Prod Schedule', href: '/production/schedule' },
+    // The setup library. Listed here for the same reason Prod Schedule is: the
+    // only other door is a small "Setup library" link on the month grid, and a
+    // reference screen nobody can find is a reference screen nobody maintains.
+    { name: 'Setup Library', href: '/production/setups' },
     { name: 'Summaries', href: '/summaries' },
     { name: 'Shipments', href: '/shipments' },
     { name: 'Accounting', href: '/accounting', disabled: true },
