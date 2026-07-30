@@ -28,12 +28,21 @@ modular widget dashboard (drag/resize ReactGridLayout grid), which is now
   paint; the `Suspense` wrapper is mandatory for `useSearchParams`.
 - **Why the schedule lives here:** it used to be the `/production/schedule` route,
   which inherited `app/(app)/production/layout.tsx` and so rendered under the
-  Daily·Electricity·Trucks tab bar it has nothing to do with. `/production/schedule`
-  is now a **redirect** to `/?view=schedule` (carrying a valid `?month=` through) —
-  one canonical URL, no second surface inside the production shell.
+  Daily·Electricity·Trucks tab bar it has nothing to do with (BUG-003).
+- **TWO DOORS, ONE SURFACE (2026-07-30).** `/production/schedule` is **no longer a
+  redirect** — it renders the SAME `<ScheduleMonthView />` in the SAME
+  `HOME_SHELL_CLS` container (`components/digest/shell.ts`), with the same
+  server-side data loading. There is no second implementation. The tab shell can
+  no longer reach it because `layout.tsx` (+ `page.tsx`/`error.tsx`/`loading.tsx`)
+  moved into the URL-invisible `app/(app)/production/(tabs)/` route group, which
+  the schedule route sits outside of — BUG-003's own documented Fallback (S).
+  **Why the redirect had to go:** it left the toggle on `/` as the only way in, so
+  the shipped inline editor read as "never built" to the person who asked for it.
 - **Navbar:** bare `/` still returns `null` from `getBreadcrumb()` (no title, by
   design), but `/?view=schedule` resolves to **"← Back to Digest / Production
-  Schedule"** — the registry's first entry now tests pathname **+ query params**.
+  Schedule"** — the registry's first entry tests pathname **+ query params** — and
+  `/production/schedule` has its own entry (**"← Back to Production"**, same title
+  and description) placed BEFORE the `prefix('/production')` catch-all.
   See `components/NAVBAR.md`.
 
 The digest marries two views, stacked top→bottom (decision: "both, stacked"):

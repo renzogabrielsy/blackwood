@@ -101,6 +101,33 @@ const TABLE_MIN_W = 'min-w-[1340px]';
 const HEAD_CLS =
   'frozen-row bg-muted px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground';
 
+/**
+ * EDITABILITY AFFORDANCE (the "you can type here" cue).
+ *
+ * Nothing on a Blackwood grid announces that a cell is editable — you have to
+ * already know the click/type · F2 · Enter model. On a table that is mostly
+ * READ-ONLY columns (actual tons, hours, variance, status, owner) with four
+ * editable ones scattered among them, that is unreadable, so the four get a cue.
+ *
+ * Reused, not invented: `cursor-cell` is the house pointer for a selectable grid
+ * cell (`summaries/supplier-brief-client.tsx`, `price-demos/demo4`), and the soft
+ * tint + inset hairline mirrors `shared/grid/DatePickerCell`'s
+ * `hover:border-blue-500/60 hover:bg-blue-500/5` treatment. `transition-colors
+ * duration-150` is the micro-interaction budget (CLAUDE.md).
+ *
+ * A per-cell pencil icon was deliberately rejected: 31 days × 4 columns = 124
+ * icons of permanent noise in a dense grid. Hover is the right weight.
+ *
+ * Frozen days (effective_owner='actual') never receive this — their cells are
+ * plain <td>s with the padlock, so they read as inert by construction.
+ *
+ * The hover half is suppressed on the ACTIVE cell so its hairline can never
+ * shrink that cell's `ring-2 ring-primary` selection ring (a hover pseudo-class
+ * would out-specify it).
+ */
+const EDITABLE_CELL_HOVER_CLS =
+  'transition-colors duration-150 hover:bg-sky-500/10 hover:ring-1 hover:ring-inset hover:ring-sky-500/40';
+
 // ---------------------------------------------------------------------
 // Formatting (display only — no aggregation)
 // ---------------------------------------------------------------------
@@ -411,6 +438,8 @@ export function ScheduleMonthGrid({ rows, totals }: ScheduleMonthGridProps) {
   ) => {
     const align = opts.align ?? 'left';
     const value = valueOf(rowIdx, field);
+    const isActiveCell =
+      activeCell?.row === rowIdx && activeCell?.col === colIdx;
     return (
       <GridCell
         row={rowIdx}
@@ -427,7 +456,10 @@ export function ScheduleMonthGrid({ rows, totals }: ScheduleMonthGridProps) {
         className={cn(
           'px-2 text-xs',
           align === 'right' ? 'justify-end' : 'justify-start',
-          opts.mono && 'font-mono tabular-nums'
+          opts.mono && 'font-mono tabular-nums',
+          // "You can type here." See EDITABLE_CELL_HOVER_CLS above.
+          'cursor-cell',
+          !isActiveCell && EDITABLE_CELL_HOVER_CLS
         )}
         displayValue={
           <span className="w-full truncate" title={opts.title ?? value}>
@@ -454,12 +486,31 @@ export function ScheduleMonthGrid({ rows, totals }: ScheduleMonthGridProps) {
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-3">
-      {/* Pre-emptive legibility: the lock rule is stated BEFORE anyone types. */}
+      {/* Two things stated BEFORE anyone types: (1) this grid IS editable and
+          how — the affordance that was missing entirely, so the editor read as
+          unshipped; (2) the ownership consequence of using it. One dense muted
+          line, not a callout box. */}
       <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Editing any cell takes the <span className="font-medium">whole day</span>{' '}
-        — ownership flips to <span className="font-medium">You</span> and the
-        daily sync stops updating that date until you hand it back. Reported days
-        are frozen. Grades are read-only for now.
+        <span className="font-medium text-foreground">
+          Setup, Shifts, Proj t and Remarks are editable
+        </span>{' '}
+        — click a cell and start typing, or press{' '}
+        <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+          F2
+        </kbd>{' '}
+        /{' '}
+        <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+          Enter
+        </kbd>
+        ;{' '}
+        <kbd className="rounded border bg-muted px-1 font-mono text-[10px]">
+          Esc
+        </kbd>{' '}
+        cancels. Editing any cell takes the{' '}
+        <span className="font-medium">whole day</span> — ownership flips to{' '}
+        <span className="font-medium">You</span> and the daily sync stops updating
+        that date until you hand it back. Reported days (padlock) are frozen and
+        Grades are read-only for now.
       </p>
 
       <div

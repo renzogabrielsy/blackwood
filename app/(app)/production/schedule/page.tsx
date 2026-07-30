@@ -1,29 +1,38 @@
-// Deep-link alias — REDIRECTS to the schedule's new home, `/?view=schedule`.
+// `/production/schedule` — the Production Schedule's OWN route. Renders the real
+// editable month grid, not a redirect.
 //
-// The Production Schedule moved into the digest world (BUG-003): it is now a view
-// toggle on `/` rather than a production sub-route, because living under
-// `app/(app)/production/layout.tsx` wrongly wrapped it in the Daily · Electricity ·
-// Trucks tab shell. The month table itself lives in
-// `components/digest/schedule-month-view.tsx`.
+// WHY THIS IS NO LONGER A REDIRECT (read with docs/BUG_LEDGER.md → BUG-003):
+// BUG-003 was never "this URL is wrong" — it was "this URL wrongly inherits the
+// Daily · Electricity · Trucks tab shell from app/(app)/production/layout.tsx".
+// The ledger's own fix spec ends with "Keep `/production/schedule` as redirect
+// (or deep-link alias)", and its Fallback (S) is exactly the route-group escape
+// now in place: the tab shell moved into `app/(app)/production/(tabs)/`, so this
+// route sits OUTSIDE it and the shell never reaches it. The bug stays fixed; the
+// URL a user would naturally try now works.
 //
-// A redirect (not an aliased re-render) is deliberate: it leaves exactly ONE
-// canonical URL for the schedule, so the breadcrumb, the toggle state, and any
-// shared link all agree — an alias would keep a second surface rendering inside
-// the production shell (the bug) and force the tab bar to be conditionally
-// suppressed. `redirect()` throws before the page renders, so the shell never
-// paints.
-import { redirect } from "next/navigation";
+// The redirect had a real cost: the schedule was reachable only by finding a
+// toggle on `/`, so the editor read as "never shipped". Two doors, ONE surface —
+// this page and `/?view=schedule` render the SAME `<ScheduleMonthView />` in the
+// SAME `HOME_SHELL_CLS` container, with the same server-side data loading. There
+// is no second implementation to drift.
+//
+// The page renders no title/description header — the navbar owns those
+// (getBreadcrumb → `/production/schedule`).
+import { ScheduleMonthView } from "@/components/digest/schedule-month-view";
+import { HOME_SHELL_CLS } from "@/components/digest/shell";
 
-const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-
-export default async function ProductionScheduleRedirect({
+export default async function ProductionSchedulePage({
   searchParams,
 }: {
   searchParams: Promise<{ month?: string }>;
 }) {
   const { month } = await searchParams;
-  const params = new URLSearchParams({ view: "schedule" });
-  // Carry a valid ?month= cursor through so old deep links land on their month.
-  if (month && MONTH_RE.test(month)) params.set("month", month);
-  redirect(`/?${params.toString()}`);
+
+  return (
+    <div className={HOME_SHELL_CLS}>
+      {/* Month nav stays on THIS route (basePath), and there is no sibling
+          param to preserve — `?view=` means nothing here. */}
+      <ScheduleMonthView month={month} basePath="/production/schedule" />
+    </div>
+  );
 }

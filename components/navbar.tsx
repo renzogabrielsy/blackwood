@@ -72,7 +72,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
         backLabel: 'Back to Digest',
         backHref: '/',
         pageTitle: 'Production Schedule',
-        pageDescription: 'Month plan vs actual — projected tons & Joseph\'s authoritative schedule',
+        pageDescription: 'Month plan vs actual — click a cell to edit the plan',
     },
     { test: prefix('/edit/'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Edit Discussion' },
     // Inventory sub-routes — MUST precede the `/inventory` catch-all below.
@@ -80,8 +80,10 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/inventory/rc-movement'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Movement', pageDescription: 'Daily feed matrix — campaign-scoped day × block' },
     { test: prefix('/inventory/flecon-bags'), backLabel: 'Back to Inventory', backHref: '/inventory', pageTitle: 'Bag Inventory', pageDescription: 'FLECON bag stock — balances & movement ledger' },
     { test: prefix('/inventory'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Inventory', pageDescription: 'Raw charcoal deliveries, usage & tracking' },
-    // NOTE: `/production/schedule` has no entry — it is a redirect to `/?view=schedule`
-    // (handled by the first entry above), never a rendered surface.
+    // `/production/schedule` renders the SAME editable month grid as `/?view=schedule`
+    // (two doors, one surface) — so it needs its own entry, and it MUST precede the
+    // `/production` catch-all below.
+    { test: exact('/production/schedule'), backLabel: 'Back to Production', backHref: '/production', pageTitle: 'Production Schedule', pageDescription: 'Month plan vs actual — click a cell to edit the plan' },
     { test: prefix('/production'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Production', pageDescription: 'Daily runs, downtime, waste, electricity & trucks' },
     { test: prefix('/summaries'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Summaries', pageDescription: 'Delivery price & volume analysis — by period or supplier' },
     // Shipments — export-doc readiness + ZIP download (Trello-backed). Detail route
@@ -145,6 +147,10 @@ const ICTC_INVENTORY: Module[] = [
 // ICTC / Davao top-level modules shown as siblings BELOW the Inventory sub-group.
 const ICTC_MODULES: Module[] = [
     { name: 'Production', href: '/production' },
+    // The editable month plan. Listed as its own destination because it is NOT a
+    // production tab — the only other way in is the Schedule toggle on `/`, which
+    // is easy to miss entirely.
+    { name: 'Prod Schedule', href: '/production/schedule' },
     { name: 'Summaries', href: '/summaries' },
     { name: 'Shipments', href: '/shipments' },
     { name: 'Accounting', href: '/accounting', disabled: true },
