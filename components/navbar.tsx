@@ -101,6 +101,10 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: prefix('/price-demos/demo4'), backLabel: 'Back to Demos', backHref: '/price-demos', pageTitle: 'Analyst Brief', pageDescription: 'Executive monthly review dashboard (concept 4 of 4)' },
     { test: prefix('/price-demos'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Price & Volume Demos', pageDescription: 'Four design concepts for delivery price & volume analysis' },
     // Cenapro sub-routes — MUST precede the `/cenapro` catch-all below.
+    // QC analysis: the BREAKDOWN is nested under the LEDGER, so its `exact` entry must
+    // come first — a `prefix('/cenapro/qc')` would otherwise swallow it.
+    { test: exact('/cenapro/qc/breakdown'), backLabel: 'Back to QC Ledger', backHref: '/cenapro/qc', pageTitle: 'QC Breakdown', pageDescription: 'Weighted monthly + daily lab analytics — ex-DVO, read-only' },
+    { test: exact('/cenapro/qc'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'QC Ledger', pageDescription: 'Log CCC partner lab results (BD · ASH · GRIT · MC) onto the receipts' },
     { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
     { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
     { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
@@ -168,6 +172,11 @@ const ICTC_MODULES: Module[] = [
 const CENAPRO_MODULES: Module[] = [
     { name: 'Production', href: '/cenapro/production' },
     { name: 'Flec Inventory', href: '/cenapro/inventory' },
+    // Both QC surfaces are listed, not just the entry one: the breakdown is a
+    // destination in its own right, and a reading screen reachable only through the
+    // entry screen is a reading screen nobody finds (the Prod Schedule lesson).
+    { name: 'QC Ledger', href: '/cenapro/qc' },
+    { name: 'QC Breakdown', href: '/cenapro/qc/breakdown' },
 ];
 
 // A single mobile-nav row. Disabled modules render as inert text; live ones are
