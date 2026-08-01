@@ -1556,6 +1556,137 @@ export type Database = {
       }
     }
     Views: {
+      cenapro_analysis_samples: {
+        Row: {
+          ash: number | null
+          bd: number | null
+          created_at: string | null
+          created_by: string | null
+          grit: number | null
+          id: string | null
+          mc: number | null
+          notes: string | null
+          row_version: number | null
+          sample_date: string | null
+          source: string | null
+          source_location_code: string | null
+          updated_at: string | null
+          updated_by: string | null
+          whse_key: string | null
+        }
+        Insert: {
+          ash?: number | null
+          bd?: number | null
+          created_at?: string | null
+          created_by?: string | null
+          grit?: number | null
+          id?: string | null
+          mc?: number | null
+          notes?: string | null
+          row_version?: number | null
+          sample_date?: string | null
+          source?: string | null
+          source_location_code?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+          whse_key?: string | null
+        }
+        Update: {
+          ash?: number | null
+          bd?: number | null
+          created_at?: string | null
+          created_by?: string | null
+          grit?: number | null
+          id?: string | null
+          mc?: number | null
+          notes?: string | null
+          row_version?: number | null
+          sample_date?: string | null
+          source?: string | null
+          source_location_code?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+          whse_key?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_ccc_analysis_daily: {
+        Row: {
+          all_kg: number | null
+          coverage: number | null
+          draw_count: number | null
+          dvo_kg: number | null
+          ex_dvo_kg: number | null
+          group_count: number | null
+          missing_value_count: number | null
+          sample_date: string | null
+          sampled_group_count: number | null
+          sampled_kg: number | null
+          scope: string | null
+          total_kg: number | null
+          wtd_ash: number | null
+          wtd_ash_kg: number | null
+          wtd_bd: number | null
+          wtd_bd_kg: number | null
+          wtd_grit: number | null
+          wtd_grit_kg: number | null
+          wtd_mc: number | null
+          wtd_mc_kg: number | null
+        }
+        Relationships: []
+      }
+      cenapro_ccc_analysis_monthly: {
+        Row: {
+          all_kg: number | null
+          coverage: number | null
+          day_count: number | null
+          draw_count: number | null
+          dvo_kg: number | null
+          ex_dvo_kg: number | null
+          group_count: number | null
+          missing_value_count: number | null
+          month_key: string | null
+          month_start: string | null
+          sampled_group_count: number | null
+          sampled_kg: number | null
+          scope: string | null
+          total_kg: number | null
+          wtd_ash: number | null
+          wtd_ash_kg: number | null
+          wtd_bd: number | null
+          wtd_bd_kg: number | null
+          wtd_grit: number | null
+          wtd_grit_kg: number | null
+          wtd_mc: number | null
+          wtd_mc_kg: number | null
+        }
+        Relationships: []
+      }
+      cenapro_ccc_sample_groups: {
+        Row: {
+          ash: number | null
+          bd: number | null
+          draw_count: number | null
+          grit: number | null
+          is_complete: boolean | null
+          is_dvo: boolean | null
+          is_sampled: boolean | null
+          mc: number | null
+          missing_metric_count: number | null
+          sample_date: string | null
+          sample_id: string | null
+          sample_notes: string | null
+          sample_row_version: number | null
+          sample_source: string | null
+          sample_updated_at: string | null
+          sample_updated_by: string | null
+          source_group: string | null
+          source_location_code: string | null
+          total_kg: number | null
+          whse_key: string | null
+        }
+        Relationships: []
+      }
       cenapro_production_events: {
         Row: {
           batch: string | null
@@ -2470,6 +2601,7 @@ export type Database = {
           warehouse_code: string
         }[]
       }
+      cenapro_import_analysis_samples: { Args: { p_rows: Json }; Returns: Json }
       cenapro_opening_balance_history: {
         Args: { p_warehouse_code: string }
         Returns: {
@@ -2492,6 +2624,20 @@ export type Database = {
           side: string
           warehouse_code: string
         }[]
+      }
+      cenapro_save_analysis_sample: {
+        Args: {
+          p_ash?: number
+          p_bd?: number
+          p_expected_row_version?: number
+          p_grit?: number
+          p_mc?: number
+          p_notes?: string
+          p_sample_date: string
+          p_source_location_code: string
+          p_whse_key: string
+        }
+        Returns: Json
       }
       cenapro_set_opening_balance: {
         Args: {

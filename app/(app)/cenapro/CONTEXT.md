@@ -1,17 +1,18 @@
 # Cenapro Module (Tenant #2 — CI / Cebu)
 
 ## Purpose
-Top-level route `/cenapro` for the **second tenant** on the Blackwood platform: the CI / Cebu charcoal company ("Cenapro"). Two screens over the dedicated `cenapro` Postgres schema: an **editable** Production ledger (the app is now the maintaining file — operators add/edit/delete production rows here instead of in Excel) and a Flec Inventory view whose **STARTING (opening) balances are now editable + append-only + backtrackable** (the rest of the inventory view — closing balances + movement ledger — stays computed/read-only). Fully decoupled from the ICTC / Davao tenant — shares zero tables, types, or code.
+Top-level route `/cenapro` for the **second tenant** on the Blackwood platform: the CI / Cebu charcoal company ("Cenapro"). Four screens over the dedicated `cenapro` Postgres schema: an **editable** Production ledger (the app is now the maintaining file — operators add/edit/delete production rows here instead of in Excel), a Flec Inventory view whose **STARTING (opening) balances are now editable + append-only + backtrackable** (the rest of the inventory view — closing balances + movement ledger — stays computed/read-only), and the **QC pair** — an editable QC Ledger for CCC's partner lab results plus a read-only QC Breakdown. Fully decoupled from the ICTC / Davao tenant — shares zero tables, types, or code.
 
 > **Tenant/Domain Module (Cenapro):** Cebu-specific.
 > - **Production (`/cenapro/production`)** is an **editable Industrial-Spreadsheet ledger** — inline cell editing, dropdowns for categorical columns, add/delete rows, paste-from-Excel, dirty tracking + single Save/Discard. It writes through the auto-updatable `public.cenapro_production_events` VIEW (see "Production write path" below).
 > - **Flec Inventory (`/cenapro/inventory`)** mirrors the Excel "PC WHSE" sheet: an **editable STARTING block** (opening flec count per grade × side, append-only, with full history) on top of computed read-only closing balances + the show-your-math movement ledger. Only the opening balances are written; everything below them is re-derived in SQL (see "Opening-balance write path" below).
+> - **QC Ledger (`/cenapro/qc`)** is the **editable** entry grid for CCC's partner lab results (BD · ASH · GRIT · MC), one reading per source + warehouse per day, written through `cenapro_save_analysis_sample` with optimistic concurrency. **QC Breakdown (`/cenapro/qc/breakdown`)** is its read-only reading surface. See "CCC / QC Analysis — THE LIVE FEATURE" below.
 
 ## Files
 | File | Role |
 |------|------|
 | `layout.tsx` | Module shell — a borderless `Card` frame (matches Production's look). No shared period provider; each screen owns its own controls. |
-| `page.tsx` | Landing hub — two `hover-lift` card-links (Production / Flec Inventory) + a "Tenant #2 · Cebu" note. |
+| `page.tsx` | Landing hub — four `hover-lift` card-links (Production / Flec Inventory / QC Ledger / QC Breakdown) + a "Tenant #2 · Cebu" note. |
 | `loading.tsx` | Table skeleton (toolbar + header + 14 row stripes). |
 | `error.tsx` | Error boundary — persistent message + **Copy button** (error HARD RULE) + a note that empty data is expected pre-exposure. |
 | `types.ts` | Row types **derived from the generated `types/supabase.ts`** (`cenapro_production_events` view + `cenapro_flec_balance`/`cenapro_flec_ledger` function Returns) + flec-warehouse constants + `formatDisposition()` (still used by the Flec Inventory ledger's friendly "Crusher C1" label) + the **editable-ledger lookup constants** (`SHIFT_CODES`/`GRADE_CODES`/`PLANT_CODES`/`WAREHOUSE_CODES`/`SOURCE_LOCATION_CODES`/`DISPOSITION_KINDS`/`WHSE_SIDES` + `CRUSHER_CODES`/`KILN_CODES`) + the equipment-dependency helpers `partnerEquipmentOptions()` / `dispositionRequiresEquipment()` (still consumed by `bulk-paste-utils`'s remaining validation), **and the shared CCC/FLEC single-column helpers**: `CCC_FLEC_OPTIONS` (typeahead list `FLEC`/`C1`–`C4`/`RK1`–`RK4`), **`parseCccFlec()`** (forward: one cell string → `{disposition_kind, partner_equipment_code}`, forgiving on case/aliases, null on unrecognized) and **`formatCccFlec()`** (inverse: the two DB fields → the single Excel-parity string). These two are the canonical derive/format pair shared by BOTH the inline grid's save and the bulk modal (via `bulk-paste-utils`). See "Editable-ledger lookups" + "CCC/FLEC single column" + "Data path" below. |
@@ -120,6 +121,7 @@ The cenapro data is reached through **accessors that live in the `public` schema
 - a VIEW `public.cenapro_production_events` (16 columns) — read by `fetchProductionEvents`, **written** by `saveProductionEvents` (auto-updatable; see "Production write path").
 - two set-returning functions `public.cenapro_flec_balance(...)` / `public.cenapro_flec_ledger(...)` (read-only).
 - three opening-balance accessors `public.cenapro_opening_balances(...)` / `public.cenapro_opening_balance_history(...)` (read-only) + **`public.cenapro_set_opening_balance(...)`** (append-only write RPC, `authenticated`/`service_role` only) — see "Opening-balance write path".
+- **CCC analysis (2026-08-01):** a writable VIEW `public.cenapro_analysis_samples`, three read-only VIEWs `public.cenapro_ccc_sample_groups` / `_ccc_analysis_daily` / `_ccc_analysis_monthly`, and two RPCs `public.cenapro_save_analysis_sample(...)` (authenticated) / `public.cenapro_import_analysis_samples(jsonb)` (service_role only). **These four views grant SELECT to `authenticated` ONLY — `anon` is revoked**, unlike the older accessors above. See "CCC Analysis — LIVE BACKEND".
 
 Reads are granted to `authenticated` + `anon` (writes to `authenticated`), so the **standard Supabase client reaches them directly** — `supabase.from('cenapro_production_events')` and `supabase.rpc('cenapro_flec_balance'|'cenapro_flec_ledger'|'cenapro_opening_balances'|'cenapro_opening_balance_history'|'cenapro_set_opening_balance', …)`. No `.schema('cenapro')`, no structural casts.
 
@@ -156,8 +158,136 @@ Notes:
 - `sonner` — success/info toasts (paste, save, copy); errors go through `errorToast` per HARD RULE.
 - `lucide-react` — icons.
 
+## CCC / QC Analysis — THE LIVE FEATURE (`/cenapro/qc`, `/cenapro/qc/breakdown`)
+
+> ✅ **Shipped 2026-08-01.** Renzo evaluated four candidate designs at the throwaway
+> `/cenapro/analysis-drafts/{a,b,c,d}` routes, picked **A for entry** and **D for reading**,
+> and the two were promoted here. **The draft tree, `lib/cenapro/ccc-analysis-draft.ts` and the
+> five draft breadcrumb entries are DELETED** — do not resurrect them; the drafts' visual
+> decisions (round-2 column widths, Month+Year dropdowns, recharts, spreadsheet keyboard nav,
+> `Σ DAY TOTAL` rule-offs, the opaque frozen month footer, no stacked bar charts) all survive
+> in the promoted routes. B and C were rejected and are gone entirely.
+
+Two routes over one shared **`?m=YYYY-MM`** month axis, cross-linked both ways:
+
+| Route | Role | Scope | Writes |
+|---|---|---|---|
+| `/cenapro/qc` — **QC Ledger** | ENTRY. The CCC-CI ANALYSIS sheet as a dense 12-column grid; the four metric columns are editable, everything left of them is reference. | **`scope='all'`** — the entry surface must show every receipt an operator can type against, DVO included. | Yes — `cenapro_save_analysis_sample`, one RPC per sample group. |
+| `/cenapro/qc/breakdown` — **QC Breakdown** | READING. Monthly + daily weighted analytics, four metric trend panels. | **`scope='ex_dvo'`** — the sheet's headline framing. | No. Read-only by design. |
+
+### Files
+| File | Role |
+|------|------|
+| `qc/page.tsx` | Server — resolves `?m=` (via `resolveQcMonth`), awaits `loadQcLedgerData`, renders `QcLedgerClient`. `force-dynamic`. |
+| `qc/data.ts` | **The ONE read path for BOTH routes.** Not a server action (no `'use server'`, no mutations) — plain async functions the two `page.tsx`s await. `loadQcMonthKeys()` (the month picker's axis, from the monthly view), `loadQcLedgerData(month, monthKeys)` (four parallel reads: sample groups + production events + `_analysis_daily scope='all'` + `_analysis_monthly scope='all'`, assembled into day blocks), `loadQcBreakdownData(month, monthKeys)` (monthly + daily at `scope='ex_dvo'`). Exports `QcDraw` / `QcGroup` / `QcLedgerDay` / `QcMonthRow` / `QcDayRow` / the two `*Data` shapes. **The view IS the grain:** groups are built from `cenapro_ccc_sample_groups` rows and the production-event draws are hung off them by `sampleGroupKey(date, canonToken(src), effectiveWhseKey(row))`; a draw whose group the view does not carry (impossible today — the view is built from those rows) synthesizes an orphan group rather than silently dropping tonnage. |
+| `qc/actions.ts` | `'use server'` — **`saveQcSamples(inputs)`**. One `cenapro_save_analysis_sample` RPC **per sample group**, threading that group's own `sample_row_version` through unchanged (`null` → insert, integer → update, version checked in the same statement as the write). Returns a per-group `SaveQcSampleResult` (`key`, `ok`, `outcome`, `rowVersion`, `message`) so a conflict on one group never blocks the others. Never retries, never force-writes, never re-reads a version to "fix" a conflict. An all-null payload short-circuits to `no_metrics` without a round trip. `revalidatePath('/cenapro/qc')` + `revalidatePath('/cenapro/qc/breakdown')` when anything landed. Metric args are OMITTED when null (every metric param is `DEFAULT NULL`, so omitting clears on the UPDATE path exactly as an explicit null would, and the generated `Args` type declares them `number`). |
+| `qc/qc-ledger-client.tsx` | Client — the entry grid. 12 columns (`Date · Prod · Sh · Grade · Plant · Whse · SRC · WT kg · BD · ASH · GRIT · MC`) at widths `62/62/40/62/60/62/62/88` + `124×4`, table min-width **994px**, so the four analysis columns hold ~50% of the table at EVERY viewport (a `table-fixed` table distributes surplus in proportion to declared widths). Three-tier structure: faint `bg-muted/25` day HEADER (date + sample status), the day's draw rows, a ruled-off **`Σ DAY TOTAL`** (`bg-muted`, `border-t-2 border-t-foreground/45`, bold tabular figures, amber `wtd of NN% sampled` caption under 100%), and a **frozen `Σ <MONTH>` footer** (`<tfoot>` + `.frozen-row-bottom` + `.frozen-edge-top`, solid `bg-muted` — never glass) inside the grid's own `min-h-0 flex-1 overflow-auto` scrollport, which is also the keyboard host. KPI tiles ×4 with DAILY sparklines and a signed (never colour-coded) delta vs the prior month. Save bar + `Discard`; the toolbar carries the Month/Year picker, the source filter, the logged/kg/coverage chips and the quiet **`QC Breakdown →`** link. Mobile: `hidden sm:flex` grid + `NarrowScreenNotice`. |
+| `qc/breakdown/page.tsx` | Server — resolves `?m=`, awaits `loadQcBreakdownData`, folds the months into the whole-history line via `combineAggregates`, builds the monthly + daily metric series, finds the newest zero-sample month. `force-dynamic`. |
+| `qc/breakdown/qc-breakdown-client.tsx` | Client — KPI tiles ×4 (Received ex-DVO · Wtd BD · Wtd MC · Sample coverage), then **both rollup tables side by side** in one `xl:grid-cols-[minmax(340px,0.85fr)_1.15fr] items-start` band (`RollupTable`: Mo · TTL WT · BD · ASH · GRIT · MC · Cov, zero-sample months render an amber "no samples yet — enter … analysis" cell spanning the five metric columns, plus a sticky `Σ All` footer that totals **weight only** and says so; `DailyRollupTable`: Day · DOW · TTL WT · 4 metrics · Cov, sticky header + sticky `Σ <MONTH>` footer, scrollport capped `max-h-[420px]`), then the four `MetricTrendPanel` small multiples with the `Daily | Monthly` `GrainToggle`. A quiet **`← QC Ledger (entry)`** link in the toolbar. **No `hidden sm:block`** — the breakdown degrades gracefully on a phone (tiles go 2-up, each table scrolls inside its own scrollport, the page itself never scrolls horizontally). |
+| `qc/qc-chrome.tsx` | `Chip` / `Tile` / `Panel` (optional `actions` header slot) / `NarrowScreenNotice`. Presentational, no directive — a server page and a client component can both render them. |
+| `qc/qc-metric-charts.tsx` | Client — the recharts chart chrome. `METRIC_COLOR` (one platform `--chart-N` token per metric: bd→1, ash→2, grit→3, mc→4 — tokens not hex, because a recharts `stroke` is a string prop and a Tailwind `dark:` class would silently do nothing), a themed `tooltipChrome()`, a padded y-domain helper, **`MetricSpark`** (the ledger tiles' `h-10` area spark, `connectNulls={false}`, dots auto-enabled at ≤14 samples) and **`MetricTrendPanel`** (the breakdown's small multiple — CartesianGrid, real axes, themed tooltip, `connectNulls={false}`, headline last-value in the metric's hue). **Layer rule:** the digest board's idiom is REPRODUCED here, never imported — `components/digest/**` is ICTC tenant code and Cenapro is Tenant #2. |
+| `qc/month-year-picker.tsx` | `MonthYearPicker` — the shared `?m=YYYY-MM` control. Two shadcn `Select`s: **Month** always lists all twelve with the empty ones `disabled` + suffixed `· no data` (an absent month is information), **Year** lists only the years present, newest-first. A year change prefers the same calendar month in the new year, else that year's newest. `router.push` inside a `useTransition`, **preserving every other search param**. |
+| `qc/load-error.tsx` | Inline load-error banner with a **Copy** button (error HARD RULE), client island. |
+| `lib/cenapro/ccc-analysis.ts` | **The data contract.** Metric metadata (`METRICS`, `METRIC_LABEL`, `METRIC_SHORT`, `METRIC_DECIMALS`/`_WEIGHTED`, `METRIC_WEIGHT_COLUMN`), the `AnalysisScope` union, row types derived from `types/supabase.ts`, `canonToken()` / `effectiveWhseKey()` / `sampleGroupKey()`, and `SaveSampleOutcome` / `SaveSampleResult` / `SaveSampleArgs`. **Contains no aggregation math by design.** |
+| `lib/cenapro/ccc-analysis-view.ts` | **The presentation layer over the SQL aggregates.** `QcAggregate` + `aggregateFromView(row)` (pure renaming of a daily/monthly view row; takes the structural `AggregateViewRow` so a caller may `.select()` a subset), `combineAggregates(parts)` (folds periods by summing each one's published NUMERATOR `wtd_X × wtd_X_kg` and DENOMINATOR `wtd_X_kg` — exact, and specifically NOT the mean-of-means the monthly footer refuses to print), `adjustAggregate(base, adjustments)` (see below), `MetricValues`/`hasAnyMetric`, `SeriesPoint`, the month helpers (`monthKey`/`monthLabel`/`formatMonthHeading`/`shiftMonth`/`monthBounds`/`resolveQcMonth`) and the display formatters (`formatKg`/`formatCompactKg`/`formatMetric`/`formatCoverage`/`formatDayHeading`/`formatShortDate`/`formatDayOfMonth`/`formatDow`). |
+| `lib/cenapro/ccc-analysis-fixture.json` | **HISTORICAL PROVENANCE — not read at runtime by anything.** The 500 lab samples transcribed from Renzo's CCC-CI ANALYSIS sheet, keyed `"YYYY-MM-DD\|SRC\|WHSE"`; it was the INPUT to the live backfill (`scripts/cenapro/backfill-ccc-analysis-samples.mjs`, its only remaining reader) and all 500 rows now live in `cenapro.analysis_sample`. Kept in the repo as the record of what was transcribed. **Generated — never hand-edit.** |
+
+### The one piece of arithmetic on the client, and why it is not a second implementation
+CLAUDE.md forbids computing weighted averages in TypeScript, and neither page does. Totals, coverage, the four weighted averages and their per-metric denominators are all READ from `cenapro_ccc_analysis_daily` / `_monthly`.
+
+`adjustAggregate()` does **not** re-aggregate. It takes a SQL aggregate and applies per-group DELTAS to the numerator/denominator pair SQL already published, so:
+
+- with **no** adjustments it returns the SQL row's numbers untouched (an early return — not even a float round-trip), which is why the regression figures below render byte-for-byte from SQL;
+- with adjustments it answers the one question the DB cannot answer yet: *"what would this total read if the number I am typing right now were saved?"*
+
+Two callers, both on the ledger: an **unsaved edit** (swap the group's stored metrics for the typed ones) and the **source filter** (`dropWeight: true` — the group's tonnage leaves the period too). A save writes through the RPC, `revalidatePath` + `router.refresh()` land the DB's own answer, and the preview disappears. There is no path where a rendered number is a TypeScript re-derivation of stored state.
+
+### Saving — one RPC per sample group, four outcomes surfaced
+The Save button builds one payload per dirty group and calls `saveQcSamples`. Results are applied per group: succeeded groups lose their pending text and a normal auto-dismissing success toast fires; **failed groups KEEP what was typed** so nothing has to be retyped.
+
+| Outcome | Surfaced as |
+|---|---|
+| `inserted` / `updated` | `toast.success('Saved N sample groups')` (2.5s) + `router.refresh()`. |
+| `version_conflict` | Persistent inline banner + `errorToast`: *"Someone else changed this sample while you were editing. Reload to see their values."* A **Reload** button re-fetches. Never a silent retry or force-write. |
+| `already_exists` | *"A sample was logged for this group while you were typing. Reload, then edit the value that is now stored."* + Reload. |
+| `not_found` | *"That sample was deleted while you were editing. Reload the ledger."* + Reload. |
+| `no_metrics` | **Prevented client-side.** A group whose four metrics all end up blank never leaves the browser: the save bar turns amber (*"1 group has every metric cleared — that would delete the reading"*), the offending cells get a rose ring, the inline banner names the group, and NOTHING is sent. (The server action re-checks anyway.) |
+| `invalid_key` / RPC error | The raw message, in the banner + `errorToast`. |
+
+The inline banner is the non-toast half of the error HARD RULE: it persists until dismissed and carries a **Copy** button that grabs every failure line at once.
+
+### The sample grain
+A **sample group** is `(recv_date, source_location_code, effective warehouse)` — one lab sample covers every draw from the same source + warehouse on a day. Partner receipts are the rows where `partner_equipment_code IS NOT NULL`. The effective warehouse is `coalesce(warehouse_code, plant_code)`: FLEC/DVO rows carry a real `warehouse_code` (`WHSE 1/3/5/7`), while TNK 1–4 / W7 draws have it NULL and the sheet's WHSE is the `plant_code` (`W6`/`W7`). That is why the sample table stores a resolved NOT NULL `whse_key` and why `effectiveWhseKey()` exists.
+
+**The `〃` fan-out** is the data model made visible: the editable cells live on a group's FIRST draw, and its sibling draws render `〃` and inherit the value. Typing on the lead row covers the whole group's weight — verified live: setting BD=1 on the 2-draw 2026-05-01 FLEC/WHSE 7 group moves the day total to **0.9254**, the full-group-weight answer (40,437 kg), not the lead-draw-only figure.
+
+### The four metrics that must appear on both pages
+Renzo's requirement: **daily kg totals, monthly kg totals, daily weighted averages, monthly weighted averages** — visible on the ledger AND the breakdown.
+
+| Metric | QC Ledger (entry) | QC Breakdown (reading) |
+|---|---|---|
+| Daily kg | `Σ DAY TOTAL` row under every day block | daily rollup table's `TTL WT` column |
+| Monthly kg | frozen `Σ <MONTH>` footer + the toolbar chip | monthly rollup row + the daily table's `Σ` footer |
+| Daily wtd avgs | the four analysis columns of `Σ DAY TOTAL` **and** the KPI tile sparklines | daily rollup table + the `Daily` grain of the metric panels |
+| Monthly wtd avgs | KPI tile headline **and** the frozen footer | monthly rollup row + the `Monthly` grain of the metric panels |
+
+**Verified reconciliation figure (re-verified in the browser 2026-08-01, now sourced from SQL):** May 2026 = **1,134,070 kg**, weighted **0.5602 / 2.80 / 0.73 / 11.63**. Rendered identically by the ledger's toolbar chip, the ledger's frozen `Σ MAY 2026` footer, the breakdown's monthly MAY row and the breakdown's daily `Σ MAY 2026` footer. May carries no DVO, so `all` and `ex_dvo` coincide there — June and July do have DVO, which is why the ledger's footer captions the included DVO tonnage (`incl. 720,958 kg DVO` in July) while the breakdown stays strictly ex-DVO.
+
+**Coverage is never silent.** A weighted average whose denominator is short of the row's total weight always says so: the day rows caption `wtd of NN% sampled`, the frozen footer captions each metric `wtd · NN%` (amber under 100% — May's ASH reads `wtd · 98%` because 2026-05-08 FLEC/WHSE 5 genuinely has no ASH), the toolbar chip carries the month's coverage, and both breakdown tables carry a `Cov` column. July 2026 renders kg with em-dash metrics and 0% coverage everywhere — correct, and the reason the feature exists. In the charts the same honesty is `connectNulls={false}`.
+
+### Default month
+Both routes resolve `?m=` identically (`resolveQcMonth`): a valid URL month, else **the newest month with receipts** (July 2026 today). Deliberately the same on both — they share one `?m=` axis and cross-link, so different defaults would make the first click between them look like a navigation bug, and the newest month is where the outstanding entry work is. *(The evaluation draft A defaulted to the newest well-covered month instead, which was an artefact of wanting the demo to show filled cells. One line in `resolveQcMonth` if Renzo prefers that back.)*
+
+### Keyboard model (the ledger)
+Renzo: *"tabbing and entering should allow us to navigate it like how excel/google sheet would let us."* The analysis cells run the canonical **Blackwood Table** stack: `useGridKeyboardNav` + `createCoordinateNavResolver` (`lib/hooks/`) over the shared `GridCell` + `EditInput` (`components/shared/grid/`) — the same pair RC IN's bulk grid and the production schedule use.
+
+- **The coordinate space is `entryGroups.length × 4` — the analysis columns only.** Row `n` is the nth sample group in visual order. Day-header rows, `〃` sibling rows, `Σ DAY TOTAL` rows and the frozen footer have **no coordinates at all**, which is *why* nav can never land on one — there is no skip logic to get wrong.
+- Tab off MC wraps to the next row's BD; Shift+Tab off BD wraps back to the previous row's MC; arrows clamp at the edges.
+- `enableEnterAnchor: true` — the first Tab of a run records the lane, and a later plain Enter drops one row and **returns to that lane** (BD→ASH→GRIT→MC→Enter lands on the next row's BD).
+- Click SELECTS (ring only); a printable key types over; F2 / double-click edits in place keeping the value; Escape reverts to the pre-edit snapshot.
+- The `min-h-0 flex-1 overflow-auto` scrollport is the keyboard host (`role="grid"`, `tabIndex={0}`); cells are `tabIndex={-1}`, so Tab is the grid's to interpret and can never walk out of the sheet mid-entry.
+- **`setCell` prunes no-op edits.** A value equal to the STORED one deletes its entry instead of recording one, so Escape (which replays the pre-edit snapshot through `setValue`) leaves the group genuinely clean rather than inflating the dirty count.
+
+**Driven and verified in a real browser (2026-08-01):** click on BD row 0 → selected `(0,0)`, not editing; `Tab` → `(0,1)`; `Tab×3` → wraps to `(1,0)` (skipping the `〃` sibling draw entirely); `Enter` → `(2,0)`, the anchored lane; `ArrowLeft` at col 0 → clamps at `(2,0)`; `ArrowUp` → `(1,0)`; pressing `9` → editor opens pre-filled `"9"`, focus on the input; `Escape` → back to `0.563` and the save bar reads "No unsaved changes".
+
+## CCC Analysis — LIVE BACKEND (shipped 2026-08-01)
+
+**Migrations:** `supabase/migrations/20260801073405_cenapro_analysis_sample.sql` (table + accessor), `..073646_cenapro_ccc_analysis_views.sql` (aggregates), `..073853_cenapro_analysis_write_path.sql` (RPCs). **Backfill:** `scripts/cenapro/backfill-ccc-analysis-samples.mjs` (re-runnable; `--dry-run` supported). **Frontend contract:** `lib/cenapro/ccc-analysis.ts`.
+
+### The table — `cenapro.analysis_sample`
+One row per `(sample_date, source_location_code, whse_key)`. `bd` / `ash` / `grit` / `mc` are **independently nullable** (2026-05-08 FLEC/WHSE 5 genuinely has no ASH). Provenance: `source` (`sheet_backfill` | `app`), `notes`, `row_version`, `created_at/by`, `updated_at/by` (FK→`profiles`, ON DELETE SET NULL). RLS on, single-org (`authenticated` = full CRUD, `anon` nothing).
+
+**The NULL-warehouse uniqueness trap, and how it's solved.** The grain's third component is the *effective* warehouse = `coalesce(warehouse_code, plant_code)` — tank and W7 draws carry a NULL `warehouse_code`. A UNIQUE spanning a nullable column would NOT de-duplicate those rows (`NULL <> NULL` in a unique index), so every tank sample would be insertable an unlimited number of times. The table therefore stores the **resolved token in a NOT NULL `whse_key` column** and the unique constraint `cenapro_analysis_sample_natural_key` spans three NOT NULL columns. `cenapro.fn_canon_token(text)` (IMMUTABLE: trim / collapse whitespace / uppercase) is the ONE normalization definition, shared by the table's CHECKs, the views' join key and the write RPCs; `canonToken()` in `lib/cenapro/ccc-analysis.ts` is its JS twin. CHECK bounds are **unit sanity only** (bd 0–5, the three percentages 0–100) — deliberately far wider than the observed sheet ranges, because a tight "observed range" bound would reject the outlier an analyst most needs to see.
+
+### The views (aggregation lives HERE, not in TS)
+| Object (public accessor) | Grain | Provides |
+|---|---|---|
+| `cenapro_analysis_samples` | one lab sample | The raw ledger, **all 500 rows** including the 117 that match no event group yet. Auto-updatable. |
+| `cenapro_ccc_sample_groups` | (date, src, effective whse) | `draw_count`, `total_kg`, the joined `bd/ash/grit/mc`, `is_sampled`, `is_complete`, `missing_metric_count`, `source_group`, `is_dvo`, and **`sample_row_version`** (feeds the save RPC — NULL means "unsampled, create it"). |
+| `cenapro_ccc_analysis_daily` | `sample_date` × `scope` | `total_kg`, `sampled_kg`, `coverage`, group counts, the four `wtd_*` + their per-metric denominators `wtd_*_kg`. |
+| `cenapro_ccc_analysis_monthly` | `month_start`/`month_key` × `scope` | Same, plus `day_count`. |
+
+**Weighted average = `SUM(kg × metric) / SUM(kg)` over the groups carrying THAT metric, per metric independently** — a group missing ASH still contributes its full weight to BD/GRIT/MC, which is why each metric ships its own denominator. Proof in live data: 2026-05-08 has `wtd_bd_kg` = 55,207 but `wtd_ash_kg` = 35,233.
+
+**Ex-DVO is a `scope` COLUMN, not a frontend filter.** The daily and monthly views emit **two rows per period**: `scope='all'` (entry ledger) and `scope='ex_dvo'` (the reading page's headline). Both come from one aggregation expression so they cannot disagree, and `all_kg` / `dvo_kg` / `ex_dvo_kg` are period-wide on *either* row — so a single `ex_dvo` row already carries the breakdown's whole day shape (ex-DVO total + DVO tonnage + ex-DVO weighted averages) without a second query. Always filter on `scope`.
+
+**Regression, verified from SQL:** `month_key='2026-05'`, `scope='ex_dvo'` → `total_kg` **1,134,070**, wtd **0.5602 / 2.80 / 0.73 / 11.63** — identical to what the drafts render.
+
+### The write path
+- **`public.cenapro_save_analysis_sample(p_sample_date, p_source_location_code, p_whse_key, p_bd, p_ash, p_grit, p_mc, p_expected_row_version, p_notes) → jsonb`** — SECURITY INVOKER, `authenticated` + `service_role`. Upserts by the natural key, canonicalizes the key server-side, stamps `created_by`/`updated_by = auth.uid()` and flips `source` to `'app'`. **Optimistic concurrency:** pass `p_expected_row_version = NULL` to CREATE (a losing race returns `already_exists`, never a clobber) or the `sample_row_version` you read to UPDATE (a mismatch returns `version_conflict` **plus the current version**). The version is checked in the SAME statement as the write — the `fn_save_schedule_day` idiom, no read-then-write. `row_version` is bumped by a **trigger**, so a raw write through the accessor view advances it too and cannot silently defeat the lock. Outcomes: `inserted` / `updated` / `already_exists` / `version_conflict` / `not_found` / `no_metrics` / `invalid_key`.
+- **`public.cenapro_import_analysis_samples(p_rows jsonb) → jsonb`** — **`service_role` ONLY.** The idempotent sheet import. `ON CONFLICT DO UPDATE` is gated on `source = 'sheet_backfill'`, so a re-run can **never** clobber a reading an operator typed in the app, and on the values differing, so an unchanged re-run honestly reports `updated: 0`.
+- **No delete RPC on purpose** — `public.cenapro_analysis_samples` is auto-updatable with DELETE granted to `authenticated`, and a delete carries no provenance an RPC could add.
+
+### Backfill outcome (2026-08-01)
+**All 500 sheet samples imported** — the ~117 that place nowhere are real lab readings for pre-June DVO container vans whose weights the DB does not carry yet (DVO is deferred out of Cenapro v1); dropping them would mean re-transcribing the sheet the day DVO lands, and they cost nothing because the views join *from* event groups. **383 groups carry a sample** (382 exact + 1 remap), **July 2026 = 144 groups / 0 sampled** — the live gap the feature fills.
+
+The one remap: `2025-12-02|FLEC|WHSE 5` → `…|WHSE 7`, because the only Dec-2 FLEC draw in the DB is under WHSE 7; the original sheet key is preserved in `notes`. **Deliberate divergence from the draft's matcher:** the draft's `date|src` fallback also lends an already-placed sample to a *second* group (2026-02-22 FLEC/WHSE 7's reading shown against FLEC/WHSE 5, 2,249 kg). The backfill refuses that — the sheet never sampled that draw, and guessing would inflate coverage and pull a weighted average toward a number nobody measured. February coverage therefore reads **98.99%** here vs 99.2% in the draft; its four weighted averages are unchanged, and no other month moves.
+
+### Grants trap (applies to every future `cenapro` object)
+The `cenapro` schema carries a DEFAULT ACL `{anon=r, authenticated=arwd, service_role=arwd}` from the original `create_cenapro_schema` migration. **Every new relation is born with `anon=SELECT` and `authenticated=INSERT/UPDATE/DELETE`, silently, whatever the CREATE says** — which contradicts the Phase-4 "anon has no data access" posture and makes a read-only reporting view look writable. The views migration REVOKEs both explicitly; do the same for anything new.
+
 ## See Also
-- [Blackwood Table (shared grid primitives)](../../../components/shared/grid/CONTEXT.md) — the production ledger + the endless sheet's draft entry zone consume the shared keyboard-nav / edit-session / paste hooks and the shared `GridCell`/`SelectCell`/`DatePickerCell`; the **Daily Block** (`production-daily-block.tsx`, Phase 3 retrofit) consumes `useGridKeyboardNav` (DOM-order resolver `createDomOrderNavResolver`) + `useGridEditSession` + the shared `EditInput`/`EDIT_INPUT` and now follows the canonical click-to-select / type-to-edit model. RC IN's `bulk-delivery-input.tsx` is the canonical reference migration.
+- [Blackwood Table (shared grid primitives)](../../../components/shared/grid/CONTEXT.md) — the production ledger + the endless sheet's draft entry zone consume the shared keyboard-nav / edit-session / paste hooks and the shared `GridCell`/`SelectCell`/`DatePickerCell`; the **QC Ledger** (`qc/qc-ledger-client.tsx`) consumes `useGridKeyboardNav` (COORDINATE resolver) + `useGridEditSession` + `GridCell`/`EditInput` over its four analysis columns; the **Daily Block** (`production-daily-block.tsx`, Phase 3 retrofit) consumes `useGridKeyboardNav` (DOM-order resolver `createDomOrderNavResolver`) + `useGridEditSession` + the shared `EditInput`/`EDIT_INPUT` and now follows the canonical click-to-select / type-to-edit model. RC IN's `bulk-delivery-input.tsx` is the canonical reference migration.
 - `/Users/renzosy/blackwood/cenapro/CENAPRO_SCHEMA.md` — the authoritative schema contract (tables, `flec_ledger`/`flec_balance`, `view_production_daily`, the 28 ported business rules, DVO deferral).
 - [Navbar](../../../components/NAVBAR.md) — page titles / breadcrumbs / Modules dropdown.
 - [Production module](../production/CONTEXT.md) — ICTC production; source of the dense-table + `ColumnFilterMenu` patterns reused here.

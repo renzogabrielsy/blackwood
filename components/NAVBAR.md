@@ -27,7 +27,9 @@ Additive, mobile-only. At 375px the desktop breadcrumb (fixed `shrink-0` parts ~
 - `MobileNavItem` is hoisted to module level (never defined during render) to satisfy the `react-hooks/static-components` lint rule.
 
 ## Breadcrumb Registry (`BREADCRUMB_REGISTRY` → `getBreadcrumb()`)
-The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname, params)` predicate — `params` is the current query string (a structural `QueryParams = { get(key): string | null }`, satisfied by both `URLSearchParams` and Next's `ReadonlyURLSearchParams`), consulted only by routes that host several URL-driven views. Most entries ignore it and are built via the `exact()` / `prefix()` helpers. The FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/?view=schedule` precedes the bare `/`, which deliberately has NO entry; `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb(pathname, params)` just `.find()`s the first matching entry.
+The old long if-chain was refactored into an **ordered registry array**. Each entry has a `test(pathname, params)` predicate — `params` is the current query string (a structural `QueryParams = { get(key): string | null }`, satisfied by both `URLSearchParams` and Next's `ReadonlyURLSearchParams`), consulted only by routes that host several URL-driven views. Most entries ignore it and are built via the `exact()` / `prefix()` helpers. The FIRST match wins, so **more-specific routes MUST come before their parent catch-alls** (e.g. `/?view=schedule` precedes the bare `/`, which deliberately has NO entry; `/inventory/blocking`, `/inventory/rc-movement`, and `/inventory/flecon-bags` precede the `/inventory` catch-all; `/price-demos/demo1..4` precede the `/price-demos` index; `exact('/cenapro/qc/breakdown')` precedes `exact('/cenapro/qc')` — the breakdown is NESTED under the ledger, so a `prefix('/cenapro/qc')` would swallow it; `/cenapro/production` precedes `/cenapro`). `getBreadcrumb(pathname, params)` just `.find()`s the first matching entry.
+
+> **The five CCC Analysis draft entries were REMOVED on 2026-08-01** when the two chosen designs shipped as `/cenapro/qc` (QC Ledger, entry) and `/cenapro/qc/breakdown` (QC Breakdown, reading). Unlike the drafts — which were breadcrumb-only, deliberately absent from the dropdown because they were evaluation surfaces — **BOTH QC routes are listed in `CENAPRO_MODULES`**. Listing the reading page as well as the entry page is intentional: a screen reachable only through another screen is a screen nobody finds (the same reason Prod Schedule and Setup Library are listed under ICTC).
 
 `Navbar` therefore calls `useSearchParams()` alongside `usePathname()`. It is safe without an extra `Suspense` boundary because the navbar is mounted via `dynamic(..., { ssr: false })` in `app-shell.tsx` — it never participates in prerender.
 
@@ -48,6 +50,8 @@ The old long if-chain was refactored into an **ordered registry array**. Each en
 | `prefix('/price-demos/demo3')` | Back to Demos | Heatmap | Month × supplier ₱/kg & volume matrix (concept 3 of 4) |
 | `prefix('/price-demos/demo4')` | Back to Demos | Analyst Brief | Executive monthly review dashboard (concept 4 of 4) |
 | `prefix('/price-demos')` | Back to Dashboard | Price & Volume Demos | Four design concepts for delivery price & volume analysis |
+| `exact('/cenapro/qc/breakdown')` | Back to QC Ledger | QC Breakdown | Weighted monthly + daily lab analytics — ex-DVO, read-only |
+| `exact('/cenapro/qc')` | Back to Cenapro | QC Ledger | Log CCC partner lab results (BD · ASH · GRIT · MC) onto the receipts |
 | `prefix('/cenapro/production')` | Back to Cenapro | Cenapro · Production | CI production events — bagging & partner draws |
 | `prefix('/cenapro/inventory')` | Back to Cenapro | Cenapro · Flec Inventory | Per-warehouse flec balances & movement ledger |
 | `prefix('/cenapro')` | Back to Dashboard | Cenapro | CI / Cebu production & flec inventory — second tenant |
@@ -71,7 +75,7 @@ A nested information architecture grouped by tenant. The dropdown is built from 
 |----------|---------|-------|
 | `ICTC_INVENTORY` | ICTC · Davao → **Inventory** sub-group (indented) | Blocking (`/inventory/blocking`) · Deliveries (`/inventory?tab=deliveries`) · Usage (`/inventory?tab=usage`) · Movement (`/inventory/rc-movement`) · Bag Inventory (`/inventory/flecon-bags`) |
 | `ICTC_MODULES` | ICTC · Davao (siblings below Inventory) | Production (`/production`) · **Prod Schedule (`/production/schedule`)** · **Setup Library (`/production/setups`)** · Summaries (`/summaries`) · Shipments (`/shipments`) · Accounting (disabled) |
-| `CENAPRO_MODULES` | Cenapro · Cebu | Production (`/cenapro/production`) · Flec Inventory (`/cenapro/inventory`) |
+| `CENAPRO_MODULES` | Cenapro · Cebu | Production (`/cenapro/production`) · Flec Inventory (`/cenapro/inventory`) · QC Ledger (`/cenapro/qc`) · QC Breakdown (`/cenapro/qc/breakdown`) |
 
 Render structure inside `DropdownMenuContent`:
 ```
@@ -89,6 +93,8 @@ ICTC · Davao                 ← uppercase tenant label
 Cenapro · Cebu               ← uppercase tenant label
   Production
   Flec Inventory
+  QC Ledger
+  QC Breakdown
 ─────────────  (privileged only)
   Sync Review
   Review Queue
