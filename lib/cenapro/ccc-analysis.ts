@@ -187,6 +187,110 @@ export interface UpdateWeightResult {
 export type UpdateWeightArgs =
     Database['public']['Functions']['cenapro_update_event_weight']['Args'];
 
+// ─── The partner-draw ADD path ───────────────────────────────────────────────
+//
+// One new row on `cenapro.production_event`, through
+// `public.cenapro_add_partner_draw`. PARTNER DRAWS ONLY — the partner reports its
+// daily totals on a piece of paper and every line on it is a pull into one of its
+// four crushers or four rotary kilns. What CI puts INTO inventory (flec bagging)
+// arrives on a separate sheet and is entered in the Production ledger; the RPC
+// refuses it here by name rather than leaving the boundary to the UI.
+//
+// The RPC — not the caller — derives `disposition_kind` from the machine and
+// `plant_code` from the source, and resolves the running `batch` label. Those are
+// not conveniences: `plant_code` IS the QC ledger's `whse_key` for a tank draw
+// (`coalesce(warehouse_code, plant_code)`), and `batch` straddles month boundaries
+// (JULY first appears 2026-06-27), so neither can be inferred client-side.
+
+/**
+ * Outcome of `cenapro_add_partner_draw`.
+ *
+ * `inserted`           — written. `sample_group` says where it landed in the QC
+ *                        ledger; `notice` is a non-blocking remark, when present.
+ * `duplicate_warning`  — a draw with the same (date, source, machine, grade,
+ *                        shift) already exists, and `existing` lists them. SOFT:
+ *                        two genuine trips in a day are real, so re-send the same
+ *                        arguments with `p_allow_duplicate: true` to confirm.
+ * `already_exists`     — an IDENTICAL row is already stored (same `unique_tag`).
+ *                        Hard: the database cannot hold two, whatever the intent.
+ *                        `id` is the row that is already there. Not confirmable.
+ * `wrong_surface`      — no machine named, or flec bagging asked for. Point the
+ *                        operator at the Production ledger.
+ * `unsupported_source` — DVO. Container vans into WHSE 3 are a different document
+ *                        and are still deferred; existing DVO rows stay editable.
+ * `invalid_key`        — a dimension code is missing or unknown (machine, source,
+ *                        grade, shift, warehouse, side).
+ * `invalid`            — a value is out of bounds, or a bag field was supplied on
+ *                        a source that consumes no bags (or omitted on one that
+ *                        does). Nothing was written.
+ */
+export type AddPartnerDrawOutcome =
+    | 'inserted'
+    | 'duplicate_warning'
+    | 'already_exists'
+    | 'wrong_surface'
+    | 'unsupported_source'
+    | 'invalid_key'
+    | 'invalid';
+
+/** How the RPC arrived at the `batch` label it stored. */
+export type BatchResolution =
+    /** The caller supplied `p_batch`. */
+    | 'explicit'
+    /** Resolved from the batch actually running at `recv_date`. The normal case. */
+    | 'running'
+    /** No history at or before that date at all — fell back to the calendar month. */
+    | 'calendar';
+
+/** One draw already on file, listed by a `duplicate_warning`. */
+export interface ExistingDraw {
+    id: string;
+    weight_kg: number;
+    prod_date: string | null;
+    warehouse_code: string | null;
+    whse_side: string | null;
+    batch: string;
+}
+
+export interface AddPartnerDrawResult {
+    ok: boolean;
+    outcome: AddPartnerDrawOutcome;
+    /** Present on `inserted`, and on `already_exists` (the row already stored). */
+    id?: string;
+    message?: string;
+
+    // ── `inserted` only ──────────────────────────────────────────────────────
+    unique_tag?: string;
+    batch?: string;
+    batch_year?: number;
+    batch_resolution?: BatchResolution;
+    /** Derived from the source. NULL for a FLEC draw — origin is unknowable once bagged. */
+    plant_code?: string | null;
+    disposition_kind?: 'partner_crusher' | 'partner_kiln';
+    /** Exactly the `cenapro_ccc_sample_groups` key the new row now belongs to. */
+    sample_group?: {
+        sample_date: string;
+        source_location_code: string;
+        whse_key: string;
+    };
+    /**
+     * Non-blocking remark on an otherwise successful write. Today the only one:
+     * a FLEC draw saved without an LS/RS side, which `cenapro.flec_ledger` does
+     * not count, so the warehouse balance will not move until a side is set.
+     */
+    notice?: string | null;
+
+    // ── `duplicate_warning` only ─────────────────────────────────────────────
+    existing?: ExistingDraw[];
+
+    // ── `already_exists` only ────────────────────────────────────────────────
+    weight_kg?: number;
+}
+
+/** Arguments for `supabase.rpc('cenapro_add_partner_draw', …)`. */
+export type AddPartnerDrawArgs =
+    Database['public']['Functions']['cenapro_add_partner_draw']['Args'];
+
 /**
  * The ONE place a typed weight becomes a number, shared by the client's live preview
  * and the server action's pre-flight — so the two can never disagree about what is
@@ -195,6 +299,10 @@ export type UpdateWeightArgs =
  * Mirrors the production ledger's own habit of stripping `,`/`₱`/whitespace off a
  * pasted numeric cell before `Number()`, then adds the RPC's rules on top. Returns
  * `null` with a reason rather than throwing; the reason is what the UI shows.
+ *
+ * Used by BOTH write paths — `cenapro_update_event_weight` (correcting a stored
+ * weight) and `cenapro_add_partner_draw` (typing a new one) apply identical rules,
+ * so a number that is acceptable in one is acceptable in the other.
  */
 export function parseWeightKg(raw: string): { kg: number | null; error: string | null } {
     const cleaned = raw.replace(/[,\s₱_]/g, '');

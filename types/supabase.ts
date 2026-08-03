@@ -2737,6 +2737,25 @@ export type Database = {
         Returns: undefined
       }
       canonical_supplier: { Args: { p_supplier: string }; Returns: string }
+      cenapro_add_partner_draw: {
+        Args: {
+          p_allow_duplicate?: boolean
+          p_batch?: string
+          p_batch_year?: number
+          p_flec_count?: number
+          p_grade_code: string
+          p_notes?: string
+          p_partner_equipment_code: string
+          p_prod_date?: string
+          p_recv_date: string
+          p_shift_code: string
+          p_source_location_code: string
+          p_warehouse_code?: string
+          p_weight_kg: number
+          p_whse_side?: string
+        }
+        Returns: Json
+      }
       cenapro_flec_balance: {
         Args: { p_start_date: string; p_warehouse_code: string }
         Returns: {

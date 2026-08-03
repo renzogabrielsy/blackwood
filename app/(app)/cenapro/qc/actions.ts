@@ -24,6 +24,11 @@ import { createClient } from '@/lib/supabase/server';
 import {
     METRICS,
     parseWeightKg,
+    type AddPartnerDrawArgs,
+    type AddPartnerDrawOutcome,
+    type AddPartnerDrawResult,
+    type BatchResolution,
+    type ExistingDraw,
     type SaveSampleArgs,
     type SaveSampleOutcome,
     type UpdateWeightOutcome,
@@ -297,4 +302,278 @@ export async function saveQcWeights(
     }
 
     return { results, savedCount, failedCount: results.length - savedCount };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Adding a partner draw — ONE new row on `cenapro.production_event`.
+//
+// The partner hands over a slip of paper listing what it pulled that day; this is the
+// path that logs a line of it. PARTNER DRAWS ONLY: what CI puts INTO inventory (flec
+// bagging) is a different document and is entered in the Production ledger. The
+// boundary is the RPC's, not this module's — `cenapro_add_partner_draw` refuses a
+// bagging row by name, so a hand-rolled caller cannot cross it either.
+//
+// Everything derived is derived SERVER-SIDE and nothing here re-derives it:
+// `disposition_kind` comes from the machine, `plant_code` from the source, and `batch`
+// from whichever label was actually running at `recv_date` (JULY starts 2026-06-27 —
+// it is not the calendar month). The verdict carries all three back so the UI can say
+// where the row landed instead of guessing.
+//
+// The pre-flight below only re-states rules this file can be CERTAIN of — required
+// fields, `parseWeightKg` (literally the RPC's shared JS twin), the source-conditional
+// bag fields. It exists to spend no round trip on a typo, never to be the authority:
+// anything it lets through is judged by the RPC, and the RPC's `message` is what the
+// operator reads.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+/** One line of the partner's slip, as typed. Raw text in, parsing done here. */
+export interface AddQcDrawInput {
+    /** `YYYY-MM-DD` — the receipt date at CCC. */
+    recvDate: string;
+    /** TNK 1–4 · W6 · W7 · FLEC. DVO is refused by the RPC (`unsupported_source`). */
+    sourceLocationCode: string;
+    /** C1–C4 (crusher) or RK1–RK4 (kiln). This ALONE decides the disposition. */
+    partnerEquipmentCode: string;
+    gradeCode: string;
+    shiftCode: string;
+    /** The raw text typed into the weight field. Parsed with the shared helper. */
+    weightRaw: string;
+    prodDate?: string | null;
+    /** FLEC source ONLY — required there, refused anywhere else. */
+    warehouseCode?: string | null;
+    /** FLEC source ONLY — required there, refused anywhere else. Whole bags. */
+    flecCountRaw?: string | null;
+    /** FLEC source only, and optional there — but see the `notice` on the verdict. */
+    whseSide?: string | null;
+    notes?: string | null;
+    /** Only ever true on the operator's explicit re-send after a `duplicate_warning`. */
+    allowDuplicate?: boolean;
+}
+
+export type AddQcDrawOutcome = AddPartnerDrawOutcome | 'rpc_error';
+
+/** The RPC's verdict, narrowed and made safe to read. */
+export interface AddQcDrawResult extends Omit<AddPartnerDrawResult, 'outcome'> {
+    outcome: AddQcDrawOutcome;
+}
+
+const ADD_OUTCOMES: readonly AddPartnerDrawOutcome[] = [
+    'inserted',
+    'duplicate_warning',
+    'already_exists',
+    'wrong_surface',
+    'unsupported_source',
+    'invalid_key',
+    'invalid',
+];
+
+const BATCH_RESOLUTIONS: readonly BatchResolution[] = ['explicit', 'running', 'calendar'];
+
+function readAddOutcome(value: unknown): AddQcDrawOutcome {
+    return ADD_OUTCOMES.includes(value as AddPartnerDrawOutcome)
+        ? (value as AddPartnerDrawOutcome)
+        : 'rpc_error';
+}
+
+function str(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+}
+
+function num(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** The `duplicate_warning` list — the draws already on file under the same key. */
+function readExisting(value: unknown): ExistingDraw[] | undefined {
+    if (!Array.isArray(value)) return undefined;
+    const rows: ExistingDraw[] = [];
+    for (const item of value) {
+        if (!item || typeof item !== 'object') continue;
+        const row = item as Record<string, unknown>;
+        const id = str(row.id);
+        if (!id) continue;
+        rows.push({
+            id,
+            weight_kg: num(row.weight_kg) ?? 0,
+            prod_date: str(row.prod_date) ?? null,
+            warehouse_code: str(row.warehouse_code) ?? null,
+            whse_side: str(row.whse_side) ?? null,
+            batch: str(row.batch) ?? '',
+        });
+    }
+    return rows;
+}
+
+/** The exact `cenapro_ccc_sample_groups` key the new row joined. Never re-derived. */
+function readSampleGroup(value: unknown): AddPartnerDrawResult['sample_group'] {
+    if (!value || typeof value !== 'object') return undefined;
+    const group = value as Record<string, unknown>;
+    const sampleDate = str(group.sample_date);
+    const source = str(group.source_location_code);
+    const whse = str(group.whse_key);
+    if (!sampleDate || !source || whse === undefined) return undefined;
+    return { sample_date: sampleDate, source_location_code: source, whse_key: whse };
+}
+
+/** A refusal decided here, worded the way the RPC words its own. */
+function refuse(outcome: AddQcDrawOutcome, message: string): AddQcDrawResult {
+    return { ok: false, outcome, message };
+}
+
+/**
+ * The bag count on a FLEC draw. Whole bags — a third of a flec is not a thing anyone
+ * counts — but the bound stays with the RPC, which owns what a legal count is.
+ */
+function parseFlecCount(raw: string): { count: number | null; error: string | null } {
+    const cleaned = raw.replace(/[,\s_]/g, '');
+    if (cleaned === '') {
+        return { count: null, error: 'A FLEC draw takes bags out of a warehouse — enter how many.' };
+    }
+    if (!/^\d+$/.test(cleaned)) {
+        return { count: null, error: 'The bag count must be a whole number of flecs.' };
+    }
+    return { count: Number(cleaned), error: null };
+}
+
+const BAGGING_CODES = new Set(['FLEC', 'BAG', 'BAGGING', 'FLEC_BAGGING']);
+
+function clean(value: string | null | undefined): string {
+    return (value ?? '').trim();
+}
+
+/**
+ * Add one partner draw.
+ *
+ * Returns the RPC's verdict rather than throwing on a refusal: four of the seven
+ * outcomes are things the operator can act on (confirm a duplicate, open the row that
+ * already exists, go to the Production ledger, retype a value), and a thrown error
+ * would flatten all of them into "it failed".
+ */
+export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawResult> {
+    const recvDate = clean(input.recvDate);
+    const source = clean(input.sourceLocationCode).toUpperCase();
+    const machine = clean(input.partnerEquipmentCode).toUpperCase();
+    const grade = clean(input.gradeCode).toUpperCase();
+    const shift = clean(input.shiftCode).toUpperCase();
+    const prodDate = clean(input.prodDate);
+    const warehouse = clean(input.warehouseCode).toUpperCase();
+    const flecCountRaw = clean(input.flecCountRaw);
+    const side = clean(input.whseSide).toUpperCase();
+    const notes = clean(input.notes);
+
+    // ── The surface boundary, restated where it is cheapest to notice ─────────────
+    if (!machine || BAGGING_CODES.has(machine)) {
+        return refuse(
+            'wrong_surface',
+            'A draw needs the partner machine it went into (C1–C4 or RK1–RK4). Flec bagging is reported on a different sheet — enter it in the Production ledger.',
+        );
+    }
+
+    const missing = [
+        !recvDate && 'a receipt date',
+        !source && 'a source',
+        !grade && 'a grade',
+        !shift && 'a shift',
+    ].filter(Boolean) as string[];
+    if (missing.length > 0) {
+        return refuse('invalid_key', `This draw is missing ${missing.join(', ')}.`);
+    }
+
+    // ── The weight, through the same parser the client previewed with ─────────────
+    const { kg, error: weightError } = parseWeightKg(input.weightRaw ?? '');
+    if (kg == null) return refuse('invalid', weightError ?? 'That weight cannot be saved.');
+
+    if (prodDate && prodDate > recvDate) {
+        return refuse(
+            'invalid',
+            'The production date cannot be after the receipt date — material is drawn after it is made.',
+        );
+    }
+
+    // ── Source-conditional bag fields ─────────────────────────────────────────────
+    // A FLEC draw is bags leaving a warehouse, so the warehouse and the count are part
+    // of what happened. Any other source consumes no bags at all, and the RPC refuses
+    // the fields by name rather than dropping them quietly — so neither does this.
+    const isFlec = source === 'FLEC';
+    let flecCount: number | null = null;
+
+    if (isFlec) {
+        if (!warehouse) {
+            return refuse(
+                'invalid',
+                'A FLEC draw takes bags out of a specific warehouse — choose which one.',
+            );
+        }
+        const parsed = parseFlecCount(flecCountRaw);
+        if (parsed.count == null) return refuse('invalid', parsed.error ?? 'The bag count is missing.');
+        flecCount = parsed.count;
+    } else if (warehouse || flecCountRaw || side) {
+        return refuse(
+            'invalid',
+            `A ${source} draw consumes no bags, so it carries no warehouse, bag count or side. Clear those, or change the source to FLEC.`,
+        );
+    }
+
+    const args: AddPartnerDrawArgs = {
+        p_recv_date: recvDate,
+        p_source_location_code: source,
+        p_partner_equipment_code: machine,
+        p_grade_code: grade,
+        p_shift_code: shift,
+        p_weight_kg: kg,
+    };
+    // Every optional argument is OMITTED when it does not apply — an explicit null on a
+    // bag field is a value the RPC would (rightly) refuse on a tank draw.
+    if (prodDate) args.p_prod_date = prodDate;
+    if (isFlec) {
+        args.p_warehouse_code = warehouse;
+        if (flecCount != null) args.p_flec_count = flecCount;
+        if (side) args.p_whse_side = side;
+    }
+    if (notes) args.p_notes = notes;
+    if (input.allowDuplicate) args.p_allow_duplicate = true;
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('cenapro_add_partner_draw', args);
+
+    if (error) {
+        return { ok: false, outcome: 'rpc_error', message: error.message };
+    }
+
+    const raw = (data ?? {}) as Record<string, unknown>;
+    const outcome = readAddOutcome(raw.outcome);
+    const batchResolution = BATCH_RESOLUTIONS.includes(raw.batch_resolution as BatchResolution)
+        ? (raw.batch_resolution as BatchResolution)
+        : undefined;
+    const disposition = raw.disposition_kind;
+
+    const result: AddQcDrawResult = {
+        ok: raw.ok === true,
+        outcome,
+        id: str(raw.id),
+        message: str(raw.message),
+        unique_tag: str(raw.unique_tag),
+        batch: str(raw.batch),
+        batch_year: num(raw.batch_year),
+        batch_resolution: batchResolution,
+        plant_code: str(raw.plant_code) ?? null,
+        disposition_kind:
+            disposition === 'partner_crusher' || disposition === 'partner_kiln'
+                ? disposition
+                : undefined,
+        sample_group: readSampleGroup(raw.sample_group),
+        notice: str(raw.notice) ?? null,
+        existing: readExisting(raw.existing),
+        weight_kg: num(raw.weight_kg),
+    };
+
+    if (result.ok && outcome === 'inserted') {
+        // A new receipt moves the QC aggregates, the breakdown that reads the same
+        // views, and the production ledger that renders the very same row.
+        revalidatePath('/cenapro/qc');
+        revalidatePath('/cenapro/qc/breakdown');
+        revalidatePath('/cenapro/production');
+    }
+
+    return result;
 }

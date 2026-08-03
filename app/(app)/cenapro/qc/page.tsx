@@ -1,6 +1,6 @@
 import { resolveQcMonth } from '@/lib/cenapro/ccc-analysis-view';
 
-import { loadQcLedgerData, loadQcMonthKeys } from './data';
+import { loadQcDrawOptions, loadQcLedgerData, loadQcMonthKeys } from './data';
 import { LoadError } from './load-error';
 import { QcLedgerClient } from './qc-ledger-client';
 
@@ -27,8 +27,13 @@ export default async function QcLedgerPage({
     const params = await searchParams;
     const { monthKeys, error: monthsError } = await loadQcMonthKeys();
     const month = resolveQcMonth(monthKeys, params.m);
-    const data = await loadQcLedgerData(month, monthKeys);
-    const error = monthsError ?? data.error;
+    // The ledger read and the ADD form's dimension lists are independent — one round
+    // trip, not two in series.
+    const [data, drawOptions] = await Promise.all([
+        loadQcLedgerData(month, monthKeys),
+        loadQcDrawOptions(),
+    ]);
+    const error = monthsError ?? data.error ?? drawOptions.error;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -44,6 +49,7 @@ export default async function QcLedgerPage({
                 monthKeys={data.monthKeys}
                 previousWtd={data.previousWtd}
                 previousLabel={data.previousLabel}
+                drawOptions={drawOptions}
             />
         </div>
     );
