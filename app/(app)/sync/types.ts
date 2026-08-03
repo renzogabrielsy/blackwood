@@ -232,6 +232,40 @@ export interface ProductionBatchStart {
   source_sheet: string
 }
 
+/**
+ * One production row the sync REFUSED to overwrite because a human edited it in the app
+ * (the human-edit latch, 2026-08-03 — migration
+ * `20260803080000_production_human_edit_guard.sql`).
+ *
+ * `human_edited_at` on the six production fact tables is set by a trigger on every
+ * in-app write; `fn_apply_production_upstream` re-checks it inside its own UPDATE, so
+ * the sync cannot revert a hand-corrected number. Nothing is parked in the DB: MC's /
+ * Ivy's workbook is cumulative, so the disagreement re-surfaces every run until the
+ * operator either fixes the sheet or hands the row back with
+ * `fn_release_production_rows`.
+ *
+ * NOT a held row (there is nothing to retry) and never a `HeldKind` (frontend-locked).
+ * Worker mirror: normalizeReport.ts::ProductionHumanEditNote. Production carries no
+ * ₱/cost fields.
+ */
+export interface ProductionHumanEdit {
+  /** runs | downtime | waste | electricity | trucks. */
+  section: string
+  /** The DB table the refusal applies to. */
+  table: string
+  /** The row id — what the release action needs. */
+  record_id: string
+  transaction_date: string | null
+  production_batch: string | null
+  shift: string | null
+  meter: string | null
+  plate_no: string | null
+  /** `yours` = the value stored in the app, `sheet` = what the report says. */
+  changed_fields: Array<{ field: string; yours: unknown; sheet: unknown }>
+  /** `known_before_write` (already latched when the run planned) | `refused_by_db` (a race). */
+  outcome: string
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -251,6 +285,10 @@ export interface ApplyResult {
    *  `auto_created_batches` — read it as `apply?.production_batch_starts ?? []`
    *  (see `collectProductionBatchStarts`). Only the `production` report ever fills it. */
   production_batch_starts?: ProductionBatchStart[]
+  /** Production rows the sync refused to overwrite because a human owns them. Same
+   *  optionality contract as `auto_created_batches` — read it as
+   *  `apply?.production_human_edits ?? []` (see `collectProductionHumanEdits`). */
+  production_human_edits?: ProductionHumanEdit[]
 }
 
 // ============================================================

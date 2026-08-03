@@ -8,7 +8,9 @@
  *      remarks) via insert_if_absent(natural_key=(shift_id,)).
  *   4. Insert electricity_readings + truck_readings (natural-key, no shift) —
  *      NEVER writing the generated columns diff_kwh/consumption_kwh/ttl_km.
- *   5. Apply ALL VALUE_CHANGED (all 5 sections), stripping generated cols defensively.
+ *   5. Apply VALUE_CHANGED (all 5 sections) through the CONDITIONAL writer
+ *      `fn_apply_production_upstream`, stripping generated cols defensively. A row a
+ *      human edited in the app is NEVER written — it becomes a run finding instead.
  *   6. Hold ALL MALFORMED.
  * Every table gets a MANUAL audit row via writeIngestionAudit (none of the 6
  * production-family tables has an audit trigger). Reconcile is INFORMATIONAL and
@@ -65,10 +67,53 @@ export interface ProductionBatchStart {
   source_sheet: string;
 }
 
+/**
+ * One production row the sync REFUSED to overwrite because a human edited it in the app
+ * (the human-edit latch — migration `20260803080000_production_human_edit_guard.sql`).
+ *
+ * The disagreement is real and stays real: MC's / Ivy's workbook is CUMULATIVE, so it
+ * still says the same thing tomorrow and this note re-fires every run until the operator
+ * resolves it — either by fixing the sheet or by handing the row back with
+ * `fn_release_production_rows`. Nothing is parked in the DB; the source IS the record.
+ *
+ * Run-visibility only — NOT a held row (there is nothing to retry) and NEVER a `HeldKind`
+ * (that enum is frontend-locked). Mirror of the frontend `ProductionHumanEdit`
+ * (app/(app)/sync/types.ts). Production carries no ₱/cost fields at all.
+ */
+export interface ProductionHumanEdit {
+  /** runs | downtime | waste | electricity | trucks. */
+  section: string;
+  /** The DB table the refusal applies to. */
+  table: string;
+  /** The row the sync would have written. Feeds the release action. */
+  record_id: string;
+  transaction_date: string | null;
+  production_batch: string | null;
+  shift: string | null;
+  meter: string | null;
+  plate_no: string | null;
+  /** Every field the report disagrees on: `yours` = what's in the app, `sheet` = the report. */
+  changed_fields: Array<{ field: string; yours: unknown; sheet: unknown }>;
+  /**
+   * `known_before_write` — the row was already latched when the run planned its writes.
+   * `refused_by_db`      — it was latched between the plan and the write; the RPC's own
+   *                        guard caught it (the TOCTOU case this design exists for).
+   */
+  outcome: string;
+}
+
 export interface ProductionCompact {
   report_type: string;
   since: string;
   window: [string, string];
+  /**
+   * Ids of rows in this run's DB window that a human owns (`human_edited_at IS NOT NULL`).
+   * Read from the SAME queries that build the classify window, so it costs no extra round
+   * trip. ADVISORY: it lets the apply skip a doomed write and name the disagreement even
+   * when there is no write to attempt. The authoritative guard is inside
+   * `fn_apply_production_upstream`'s own UPDATE.
+   */
+  human_edited_ids?: string[];
   source: {
     mc_subject?: string | null;
     mc_uid?: number | string | null;
@@ -93,6 +138,8 @@ export interface ApplyResult {
   errors: string[];
   /** Echoed from the compact so the run result carries it to the panel's findings. */
   production_batch_starts: ProductionBatchStart[];
+  /** Rows the sync refused to overwrite because a human owns them. */
+  production_human_edits: ProductionHumanEdit[];
 }
 
 /** Human label for a production child record: "2026-06-30 · JUNE-26 · Morning · runs". */
@@ -111,6 +158,59 @@ function prodHeldRow(section: string, rec: Record<string, unknown> | undefined):
     shift: r.shift ?? null,
     customer: r.customer ?? null,
     grade: r.grade ?? null,
+  };
+}
+
+/**
+ * Normalize either classifier diff shape into ONE list of {field, yours, sheet}:
+ *   runs/downtime/waste   `{ field: { db, email } }`
+ *   electricity/trucks    `[ { field, emailValue, dbValue } ]`
+ * `yours` is the stored (app) value, `sheet` is what the report says. Generated columns
+ * are dropped — they are derived, never a real disagreement.
+ */
+function changedFields(
+  diff: Record<string, unknown> | Array<{ field: string; emailValue?: unknown; dbValue?: unknown }>,
+): Array<{ field: string; yours: unknown; sheet: unknown }> {
+  const out: Array<{ field: string; yours: unknown; sheet: unknown }> = [];
+  const generated = new Set<string>(GENERATED_COLS);
+  if (Array.isArray(diff)) {
+    for (const e of diff) {
+      if (!e || typeof e !== "object" || generated.has(e.field)) continue;
+      out.push({ field: e.field, yours: e.dbValue ?? null, sheet: e.emailValue ?? null });
+    }
+  } else {
+    for (const [field, v] of Object.entries(diff)) {
+      if (generated.has(field)) continue;
+      const o = (v ?? {}) as Record<string, unknown>;
+      out.push({ field, yours: o.db ?? null, sheet: o.email ?? null });
+    }
+  }
+  out.sort((a, b) => (a.field < b.field ? -1 : a.field > b.field ? 1 : 0));
+  return out;
+}
+
+/** Build the run-visibility note for one refused row. NEVER carries a ₱/cost field. */
+function humanEditNote(
+  section: string,
+  table: string,
+  recordId: string,
+  rec: Row,
+  changed: Array<{ field: string; yours: unknown; sheet: unknown }>,
+  outcome: string,
+): ProductionHumanEdit {
+  const s = (v: unknown): string | null => (v === null || v === undefined || v === "" ? null : String(v));
+  return {
+    section,
+    table,
+    record_id: recordId,
+    // runs/downtime/waste carry transaction_date; electricity/trucks carry reading_date.
+    transaction_date: s(rec.transaction_date) ?? s(rec.reading_date),
+    production_batch: s(rec.production_batch),
+    shift: s(rec.shift),
+    meter: s(rec.meter),
+    plate_no: s(rec.plate_no),
+    changed_fields: changed,
+    outcome,
   };
 }
 
@@ -343,22 +443,56 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
 
   await emit?.("apply", "Applying changed rows…", 78);
 
-  // ── 5. VALUE_CHANGED (all sections) → UPDATE + manual audit ──
+  // ── 5. VALUE_CHANGED (all sections) → CONDITIONAL update + manual audit ──
+  //
+  // Two layers, doing two different jobs:
+  //
+  //   VISIBILITY — a row already latched (`compact.human_edited_ids`) is never sent to
+  //     the writer at all; it becomes a `ProductionHumanEdit` note carrying BOTH values.
+  //     This runs BEFORE the empty-patch skip on purpose: the disagreement exists whether
+  //     or not there is a patch to write, and staying silent about it is the actual
+  //     complaint ("sync has to know when i edited something in the app").
+  //
+  //   CORRECTNESS — everything else goes through `fn_apply_production_upstream`, whose
+  //     UPDATE carries `human_edited_at IS NULL` in its OWN WHERE. A save that lands
+  //     between the read above and this call therefore still wins, and comes back as
+  //     `human_edited`. There is no read-then-write anywhere on this path.
+  //
+  // NOTE ON THE PATCH SHAPE (unchanged, deliberately): the classifiers emit
+  // `{field:{db,email}}` (runs/downtime/waste) and `[{field,emailValue,dbValue}]`
+  // (electricity/trucks); this reads a `new` key that NEITHER carries, faithfully
+  // mirroring sync_production.py. So in the live pipeline the patch is empty and no
+  // update is attempted — the write path is DORMANT. Repairing that shape is a separate,
+  // deliberate decision (it would start writing MC's values over the DB); this change
+  // only makes sure the guard is already underneath it when someone does.
   const tableFor: Record<keyof ProductionSections, string> = {
     runs: "production_runs", downtime: "production_downtime", waste: "production_waste",
     electricity: "electricity_readings", trucks: "truck_readings",
   };
+  const humanEditedIds = new Set(compact.human_edited_ids ?? []);
+  const humanEdits: ProductionHumanEdit[] = [];
+  const ops: Row[] = [];
+  /** Per-op bookkeeping so an RPC outcome can be turned back into an audit row / note. */
+  const opMeta = new Map<string, {
+    section: keyof ProductionSections; table: string; diff: unknown;
+    rec: Row; changed: Array<{ field: string; yours: unknown; sheet: unknown }>;
+  }>();
+
   for (const secName of Object.keys(tableFor) as Array<keyof ProductionSections>) {
     const tbl = tableFor[secName];
     for (const c of sections[secName] ?? []) {
       if (c.class !== "VALUE_CHANGED" || !c.existing_id) continue;
+      const id = String(c.existing_id);
       const diff = (c.diff ?? {}) as Record<string, unknown> | Array<{ field: string; emailValue?: unknown; dbValue?: unknown }>;
+      const rec = (c.record ?? {}) as Row;
+      const changed = changedFields(diff);
+
+      if (humanEditedIds.has(id)) {
+        humanEdits.push(humanEditNote(secName, tbl, id, rec, changed, "known_before_write"));
+        continue;
+      }
+
       const patch: Row = {};
-      // runs/downtime/waste diff is {field:{db,email}}; electricity/trucks diff is
-      // a LIST of {field,emailValue,dbValue}. Python's apply reads a dict `.new`
-      // which neither shape carries, so patch ends up EMPTY for the dict shape and
-      // is only meaningful when a caller provides {new:...}. We mirror: pull `new`
-      // if present (dict form), else skip — then strip generated cols defensively.
       if (Array.isArray(diff)) {
         for (const entry of diff) {
           if (entry && typeof entry === "object" && "new" in entry) patch[entry.field] = (entry as { new: unknown }).new;
@@ -370,17 +504,50 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
       }
       for (const gen of GENERATED_COLS) delete patch[gen];
       if (Object.keys(patch).length === 0) continue;
-      try {
-        await db.update(tbl, { id: `eq.${c.existing_id}` }, patch);
-        updates++;
-        await db.writeIngestionAudit({
-          tableName: tbl, recordId: c.existing_id as string, operation: "UPDATE",
-          comment: prov(tbl, runTs, "UPDATE"), diff: diff as Row,
-        });
-      } catch (exc) {
-        errors.push(`${tbl} update ${c.existing_id}: ${exc instanceof Error ? exc.message : String(exc)}`);
-      }
+
+      ops.push({ table: tbl, id, patch });
+      opMeta.set(`${tbl}|${id}`, { section: secName, table: tbl, diff, rec, changed });
     }
+  }
+
+  if (ops.length > 0) {
+    try {
+      for (const res of await db.applyProductionUpstream(ops)) {
+        const meta = opMeta.get(`${res.table}|${res.id}`);
+        if (!meta) continue;
+        if (res.outcome === "applied") {
+          updates++;
+          await db.writeIngestionAudit({
+            tableName: meta.table, recordId: res.id, operation: "UPDATE",
+            comment: prov(meta.table, runTs, "UPDATE"), diff: meta.diff as Row,
+          });
+        } else if (res.outcome === "human_edited") {
+          humanEdits.push(
+            humanEditNote(meta.section, meta.table, res.id, meta.rec, meta.changed, "refused_by_db"),
+          );
+        } else {
+          // missing / empty_patch / unsupported_field / not_applied — nothing was written
+          // and it is NOT a human-arbitration case, so it must surface as a real problem
+          // (errors[] also blocks the watermark bump + the Gmail label).
+          errors.push(`${meta.table} update ${res.id}: not applied (${res.outcome})`);
+        }
+      }
+    } catch (exc) {
+      errors.push(
+        `production conditional update failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+      );
+    }
+  }
+
+  for (const h of humanEdits) {
+    await emit?.(
+      "apply",
+      `${h.transaction_date ?? "a row"} ${h.section}: you edited this in the app, so the ` +
+        `report's different value was NOT written — please confirm which is right.`,
+      80,
+      undefined,
+      "warn",
+    );
   }
 
   // ── 6. MALFORMED → held everywhere ──
@@ -436,5 +603,6 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
     watermark_updated: watermarkUpdated,
     errors,
     production_batch_starts: compact.batch_starts ?? [],
+    production_human_edits: humanEdits,
   };
 }

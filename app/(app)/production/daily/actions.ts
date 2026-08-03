@@ -62,6 +62,22 @@ export interface LedgerRowPayload {
     } | null;
 }
 
+// ─── Human-edit latch ──────────────────────────────────────────────────────────
+// Every in-app write to a production fact table CLAIMS the row: `human_edited_at` is
+// set, and from then on the sync will NOT overwrite it — it surfaces the report's
+// differing value as a run finding instead (migration
+// `20260803080000_production_human_edit_guard.sql`).
+//
+// The DB trigger `fn_stamp_human_edit` is what actually guarantees this (it stamps
+// whenever `auth.uid()` is non-null, which no caller can forget or opt out of, and it
+// fills `human_edited_by` from `auth.uid()` — the app has no reason to look the user up).
+// Passing the timestamp here too is belt-and-braces, and it keeps the claim visible at
+// the call site instead of hidden in the schema.
+//
+// To hand a row back to the sync, use `releaseProductionRows` in
+// `app/(app)/production/actions.ts` — the stamp cannot be cleared by an ordinary write.
+const claim = () => ({ human_edited_at: new Date().toISOString() });
+
 // ─── Error translation ─────────────────────────────────────────────────────────
 function translateDbError(message: string): string {
     if (message.includes('chk_production_runs_grade') || message.includes('production_runs_grade_check')) {
@@ -287,6 +303,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
             transaction_date: firstRow.shift.transaction_date,
             production_batch: firstRow.shift.production_batch,
             shift: firstRow.shift.shift,
+            ...claim(),
         };
 
         // Upsert shift by natural key — get back the id
@@ -320,6 +337,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
                     ttl_kg: row.run.ttl_kg ?? 0,
                     sacks_bags: row.run.sacks_bags ?? null,
                     remarks: row.run.remarks || null,
+                    ...claim(),
                 };
                 const { error: runError } = await supabase
                     .from('production_runs')
@@ -335,6 +353,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
                     ttl_kg: row.run.ttl_kg ?? 0,
                     sacks_bags: row.run.sacks_bags ?? null,
                     remarks: row.run.remarks || null,
+                    ...claim(),
                 };
                 const { error: runError } = await supabase
                     .from('production_runs')
@@ -356,6 +375,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
                     dt_hrs: dt.dt_hrs ?? 0,
                     dt_mins: dt.dt_mins ?? 0,
                     dt_reason: dt.dt_reason || null,
+                    ...claim(),
                 };
                 const { error: dtError } = await supabase
                     .from('production_downtime')
@@ -388,6 +408,7 @@ export async function saveBulkDailyLedger(rows: LedgerRowPayload[]): Promise<
                     trml2_kg: w.trml2_kg ?? 0,
                     grit_kg: w.grit_kg ?? 0,
                     remarks: w.remarks || null,
+                    ...claim(),
                 };
                 const { error: wError } = await supabase
                     .from('production_waste')

@@ -13,6 +13,13 @@ export type BulkSavePayload<TInsert, TUpdate> = {
 
 export type ElectricityReadingRow = Tables<'electricity_readings'>;
 
+// Human-edit latch: every in-app write CLAIMS the row, so the sync will not overwrite it
+// (migration `20260803080000_production_human_edit_guard.sql`). The DB trigger
+// `fn_stamp_human_edit` is the real guarantee — including `human_edited_by` from
+// `auth.uid()`; this keeps the claim visible at the call site. Hand a row back with
+// `releaseProductionRows` in `app/(app)/production/actions.ts`.
+const claim = () => ({ human_edited_at: new Date().toISOString() });
+
 function translateDbError(message: string): string {
     if (message.includes('chk_electricity_readings_end_kwh')) {
         return 'End KWH must be greater than or equal to Start KWH.';
@@ -103,6 +110,7 @@ export async function saveBulkElectricity(
                 start_kwh: Number(r.start_kwh),
                 end_kwh: Number(r.end_kwh),
                 meter_multiplier: Number(r.meter_multiplier ?? 120),
+                ...claim(),
             }))
         );
         if (error) return { ok: false, error: translateDbError(error.message) };
@@ -115,7 +123,10 @@ export async function saveBulkElectricity(
                 return { ok: false, error: 'End KWH must be ≥ Start KWH.' };
             }
         }
-        const { error } = await supabase.from('electricity_readings').update(data).eq('id', id);
+        const { error } = await supabase
+            .from('electricity_readings')
+            .update({ ...data, ...claim() })
+            .eq('id', id);
         if (error) return { ok: false, error: translateDbError(error.message) };
         updatedCount++;
     }

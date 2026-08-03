@@ -6,7 +6,7 @@ Daily truck odometer and fuel readings for fleet tracking, displayed as a **pivo
 ## Files
 | File | Role |
 |------|------|
-| `actions.ts` | `fetchTrucksTabData(year, month)`, `saveBulkTrucks`. Defines `BulkSavePayload` locally. |
+| `actions.ts` | `fetchTrucksTabData(year, month)`, `saveBulkTrucks`. Defines `BulkSavePayload` locally. **Human-edit latch (2026-08-03):** every insert/update also passes `human_edited_at` via the local `claim()` helper, so the row is marked as yours and the sync will not overwrite it. The DB trigger `fn_stamp_human_edit` is the actual guarantee (it also fills `human_edited_by` from `auth.uid()`); hand a row back with `releaseProductionRows` in `app/(app)/production/actions.ts`. See the module CONTEXT → "Human-edit latch". |
 | `trucks-view.tsx` | Scope-label wrapper (shows "Showing: {scope}") — passes `readings` to `TrucksGrid`. Accepts `year: number\|null`, `month: number\|null`. |
 | `trucks-grid.tsx` | Pivoted, inline-editable grid for `truck_readings` (one row per date, plate column groups) |
 

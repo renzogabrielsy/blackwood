@@ -10,7 +10,7 @@ Daily electricity meter readings (MAIN / BUNKHOUSE / PUMP) with computed DIFF an
 ## Files
 | File | Role |
 |------|------|
-| `actions.ts` | `fetchElectricityTabData(year, month)`, `saveBulkElectricity`. Defines `BulkSavePayload` locally. |
+| `actions.ts` | `fetchElectricityTabData(year, month)`, `saveBulkElectricity`. Defines `BulkSavePayload` locally. **Human-edit latch (2026-08-03):** every insert/update also passes `human_edited_at` via the local `claim()` helper, so the row is marked as yours and the sync will not overwrite it. The DB trigger `fn_stamp_human_edit` is the actual guarantee (it also fills `human_edited_by` from `auth.uid()`); hand a row back with `releaseProductionRows` in `app/(app)/production/actions.ts`. See the module CONTEXT → "Human-edit latch". |
 | `electricity-view.tsx` | Scope-label wrapper (shows "Showing: {scope}") — renders the grid `hidden sm:block` + `ElectricityCardsMobile` `sm:hidden` (`h-[70dvh]`). Accepts `year: number\|null`, `month: number\|null`. |
 | `electricity-grid.tsx` | Inline-editable grid for `electricity_readings` (desktop, unchanged) |
 | `electricity-cards-mobile.tsx` | **Phone read layer** (`sm:hidden`) — simplest Archetype C `MobileCardList` over the `readings` rows. Headline `date · meter · TTL KWH · [start→end]`; detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns. Read-only — no editing/keyboard/paste. |
