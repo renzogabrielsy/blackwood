@@ -34,7 +34,18 @@ import {
 } from '@/lib/hooks/use-grid-keyboard-nav';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import { CenaproPeriodPicker } from './period-picker';
-import { ViewModeSwitcher, ScopeToggle } from './ledger-controls';
+import { ViewModeSwitcher, ScopeToggle, useLedgerFilters } from './ledger-controls';
+import { ColumnFilterMenu, FilterSummaryChip, FilteredEmptyState } from './column-filter-menu';
+import {
+    FILTER_SPECS,
+    collectFilterPresence,
+    describeActiveFilters,
+    matchesLedgerFilters,
+    mergeDiscoveredGroups,
+    mergeDiscoveredOptions,
+    type FilterColumn,
+    type LedgerFilters,
+} from './ledger-url';
 import { useLedgerWindow, type InitialLedgerPage } from './use-ledger-window';
 import { DraftRowCells, CommittedRowCells, DraftDatalists, type DraftCellCommonProps, type DraftCellSelProps } from './draft-entry-zone';
 import { saveProductionEvents, type LedgerAnchor, type CenaproPeriod, type ProductionEventDirtyRow } from './actions';
@@ -60,6 +71,7 @@ import {
     BADGE_BASE,
     formatKg,
 } from './production-ledger-grid';
+import { formatCccFlec } from '../types';
 
 // ─── The Endless Sheet (Phase 2A — in-list draft entry) ──────────────────────────
 // ONE continuous, virtualized view of the ENTIRE cenapro_production_events history,
@@ -312,7 +324,51 @@ function renderCommittedCells(row: ProductionEventRow, rowNum: number, isMonthSt
 }
 
 // ─── Frozen, opaque header (fixedHeaderContent) ──────────────────────────────────
-function HeaderRow() {
+// The six filterable columns render a multi-select `ColumnFilterMenu` in place of a plain
+// label. The header cell geometry is unchanged (h-8, same paddings) — the menu is the same
+// tiny chevron the single-select version used, plus a count chip when active, so the
+// Excel-Standard density holds. The Popover portals to <body>, so it is never clipped by
+// the virtualized scroller's overflow.
+interface HeaderFilterWiring {
+    /** Selection to render (optimistic — ticks the instant the operator clicks). */
+    selected: LedgerFilters;
+    presence: Record<FilterColumn, Set<string>>;
+    onChange: (column: FilterColumn, values: string[]) => void;
+    disabled: boolean;
+    disabledHint?: string;
+}
+
+function HeaderFilter({
+    column,
+    wiring,
+    align = 'start',
+}: {
+    column: FilterColumn;
+    wiring: HeaderFilterWiring;
+    align?: 'start' | 'end';
+}) {
+    const options = React.useMemo(
+        () => mergeDiscoveredOptions(column, wiring.presence[column]),
+        [column, wiring.presence],
+    );
+    const groups = React.useMemo(() => mergeDiscoveredGroups(column, options), [column, options]);
+    return (
+        <ColumnFilterMenu
+            label={FILTER_SPECS[column].label}
+            selected={wiring.selected[column]}
+            options={options}
+            groups={groups}
+            present={wiring.presence[column]}
+            searchable={FILTER_SPECS[column].searchable}
+            onChange={(values) => wiring.onChange(column, values)}
+            align={align}
+            disabled={wiring.disabled}
+            disabledHint={wiring.disabledHint}
+        />
+    );
+}
+
+function HeaderRow({ wiring }: { wiring: HeaderFilterWiring }) {
     const th = 'h-8 px-2 text-left align-middle text-[11px] font-bold uppercase tracking-wide text-muted-foreground';
     return (
         <tr className="border-b">
@@ -320,13 +376,13 @@ function HeaderRow() {
             <th className={cn(th, 'frozen-corner bg-muted')} style={{ left: FROZEN_LEFT[1] }}>Recv</th>
             <th className={cn(th, 'frozen-corner bg-muted')} style={{ left: FROZEN_LEFT[2] }}>Prod</th>
             <th className={cn(th, 'frozen-corner frozen-edge bg-muted')} style={{ left: FROZEN_LEFT[3] }}>Batch</th>
-            <th className={th}>Shift</th>
-            <th className={th}>Grade</th>
-            <th className={th}>Plant</th>
-            <th className={th}>Whse</th>
-            <th className={th}>Source</th>
+            <th className={th}><HeaderFilter column="shift" wiring={wiring} /></th>
+            <th className={th}><HeaderFilter column="grade" wiring={wiring} /></th>
+            <th className={th}><HeaderFilter column="plant" wiring={wiring} /></th>
+            <th className={th}><HeaderFilter column="whse" wiring={wiring} /></th>
+            <th className={th}><HeaderFilter column="source" wiring={wiring} /></th>
             <th className={cn(th, 'text-right')}>Weight</th>
-            <th className={th}>CCC/FLEC</th>
+            <th className={th}><HeaderFilter column="ccc" wiring={wiring} align="end" /></th>
             <th className={cn(th, 'text-right')}>Flec</th>
             <th className={th}>Side</th>
         </tr>
@@ -414,14 +470,35 @@ const tableComponents: TableComponents<LedgerItem, LedgerCtx> = {
 interface ProductionEndlessSheetProps {
     initialPage: InitialLedgerPage;
     anchor: LedgerAnchor;
+    /**
+     * The filters the server ALREADY APPLIED to `initialPage`. Every subsequent page this
+     * component pulls must carry the same set, or the keyset walk would silently drift back
+     * to unfiltered history. This is the applied truth — the menus render the (optimistic)
+     * control state from `useLedgerFilters()` instead.
+     */
+    filters: LedgerFilters;
+    filtersActive: boolean;
     periods: CenaproPeriod[];
     selectedPeriod: CenaproPeriod | null;
     loadError: string | null;
 }
 
-export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedPeriod, loadError }: ProductionEndlessSheetProps) {
-    const win = useLedgerWindow(initialPage);
+export function ProductionEndlessSheet({
+    initialPage,
+    anchor,
+    filters,
+    filtersActive,
+    periods,
+    selectedPeriod,
+    loadError,
+}: ProductionEndlessSheetProps) {
+    const win = useLedgerWindow(initialPage, filters);
     const { rows: committed, firstItemIndex, hasOlder, hasNewer, loadingOlder, loadingNewer, notice, fetchOlder, fetchNewer } = win;
+
+    // Filter axis. `filterUi.filters` is the OPTIMISTIC control state (so a checkbox ticks
+    // instantly); the rows in view reflect the `filters` PROP, which is what the server
+    // query used. `filterUi.isPending` bridges the gap with a visible spinner.
+    const filterUi = useLedgerFilters();
 
     const { user, isLoading: authLoading } = useAuth();
     const router = useRouter();
@@ -453,6 +530,10 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
     // Brief post-save "Saved N rows" chrome cue in the toolbar (auto-clears). NOT a row.
     const [savedFlash, setSavedFlash] = React.useState<number | null>(null);
     const savedFlashTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    // How many rows a Save committed that the ACTIVE filters then exclude. Saving with a
+    // filter on and watching the rows not come back would read as data loss, so we count
+    // them and say so (with a one-click way out). Persists until the next save / clear.
+    const [savedButFiltered, setSavedButFiltered] = React.useState(0);
     const hydratedRef = React.useRef(false);
     // Anti-runaway guard for scroll-growth: set when a bottom-reach appends blanks, cleared
     // only when the operator scrolls back UP off the bottom (atBottom → false). Because
@@ -479,6 +560,49 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         .join(' · ');
 
     const C = committed.length; // count of committed rows currently loaded (region boundary)
+
+    // ─── Filter wiring ──────────────────────────────────────────────────────────────
+    // UNSAVED WORK IS NEVER HIDDEN. In this scope filtering is a SERVER predicate, so
+    // changing it refetches the window — and a pending edit whose row falls outside the
+    // new window would still be counted as unsaved while being invisible. So the filter
+    // controls are FROZEN while any pending work exists (the same dirty-guard idiom the
+    // period picker / view switcher / scope toggle already use). Draft rows are appended
+    // client-side and are never subject to a filter at all.
+    const filtersLocked = totalDirty > 0;
+    const filtersLockedHint =
+        'Save or discard your unsaved changes before filtering — filtering reloads the window.';
+
+    // Values actually present in the loaded window → used to DIM (never hide/disable)
+    // options with no rows here. In endless scope an option absent from the window may
+    // still exist further back; the query-side filter will still find it.
+    const filterPresence = React.useMemo(
+        () =>
+            collectFilterPresence(
+                committed.map((r) => ({
+                    shift_code: r.shift_code,
+                    grade_code: r.grade_code,
+                    plant_code: r.plant_code,
+                    warehouse_code: r.warehouse_code,
+                    source_location_code: r.source_location_code,
+                    ccc_flec: formatCccFlec(r.disposition_kind, r.partner_equipment_code),
+                })),
+            ),
+        [committed],
+    );
+
+    const setFilterColumn = filterUi.setColumn;
+    const clearFilters = filterUi.clearAll;
+    const headerFilterWiring = React.useMemo<HeaderFilterWiring>(
+        () => ({
+            selected: filterUi.filters,
+            presence: filterPresence,
+            onChange: setFilterColumn,
+            disabled: filtersLocked,
+            disabledHint: filtersLockedHint,
+        }),
+        [filterUi.filters, filterPresence, setFilterColumn, filtersLocked],
+    );
+    const activeFilterDescription = React.useMemo(() => describeActiveFilters(filters), [filters]);
 
     const gridRef = React.useRef<HTMLDivElement>(null);
     const virtuosoRef = React.useRef<TableVirtuosoHandle>(null);
@@ -1134,6 +1258,21 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         // Remember where we were (committed-only viewport re-anchor) before the save.
         const topId = committed[0]?.id ?? null;
 
+        // With filters ON, a row we're about to commit may not survive the refetch — the
+        // window is a SERVER-filtered read. Count those up front (the same client matcher
+        // that expresses the filters in Focus scope) so the post-save cue can say "3 saved
+        // rows are hidden by the active filters" instead of the rows just not reappearing.
+        let willBeFiltered = 0;
+        if (filtersActive) {
+            const check = (r: BulkRow) => {
+                if (!matchesLedgerFilters(r, filters)) willBeFiltered++;
+            };
+            filledDrafts.forEach(check);
+            editedRows.forEach((bulk, id) => {
+                if (!deletedIds.has(id)) check(bulk);
+            });
+        }
+
         setIsSaving(true);
         try {
             const res = await saveProductionEvents(dirtyRows, deleted);
@@ -1158,6 +1297,8 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
             setSavedFlash(savedN);
             if (savedFlashTimerRef.current) clearTimeout(savedFlashTimerRef.current);
             savedFlashTimerRef.current = setTimeout(() => setSavedFlash(null), 2500);
+            // Honest about rows the refetched (filtered) window won't bring back.
+            setSavedButFiltered(willBeFiltered);
 
             // Post-save refresh — the pager holds client-side pages (revalidatePath won't
             // touch them). New rows always append at the newest end, so when drafts were
@@ -1177,7 +1318,18 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
         } finally {
             setIsSaving(false);
         }
-    }, [draftRows, editedRows, deletedIds, selectedPeriod?.batch_year, committed, clearDraftMirror, win, anchor]);
+    }, [
+        draftRows,
+        editedRows,
+        deletedIds,
+        selectedPeriod?.batch_year,
+        committed,
+        clearDraftMirror,
+        win,
+        anchor,
+        filters,
+        filtersActive,
+    ]);
 
     const handleDiscardConfirm = React.useCallback(() => {
         setDiscardOpen(false);
@@ -1328,6 +1480,13 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
 
     const initialTopMostItemIndex = anchor.kind === 'latest' ? Math.max(0, initialPage.rows.length - 1) : 0;
 
+    // The frozen header now carries the six column filter menus, so it must re-render when
+    // the selection / presence / dirty-guard change. Memoized on exactly those.
+    const fixedHeaderContent = React.useCallback(
+        () => <HeaderRow wiring={headerFilterWiring} />,
+        [headerFilterWiring],
+    );
+
     return (
         <div className="flex h-full flex-col">
             {/* Toolbar */}
@@ -1408,15 +1567,47 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         Read-only · oldest → newest
                     </span>
                 )}
+                {/* Saved-but-filtered cue — rows the refetched window legitimately can't
+                    bring back because the active filters exclude them. One click out. */}
+                {savedButFiltered > 0 && (
+                    <span className="animate-fade-up inline-flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        {savedButFiltered} saved row{savedButFiltered !== 1 ? 's' : ''} hidden by filters
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1 text-[10px] text-amber-700 dark:text-amber-300"
+                            onClick={() => {
+                                setSavedButFiltered(0);
+                                clearFilters();
+                            }}
+                        >
+                            Show
+                        </Button>
+                    </span>
+                )}
                 <span className="h-4 w-px bg-border/60" />
                 <CenaproPeriodPicker periods={periods} selected={selectedPeriod} />
                 <span className="h-4 w-px bg-border/60" />
                 <ViewModeSwitcher mode="ledger" />
                 <span className="h-4 w-px bg-border/60" />
                 <ScopeToggle scope="endless" />
+                {filterUi.activeCount > 0 && (
+                    <>
+                        <span className="h-4 w-px bg-border/60" />
+                        <FilterSummaryChip
+                            count={filterUi.activeCount}
+                            onClear={clearFilters}
+                            pending={filterUi.isPending}
+                            disabled={filtersLocked}
+                            disabledHint={filtersLockedHint}
+                        />
+                    </>
+                )}
+                {filterUi.isPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
                 <div className="flex-1" />
                 <span className="font-mono text-[11px] text-muted-foreground/70">
                     {committed.length.toLocaleString('en-US')} loaded
+                    {filtersActive && <span className="ml-1 text-primary">· filtered</span>}
                     {(hasOlder || hasNewer) && <span className="ml-1 text-muted-foreground/50">· scroll to load more</span>}
                 </span>
             </div>
@@ -1493,8 +1684,20 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
 
             {committed.length === 0 && !unlocked ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-                    <Inbox className="h-8 w-8 text-muted-foreground/30" />
-                    <p className="text-sm text-muted-foreground">{notice ?? 'No production events to display.'}</p>
+                    {filtersActive ? (
+                        // Name the filters responsible — a bare "nothing here" would read as
+                        // missing data when it's actually a predicate the operator set.
+                        <FilteredEmptyState
+                            active={activeFilterDescription}
+                            onClear={clearFilters}
+                            disabled={filtersLocked}
+                        />
+                    ) : (
+                        <>
+                            <Inbox className="h-8 w-8 text-muted-foreground/30" />
+                            <p className="text-sm text-muted-foreground">{notice ?? 'No production events to display.'}</p>
+                        </>
+                    )}
                 </div>
             ) : (
                 <div
@@ -1528,7 +1731,7 @@ export function ProductionEndlessSheet({ initialPage, anchor, periods, selectedP
                         atBottomStateChange={handleAtBottomStateChange}
                         increaseViewportBy={{ top: 400, bottom: unlocked ? 900 : 400 }}
                         components={tableComponents}
-                        fixedHeaderContent={HeaderRow}
+                        fixedHeaderContent={fixedHeaderContent}
                         itemContent={itemContent}
                         style={{ height: '100%' }}
                     />

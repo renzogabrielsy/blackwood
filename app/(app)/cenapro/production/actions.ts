@@ -5,6 +5,12 @@ import { createClient } from '@/lib/supabase/server';
 import type { Database } from '@/types/supabase';
 import type { ProductionEventRow } from '../types';
 import { SOURCE_SETS, type PlantView } from './production-sources';
+import {
+    cccFlecPredicateParts,
+    hasActiveFilters,
+    FILTER_NULL,
+    type LedgerFilters,
+} from './ledger-url';
 
 // The auto-updatable VIEW's generated Insert shape. Identical to Update (same view),
 // so we reuse it for both the upsert payload and the typed coercion below.
@@ -151,9 +157,11 @@ export interface LedgerCursor {
 }
 
 // One page request: either an initial anchored page, or a cursored older/newer page.
+// `filters` (the URL filter axis) is applied SERVER-SIDE to every branch — see
+// `withLedgerFilters` below for why that is non-negotiable in the endless scope.
 export type LedgerPageInput =
-    | { mode: 'anchor'; anchor: LedgerAnchor }
-    | { mode: 'cursor'; cursor: LedgerCursor; direction: 'older' | 'newer' };
+    | { mode: 'anchor'; anchor: LedgerAnchor; filters?: LedgerFilters }
+    | { mode: 'cursor'; cursor: LedgerCursor; direction: 'older' | 'newer'; filters?: LedgerFilters };
 
 // One page result. `rows` is ALWAYS oldest-first (canonical order), regardless of the
 // direction fetched (DESC fetches are reversed in memory before returning). `hasOlder` /
@@ -177,8 +185,85 @@ async function ledgerErr(msg: string): Promise<LedgerPage> {
     return { rows: [], hasOlder: false, hasNewer: false, error: msg };
 }
 
+// ─── Column filters, pushed into the QUERY (not the view) ────────────────────────
+// The endless sheet is a virtualized keyset pager. If a filter only hid rows CLIENT-side,
+// scrolling would keep fetching unfiltered pages and `hasOlder`/`hasNewer` would describe
+// the unfiltered history — "show only C1" could look nearly empty while thousands of C1
+// rows sat further back. So the predicates go into the SQL: the keyset walk itself is
+// filtered, page size counts MATCHING rows, and the edge flags stay truthful.
+//
+// Composition: PostgREST ANDs repeated top-level params, INCLUDING repeated `or=`. That is
+// what lets a filter `.or(...)` coexist with the composite-keyset `.or(...)` already on
+// these queries (verified against this project's data: keyset-only 752 rows, ccc-only 892,
+// both applied 580 — strictly narrower than either, and identical to the nested-`and`
+// spelling of the same predicate).
+//
+// Typing: the concrete PostgrestFilterBuilder generics are enormous and would have to be
+// threaded through the single-string-literal `.select(...)` inference. Instead we narrow to
+// the three builder methods we actually call, and hand the caller its own type back — no
+// `any`, and the row-shape inference at the call site is untouched.
+interface LedgerQueryBuilder {
+    in(column: string, values: string[]): LedgerQueryBuilder;
+    is(column: string, value: null): LedgerQueryBuilder;
+    or(filters: string): LedgerQueryBuilder;
+}
+
+/** Double-quote a value for a PostgREST `in.(…)` list (codes carry spaces + slashes). */
+function pgQuote(value: string): string {
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** A plain, NOT-NULL-able column: a bare `IN (…)`. */
+function applyIn(q: LedgerQueryBuilder, column: string, values: readonly string[]): LedgerQueryBuilder {
+    return values.length === 0 ? q : q.in(column, [...values]);
+}
+
+/** A NULLABLE column whose selection may include the `__NULL__` sentinel. */
+function applyNullable(q: LedgerQueryBuilder, column: string, values: readonly string[]): LedgerQueryBuilder {
+    if (values.length === 0) return q;
+    const wantsNull = values.includes(FILTER_NULL);
+    const codes = values.filter((v) => v !== FILTER_NULL);
+    if (wantsNull && codes.length === 0) return q.is(column, null);
+    if (!wantsNull) return q.in(column, codes);
+    return q.or(`${column}.is.null,${column}.in.(${codes.map(pgQuote).join(',')})`);
+}
+
+// NOT exported — a 'use server' module may only export async functions, and this is a
+// sync generic helper. It stays module-local by design.
+function applyLedgerFilters<Q>(query: Q, filters?: LedgerFilters | null): Q {
+    if (!filters || !hasActiveFilters(filters)) return query;
+    let q = query as unknown as LedgerQueryBuilder;
+
+    q = applyIn(q, 'shift_code', filters.shift);
+    q = applyIn(q, 'grade_code', filters.grade);
+    q = applyIn(q, 'source_location_code', filters.source);
+    q = applyNullable(q, 'plant_code', filters.plant);
+    q = applyNullable(q, 'warehouse_code', filters.whse);
+
+    // CCC/FLEC — ONE on-screen column, TWO DB fields, so this is an OR across columns:
+    //   FLEC        → disposition_kind = 'flec_bagging'
+    //   C1…/RK1…    → partner_equipment_code IN (…)
+    // A selection of just one side collapses to a single-column IN (no `or` needed).
+    if (filters.ccc.length > 0) {
+        const { flecBagging, equipment } = cccFlecPredicateParts(filters.ccc);
+        if (flecBagging && equipment.length > 0) {
+            q = q.or(
+                `disposition_kind.eq.flec_bagging,partner_equipment_code.in.(${equipment.map(pgQuote).join(',')})`,
+            );
+        } else if (flecBagging) {
+            q = q.in('disposition_kind', ['flec_bagging']);
+        } else if (equipment.length > 0) {
+            q = q.in('partner_equipment_code', equipment);
+        }
+    }
+
+    return q as unknown as Q;
+}
+
 export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPage> {
     const supabase = await createClient();
+    const filters = input.filters;
+    const filtered = !!filters && hasActiveFilters(filters);
 
     // ── Initial anchored page ────────────────────────────────────────────────────
     if (input.mode === 'anchor') {
@@ -188,11 +273,14 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
         // view opens at the BOTTOM (newest rows). No newer rows exist beyond the end;
         // a full page implies there's older history above.
         if (anchor.kind === 'latest') {
-            const { data, error } = await supabase
-                .from('cenapro_production_events')
-                .select(
-                    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
-                )
+            const { data, error } = await applyLedgerFilters(
+                supabase
+                    .from('cenapro_production_events')
+                    .select(
+                        'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+                    ),
+                filters,
+            )
                 .order('recv_date', { ascending: false })
                 .order('id', { ascending: false })
                 .limit(LEDGER_PAGE_SIZE);
@@ -202,16 +290,21 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
             return { rows: fetched.reverse(), hasOlder, hasNewer: false };
         }
 
-        // 'period' → anchor at the period's FIRST (oldest, canonical-order) row, then
-        // load forward INCLUSIVE (>= that row). The period is a jump target only; the
-        // window still spans all history in both directions from there.
-        const { data: firstRows, error: firstErr } = await supabase
-            .from('cenapro_production_events')
-            .select(
-                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
-            )
-            .eq('batch_year', anchor.batch_year)
-            .eq('batch', anchor.batch)
+        // 'period' → anchor at the period's FIRST (oldest, canonical-order) MATCHING row,
+        // then load forward INCLUSIVE (>= that row). The period is a jump target only; the
+        // window still spans all history in both directions from there. With filters on,
+        // "first" means first row that SURVIVES them — otherwise the window would open on a
+        // row that is then hidden and the operator would see a hole.
+        const { data: firstRows, error: firstErr } = await applyLedgerFilters(
+            supabase
+                .from('cenapro_production_events')
+                .select(
+                    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+                )
+                .eq('batch_year', anchor.batch_year)
+                .eq('batch', anchor.batch),
+            filters,
+        )
             .order('recv_date', { ascending: true })
             .order('id', { ascending: true })
             .limit(1);
@@ -219,8 +312,20 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
 
         const first = firstRows?.[0];
         if (!first) {
-            // Empty jumped-to period (edge case — the picker only offers periods that
-            // exist in data). Show nothing but an inline notice rather than a blank void.
+            // No anchor row. With filters on, this is "the period has no MATCHES" — falling
+            // through to an empty, edge-flag-dead window would trap the operator (nothing to
+            // scroll toward). Re-anchor on the newest matches anywhere in history instead,
+            // and say so. Without filters this stays the original empty-period notice.
+            if (filtered) {
+                const fallback = await fetchLedgerPage({ mode: 'anchor', anchor: { kind: 'latest' }, filters });
+                return {
+                    ...fallback,
+                    notice:
+                        fallback.rows.length > 0
+                            ? `No matches in ${anchor.batch} ${anchor.batch_year} — showing the newest matching entries instead.`
+                            : 'No entries match the current filters.',
+                };
+            }
             return {
                 rows: [],
                 hasOlder: false,
@@ -231,12 +336,15 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
 
         const d = first.recv_date ?? '';
         const i = first.id ?? '';
-        const { data, error } = await supabase
-            .from('cenapro_production_events')
-            .select(
-                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
-            )
-            .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gte.${i})`)
+        const { data, error } = await applyLedgerFilters(
+            supabase
+                .from('cenapro_production_events')
+                .select(
+                    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+                )
+                .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gte.${i})`),
+            filters,
+        )
             .order('recv_date', { ascending: true })
             .order('id', { ascending: true })
             .limit(LEDGER_PAGE_SIZE + 1);
@@ -245,11 +353,16 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
         const hasNewer = fetched.length > LEDGER_PAGE_SIZE;
         const rows = fetched.slice(0, LEDGER_PAGE_SIZE);
 
-        // hasOlder: anything strictly BEFORE the period's first row (older months)?
-        const { count, error: probeErr } = await supabase
-            .from('cenapro_production_events')
-            .select('id', { count: 'exact', head: true })
-            .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`);
+        // hasOlder: any MATCHING row strictly BEFORE the anchor (older months)? Filtering
+        // this probe too is what keeps the "load earlier" edge from promising rows the
+        // filtered keyset walk would never surface.
+        const { count, error: probeErr } = await applyLedgerFilters(
+            supabase
+                .from('cenapro_production_events')
+                .select('id', { count: 'exact', head: true })
+                .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`),
+            filters,
+        );
         if (probeErr) return ledgerErr(`Failed to probe ledger history: ${probeErr.message}`);
 
         return { rows, hasOlder: (count ?? 0) > 0, hasNewer };
@@ -260,13 +373,17 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
 
     if (input.direction === 'older') {
         // Rows strictly BEFORE the cursor. Fetch DESC (limit+1 to probe), then reverse
-        // to canonical asc for return.
-        const { data, error } = await supabase
-            .from('cenapro_production_events')
-            .select(
-                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
-            )
-            .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`)
+        // to canonical asc for return. Filters ride along, so a page = the next
+        // LEDGER_PAGE_SIZE *matching* rows however far back they are.
+        const { data, error } = await applyLedgerFilters(
+            supabase
+                .from('cenapro_production_events')
+                .select(
+                    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+                )
+                .or(`recv_date.lt.${d},and(recv_date.eq.${d},id.lt.${i})`),
+            filters,
+        )
             .order('recv_date', { ascending: false })
             .order('id', { ascending: false })
             .limit(LEDGER_PAGE_SIZE + 1);
@@ -278,12 +395,15 @@ export async function fetchLedgerPage(input: LedgerPageInput): Promise<LedgerPag
     }
 
     // direction === 'newer' → rows strictly AFTER the cursor, already canonical asc.
-    const { data, error } = await supabase
-        .from('cenapro_production_events')
-        .select(
-            'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
-        )
-        .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gt.${i})`)
+    const { data, error } = await applyLedgerFilters(
+        supabase
+            .from('cenapro_production_events')
+            .select(
+                'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, disposition_kind, partner_equipment_code, flec_count, whse_side, unique_tag',
+            )
+            .or(`recv_date.gt.${d},and(recv_date.eq.${d},id.gt.${i})`),
+        filters,
+    )
         .order('recv_date', { ascending: true })
         .order('id', { ascending: true })
         .limit(LEDGER_PAGE_SIZE + 1);

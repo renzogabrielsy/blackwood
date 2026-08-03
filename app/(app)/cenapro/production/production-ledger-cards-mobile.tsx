@@ -29,14 +29,16 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from "@/components/ui/dropdown-menu";
 import { MobileCardList } from "@/components/shared/mobile/mobile-card-list";
+import { ColumnFilterMenu } from "./column-filter-menu";
+import {
+  FILTER_COLUMNS,
+  FILTER_SPECS,
+  mergeDiscoveredGroups,
+  mergeDiscoveredOptions,
+  type FilterColumn,
+  type LedgerFilters,
+} from "./ledger-url";
 // Reuse the desktop ledger's row shape + badge helpers (single source of truth —
 // no duplication). This mirrors RC IN, where the mobile card file imports helpers
 // from its sibling desktop table (`delivery-master-table`).
@@ -48,48 +50,29 @@ import {
   formatKg,
 } from "./production-ledger-grid";
 
-// ─── Filter option shape (matches the desktop ColumnFilterMenu options) ──────
-interface FilterOption {
-  value: string;
-  label: string;
-}
-
 // ─── Props ───────────────────────────────────────────────────────────────────
+// The filter surface is the SAME multi-select model the desktop headers use — the
+// URL filter axis (`?shift=&grade=&plant=&whse=&src=&ccc=`) parsed by the parent's
+// `useLedgerFilters()` and handed down. One contract, three surfaces.
 export interface CenaproLedgerCardsMobileProps {
   /** Already sorted + filter-hidden-excluded + deleted/empty-new-excluded rows. */
   rows: GridRow[];
   savedRowCount: number;
-  // Column-header filters (single-select; 'ALL' = no filter) — shared with desktop.
-  shiftFilter: string;
-  gradeFilter: string;
-  plantFilter: string;
-  warehouseFilter: string;
-  sourceFilter: string;
-  shiftOptions: FilterOption[];
-  gradeOptions: FilterOption[];
-  plantOptions: FilterOption[];
-  warehouseOptions: FilterOption[];
-  sourceOptions: FilterOption[];
-  setShiftFilter: (v: string) => void;
-  setGradeFilter: (v: string) => void;
-  setPlantFilter: (v: string) => void;
-  setWarehouseFilter: (v: string) => void;
-  setSourceFilter: (v: string) => void;
-  anyFilterActive: boolean;
+  /** Current per-column selections (empty array = no filter on that column). */
+  filters: LedgerFilters;
+  /** Values present in the loaded rows — dims options with nothing here. */
+  presence: Record<FilterColumn, Set<string>>;
+  /** Number of COLUMNS carrying a filter. */
+  activeFilterCount: number;
+  setFilterColumn: (column: FilterColumn, values: string[]) => void;
   clearFilters: () => void;
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export function CenaproLedgerCardsMobile(props: CenaproLedgerCardsMobileProps) {
-  const { rows, savedRowCount, anyFilterActive } = props;
+  const { rows, savedRowCount, activeFilterCount } = props;
   const [filtersOpen, setFiltersOpen] = React.useState(false);
-
-  const activeFilterCount =
-    (props.shiftFilter !== "ALL" ? 1 : 0) +
-    (props.gradeFilter !== "ALL" ? 1 : 0) +
-    (props.plantFilter !== "ALL" ? 1 : 0) +
-    (props.warehouseFilter !== "ALL" ? 1 : 0) +
-    (props.sourceFilter !== "ALL" ? 1 : 0);
+  const anyFilterActive = activeFilterCount > 0;
 
   const toolbar = (
     <div className="flex items-center gap-2 border-b bg-background px-3 py-2">
@@ -270,26 +253,14 @@ function Field({
   );
 }
 
-// ─── Mobile Filter Sheet (reuses the desktop single-select filter state) ─────
+// ─── Mobile Filter Sheet (the SAME multi-select menus as the desktop headers) ─
 function LedgerFilterSheet({
   open,
   onOpenChange,
-  shiftFilter,
-  gradeFilter,
-  plantFilter,
-  warehouseFilter,
-  sourceFilter,
-  shiftOptions,
-  gradeOptions,
-  plantOptions,
-  warehouseOptions,
-  sourceOptions,
-  setShiftFilter,
-  setGradeFilter,
-  setPlantFilter,
-  setWarehouseFilter,
-  setSourceFilter,
-  anyFilterActive,
+  filters,
+  presence,
+  activeFilterCount,
+  setFilterColumn,
   clearFilters,
 }: {
   open: boolean;
@@ -305,10 +276,10 @@ function LedgerFilterSheet({
           <div>
             <SheetTitle>Filters</SheetTitle>
             <SheetDescription>
-              Filter the ledger by shift, grade, plant, warehouse and source.
+              Pick the values to show per column. Nothing picked = show everything.
             </SheetDescription>
           </div>
-          {anyFilterActive ? (
+          {activeFilterCount > 0 ? (
             <Button
               variant="ghost"
               size="sm"
@@ -322,11 +293,15 @@ function LedgerFilterSheet({
         </SheetHeader>
 
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
-          <FilterRow label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
-          <FilterRow label="Grade" value={gradeFilter} options={gradeOptions} onChange={setGradeFilter} />
-          <FilterRow label="Plant" value={plantFilter} options={plantOptions} onChange={setPlantFilter} />
-          <FilterRow label="Whse" value={warehouseFilter} options={warehouseOptions} onChange={setWarehouseFilter} />
-          <FilterRow label="Source" value={sourceFilter} options={sourceOptions} onChange={setSourceFilter} />
+          {FILTER_COLUMNS.map((column) => (
+            <FilterRow
+              key={column}
+              column={column}
+              selected={filters[column]}
+              presence={presence[column]}
+              onChange={(values) => setFilterColumn(column, values)}
+            />
+          ))}
         </div>
 
         <div className="shrink-0 border-t bg-background/90 px-4 py-3 backdrop-blur-sm">
@@ -339,53 +314,51 @@ function LedgerFilterSheet({
   );
 }
 
-// One single-select filter row — a labeled dropdown mirroring the desktop
-// ColumnFilterMenu ('ALL' = no filter). Options come from the SAME memo the
-// desktop header filters use, so the mobile + desktop filter sets never diverge.
+// One column row in the sheet. The trigger + menu are the SHARED ColumnFilterMenu,
+// so mobile and desktop can never drift apart in semantics — only in chrome (here
+// the label sits on the left and the menu is a touch-sized summary button).
 function FilterRow({
-  label,
-  value,
-  options,
+  column,
+  selected,
+  presence,
   onChange,
 }: {
-  label: string;
-  value: string;
-  options: FilterOption[];
-  onChange: (v: string) => void;
+  column: FilterColumn;
+  selected: readonly string[];
+  presence: ReadonlySet<string>;
+  onChange: (values: string[]) => void;
 }) {
-  const isActive = value !== "ALL";
-  const activeLabel = options.find((o) => o.value === value)?.label ?? value;
+  const spec = FILTER_SPECS[column];
+  const options = React.useMemo(() => mergeDiscoveredOptions(column, presence), [column, presence]);
+  const groups = React.useMemo(() => mergeDiscoveredGroups(column, options), [column, options]);
+  const summary =
+    selected.length === 0
+      ? "All"
+      : selected.length <= 2
+        ? selected.join(", ")
+        : `${selected.length} selected`;
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
-      <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant={isActive ? "default" : "outline"}
-            size="sm"
-            className="h-8 min-w-[120px] justify-between gap-2 px-2 font-mono text-[11px]"
-          >
-            {isActive ? activeLabel : "All"}
-            <SlidersHorizontal className="size-3 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[140px] bg-popover/95 backdrop-blur-lg">
-          <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-            <DropdownMenuRadioItem value="ALL" className="py-1 font-mono text-[11px]">
-              All
-            </DropdownMenuRadioItem>
-            {options.map((opt) => (
-              <DropdownMenuRadioItem
-                key={opt.value}
-                value={opt.value}
-                className="py-1 font-mono text-[11px]"
-              >
-                {opt.label}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <span className="text-xs font-semibold text-muted-foreground">{spec.label}</span>
+      <span
+        className={cn(
+          "flex h-8 min-w-[130px] items-center justify-between gap-2 rounded-md border px-2 font-mono text-[11px]",
+          selected.length > 0 ? "border-primary/40 bg-primary/10 text-primary" : "text-muted-foreground",
+        )}
+      >
+        <span className="truncate">{summary}</span>
+        <ColumnFilterMenu
+          label={spec.label}
+          showLabel={false}
+          selected={selected}
+          options={options}
+          groups={groups}
+          present={presence}
+          searchable={spec.searchable}
+          onChange={onChange}
+          align="end"
+        />
+      </span>
     </div>
   );
 }

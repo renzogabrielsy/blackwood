@@ -13,7 +13,6 @@ import {
     ArrowDownFromLine,
     ArrowUp,
     ArrowDown,
-    ChevronDown,
     ChevronsUpDown,
     Inbox,
     Sparkles,
@@ -24,15 +23,6 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuTrigger,
-    DropdownMenuRadioGroup,
-    DropdownMenuRadioItem,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu';
 import { GridCell } from '@/components/shared/grid/GridCell';
 import { SelectCell } from '@/components/shared/grid/SelectCell';
 import { DatePickerCell, formatDateShort } from '@/components/shared/grid/DatePickerCell';
@@ -67,8 +57,21 @@ import { saveProductionEvents, type ProductionEventDirtyRow, type CenaproPeriod 
 import { CenaproPeriodPicker } from './period-picker';
 import { ProductionDailyBlock } from './production-daily-block';
 import { CenaproLedgerCardsMobile } from './production-ledger-cards-mobile';
-import { parseViewMode, plantViewOf, parseScope, type Scope } from './ledger-url';
-import { ViewModeSwitcher, ScopeToggle } from './ledger-controls';
+import {
+    parseViewMode,
+    plantViewOf,
+    parseScope,
+    FILTER_SPECS,
+    collectFilterPresence,
+    describeActiveFilters,
+    matchesLedgerFilters,
+    mergeDiscoveredGroups,
+    mergeDiscoveredOptions,
+    type FilterColumn,
+    type Scope,
+} from './ledger-url';
+import { ViewModeSwitcher, ScopeToggle, useLedgerFilters } from './ledger-controls';
+import { ColumnFilterMenu, FilterSummaryChip, FilteredEmptyState } from './column-filter-menu';
 
 // The view axis (`?view=`) + its switcher now live in the shared `ledger-url.ts` (pure
 // helpers) + `ledger-controls.tsx` (`ViewModeSwitcher`), so the server page and this
@@ -359,58 +362,34 @@ export function formatKg(value: string): string {
 }
 
 
-// ─── ColumnFilterMenu (header filter — HIDES rows, not a sort) ────────────────────
-interface ColumnFilterMenuProps {
-    label: string;
-    value: string; // 'ALL' = no filter
-    options: { value: string; label: string }[];
-    onChange: (value: string) => void;
+// ─── Header filter (multi-select) ─────────────────────────────────────────────────
+// The single-select `DropdownMenuRadioGroup` was replaced by the shared multi-select
+// `ColumnFilterMenu` (column-filter-menu.tsx), which BOTH this grid and the endless sheet
+// render — one component, one set of semantics. `HeaderFilter` is the thin per-column
+// binding: canonical options (+ any discovered unmapped value) merged once, presence in
+// the loaded rows fed in for the dimming pass.
+interface HeaderFilterProps {
+    column: FilterColumn;
+    selected: readonly string[];
+    presence: ReadonlySet<string>;
+    onChange: (values: string[]) => void;
     align?: 'start' | 'end';
 }
 
-function ColumnFilterMenu({ label, value, options, onChange, align = 'start' }: ColumnFilterMenuProps) {
-    const isActive = value !== 'ALL';
-    const activeLabel = options.find((o) => o.value === value)?.label ?? value;
+function HeaderFilter({ column, selected, presence, onChange, align = 'start' }: HeaderFilterProps) {
+    const options = React.useMemo(() => mergeDiscoveredOptions(column, presence), [column, presence]);
+    const groups = React.useMemo(() => mergeDiscoveredGroups(column, options), [column, options]);
     return (
-        <span className="inline-flex items-center justify-center gap-0.5">
-            {label}
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <button
-                        type="button"
-                        aria-label={`Filter ${label}${isActive ? `: ${activeLabel}` : ''}`}
-                        title={isActive ? `${label}: ${activeLabel}` : `Filter ${label}`}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className={cn(
-                            'flex items-center justify-center rounded p-0.5 outline-none transition-colors duration-150',
-                            'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary',
-                            isActive
-                                ? 'text-primary hover:text-primary/80'
-                                : 'text-muted-foreground/50 hover:text-muted-foreground',
-                        )}
-                    >
-                        <ChevronDown className="h-3 w-3" />
-                    </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align={align} className="min-w-[120px] bg-popover/95 backdrop-blur-lg">
-                    <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                        {label}
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-                        <DropdownMenuRadioItem value="ALL" className="py-1 font-mono text-[11px]">
-                            All
-                        </DropdownMenuRadioItem>
-                        {options.map((opt) => (
-                            <DropdownMenuRadioItem key={opt.value} value={opt.value} className="py-1 font-mono text-[11px]">
-                                {opt.label}
-                            </DropdownMenuRadioItem>
-                        ))}
-                    </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-            </DropdownMenu>
-        </span>
+        <ColumnFilterMenu
+            label={FILTER_SPECS[column].label}
+            selected={selected}
+            options={options}
+            groups={groups}
+            present={presence}
+            searchable={FILTER_SPECS[column].searchable}
+            onChange={onChange}
+            align={align}
+        />
     );
 }
 
@@ -887,13 +866,18 @@ export function ProductionLedgerGrid({
     const activeCellRef = React.useRef(activeCell);
     activeCellRef.current = activeCell;
 
-    // Header filters — single-select; 'ALL' = no filter. Set = Shift / Grade / Plant /
-    // Warehouse / Source (Disposition is gone — it's no longer a standalone column).
-    const [shiftFilter, setShiftFilter] = React.useState('ALL');
-    const [gradeFilter, setGradeFilter] = React.useState('ALL');
-    const [plantFilter, setPlantFilter] = React.useState('ALL');
-    const [warehouseFilter, setWarehouseFilter] = React.useState('ALL');
-    const [sourceFilter, setSourceFilter] = React.useState('ALL');
+    // ─── Header filters — MULTI-SELECT, driven by the URL filter axis ───────────────
+    // State lives in `?shift=&grade=&plant=&whse=&src=&ccc=` (CLAUDE.md: URL params carry
+    // filter state), parsed + written by the shared `useLedgerFilters()` hook so this grid
+    // and the endless sheet read/write the SAME contract. Focus scope loads one whole
+    // period, so applying them CLIENT-side here is complete and instant — nothing is
+    // paged in behind the operator's back, unlike the endless keyset window (which pushes
+    // the identical predicates into SQL, see actions.ts::applyLedgerFilters).
+    const filterUi = useLedgerFilters();
+    const filters = filterUi.filters;
+    const anyFilterActive = filterUi.activeCount > 0;
+    const setFilterColumn = filterUi.setColumn;
+    const clearFilters = filterUi.clearAll;
 
     // ─── Re-sort the data rows when the date key/direction changes ──────────────────
     React.useEffect(() => {
@@ -1388,71 +1372,54 @@ export function ProductionLedgerGrid({
     const selRange = cellSelection.range;
     const selectionSize = cellSelection.getSelectionSize();
 
-    // ─── Distinct filter options (derived from data; only present values appear) ────
-    // Filter set = Shift / Grade / Plant / Warehouse / Source (Disposition is gone — no
-    // longer a standalone column). Options come from the loaded period's data, matching
-    // how Shift/Grade/Warehouse already sourced theirs.
-    const { shiftOptions, gradeOptions, plantOptions, warehouseOptions, sourceOptions } = React.useMemo(() => {
-        const shifts = new Set<string>();
-        const grades = new Set<string>();
-        const plants = new Set<string>();
-        const warehouses = new Set<string>();
-        const sources = new Set<string>();
-        let hasUnplaced = false;
-        for (const r of rows) {
-            if (r._state === 'deleted' || (r._state === 'new' && !isMeaningfulNewRow(r))) continue;
-            if (r.shift_code) shifts.add(r.shift_code);
-            if (r.grade_code) grades.add(r.grade_code);
-            if (r.plant_code) plants.add(r.plant_code);
-            if (r.source_location_code) sources.add(r.source_location_code);
-            if (r.warehouse_code) warehouses.add(r.warehouse_code);
-            else hasUnplaced = true;
-        }
-        const warehouseOpts = [...warehouses].sort().map((w) => ({ value: w, label: w }));
-        if (hasUnplaced) warehouseOpts.push({ value: '__NULL__', label: '— Unplaced' });
-        return {
-            shiftOptions: [...shifts].sort().map((s) => ({ value: s, label: s })),
-            gradeOptions: [...grades].sort().map((g) => ({ value: g, label: g })),
-            plantOptions: [...plants].sort().map((p) => ({ value: p, label: p })),
-            warehouseOptions: warehouseOpts,
-            sourceOptions: [...sources].sort().map((s) => ({ value: s, label: s })),
-        };
-    }, [rows]);
-
-    // ─── Per-row visibility under active filters (index-preserving HIDE) ───────────
-    const isRowHidden = React.useCallback(
-        (row: GridRow): boolean => {
-            if (row._state === 'new' && !isMeaningfulNewRow(row)) return false; // keep the typing row
-            if (shiftFilter !== 'ALL' && row.shift_code !== shiftFilter) return true;
-            if (gradeFilter !== 'ALL' && row.grade_code !== gradeFilter) return true;
-            if (plantFilter !== 'ALL' && row.plant_code !== plantFilter) return true;
-            if (sourceFilter !== 'ALL' && row.source_location_code !== sourceFilter) return true;
-            if (warehouseFilter !== 'ALL') {
-                if (warehouseFilter === '__NULL__') {
-                    if (row.warehouse_code !== '') return true;
-                } else if (row.warehouse_code !== warehouseFilter) {
-                    return true;
-                }
-            }
-            return false;
-        },
-        [shiftFilter, gradeFilter, plantFilter, sourceFilter, warehouseFilter],
+    // ─── Which values are PRESENT in this period's rows ────────────────────────────
+    // The option LISTS themselves now come from the canonical `cenapro` lookup constants
+    // (see FILTER_SPECS) rather than "whatever this period happens to contain" — a value
+    // absent here is DIMMED in the menu, never hidden, so it stays selectable/shareable
+    // and the two scopes offer identical choices. This set only drives that dimming (plus
+    // discovery of any value the constants don't know about).
+    const filterPresence = React.useMemo(
+        () =>
+            collectFilterPresence(
+                rows.filter((r) => r._state !== 'deleted' && !(r._state === 'new' && !isMeaningfulNewRow(r))),
+            ),
+        [rows],
     );
 
-    const anyFilterActive =
-        shiftFilter !== 'ALL' ||
-        gradeFilter !== 'ALL' ||
-        plantFilter !== 'ALL' ||
-        sourceFilter !== 'ALL' ||
-        warehouseFilter !== 'ALL';
+    // ─── Per-row visibility under active filters (index-preserving HIDE) ───────────
+    // UNSAVED WORK IS NEVER HIDDEN. A dirty row — a new draft, an edited row, or one
+    // pending deletion — is EXEMPT from every filter and stays in place with an "unsaved"
+    // marker. Hiding it would silently bury work the operator can't see or recover, and
+    // Focus scope holds the whole period client-side, so keeping it costs nothing.
+    const isRowExemptFromFilters = React.useCallback(
+        (row: GridRow) => row._state === 'new' || row._state === 'modified' || row._state === 'deleted',
+        [],
+    );
 
-    const clearFilters = () => {
-        setShiftFilter('ALL');
-        setGradeFilter('ALL');
-        setPlantFilter('ALL');
-        setSourceFilter('ALL');
-        setWarehouseFilter('ALL');
-    };
+    const isRowHidden = React.useCallback(
+        (row: GridRow): boolean => {
+            if (isRowExemptFromFilters(row)) return false;
+            return !matchesLedgerFilters(row, filters);
+        },
+        [filters, isRowExemptFromFilters],
+    );
+
+    // Dirty rows kept visible IN SPITE of the filters — surfaced in the toolbar so the
+    // exemption is stated, not just silently done.
+    const exemptVisibleCount = React.useMemo(
+        () =>
+            anyFilterActive
+                ? rows.filter(
+                      (r) =>
+                          isRowExemptFromFilters(r) &&
+                          !(r._state === 'new' && !isMeaningfulNewRow(r)) &&
+                          !matchesLedgerFilters(r, filters),
+                  ).length
+                : 0,
+        [rows, anyFilterActive, filters, isRowExemptFromFilters],
+    );
+
+    const activeFilterDescription = React.useMemo(() => describeActiveFilters(filters), [filters]);
 
     // ─── Date sort header click (CHANGE 2: sort by EITHER recv or prod date) ────────
     // Clicking the active date key toggles asc/desc; clicking the other date header
@@ -1516,15 +1483,28 @@ export function ProductionLedgerGrid({
                     <>
                         <span className="h-4 w-px bg-border/60" />
                         <span className="font-mono text-[11px] text-muted-foreground/70">
-                            {savedRowCount.toLocaleString('en-US')} row{savedRowCount !== 1 ? 's' : ''}
+                            {anyFilterActive
+                                ? `${visibleCount.toLocaleString('en-US')} of ${savedRowCount.toLocaleString('en-US')}`
+                                : savedRowCount.toLocaleString('en-US')}{' '}
+                            row{savedRowCount !== 1 ? 's' : ''}
                             {dirtyCount > 0 && <span className="ml-1 text-amber-600 dark:text-amber-400">· {dirtyCount} unsaved</span>}
                         </span>
+                        {exemptVisibleCount > 0 && (
+                            <span
+                                className="text-[10px] font-medium text-amber-600 dark:text-amber-400"
+                                title="Rows with unsaved changes are never hidden by a filter — they stay in place until you save or discard."
+                            >
+                                · {exemptVisibleCount} unsaved kept visible
+                            </span>
+                        )}
                     </>
                 )}
                 <div className="flex-1" />
                 {/* Editable-only controls — hidden in the read-only Daily Block view. */}
                 {!isDailyView && (
                     <>
+                        {filterUi.isPending && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                        <FilterSummaryChip count={filterUi.activeCount} onClear={clearFilters} pending={filterUi.isPending} />
                         {anyFilterActive && (
                             <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={clearFilters}>
                                 Clear filters
@@ -1650,22 +1630,24 @@ export function ProductionLedgerGrid({
                             </th>
                             <th className="frozen-corner frozen-edge h-8 bg-muted px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground" style={{ left: 228 }}>Batch</th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Shift" value={shiftFilter} options={shiftOptions} onChange={setShiftFilter} />
+                                <HeaderFilter column="shift" selected={filters.shift} presence={filterPresence.shift} onChange={(v) => setFilterColumn('shift', v)} />
                             </th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Grade" value={gradeFilter} options={gradeOptions} onChange={setGradeFilter} />
+                                <HeaderFilter column="grade" selected={filters.grade} presence={filterPresence.grade} onChange={(v) => setFilterColumn('grade', v)} />
                             </th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Plant" value={plantFilter} options={plantOptions} onChange={setPlantFilter} />
+                                <HeaderFilter column="plant" selected={filters.plant} presence={filterPresence.plant} onChange={(v) => setFilterColumn('plant', v)} />
                             </th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Whse" value={warehouseFilter} options={warehouseOptions} onChange={setWarehouseFilter} />
+                                <HeaderFilter column="whse" selected={filters.whse} presence={filterPresence.whse} onChange={(v) => setFilterColumn('whse', v)} />
                             </th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
-                                <ColumnFilterMenu label="Source" value={sourceFilter} options={sourceOptions} onChange={setSourceFilter} />
+                                <HeaderFilter column="source" selected={filters.source} presence={filterPresence.source} onChange={(v) => setFilterColumn('source', v)} />
                             </th>
                             <th className="h-8 px-2 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Weight</th>
-                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">CCC/FLEC</th>
+                            <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                                <HeaderFilter column="ccc" selected={filters.ccc} presence={filterPresence.ccc} onChange={(v) => setFilterColumn('ccc', v)} align="end" />
+                            </th>
                             <th className="h-8 px-2 text-right text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Flec</th>
                             <th className="h-8 px-2 text-left text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Side</th>
                         </tr>
@@ -1698,17 +1680,11 @@ export function ProductionLedgerGrid({
                             </tr>
                         )}
 
-                        {/* All rows hidden by filter */}
+                        {/* All rows hidden by filter — name WHICH filters are responsible. */}
                         {allHiddenByFilter && (
                             <tr>
                                 <td colSpan={COL_COUNT} className="py-10 text-center">
-                                    <div className="flex flex-col items-center justify-center gap-2 text-center">
-                                        <Inbox className="h-8 w-8 text-muted-foreground/30" />
-                                        <p className="text-sm text-muted-foreground">No rows match the current filters.</p>
-                                        <Button variant="outline" size="sm" className="h-6 px-2 text-[11px]" onClick={clearFilters}>
-                                            Clear filters
-                                        </Button>
-                                    </div>
+                                    <FilteredEmptyState active={activeFilterDescription} onClear={clearFilters} />
                                 </td>
                             </tr>
                         )}
@@ -1779,22 +1755,10 @@ export function ProductionLedgerGrid({
                 <CenaproLedgerCardsMobile
                     rows={mobileRows}
                     savedRowCount={savedRowCount}
-                    shiftFilter={shiftFilter}
-                    gradeFilter={gradeFilter}
-                    plantFilter={plantFilter}
-                    warehouseFilter={warehouseFilter}
-                    sourceFilter={sourceFilter}
-                    shiftOptions={shiftOptions}
-                    gradeOptions={gradeOptions}
-                    plantOptions={plantOptions}
-                    warehouseOptions={warehouseOptions}
-                    sourceOptions={sourceOptions}
-                    setShiftFilter={setShiftFilter}
-                    setGradeFilter={setGradeFilter}
-                    setPlantFilter={setPlantFilter}
-                    setWarehouseFilter={setWarehouseFilter}
-                    setSourceFilter={setSourceFilter}
-                    anyFilterActive={anyFilterActive}
+                    filters={filters}
+                    presence={filterPresence}
+                    activeFilterCount={filterUi.activeCount}
+                    setFilterColumn={setFilterColumn}
                     clearFilters={clearFilters}
                 />
             </div>

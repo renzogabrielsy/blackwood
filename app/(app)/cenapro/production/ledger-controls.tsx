@@ -7,6 +7,13 @@ import { cn } from '@/lib/utils';
 import {
     VIEW_MODES,
     VIEW_MODE_LABELS,
+    countActiveFilterColumns,
+    deleteLedgerFilters,
+    ledgerFilterKey,
+    parseLedgerFilters,
+    writeLedgerFilters,
+    type FilterColumn,
+    type LedgerFilters,
     type ViewMode,
     type Scope,
 } from './ledger-url';
@@ -161,4 +168,87 @@ export function ScopeToggle({
             {isPending && <Loader2 className="ml-1 mr-0.5 h-3 w-3 animate-spin text-muted-foreground" />}
         </div>
     );
+}
+
+// ─── Filter axis hook (`?shift=`, `?grade=`, `?plant=`, `?whse=`, `?src=`, `?ccc=`) ──
+// The single client entry point to the FILTER axis, shared by the Focus grid and the
+// Endless sheet exactly the way `ViewModeSwitcher` / `ScopeToggle` share the other two.
+// It reads the URL (the source of truth, so a filtered view is shareable, reload-safe and
+// back-button-correct) and writes it with `router.replace` while PRESERVING every other
+// param (view / scope / year / batch).
+//
+// OPTIMISTIC CONTROL STATE: a URL write is a server round-trip, and a checkbox that only
+// ticks 300ms after the click feels broken. So the hook mirrors the pending selection
+// locally and hands that back as `filters` — the menus tick instantly while `isPending`
+// drives the toolbar spinner. Any URL change (including Back/Forward) drops the mirror, so
+// the URL always wins in the end.
+export interface LedgerFilterControls {
+    /** The selection to RENDER in the menus (optimistic while a write is in flight). */
+    filters: LedgerFilters;
+    /** Number of COLUMNS carrying a filter — the toolbar chip count. */
+    activeCount: number;
+    /** True while the URL write is committing. */
+    isPending: boolean;
+    setColumn: (column: FilterColumn, values: string[]) => void;
+    clearAll: () => void;
+}
+
+export function useLedgerFilters(): LedgerFilterControls {
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const [isPending, startTransition] = React.useTransition();
+
+    const urlFilters = React.useMemo(
+        () => parseLedgerFilters((name) => searchParams.get(name)),
+        [searchParams],
+    );
+    const urlKey = ledgerFilterKey(urlFilters);
+
+    const [optimistic, setOptimistic] = React.useState<LedgerFilters | null>(null);
+
+    // Any URL change wins — drops a stale mirror after our own write lands AND after a
+    // Back/Forward that we did not initiate.
+    const prevUrlKeyRef = React.useRef(urlKey);
+    React.useEffect(() => {
+        if (prevUrlKeyRef.current !== urlKey) {
+            prevUrlKeyRef.current = urlKey;
+            setOptimistic(null);
+        }
+    }, [urlKey]);
+
+    const filters = optimistic ?? urlFilters;
+
+    const commit = React.useCallback(
+        (next: LedgerFilters | null) => {
+            const sp = new URLSearchParams(searchParams.toString());
+            if (next === null) deleteLedgerFilters(sp);
+            else writeLedgerFilters(sp, next);
+            setOptimistic(next);
+            const qs = sp.toString();
+            startTransition(() => {
+                router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+            });
+        },
+        [searchParams, router, pathname],
+    );
+
+    const setColumn = React.useCallback(
+        (column: FilterColumn, values: string[]) => {
+            commit({ ...filters, [column]: values });
+        },
+        [commit, filters],
+    );
+
+    const clearAll = React.useCallback(() => {
+        commit(null);
+    }, [commit]);
+
+    return {
+        filters,
+        activeCount: countActiveFilterColumns(filters),
+        isPending,
+        setColumn,
+        clearAll,
+    };
 }

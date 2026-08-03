@@ -7,6 +7,7 @@ import {
     type LedgerCursor,
 } from './actions';
 import type { ProductionEventRow } from '../types';
+import type { LedgerFilters } from './ledger-url';
 import { errorToast } from '@/lib/toast';
 
 // ─── useLedgerWindow ─────────────────────────────────────────────────────────────
@@ -79,8 +80,17 @@ function cursorFrom(row: ProductionEventRow): LedgerCursor {
     return { recv_date: row.recv_date ?? '', id: row.id ?? '' };
 }
 
-export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
+/**
+ * @param initial  Server-prefetched first page (already filtered when filters are active).
+ * @param filters  The active column filters. They are applied SERVER-SIDE by
+ *   `fetchLedgerPage`, so every page this hook pulls — older, newer, reset, refresh — must
+ *   carry them or the keyset walk would silently drift back to unfiltered history. Held in
+ *   a ref so the stable callbacks below never need to re-bind.
+ */
+export function useLedgerWindow(initial: InitialLedgerPage, filters?: LedgerFilters): LedgerWindow {
     const [rows, setRows] = React.useState<ProductionEventRow[]>(initial.rows);
+    const filtersRef = React.useRef(filters);
+    filtersRef.current = filters;
     const [firstItemIndex, setFirstItemIndex] = React.useState(FIRST_ITEM_BASE);
     const [hasOlder, setHasOlder] = React.useState(initial.hasOlder);
     const [hasNewer, setHasNewer] = React.useState(initial.hasNewer);
@@ -112,6 +122,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
                 mode: 'cursor',
                 cursor: cursorFrom(current[0]),
                 direction: 'older',
+                filters: filtersRef.current,
             });
             if (page.error) {
                 errorToast(page.error);
@@ -146,6 +157,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
                 mode: 'cursor',
                 cursor: cursorFrom(current[current.length - 1]),
                 direction: 'newer',
+                filters: filtersRef.current,
             });
             if (page.error) {
                 errorToast(page.error);
@@ -169,7 +181,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
         setLoadingOlder(true);
         setLoadingNewer(true);
         try {
-            const page = await fetchLedgerPage({ mode: 'anchor', anchor });
+            const page = await fetchLedgerPage({ mode: 'anchor', anchor, filters: filtersRef.current });
             if (page.error) {
                 errorToast(page.error);
                 return;
@@ -214,6 +226,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
                     mode: 'cursor',
                     cursor,
                     direction: 'newer',
+                    filters: filtersRef.current,
                 });
                 if (page.error) {
                     errorToast(page.error);
@@ -260,7 +273,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
         setLoadingOlder(true);
         setLoadingNewer(true);
         try {
-            const firstPage = await fetchLedgerPage({ mode: 'anchor', anchor });
+            const firstPage = await fetchLedgerPage({ mode: 'anchor', anchor, filters: filtersRef.current });
             if (firstPage.error) {
                 errorToast(firstPage.error);
                 return;
@@ -284,6 +297,7 @@ export function useLedgerWindow(initial: InitialLedgerPage): LedgerWindow {
                     mode: 'cursor',
                     cursor: cursorFrom(all[all.length - 1]),
                     direction: 'newer',
+                    filters: filtersRef.current,
                 });
                 if (page.error) {
                     errorToast(page.error);
