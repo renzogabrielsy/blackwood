@@ -10,14 +10,19 @@ import { Button } from '@/components/ui/button';
 import { GridCell, EditInput } from '@/components/shared/grid';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import {
-    createCoordinateNavResolver,
     useGridKeyboardNav,
     type CoordinateId,
+    type NavResolver,
 } from '@/lib/hooks/use-grid-keyboard-nav';
 import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
-import { METRICS, METRIC_LABEL, type MetricKey } from '@/lib/cenapro/ccc-analysis';
+import {
+    METRICS,
+    METRIC_LABEL,
+    parseWeightKg,
+    type MetricKey,
+} from '@/lib/cenapro/ccc-analysis';
 import {
     EMPTY_METRIC_VALUES,
     adjustAggregate,
@@ -37,8 +42,15 @@ import {
 import { Chip, NarrowScreenNotice, Tile } from './qc-chrome';
 import { MetricSpark } from './qc-metric-charts';
 import { MonthYearPicker } from './month-year-picker';
-import { saveQcSamples, type SaveQcSampleInput, type SaveQcSampleResult } from './actions';
-import type { QcGroup, QcLedgerDay } from './data';
+import {
+    saveQcSamples,
+    saveQcWeights,
+    type SaveQcSampleInput,
+    type SaveQcSampleResult,
+    type SaveQcWeightInput,
+    type SaveQcWeightResult,
+} from './actions';
+import type { QcDraw, QcGroup, QcLedgerDay } from './data';
 
 interface QcLedgerClientProps {
     month: string;
@@ -53,6 +65,9 @@ interface QcLedgerClientProps {
 
 /** Per-group, per-metric unsaved edits, held as the raw text the operator typed. */
 type EditMap = Record<string, Partial<Record<MetricKey, string>>>;
+
+/** Per-DRAW unsaved weight edits, keyed by `production_event.id`. */
+type WeightEditMap = Record<string, string>;
 
 // ─── Column widths ────────────────────────────────────────────────────────────────
 //
@@ -87,7 +102,13 @@ const COLS: LedgerCol[] = [
     { key: 'plant', width: 60, label: 'Plant' },
     { key: 'whse', width: 62, label: 'Whse', title: 'Warehouse (or plant, when unplaced)' },
     { key: 'src', width: 62, label: 'SRC', title: 'Source location' },
-    { key: 'wt', width: 88, label: 'WT kg', title: 'Weight (kg)', numeric: true },
+    {
+        key: 'wt',
+        width: 88,
+        label: 'WT kg',
+        title: 'Weight (kg) — editable on EVERY row, per individual draw. Unlike a lab reading, a weight never carries over to the group’s other rows.',
+        numeric: true,
+    },
     { key: 'bd', width: 124, label: 'BD', numeric: true },
     { key: 'ash', width: 124, label: 'ASH', numeric: true },
     { key: 'grit', width: 124, label: 'GRIT', numeric: true },
@@ -99,9 +120,121 @@ const MIN_WIDTH = COLS.reduce((sum, c) => sum + c.width, 0);
 const LABEL_SPAN = 7;
 /** Visual column index of the first analysis column (BD). */
 const FIRST_METRIC_COL = COLS.length - METRICS.length;
+/** Visual column index of WT kg — the first EDITABLE column, one left of BD. */
+const WT_COL = FIRST_METRIC_COL - 1;
 
-/** The nav coordinate space is the FOUR analysis columns only — every one is typable. */
-const METRIC_COLUMN_MAP: readonly (string | null)[] = METRICS;
+// ─── The keyboard coordinate space ────────────────────────────────────────────────
+//
+// FIVE columns now, in visual order: `WT · BD · ASH · GRIT · MC`. Nav column 0 is the
+// weight; nav column n>0 is `METRICS[n-1]`.
+//
+// The ROW axis changed with it, and that is the interesting part. It used to be one
+// row per SAMPLE GROUP, because a lab reading covers a whole group and the four metric
+// cells live on the group's first draw. A WEIGHT is not like that: it belongs to ONE
+// physical draw, so every draw row must be independently addressable — including the
+// `〃` sibling rows a metric can never land on. So the axis is now one row per DRAW,
+// and the two column families disagree about which rows they occupy:
+//
+//   • WT      — live on EVERY row.
+//   • metrics — live only on a group's LEAD row; on a sibling row they are `〃`,
+//               inert, and have no coordinate at all.
+//
+// Which is why this module has its own resolver instead of `createCoordinateNavResolver`:
+// that factory's `columnMap` is per-COLUMN, and this grid needs per-CELL addressability.
+// The behavioural consequence is exactly the asymmetry the data model already has —
+// ArrowDown in a metric lane walks lead-to-lead (skipping siblings, precisely as it did
+// before this change), while ArrowDown in the WT lane walks draw-to-draw.
+const NAV_COLS = METRICS.length + 1;
+const NAV_LAST_COL = NAV_COLS - 1;
+
+/** Nav column → what it edits. Column 0 is the weight; the rest are metrics. */
+function navMetric(col: number): MetricKey | null {
+    return col === 0 ? null : (METRICS[col - 1] ?? null);
+}
+
+interface QcNavGeometry {
+    rowCount: number;
+    /** True when row `n` is its sample group's FIRST draw — where the metrics live. */
+    isLead: (row: number) => boolean;
+}
+
+/**
+ * The QC ledger's nav resolver. Every branch answers one question: "is there an
+ * ADDRESSABLE cell that way?" — and returns null (stay put) when there is not, so the
+ * selection can never come to rest on a `〃`.
+ */
+function createQcNavResolver({ rowCount, isLead }: QcNavGeometry): NavResolver<CoordinateId> {
+    const addressable = (row: number, col: number): boolean =>
+        row >= 0 &&
+        row < rowCount &&
+        col >= 0 &&
+        col <= NAV_LAST_COL &&
+        (col === 0 || isLead(row));
+
+    /** The nearest row above/below in which `col` is addressable. */
+    const rowStep = (row: number, col: number, dir: 1 | -1): number | null => {
+        for (let r = row + dir; r >= 0 && r < rowCount; r += dir) {
+            if (addressable(r, col)) return r;
+        }
+        return null;
+    };
+
+    /** Reading order: across the row, then on to the next. Skips inert cells. */
+    const tabStep = (from: CoordinateId, dir: 1 | -1): CoordinateId | null => {
+        let { row, col } = from;
+        const limit = rowCount * NAV_COLS + NAV_COLS;
+        for (let guard = 0; guard < limit; guard++) {
+            col += dir;
+            if (col > NAV_LAST_COL) {
+                row += 1;
+                col = 0;
+            } else if (col < 0) {
+                row -= 1;
+                col = NAV_LAST_COL;
+            }
+            if (row < 0 || row >= rowCount) return null;
+            if (addressable(row, col)) return { row, col };
+        }
+        return null;
+    };
+
+    const vertical = (from: CoordinateId, dir: 1 | -1): CoordinateId | null => {
+        const row = rowStep(from.row, from.col, dir);
+        return row === null ? null : { row, col: from.col };
+    };
+
+    return {
+        resolve(from, move) {
+            if (move.kind === 'tab') return tabStep(from, move.shift ? -1 : 1);
+            if (move.kind === 'enter') return vertical(from, move.shift ? -1 : 1);
+            if (move.dir === 'up') return vertical(from, -1);
+            if (move.dir === 'down') return vertical(from, 1);
+            // left / right stay on the row and clamp at its edges.
+            const dir = move.dir === 'right' ? 1 : -1;
+            for (let col = from.col + dir; col >= 0 && col <= NAV_LAST_COL; col += dir) {
+                if (addressable(from.row, col)) return { row: from.row, col };
+            }
+            return null;
+        },
+        laneOf: (id) => id.col,
+        resolveInRow(from, lane, dir) {
+            // The Enter-anchor lane may not exist below (a metric lane over a run of
+            // sibling rows) — `rowStep` walks past them to the next row that has it.
+            const col = typeof lane === 'number' ? lane : from.col;
+            const row = rowStep(from.row, col, dir);
+            return row === null ? null : { row, col };
+        },
+        isEditable: (id) => addressable(id.row, id.col),
+    };
+}
+
+/** One addressable row of the grid: a single draw, and the group it belongs to. */
+interface EntryRow {
+    group: QcGroup;
+    draw: QcDraw;
+    /** First draw of its group — the row that carries the four editable metrics. */
+    isLead: boolean;
+}
 
 // ── The two summary-row treatments ────────────────────────────────────────────────
 //
@@ -132,6 +265,7 @@ export function QcLedgerClient({
 }: QcLedgerClientProps) {
     const router = useRouter();
     const [edits, setEdits] = React.useState<EditMap>({});
+    const [weightEdits, setWeightEdits] = React.useState<WeightEditMap>({});
     const [sourceFilter, setSourceFilter] = React.useState<string>('ALL');
     const [saving, setSaving] = React.useState(false);
     const [failures, setFailures] = React.useState<SaveFailure[]>([]);
@@ -149,6 +283,39 @@ export function QcLedgerClient({
         for (const day of days) for (const group of day.groups) map.set(group.key, group);
         return map;
     }, [days]);
+
+    /** Every draw in the month by id, with its group — the weight payload's source. */
+    const drawById = React.useMemo(() => {
+        const map = new Map<string, { draw: QcDraw; group: QcGroup }>();
+        for (const day of days)
+            for (const group of day.groups)
+                for (const draw of group.draws) map.set(draw.id, { draw, group });
+        return map;
+    }, [days]);
+
+    /**
+     * How much each group's tonnage would move if the pending weight edits were
+     * saved. Keyed by group, because the aggregates are grouped even though the
+     * weights are not: SQL published one `total_kg` per group, and this is the delta
+     * to restate it by.
+     *
+     * An unparseable string (mid-typing `12.`, a stray letter) contributes NOTHING —
+     * the preview keeps the stored weight rather than poisoning a total with NaN. The
+     * save is blocked separately, by `badWeightIds`.
+     */
+    const groupKgDelta = React.useMemo(() => {
+        const deltas = new Map<string, number>();
+        for (const [drawId, raw] of Object.entries(weightEdits)) {
+            const entry = drawById.get(drawId);
+            if (!entry) continue;
+            const { kg } = parseWeightKg(raw);
+            if (kg == null) continue;
+            const delta = kg - entry.draw.weightKg;
+            if (delta === 0) continue;
+            deltas.set(entry.group.key, (deltas.get(entry.group.key) ?? 0) + delta);
+        }
+        return deltas;
+    }, [weightEdits, drawById]);
 
     /**
      * The month's day blocks, each carrying (a) the groups actually on screen and
@@ -180,18 +347,33 @@ export function QcLedgerClient({
                     continue;
                 }
                 const after = overlay(group.sample, edits[group.key]);
-                if (after === group.sample) continue;
-                adjustments.push({ kg: group.totalKg, before: group.sample, after });
+                const kgDelta = groupKgDelta.get(group.key) ?? 0;
+                if (after === group.sample && kgDelta === 0) continue;
+                adjustments.push({
+                    kg: group.totalKg,
+                    before: group.sample,
+                    after,
+                    // The weight IS the weight: restating it moves the day total, the
+                    // month total and each metric's own denominator, so the weighted
+                    // averages move with it.
+                    afterKg: group.totalKg + kgDelta,
+                });
             }
+
+            // One row per DRAW, in visual order — the keyboard grid's row axis.
+            const rows: EntryRow[] = visible.flatMap((group) =>
+                group.draws.map((draw, index) => ({ group, draw, isLead: index === 0 })),
+            );
 
             return {
                 date: day.date,
                 groups: visible,
+                rows,
                 agg: adjustAggregate(day.agg, adjustments),
                 adjustments,
             };
         });
-    }, [days, sourceFilter, edits]);
+    }, [days, sourceFilter, edits, groupKgDelta]);
 
     const visibleDays = React.useMemo(
         () => dayViews.filter((day) => day.groups.length > 0),
@@ -199,23 +381,32 @@ export function QcLedgerClient({
     );
 
     /**
-     * Every entry row on screen, flattened in visual order. This array IS the keyboard
-     * grid's row axis: index `n` here is `activeCell.row === n`. Day headers, `〃`
-     * sibling rows, `Σ DAY TOTAL` rows and the frozen month footer are absent from it
-     * by construction, which is exactly why Tab and the arrows can never land on one.
+     * Every DRAW row on screen, flattened in visual order. This array IS the keyboard
+     * grid's row axis: index `n` here is `activeCell.row === n`. Day headers,
+     * `Σ DAY TOTAL` rows and the frozen month footer are absent from it by
+     * construction, which is exactly why Tab and the arrows can never land on one.
+     *
+     * A `〃` sibling row IS present here (its WT is editable) but is not `isLead`, so
+     * its four metric cells stay unaddressable — see `createQcNavResolver`.
      */
+    const entryRows = React.useMemo(
+        () => visibleDays.flatMap((day) => day.rows),
+        [visibleDays],
+    );
+
+    /** Every group on screen, for the payload builders and the DVO tally. */
     const entryGroups = React.useMemo(
         () => visibleDays.flatMap((day) => day.groups),
         [visibleDays],
     );
 
-    /** Row index of each day's FIRST entry row, so a day block can address its cells. */
+    /** Row index of each day's FIRST draw row, so a day block can address its cells. */
     const dayRowOffsets = React.useMemo(() => {
         const offsets: number[] = [];
         let cursor = 0;
         for (const day of visibleDays) {
             offsets.push(cursor);
-            cursor += day.groups.length;
+            cursor += day.rows.length;
         }
         return offsets;
     }, [visibleDays]);
@@ -227,9 +418,18 @@ export function QcLedgerClient({
     );
 
     const dvoKg = React.useMemo(() => {
-        if (sourceFilter === 'ALL') return monthAgg.dvoKg;
-        return entryGroups.reduce((sum, group) => (group.isDvo ? sum + group.totalKg : sum), 0);
-    }, [sourceFilter, monthAgg.dvoKg, entryGroups]);
+        // Pending weight edits move the DVO tally too, or the footer would report a
+        // total that had moved next to a DVO share that had not.
+        const pending = (group: QcGroup) => group.totalKg + (groupKgDelta.get(group.key) ?? 0);
+        if (sourceFilter === 'ALL') {
+            let sum = monthAgg.dvoKg;
+            for (const [key, delta] of groupKgDelta) {
+                if (groupByKey.get(key)?.isDvo) sum += delta;
+            }
+            return sum;
+        }
+        return entryGroups.reduce((sum, group) => (group.isDvo ? sum + pending(group) : sum), 0);
+    }, [sourceFilter, monthAgg.dvoKg, entryGroups, groupKgDelta, groupByKey]);
 
     /**
      * The tile sparklines. One point per RECEIPT DAY of the selected month, carrying
@@ -284,37 +484,89 @@ export function QcLedgerClient({
         [groupByKey],
     );
 
+    // ── Weight plumbing (per DRAW, never fanned out) ──────────────────────────────
+
+    const weightValueById = React.useCallback(
+        (drawId: string): string => {
+            const edited = weightEdits[drawId];
+            if (edited !== undefined) return edited;
+            const stored = drawById.get(drawId)?.draw.weightKg;
+            return stored == null ? '' : formatKgExact(stored);
+        },
+        [weightEdits, drawById],
+    );
+
+    /**
+     * Write one draw's weight. Pruned by VALUE, not by text: `40437` and `40,437`
+     * are the same weight, and retyping what is already stored — or reverting with
+     * Escape — must leave the row genuinely clean rather than inflating the count.
+     */
+    const setWeightCell = React.useCallback(
+        (drawId: string, raw: string) => {
+            const stored = drawById.get(drawId)?.draw.weightKg;
+            const { kg } = parseWeightKg(raw);
+            setWeightEdits((prev) => {
+                const next = { ...prev };
+                if (kg != null && stored != null && kg === stored) delete next[drawId];
+                else next[drawId] = raw;
+                return next;
+            });
+        },
+        [drawById],
+    );
+
     // ── Keyboard grid (the shared Blackwood Table state machine) ──────────────────
     //
-    // `useGridKeyboardNav` + `createCoordinateNavResolver` — the SAME pair RC IN's bulk
-    // grid and the production schedule run on, so the muscle memory transfers. The
-    // coordinate space is deliberately just `entryGroups.length × 4`: Tab off the last
-    // metric of a row wraps to the next row's BD, Shift+Tab off BD wraps back to the
-    // previous row's MC, and neither can reach a summary row because summary rows have
-    // no coordinates at all.
+    // `useGridKeyboardNav` — the SAME hook RC IN's bulk grid and the production
+    // schedule run on, so the muscle memory transfers. The resolver is local
+    // (`createQcNavResolver`) because this grid needs per-CELL addressability rather
+    // than the shared factory's per-column `columnMap`: WT is live on every draw row,
+    // the four metrics only on a group's lead row.
+    //
+    // Tab off MC wraps to the next row's WT; Shift+Tab off WT wraps back to the
+    // previous row's last live cell; arrows clamp at the edges. A summary row has no
+    // coordinate at all, which is why nav can never land on one.
 
     const [activeCell, setActiveCell] = React.useState<CoordinateId | null>(null);
 
     // A source-filter change or a month change re-lengthens the row axis under us; an
     // active cell past the new end would address a row that no longer exists.
     React.useEffect(() => {
-        setActiveCell((current) => (current && current.row >= entryGroups.length ? null : current));
-    }, [entryGroups.length]);
+        setActiveCell((current) => (current && current.row >= entryRows.length ? null : current));
+    }, [entryRows.length]);
 
-    const groupKeyAt = React.useCallback(
-        (row: number): string | null => entryGroups[row]?.key ?? null,
-        [entryGroups],
+    const rowAt = React.useCallback(
+        (row: number): EntryRow | null => entryRows[row] ?? null,
+        [entryRows],
+    );
+
+    /** Read whichever kind of cell a coordinate names. */
+    const valueAt = React.useCallback(
+        (id: CoordinateId): string => {
+            const entry = rowAt(id.row);
+            if (!entry) return '';
+            const metric = navMetric(id.col);
+            if (!metric) return weightValueById(entry.draw.id);
+            return entry.isLead ? cellValueByKey(entry.group.key, metric) : '';
+        },
+        [rowAt, weightValueById, cellValueByKey],
+    );
+
+    /** Write whichever kind of cell a coordinate names. */
+    const writeAt = React.useCallback(
+        (id: CoordinateId, value: string) => {
+            const entry = rowAt(id.row);
+            if (!entry) return;
+            const metric = navMetric(id.col);
+            if (!metric) setWeightCell(entry.draw.id, value);
+            else if (entry.isLead) setCell(entry.group.key, metric, value);
+        },
+        [rowAt, setWeightCell, setCell],
     );
 
     const editSession = useGridEditSession<CoordinateId>({
-        getValue: (id) => {
-            const key = groupKeyAt(id.row);
-            return key ? cellValueByKey(key, METRICS[id.col]) : '';
-        },
-        setValue: (id, value) => {
-            const key = groupKeyAt(id.row);
-            if (key) setCell(key, METRICS[id.col], value);
-        },
+        getValue: valueAt,
+        setValue: writeAt,
     });
 
     /** Put the moved-to cell on screen and hand the keyboard back to the scrollport. */
@@ -329,11 +581,13 @@ export function QcLedgerClient({
 
     const startEditing = React.useCallback(
         (row: number, col: number, initialChar?: string) => {
-            if (!groupKeyAt(row)) return;
+            const entry = rowAt(row);
+            // A `〃` sibling's metric cell is inert — never open an editor over it.
+            if (!entry || (col > 0 && !entry.isLead)) return;
             setActiveCell({ row, col });
             editSession.startEditing({ row, col }, initialChar);
         },
-        [groupKeyAt, editSession],
+        [rowAt, editSession],
     );
 
     const revertCellEdit = React.useCallback(() => {
@@ -350,11 +604,11 @@ export function QcLedgerClient({
 
     const resolver = React.useMemo(
         () =>
-            createCoordinateNavResolver({
-                rowCount: entryGroups.length,
-                columnMap: METRIC_COLUMN_MAP,
+            createQcNavResolver({
+                rowCount: entryRows.length,
+                isLead: (row) => entryRows[row]?.isLead === true,
             }),
-        [entryGroups.length],
+        [entryRows],
     );
 
     const { handleKeyDown } = useGridKeyboardNav<CoordinateId>({
@@ -373,13 +627,26 @@ export function QcLedgerClient({
         onAfterMove: focusCell,
         // The RC IN convention: the first Tab of a run remembers the lane you started
         // in, and a later plain Enter drops one row and RETURNS to it. Filling BD → ASH
-        // → GRIT → MC → Enter puts you back on the next row's BD, not its MC.
+        // → GRIT → MC → Enter puts you back on the next row's BD, not its MC — and a
+        // run started on WT comes back to WT.
         enableEnterAnchor: true,
     });
 
     // ── Save ──────────────────────────────────────────────────────────────────────
 
     const dirtyKeys = React.useMemo(() => Object.keys(edits), [edits]);
+    const dirtyWeightIds = React.useMemo(() => Object.keys(weightEdits), [weightEdits]);
+    const totalDirty = dirtyKeys.length + dirtyWeightIds.length;
+
+    /**
+     * Weights that could never be saved: blank, non-numeric, negative, over three
+     * decimals, absurd. `weight_kg` is NOT NULL and CHECK > 0 in the database, so this
+     * is caught here and reported inline rather than spent on a round trip.
+     */
+    const badWeightIds = React.useMemo(
+        () => dirtyWeightIds.filter((id) => parseWeightKg(weightEdits[id]).kg == null),
+        [dirtyWeightIds, weightEdits],
+    );
 
     /**
      * Groups whose every metric would end up blank. The RPC rejects that outright
@@ -399,30 +666,78 @@ export function QcLedgerClient({
     /** Lead-row decoration per group key: the two states worth pointing at. */
     const groupFlags = React.useMemo(() => {
         const map = new Map<string, GroupFlag>();
-        for (const failure of failures) map.set(failure.key, 'conflict');
+        for (const failure of failures) {
+            if (failure.kind === 'sample') map.set(failure.target, 'conflict');
+        }
         for (const key of emptiedKeys) map.set(key, 'blocked');
         return map;
     }, [failures, emptiedKeys]);
 
+    /** The same two states, per DRAW, for the WT column. */
+    const weightFlags = React.useMemo(() => {
+        const map = new Map<string, GroupFlag>();
+        for (const failure of failures) {
+            if (failure.kind === 'weight') map.set(failure.target, 'conflict');
+        }
+        for (const id of badWeightIds) map.set(id, 'blocked');
+        return map;
+    }, [failures, badWeightIds]);
+
     const discard = React.useCallback(() => {
         setEdits({});
+        setWeightEdits({});
         setFailures([]);
     }, []);
 
+    /**
+     * ONE Save. A weight correction and a lab reading typed in the same sitting commit
+     * together, through their own write paths — the sample RPC per group, the weight
+     * RPC per draw — and come back as one merged verdict list.
+     *
+     * Nothing is all-or-nothing across the two: each row carries its own concurrency
+     * check, so a conflict on one draw's weight leaves the other rows saved and keeps
+     * that draw's typing on screen.
+     */
     const save = React.useCallback(async () => {
-        if (dirtyKeys.length === 0 || saving) return;
+        if (totalDirty === 0 || saving) return;
 
-        if (emptiedKeys.length > 0) {
-            setFailures(
-                emptiedKeys.map((key) => ({
-                    key,
+        // ── Blocked before anything leaves the browser ────────────────────────────
+        if (emptiedKeys.length > 0 || badWeightIds.length > 0) {
+            setFailures([
+                ...emptiedKeys.map((key) => ({
+                    key: `s:${key}`,
+                    kind: 'sample' as const,
+                    target: key,
                     label: describeGroup(groupByKey.get(key)),
                     outcome: 'no_metrics' as const,
                     message:
                         'Every metric was cleared. A sample must keep at least one of BD / ASH / GRIT / MC — re-enter a value, or press Esc to restore what was stored.',
                 })),
-            );
+                ...badWeightIds.map((id) => ({
+                    key: `w:${id}`,
+                    kind: 'weight' as const,
+                    target: id,
+                    label: describeDraw(drawById.get(id)),
+                    outcome: 'invalid' as const,
+                    message:
+                        parseWeightKg(weightEdits[id]).error ??
+                        'That weight cannot be saved — re-enter it, or press Esc to restore what was stored.',
+                })),
+            ]);
             return;
+        }
+
+        const weightPayloads: SaveQcWeightInput[] = [];
+        for (const id of dirtyWeightIds) {
+            const entry = drawById.get(id);
+            if (!entry) continue;
+            weightPayloads.push({
+                id,
+                // Compare-and-set: the weight this operator was looking at. If the
+                // stored value has moved since, the write does not happen.
+                expectedWeightKg: entry.draw.weightKg,
+                raw: weightEdits[id],
+            });
         }
 
         const payloads: SaveQcSampleInput[] = [];
@@ -448,41 +763,81 @@ export function QcLedgerClient({
         setSaving(true);
         setFailures([]);
         try {
-            const { results, savedCount } = await saveQcSamples(payloads);
+            // Weights first, then readings: fix what the number IS before recording
+            // what was measured about it. (Independent rows — order is a reading
+            // convenience, not a correctness requirement.)
+            const weightRun = weightPayloads.length
+                ? await saveQcWeights(weightPayloads)
+                : { results: [] as SaveQcWeightResult[], savedCount: 0, failedCount: 0 };
+            const sampleRun = payloads.length
+                ? await saveQcSamples(payloads)
+                : { results: [] as SaveQcSampleResult[], savedCount: 0, failedCount: 0 };
 
-            const succeeded = new Set(results.filter((r) => r.ok).map((r) => r.key));
-            if (succeeded.size > 0) {
-                // Only the groups that actually landed lose their pending text; a
-                // conflicted group keeps what was typed so nothing has to be retyped.
-                setEdits((prev) => {
+            const savedWeights = new Set(
+                weightRun.results.filter((r) => r.ok).map((r) => r.id),
+            );
+            if (savedWeights.size > 0) {
+                setWeightEdits((prev) => {
                     const next = { ...prev };
-                    for (const key of succeeded) delete next[key];
+                    for (const id of savedWeights) delete next[id];
                     return next;
                 });
-                toast.success(
-                    `Saved ${savedCount} sample group${savedCount === 1 ? '' : 's'}`,
-                    { duration: 2500 },
-                );
+            }
+
+            const savedGroups = new Set(sampleRun.results.filter((r) => r.ok).map((r) => r.key));
+            if (savedGroups.size > 0) {
+                // Only what actually landed loses its pending text; a conflicted row
+                // keeps what was typed so nothing has to be retyped.
+                setEdits((prev) => {
+                    const next = { ...prev };
+                    for (const key of savedGroups) delete next[key];
+                    return next;
+                });
+            }
+
+            const savedTotal = sampleRun.savedCount + weightRun.savedCount;
+            if (savedTotal > 0) {
+                toast.success(describeSaved(sampleRun.savedCount, weightRun.savedCount), {
+                    duration: 2500,
+                });
                 router.refresh();
             }
 
-            const failed = results.filter((r) => !r.ok);
-            if (failed.length > 0) {
-                const rows = failed.map((result) => toFailure(result, groupByKey.get(result.key)));
+            const rows: SaveFailure[] = [
+                ...weightRun.results
+                    .filter((r) => !r.ok)
+                    .map((result) => toWeightFailure(result, drawById.get(result.id))),
+                ...sampleRun.results
+                    .filter((r) => !r.ok)
+                    .map((result) => toFailure(result, groupByKey.get(result.key))),
+            ];
+            if (rows.length > 0) {
                 setFailures(rows);
                 errorToast(
-                    `${failed.length} sample group${failed.length === 1 ? '' : 's'} could not be saved`,
+                    `${rows.length} change${rows.length === 1 ? '' : 's'} could not be saved`,
                     { description: rows.map((row) => `${row.label} — ${row.message}`).join('\n') },
                 );
             }
         } catch (cause) {
-            errorToast('Saving the QC samples failed', {
+            errorToast('Saving the QC ledger failed', {
                 description: cause instanceof Error ? cause.message : String(cause),
             });
         } finally {
             setSaving(false);
         }
-    }, [dirtyKeys, saving, emptiedKeys, groupByKey, edits, router]);
+    }, [
+        totalDirty,
+        saving,
+        emptiedKeys,
+        badWeightIds,
+        dirtyKeys,
+        dirtyWeightIds,
+        groupByKey,
+        drawById,
+        edits,
+        weightEdits,
+        router,
+    ]);
 
     const loggedGroups = liveMonthAgg.sampledGroupCount;
 
@@ -602,10 +957,11 @@ export function QcLedgerClient({
                                                 'frozen-row whitespace-nowrap border border-border bg-muted px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
                                                 col.numeric ? 'text-right' : 'text-left',
                                                 // The work half is visually claimed, not
-                                                // just wider: the four analysis headers
-                                                // read as foreground, the reference
-                                                // columns stay muted.
-                                                index >= FIRST_METRIC_COL && 'text-foreground',
+                                                // just wider: the editable headers read
+                                                // as foreground, the reference columns
+                                                // stay muted. WT joined that half when
+                                                // it became typable.
+                                                index >= WT_COL && 'text-foreground',
                                             )}
                                         >
                                             {col.label}
@@ -629,7 +985,7 @@ export function QcLedgerClient({
                                     <DayBlock
                                         key={day.date}
                                         date={day.date}
-                                        groups={day.groups}
+                                        rows={day.rows}
                                         agg={day.agg}
                                         rowOffset={dayRowOffsets[dayIndex]}
                                         activeCell={activeCell}
@@ -641,7 +997,11 @@ export function QcLedgerClient({
                                         gridRef={gridRef}
                                         cellValue={cellValueByKey}
                                         setCell={setCell}
+                                        weightValue={weightValueById}
+                                        setWeight={setWeightCell}
+                                        weightEdits={weightEdits}
                                         groupFlags={groupFlags}
+                                        weightFlags={weightFlags}
                                     />
                                 ))}
                             </tbody>
@@ -660,15 +1020,15 @@ export function QcLedgerClient({
                     <Button
                         size="sm"
                         className="h-7 text-xs"
-                        disabled={dirtyKeys.length === 0 || saving}
+                        disabled={totalDirty === 0 || saving}
                         onClick={() => void save()}
                     >
                         {saving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        {dirtyKeys.length === 0
+                        {totalDirty === 0
                             ? 'Save'
-                            : `Save ${dirtyKeys.length} sample group${dirtyKeys.length === 1 ? '' : 's'}`}
+                            : `Save ${describeDirty(dirtyKeys.length, dirtyWeightIds.length)}`}
                     </Button>
-                    {dirtyKeys.length > 0 ? (
+                    {totalDirty > 0 ? (
                         <Button
                             size="sm"
                             variant="ghost"
@@ -682,16 +1042,20 @@ export function QcLedgerClient({
                     <span
                         className={cn(
                             'text-[11px]',
-                            emptiedKeys.length > 0
+                            emptiedKeys.length + badWeightIds.length > 0
                                 ? 'text-amber-600 dark:text-amber-400'
                                 : 'text-muted-foreground',
                         )}
                     >
                         {emptiedKeys.length > 0
                             ? `${emptiedKeys.length} group${emptiedKeys.length === 1 ? ' has' : 's have'} every metric cleared — that would delete the reading`
-                            : dirtyKeys.length === 0
-                              ? 'No unsaved changes'
-                              : 'Each group saves as its own row, with its own version check'}
+                            : badWeightIds.length > 0
+                              ? `${badWeightIds.length} weight${badWeightIds.length === 1 ? ' is' : 's are'} not a valid number of kilograms`
+                              : totalDirty === 0
+                                ? 'No unsaved changes'
+                                : dirtyWeightIds.length > 0
+                                  ? 'Each row saves on its own — a reading against its version, a weight against the value you were shown'
+                                  : 'Each group saves as its own row, with its own version check'}
                     </span>
                 </div>
             </div>
@@ -734,12 +1098,49 @@ function describeGroup(group: QcGroup | undefined): string {
     return `${formatDayHeading(group.date).split(' · ')[0]} · ${group.src} · ${group.whse}`;
 }
 
+/** A weight belongs to one DRAW, so its label names the draw, not just the group. */
+function describeDraw(entry: { draw: QcDraw; group: QcGroup } | undefined): string {
+    if (!entry) return 'Unknown receipt row';
+    return `${describeGroup(entry.group)} · ${entry.draw.equip ?? 'draw'} · WT`;
+}
+
+/** `3 samples · 2 weights`, and the singular of each. */
+function describeDirty(samples: number, weights: number): string {
+    const parts: string[] = [];
+    if (samples > 0) parts.push(`${samples} sample${samples === 1 ? '' : 's'}`);
+    if (weights > 0) parts.push(`${weights} weight${weights === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+}
+
+function describeSaved(samples: number, weights: number): string {
+    return `Saved ${describeDirty(samples, weights)}`;
+}
+
+/**
+ * The exact weight, with thousands separators — used ONLY by the editable WT cells.
+ *
+ * NOT `formatKg`, which rounds to whole kilograms. That is the right call for a SUM
+ * (day totals, the month footer) but lethal in a cell you can type over: a stored
+ * 9,583.5 would display as "9,584", and committing the cell would write the rounded
+ * number back. Nothing on record is fractional today, but the write path accepts three
+ * decimals, so the display must be lossless before the first one arrives, not after.
+ */
+function formatKgExact(value: number): string {
+    if (!Number.isFinite(value)) return '';
+    return value.toLocaleString('en-US', { maximumFractionDigits: 3 });
+}
+
 // ─── Save failures ───────────────────────────────────────────────────────────────
 
 interface SaveFailure {
+    /** Unique React key across both kinds (`s:<groupKey>` / `w:<drawId>`). */
     key: string;
+    /** Which write path produced it — decides which cell gets the rose ring. */
+    kind: 'sample' | 'weight';
+    /** The group key (samples) or the draw id (weights). */
+    target: string;
     label: string;
-    outcome: SaveQcSampleResult['outcome'];
+    outcome: SaveQcSampleResult['outcome'] | SaveQcWeightResult['outcome'];
     message: string;
 }
 
@@ -748,53 +1149,88 @@ interface SaveFailure {
  * own sentence — a conflict is NOT retried, force-written, or papered over.
  */
 function toFailure(result: SaveQcSampleResult, group: QcGroup | undefined): SaveFailure {
-    const label = describeGroup(group);
+    const base = {
+        key: `s:${result.key}`,
+        kind: 'sample' as const,
+        target: result.key,
+        label: describeGroup(group),
+        outcome: result.outcome,
+    };
     switch (result.outcome) {
         case 'version_conflict':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
+                ...base,
                 message:
                     'Someone else changed this sample while you were editing. Reload to see their values.',
             };
         case 'already_exists':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
+                ...base,
                 message:
                     'A sample was logged for this group while you were typing. Reload, then edit the value that is now stored.',
             };
         case 'not_found':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
+                ...base,
                 message: 'That sample was deleted while you were editing. Reload the ledger.',
             };
         case 'no_metrics':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
+                ...base,
                 message:
                     'Every metric was cleared. A sample must keep at least one of BD / ASH / GRIT / MC — re-enter a value, or press Esc to restore what was stored.',
             };
         case 'invalid_key':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
+                ...base,
                 message:
                     result.message ?? 'The date / source / warehouse key was incomplete. Reload the ledger.',
             };
         default:
+            return { ...base, message: result.message ?? 'The save failed for an unknown reason.' };
+    }
+}
+
+/**
+ * The weight write path's verdict, in the same voice. A `conflict` is the compare-and-
+ * set refusing to overwrite a value that moved underneath — never retried, never
+ * force-written, and the RPC's message already names both numbers.
+ */
+function toWeightFailure(
+    result: SaveQcWeightResult,
+    entry: { draw: QcDraw; group: QcGroup } | undefined,
+): SaveFailure {
+    const base = {
+        key: `w:${result.id}`,
+        kind: 'weight' as const,
+        target: result.id,
+        label: describeDraw(entry),
+        outcome: result.outcome,
+    };
+    switch (result.outcome) {
+        case 'conflict':
             return {
-                key: result.key,
-                label,
-                outcome: result.outcome,
-                message: result.message ?? 'The save failed for an unknown reason.',
+                ...base,
+                message:
+                    result.message ??
+                    'This weight changed while you were editing. Reload to see the value that is now stored.',
+            };
+        case 'not_found':
+            return {
+                ...base,
+                message: 'That receipt row was deleted while you were editing. Reload the ledger.',
+            };
+        case 'invalid':
+            return {
+                ...base,
+                message:
+                    result.message ??
+                    'That weight cannot be saved — re-enter it, or press Esc to restore what was stored.',
+            };
+        default:
+            return {
+                ...base,
+                message: result.message ?? 'The weight could not be saved for an unknown reason.',
             };
     }
 }
@@ -814,7 +1250,11 @@ function SaveFailureBanner({
 }) {
     const [copied, setCopied] = React.useState(false);
     const text = failures.map((failure) => `${failure.label} — ${failure.message}`).join('\n');
-    const reloadable = failures.some((failure) => failure.outcome !== 'no_metrics');
+    // Reloading fixes a stale read. It cannot fix something the operator typed, so a
+    // blocked sample or an unparseable weight does not offer the button.
+    const reloadable = failures.some(
+        (failure) => failure.outcome !== 'no_metrics' && failure.outcome !== 'invalid',
+    );
 
     return (
         <div
@@ -824,7 +1264,7 @@ function SaveFailureBanner({
             <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-destructive">
-                        {failures.length} sample group{failures.length === 1 ? '' : 's'} not saved
+                        {failures.length} change{failures.length === 1 ? '' : 's'} not saved
                     </p>
                     <ul className="mt-1 space-y-0.5">
                         {failures.map((failure) => (
@@ -923,9 +1363,10 @@ function overlay(
 
 interface DayBlockProps {
     date: string;
-    groups: QcGroup[];
+    /** This day's draw rows, in visual order — the grid's row axis, sliced. */
+    rows: EntryRow[];
     agg: QcAggregate;
-    /** Grid row index of this day's FIRST sample group. */
+    /** Grid row index of this day's FIRST draw row. */
     rowOffset: number;
     activeCell: CoordinateId | null;
     isEditing: boolean;
@@ -936,12 +1377,16 @@ interface DayBlockProps {
     gridRef: React.RefObject<HTMLDivElement | null>;
     cellValue: (groupKey: string, metric: MetricKey) => string;
     setCell: (groupKey: string, metric: MetricKey, raw: string) => void;
+    weightValue: (drawId: string) => string;
+    setWeight: (drawId: string, raw: string) => void;
+    weightEdits: WeightEditMap;
     groupFlags: Map<string, GroupFlag>;
+    weightFlags: Map<string, GroupFlag>;
 }
 
 function DayBlock({
     date,
-    groups,
+    rows,
     agg,
     rowOffset,
     activeCell,
@@ -953,7 +1398,11 @@ function DayBlock({
     gridRef,
     cellValue,
     setCell,
+    weightValue,
+    setWeight,
+    weightEdits,
     groupFlags,
+    weightFlags,
 }: DayBlockProps) {
     const logged = agg.sampledGroupCount;
     const allLogged = logged === agg.groupCount;
@@ -984,47 +1433,59 @@ function DayBlock({
                 </td>
             </tr>
 
-            {groups.map((group, groupIndex) => {
-                const gridRow = rowOffset + groupIndex;
+            {rows.map(({ group, draw, isLead }, rowIndex) => {
+                const gridRow = rowOffset + rowIndex;
                 const flag = groupFlags.get(group.key);
-                return group.draws.map((draw, drawIndex) => {
-                    const isLead = drawIndex === 0;
-                    return (
-                        <tr key={draw.id} className="h-8 transition-all duration-150 hover:bg-muted/40">
-                            <Cell>{formatShortDate(draw.recvDate)}</Cell>
-                            <Cell muted>{draw.prodDate ? formatShortDate(draw.prodDate) : '—'}</Cell>
-                            <Cell>{draw.shift ?? '—'}</Cell>
-                            <Cell>{draw.grade ?? '—'}</Cell>
-                            <Cell>{draw.plant ?? '—'}</Cell>
-                            <Cell>{group.whse || '—'}</Cell>
-                            <Cell>{group.src}</Cell>
-                            <Cell numeric>{formatKg(draw.weightKg)}</Cell>
+                return (
+                    <tr key={draw.id} className="h-8 transition-all duration-150 hover:bg-muted/40">
+                        <Cell>{formatShortDate(draw.recvDate)}</Cell>
+                        <Cell muted>{draw.prodDate ? formatShortDate(draw.prodDate) : '—'}</Cell>
+                        <Cell>{draw.shift ?? '—'}</Cell>
+                        <Cell>{draw.grade ?? '—'}</Cell>
+                        <Cell>{draw.plant ?? '—'}</Cell>
+                        <Cell>{group.whse || '—'}</Cell>
+                        <Cell>{group.src}</Cell>
 
-                            {METRICS.map((metric, metricIndex) =>
-                                isLead ? (
-                                    <AnalysisCell
-                                        key={metric}
-                                        row={gridRow}
-                                        col={metricIndex}
-                                        metric={metric}
-                                        value={cellValue(group.key, metric)}
-                                        flag={flag}
-                                        activeCell={activeCell}
-                                        isEditing={isEditing}
-                                        setActiveCell={setActiveCell}
-                                        setIsEditing={setIsEditing}
-                                        onStartEditing={onStartEditing}
-                                        onRevert={onRevert}
-                                        gridRef={gridRef}
-                                        onChange={(raw) => setCell(group.key, metric, raw)}
-                                    />
-                                ) : (
-                                    <GhostCell key={metric} filled={cellValue(group.key, metric) !== ''} />
-                                ),
-                            )}
-                        </tr>
-                    );
-                });
+                        {/* WT — nav column 0, live on EVERY row including the `〃`s. */}
+                        <WeightCell
+                            row={gridRow}
+                            value={weightValue(draw.id)}
+                            edited={weightEdits[draw.id] !== undefined}
+                            flag={weightFlags.get(draw.id)}
+                            activeCell={activeCell}
+                            isEditing={isEditing}
+                            setActiveCell={setActiveCell}
+                            setIsEditing={setIsEditing}
+                            onStartEditing={onStartEditing}
+                            onRevert={onRevert}
+                            gridRef={gridRef}
+                            onChange={(raw) => setWeight(draw.id, raw)}
+                        />
+
+                        {METRICS.map((metric, metricIndex) =>
+                            isLead ? (
+                                <AnalysisCell
+                                    key={metric}
+                                    row={gridRow}
+                                    col={metricIndex + 1}
+                                    metric={metric}
+                                    value={cellValue(group.key, metric)}
+                                    flag={flag}
+                                    activeCell={activeCell}
+                                    isEditing={isEditing}
+                                    setActiveCell={setActiveCell}
+                                    setIsEditing={setIsEditing}
+                                    onStartEditing={onStartEditing}
+                                    onRevert={onRevert}
+                                    gridRef={gridRef}
+                                    onChange={(raw) => setCell(group.key, metric, raw)}
+                                />
+                            ) : (
+                                <GhostCell key={metric} filled={cellValue(group.key, metric) !== ''} />
+                            ),
+                        )}
+                    </tr>
+                );
             })}
 
             {/* Day TOTAL — the sum line an accountant would rule off under the block. */}
@@ -1156,6 +1617,88 @@ function Cell({
             )}
         >
             {children}
+        </td>
+    );
+}
+
+interface WeightCellProps {
+    row: number;
+    value: string;
+    /** True while an unsaved value is pending on this draw. */
+    edited: boolean;
+    flag?: GroupFlag;
+    activeCell: CoordinateId | null;
+    isEditing: boolean;
+    setActiveCell: (cell: CoordinateId) => void;
+    setIsEditing: (editing: boolean) => void;
+    onStartEditing: (row: number, col: number, char?: string) => void;
+    onRevert: () => void;
+    gridRef: React.RefObject<HTMLDivElement | null>;
+    onChange: (raw: string) => void;
+}
+
+/**
+ * The editable WT cell — nav column 0, and the one place this ledger's group/sibling
+ * asymmetry INVERTS.
+ *
+ * A lab reading covers a whole sample group, so it is typed once on the group's lead
+ * row and the siblings render `〃`. A weight is the opposite: it is a property of ONE
+ * physical draw, so every row's WT is independently editable and nothing ever carries
+ * over. Visually that reads as: inside the tinted editable block, a sibling row's four
+ * metric cells are inert `〃` while its WT is a live cell like any other.
+ *
+ * An unsaved value gets the primary tint plus a left rail, so a pending weight is
+ * never mistaken for a stored one.
+ */
+function WeightCell({
+    row,
+    value,
+    edited,
+    flag,
+    activeCell,
+    isEditing,
+    setActiveCell,
+    setIsEditing,
+    onStartEditing,
+    onRevert,
+    gridRef,
+    onChange,
+}: WeightCellProps) {
+    return (
+        <td
+            className={cn(
+                'h-8 border border-border/60 p-0',
+                'bg-sky-500/5',
+                edited && 'border-l-2 border-l-primary bg-primary/10',
+                flag && 'bg-rose-500/10 ring-1 ring-inset ring-rose-500/40',
+            )}
+        >
+            <GridCell
+                row={row}
+                col={0}
+                value={value}
+                activeCell={activeCell}
+                isEditing={isEditing}
+                setActiveCell={setActiveCell}
+                setIsEditing={setIsEditing}
+                onStartEditing={onStartEditing}
+                onRevert={onRevert}
+                gridRef={gridRef}
+                tabIndex={-1}
+                className="cursor-cell justify-end px-2 font-mono text-xs tabular-nums"
+            >
+                <EditInput
+                    autoFocus
+                    value={value}
+                    onChange={onChange}
+                    onCommit={() => setIsEditing(false)}
+                    onEscape={onRevert}
+                    align="right"
+                    inputMode="decimal"
+                    valueClass="text-xs"
+                    placeholder="kg"
+                />
+            </GridCell>
         </td>
     );
 }

@@ -152,3 +152,64 @@ export interface SaveSampleResult {
  * straight through does the right thing in both cases.
  */
 export type SaveSampleArgs = Database['public']['Functions']['cenapro_save_analysis_sample']['Args'];
+
+// ─── The weight write path ───────────────────────────────────────────────────
+//
+// A DRAW's `weight_kg` on `cenapro.production_event` — the tonnage every weighted
+// average is weighted BY. Editable from the QC Ledger so a typo can be fixed where
+// it is noticed, through `public.cenapro_update_event_weight`.
+//
+// CONCURRENCY IS COMPARE-AND-SET, NOT A ROW VERSION. `production_event` carries no
+// `row_version` column, and adding one would drag the production ledger's bulk
+// upsert into respecting it too — far wider than a typo fix warrants. Instead the
+// caller sends the weight it is LOOKING AT and the UPDATE only fires while the
+// stored value still equals it, checked in the same statement as the write. Zero
+// rows matched is a `conflict`; it is never retried and never force-written.
+//
+// `updated`   — the stored weight equalled what was on screen and now holds the new
+//               value. The change is trailed in `cenapro.production_event_audit`.
+// `conflict`  — somebody moved it underneath. `weight_kg` is the CURRENT value.
+// `not_found` — the receipt row was deleted while it was being edited.
+// `invalid`   — not a positive number, over 3 decimal places, over 10,000,000 kg,
+//               or no expected value supplied. Nothing was written.
+export type UpdateWeightOutcome = 'updated' | 'conflict' | 'not_found' | 'invalid';
+
+export interface UpdateWeightResult {
+    ok: boolean;
+    outcome: UpdateWeightOutcome;
+    id?: string;
+    /** Present on success (the new value) and on `conflict` (the CURRENT stored one). */
+    weight_kg?: number | null;
+    message?: string;
+}
+
+/** Arguments for `supabase.rpc('cenapro_update_event_weight', …)`. */
+export type UpdateWeightArgs =
+    Database['public']['Functions']['cenapro_update_event_weight']['Args'];
+
+/**
+ * The ONE place a typed weight becomes a number, shared by the client's live preview
+ * and the server action's pre-flight — so the two can never disagree about what is
+ * acceptable, and the client can block a bad value before it costs a round trip.
+ *
+ * Mirrors the production ledger's own habit of stripping `,`/`₱`/whitespace off a
+ * pasted numeric cell before `Number()`, then adds the RPC's rules on top. Returns
+ * `null` with a reason rather than throwing; the reason is what the UI shows.
+ */
+export function parseWeightKg(raw: string): { kg: number | null; error: string | null } {
+    const cleaned = raw.replace(/[,\s₱_]/g, '');
+    if (cleaned === '') return { kg: null, error: 'A weight is required — this row cannot be blank.' };
+    if (!/^\d*\.?\d*$/.test(cleaned) || cleaned === '.') {
+        return { kg: null, error: 'A weight must be a plain number of kilograms.' };
+    }
+    const decimals = cleaned.split('.')[1]?.length ?? 0;
+    if (decimals > 3) return { kg: null, error: 'A weight carries at most 3 decimal places.' };
+    const kg = Number(cleaned);
+    if (!Number.isFinite(kg) || kg <= 0) {
+        return { kg: null, error: 'A weight must be a positive number of kilograms.' };
+    }
+    if (kg > 10_000_000) {
+        return { kg: null, error: 'That weight is over 10,000,000 kg — check for a mistyped digit.' };
+    }
+    return { kg, error: null };
+}

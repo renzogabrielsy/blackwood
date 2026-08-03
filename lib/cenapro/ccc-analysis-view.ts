@@ -202,16 +202,25 @@ export function combineAggregates(parts: QcAggregate[]): QcAggregate {
 /**
  * One group's difference from what SQL already counted.
  *
- * `before` is the STORED sample the view aggregated (null when the group is
- * unsampled). `after` is what should be counted instead — the value being typed.
- * `dropWeight` additionally removes the group's tonnage from the period, which is
- * what a source filter does and an edit never does.
+ * `kg` is the tonnage the view aggregated this group AT. `before` is the STORED
+ * sample it aggregated (null when the group is unsampled). `after` is what should be
+ * counted instead — the value being typed. `dropWeight` additionally removes the
+ * group's tonnage from the period, which is what a source filter does.
+ *
+ * `afterKg` is the group's tonnage AFTER pending WEIGHT edits, and defaults to `kg`.
+ * It exists because the QC ledger can now retype a draw's `weight_kg`, and a weight
+ * is not a spectator here: it is the thing every average is weighted BY. Moving it
+ * moves the day total, the month total, each metric's own denominator, and therefore
+ * the weighted averages themselves — the same numerator/denominator arithmetic SQL
+ * published, with one group's contribution restated. Metric-only edits leave
+ * `afterKg` undefined and behave exactly as before.
  */
 export interface AggregateAdjustment {
     kg: number;
     before: MetricValues | null;
     after: MetricValues | null;
     dropWeight?: boolean;
+    afterKg?: number;
 }
 
 /** Never let float noise print a negative kilogram. */
@@ -240,7 +249,11 @@ export function adjustAggregate(
 
     for (const adjustment of adjustments) {
         const { kg, before, after, dropWeight } = adjustment;
+        // Absent ⇒ the weight did not move, and every line below collapses to the
+        // metric-only behaviour this function has always had.
+        const afterKg = adjustment.afterKg ?? kg;
 
+        // ── Take the group back OUT at the weight SQL counted it at ──────────────
         if (before) {
             for (const metric of METRICS) {
                 const value = before[metric];
@@ -260,18 +273,23 @@ export function adjustAggregate(
             continue;
         }
 
+        // ── Put it back IN at the weight it would carry once saved ───────────────
         if (after) {
             for (const metric of METRICS) {
                 const value = after[metric];
-                if (value == null || kg <= 0) continue;
-                numerator[metric] += value * kg;
-                wtdKg[metric] += kg;
+                if (value == null || afterKg <= 0) continue;
+                numerator[metric] += value * afterKg;
+                wtdKg[metric] += afterKg;
             }
             if (hasAnyMetric(after)) {
-                sampledKg += kg;
+                sampledKg += afterKg;
                 sampledGroupCount += 1;
             }
         }
+
+        // The period's own tonnage follows the weight edit even when the group
+        // carries no sample at all — an unsampled group still has weight.
+        totalKg += afterKg - kg;
     }
 
     const wtd = {} as MetricValues;
