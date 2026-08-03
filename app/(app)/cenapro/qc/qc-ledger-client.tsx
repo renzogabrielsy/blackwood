@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Check, Copy, Loader2, RotateCw } from 'lucide-react';
+import { Check, Copy, Loader2, Plus, RotateCw } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -42,6 +42,7 @@ import {
 import { Chip, NarrowScreenNotice, Tile } from './qc-chrome';
 import { MetricSpark } from './qc-metric-charts';
 import { MonthYearPicker } from './month-year-picker';
+import { AddDrawPanel, type DrawLanding } from './add-draw-panel';
 import {
     saveQcSamples,
     saveQcWeights,
@@ -50,7 +51,7 @@ import {
     type SaveQcWeightInput,
     type SaveQcWeightResult,
 } from './actions';
-import type { QcDraw, QcGroup, QcLedgerDay } from './data';
+import type { QcDraw, QcDrawOptions, QcGroup, QcLedgerDay } from './data';
 
 interface QcLedgerClientProps {
     month: string;
@@ -61,6 +62,8 @@ interface QcLedgerClientProps {
     monthKeys: string[];
     previousWtd: MetricValues | null;
     previousLabel: string | null;
+    /** DB-read dimension lists for the "Add draw" composer. */
+    drawOptions: QcDrawOptions;
 }
 
 /** Per-group, per-metric unsaved edits, held as the raw text the operator typed. */
@@ -262,6 +265,7 @@ export function QcLedgerClient({
     monthKeys,
     previousWtd,
     previousLabel,
+    drawOptions,
 }: QcLedgerClientProps) {
     const router = useRouter();
     const [edits, setEdits] = React.useState<EditMap>({});
@@ -270,6 +274,13 @@ export function QcLedgerClient({
     const [saving, setSaving] = React.useState(false);
     const [failures, setFailures] = React.useState<SaveFailure[]>([]);
     const gridRef = React.useRef<HTMLDivElement>(null);
+
+    // ── Adding draws ──────────────────────────────────────────────────────────────
+    const [addOpen, setAddOpen] = React.useState(false);
+    const [addDate, setAddDate] = React.useState<string | null>(null);
+    /** The draw to point at — a row just committed, or one `already_exists` named. */
+    const [markedDrawId, setMarkedDrawId] = React.useState<string | null>(null);
+    const [refreshing, startRefresh] = React.useTransition();
 
     const sources = React.useMemo(() => {
         const set = new Set<string>();
@@ -292,6 +303,50 @@ export function QcLedgerClient({
                 for (const draw of group.draws) map.set(draw.id, { draw, group });
         return map;
     }, [days]);
+
+    /**
+     * Which day the composer opens on when it is opened from the toolbar rather than
+     * from a day header: today when today is in the month on screen (the overwhelmingly
+     * common case — the slip arrives the same day), else the month's last receipt day,
+     * else its first calendar day.
+     */
+    const defaultAddDate = React.useMemo(() => {
+        const today = new Date().toISOString().slice(0, 10);
+        if (today.startsWith(month)) return today;
+        return days[days.length - 1]?.date ?? `${month}-01`;
+    }, [days, month]);
+
+    const openAdd = React.useCallback((date?: string) => {
+        setAddDate(date ?? null);
+        setAddOpen(true);
+    }, []);
+
+    /**
+     * A committed draw. `revalidatePath` refreshed the server tree; `router.refresh()`
+     * is what pulls it into this render, and the row is then marked so the operator can
+     * see the line they just read out land in the day they are looking at.
+     */
+    const handleInserted = React.useCallback((landing: DrawLanding) => {
+        setMarkedDrawId(landing.drawId);
+        // A source filter that excludes the new row would make a successful add look
+        // like it did nothing.
+        setSourceFilter((current) => (current === 'ALL' || current === landing.source ? current : 'ALL'));
+        startRefresh(() => router.refresh());
+    }, [router]);
+
+    /**
+     * Bring the marked row into view once it actually exists in the render, then let the
+     * mark fade out of relevance. Re-runs on `days` because the row arrives with the
+     * refresh, not with the click.
+     */
+    React.useEffect(() => {
+        if (!markedDrawId) return;
+        gridRef.current
+            ?.querySelector<HTMLElement>(`[data-draw-id="${markedDrawId}"]`)
+            ?.scrollIntoView({ block: 'nearest' });
+        const timer = window.setTimeout(() => setMarkedDrawId(null), 8000);
+        return () => window.clearTimeout(timer);
+    }, [markedDrawId, days]);
 
     /**
      * How much each group's tonnage would move if the pending weight edits were
@@ -862,6 +917,18 @@ export function QcLedgerClient({
                         ))}
                     </select>
 
+                    {/* Adding is a DESKTOP action — the grid it writes into is hidden
+                        below `sm`, so the button is too. */}
+                    <Button
+                        size="sm"
+                        variant={addOpen ? 'secondary' : 'default'}
+                        className="hidden h-7 text-xs sm:inline-flex"
+                        onClick={() => (addOpen ? setAddOpen(false) : openAdd(defaultAddDate))}
+                    >
+                        <Plus className="mr-1 h-3 w-3" />
+                        {addOpen ? 'Adding draws' : 'Add draw'}
+                    </Button>
+
                     <Chip tone={loggedGroups === liveMonthAgg.groupCount ? 'ok' : 'pending'}>
                         {loggedGroups} of {liveMonthAgg.groupCount} samples logged
                     </Chip>
@@ -921,6 +988,10 @@ export function QcLedgerClient({
                         ))}
                     </div>
 
+                    {/* The grid and the add composer sit SIDE BY SIDE — the panel is
+                        docked, not an overlay, so a draw being transcribed can be
+                        watched landing in the day block it belongs to. */}
+                    <div className="flex min-h-0 flex-1">
                     {/* ── The grid ─────────────────────────────────────────────────────
                         Its OWN scrollport (min-h-0 flex-1 overflow-auto): that is what
                         makes the sticky header row and the sticky month footer actually
@@ -935,7 +1006,7 @@ export function QcLedgerClient({
                         onKeyDown={handleKeyDown}
                         role="grid"
                         aria-label={`QC analysis ledger — ${formatMonthHeading(month)}`}
-                        className="min-h-0 flex-1 overflow-auto rounded-lg border border-border outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        className="min-h-0 min-w-0 flex-1 overflow-auto rounded-lg border border-border outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     >
                         <table
                             className="w-full table-fixed border-collapse text-xs"
@@ -977,6 +1048,17 @@ export function QcLedgerClient({
                                             className="px-2 py-6 text-center text-xs text-muted-foreground"
                                         >
                                             No partner receipts in {formatMonthHeading(month)}.
+                                            {sourceFilter === 'ALL' ? (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="ml-2 h-6 text-[11px]"
+                                                    onClick={() => openAdd(defaultAddDate)}
+                                                >
+                                                    <Plus className="mr-1 h-3 w-3" />
+                                                    Add the first draw
+                                                </Button>
+                                            ) : null}
                                         </td>
                                     </tr>
                                 ) : null}
@@ -988,6 +1070,8 @@ export function QcLedgerClient({
                                         rows={day.rows}
                                         agg={day.agg}
                                         rowOffset={dayRowOffsets[dayIndex]}
+                                        markedDrawId={markedDrawId}
+                                        onAddDraw={openAdd}
                                         activeCell={activeCell}
                                         isEditing={editSession.isEditing}
                                         setActiveCell={setActiveCell}
@@ -1010,6 +1094,20 @@ export function QcLedgerClient({
                                 <MonthFooter month={month} agg={liveMonthAgg} dvoKg={dvoKg} />
                             ) : null}
                         </table>
+                    </div>
+
+                    {addOpen ? (
+                        <AddDrawPanel
+                            options={drawOptions}
+                            month={month}
+                            initialDate={addDate ?? defaultAddDate}
+                            refreshing={refreshing}
+                            onClose={() => setAddOpen(false)}
+                            onInserted={handleInserted}
+                            hasDraw={(id) => drawById.has(id)}
+                            onLocateDraw={setMarkedDrawId}
+                        />
+                    ) : null}
                     </div>
                 </div>
             </div>
@@ -1382,6 +1480,10 @@ interface DayBlockProps {
     weightEdits: WeightEditMap;
     groupFlags: Map<string, GroupFlag>;
     weightFlags: Map<string, GroupFlag>;
+    /** The row to point at after a commit, if it is in this day. */
+    markedDrawId: string | null;
+    /** Open the composer already targeted at this day. */
+    onAddDraw: (date: string) => void;
 }
 
 function DayBlock({
@@ -1389,6 +1491,8 @@ function DayBlock({
     rows,
     agg,
     rowOffset,
+    markedDrawId,
+    onAddDraw,
     activeCell,
     isEditing,
     setActiveCell,
@@ -1415,10 +1519,25 @@ function DayBlock({
                     colSpan={LABEL_SPAN}
                     className={cn(
                         DAY_HEADER_CELL,
-                        'truncate border-t border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
+                        'border-t border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
                     )}
                 >
-                    {formatDayHeading(date)}
+                    <span className="flex items-center justify-between gap-2">
+                        <span className="truncate">{formatDayHeading(date)}</span>
+                        {/* The slip is one day's work, so the add starts from the day
+                            you are reading — not from a form you have to date yourself.
+                            It sits in the LEFT block, which is what is on screen at the
+                            table's default horizontal scroll position. */}
+                        <button
+                            type="button"
+                            onClick={() => onAddDraw(date)}
+                            title={`Add a partner draw to ${formatDayHeading(date)}`}
+                            className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                        >
+                            <Plus className="h-2.5 w-2.5" />
+                            Add
+                        </button>
+                    </span>
                 </td>
                 <td
                     colSpan={COLS.length - LABEL_SPAN}
@@ -1437,7 +1556,16 @@ function DayBlock({
                 const gridRow = rowOffset + rowIndex;
                 const flag = groupFlags.get(group.key);
                 return (
-                    <tr key={draw.id} className="h-8 transition-all duration-150 hover:bg-muted/40">
+                    <tr
+                        key={draw.id}
+                        data-draw-id={draw.id}
+                        className={cn(
+                            'h-8 transition-all duration-150 hover:bg-muted/40',
+                            // A static tint, never an entrance animation — these are
+                            // table rows (CLAUDE.md). It clears itself after 8s.
+                            markedDrawId === draw.id && 'bg-primary/10',
+                        )}
+                    >
                         <Cell>{formatShortDate(draw.recvDate)}</Cell>
                         <Cell muted>{draw.prodDate ? formatShortDate(draw.prodDate) : '—'}</Cell>
                         <Cell>{draw.shift ?? '—'}</Cell>

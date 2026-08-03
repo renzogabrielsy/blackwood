@@ -27,6 +27,15 @@ import {
     type AnalysisScope,
 } from '@/lib/cenapro/ccc-analysis';
 import {
+    CRUSHER_CODES,
+    FLEC_WAREHOUSES,
+    GRADE_CODES,
+    KILN_CODES,
+    SHIFT_CODES,
+    SOURCE_LOCATION_CODES,
+    WHSE_SIDES,
+} from '../types';
+import {
     EMPTY_AGGREGATE,
     adjustAggregate,
     aggregateFromView,
@@ -317,6 +326,124 @@ export async function loadQcLedgerData(
         previousWtd: previous ? aggregateFromView(previous).wtd : null,
         previousLabel: previousKey ? monthLabel(previousKey) : null,
         error: null,
+    };
+}
+
+// ─── Dimension options for the ADD form ──────────────────────────────────────────
+//
+// Every code the "Add draw" composer offers is checked against its dimension table by
+// `cenapro_add_partner_draw`, so an option this loader gets wrong can only ever produce
+// an `invalid_key` sentence — never a bad row. What it must not do is HIDE a machine
+// the partner's slip actually names, which is why the list is read from the database
+// rather than typed out here.
+//
+// WHERE IT READS FROM, AND WHY IT IS NOT THE DIMENSION TABLES. `cenapro.source_location`
+// / `partner_equipment` / `grade` / `shift` / `warehouse` are the real lists, but the
+// `cenapro` schema is NOT exposed to PostgREST (`Only the following schemas are exposed:
+// public, graphql_public`) and no `public` accessor for them exists yet — so the app,
+// server-side included, cannot reach them. The reachable evidence is the fact table:
+// `public.cenapro_production_events` carries the five code columns, FK-constrained, so
+// every distinct value in it is by definition a live dimension row.
+//
+// That read alone is INCOMPLETE — a seeded code no event has used yet is invisible to
+// it (today: C3, C4, 4X8, WHSE 2). So the observed values are merged over the module's
+// canonical code constants in `../types.ts`, which that file already documents as an
+// exact mirror of the seed. Canonical order first (TNK 1…4 · W6 · W7 · FLEC reads the
+// way the slip does), then anything the data knows that the constants do not — so a
+// code added to the seed later surfaces on its first row instead of silently missing.
+//
+// Replace the whole body with one read the day a `public.cenapro_dimensions` accessor
+// lands; the shape below is what the UI consumes and would not change.
+
+/** The picker lists the composer renders. Every list is already RPC-legal. */
+export interface QcDrawOptions {
+    /** Draw sources. DVO is never offered — the RPC answers `unsupported_source`. */
+    sources: string[];
+    /** Partner crushers — a draw into one is a `partner_crusher`. */
+    crushers: string[];
+    /** Partner rotary kilns — a draw into one is a `partner_kiln`. */
+    kilns: string[];
+    grades: string[];
+    shifts: string[];
+    /** FLEC-source draws only, and flec-count warehouses only (never WHSE 3 / DVO). */
+    warehouses: string[];
+    sides: string[];
+    /** Non-fatal: the form still renders on the canonical lists. */
+    error: string | null;
+}
+
+/** Canonical order first, then anything live data knows that the constants do not. */
+function mergeCodes(
+    canonical: readonly string[],
+    observed: Iterable<string>,
+    exclude: readonly string[] = [],
+): string[] {
+    const blocked = new Set(exclude);
+    const out = canonical.filter((code) => !blocked.has(code));
+    const known = new Set(out);
+    const extras: string[] = [];
+    for (const code of observed) {
+        const trimmed = code.trim();
+        if (!trimmed || blocked.has(trimmed) || known.has(trimmed)) continue;
+        known.add(trimmed);
+        extras.push(trimmed);
+    }
+    return [...out, ...extras.sort()];
+}
+
+const OPTION_COLUMNS =
+    'source_location_code, partner_equipment_code, grade_code, shift_code, warehouse_code';
+
+/**
+ * The dimension lists the "Add draw" composer renders. One read, five short columns —
+ * the whole event history, because a code used once in 2025 is still a code the partner
+ * can name today. Cheap next to the reads the page already makes, and the accessor
+ * above would replace it with a ~30-row lookup.
+ */
+export async function loadQcDrawOptions(): Promise<QcDrawOptions> {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .from('cenapro_production_events')
+        .select(OPTION_COLUMNS)
+        .limit(20000);
+
+    const sources = new Set<string>();
+    const machines = new Set<string>();
+    const grades = new Set<string>();
+    const shifts = new Set<string>();
+    const warehouses = new Set<string>();
+
+    for (const row of data ?? []) {
+        if (row.source_location_code) sources.add(row.source_location_code);
+        if (row.partner_equipment_code) machines.add(row.partner_equipment_code);
+        if (row.grade_code) grades.add(row.grade_code);
+        if (row.shift_code) shifts.add(row.shift_code);
+        if (row.warehouse_code) warehouses.add(row.warehouse_code);
+    }
+
+    // A machine the constants do not know cannot be sorted into crushers vs kilns by
+    // anything this layer can see (`partner_equipment.kind` is behind the same closed
+    // schema), so it is listed under the kind its code SHAPE matches and otherwise with
+    // the crushers — visible either way, and the RPC decides what it really is.
+    const kilnLike = [...machines].filter(
+        (code) => !CRUSHER_CODES.includes(code as (typeof CRUSHER_CODES)[number]) && /^RK/i.test(code),
+    );
+    const crusherLike = [...machines].filter(
+        (code) => !kilnLike.includes(code) && !KILN_CODES.includes(code as (typeof KILN_CODES)[number]),
+    );
+
+    return {
+        // DVO is a container van into WHSE 3 under its own batch code — a different
+        // document, deferred, and refused by name.
+        sources: mergeCodes(SOURCE_LOCATION_CODES, sources, ['DVO']),
+        crushers: mergeCodes(CRUSHER_CODES, crusherLike),
+        kilns: mergeCodes(KILN_CODES, kilnLike),
+        grades: mergeCodes(GRADE_CODES, grades),
+        shifts: mergeCodes(SHIFT_CODES, shifts),
+        // WHSE 3 is the kg/DVO warehouse; the RPC requires a flec-count one.
+        warehouses: mergeCodes(FLEC_WAREHOUSES, warehouses, ['WHSE 3']),
+        sides: [...WHSE_SIDES],
+        error: error ? describe('the draw entry options', error.message) : null,
     };
 }
 
