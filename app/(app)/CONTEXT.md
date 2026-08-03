@@ -130,6 +130,11 @@ values into views.
   `StateCard` instead — a state label + left severity rail + chip + ghosted
   projection and **NO sparkline** ("no active series"), so a planned rest, a
   late report, and a stale stream never all masquerade as a misleading `0`.
+  A **lag-by-design** card (production / power / rc_out) is `reported` against
+  its latest REPORTED day and carries an `AsOfChip` ("Aug 1") on the VALUE row
+  plus a qualifier line ("2 days ago" / amber "1 report due"); an overdue one
+  becomes a red `StateCard` that still shows the last real reading and
+  "N working days behind". See `components/digest/CONTEXT.md`.
   Uses `stagger-children` + `hover-lift`; empty state only when `kpis` is empty.
   **Sparkline zero-skip** still applies to `reported` cards: the four operational
   spark SERIES drop zero-value days so a 0 day doesn't plunge the area chart —
@@ -297,14 +302,22 @@ values into views.
   **Stream freshness** (Excel-standard dense table: label · through-date · status
   dot ok-green/warn-amber), **Month-to-date** card (rcInKg / rcOutKg /
   productionKg / netKg in kg format; net row muted).
-  - Stream freshness is fed by `view_digest_stream_freshness` (one row per stream).
-    Each stream's `through_date` = max transaction/reading date on its OWN table,
-    EXCEPT **production**: its `through_date` = max `production_shifts.transaction_date`
-    that has ≥1 `production_runs` row (actual OUTPUT). This is deliberate — a shift is
-    also created by the WASTE report (`production_waste` FKs `shift_id`), so keying on
-    the raw shift date would report Production as current whenever waste is fresh even
-    though output ingestion (MC's Daily Production Report) has stalled. See migration
-    `20260714000000_digest_stream_freshness_production_output.sql`.
+  - Stream freshness is fed by **`view_digest_stream_status`** (one row per
+    stream; `view_digest_stream_freshness` is now a 3-column projection of it and
+    is no longer what the adapter reads). Each stream's `through_date` = max
+    transaction/reading date on its OWN table, EXCEPT **production**: its
+    `through_date` = max `production_shifts.transaction_date` that has ≥1
+    `production_runs` row (actual OUTPUT). This is deliberate — a shift is also
+    created by the WASTE report (`production_waste` FKs `shift_id`), so keying on
+    the raw shift date would report Production as current whenever waste is fresh
+    even though output ingestion (MC's Daily Production Report) has stalled. That
+    rule now lives in **`view_digest_stream_reported_days`** (the ONE definition
+    of "a reported day"); migrations
+    `20260714000000_digest_stream_freshness_production_output.sql` →
+    `20260803070000_digest_stream_status_lag_aware.sql`. **Do not regress it.**
+    The status **dot is now plan-aware**: amber means 2+ planned WORKING days of
+    reports outstanding, so a stream that is merely one Sunday "behind" on the
+    calendar stays green.
 
 ## Data
 - **Source:** `getDigestData(): Promise<DigestData>` from `lib/digest/queries.ts`
@@ -315,7 +328,11 @@ values into views.
   structured as exactly two parallel waves, and new queries MUST land in one of
   them rather than adding an `await`:
   - **Wave 1** — one `Promise.all` of `canViewPrices()` + the 16 queries that
-    need no prior result.
+    need no prior result. `view_digest_stream_status` REPLACED
+    `view_digest_stream_freshness` in this wave (a swap, not an addition — the
+    lag-aware columns cost no extra round-trip), and `meta.streams` is now
+    assembled immediately after `operationalDate` resolves because the KPI cards
+    are ANCHORED to it.
   - **Wave 2** — one `Promise.all` of the 4 queries that need `operationalDate`
     (rc-in day stats, trucks, the `production_schedule` plan, actual tons).
     `operationalDate` comes from wave 1's `view_digest_operational_days`, so
@@ -333,7 +350,14 @@ values into views.
   openBlocks, fleconBags, plantStatus, dayStatus, weekPlan, schedulePreview,
   schedulePendingConflicts }`.
   - `meta` — `operationalDate`, `prevOperationalDate`, `lastSyncAt`, `freshness`,
-    `streams[]` (per-stream `throughDate` + `ok|warn`).
+    `streams[]` (per-stream `throughDate`, `prevReportedDate`, `reportsNextDay`,
+    `missedDays` + `ok|warn`). Sourced from **`view_digest_stream_status`**
+    (migration `20260803070000`), which supersedes `view_digest_stream_freshness`
+    in the adapter — same query count, no extra round-trip. `status = warn` now
+    means "2+ planned WORKING days of reports outstanding", not "N calendar days
+    behind": rest days (`production_schedule.shifts = 0`) and the operational
+    date itself are excluded in SQL, so a Sunday is never late and a next-day
+    stream's not-yet-due report for today is never late.
   - `kpis[]` — `{ key, label, value, unit, prevValue, deltaPct, spark[], sub? }`.
     The four operational `spark[]` series (rc_in/rc_out/production/power) are
     built with zero-value days FILTERED OUT (pre-`tail`) so a 0 day doesn't dip
@@ -386,10 +410,20 @@ values into views.
   - `dayStatus` — `Record<string, KpiDayStatus>` keyed by kpi key
     (`rc_in`/`rc_out`/`production`/`power`/`net_flow`). Each `KpiDayStatus` =
     `{ state: 'reported'|'awaiting'|'rest'|'stale'|'idle', projectedTons?,
-    staleDays? }`, resolved by `resolveKpiDayStatus` (`lib/digest/day-status.ts`)
-    against the op-date plan + stream freshness — the "misleading zero" fix.
+    staleDays?, lagByDesign?, asOf?, asOfAgeDays?, missedDays?, restToday? }`,
+    resolved by `resolveKpiDayStatus` (`lib/digest/day-status.ts`) against the
+    op-date plan + stream status — the "misleading zero" fix.
     `net_flow` stays neutral (`reported`); `rc_in` with no delivery → `idle`.
     Feeds the state-aware `KpiHero`.
+    **Lag-by-design anchoring (2026-08-03).** production / power / rc_out are
+    filed the morning AFTER, so their `kpi.value`, `prevValue` and `deltaPct` are
+    keyed to the stream's latest REPORTED day (`through_date`) and the one before
+    it (`prev_reported_date`) — NOT to `operationalDate` / `prevOperationalDate`.
+    `asOf` carries that day so the card can render "Aug 1" and the value can
+    never be read as today's; `missedDays` (planned WORKING days of outstanding
+    reports, from SQL) is the ONLY thing that turns a card amber (>= 1) or red
+    (>= 2). `awaiting` is deliberately not emitted for these streams — see
+    `components/digest/CONTEXT.md` → "Lag-by-design streams".
   - `weekPlan[]` — `{ date, dow, shifts, setup, projectedTons, actualTons,
     isToday, state }` for the 7 days of the operational date's week. Plan (from
     `production_schedule`) joined with ACTUAL tons (`view_digest_prod_actual_tons`

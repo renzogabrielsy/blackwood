@@ -2034,6 +2034,35 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_stream_registry: {
+        Row: {
+          label: string | null
+          reports_next_day: boolean | null
+          sort_order: number | null
+          stream: string | null
+        }
+        Relationships: []
+      }
+      view_digest_stream_reported_days: {
+        Row: {
+          reported_date: string | null
+          stream: string | null
+        }
+        Relationships: []
+      }
+      view_digest_stream_status: {
+        Row: {
+          label: string | null
+          missed_working_days: number | null
+          operational_date: string | null
+          prev_reported_date: string | null
+          reports_next_day: boolean | null
+          sort_order: number | null
+          stream: string | null
+          through_date: string | null
+        }
+        Relationships: []
+      }
       view_digest_unpriced_recent: {
         Row: {
           cnt: number | null
