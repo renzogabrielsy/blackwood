@@ -236,6 +236,7 @@ Additive Archetype C card views for the read surfaces — the dense desktop grid
 
 **Parent table (2026-05-28):**
 - `production_shifts` — `id`, `transaction_date`, `production_batch`, `shift` (M/E/N). Natural key: `(transaction_date, production_batch, shift)`. One row per unique shift. All 3 child tables FK to this via `shift_id`.
+  - **`production_batch` is NOT the calendar month** (canonicalized in the sync 2026-08-03). A batch runs from its first shift to its last and routinely spans a month boundary in both directions (e.g. JULY ran 2026-06-30 → 2026-07-31), and it can end early inside its own month. On a **changeover day** the plant empties and a new batch opens, so ONE date legitimately carries TWO shifts — e.g. `(2026-08-01, JULY, M)` closing out and `(2026-08-01, AUGUST, M)` opening — and the batch picker will show both. The sync derives this from MC's `ENDING`/`STARTING` markers plus the running batch; see `workers/sync/specs/production.md` → "`production_batch` — derived from the plant's RUNNING STATE".
 
 **Child tables (restructured 2026-05-28 — `transaction_date`, `production_batch`, `shift` columns dropped; now live in parent):**
 - `production_runs` — `shift_id` (FK), `customer` (CEBU/KURARAY/..., default 'CEBU'), `grade` (3X50/6X50/8X50/2X6), `ttl_kg`, `sacks_bags`. Natural key: `(shift_id, customer, grade)`. N:1 with production_shifts.

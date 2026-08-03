@@ -94,7 +94,31 @@ return DEFAULT_RUN_SHIFT, True, reason   # DEFAULT_RUN_SHIFT = "M"
 ```
 `SHIFT_LABEL_TO_CODE` (lines 83-91): `"MORNING SHIFT"`→M, `"MORNING"`→M, `"NIGHT SHIFT"`→E, `"NIGHT"`→E, `"EVENING SHIFT"`→E, `"EVENING"`→E, `"AFTERNOON SHIFT"`→E. **Exact-string-match against the whole cell value uppercased** — NOT a substring/contains check (unlike waste's shift normalizer, which DOES use substring matching — see §waste below, a genuine cross-file inconsistency).
 
-A defaulted shift (blank/absent/unrecognized, INCLUDING the literal strings `"STARTING"`/`"ENDING"` per L-007) appends the constant note `SHIFT_DEFAULT_NOTE = "shift defaulted to Morning (operator left blank)"` (line 112) into the run's `remarks` via `append_note(None, SHIFT_DEFAULT_NOTE)` — since a run's `remarks` has no other source, this is effectively always either exactly the note string or `None`. **This constant MUST stay byte-identical to the same-named constant in `classify_production_runs.py`** (both files' module comments say so explicitly) — the classifier strips this exact substring before diffing remarks so an already-written Morning row (from before this feature existed) doesn't perpetually re-diff as VALUE_CHANGED.
+> **TS PORT DEVIATION (2026-08-03, Renzo-approved) — column H is DUAL-PURPOSE.**
+> The Python treats column H as "the shift cell" and nothing else, so the L-007 batch
+> markers fell into the unrecognized branch. The TS port (`extractMc.ts::resolveRunShift`
+> + `productionBatch.ts`) now DISCRIMINATES BY VALUE — never repurposing the column,
+> which would break every overtime day. Verified against real sheets:
+>
+> | Sheet | Column H | Meaning |
+> |---|---|---|
+> | `07-23-26` | `DAY SHIFT`, `DAY SHIFT`, `OVERTIME`, `OVERTIME` | real shift labels |
+> | `07-27-26` | *(blank)* | no label |
+> | `08-01-26` | `ENDING`, `ENDING`, `STARTING` | batch-transition markers |
+>
+> Rules, in order:
+> 1. a value in `SHIFT_LABEL_TO_CODE` → that shift, `_shift_defaulted=false`, no warning (unchanged);
+> 2. `ENDING` / `STARTING` (trim + case tolerant) → **shift `M` by EXPLICIT DOMAIN RULE**
+>    (markers only ever occur on the Morning shift — Renzo, 2026-08-03), `_shift_defaulted=false`,
+>    **no warning, no default-note**, and the row carries a batch marker;
+> 3. blank → Morning, defaulted, blank-cell warning (unchanged);
+> 4. anything else → Morning, defaulted, unrecognized warning (unchanged — this is the
+>    branch `DAY SHIFT`/`OVERTIME` take, and it is parity-frozen).
+>
+> Rule 2 is the ONLY behavioral change. No parity fixture workbook carries a marker, so
+> `npm run parity` is unaffected.
+
+A defaulted shift (blank/absent/unrecognized — **no longer including** `"STARTING"`/`"ENDING"`, see the deviation box above) appends the constant note `SHIFT_DEFAULT_NOTE = "shift defaulted to Morning (operator left blank)"` (line 112) into the run's `remarks` via `append_note(None, SHIFT_DEFAULT_NOTE)` — since a run's `remarks` has no other source, this is effectively always either exactly the note string or `None`. **This constant MUST stay byte-identical to the same-named constant in `classify_production_runs.py`** (both files' module comments say so explicitly) — the classifier strips this exact substring before diffing remarks so an already-written Morning row (from before this feature existed) doesn't perpetually re-diff as VALUE_CHANGED.
 
 **MALFORMED-equivalent guards** (row-level warnings, NOT dropped by the extractor — deferred to classify_production_runs.py):
 - `ttl_kg is None` → warning, row still emitted.
@@ -133,9 +157,83 @@ Columns: plate=`C`, start_km=`D`, end_km=`E`, total_km=`F` (informational, not s
 
 `remarks` folds BOTH gauge readings if present: `"start fuel: {gauge_start}; arriving fuel: {gauge_end}"` (only the non-null half included if one is missing).
 
-### `production_batch` convention (production pipeline's OWN convention — differs from rc_out's)
+### `production_batch` — derived from the plant's RUNNING STATE, not the calendar
 
-`MONTH_NAME_UPPER` (extract_daily_production.py:115-118): FULL uppercase English month name for ALL 12 months (`JANUARY`...`DECEMBER`), no abbreviation exceptions. **This is the pipeline-specific convention; do not confuse with rc_out's mostly-3-letter convention (rc_out.md §2).**
+**Naming convention** (unchanged): FULL uppercase English month name for all 12 months
+(`JANUARY`…`DECEMBER`), no abbreviation exceptions — canonical source is
+`workers/sync/src/lib/months.ts`. **Do not confuse with rc_out's mostly-3-letter
+convention (rc_out.md §2).**
+
+> **TS PORT DEVIATION (2026-08-03, Renzo-approved) — the VALUE, not the naming.**
+> The Python derived `production_batch = MONTH_NAME_UPPER[sheet_month]`. That is wrong
+> twice over:
+>
+> 1. **Batches are not calendar months.** Verified from `production_shifts`, the sequence
+>    is strict and unbroken but every batch starts in the PRIOR month and ends in the NEXT:
+>
+>    | Batch | First shift | Last shift |
+>    |---|---|---|
+>    | DECEMBER | 2025-11-27 | 2025-12-28 |
+>    | JANUARY | 2026-01-02 | 2026-02-02 |
+>    | FEBRUARY | 2026-02-02 | 2026-02-27 |
+>    | MARCH | 2026-02-28 | 2026-03-30 |
+>    | APRIL | 2026-03-30 | 2026-04-30 |
+>    | MAY | 2026-04-30 | 2026-05-29 |
+>    | JUNE | 2026-05-29 | 2026-06-30 |
+>    | JULY | 2026-06-30 | 2026-07-31 |
+>
+>    A batch can also end EARLY inside its own month (Renzo, 2026-08-03), so "the previous
+>    calendar month" is not a safe substitute either.
+> 2. **On a changeover day two batches produce on the SAME date.** With one name for both,
+>    the two same-grade rows collapse to ONE `(shift_id, customer, grade)` key and apply's
+>    L-026 combine SUMS them into a single wrong row. (2026-08-01: `CEBU 3X50` 1,326 kg
+>    ending JULY + `CEBU 3X50` 11,830 kg starting AUGUST would have become one 13,156 kg row.)
+>
+> **The rule** (`src/reports/production/productionBatch.ts`):
+>
+> | Row | `production_batch` |
+> |---|---|
+> | marked `ENDING` | the batch that was already running |
+> | marked `STARTING` | the **next name in the month sequence** after the running batch (NOT the sheet's calendar month) |
+> | unmarked | the batch that was already running |
+> | downtime (whole-day, carries no marker) | the batch that was already running |
+>
+> The running batch is SEEDED from the DB — `resolveRunningBatch()` over
+> `production_shifts` at or below the `since` floor (which, since `since` is sheet-level
+> EXCLUSIVE, is strictly before every sheet the run reads) — and then FOLDED FORWARD
+> across the run's sheets **in date order**, so a changeover mid-run carries into the
+> following days. The emission order stays the WORKBOOK's own order (the sort is on a copy),
+> so the parity-critical row order never moves. A changeover day that carries two batches
+> (e.g. 2026-06-30 = JUNE + JULY) is disambiguated by first-seen date: the RUNNING batch is
+> the one that STARTED most recently.
+>
+> **A `STARTING` on a dropped grade never advances the batch** — the marker scan applies the
+> same `route_grade` allowlist gate as the emitter (L-027).
+>
+> **COLD START (no prior batch on record).** The running batch falls back to the sheet's own
+> CALENDAR MONTH — exactly the pre-fix derivation — and the date is reported in
+> `McExtract.batch.coldStartDates` (a `warn` progress line on a live run). On a cold-start
+> sheet that ALSO carries a `STARTING`, the fallback names the NEW batch and the closing
+> batch becomes the PRECEDING month, so the two still resolve to different batches and the
+> changeover collision cannot reappear. Both are explicit, reported guesses — **nothing is
+> guessed silently**. The frozen parity entrypoint `classifyCase` runs this path (it does not
+> read a seed unless a caller passes `opts.runningBatch`), which is why every fixture keeps
+> reproducing the Python byte-for-byte.
+>
+> **KNOWN RISK (accepted, not mitigated here).** Only a `STARTING` marker advances the batch.
+> If MC ever changes over WITHOUT marking it — as happened on 2026-06-30, before the marker
+> convention — the sync keeps filing under the old batch instead of silently guessing a new
+> one. That is the intended trade-off (no silent auto-resolution, per CLAUDE.md → Sync
+> Integrity), and it surfaces as production piling into a stale batch rather than as an error.
+>
+> **A new batch is ANNOUNCED, never assumed.** The batch NAME appears NOWHERE in the workbook
+> (every cell searched). Each changeover therefore emits a `production_batch_started` run
+> finding — new batch, date, batch it follows, and how the name was derived — carried on
+> `apply.production_batch_starts` and surfaced by `lib/sync/findings.ts` at severity
+> `attention`. It is NOT a held row (the rows DID write) and NOT a `HeldKind` (that enum is
+> frontend-locked). It is suppressed once the (date, new batch) shift already carries
+> production RUNS — a shift that exists with only WASTE does not suppress it, because Ivy's
+> cumulative workbook opens such a parent on its own.
 
 ### Overall confidence
 
@@ -334,9 +432,10 @@ Only if `not errors`. Labels BOTH `mc_uid` and `ivy_uid` together (falsy-filtere
 
 | Rule | Where | Parity test must assert |
 |---|---|---|
-| L-007 (STARTING/ENDING batch boundary) | extract_daily_production.py resolve_run_shift treats these as "unrecognized" → defaults to Morning via L-025's mechanism; the BATCH inference (ENDING=old batch, STARTING=new batch) described in the ledger is NOT separately codified in the extractor's grade/batch column reading — verify current code only handles the SHIFT default, not batch-boundary detection | A run row with column H = "STARTING" or "ENDING" resolves to shift M with `_shift_defaulted=true` and the standard note; batch-boundary customer/grade logic is untouched (whatever the grade column literally says). |
+| L-007 (STARTING/ENDING batch boundary) | **PORTED 2026-08-03** — `extractMc.ts::resolveRunShift` discriminates column H by value; `productionBatch.ts` folds the running batch. (Python only ever defaulted the SHIFT and never inferred the batch.) | A run row with column H = `STARTING`/`ENDING` resolves to shift `M` with `_shift_defaulted=false`, **no note and no warning**; `ENDING` files under the running batch and `STARTING` under the next name in the sequence, so a changeover day yields TWO distinct `production_shifts` parents and the L-026 combine cannot merge the two same-grade rows. Covered by `test/reports/production-batch-markers.test.ts`. |
+| batch-from-running-state (2026-08-03) | `productionBatch.ts::resolveRunningBatch` + `buildBatchPlans`; seeded in `index.ts::runReport` | An ordinary day past a month boundary keeps the RUNNING batch (not the calendar month); a changeover on the 30th of the prior month still opens the NEXT name; cold start falls back to the calendar and reports the dates; a changeover emits one `production_batch_started` finding naming the new batch, the date, and the batch it follows. |
 | L-014 (dt_mins>=60 split) | **NOT implemented in code** — ledger-documented manual step only | Flag: a downtime day totaling ≥60 minutes will fail the DB CHECK constraint unless the TS port implements the split explicitly during apply. |
-| L-025 (blank shift → Morning default) | extract_daily_production.py:275-297, `SHIFT_DEFAULT_NOTE` constant duplicated in classify_production_runs.py:84 | A blank/absent/STARTING/ENDING shift cell → `shift="M"`, `_shift_defaulted=true`, note appended; an EXPLICIT "MORNING SHIFT" cell → same `shift="M"` but `_shift_defaulted=false`, no note. |
+| L-025 (blank shift → Morning default) | extract_daily_production.py:275-297, `SHIFT_DEFAULT_NOTE` constant duplicated in classify_production_runs.py:84 | A blank/absent/unrecognized shift cell (e.g. `DAY SHIFT`, `OVERTIME`) → `shift="M"`, `_shift_defaulted=true`, note appended; an EXPLICIT "MORNING SHIFT" cell → same `shift="M"` but `_shift_defaulted=false`, no note. **`STARTING`/`ENDING` are NO LONGER on this path** — see the L-007 row above. |
 | L-026 (combine duplicate shift+customer+grade rows) | sync_production.py:320-338 | Two NEW run rows resolving to the same `(shift_id,customer,grade)` combine into ONE inserted row with summed `ttl_kg`/`sacks_bags`. |
 | L-027 (4X8 / 3-gate grade allowlist) | extract_daily_production.py:79, classify_production_runs.py:71 | `VALID_GRADES` sets in BOTH files contain exactly `{3X50,6X50,8X50,2X6,4X8}`; a grade outside this set is dropped at extract (silent) and/or MALFORMED at classify. |
 | L-028 (month-transition 2nd waste row = new shift) | extract_waste_production.py carryover detection (warning only) + the NATURAL KEY `(shift_id,)` on production_waste naturally prevents collision IF the two rows resolve to genuinely different shifts (different production_batch) | A carryover waste row dated on the outgoing month's last day, appearing on the NEW month's sheet, must resolve to a DISTINCT shift (different production_batch) rather than colliding with the outgoing shift's existing waste row. |

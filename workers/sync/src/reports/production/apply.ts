@@ -19,6 +19,12 @@
  * (extractMc.ts), so the downtime record reaching apply already carries a
  * constraint-valid dt_hrs/dt_mins — apply writes it verbatim.
  *
+ * Batch-changeover note (2026-08-03): a `STARTING` marker gives the day's rows a
+ * DIFFERENT `production_batch` from the `ENDING` rows, so the two shift triplets
+ * upserted in step 1 are distinct, the two shift_ids differ, and the L-026 combine
+ * in step 2 CANNOT merge the two same-grade rows. No special case is needed here —
+ * the fix lands entirely upstream in extractMc/productionBatch.
+ *
  * Ground truth: .claude/skills/sync-ictc/scripts/sync_production.py.
  */
 import type { DbClient, Row } from "../../lib/db.js";
@@ -36,6 +42,29 @@ export interface ProductionSections {
   trucks: Record<string, unknown>[];
 }
 
+/**
+ * One production-batch CHANGEOVER this run detected — MC marked `STARTING` in the
+ * runs block, so a brand-new `production_batch` name came into being. The batch
+ * name appears NOWHERE in the workbook (searched every cell): the sync DERIVES it
+ * as the next name in the monthly sequence, with no source to verify against.
+ * That is why it is announced for human confirmation rather than assumed silently.
+ *
+ * Run-visibility only — it is NOT a held row (the rows DID write) and NEVER a
+ * `HeldKind` (that enum is frontend-locked). Mirror of the frontend
+ * `ProductionBatchStart` (app/(app)/sync/types.ts). NEVER a ₱/cost field.
+ */
+export interface ProductionBatchStart {
+  transaction_date: string;
+  /** The new batch the `STARTING` row opened. */
+  new_batch: string;
+  /** The batch it follows (the one that was running). */
+  previous_batch: string;
+  /** How the new name was derived: next-in-sequence, or a calendar fallback. */
+  derivation: string;
+  /** Sheet title the marker was read from. */
+  source_sheet: string;
+}
+
 export interface ProductionCompact {
   report_type: string;
   since: string;
@@ -49,6 +78,8 @@ export interface ProductionCompact {
     ivy_thread_id?: string | null;
   };
   sections: ProductionSections;
+  /** Changeovers detected this run (usually empty — once a month at most). */
+  batch_starts?: ProductionBatchStart[];
 }
 
 export interface ApplyResult {
@@ -60,6 +91,8 @@ export interface ApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
+  /** Echoed from the compact so the run result carries it to the panel's findings. */
+  production_batch_starts: ProductionBatchStart[];
 }
 
 /** Human label for a production child record: "2026-06-30 · JUNE-26 · Morning · runs". */
@@ -402,5 +435,6 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
     labeled,
     watermark_updated: watermarkUpdated,
     errors,
+    production_batch_starts: compact.batch_starts ?? [],
   };
 }

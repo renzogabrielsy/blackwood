@@ -118,6 +118,19 @@ export interface AutoCreatedBatchNote {
 }
 
 /**
+ * One production-batch CHANGEOVER a run announced (2026-08-03 — see
+ * reports/production/productionBatch.ts). Mirror of the frontend
+ * `ProductionBatchStart`. NEVER a ₱/cost field.
+ */
+export interface ProductionBatchStartNote {
+  transaction_date: string;
+  new_batch: string;
+  previous_batch: string;
+  derivation: string;
+  source_sheet: string;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
@@ -133,6 +146,8 @@ export interface ApplyResult {
   watermark_updated: boolean;
   errors: string[];
   auto_created_batches: AutoCreatedBatchNote[];
+  /** Production-batch changeovers this apply announced. ALWAYS present (default []). */
+  production_batch_starts: ProductionBatchStartNote[];
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -196,6 +211,8 @@ interface RawApply {
   errors?: unknown;
   /** gsheet (top-level) / rc_out — batches auto-created this apply. */
   auto_created_batches?: unknown;
+  /** production only — batch changeovers announced this apply. */
+  production_batch_starts?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -259,6 +276,24 @@ function toAutoCreatedBatch(v: unknown): AutoCreatedBatchNote {
 /** Coerce a raw auto-created-batches array → AutoCreatedBatchNote[]. */
 function toAutoCreatedBatches(v: unknown): AutoCreatedBatchNote[] {
   return Array.isArray(v) ? v.map(toAutoCreatedBatch) : [];
+}
+
+/** Coerce a raw batch-changeover entry → contract ProductionBatchStartNote. Every
+ *  field guarded — a bad/missing entry degrades to safe defaults, never a crash. */
+function toProductionBatchStart(v: unknown): ProductionBatchStartNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  return {
+    transaction_date: str(o.transaction_date),
+    new_batch: str(o.new_batch),
+    previous_batch: str(o.previous_batch),
+    derivation: str(o.derivation),
+    source_sheet: str(o.source_sheet),
+  };
+}
+
+/** Coerce a raw batch-changeover array → ProductionBatchStartNote[]. */
+function toProductionBatchStarts(v: unknown): ProductionBatchStartNote[] {
+  return Array.isArray(v) ? v.map(toProductionBatchStart) : [];
 }
 
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
@@ -328,6 +363,7 @@ export function normalizeApply(
     watermark_updated: Boolean(raw.watermark_updated),
     errors: strArray(raw.errors),
     auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
+    production_batch_starts: toProductionBatchStarts(raw.production_batch_starts),
   };
 }
 
@@ -390,6 +426,7 @@ export function failedReportResult(
       watermark_updated: false,
       errors: [message],
       auto_created_batches: [],
+      production_batch_starts: [],
     },
     status: "error",
     error: message,

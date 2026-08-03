@@ -639,12 +639,16 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `result.reconciliation.rc_out.unresolvedBatches ?? []` / `.heldOverdue ?? []` (optional additive
   fields — absent on pre-R4a runs). **RB:** **`collectBlockDiffs(result)`** →
   `result.reconciliation.blocking.blockDiffs ?? []` (optional channel — absent on pre-RB runs / no
-  Blocking tab). Pure, no supabase import.
+  Blocking tab). **2026-08-03:** **`collectProductionBatchStarts(result)`** →
+  `result.reports[type].apply.production_batch_starts ?? []` (only `production` ever fills it —
+  optional additive field, absent on pre-feature runs). Pure, no supabase import.
 - `lib/sync/findings.ts` (**PURE, CLIENT-SAFE — imports ONLY `types` + `cases-fold`; NO server
   imports, NO `node:crypto`**) — the honest READ model for the panel. **`flattenRunFindings(result)`**
   → `RunFinding[]`: merges INTO ONE array every `reports[*].apply.held[]` PLUS the whole
   `reconciliation` channel (`rc_out.diffs` → source_diff, `.heldOverdue` → single_source_overdue,
-  `.unresolvedBatches` → unresolved_batch, `blocking.blockDiffs` → block_diff incl. the grand_total).
+  `.unresolvedBatches` → unresolved_batch, `blocking.blockDiffs` → block_diff incl. the grand_total)
+  PLUS the per-report announcement channels (`apply.auto_created_batches` → `batch_auto_created`,
+  `apply.production_batch_starts` → **`production_batch_started`**, 2026-08-03).
   Each `RunFinding = {key, kind, kindLabel (plain phrase), source (plain "Google Sheet — RC IN" /
   "Blocking cross-check" / …), title, location, data (the ACTUAL values — weights/batch/date, NO ₱),
   reason, severity: 'info'|'attention'|'high'}`. **`summarizeFindings(findings)`** → `{total, byKind}`.

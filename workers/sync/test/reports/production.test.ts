@@ -5,7 +5,11 @@
  * (2/2, production_downtime_ge60 PASS-with-note via PD-5). These tests lock the
  * behaviors that define this port:
  *   - PD-5 / L-014 dt_mins>=60 split at 59 / 60 / 125 minutes.
- *   - L-007 STARTING/ENDING batch-boundary → shift defaults to Morning + note.
+ *   - L-025 blank / unrecognized column-H shift → Morning + strippable note.
+ *     (The L-007 `STARTING`/`ENDING` markers are NO LONGER on that path — they are
+ *     Morning by explicit rule, with no note and no warning. Their behavior, and the
+ *     running-state `production_batch` derivation, live in
+ *     test/reports/production-batch-markers.test.ts.)
  *   - L-026 combine of duplicate (shift_id, customer, grade) NEW run rows on apply.
  *   - L-028 second same-date waste row (carryover) resolves to a DISTINCT shift.
  *   - L-027 grade allowlist drop (KOREA POWDER) + generated-col exclusion on write.
@@ -76,9 +80,11 @@ describe("PD-5 / L-014 — dt_mins>=60 split", () => {
 });
 
 // ---------------------------------------------------------------------------
-// L-025 / L-007 — blank / STARTING / ENDING shift defaults to Morning + note.
+// L-025 — a BLANK or UNRECOGNIZED column-H shift defaults to Morning + note.
+// (`STARTING`/`ENDING` used to land here too; since 2026-08-03 they are Morning by
+// explicit rule with NO note and NO warning — see production-batch-markers.test.ts.)
 // ---------------------------------------------------------------------------
-describe("L-025 / L-007 — shift default to Morning", () => {
+describe("L-025 — shift default to Morning", () => {
   it("edge workbook: every run defaults to M with the strippable note", async () => {
     const mc = extractMc(await loadMc("production_mc_edge.xlsx"), 2026, "2026-01-01");
     expect(mc.runs.length).toBeGreaterThan(0);
@@ -89,7 +95,7 @@ describe("L-025 / L-007 — shift default to Morning", () => {
     }
   });
 
-  it("KURARAY 6X50 blank-shift run carries the 'blank/absent' warning (L-007 path)", async () => {
+  it("KURARAY 6X50 blank-shift run carries the 'blank/absent' warning (blank-cell path)", async () => {
     const mc = extractMc(await loadMc("production_mc_edge.xlsx"), 2026, "2026-01-01");
     const kuraray = mc.runs.find((r) => r.customer === "KURARAY" && r.grade === "6X50");
     expect(kuraray).toBeDefined();

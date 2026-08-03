@@ -203,6 +203,35 @@ export interface AutoCreatedBatch {
   source_row: string | number | null
 }
 
+/**
+ * One production-batch CHANGEOVER a run detected (2026-08-03). MC's Daily Production
+ * Report marks a batch handover in the runs block's column H — `ENDING` on the last
+ * runs of the batch that was running, `STARTING` on the first runs of the new one —
+ * and the sync files those rows under two DIFFERENT `production_batch` values.
+ *
+ * The new batch's NAME appears nowhere in the workbook, so the sync DERIVES it (the
+ * next name in the strict monthly sequence after the running batch) with nothing to
+ * verify it against. This note exists so the operator confirms the name. It is NOT a
+ * held row — the rows DID write — and never a `HeldKind` (that enum is frontend-locked).
+ * Worker mirror: normalizeReport.ts::ProductionBatchStartNote. NEVER a ₱/cost field.
+ */
+export interface ProductionBatchStart {
+  transaction_date: string
+  /** The new batch the `STARTING` rows opened. */
+  new_batch: string
+  /** The batch it follows (the one that was already running). */
+  previous_batch: string
+  /**
+   * How the new name was derived:
+   *   `sequence`                   — the next name after a KNOWN running batch (normal),
+   *   `calendar_cold_start`        — no prior batch on record; the sheet's month was used,
+   *   `calendar_unknown_running`   — the running batch isn't a month name; ditto.
+   */
+  derivation: string
+  /** The workbook tab the marker was read from. */
+  source_sheet: string
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -218,6 +247,10 @@ export interface ApplyResult {
    *  field still type-check. Consumers should read it as `apply?.auto_created_batches
    *  ?? []` (see `collectAutoCreatedBatches`). */
   auto_created_batches?: AutoCreatedBatch[]
+  /** Production-batch changeovers this apply announced. Same optionality contract as
+   *  `auto_created_batches` — read it as `apply?.production_batch_starts ?? []`
+   *  (see `collectProductionBatchStarts`). Only the `production` report ever fills it. */
+  production_batch_starts?: ProductionBatchStart[]
 }
 
 // ============================================================
