@@ -276,6 +276,8 @@ export type Database = {
           created_at: string
           diff_kwh: number | null
           end_kwh: number
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           meter: string
           meter_multiplier: number
@@ -288,6 +290,8 @@ export type Database = {
           created_at?: string
           diff_kwh?: number | null
           end_kwh: number
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           meter: string
           meter_multiplier?: number
@@ -300,6 +304,8 @@ export type Database = {
           created_at?: string
           diff_kwh?: number | null
           end_kwh?: number
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           meter?: string
           meter_multiplier?: number
@@ -307,7 +313,15 @@ export type Database = {
           remarks?: string | null
           start_kwh?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "electricity_readings_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       flecon_bag_date_settlements: {
         Row: {
@@ -780,6 +794,8 @@ export type Database = {
           dt_hrs: number
           dt_mins: number
           dt_reason: string | null
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           shift_hrs: number
           shift_id: string
@@ -789,6 +805,8 @@ export type Database = {
           dt_hrs?: number
           dt_mins?: number
           dt_reason?: string | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           shift_hrs: number
           shift_id: string
@@ -798,11 +816,20 @@ export type Database = {
           dt_hrs?: number
           dt_mins?: number
           dt_reason?: string | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           shift_hrs?: number
           shift_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "production_downtime_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "production_downtime_shift_id_fkey"
             columns: ["shift_id"]
@@ -824,6 +851,8 @@ export type Database = {
           created_at: string
           customer: string
           grade: string
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           remarks: string | null
           sacks_bags: number | null
@@ -834,6 +863,8 @@ export type Database = {
           created_at?: string
           customer?: string
           grade: string
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           remarks?: string | null
           sacks_bags?: number | null
@@ -844,6 +875,8 @@ export type Database = {
           created_at?: string
           customer?: string
           grade?: string
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           remarks?: string | null
           sacks_bags?: number | null
@@ -851,6 +884,13 @@ export type Database = {
           ttl_kg?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "production_runs_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "production_runs_shift_id_fkey"
             columns: ["shift_id"]
@@ -985,6 +1025,8 @@ export type Database = {
       production_shifts: {
         Row: {
           created_at: string
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           production_batch: string
           shift: string
@@ -992,6 +1034,8 @@ export type Database = {
         }
         Insert: {
           created_at?: string
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           production_batch: string
           shift: string
@@ -999,18 +1043,30 @@ export type Database = {
         }
         Update: {
           created_at?: string
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           production_batch?: string
           shift?: string
           transaction_date?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "production_shifts_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       production_waste: {
         Row: {
           bf_kg: number
           created_at: string
           grit_kg: number
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           remarks: string | null
           rs1a_kg: number
@@ -1025,6 +1081,8 @@ export type Database = {
           bf_kg?: number
           created_at?: string
           grit_kg?: number
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           remarks?: string | null
           rs1a_kg?: number
@@ -1039,6 +1097,8 @@ export type Database = {
           bf_kg?: number
           created_at?: string
           grit_kg?: number
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           remarks?: string | null
           rs1a_kg?: number
@@ -1050,6 +1110,13 @@ export type Database = {
           trml2_kg?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "production_waste_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "production_waste_shift_id_fkey"
             columns: ["shift_id"]
@@ -1452,6 +1519,8 @@ export type Database = {
           created_at: string
           end_km: number
           fuel_liters: number | null
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           plate_no: string
           reading_date: string
@@ -1463,6 +1532,8 @@ export type Database = {
           created_at?: string
           end_km: number
           fuel_liters?: number | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           plate_no: string
           reading_date: string
@@ -1474,6 +1545,8 @@ export type Database = {
           created_at?: string
           end_km?: number
           fuel_liters?: number | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           plate_no?: string
           reading_date?: string
@@ -1481,7 +1554,15 @@ export type Database = {
           start_km?: number
           ttl_km?: number | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "truck_readings_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       user_dashboard_prefs: {
         Row: {
@@ -2115,6 +2196,22 @@ export type Database = {
         }
         Relationships: []
       }
+      view_production_human_edited: {
+        Row: {
+          human_edited_at: string | null
+          human_edited_by: string | null
+          human_edited_by_name: string | null
+          meter: string | null
+          plate_no: string | null
+          production_batch: string | null
+          record_id: string | null
+          section: string | null
+          shift: string | null
+          table_name: string | null
+          transaction_date: string | null
+        }
+        Relationships: []
+      }
       view_production_schedule_conflicts: {
         Row: {
           changed_fields: Json | null
@@ -2736,6 +2833,7 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_apply_production_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_apply_schedule_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_blend_proposal: {
         Args: { p_block_locs: string[] }
@@ -2760,6 +2858,10 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_release_production_rows: {
+        Args: { p_ids: string[]; p_table: string }
+        Returns: Json
+      }
       fn_release_schedule_day: {
         Args: { p_expected_row_version: number; p_plan_date: string }
         Returns: Json

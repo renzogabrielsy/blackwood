@@ -9,6 +9,7 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | File | Role |
 |------|------|
 | `page.tsx` | Server entry point — renders `<ProductionView />` |
+| `actions.ts` | **The human-edit latch, app side** (2026-08-03). `fetchHumanEditedProductionRows()` reads `view_production_human_edited` (every production fact a human currently owns, across all six tables). `releaseProductionRows({table, ids})` calls `fn_release_production_rows` — the ONLY sanctioned way to hand a row back to the sync, since the DB trigger re-stamps any ordinary write that tries to clear the stamp. Exports `ProductionFactTable`, `ReleaseResult`, `HumanEditedProductionRow`. No ₱ data anywhere in production, so no `canViewPrices()`. See "Human-edit latch" below. |
 | `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
 | `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
 | `electricity/electricity-cards-mobile.tsx` | **Phone read layer** for Electricity (`sm:hidden`). Simplest `MobileCardList` — card headline `date · meter · TTL KWH · [start→end]`, detail = start/end/diff/mult/consumption/remarks. DIFF + TTL KWH read off the DB generated columns (`diff_kwh`, `consumption_kwh`). |
@@ -51,6 +52,36 @@ All 5 grids share the same pattern (modelled after `bulk-delivery-input.tsx`):
 
 ## Daily Tab Layout (as of 2026-05-28)
 ONE unified ledger inside `overflow-x-auto`. `table minWidth: 1800px`. Columns grouped into sections: Identity (blue) · Production (green) · Downtime (amber) · Waste (red). Each ledger row = one `production_runs` entry. Downtime/Waste columns appear only on the primary grade row per shift; secondary rows have muted gray cells. See `daily/CONTEXT.md` for full column order and multi-grade rendering rules.
+
+## Human-edit latch — the sync cannot revert your edits (2026-08-03)
+
+Every one of the six tables this module writes (`production_shifts`, `production_runs`,
+`production_downtime`, `production_waste`, `electricity_readings`, `truck_readings`)
+carries `human_edited_at` + `human_edited_by`. Migration
+`supabase/migrations/20260803080000_production_human_edit_guard.sql`.
+
+**The bug it fixes:** the sync's apply turned every classify difference into a plain
+`UPDATE … WHERE id = …`. Correct a number in a grid here, and the next sync run put MC's
+old value back — silently, because the workbook still said the old value.
+
+**What changed for this module:**
+
+- **Saving CLAIMS the row.** The DB trigger `fn_stamp_human_edit` stamps
+  `human_edited_at` (+ `human_edited_by` from `auth.uid()`) on **any** insert or update
+  made through an authenticated session — the three `saveBulk*` actions also pass
+  `human_edited_at` explicitly via their local `claim()` helper, so the intent is visible
+  at the call site, but the trigger is what guarantees it. Nothing here can forget.
+- **From then on the sync will not touch that row.** It surfaces the report's differing
+  value as a `production_human_edited` finding in the Daily Sync panel ("Row you edited —
+  the report disagrees") naming the row and both values. Nothing is overwritten and
+  nothing is auto-resolved.
+- **Handing a row back** is `releaseProductionRows` in `actions.ts`. There is no way to
+  clear the stamp with an ordinary write: sending `human_edited_at: null` in a normal
+  update just gets re-stamped by the trigger.
+- **New rows are unaffected** — the latch governs updates only, so the sync keeps filing
+  days nobody has touched.
+
+Worker side: `workers/sync/specs/production.md` §6a.
 
 ## Production Schedule (Phase B — in-app editing, 2026-07-30)
 

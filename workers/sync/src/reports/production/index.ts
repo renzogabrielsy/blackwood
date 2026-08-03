@@ -53,6 +53,8 @@ import {
   type ProductionBatchStart,
 } from "./apply.js";
 
+export type { ProductionHumanEdit } from "./apply.js";
+
 export const REPORT_TYPE = "production";
 
 const CODIFIED_RULES = [
@@ -239,6 +241,7 @@ export async function runReport(
     const emptyApply: ApplyResult = {
       report_type: REPORT_TYPE, ok: true, inserts: 0, updates: 0, held: [],
       labeled: false, watermark_updated: false, errors: [], production_batch_starts: [],
+      production_human_edits: [],
     };
     return {
       classify: {
@@ -300,8 +303,15 @@ export async function runReport(
 
   // Child DB rows: fetch ALL (no date filter), then keep only those whose shift_id
   // resolves to an in-window shift (sync_production.py::_child_db).
+  // `human_edited_at` rides along on every one of these reads (the human-edit latch,
+  // migration 20260803080000) so the apply can name a disagreement it must not write,
+  // at ZERO extra round trips. It is inert for classify — the classifiers read named
+  // fields and echo the EMAIL row as `record`, never the DB row — so parity is untouched.
   const childDb = async (table: string, extra: string[]): Promise<Row[]> => {
-    const rows = await db.readRows(table, { sinceColumn: null, columns: ["id", "shift_id", ...extra] });
+    const rows = await db.readRows(table, {
+      sinceColumn: null,
+      columns: ["id", "shift_id", "human_edited_at", ...extra],
+    });
     const out: Row[] = [];
     for (const r of rows) {
       if (shiftById.has(String(r.shift_id))) out.push(r);
@@ -314,12 +324,14 @@ export async function runReport(
   // electricity + trucks: OWN reading_date filter from lo (no upper bound).
   const dbElec = (await db.readRows("electricity_readings", {
     sinceDate: lo, sinceColumn: "reading_date",
-    columns: ["id", "reading_date", "meter", "start_kwh", "end_kwh", "meter_multiplier", "remarks"],
+    columns: ["id", "reading_date", "meter", "start_kwh", "end_kwh", "meter_multiplier", "remarks", "human_edited_at"],
   })) as ElectricityDbRow[];
   const dbTruck = (await db.readRows("truck_readings", {
     sinceDate: lo, sinceColumn: "reading_date",
-    columns: ["id", "reading_date", "plate_no", "start_km", "end_km", "fuel_liters", "remarks"],
+    columns: ["id", "reading_date", "plate_no", "start_km", "end_km", "fuel_liters", "remarks", "human_edited_at"],
   })) as TruckDbRow[];
+
+  const humanEditedIds = collectHumanEditedIds([dbRuns, dbDowntime, dbWaste, dbElec, dbTruck]);
 
   await emit?.("classify", "Comparing the reports against the database…", 55);
   const classified = composeClassify(mc, ivy, shifts, {
@@ -413,6 +425,7 @@ export async function runReport(
     },
     sections,
     batch_starts: batchStarts,
+    human_edited_ids: humanEditedIds,
   };
 
   const apply = await applyProduction(compact, {
@@ -436,6 +449,23 @@ export async function runReport(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+/**
+ * Ids of DB-window rows a human owns (`human_edited_at IS NOT NULL`) — the advisory half
+ * of the human-edit latch. Read off the rows the window already fetched; the binding
+ * guard is inside `fn_apply_production_upstream`'s own UPDATE, so a row that becomes
+ * human-owned after this snapshot is still protected.
+ */
+function collectHumanEditedIds(groups: Array<Array<unknown>>): string[] {
+  const out = new Set<string>();
+  for (const rows of groups) {
+    for (const r of rows) {
+      const row = (r ?? {}) as Row;
+      if (row.human_edited_at != null && row.id) out.add(String(row.id));
+    }
+  }
+  return [...out];
+}
+
 /** The "MC's email didn't arrive" extract — every section empty, no batch plan. */
 function emptyMcExtract(): McExtract {
   const batch: BatchResolution = {

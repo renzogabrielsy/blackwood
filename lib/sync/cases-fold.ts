@@ -15,6 +15,7 @@ import type {
   BlockDiff,
   HeldRow,
   ProductionBatchStart,
+  ProductionHumanEdit,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
@@ -68,6 +69,26 @@ export function collectProductionBatchStarts(result: SyncRunResult): ProductionB
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.production_batch_starts ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every production row a run REFUSED to overwrite because a human edited it
+ * (`result.reports.production.apply.production_human_edits`, 2026-08-03 human-edit
+ * latch). Only the `production` report ever fills it, but the fold is generic + guarded
+ * so a hand-built or pre-feature result simply yields []. Pure — panel-visibility only;
+ * these are NOT folded into durable cases (same treatment as `production_batch_starts`).
+ */
+export function collectProductionHumanEdits(result: SyncRunResult): ProductionHumanEdit[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: ProductionHumanEdit[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.production_human_edits ?? []) out.push(note)
   }
   return out
 }

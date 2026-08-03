@@ -190,8 +190,9 @@ describe("generated columns are never written", () => {
   it("an electricity VALUE_CHANGED patch never includes consumption_kwh/diff_kwh", async () => {
     const patches: Array<{ table: string; patch: Row }> = [];
     const db = mockDb({
-      onUpdate: (table, _filters, patch) => {
-        patches.push({ table, patch });
+      onApplyUpstream: (ops) => {
+        for (const o of ops) patches.push({ table: String(o.table), patch: o.patch as Row });
+        return ops.map((o) => ({ table: String(o.table), id: String(o.id), outcome: "applied" }));
       },
     });
 
@@ -528,10 +529,19 @@ function okInsert(row: Row): InsertIfAbsentResult {
   return { inserted: [inserted], skipped: [], insertedCount: 1, skippedCount: 0 };
 }
 
-/** A minimal DbClient stub — only the methods applyProduction calls. */
-function mockDb(hooks: {
+/**
+ * A minimal DbClient stub — only the methods applyProduction calls.
+ *
+ * `applyProductionUpstream` is the CONDITIONAL update path (the human-edit latch); it
+ * MUST be stubbed, or every VALUE_CHANGED test silently lands in the catch and reports
+ * zero updates. (That is the BUG-016 lesson: a stub built from `Partial<DbClient>` does
+ * not fail to compile when the client grows a method.) `onApplyUpstream` lets a test
+ * choose the per-op outcome the real RPC would return.
+ */
+export function mockDb(hooks: {
   onInsertIfAbsent?: (table: string, rows: Row[], nkey: string[]) => InsertIfAbsentResult;
   onUpdate?: (table: string, filters: Record<string, string>, patch: Row) => void;
+  onApplyUpstream?: (ops: Row[]) => Array<{ table: string; id: string; outcome: string }>;
 }): DbClient {
   const stub: Partial<DbClient> = {
     insertIfAbsent: async (table: string, rows: Row[], naturalKey: string[]) =>
@@ -540,6 +550,10 @@ function mockDb(hooks: {
       hooks.onUpdate?.(table, filters, patch);
       return [];
     },
+    applyProductionUpstream: async (ops: Row[]) =>
+      hooks.onApplyUpstream
+        ? hooks.onApplyUpstream(ops)
+        : ops.map((o) => ({ table: String(o.table), id: String(o.id), outcome: "applied" })),
     selectOne: async () => null,
     writeIngestionAudit: async () => ({ id: "AUDIT-1" }),
     upsertIngestionWatermark: async () => true,

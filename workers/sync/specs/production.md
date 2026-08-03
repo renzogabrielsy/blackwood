@@ -379,7 +379,7 @@ None of the 5 classifiers have an UNMAPPED bucket in the rc_out/gsheet sense —
 2. L-026 combine + insert `production_runs`.
 3. Insert `production_downtime` (no remarks col) + `production_waste` (8 streams + remarks) — both via `insert_if_absent(natural_key=("shift_id",))`.
 4. Insert `electricity_readings` + `truck_readings` (natural-key, no shift; generated cols excluded).
-5. Apply ALL VALUE_CHANGED across all 5 sections (generated cols stripped from any patch defensively).
+5. Apply VALUE_CHANGED across all 5 sections (generated cols stripped from any patch defensively) — **through the CONDITIONAL writer, see §6a**. The Python wrote these with a bare `db.update`; the TS worker must not.
 6. Hold ALL MALFORMED across all 5 sections.
 
 ### L-026 combine algorithm (VERBATIM, sync_production.py:320-338)
@@ -425,6 +425,52 @@ Note this combine happens ONLY across rows within the SAME classify batch's `NEW
 ### Label + watermark
 
 Only if `not errors`. Labels BOTH `mc_uid` and `ivy_uid` together (falsy-filtered) in ONE call.
+
+---
+
+## 6a. § The human-edit latch (LIVE-WORKER DEVIATION, 2026-08-03)
+
+**The defect.** Step 5 above turned every `VALUE_CHANGED` into `db.update(table, {id: eq.…}, patch)`. The app edits the very same tables (`app/(app)/production/{daily,trucks,electricity}/actions.ts`), so the moment Renzo corrects a number by hand, MC's workbook still says the old value, the next run classifies `VALUE_CHANGED`, and the sync reverts him — silently. That is the exact failure CLAUDE.md's Sync Integrity section forbids. Renzo raised it himself: *"sync has to know when i edited something in the app and not blindly sync and overwrite."*
+
+Migration `supabase/migrations/20260803080000_production_human_edit_guard.sql` (applied live).
+
+### The model — a monotone LATCH, not the schedule's ownership record
+
+Two nullable columns on all six tables: `human_edited_at` (NULL = sync-owned; NOT NULL = the sync will not update it) and `human_edited_by` (display only — the guard never reads it).
+
+Deliberately lighter than `production_schedule`'s `owner` + `pending_upstream` + `row_version`:
+
+| Schedule has | Production facts don't, because |
+|---|---|
+| `owner` enum | The schedule has TWO upstreams (Joseph's email, Renzo's PROD SCHED tab) and must know which one to hand a released day back to. A production fact has exactly ONE (MC's / Ivy's workbook), so ownership is binary — a nullable timestamp IS the boolean, with the "when" for free. |
+| `pending_upstream` | The plan is forward-looking, so a withheld value must survive until arbitrated. MC's/Ivy's workbook is CUMULATIVE — it still says the same thing tomorrow — so the run finding re-fires every run on its own. A parked copy would be a second, drifting record of something the source restates for free. |
+| `row_version` | Optimistic concurrency answers "did this row change since I read it". The latch answers "has a human EVER touched it" and only the explicit release moves it back, so there is no ABA hazard for a version token to catch. Threading a version through 5 classifiers and 6 tables would buy nothing. |
+
+### How the stamp is set — by TRIGGER
+
+`fn_stamp_human_edit` fires BEFORE INSERT OR UPDATE on all six tables. `auth.uid()` non-null (an app session) → stamp, unconditionally; `auth.uid()` NULL (the worker's service-role key, whose JWT carries no `sub`) → leave alone. A guard the app can forget is useless, and these tables have eight app write sites. The app's actions also pass `human_edited_at` explicitly — belt and braces, and it keeps the claim legible at the call site. `human_edited_by` is resolved THROUGH `profiles` so a user with no profile row degrades to a NULL "by" instead of 23503-ing the operator's save.
+
+### How the sync writes — `fn_apply_production_upstream(p_ops)`
+
+`db.applyProductionUpstream(ops)` is now the ONLY update path; `ops` are `{table, id, patch}`. Each of the five UPDATEs carries `human_edited_at IS NULL` **in its own WHERE**, in ONE statement with the outcome classification (data-modifying CTEs), so there is no read-then-write. Outcomes: `applied | human_edited | missing | empty_patch | unsupported_field`. A patch key outside the per-table allowlist refuses the whole op — a new classifier field must be added to the RPC deliberately, never smuggled into a fact table. `production_shifts` is absent from the allowlist (the sync only inserts shifts). Non-`human_edited` refusals go to `errors[]`, which already blocks the watermark bump + the Gmail label.
+
+### What the operator sees
+
+A refusal becomes a `ProductionHumanEdit` note on `apply.production_human_edits` → `lib/sync/cases-fold.ts::collectProductionHumanEdits` → a `production_human_edited` run finding ("Row you edited — the report disagrees") naming the row and BOTH values, severity `attention`. Run-visibility only: NOT a held row (nothing to retry) and never a `HeldKind` (frontend-locked). `outcome` distinguishes `known_before_write` from `refused_by_db` (the save/sync race).
+
+`ProductionCompact.human_edited_ids` carries the advisory list. It is read from the SAME queries that build the classify window (`human_edited_at` was added to those column lists), so it costs no extra round trip, and it is inert for classify — the classifiers read named fields and echo the EMAIL row as `record`, never the DB row. **Parity is untouched (12/12).**
+
+### The way back
+
+`fn_release_production_rows(table, ids)` clears the latch. Without it ownership ratchets one way and the data slowly freezes — the failure the schedule work called out. Release is EXPLICIT only: a row is never auto-released just because the workbook later agrees (that would break "a row a human edited is never overwritten"). The stamp cannot be cleared by an ordinary write — the trigger re-stamps any authenticated PATCH, including one sending `human_edited_at: null`; the RPC announces itself with the transaction-local GUC `blackwood.release_human_edit`. App entry point: `releaseProductionRows` in `app/(app)/production/actions.ts`. Read model: `view_production_human_edited`.
+
+### The write path this guards is currently DORMANT
+
+The classifiers emit `{field:{db,email}}` (runs/downtime/waste) and `[{field,emailValue,dbValue}]` (electricity/trucks). Step 5's patch builder reads a `.new` key **neither shape carries** — faithfully mirroring `sync_production.py` — so in the live pipeline the patch is always empty and no UPDATE is attempted (`updates` is always 0 for production). Repairing that shape would start writing MC's values over the DB and is a separate, deliberate decision; this change only guarantees the guard is already underneath it. **The refusal FINDING fires today regardless**, because it is emitted before the empty-patch skip: the disagreement is real whether or not there is a write to attempt.
+
+### Re-proving it against the live DB
+
+Rolled-back `DO` block (MCP `execute_sql`), accumulating a `log text` and ending in `RAISE EXCEPTION E'PROOF:%', log`; fingerprint the six tables (`md5(string_agg(to_jsonb(z.*)::text ORDER BY …))`) before and after to prove nothing stuck. Simulate an app session with `set_config('request.jwt.claims', json_build_object('sub', <profiles.id>)::text, true)` and the sync with `set_config('request.jwt.claims','',true)`. Covered: apply-vs-untouched, app edit latches, apply-vs-latched refused, PATCH cannot clear the stamp, release + re-apply, insert still works, cross-table batch, `unsupported_field`, `missing`, idempotent re-release, bad table rejected.
 
 ---
 

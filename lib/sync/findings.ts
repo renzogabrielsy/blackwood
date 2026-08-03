@@ -24,6 +24,7 @@ import type {
   BlockDiff,
   HeldRow,
   ProductionBatchStart,
+  ProductionHumanEdit,
   RcOutSource,
   ScheduleConflict,
   SingleSourceOverdue,
@@ -39,6 +40,7 @@ import {
   collectBlockDiffs,
   collectHeldRows,
   collectProductionBatchStarts,
+  collectProductionHumanEdits,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
@@ -566,6 +568,106 @@ function fromProductionBatchStart(s: ProductionBatchStart): RunFinding {
   }
 }
 
+/** Plain phrase per production field (no column names in the operator's face). */
+const PRODUCTION_FIELD_LABEL: Record<string, string> = {
+  ttl_kg: 'total kg',
+  sacks_bags: 'sacks/bags',
+  customer: 'customer',
+  grade: 'grade',
+  remarks: 'notes',
+  shift_hrs: 'shift hours',
+  dt_hrs: 'downtime hours',
+  dt_mins: 'downtime minutes',
+  dt_reason: 'downtime reason',
+  rs1a_kg: 'RS1A waste',
+  rs1b_kg: 'RS1B waste',
+  bf_kg: 'BF waste',
+  rs23_kg: 'RS2/3 waste',
+  rs5_kg: 'RS5 waste',
+  trml1_kg: 'TRML1 waste',
+  trml2_kg: 'TRML2 waste',
+  grit_kg: 'grit waste',
+  start_kwh: 'start KWH',
+  end_kwh: 'end KWH',
+  meter_multiplier: 'meter multiplier',
+  start_km: 'start KM',
+  end_km: 'end KM',
+  fuel_liters: 'fuel (L)',
+}
+
+/** Plain phrase per production section. */
+const PRODUCTION_SECTION_LABEL: Record<string, string> = {
+  runs: 'production output',
+  downtime: 'downtime',
+  waste: 'waste',
+  electricity: 'electricity reading',
+  trucks: 'truck reading',
+}
+
+/** "total kg 13,685 → 13,680; notes none → 'per MC'". */
+function productionDeltas(e: ProductionHumanEdit): string {
+  return e.changed_fields
+    .map((f) => {
+      const show = (v: unknown) => {
+        if (v == null || v === '') return 'none'
+        if (typeof v === 'number') return v.toLocaleString('en-US')
+        if (typeof v === 'object') return JSON.stringify(v)
+        return String(v)
+      }
+      return `${PRODUCTION_FIELD_LABEL[f.field] ?? f.field} ${show(f.yours)} ${ARROW} ${show(f.sheet)}`
+    })
+    .join('; ')
+}
+
+/**
+ * A production row the sync refused to overwrite because a human edited it in the app
+ * (the human-edit latch). The report's value is NOT applied and NOT parked — MC's/Ivy's
+ * workbook is cumulative, so this re-fires every run until the operator fixes the sheet
+ * or hands the row back. `attention`, never auto-resolved: production's instance of the
+ * project-wide "disagreements are arbitrated by a human" rule.
+ */
+function fromProductionHumanEdit(e: ProductionHumanEdit): RunFinding {
+  const sectionLabel = PRODUCTION_SECTION_LABEL[e.section] ?? e.section
+  const where = [e.transaction_date, e.production_batch, e.shift, e.meter, e.plate_no]
+    .filter(Boolean)
+    .join(` ${DOT} `)
+  const fields = e.changed_fields.map((f) => PRODUCTION_FIELD_LABEL[f.field] ?? f.field)
+  const fieldPhrase =
+    fields.length <= 1
+      ? (fields[0] ?? 'this row')
+      : `${fields.slice(0, -1).join(', ')} and ${fields[fields.length - 1]}`
+  const raced =
+    e.outcome === 'refused_by_db'
+      ? ' (you saved it while the sync was running - your save won)'
+      : ''
+
+  return {
+    key: `production_human_edited:${e.table}:${e.record_id}`,
+    kind: 'production_human_edited',
+    kindLabel: 'Row you edited — the report disagrees',
+    source: 'Production report',
+    title: `${e.transaction_date ?? 'This'} ${sectionLabel}: your edit was kept — the report has a different ${fieldPhrase}`,
+    location: where || e.table,
+    data: {
+      table: e.table,
+      record_id: e.record_id,
+      section: e.section,
+      transaction_date: e.transaction_date,
+      production_batch: e.production_batch,
+      shift: e.shift,
+      meter: e.meter,
+      plate_no: e.plate_no,
+      changed_fields: e.changed_fields,
+      outcome: e.outcome,
+    },
+    reason:
+      `You edited this row in the app, so the sync did NOT overwrite it${raced}. The report ` +
+      `says ${productionDeltas(e)}. Nothing changed — either correct the report, or hand ` +
+      `this row back to the sync if the report is right.`,
+    severity: 'attention',
+  }
+}
+
 // ============================================================================
 // The public API.
 // ============================================================================
@@ -614,6 +716,9 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
 
   // 9. Production-batch changeovers (a STARTING marker opened a derived batch name).
   for (const s of collectProductionBatchStarts(result)) out.push(fromProductionBatchStart(s))
+
+  // 10. Production rows the sync refused to overwrite (the human-edit latch).
+  for (const e of collectProductionHumanEdits(result)) out.push(fromProductionHumanEdit(e))
 
   return out
 }
@@ -671,6 +776,7 @@ const SHORT_KIND: Record<string, string> = {
   batch_auto_created: 'batch created',
   schedule_conflict: 'schedule day held',
   production_batch_started: 'new production batch',
+  production_human_edited: 'your edit kept',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -684,6 +790,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   batch_auto_created: 'New batch created automatically',
   schedule_conflict: 'Schedule day you edited — the plan email disagrees',
   production_batch_started: 'New production batch opened',
+  production_human_edited: 'Row you edited — the report disagrees',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

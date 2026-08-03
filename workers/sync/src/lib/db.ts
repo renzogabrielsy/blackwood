@@ -590,6 +590,50 @@ export class DbClient {
     return out;
   }
 
+  // -- production facts (the human-edit latch, 2026-08-03) ------------------
+  /**
+   * CONDITIONAL update of the production fact tables via the atomic RPC
+   * `fn_apply_production_upstream`.
+   *
+   * This is the ONLY way the sync may UPDATE `production_runs` / `production_downtime` /
+   * `production_waste` / `electricity_readings` / `truck_readings`. A plain
+   * `db.update(table, {id}, patch)` on those tables would silently revert a number an
+   * operator corrected in the app; the RPC re-checks `human_edited_at IS NULL` IN THE SAME
+   * STATEMENT as each write, so a save that landed between classify and apply wins and the
+   * op comes back labelled `human_edited` instead of clobbering it.
+   *
+   * `production_shifts` is deliberately NOT accepted — the sync only ever inserts shifts.
+   *
+   * Chunked at 200 ops. Throws on a hard PostgREST error (the caller records it in
+   * `errors[]`, which already blocks the watermark + Gmail label).
+   */
+  async applyProductionUpstream(
+    ops: Row[],
+  ): Promise<Array<{ table: string; id: string; outcome: string }>> {
+    if (!ops.length) return [];
+    const CHUNK = 200;
+    const out: Array<{ table: string; id: string; outcome: string }> = [];
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const slice = ops.slice(i, i + CHUNK);
+      const { data, error } = await this.sb.rpc("fn_apply_production_upstream", {
+        p_ops: slice,
+      });
+      if (error) {
+        throw new Error(
+          `fn_apply_production_upstream RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
+        );
+      }
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+        out.push({
+          table: String(r.table ?? ""),
+          id: String(r.id ?? ""),
+          outcome: String(r.outcome ?? ""),
+        });
+      }
+    }
+    return out;
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

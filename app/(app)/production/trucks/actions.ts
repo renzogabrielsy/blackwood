@@ -13,6 +13,13 @@ export type BulkSavePayload<TInsert, TUpdate> = {
 
 export type TruckReadingRow = Tables<'truck_readings'>;
 
+// Human-edit latch: every in-app write CLAIMS the row, so the sync will not overwrite it
+// (migration `20260803080000_production_human_edit_guard.sql`). The DB trigger
+// `fn_stamp_human_edit` is the real guarantee — including `human_edited_by` from
+// `auth.uid()`; this keeps the claim visible at the call site. Hand a row back with
+// `releaseProductionRows` in `app/(app)/production/actions.ts`.
+const claim = () => ({ human_edited_at: new Date().toISOString() });
+
 function translateDbError(message: string): string {
     if (message.includes('chk_truck_readings_end_km')) {
         return 'End KM must be greater than or equal to Start KM.';
@@ -103,6 +110,7 @@ export async function saveBulkTrucks(
                 start_km: Number(r.start_km),
                 end_km: Number(r.end_km),
                 fuel_liters: r.fuel_liters !== null && r.fuel_liters !== undefined ? Number(r.fuel_liters) : null,
+                ...claim(),
             }))
         );
         if (error) return { ok: false, error: translateDbError(error.message) };
@@ -115,7 +123,10 @@ export async function saveBulkTrucks(
                 return { ok: false, error: 'End KM must be ≥ Start KM.' };
             }
         }
-        const { error } = await supabase.from('truck_readings').update(data).eq('id', id);
+        const { error } = await supabase
+            .from('truck_readings')
+            .update({ ...data, ...claim() })
+            .eq('id', id);
         if (error) return { ok: false, error: translateDbError(error.message) };
         updatedCount++;
     }

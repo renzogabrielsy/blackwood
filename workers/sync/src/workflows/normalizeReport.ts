@@ -131,6 +131,24 @@ export interface ProductionBatchStartNote {
 }
 
 /**
+ * One production row the sync REFUSED to overwrite because a human edited it in the app
+ * (the human-edit latch, 2026-08-03 — see reports/production/apply.ts). Mirror of the
+ * frontend `ProductionHumanEdit`. Production carries no ₱/cost fields.
+ */
+export interface ProductionHumanEditNote {
+  section: string;
+  table: string;
+  record_id: string;
+  transaction_date: string | null;
+  production_batch: string | null;
+  shift: string | null;
+  meter: string | null;
+  plate_no: string | null;
+  changed_fields: Array<{ field: string; yours: unknown; sheet: unknown }>;
+  outcome: string;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
@@ -148,6 +166,8 @@ export interface ApplyResult {
   auto_created_batches: AutoCreatedBatchNote[];
   /** Production-batch changeovers this apply announced. ALWAYS present (default []). */
   production_batch_starts: ProductionBatchStartNote[];
+  /** Production rows the sync refused to overwrite. ALWAYS present (default []). */
+  production_human_edits: ProductionHumanEditNote[];
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -213,6 +233,8 @@ interface RawApply {
   auto_created_batches?: unknown;
   /** production only — batch changeovers announced this apply. */
   production_batch_starts?: unknown;
+  /** production only — rows the sync refused to overwrite (human-edit latch). */
+  production_human_edits?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -296,6 +318,34 @@ function toProductionBatchStarts(v: unknown): ProductionBatchStartNote[] {
   return Array.isArray(v) ? v.map(toProductionBatchStart) : [];
 }
 
+/** Coerce one raw refused-overwrite entry → contract ProductionHumanEditNote. */
+function toProductionHumanEdit(v: unknown): ProductionHumanEditNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  const fields = Array.isArray(o.changed_fields) ? o.changed_fields : [];
+  return {
+    section: str(o.section),
+    table: str(o.table),
+    record_id: str(o.record_id),
+    transaction_date: nullable(o.transaction_date),
+    production_batch: nullable(o.production_batch),
+    shift: nullable(o.shift),
+    meter: nullable(o.meter),
+    plate_no: nullable(o.plate_no),
+    changed_fields: fields.map((f) => {
+      const e = (f ?? {}) as Record<string, unknown>;
+      return { field: str(e.field), yours: e.yours ?? null, sheet: e.sheet ?? null };
+    }),
+    outcome: str(o.outcome),
+  };
+}
+
+/** Coerce a raw refused-overwrite array → ProductionHumanEditNote[]. */
+function toProductionHumanEdits(v: unknown): ProductionHumanEditNote[] {
+  return Array.isArray(v) ? v.map(toProductionHumanEdit) : [];
+}
+
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
 function toGateFailures(v: unknown): GateFailure[] {
   if (!Array.isArray(v)) return [];
@@ -364,6 +414,7 @@ export function normalizeApply(
     errors: strArray(raw.errors),
     auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
     production_batch_starts: toProductionBatchStarts(raw.production_batch_starts),
+    production_human_edits: toProductionHumanEdits(raw.production_human_edits),
   };
 }
 
@@ -427,6 +478,7 @@ export function failedReportResult(
       errors: [message],
       auto_created_batches: [],
       production_batch_starts: [],
+      production_human_edits: [],
     },
     status: "error",
     error: message,
