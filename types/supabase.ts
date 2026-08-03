@@ -1687,6 +1687,48 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_production_event_audit: {
+        Row: {
+          changed: Json | null
+          changed_at: string | null
+          changed_by: string | null
+          changed_by_role: string | null
+          event_id: string | null
+          id: number | null
+          operation: string | null
+          recv_date: string | null
+          snapshot: Json | null
+          source: string | null
+          unique_tag: string | null
+        }
+        Insert: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          event_id?: string | null
+          id?: number | null
+          operation?: string | null
+          recv_date?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          unique_tag?: string | null
+        }
+        Update: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          event_id?: string | null
+          id?: number | null
+          operation?: string | null
+          recv_date?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          unique_tag?: string | null
+        }
+        Relationships: []
+      }
       cenapro_production_events: {
         Row: {
           batch: string | null
@@ -2656,6 +2698,14 @@ export type Database = {
           side: string
           warehouse_code: string
         }[]
+      }
+      cenapro_update_event_weight: {
+        Args: {
+          p_event_id: string
+          p_expected_weight_kg: number
+          p_weight_kg: number
+        }
+        Returns: Json
       }
       fn_apply_schedule_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_blend_proposal: {

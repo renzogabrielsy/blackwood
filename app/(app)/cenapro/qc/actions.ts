@@ -21,7 +21,13 @@
 import { revalidatePath } from 'next/cache';
 
 import { createClient } from '@/lib/supabase/server';
-import { METRICS, type SaveSampleArgs, type SaveSampleOutcome } from '@/lib/cenapro/ccc-analysis';
+import {
+    METRICS,
+    parseWeightKg,
+    type SaveSampleArgs,
+    type SaveSampleOutcome,
+    type UpdateWeightOutcome,
+} from '@/lib/cenapro/ccc-analysis';
 
 /** One sample group's save request. Mirrors the RPC's natural key + payload. */
 export interface SaveQcSampleInput {
@@ -154,6 +160,140 @@ export async function saveQcSamples(inputs: SaveQcSampleInput[]): Promise<SaveQc
     if (savedCount > 0) {
         revalidatePath('/cenapro/qc');
         revalidatePath('/cenapro/qc/breakdown');
+    }
+
+    return { results, savedCount, failedCount: results.length - savedCount };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// Weight edits — one DRAW's `weight_kg` on `cenapro.production_event`.
+//
+// This is the QOL half of the ledger: a receipt weight is a number an operator
+// mistypes, notices HERE (staring at the day's total), and today has to leave for
+// the production ledger to fix. Same authority as that grid already grants; a more
+// convenient place to exercise it.
+//
+// Two things make it safe to move here rather than merely handy:
+//
+//  1. COMPARE-AND-SET. Each call carries the weight the operator was looking at, and
+//     `public.cenapro_update_event_weight` only writes while the stored value still
+//     equals it — checked in the same statement as the UPDATE. A losing race gets
+//     `conflict` and the CURRENT value; nothing retries, nothing force-writes.
+//  2. AN AUDIT TRAIL. `cenapro.production_event` had none until now. The trigger
+//     `tr_cenapro_pe_audit` records every change (old → new, actor, surface) in
+//     `cenapro.production_event_audit` — on this path AND on the production grid's.
+//
+// A weight is PER-DRAW, so unlike a lab sample it never fans out to the group's
+// sibling rows. One request per draw, one independent verdict per draw.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+/** One draw's weight change. `expectedWeightKg` is what the operator saw. */
+export interface SaveQcWeightInput {
+    /** `cenapro.production_event.id` — echoed back so the client can match up. */
+    id: string;
+    /** The weight rendered in the cell before it was retyped. */
+    expectedWeightKg: number;
+    /** The raw text typed into the cell. Parsed and validated server-side too. */
+    raw: string;
+}
+
+export interface SaveQcWeightResult {
+    id: string;
+    ok: boolean;
+    outcome: UpdateWeightOutcome | 'rpc_error';
+    /** On success the new value; on `conflict` the CURRENT stored one. */
+    weightKg: number | null;
+    message: string | null;
+}
+
+export interface SaveQcWeightsResult {
+    results: SaveQcWeightResult[];
+    savedCount: number;
+    failedCount: number;
+}
+
+interface RawWeightResult {
+    ok?: unknown;
+    outcome?: unknown;
+    weight_kg?: unknown;
+    message?: unknown;
+}
+
+const WEIGHT_OUTCOMES: readonly UpdateWeightOutcome[] = [
+    'updated',
+    'conflict',
+    'not_found',
+    'invalid',
+];
+
+function readWeightOutcome(value: unknown): UpdateWeightOutcome | 'rpc_error' {
+    return WEIGHT_OUTCOMES.includes(value as UpdateWeightOutcome)
+        ? (value as UpdateWeightOutcome)
+        : 'rpc_error';
+}
+
+/**
+ * Apply one or more per-draw weight corrections. Each is an independent RPC call
+ * with its own compare-and-set, so a conflict on one draw never blocks the others.
+ */
+export async function saveQcWeights(
+    inputs: SaveQcWeightInput[],
+): Promise<SaveQcWeightsResult> {
+    if (inputs.length === 0) return { results: [], savedCount: 0, failedCount: 0 };
+
+    const supabase = await createClient();
+    const results: SaveQcWeightResult[] = [];
+
+    for (const input of inputs) {
+        // The client's guard's server twin — same `parseWeightKg`, so the two can
+        // never disagree, and a value the RPC would reject costs no round trip.
+        const { kg, error: parseError } = parseWeightKg(input.raw);
+        if (kg == null) {
+            results.push({
+                id: input.id,
+                ok: false,
+                outcome: 'invalid',
+                weightKg: null,
+                message: parseError,
+            });
+            continue;
+        }
+
+        const { data, error } = await supabase.rpc('cenapro_update_event_weight', {
+            p_event_id: input.id,
+            p_expected_weight_kg: input.expectedWeightKg,
+            p_weight_kg: kg,
+        });
+
+        if (error) {
+            results.push({
+                id: input.id,
+                ok: false,
+                outcome: 'rpc_error',
+                weightKg: null,
+                message: error.message,
+            });
+            continue;
+        }
+
+        const raw = (data ?? {}) as RawWeightResult;
+        results.push({
+            id: input.id,
+            ok: raw.ok === true,
+            outcome: readWeightOutcome(raw.outcome),
+            weightKg: typeof raw.weight_kg === 'number' ? raw.weight_kg : null,
+            message: typeof raw.message === 'string' ? raw.message : null,
+        });
+    }
+
+    const savedCount = results.filter((r) => r.ok).length;
+
+    if (savedCount > 0) {
+        // A weight moves the QC aggregates AND the production ledger that shows the
+        // same row, so all three surfaces go stale.
+        revalidatePath('/cenapro/qc');
+        revalidatePath('/cenapro/qc/breakdown');
+        revalidatePath('/cenapro/production');
     }
 
     return { results, savedCount, failedCount: results.length - savedCount };
