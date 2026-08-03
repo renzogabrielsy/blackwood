@@ -8,7 +8,14 @@ import {
 import { ProductionView } from './production-view';
 import { ProductionEndlessSheet } from './production-endless-sheet';
 import { ProductionEndlessPivots } from './production-endless-pivots';
-import { parseScope, parseViewMode, plantViewOf } from './ledger-url';
+import {
+    hasActiveFilters,
+    ledgerFilterKey,
+    parseLedgerFilters,
+    parseScope,
+    parseViewMode,
+    plantViewOf,
+} from './ledger-url';
 
 // Server component — the Cenapro production ledger is governed by TWO orthogonal URL
 // axes (a third, EDIT lock/unlock, lands in Phase 3). Every combination is valid and
@@ -29,17 +36,24 @@ import { parseScope, parseViewMode, plantViewOf } from './ledger-url';
 export default async function CenaproProductionPage({
     searchParams,
 }: {
-    searchParams: Promise<{ year?: string; batch?: string; scope?: string; view?: string; focus?: string }>;
+    // The filter axis adds six optional params (shift/grade/plant/whse/src/ccc) — typed
+    // loosely here and parsed by `parseLedgerFilters`, which owns their contract.
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
     const params = await searchParams;
 
     const periodsResult = await fetchCenaproPeriods();
     const periods = periodsResult.periods ?? [];
 
+    // A repeated param arrives as an array — take the first, defensively.
+    const one = (v: string | string[] | undefined): string | undefined =>
+        Array.isArray(v) ? v[0] : v;
+
     // Resolve the active period. A valid ?year=&batch= wins; otherwise default to the
     // newest period. A malformed/stale pair falls through to the default (defensive).
-    const urlYear = params.year ? Number.parseInt(params.year, 10) : NaN;
-    const urlBatch = params.batch?.toUpperCase();
+    const rawYear = one(params.year);
+    const urlYear = rawYear ? Number.parseInt(rawYear, 10) : NaN;
+    const urlBatch = one(params.batch)?.toUpperCase();
     const urlPeriodValid =
         Number.isInteger(urlYear) &&
         !!urlBatch &&
@@ -51,9 +65,21 @@ export default async function CenaproProductionPage({
 
     // ── Axis resolution ───────────────────────────────────────────────────────────
     // Legacy `?focus=1` (the retired silo param) maps to the focus scope for back-compat.
-    const scope = params.focus === '1' ? 'focus' : parseScope(params.scope);
-    const view = parseViewMode(params.view);
+    const scope = one(params.focus) === '1' ? 'focus' : parseScope(one(params.scope));
+    const view = parseViewMode(one(params.view));
     const plantView = plantViewOf(view); // 'W6' | 'W7' | null
+
+    // ── FILTER axis ───────────────────────────────────────────────────────────────
+    // Parsed here on the SERVER so the endless scope can push the predicates into the
+    // keyset query (`fetchLedgerPage`) rather than hiding rows after the fact. The daily
+    // W6/W7 pivots ignore filters (they own their own plant-source filtering) — the params
+    // simply ride along in the URL so switching back to the ledger restores them.
+    const filters = parseLedgerFilters((name) => params[name]);
+    const filtersActive = hasActiveFilters(filters);
+    // Folded into the endless-sheet React key so a filter change remounts cleanly with the
+    // server-prefetched FILTERED first window — same deterministic seeding path the period
+    // anchor already uses, and it resets `firstItemIndex` by construction (no scroll jump).
+    const filterKey = ledgerFilterKey(filters);
 
     // ── endless + ledger → the endless sheet. Anchor-first: resolve the anchor from the
     // URL, then prefetch the FIRST keyset window server-side (already anchored). ──────
@@ -62,15 +88,16 @@ export default async function CenaproProductionPage({
             ? { kind: 'period', batch_year: urlYear, batch: urlBatch! }
             : { kind: 'latest' };
 
-        const page = await fetchLedgerPage({ mode: 'anchor', anchor });
+        const page = await fetchLedgerPage({ mode: 'anchor', anchor, filters });
 
         // Keying by the anchor forces a clean remount (fresh window + firstItemIndex) when
-        // the dropdowns jump to a new period — a single, deterministic seeding path.
+        // the dropdowns jump to a new period — a single, deterministic seeding path. The
+        // filter fingerprint joins it for exactly the same reason.
         const anchorKey = anchor.kind === 'latest' ? 'latest' : `${anchor.batch_year}:${anchor.batch}`;
 
         return (
             <ProductionEndlessSheet
-                key={anchorKey}
+                key={`${anchorKey}|${filterKey}`}
                 initialPage={{
                     rows: page.rows,
                     hasOlder: page.hasOlder,
@@ -78,6 +105,8 @@ export default async function CenaproProductionPage({
                     notice: page.notice,
                 }}
                 anchor={anchor}
+                filters={filters}
+                filtersActive={filtersActive}
                 periods={periods}
                 selectedPeriod={selectedPeriod}
                 loadError={page.error ?? periodsResult.error ?? null}
