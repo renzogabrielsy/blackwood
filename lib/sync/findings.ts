@@ -23,6 +23,7 @@ import type {
   BatchClose,
   BlockDiff,
   HeldRow,
+  ProductionBatchStart,
   RcOutSource,
   ScheduleConflict,
   SingleSourceOverdue,
@@ -37,6 +38,7 @@ import {
   collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
+  collectProductionBatchStarts,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
@@ -528,6 +530,42 @@ function fromScheduleConflict(c: ScheduleConflict): RunFinding {
   }
 }
 
+/**
+ * A production-batch CHANGEOVER: MC's report marked the last runs of the batch that
+ * was running (`ENDING`) and the first runs of a brand-new one (`STARTING`) on the
+ * same day. The new batch's NAME is written nowhere in the workbook, so the sync
+ * derived it — this is the confirmation prompt. Once a month at most; the rows DID
+ * write, so this is never a held row.
+ */
+function fromProductionBatchStart(s: ProductionBatchStart): RunFinding {
+  const derivedHow =
+    s.derivation === 'sequence'
+      ? `the next batch after ${s.previous_batch}`
+      : `the month on the report tab (nothing earlier on record to count from)`
+
+  return {
+    key: `production_batch_started:${s.transaction_date}:${s.new_batch}`,
+    kind: 'production_batch_started',
+    kindLabel: 'New production batch opened',
+    source: 'Production report',
+    title: `${s.transaction_date}: production moved to a new batch, "${s.new_batch}"`,
+    location: s.transaction_date,
+    data: {
+      transaction_date: s.transaction_date,
+      new_batch: s.new_batch,
+      previous_batch: s.previous_batch,
+      derivation: s.derivation,
+      source_sheet: s.source_sheet,
+    },
+    reason:
+      `The report marked the last output of ${s.previous_batch} and the first output of a ` +
+      `new batch on this day, so both were filed separately. The new batch's name is not ` +
+      `written anywhere in the report — the sync named it "${s.new_batch}" because that is ` +
+      `${derivedHow}. Confirm the name is right.`,
+    severity: 'attention',
+  }
+}
+
 // ============================================================================
 // The public API.
 // ============================================================================
@@ -573,6 +611,9 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
 
   // 8. Production-plan days the sync withheld because a human owns them (Stage 3c).
   for (const c of collectScheduleConflicts(result)) out.push(fromScheduleConflict(c))
+
+  // 9. Production-batch changeovers (a STARTING marker opened a derived batch name).
+  for (const s of collectProductionBatchStarts(result)) out.push(fromProductionBatchStart(s))
 
   return out
 }
@@ -629,6 +670,7 @@ const SHORT_KIND: Record<string, string> = {
   unresolved_batch_id: 'unknown batch',
   batch_auto_created: 'batch created',
   schedule_conflict: 'schedule day held',
+  production_batch_started: 'new production batch',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -641,6 +683,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   run_triage: 'Run summary',
   batch_auto_created: 'New batch created automatically',
   schedule_conflict: 'Schedule day you edited — the plan email disagrees',
+  production_batch_started: 'New production batch opened',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

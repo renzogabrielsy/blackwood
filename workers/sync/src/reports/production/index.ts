@@ -27,6 +27,11 @@ import { loadProductionWorkbook } from "./sheet.js";
 import { extractMc, type McExtract } from "./extractMc.js";
 import { extractIvy, type IvyExtract } from "./extractIvy.js";
 import {
+  resolveRunningBatch,
+  type BatchResolution,
+  type ShiftBatchRow,
+} from "./productionBatch.js";
+import {
   classifyRuns,
   classifyDowntime,
   classifyWaste,
@@ -41,13 +46,19 @@ import {
   type TruckDbRow,
 } from "./classify.js";
 import { reconcile } from "./reconcile.js";
-import { applyProduction, type ProductionCompact, type ApplyResult } from "./apply.js";
+import {
+  applyProduction,
+  type ProductionCompact,
+  type ApplyResult,
+  type ProductionBatchStart,
+} from "./apply.js";
 
 export const REPORT_TYPE = "production";
 
 const CODIFIED_RULES = [
   "rounding-null-zero-noop", "L-007", "L-014", "L-025", "L-026", "L-027", "L-028",
   "parent-shift-first-fk-order", "generated-cols-never-written",
+  "batch-from-running-state",
 ] as const;
 
 // ── DB-window shape the classify oracle consumes (matches fixtures/production) ──
@@ -95,11 +106,19 @@ async function runClassify(
   const since = String(opts.since);
   const year = parseInt(since.slice(0, 4), 10);
 
+  // The running-batch seed is a runReport-phase input the ORCHESTRATOR resolves
+  // from the live DB. The frozen parity entrypoint deliberately leaves it UNSET
+  // unless a caller passes it explicitly, so every fixture runs the documented
+  // cold-start path and reproduces the Python calendar derivation byte-for-byte.
+  // (`ClassifyOpts` carries an index signature, so this is a legal extra knob.)
+  const runningBatch =
+    typeof opts.runningBatch === "string" && opts.runningBatch.trim() ? opts.runningBatch : null;
+
   // MC role (runs/downtime/electricity/trucks). Absent → empty extract.
-  let mc: McExtract = { runs: [], downtime: [], electricity: [], trucks: [], dayTotals: {} };
+  let mc: McExtract = emptyMcExtract();
   if (workbookPaths.mc) {
     const wb = await loadProductionWorkbook(await readFile(workbookPaths.mc));
-    mc = extractMc(wb, year, since);
+    mc = extractMc(wb, year, since, { runningBatch });
   }
 
   // Ivy role (waste). Absent → empty extract.
@@ -197,6 +216,21 @@ export async function runReport(
   const since = opts.since ?? (watermark ?? "2025-01-01");
   const year = parseInt(since.slice(0, 4), 10);
 
+  // The `production_batch` already RUNNING before this run's first sheet. `since`
+  // is EXCLUSIVE at sheet level (sheets are `> since`), so every shift dated at or
+  // below it is strictly before every sheet we are about to read. One small read;
+  // 200 rows is ~7 months of shifts, far more than the tie-break needs.
+  const priorShifts = (await db.readRows("production_shifts", {
+    sinceColumn: null,
+    columns: ["transaction_date", "production_batch"],
+    extraFilters: {
+      transaction_date: `lte.${since}`,
+      order: "transaction_date.desc",
+      limit: "200",
+    },
+  })) as ShiftBatchRow[];
+  const runningBatch = resolveRunningBatch(priorShifts, since);
+
   const mcAtt = firstAttachment(manifest, "production_mc");
   const ivyAtt = firstAttachment(manifest, "production_waste");
 
@@ -204,7 +238,7 @@ export async function runReport(
     await emit?.("finalize", "Nothing new today — no production or waste report waiting.", 100);
     const emptyApply: ApplyResult = {
       report_type: REPORT_TYPE, ok: true, inserts: 0, updates: 0, held: [],
-      labeled: false, watermark_updated: false, errors: [],
+      labeled: false, watermark_updated: false, errors: [], production_batch_starts: [],
     };
     return {
       classify: {
@@ -225,10 +259,12 @@ export async function runReport(
 
   // Extract both sides.
   await emit?.("extract", "Reading the production spreadsheet(s)…", 30);
-  let mc: McExtract = { runs: [], downtime: [], electricity: [], trucks: [], dayTotals: {} };
+  let mc: McExtract = emptyMcExtract();
   if (mcAtt) {
     const path = await deps.fetchToLocalPath(mcAtt.storagePath);
-    mc = extractMc(await loadProductionWorkbook(await readFile(path)), year, since);
+    mc = extractMc(await loadProductionWorkbook(await readFile(path)), year, since, {
+      runningBatch,
+    });
   }
   let ivy: IvyExtract = { waste: [] };
   if (ivyAtt) {
@@ -319,6 +355,50 @@ export async function runReport(
     92,
   );
 
+  // Batch changeovers (`STARTING` markers) — at most once a month. Announced for
+  // human confirmation because the batch NAME exists nowhere in the workbook: the
+  // sync derives it from the running batch and has nothing to verify it against.
+  //
+  // Suppressed only once the changeover is ALREADY FULLY INGESTED — i.e. the
+  // (date, new batch) shift already carries production RUNS. A shift that exists
+  // with no runs does NOT suppress it: Ivy's cumulative waste workbook opens a
+  // parent shift for the new batch on its own, and that must not silence the very
+  // announcement this feature exists for. In the steady state `since` (the runs
+  // frontier, exclusive) already keeps an ingested changeover day out of the
+  // window entirely, so this fires exactly once.
+  const shiftIdsWithRuns = new Set(dbRuns.map((r) => String(r.shift_id)));
+  const ingestedChangeoverKeys = new Set(
+    shifts
+      .filter((s) => s.id && shiftIdsWithRuns.has(String(s.id)))
+      .map(
+        (s) =>
+          `${String(s.transaction_date ?? "").slice(0, 10)}|` +
+          `${String(s.production_batch ?? "").trim().toUpperCase()}`,
+      ),
+  );
+  const batchStarts: ProductionBatchStart[] = mc.batch.transitions.filter(
+    (t) => !ingestedChangeoverKeys.has(`${t.transaction_date}|${t.new_batch.trim().toUpperCase()}`),
+  );
+  for (const t of batchStarts) {
+    await emit?.(
+      "classify",
+      `New production batch ${t.new_batch} opened on ${t.transaction_date} (follows ${t.previous_batch}) — please confirm the name.`,
+      93,
+      undefined,
+      "warn",
+    );
+  }
+  if (mc.batch.coldStartDates.length > 0) {
+    await emit?.(
+      "classify",
+      `No earlier production batch on record — fell back to the calendar month for ` +
+        `${mc.batch.coldStartDates.length} day(s): ${mc.batch.coldStartDates.join(", ")}.`,
+      93,
+      undefined,
+      "warn",
+    );
+  }
+
   const compact: ProductionCompact = {
     report_type: REPORT_TYPE,
     since,
@@ -332,6 +412,7 @@ export async function runReport(
       ivy_thread_id: ivyAtt?.threadId ?? null,
     },
     sections,
+    batch_starts: batchStarts,
   };
 
   const apply = await applyProduction(compact, {
@@ -355,6 +436,17 @@ export async function runReport(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+/** The "MC's email didn't arrive" extract — every section empty, no batch plan. */
+function emptyMcExtract(): McExtract {
+  const batch: BatchResolution = {
+    seed: null,
+    plans: new Map(),
+    coldStartDates: [],
+    transitions: [],
+  };
+  return { runs: [], downtime: [], electricity: [], trucks: [], dayTotals: {}, batch };
+}
+
 function firstAttachment(manifest: ProductionManifest, key: string): StoredAttachmentLike | null {
   const arr = manifest.reports?.[key];
   return arr && arr.length ? arr[0] : null;

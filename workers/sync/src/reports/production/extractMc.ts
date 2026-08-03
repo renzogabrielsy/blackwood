@@ -13,9 +13,30 @@
  * --since is SHEET-level and EXCLUSIVE (`> since`): keep only day-sheets dated
  * strictly after the watermark, or whose title fails to parse.
  *
+ * DEVIATION FROM THE PYTHON GROUND TRUTH (2026-08-03, Renzo-approved):
+ * `production_batch` is NO LONGER the sheet's calendar month. Column H of the
+ * runs block is DUAL-PURPOSE — it carries real shift labels on an overtime day
+ * and the batch-transition markers `ENDING`/`STARTING` on a changeover day
+ * (L-007) — and the batch now follows the plant's RUNNING STATE, seeded from the
+ * DB and folded forward across the run's sheets. See ./productionBatch.ts for
+ * the full rule and rationale. The calendar derivation survives ONLY as the
+ * documented cold-start fallback (no prior batch in the DB), which is also what
+ * the frozen `classifyCase` parity entrypoint runs on — so the parity fixtures
+ * keep reproducing the Python byte-for-byte.
+ *
  * Ground truth: .claude/skills/sync-ictc/scripts/extract_daily_production.py.
  */
 import type { LoadedWorkbook, LoadedSheet, CellValue } from "../../lib/xlsx.js";
+import { monthName } from "../../lib/months.js";
+import {
+  batchMarkerFor,
+  buildBatchPlans,
+  MARKER_SHIFT,
+  type BatchMarker,
+  type BatchResolution,
+  type SheetBatchPlan,
+  type SheetMarkerScan,
+} from "./productionBatch.js";
 
 // ── Domain constants (Python lines 79-165) ─────────────────────────────────
 const VALID_GRADES = new Set(["3X50", "6X50", "8X50", "2X6", "4X8"]); // L-027
@@ -33,11 +54,6 @@ const SHIFT_LABEL_TO_CODE: Record<string, string> = {
 const DEFAULT_RUN_SHIFT = "M";
 // MUST stay byte-identical to SHIFT_DEFAULT_NOTE in classify.ts (runs classifier).
 export const SHIFT_DEFAULT_NOTE = "shift defaulted to Morning (operator left blank)";
-
-const MONTH_NAME_UPPER: Record<number, string> = {
-  1: "JANUARY", 2: "FEBRUARY", 3: "MARCH", 4: "APRIL", 5: "MAY", 6: "JUNE",
-  7: "JULY", 8: "AUGUST", 9: "SEPTEMBER", 10: "OCTOBER", 11: "NOVEMBER", 12: "DECEMBER",
-};
 
 const SHEET_NAME_RE = /^(\d{1,2})-(\d{1,2})-(\d{2,4})$/;
 
@@ -223,11 +239,7 @@ function isoGreater(a: string, b: string): boolean {
   return a > b;
 }
 
-function productionBatchFor(ymd: YMD): string {
-  return MONTH_NAME_UPPER[ymd.m];
-}
-
-// ── Shift resolution (L-025) ────────────────────────────────────────────────
+// ── Shift resolution (L-025) + batch-marker discrimination (L-007) ──────────
 function normalizeShift(label: CellValue): { code: string | null; warn: string | null } {
   const s = coerceStr(label);
   if (s === null) return { code: null, warn: null };
@@ -236,15 +248,51 @@ function normalizeShift(label: CellValue): { code: string | null; warn: string |
   return { code, warn: null };
 }
 
-function resolveRunShift(label: CellValue): { code: string; defaulted: boolean; warn: string | null } {
+/**
+ * The DISCRIMINATED read of the runs block's column H. That column is genuinely
+ * DUAL-PURPOSE — verified across real sheets:
+ *     07-23-26  H: ['DAY SHIFT','DAY SHIFT','OVERTIME','OVERTIME']  real shift labels
+ *     07-27-26  H: []                                              blank
+ *     07-31-26  H: ['ENDING','ENDING','STARTING']                  batch markers
+ * so it is read BY VALUE, never repurposed as "the batch column" (that would
+ * break every overtime day).
+ *
+ *   - recognized shift label  -> that shift, no marker (unchanged).
+ *   - `ENDING` / `STARTING`   -> shift M by EXPLICIT DOMAIN RULE (markers only
+ *                                ever occur on the Morning shift — Renzo,
+ *                                2026-08-03), NOT defaulted, NO warning. Before
+ *                                this change these two words fell through to the
+ *                                "unrecognized" branch and produced a spurious
+ *                                `unrecognized shift 'ENDING' — defaulted to
+ *                                Morning` warning + a default-note in `remarks`.
+ *   - blank                   -> Morning, defaulted, blank-cell warning (unchanged).
+ *   - anything else           -> Morning, defaulted, unrecognized warning (unchanged,
+ *                                and this is the branch `DAY SHIFT`/`OVERTIME` take —
+ *                                deliberately untouched, it is parity-frozen).
+ */
+interface RunShiftResolution {
+  code: string;
+  defaulted: boolean;
+  warn: string | null;
+  /** The batch-transition marker this cell carried, if any. */
+  marker: BatchMarker | null;
+}
+
+function resolveRunShift(label: CellValue): RunShiftResolution {
   const { code } = normalizeShift(label);
-  if (code !== null) return { code, defaulted: false, warn: null };
+  if (code !== null) return { code, defaulted: false, warn: null, marker: null };
+
   const raw = coerceStr(label);
+  const marker = batchMarkerFor(raw);
+  if (marker !== null) {
+    return { code: MARKER_SHIFT, defaulted: false, warn: null, marker };
+  }
+
   const reason =
     raw === null
       ? "shift cell blank/absent — defaulted to Morning"
       : `unrecognized shift '${raw}' — defaulted to Morning`;
-  return { code: DEFAULT_RUN_SHIFT, defaulted: true, warn: reason };
+  return { code: DEFAULT_RUN_SHIFT, defaulted: true, warn: reason, marker: null };
 }
 
 function appendNote(existing: string | null, note: string): string {
@@ -338,6 +386,13 @@ export interface McExtract {
   trucks: TruckRow[];
   /** G13 day total per date (reconcile-only; NOT part of the classify oracle). */
   dayTotals: Record<string, number | null>;
+  /**
+   * How `production_batch` was resolved this extract — the seed, the per-sheet
+   * plan, every changeover detected, and any cold-start calendar fallback.
+   * Run-visibility ONLY: like `dayTotals` it is NOT part of the classify oracle,
+   * so adding it cannot move parity.
+   */
+  batch: BatchResolution;
 }
 
 // ── Section A — production runs ─────────────────────────────────────────────
@@ -357,11 +412,27 @@ function routeGrade(rawGrade: string): { customer: string | null; grade: string 
   return { customer: null, grade: null, keep: false };
 }
 
+/**
+ * Scan a sheet's runs block for a `STARTING` marker. Only EMITTABLE run rows
+ * count (same grade gate as `extractRuns`), so a marker parked on a dropped
+ * grade — e.g. the `KOREA POWDER (BAGGED)` row — can never advance the batch.
+ */
+function sheetHasStartingMarker(ws: LoadedSheet): boolean {
+  for (let r = RUNS_FIRST_DATA_ROW; r <= RUNS_LAST_DATA_ROW; r++) {
+    const rawGrade = coerceStr(ws.cell(r, COL_RUN_GRADE));
+    if (rawGrade === null) continue;
+    const { keep } = routeGrade(rawGrade);
+    if (!keep) continue;
+    if (batchMarkerFor(coerceStr(ws.cell(r, COL_RUN_SHIFT))) === "STARTING") return true;
+  }
+  return false;
+}
+
 function extractRuns(
   ws: LoadedSheet,
   titleStripped: string,
   txnIso: string,
-  productionBatch: string,
+  plan: SheetBatchPlan,
 ): RunRow[] {
   const runs: RunRow[] = [];
   for (let r = RUNS_FIRST_DATA_ROW; r <= RUNS_LAST_DATA_ROW; r++) {
@@ -376,9 +447,17 @@ function extractRuns(
     // unparseable/negative value still holds — see classifyRuns.
     const ttlBlank = ttlKg === null && isBlankCell(ttlCell);
     const sacks = coerceInt(ws.cell(r, COL_RUN_SACKS));
-    const { code: shiftCode, defaulted: shiftDefaulted, warn: shiftWarn } = resolveRunShift(
-      ws.cell(r, COL_RUN_SHIFT),
-    );
+    const {
+      code: shiftCode,
+      defaulted: shiftDefaulted,
+      warn: shiftWarn,
+      marker,
+    } = resolveRunShift(ws.cell(r, COL_RUN_SHIFT));
+
+    // A `STARTING` row belongs to the batch that OPENS today; every other row
+    // (`ENDING` or unmarked) belongs to the batch that was already running.
+    const productionBatch =
+      marker === "STARTING" && plan.starting !== null ? plan.starting : plan.running;
 
     const rowWarnings: string[] = [];
     if (shiftWarn) rowWarnings.push(shiftWarn);
@@ -659,17 +738,22 @@ function extractDayTotal(ws: LoadedSheet): number | null {
   return null;
 }
 
-function extractSheet(ws: LoadedSheet, yearOverride: number | null): SheetResult {
+function extractSheet(
+  ws: LoadedSheet,
+  yearOverride: number | null,
+  plan: SheetBatchPlan,
+): SheetResult {
   const titleStripped = ws.name.trim();
   const ymd = parseSheetDate(ws.name, yearOverride);
   if (ymd === null) {
     return { runs: [], downtime: [], electricity: [], trucks: [], txnIso: null, dayTotal: null };
   }
   const txnIso = isoDate(ymd);
-  const productionBatch = productionBatchFor(ymd);
 
-  const runs = extractRuns(ws, titleStripped, txnIso, productionBatch);
-  const downtime = extractDowntime(ws, titleStripped, txnIso, productionBatch);
+  const runs = extractRuns(ws, titleStripped, txnIso, plan);
+  // Downtime carries no marker of its own and is a whole-DAY fact, so it follows
+  // the same rule as an unmarked run row: the batch that was already running.
+  const downtime = extractDowntime(ws, titleStripped, txnIso, plan.running);
   const electricity = extractElectricity(ws, titleStripped, txnIso);
   const trucks = extractTrucks(ws, titleStripped, txnIso);
   const dayTotal = extractDayTotal(ws);
@@ -696,12 +780,53 @@ function resolveSheets(wb: LoadedWorkbook, yearOverride: number | null, since: s
   return selected;
 }
 
+/** Optional knobs the orchestrator resolves before extraction. */
+export interface McExtractOpts {
+  /**
+   * The `production_batch` already RUNNING immediately before the earliest sheet
+   * this extract will read — resolved from the DB by `index.ts`
+   * (`resolveRunningBatch` over `production_shifts` at/below the `since` floor).
+   * `null`/omitted = COLD START: every sheet's batch falls back to its own
+   * calendar month (the pre-fix derivation) and the dates are reported in
+   * `batch.coldStartDates`.
+   *
+   * The parity entrypoint (`classifyCase`) leaves this UNSET, so the frozen
+   * fixtures keep reproducing the Python calendar derivation byte-for-byte.
+   */
+  runningBatch?: string | null;
+}
+
 /**
  * Extract the MC Daily Production Report across ALL sheets, applying the
  * exclusive --since sheet filter. `year` is the century override (int(since[:4])).
+ *
+ * Two passes over the selected sheets:
+ *   1. A marker SCAN (date + "does this sheet carry a STARTING?") folded in DATE
+ *      order into one `SheetBatchPlan` per sheet — this is where the running
+ *      batch is carried forward across a changeover.
+ *   2. The EXTRACTION proper, in the WORKBOOK'S OWN sheet order, so the emitted
+ *      row order (which the parity harness compares) is unchanged.
  */
-export function extractMc(wb: LoadedWorkbook, year: number, since: string | null): McExtract {
+export function extractMc(
+  wb: LoadedWorkbook,
+  year: number,
+  since: string | null,
+  opts: McExtractOpts = {},
+): McExtract {
   const sheetNames = resolveSheets(wb, year, since);
+
+  // Pass 1 — marker scan + running-batch fold (date order, on a copy).
+  const scans: SheetMarkerScan[] = [];
+  for (const name of sheetNames) {
+    const ws = wb.sheet(name);
+    if (!ws) continue;
+    const ymd = parseSheetDate(name, year);
+    if (ymd === null) continue; // undated sheet: no batch plan, no rows anyway
+    scans.push({ name, iso: isoDate(ymd), month: ymd.m, hasStarting: sheetHasStartingMarker(ws) });
+  }
+  const batch = buildBatchPlans(scans, opts.runningBatch ?? null);
+
+  // Pass 2 — extraction, in the workbook's own order.
   const runs: RunRow[] = [];
   const downtime: DowntimeRow[] = [];
   const electricity: ElectricityRow[] = [];
@@ -710,12 +835,14 @@ export function extractMc(wb: LoadedWorkbook, year: number, since: string | null
   for (const name of sheetNames) {
     const ws = wb.sheet(name);
     if (!ws) continue;
-    const res = extractSheet(ws, year);
+    // An undated sheet has no plan; extractSheet early-returns on it regardless.
+    const plan = batch.plans.get(name) ?? { running: monthName(1), starting: null, coldStart: true };
+    const res = extractSheet(ws, year, plan);
     runs.push(...res.runs);
     downtime.push(...res.downtime);
     electricity.push(...res.electricity);
     trucks.push(...res.trucks);
     if (res.txnIso) dayTotals[res.txnIso] = res.dayTotal;
   }
-  return { runs, downtime, electricity, trucks, dayTotals };
+  return { runs, downtime, electricity, trucks, dayTotals, batch };
 }

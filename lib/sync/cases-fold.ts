@@ -14,6 +14,7 @@ import type {
   BatchClose,
   BlockDiff,
   HeldRow,
+  ProductionBatchStart,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
@@ -47,6 +48,26 @@ export function collectAutoCreatedBatches(result: SyncRunResult): CollectedAutoC
     if (!report) continue
     const notes = report.apply?.auto_created_batches ?? []
     for (const note of notes) out.push({ reportType: key, note })
+  }
+  return out
+}
+
+/**
+ * Flatten every production-batch changeover a run announced
+ * (`result.reports.production.apply.production_batch_starts`, 2026-08-03). Only the
+ * `production` report ever fills it, but the fold is generic + guarded so a hand-built
+ * or pre-feature result simply yields []. Pure — panel-visibility only; these are NOT
+ * folded into durable cases (same treatment as `auto_created_batches`).
+ */
+export function collectProductionBatchStarts(result: SyncRunResult): ProductionBatchStart[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: ProductionBatchStart[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.production_batch_starts ?? []) out.push(note)
   }
   return out
 }
