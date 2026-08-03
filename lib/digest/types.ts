@@ -28,7 +28,24 @@ export interface StreamFreshness {
   label: string;
   /** latest business date present for this stream (yyyy-MM-dd) */
   throughDate: string | null;
-  /** ok = current within tolerance, warn = lagging */
+  /** the reported day immediately BEFORE `throughDate` (yyyy-MM-dd), so a
+   *  lag-anchored KPI card can compute a delta against the prior REPORTED
+   *  day rather than against a day that simply has no row. From SQL
+   *  (`view_digest_stream_status.prev_reported_date`). */
+  prevReportedDate: string | null;
+  /** TRUE when the source reports this stream a day BEHIND by design (MC's
+   *  Daily Production Report and the PROPOSED DAILY REPORT both describe
+   *  YESTERDAY). Such a stream's KPI card is anchored to `throughDate`, and
+   *  "no row for the operational date" is its normal steady state, never a
+   *  fault. From SQL (`view_digest_stream_status.reports_next_day`). */
+  reportsNextDay: boolean;
+  /** planned WORKING days whose report is outstanding — days with
+   *  `production_schedule.shifts > 0` strictly between `throughDate` and the
+   *  operational date. Rest days and the operational date itself are
+   *  EXCLUDED, so Sunday is never late and today is never late. 0 = on time.
+   *  null = not computable. Counted in SQL, never in TypeScript. */
+  missedDays: number | null;
+  /** ok = current within tolerance, warn = lagging (>= 2 missed working days) */
   status: "ok" | "warn";
 }
 

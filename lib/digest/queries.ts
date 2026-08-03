@@ -39,8 +39,12 @@ import type {
   SchedulePreviewRow,
 } from "./types";
 import {
+  OVERDUE_AFTER_MISSED_DAYS,
+  resolveKpiAnchorDate,
   resolveKpiDayStatus,
+  resolveKpiPrevDate,
   resolveScheduleRowState,
+  streamForKpi,
   type KpiDayStatus,
   type ProdSchedDay,
 } from "./day-status";
@@ -61,7 +65,6 @@ const PRICE_DAYS = 30;
 const GRADE_DAYS = 14;
 const AVG7_DAYS = 7;
 const ACTIVITY_LIMIT = 40;
-const STREAM_LAG_TOLERANCE_DAYS = 2;
 
 // ---------- raw row shapes (match the SQL view columns) ----------
 
@@ -69,10 +72,18 @@ interface OperationalDaysRow {
   operational_date: string | null;
   prev_operational_date: string | null;
 }
-interface StreamFreshnessRow {
+/** One row of `view_digest_stream_status` (migration 20260803070000) — the
+ *  lag-aware successor to `view_digest_stream_freshness`. It carries the
+ *  stream's latest reported day, the one before it, whether the stream is
+ *  reported a day behind BY DESIGN, and how many planned WORKING days of
+ *  reports are outstanding. All four are computed in SQL. */
+interface StreamStatusRow {
   stream: string;
   label: string;
   through_date: string | null;
+  prev_reported_date: string | null;
+  reports_next_day: boolean | null;
+  missed_working_days: number | null;
 }
 interface DailyFlowRow {
   date: string;
@@ -286,7 +297,11 @@ export async function getDigestData(): Promise<DigestData> {
   ] = await Promise.all([
     canViewPrices(),
     supabase.from("view_digest_operational_days").select("*").maybeSingle(),
-    supabase.from("view_digest_stream_freshness").select("*"),
+    // Lag-aware stream read model — supersedes view_digest_stream_freshness
+    // (which is now a thin 3-column projection of this view). Carries
+    // reports_next_day / prev_reported_date / missed_working_days, all
+    // computed in SQL. Same query count as before, no extra round-trip.
+    supabase.from("view_digest_stream_status").select("*"),
     supabase.from("view_digest_daily_flow").select("*").order("date", { ascending: true }),
     supabase.from("view_digest_daily_price").select("*").order("date", { ascending: true }),
     supabase.from("view_digest_daily_production").select("*").order("date", { ascending: true }),
@@ -344,6 +359,33 @@ export async function getDigestData(): Promise<DigestData> {
   };
   const operationalDate = opDays.operational_date;
   const prevOperationalDate = opDays.prev_operational_date;
+
+  // ---------- per-stream status (needed BEFORE the KPIs) ----------
+  // Built up here rather than beside `meta` because the KPI cards are
+  // ANCHORED to it: a lag-by-design stream's headline value belongs to its
+  // latest REPORTED day, not to the operational date. Every row-set fact
+  // (through/prev reported day, missed working days) is computed in SQL —
+  // this is a passthrough plus the ok/warn threshold.
+  //
+  // `status = warn` now means "OVERDUE_AFTER_MISSED_DAYS+ planned WORKING
+  // days of reports outstanding", not "N calendar days behind": a Sunday or
+  // holiday (production_schedule.shifts = 0) is not a late report, and the
+  // operational date itself is excluded because a next-day stream's report
+  // for today is not due yet.
+  const streamRows = (streamsRes.data as StreamStatusRow[] | null) ?? [];
+  const streams: StreamFreshness[] = streamRows.map((s) => ({
+    stream: s.stream,
+    label: s.label,
+    throughDate: s.through_date,
+    prevReportedDate: s.prev_reported_date,
+    reportsNextDay: s.reports_next_day ?? false,
+    missedDays: s.missed_working_days,
+    status:
+      s.missed_working_days != null &&
+      s.missed_working_days >= OVERDUE_AFTER_MISSED_DAYS
+        ? "warn"
+        : "ok",
+  }));
 
   // ---------- raw series ----------
   const flowRows = (flowRes.data as DailyFlowRow[] | null) ?? [];
@@ -407,17 +449,62 @@ export async function getDigestData(): Promise<DigestData> {
     value: round(n(r.kwh)),
   }));
 
+  // ---------- KPI anchors ----------
+  // Which DAY each card's headline number belongs to. Same-day streams
+  // (RC In) and the derived net-flow card stay on the operational date;
+  // a lag-by-design stream anchors to its latest REPORTED day, which comes
+  // from SQL (`view_digest_stream_status.through_date`) — the daily series
+  // is never scanned here to find it.
+  //
+  // `anchorOn()` narrows that date to one the loaded (120-day windowed)
+  // daily series actually carries: a stream whose last report predates the
+  // window has no usable value, and returning null lets the resolver say
+  // "overdue" instead of the card printing a hollow 0.
+  const anchorOn = (
+    kpiKey: string,
+    map: Map<string, number>
+  ): { date: string | null; value: number } => {
+    const date = resolveKpiAnchorDate({ kpiKey, operationalDate, streams });
+    if (date && map.has(date)) return { date, value: map.get(date)! };
+    // Lag-by-design stream with nothing usable in the loaded window → no
+    // anchor, so the resolver says "overdue" instead of printing a hollow 0.
+    if (streamForKpi(kpiKey, streams)?.reportsNextDay) {
+      return { date: null, value: 0 };
+    }
+    // Same-day stream: "no row today" is a real 0 TODAY, not a gap — keep the
+    // operational date so `idle` / `awaiting` still resolve against it.
+    return { date, value: 0 };
+  };
+  /** Value on the prior REPORTED day (lagging) or prevOperationalDate. */
+  const prevOn = (kpiKey: string, map: Map<string, number>): number | null => {
+    const date = resolveKpiPrevDate({ kpiKey, prevOperationalDate, streams });
+    return date ? valueOn(map, date) : null;
+  };
+
   // ---------- KPIs ----------
-  const rcInVal = valueOn(inByDate, operationalDate);
-  const rcInPrev = prevOperationalDate ? valueOn(inByDate, prevOperationalDate) : null;
-  const rcOutVal = valueOn(outByDate, operationalDate);
-  const rcOutPrev = prevOperationalDate ? valueOn(outByDate, prevOperationalDate) : null;
-  const prodVal = valueOn(prodByDate, operationalDate);
-  const prodPrev = prevOperationalDate ? valueOn(prodByDate, prevOperationalDate) : null;
-  const powerVal = valueOn(powerByDate, operationalDate);
-  const powerPrev = prevOperationalDate ? valueOn(powerByDate, prevOperationalDate) : null;
+  const rcIn = anchorOn("rc_in", inByDate);
+  const rcInVal = rcIn.value;
+  const rcInPrev = prevOn("rc_in", inByDate);
+  const rcOut = anchorOn("rc_out", outByDate);
+  const rcOutVal = rcOut.value;
+  const rcOutPrev = prevOn("rc_out", outByDate);
+  const prod = anchorOn("production", prodByDate);
+  const prodVal = prod.value;
+  const prodPrev = prevOn("production", prodByDate);
+  const power = anchorOn("power", powerByDate);
+  const powerVal = power.value;
+  const powerPrev = prevOn("power", powerByDate);
   const netVal = valueOn(netByDate, operationalDate);
   const netPrev = prevOperationalDate ? valueOn(netByDate, prevOperationalDate) : null;
+
+  /** kpi key → the day its headline value belongs to (for `dayStatus`). */
+  const anchorByKpi: Record<string, string | null> = {
+    rc_in: rcIn.date,
+    rc_out: rcOut.date,
+    production: prod.date,
+    power: power.date,
+    net_flow: operationalDate,
+  };
 
   // ---------- avg7 (trailing 7 daily values from the windowed series) ----------
   // Ascending daily-value arrays; avg7() takes the last 7. Presentational
@@ -683,21 +770,21 @@ export async function getDigestData(): Promise<DigestData> {
   // ---------- flags ----------
   const flags: Flag[] = [];
 
-  // (a) stale stream: any stream lagging operationalDate by > tolerance.
-  const streamRows = (streamsRes.data as StreamFreshnessRow[] | null) ?? [];
-  if (operationalDate) {
-    for (const s of streamRows) {
-      if (!s.through_date) continue;
-      const lag = daysBetween(operationalDate, s.through_date);
-      if (lag > STREAM_LAG_TOLERANCE_DAYS) {
-        flags.push({
-          kind: "stale_stream",
-          severity: "warn",
-          message: `${s.label} is ${lag} days behind (through ${s.through_date}).`,
-          date: s.through_date,
-        });
-      }
-    }
+  // (a) stale stream: reports outstanding for OVERDUE_AFTER_MISSED_DAYS+
+  // planned WORKING days. Measured against the plan (SQL), not raw calendar
+  // days, so a Sunday/holiday and "today's next-day report isn't due yet"
+  // never raise a flag — the same measure the KPI cards use, so the footer
+  // and the hero can never disagree.
+  for (const s of streams) {
+    if (s.status !== "warn" || s.missedDays == null) continue;
+    flags.push({
+      kind: "stale_stream",
+      severity: "warn",
+      message: `${s.label} is ${s.missedDays} working day${
+        s.missedDays === 1 ? "" : "s"
+      } behind (through ${s.throughDate}).`,
+      date: s.throughDate ?? undefined,
+    });
   }
 
   // (b) deliveries awaiting price enrichment (cost_basis = 0) in last 30 days.
@@ -736,17 +823,6 @@ export async function getDigestData(): Promise<DigestData> {
         netKg: round(n(mtdRow.rc_in_kg) - n(mtdRow.rc_out_kg)),
       }
     : { label: "", rcInKg: 0, rcOutKg: 0, productionKg: 0, netKg: 0 };
-
-  // ---------- meta ----------
-  const streams: StreamFreshness[] = streamRows.map((s) => ({
-    stream: s.stream,
-    label: s.label,
-    throughDate: s.through_date,
-    status:
-      operationalDate && s.through_date && daysBetween(operationalDate, s.through_date) > STREAM_LAG_TOLERANCE_DAYS
-        ? "warn"
-        : "ok",
-  }));
 
   // ---------- production plan: plant status, per-KPI day state, week plan ----------
   // Sourced from `production_schedule` (the ingested PROD SCHED plan) joined with
@@ -795,11 +871,15 @@ export async function getDigestData(): Promise<DigestData> {
       };
     }
 
-    // Per-KPI day state (the "misleading zero" fix) against the op-date plan.
+    // Per-KPI day state (the "misleading zero" + lag-by-design fix) against
+    // the op-date plan. `anchorDate` is the day kpi.value belongs to — the
+    // operational date for same-day streams, the stream's latest REPORTED day
+    // for the ones the operator files a morning late.
     for (const kpi of kpis) {
       dayStatus[kpi.key] = resolveKpiDayStatus({
         kpiKey: kpi.key,
         value: kpi.value,
+        anchorDate: anchorByKpi[kpi.key] ?? operationalDate,
         operationalDate,
         plan: opPlan,
         streams,

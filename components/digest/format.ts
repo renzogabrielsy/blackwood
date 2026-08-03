@@ -10,6 +10,7 @@
 // blank-on-zero grid variants are intentionally NOT unified).
 // =====================================================================
 
+import { format, parseISO } from "date-fns";
 import { fmtKg, fmtPhpNumber } from "@/lib/format-utils";
 export { fmtKg, fmtPhpNumber };
 
@@ -40,6 +41,39 @@ export function fmtByUnit(value: number, unit: string): string {
     default:
       return value.toLocaleString("en-US");
   }
+}
+
+/** A yyyy-MM-dd business date as a short, unambiguous label — "Aug 1".
+ *  `parseISO`, never `new Date()`, so a date-only string can't drift a day
+ *  across timezones (the house rule, see bag-inventory). */
+export function fmtShortDate(date: string): string {
+  try {
+    return format(parseISO(date), "MMM d");
+  } catch {
+    return date;
+  }
+}
+
+/** How old a business date is, in plain words — "today", "yesterday",
+ *  "2 days ago". Takes the already-computed calendar-day gap so the caller
+ *  keeps ownership of the date math. */
+export function fmtDayAge(days: number | undefined): string {
+  if (days == null || days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  return `${days} days ago`;
+}
+
+/** "1 working day behind" / "3 working days behind" — the lateness of a
+ *  lag-by-design stream, counted in PLANNED working days (rest days and the
+ *  operational date itself are excluded upstream, in SQL). For a wide slot. */
+export function fmtMissedDays(missed: number): string {
+  return `${missed} working day${missed === 1 ? "" : "s"} behind`;
+}
+
+/** The same fact in a phrase short enough for a KPI card's shared sub-line:
+ *  one outstanding planned working day == one report that has not arrived. */
+export function fmtReportsDue(missed: number): string {
+  return `${missed} report${missed === 1 ? "" : "s"} due`;
 }
 
 /** Relative time from an ISO timestamp, e.g. "3 min ago", "2 h ago", "Just now". */
