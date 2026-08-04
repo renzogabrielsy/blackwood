@@ -23,12 +23,17 @@ import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
 import {
     METRICS,
+    METRIC_SHORT,
+    isIsoDate,
+    parseMetricValue,
     parseWeightKg,
+    sampleGroupKey,
     type AddPartnerDrawArgs,
     type AddPartnerDrawOutcome,
     type AddPartnerDrawResult,
     type BatchResolution,
     type ExistingDraw,
+    type MetricKey,
     type SaveSampleArgs,
     type SaveSampleOutcome,
     type UpdateWeightOutcome,
@@ -115,6 +120,51 @@ function buildArgs(input: SaveQcSampleInput): SaveSampleArgs {
  * optimistic-concurrency check, so a conflict on one group never blocks the others —
  * the caller gets a per-group verdict and decides what to keep on screen.
  */
+/**
+ * ONE sample group's RPC round trip, extracted so the "add a draw, then apply its
+ * reading" path (`addQcDraws`) and the "edit a saved row's reading" path
+ * (`saveQcSamples`) cannot drift into two different write behaviours. The Supabase
+ * client is passed in so a batch shares one.
+ */
+async function writeSampleGroup(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    input: SaveQcSampleInput,
+): Promise<SaveQcSampleResult> {
+    // Cheap client-side guard's server twin: the RPC rejects an all-null sample
+    // (`no_metrics`), so never spend a round trip discovering that.
+    if (METRICS.every((metric) => input[metric] == null)) {
+        return {
+            key: input.key,
+            ok: false,
+            outcome: 'no_metrics',
+            rowVersion: input.expectedRowVersion,
+            message:
+                'A sample must carry at least one of BD / ASH / GRIT / MC. Clearing every metric would delete the reading, which this screen does not do.',
+        };
+    }
+
+    const { data, error } = await supabase.rpc('cenapro_save_analysis_sample', buildArgs(input));
+
+    if (error) {
+        return {
+            key: input.key,
+            ok: false,
+            outcome: 'rpc_error',
+            rowVersion: null,
+            message: error.message,
+        };
+    }
+
+    const raw = (data ?? {}) as RawSaveResult;
+    return {
+        key: input.key,
+        ok: raw.ok === true,
+        outcome: readOutcome(raw.outcome),
+        rowVersion: typeof raw.row_version === 'number' ? raw.row_version : null,
+        message: typeof raw.message === 'string' ? raw.message : null,
+    };
+}
+
 export async function saveQcSamples(inputs: SaveQcSampleInput[]): Promise<SaveQcSamplesResult> {
     if (inputs.length === 0) return { results: [], savedCount: 0, failedCount: 0 };
 
@@ -122,41 +172,7 @@ export async function saveQcSamples(inputs: SaveQcSampleInput[]): Promise<SaveQc
     const results: SaveQcSampleResult[] = [];
 
     for (const input of inputs) {
-        // Cheap client-side guard's server twin: the RPC rejects an all-null sample
-        // (`no_metrics`), so never spend a round trip discovering that.
-        if (METRICS.every((metric) => input[metric] == null)) {
-            results.push({
-                key: input.key,
-                ok: false,
-                outcome: 'no_metrics',
-                rowVersion: input.expectedRowVersion,
-                message:
-                    'A sample must carry at least one of BD / ASH / GRIT / MC. Clearing every metric would delete the reading, which this screen does not do.',
-            });
-            continue;
-        }
-
-        const { data, error } = await supabase.rpc('cenapro_save_analysis_sample', buildArgs(input));
-
-        if (error) {
-            results.push({
-                key: input.key,
-                ok: false,
-                outcome: 'rpc_error',
-                rowVersion: null,
-                message: error.message,
-            });
-            continue;
-        }
-
-        const raw = (data ?? {}) as RawSaveResult;
-        results.push({
-            key: input.key,
-            ok: raw.ok === true,
-            outcome: readOutcome(raw.outcome),
-            rowVersion: typeof raw.row_version === 'number' ? raw.row_version : null,
-            message: typeof raw.message === 'string' ? raw.message : null,
-        });
+        results.push(await writeSampleGroup(supabase, input));
     }
 
     const savedCount = results.filter((r) => r.ok).length;
@@ -479,6 +495,27 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
         return refuse('invalid_key', `This draw is missing ${missing.join(', ')}.`);
     }
 
+    // ── The dates arrive already normalized, and this is where that is checked ────
+    // The QC date cells are FREE TEXT that becomes `yyyy-MM-dd` when you leave them, so
+    // by the time a row is sent it is ISO. If it is not — a row saved from a focused
+    // cell whose text never parsed, or any caller that is not this screen — the RPC's
+    // `date` cast would fail with a Postgres message about a column the operator never
+    // named. Refuse it here instead, in this module's own voice. Deliberately NOT
+    // "helpfully" parsed: only the client knows which year a bare `6/27` means, and
+    // guessing one here is exactly the silent wrong write this ledger must not make.
+    if (!isIsoDate(recvDate)) {
+        return refuse(
+            'invalid_key',
+            `"${recvDate}" is not a receipt date. Dates are written as yyyy-MM-dd — retype the date cell and tab out of it.`,
+        );
+    }
+    if (prodDate && !isIsoDate(prodDate)) {
+        return refuse(
+            'invalid',
+            `"${prodDate}" is not a production date. Dates are written as yyyy-MM-dd — retype the date cell and tab out of it, or clear it.`,
+        );
+    }
+
     // ── The weight, through the same parser the client previewed with ─────────────
     const { kg, error: weightError } = parseWeightKg(input.weightRaw ?? '');
     if (kg == null) return refuse('invalid', weightError ?? 'That weight cannot be saved.');
@@ -578,12 +615,65 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
     return result;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────
+// Typed rows → draws, and then their readings (2026-08-04, second pass).
+//
+// A lab reading belongs to a sample GROUP, and until a draw is saved that group may not
+// exist. That is why BD/ASH/GRIT/MC were inert on a draft row. They are typable now, and
+// the sequencing that makes them safe lives HERE rather than in the browser:
+//
+//   1. every row's draw is inserted, sequentially (see `addQcDraws` below);
+//   2. each successful insert reports the sample group it landed in — `sample_group` on
+//      the RPC's own verdict, computed by the same `coalesce(warehouse_code, plant_code)`
+//      the view groups by. Nothing re-derives it;
+//   3. the rows that carried a reading are bucketed by THAT key, and each bucket gets
+//      ONE `cenapro_save_analysis_sample` call.
+//
+// Step 3 is where two rows can disagree. Two draws from the same source and warehouse on
+// the same day are one sample group by definition, so two typed readings for them must
+// agree; if they do not, no machine can pick. The bucket is refused, named, and NOTHING
+// is written for it — the draws themselves stay (they are real receipts and not in
+// dispute), and the operator types the reading once on the saved row.
+//
+// A union is not a conflict: one row giving BD and another giving MC is how a slip that
+// splits its analysis across lines is meant to read, and the two merge.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+/** What happened to the reading typed on a row, once its draw was in. */
+export interface AddQcReadingResult {
+    ok: boolean;
+    outcome: SaveSampleOutcome | 'rpc_error' | 'reading_conflict' | 'skipped';
+    /** The sample group the reading was aimed at — the RPC's own key, never re-derived. */
+    groupKey: string | null;
+    message: string | null;
+}
+
 /** One typed row's verdict, carried back with the row it belongs to. */
 export interface AddQcDrawRowResult {
     /** The client's own row id — the ONLY way to put a verdict back on the right row. */
     rowId: string;
     result: AddQcDrawResult;
+    /** Present only when the row carried BD/ASH/GRIT/MC. */
+    reading?: AddQcReadingResult;
 }
+
+/** One typed row on its way in: the draw, plus whatever was typed in the lab cells. */
+export interface AddQcDrawRow {
+    rowId: string;
+    input: AddQcDrawInput;
+    /** Raw metric text, blanks already dropped. Omitted when the row says nothing. */
+    metrics?: Partial<Record<MetricKey, string>>;
+}
+
+/**
+ * The `sample_row_version` of each group the CLIENT can currently see, keyed exactly as
+ * `sampleGroupKey` builds it. A group already carrying a reading needs its version, or
+ * the RPC (rightly) answers `already_exists` rather than overwriting a stored reading
+ * against a blind `null`. A key that is absent means "no sample there as far as the
+ * screen knows" → `null` → INSERT, and a losing race comes back `already_exists`.
+ * Never a re-read-and-retry.
+ */
+export type QcGroupVersions = Record<string, number | null>;
 
 /**
  * Save a batch of typed draw rows — the spreadsheet entry path (2026-08-04).
@@ -605,11 +695,158 @@ export interface AddQcDrawRowResult {
  * refusal the operator confirms through by re-sending that row with `allowDuplicate`.
  */
 export async function addQcDraws(
-    rows: Array<{ rowId: string; input: AddQcDrawInput }>,
+    rows: AddQcDrawRow[],
+    groupVersions: QcGroupVersions = {},
 ): Promise<AddQcDrawRowResult[]> {
     const out: AddQcDrawRowResult[] = [];
     for (const { rowId, input } of rows) {
         out.push({ rowId, result: await addPartnerDraw(input) });
     }
+
+    // ── The readings, bucketed by the group each insert actually landed in ────────
+    interface Bucket {
+        key: string;
+        sampleDate: string;
+        src: string;
+        whse: string;
+        rowIds: string[];
+        /** Per metric: the agreed value. A second, different one is a conflict. */
+        values: Partial<Record<MetricKey, number>>;
+        /** The first disagreement found — recorded, then worded once the bucket is whole. */
+        conflict: { metric: MetricKey; a: number; b: number } | null;
+        /** A metric that could not be read at all — the row is named, nothing written. */
+        invalid: string | null;
+    }
+    const buckets = new Map<string, Bucket>();
+    const readingByRow = new Map<string, AddQcReadingResult>();
+
+    for (let i = 0; i < rows.length; i++) {
+        const { rowId, metrics } = rows[i];
+        if (!metrics || Object.keys(metrics).length === 0) continue;
+
+        const verdict = out[i].result;
+        if (!(verdict.ok && verdict.outcome === 'inserted')) {
+            readingByRow.set(rowId, {
+                ok: false,
+                outcome: 'skipped',
+                groupKey: null,
+                message:
+                    'The draw did not save, so its reading was not written either. Fix the row and save again.',
+            });
+            continue;
+        }
+        const group = verdict.sample_group;
+        if (!group) {
+            readingByRow.set(rowId, {
+                ok: false,
+                outcome: 'rpc_error',
+                groupKey: null,
+                message:
+                    'The draw saved, but the database did not report which sample group it joined, so the reading was not written. Type it on the saved row.',
+            });
+            continue;
+        }
+
+        const key = sampleGroupKey({
+            sample_date: group.sample_date,
+            source_location_code: group.source_location_code,
+            whse_key: group.whse_key,
+        });
+        const bucket: Bucket = buckets.get(key) ?? {
+            key,
+            sampleDate: group.sample_date,
+            src: group.source_location_code,
+            whse: group.whse_key,
+            rowIds: [],
+            values: {},
+            conflict: null,
+            invalid: null,
+        };
+        bucket.rowIds.push(rowId);
+
+        for (const metric of METRICS) {
+            const raw = metrics[metric];
+            if (raw == null || raw.trim() === '') continue;
+            const { value, error } = parseMetricValue(metric, raw);
+            if (value == null) {
+                bucket.invalid ??= error ?? `${METRIC_SHORT[metric]} could not be read.`;
+                continue;
+            }
+            const seen = bucket.values[metric];
+            if (seen == null) {
+                bucket.values[metric] = value;
+            } else if (seen !== value) {
+                // Two typed rows, one sample group, two different numbers for the same
+                // metric. There is no correct answer to pick, so none is picked.
+                bucket.conflict ??= { metric, a: seen, b: value };
+            }
+        }
+        buckets.set(key, bucket);
+    }
+
+    if (buckets.size > 0) {
+        const supabase = await createClient();
+
+        for (const bucket of buckets.values()) {
+            const refusal = bucket.conflict
+                ? `${bucket.rowIds.length} new rows land in the sample group ` +
+                  `${bucket.sampleDate} · ${bucket.src} · ${bucket.whse} but give ` +
+                  `${METRIC_SHORT[bucket.conflict.metric]} as ${bucket.conflict.a} and ` +
+                  `${bucket.conflict.b}. A reading covers the whole group, so none was saved ` +
+                  `for it — the draws are in; make the numbers match, or type the reading once ` +
+                  `on the saved row.`
+                : bucket.invalid;
+            if (refusal) {
+                for (const rowId of bucket.rowIds) {
+                    readingByRow.set(rowId, {
+                        ok: false,
+                        outcome: bucket.conflict ? 'reading_conflict' : 'rpc_error',
+                        groupKey: bucket.key,
+                        message: refusal,
+                    });
+                }
+                continue;
+            }
+            if (Object.keys(bucket.values).length === 0) continue;
+
+            const result = await writeSampleGroup(supabase, {
+                key: bucket.key,
+                sampleDate: bucket.sampleDate,
+                sourceLocationCode: bucket.src,
+                whseKey: bucket.whse,
+                bd: bucket.values.bd ?? null,
+                ash: bucket.values.ash ?? null,
+                grit: bucket.values.grit ?? null,
+                mc: bucket.values.mc ?? null,
+                // Straight through, exactly as an edit on a saved row would: `null`
+                // creates, an integer updates against that exact version. A group whose
+                // reading moved while the slip was being typed comes back
+                // `version_conflict`, never clobbered.
+                expectedRowVersion: groupVersions[bucket.key] ?? null,
+            });
+            for (const rowId of bucket.rowIds) {
+                readingByRow.set(rowId, {
+                    ok: result.ok,
+                    outcome: result.outcome,
+                    groupKey: bucket.key,
+                    message: result.message,
+                });
+            }
+        }
+    }
+
+    if (readingByRow.size > 0) {
+        for (const row of out) {
+            const reading = readingByRow.get(row.rowId);
+            if (reading) row.reading = reading;
+        }
+        // A reading moves both QC surfaces. `addPartnerDraw` already revalidated for the
+        // insert; this covers a save where only the reading landed.
+        if ([...readingByRow.values()].some((r) => r.ok)) {
+            revalidatePath('/cenapro/qc');
+            revalidatePath('/cenapro/qc/breakdown');
+        }
+    }
+
     return out;
 }
