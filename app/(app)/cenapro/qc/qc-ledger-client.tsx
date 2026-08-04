@@ -134,7 +134,15 @@ const COLS: LedgerCol[] = [
     { key: 'prod', width: 62, label: 'Prod', title: 'Production date of the material drawn' },
     { key: 'shift', width: 40, label: 'Sh', title: 'Shift' },
     { key: 'grade', width: 62, label: 'Grade' },
-    { key: 'plant', width: 60, label: 'Plant' },
+    {
+        key: 'plant',
+        // Wider than its header needs since 2026-08-04: on a draft row this cell holds a
+        // `SelectCell` (badge + chevron) AND the row's remove control, and `W6/W7` is the
+        // widest badge. Reference rows just get an airier column.
+        width: 88,
+        label: 'Plant',
+        title: 'Plant — derived from SRC on a new row (TNK→W6, W7→W7, W6→W6, FLEC→none), and overridable when the partner’s slip says otherwise',
+    },
     { key: 'whse', width: 62, label: 'Whse', title: 'Warehouse (or plant, when unplaced)' },
     { key: 'side', width: 44, label: 'Side', title: 'Warehouse side (LS / RS) — FLEC draws only' },
     {
@@ -364,18 +372,6 @@ export function QcLedgerClient({
         return map;
     }, [days]);
 
-    /**
-     * Which day the composer opens on when it is opened from the toolbar rather than
-     * from a day header: today when today is in the month on screen (the overwhelmingly
-     * common case — the slip arrives the same day), else the month's last receipt day,
-     * else its first calendar day.
-     */
-    const defaultAddDate = React.useMemo(() => {
-        const today = new Date().toISOString().slice(0, 10);
-        if (today.startsWith(month)) return today;
-        return days[days.length - 1]?.date ?? `${month}-01`;
-    }, [days, month]);
-
     /** How many blanks the "Add draw" button hands you. Renzo's number. */
     const BLANK_BATCH = 10;
 
@@ -383,14 +379,15 @@ export function QcLedgerClient({
      * Append blanks. `anchorDate === null` puts them in the trailing block under the
      * month (the toolbar's ten); a date puts them INSIDE that day's block, which is what
      * the day header's `+ ADD` does — "adding a row inside of an existing day".
+     *
+     * `anchorDate` is LAYOUT ONLY. Blanks arrive with BOTH date cells empty (2026-08-04,
+     * Renzo: *"when you add draw, leave the new cells in both dates column blank"*), so
+     * a row added under a day still renders there but claims no date until one is typed.
      */
-    const addBlanks = React.useCallback(
-        (count: number, anchorDate: string | null, date: string) => {
-            setDrafts((current) => [...current, ...makeBlankDrafts(count, date, anchorDate)]);
-            setAddingDraws(true);
-        },
-        [],
-    );
+    const addBlanks = React.useCallback((count: number, anchorDate: string | null) => {
+        setDrafts((current) => [...current, ...makeBlankDrafts(count, anchorDate)]);
+        setAddingDraws(true);
+    }, []);
 
     const patchDraft = React.useCallback((id: string, patch: Partial<DraftDraw>) => {
         setDrafts((current) =>
@@ -1039,6 +1036,16 @@ export function QcLedgerClient({
                             const row = verdict.get(d.id);
                             if (!row) return d;
                             const v = row.result;
+                            // Non-blocking remarks that came back WITH a successful
+                            // write, in one sentence: the plant the operator typed
+                            // disagreeing with the source, and/or a FLEC draw saved
+                            // without a side. Independent of each other — a FLEC row can
+                            // return both — and neither is a refusal, so neither gets a
+                            // confirm round trip.
+                            const notice = [v.plant_notice, v.notice]
+                                .map((text) => text?.trim())
+                                .filter((text): text is string => Boolean(text))
+                                .join(' ');
                             if (v.ok && v.outcome === 'inserted') {
                                 // The DRAW is in. If the reading typed beside it was
                                 // refused, the row stays on screen carrying that reason
@@ -1048,12 +1055,24 @@ export function QcLedgerClient({
                                         ...d,
                                         status: 'failed' as const,
                                         message: `The draw was added — this row will not be sent again. ${row.reading.message ?? 'Its reading was not saved.'}`,
+                                        notice: notice || undefined,
                                         needsDuplicateConfirm: false,
                                         drawSaved: true,
                                     };
                                 }
-                                // Drop it — the saved row arrives with the refresh below.
-                                return { ...d, status: 'saved' as const };
+                                // A clean insert is DROPPED — the saved row arrives with
+                                // the refresh below. One that came back with a remark is
+                                // KEPT instead (marked filed, so `isSendableDraft` can
+                                // never re-send it), because a notice with nowhere to be
+                                // read is a notice that was never given.
+                                return notice
+                                    ? {
+                                          ...d,
+                                          status: 'saved' as const,
+                                          notice,
+                                          drawSaved: true,
+                                      }
+                                    : { ...d, status: 'saved' as const };
                             }
                             return {
                                 ...d,
@@ -1065,7 +1084,9 @@ export function QcLedgerClient({
                                 needsDuplicateConfirm: v.outcome === 'duplicate_warning',
                             };
                         })
-                        .filter((d) => d.status !== 'saved');
+                        // A saved row leaves the draft list — unless it is carrying a
+                        // remark, which is the only thing keeping that sentence on screen.
+                        .filter((d) => d.status !== 'saved' || Boolean(d.notice));
                 });
                 const inserted = drawRun.filter((r) => r.result.ok && r.result.outcome === 'inserted');
                 if (inserted.length > 0) {
@@ -1203,7 +1224,7 @@ export function QcLedgerClient({
                         size="sm"
                         variant={addingDraws ? 'secondary' : 'default'}
                         className="hidden h-7 text-xs sm:inline-flex"
-                        onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
+                        onClick={() => addBlanks(BLANK_BATCH, null)}
                         title={`Add ${BLANK_BATCH} blank rows at the bottom of ${formatMonthHeading(month)}`}
                     >
                         <Plus className="mr-1 h-3 w-3" />
@@ -1334,7 +1355,7 @@ export function QcLedgerClient({
                                                     size="sm"
                                                     variant="outline"
                                                     className="ml-2 h-6 text-[11px]"
-                                                    onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
+                                                    onClick={() => addBlanks(BLANK_BATCH, null)}
                                                 >
                                                     <Plus className="mr-1 h-3 w-3" />
                                                     Add the first draw
@@ -1352,7 +1373,7 @@ export function QcLedgerClient({
                                         agg={day.agg}
                                         rowOffset={dayRowOffsets[dayIndex]}
                                         markedDrawId={markedDrawId}
-                                        onAddDraw={(date) => addBlanks(1, date, date)}
+                                        onAddDraw={(date) => addBlanks(1, date)}
                                         drafts={drafts.filter((d) => d.anchorDate === day.date)}
                                         drawOptions={drawOptions}
                                         contextYear={contextYear}
@@ -1407,7 +1428,7 @@ export function QcLedgerClient({
                                             <td colSpan={COLS.length} className="border-x border-border/60 px-2 py-1">
                                                 <button
                                                     type="button"
-                                                    onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
+                                                    onClick={() => addBlanks(BLANK_BATCH, null)}
                                                     className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
                                                 >
                                                     <Plus className="h-2.5 w-2.5" />
@@ -1928,14 +1949,16 @@ function DayBlock({
                 >
                     <span className="flex items-center justify-between gap-2">
                         <span className="truncate">{formatDayHeading(date)}</span>
-                        {/* The slip is one day's work, so the add starts from the day
-                            you are reading — not from a form you have to date yourself.
-                            It sits in the LEFT block, which is what is on screen at the
-                            table's default horizontal scroll position. */}
+                        {/* The slip is one day's work, so the add lands in the day you
+                            are reading rather than at the bottom of the month. It sits in
+                            the LEFT block, which is what is on screen at the table's
+                            default horizontal scroll position. The row is placed here but
+                            NOT dated — since 2026-08-04 every blank starts with both date
+                            cells empty, and `anchorDate` (placement) is not `recvDate`. */}
                         <button
                             type="button"
                             onClick={() => onAddDraw(date)}
-                            title={`Add a partner draw to ${formatDayHeading(date)}`}
+                            title={`Add a blank row inside ${formatDayHeading(date)} — type its date in like the rest of the row`}
                             className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
                         >
                             <Plus className="h-2.5 w-2.5" />
