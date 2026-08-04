@@ -41,7 +41,7 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 21 promotions as of 2026-08-04 before the `feat/cenapro-deliveries-qol` split, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
 
-The merge-base tree test has now held **20 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+The merge-base tree test has now held **21 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
 
 ### Branching a correctly-named `feat/*` off a mis-named one (2026-08-04, `c8ffc53`)
 
@@ -80,8 +80,24 @@ branch, same recipe. A brief that says the shared platform hook
 constraint you should VERIFY in the staged path list — its presence would contradict the
 fix and is a stop condition.
 
-**Promotion tempo on this branch is minutes, not hours.** Four promotions in one afternoon
-(`c8ffc53`, `9ee70d5`, `98805ff`, `2d6e422`). Renzo is blocked on the live app during each one, so
+**Promotion 26 (`921b8b3` + `37095dd` → `7aff668`) broke the one-grid-per-promotion pattern**:
+first WIDE changeset on this branch — 20 files across platform `components/shared/grid/**` plus
+five modules (rc-in, rc-out, three production grids, cenapro qc, cenapro deliveries). A brief
+that enumerates a wide expected-path list is describing a real platform sweep, not scope creep;
+diff the staged list against the brief's list and only stop on a genuine extra. The
+`use-grid-keyboard-nav.ts` / `use-cell-selection.ts` stop condition from promotion 25 held —
+neither appeared, and the brief's "audited, no change needed" claim was true.
+
+**Splitting platform from tenant is the natural cut on a wide changeset.** Two commits via
+`git commit -F <msg> -- <pathspec>` (never per-file staging): `fix(grid):` took
+`components/shared/grid` + `app/(app)/inventory` + `app/(app)/production` + `app/(app)/cenapro/qc`
++ `app/(app)/cenapro/CONTEXT.md`; `fix(cenapro):` took `app/(app)/cenapro/deliveries` +
+`scripts/verify-*.ts`. Note `app/(app)/cenapro/CONTEXT.md` documents the **QC** ledger, so it
+rides the PLATFORM commit, not the cenapro one — check which module a shared CONTEXT.md edit
+actually describes before assigning it by path prefix.
+
+**Promotion tempo on this branch is minutes, not hours.** Five promotions in one afternoon
+(`c8ffc53`, `9ee70d5`, `98805ff`, `2d6e422`, `7aff668`). Renzo is blocked on the live app during each one, so
 prefer the cheap gate set (`npx tsc --noEmit` + the repo's `scripts/verify-*.ts`, ~1 min
 total) over a fresh 8-minute `npm run build` when the brief already reports the build green.
 
