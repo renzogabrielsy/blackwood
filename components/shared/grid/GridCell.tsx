@@ -125,10 +125,14 @@ export function GridCell({
                 if (onCellMouseDown) {
                     onCellMouseDown(e);
                 } else {
-                    // No cell selection -> original click behavior
+                    // No cell selection -> original click behavior.
+                    // `preventScroll` because HTMLElement.focus() otherwise scrolls the
+                    // target into view with block AND inline "center" through every
+                    // scrolling ancestor — even when it is already fully visible — so
+                    // clicking a cell jolted the whole page. Focus still moves.
                     setActiveCell({ row, col });
                     setIsEditing(false);
-                    gridRef?.current?.focus();
+                    gridRef?.current?.focus({ preventScroll: true });
                 }
             }}
             onMouseUp={(e) => {

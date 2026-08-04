@@ -82,6 +82,30 @@ Key semantics:
   - **`useGridEditSession<CoordinateId>`** (`@/lib/hooks/use-grid-edit-session`) — owns `isEditing` + the pre-edit snapshot + `startEditing`/`revertChanges`/`commit`, replacing the old local `isEditing` state + `preEditValue` ref + `startEditing`/`revertChanges`. Wired to the grid via `getValue: getCellValue` and `setValue` (→ `updateRow` through `COLUMN_MAP`). Commit does **not** auto-focus; focus is restored explicitly only where the old code did (Tab/Enter commit, Escape revert, single-cell click) so `onBlur` never re-focuses. `GridCell` still calls `onStartEditing(row, col, char?)`/`onRevert()` via thin `{row,col}`-id adapters; a stable `endEditRef` lets the click/blur handlers end an active edit without a forward reference to the later-created session.
   - **`useGridPaste<InputDeliveryRow>`** (`@/lib/hooks/use-grid-paste`) — the Excel/TSV smart-paste (parse TSV, auto-create rows past the end, map via `COLUMN_MAP`, clean via `cleanCellValue`), replacing the old local `handleSmartPaste`/`handleGridPaste`. The container `onPaste` clears the selection after pasting; the "Pasted N rows" success toast is preserved.
   - Behavior is intentionally **byte-for-byte identical** to the pre-migration grid (click=select-no-edit, type=type-over, dblclick/F2=edit-preserve, Esc=revert, Enter/Tab=commit+move skipping non-editable + row-wrap, Shift+Arrow range, Ctrl+C copy, Delete clears). No animation added to cells/selection (CLAUDE.md motion rule). See `components/shared/grid/CONTEXT.md` for the full three-layer package model.
+- **Focus never scrolls (2026-08-04).** `HTMLElement.focus()` scrolls its target into
+  view with block AND inline `"center"` through every scrolling ancestor, and `"center"`
+  always computes a target — so it fires even when nothing moved, re-centring the row and
+  dragging the page. Every `gridRef.current?.focus()` in `bulk-delivery-input.tsx` (the
+  single-cell click, the Escape revert, the Tab/Enter commit) and the `focusCell` helper
+  now pass **`{ preventScroll: true }`**; the master table already did. Focus still moves;
+  only the scroll is refused. See "Focus must never scroll" in
+  `components/shared/grid/CONTEXT.md`.
+  - **Still open in this file:** the per-column editors are shadcn `<Input autoFocus>`,
+    not the shared `EditInput`, so react-dom's own unguarded `.focus()` still runs when an
+    edit STARTS (15 sites). Fixing it means swapping `autoFocus` for a ref callback
+    (`el?.focus({ preventScroll: true })`) at each site — a mechanical change deliberately
+    left out of the platform pass.
+- **Escape-after-Delete audit (2026-08-04) — no gap here, nothing changed.**
+  A **single-cell** Delete/Backspace goes through `useGridKeyboardNav`'s
+  `edit.start(active, '')`, which snapshots the pre-edit value before blanking, so Escape
+  reverts it. A **range** Delete runs `useCellDelete` (no snapshot) and the shared hook
+  then drops the selection — not undoable. That is left as-is on purpose: this is a
+  **staging grid**, so in `mode='create'` there is no stored value to revert to at all,
+  and in `mode='edit'` the only baseline is the `initialData` the dialog was opened with
+  (the form's own Cancel/Discard, not a cell-level undo). Forcing a "revert to stored"
+  semantic onto a create-mode row would be incoherent. The **master table has no cell
+  delete at all** — its cell selection is read-only (copy + aggregate), and Escape simply
+  clears the selection.
 - **Glass & Motion:** Table header/footer use frosted glass (`bg-muted/90 backdrop-blur-sm`). Row hover uses `transition-all duration-150`. Empty state uses `animate-fade-up`. Loading overlay uses `animate-blur-in`. Selection bar uses `animate-fade-up`. Bulk input headers use `bg-muted/90 backdrop-blur-sm`. DeliveryHistoryDialog uses `stagger-fast` on field cards, `stagger-children` on activity feed. Virtual scroll rows use `animate-row-fade` (100ms opacity-only) for subtle recycle animation.
 - **Conditional TOTALS footer:** The TOTALS `<TableFooter>` row is conditionally rendered only when `hasActiveFilters` is true (any STATE, WHSE, Supplier, or LOC filter is active). Uses `animate-slide-up` (250ms translateY + opacity) for entrance. The `DeliverySheetFooter` (year/month nav bar) is always visible — only the TOTALS row is conditional.
 - **Tab crossfade:** Switching between the Deliveries/Usage tabs uses CSS `transition-opacity duration-150` on the visible tab container (Blocking + Movement are standalone routes now, not tabs). Managed by `displayTab` + `transitioning` state in `inventory-view.tsx` — a single `setTimeout(150)` fades out, swaps content, then fades in. No CSS keyframes involved.

@@ -34,21 +34,27 @@ nothing wires them into call sites yet (Phase 1+ migrates each grid).
 - **`GridCell.tsx`** — coordinate `{row,col}` cell. Two modes: display (ring/tint +
   selection feedback) and edit (renders `children`). Extended in Phase 0 with an
   optional `onContextMenu` passthrough on the display div; ring/tint/behavior
-  otherwise unchanged. Used by the flat coordinate grids.
+  otherwise unchanged. Used by the flat coordinate grids. Its **fallback**
+  `onMouseDown` (the branch taken only when the consumer passes NO
+  `onCellMouseDown` — i.e. QC and the digest schedule grid) focuses the grid with
+  **`{ preventScroll: true }`** — see "Focus must never scroll" below.
 - **`SelectCell.tsx`** — categorical dropdown cell (DropdownMenu + RadioGroup).
   `value/options/onChange`, optional `renderLabel`/`renderTrigger`, `nullable`
   ("— None"), `placeholder`, `disabled`/`disabledHint`, `align`. Stops propagation
   on mouse/pointer-down so opening never starts a drag. Promoted verbatim from the
   production ledger (the canonical source).
 - **`DatePickerCell.tsx`** — native `<input type=date>` overlay (opacity:0) + a
-  `formatDateShort` display + calendar icon. `showPicker()` on click when available.
-  Also **exports `formatDateShort`** (was a local helper in the ledger — promoted
-  here as its single source of truth).
+  `formatDateShort` display + calendar icon. `showPicker()` on click when available;
+  both `.focus()` fallbacks pass `{ preventScroll: true }`. Also **exports
+  `formatDateShort`** (was a local helper in the ledger — promoted here as its
+  single source of truth).
 - **`EditInput.tsx`** — the bare inline editor matching static-metric cells exactly
   (no row-height change on edit). `escapedRef` suppresses the blur-commit after
   Escape; placeholder vanishes on focus (Excel-like); `autoFocus` + type-over
-  seeding. Also exports the canonical `EDIT_INPUT` class string. Standalone /
-  presentational — no domain imports.
+  seeding. The `autoFocus` **prop is honoured by a ref callback, never by React's
+  own `autoFocus` attribute** — see "Focus must never scroll" below. Also exports
+  the canonical `EDIT_INPUT` class string. Standalone / presentational — no domain
+  imports.
 - **`GridContextMenu.tsx`** — declarative right-click menu (NO shadcn/Radix; avoids
   focus-steal inside grids). Consumes `useGridContextMenu` state; items via
   `GridMenuItem<T>` (label as string|fn for Delete↔Restore, icon, onSelect, variant
@@ -117,6 +123,24 @@ The primitives are **data-agnostic** — they carry no schema knowledge. The con
 - **Esc + Radix:** while editing, Escape calls
   `e.nativeEvent.stopImmediatePropagation()` so a parent Radix Dialog never catches
   it and closes the modal.
+- **Delete/Backspace is undoable ONLY because it opens an editor (2026-08-04).**
+  `useGridKeyboardNav`'s single-cell branch is `edit.start(active, '')` — it goes
+  through `useGridEditSession.startEditing`, which snapshots the pre-edit value
+  BEFORE blanking the cell. That snapshot is the only thing Escape has to restore,
+  so in every grid on this hook a single-cell clear reverts cleanly. **The range
+  branch does not:** `range.onDelete(e); range.clear();` runs the consumer's
+  `useCellDelete` (which writes `''` per cell with no snapshot) and then drops the
+  selection in the same breath, so a multi-cell clear is not undoable and there is
+  no selection left to aim an undo at. **This is deliberate and unchanged** — a
+  correct fix needs a per-cell *stored* value to revert to, which the coordinate
+  grids on this hook do not have (see the audit note in each consuming module's
+  CONTEXT.md). A grid that DOES have one (Cenapro RC Deliveries) expresses the whole
+  behaviour in its own `onGridKeyDown` wrapper and never touches this hook.
+- **The hook is inert without an active cell.** `handleKeyDown` returns immediately
+  when `activeCell === null`, which includes the range branches — so a range built
+  purely by dragging (the coordinate grids set `activeCell` on a single-cell *click*,
+  not on a drag) will not respond to Delete/Copy until some cell has been clicked.
+  Consumers needing otherwise must handle those keys before delegating.
 - **Active ring z-scale over frozen panes (CLAUDE.md rule):** the active-cell ring
   must sit at **z-20** so it clears `.frozen-col` (z-10). Frozen cells repaint
   opaquely; never glass. This package keeps `GridCell`/`DatePickerCell` ring at the
@@ -126,6 +150,32 @@ The primitives are **data-agnostic** — they carry no schema knowledge. The con
   and the edit transition are **static** — no `@keyframes`, no transition on the
   ring/tint/selection. (Row-level hover/`transition-colors` is fine; cell selection
   is not.) The shared cells follow this — do not add transitions to the ring.
+- **Focus must never scroll (2026-08-04).** `HTMLElement.focus()` is specified to run
+  "scroll an element into view" with block AND inline **`"center"`**, in every
+  scrolling box up to the document — and an `overflow-hidden` ancestor is still
+  programmatically scrollable, so it counts. `"center"` always computes a target, so
+  it fires **even when the element is already fully visible**. In a grid that means a
+  purely lateral gesture (click a cell, start an edit) re-centres the row and drags
+  the whole page with it. **Every `.focus()` in this package therefore passes
+  `{ preventScroll: true }`** — `GridCell`'s fallback mouse-down, both
+  `DatePickerCell` fallbacks, and `EditInput`'s autofocus. Focus still moves; only
+  the scroll is refused. A new `.focus()` here without the option is a bug.
+  - **`EditInput` cannot use React's `autoFocus` attribute.** react-dom's
+    `commitMount` implements it as a bare `domElement.focus()` with no options, so
+    the prop is unfixable from the outside. `EditInput` keeps the `autoFocus` *prop*
+    but honours it with a **ref callback** (`el?.focus({ preventScroll: true })`),
+    which lands in the same commit/layout phase `commitMount` would have. Like
+    react-dom it calls no `select()` / `setSelectionRange()`, so the caret still
+    lands wherever the browser puts it for a freshly focused input — caret and
+    selection behaviour are byte-identical to before, and `autoFocus` must stay OFF
+    the `<input>` or React re-adds its own unguarded focus on top.
+  - Any scroll a grid genuinely wants (following the caret) must be its own, and
+    instant (`behavior:'auto'`) — arithmetic on the table scroller's own
+    `scrollTop`/`scrollLeft`, or at worst `scrollIntoView({ block:'nearest' })`,
+    which is a no-op for an already-visible element. Never `'center'`.
+  - **Consumers that pass their own `onCellMouseDown` never reach `GridCell`'s
+    fallback** and own their focus calls themselves (they focus the grid wrapper on
+    click / commit / revert). Those sites need the same `{ preventScroll: true }`.
 - **Context menu:** no Radix (focus-steal); `data-ctx-menu` marks the surface;
   capture-phase outside-mousedown + Escape close it; `open` flips left/up at the
   viewport edge. `hidden` items skip; `disabled` items render dimmed/non-interactive.

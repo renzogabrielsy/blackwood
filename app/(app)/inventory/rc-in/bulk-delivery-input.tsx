@@ -114,11 +114,15 @@ function getStateClasses(state: string): string {
 
 const inputClass = "h-8 w-full px-1 border-transparent bg-transparent rounded-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary focus-visible:bg-accent/10 transition-colors shadow-none";
 
-/** Focus an input in the grid by row/col data attributes */
+/**
+ * Focus an input in the grid by row/col data attributes.
+ * `preventScroll` — see the note on the mouse-up handler below: a bare focus() scrolls
+ * every ancestor to centre the target, even one already fully on screen.
+ */
 function focusCell(container: HTMLElement | null, row: number, col: number) {
     if (!container) return;
     const target = container.querySelector<HTMLInputElement>(`[data-row="${row}"][data-col="${col}"]`);
-    target?.focus();
+    target?.focus({ preventScroll: true });
 }
 
 // --- MAIN COMPONENT ---
@@ -241,7 +245,11 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
             cellSelection.clearSelection();
             setActiveCell({ row: rowIdx, col: colIdx });
             endEditRef.current();
-            gridRef.current?.focus();
+            // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper into
+            // view with block AND inline "center" through every scrolling ancestor — and
+            // "center" always computes a target, so it fires even when nothing moved. That
+            // is what jolted the page on a plain cell click. Focus still moves.
+            gridRef.current?.focus({ preventScroll: true });
         }
         dragMovedRef.current = false;
     }, [cellSelection, setActiveCell]);
@@ -333,7 +341,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
 
     const revertChanges = React.useCallback(() => {
         editSession.revertChanges();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [editSession]);
 
     // --- GRID NAVIGATION (shared Blackwood Table primitives) ---
@@ -377,7 +385,7 @@ export function BulkDeliveryInput({ batches, suppliers, onSuccess, mode = 'creat
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         // RC IN never used the Tab-then-Enter "return to lane" behavior — plain

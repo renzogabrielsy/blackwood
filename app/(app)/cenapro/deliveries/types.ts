@@ -378,6 +378,149 @@ export function columnScrollLeft(input: ColumnScrollInput): number | null {
     return next === scrollLeft ? null : next;
 }
 
+// ═══ Drag auto-scroll — where the pointer must be for the sheet to follow ═══════
+//
+// Click-dragging a selection to the edge of the scrollport has to scroll it, and the two
+// things that make this grid's version different from the platform hook's are the same
+// two the caret-follow had to solve:
+//
+//   • **The scroller is a different element in each scope.** `focus` renders a plain
+//     table inside a wrapper the ledger owns; `endless` renders through virtuoso, whose
+//     scroller is virtuoso's own div. `useCellSelection` takes ONE ref object and was
+//     handed the focus wrapper, which is NULL under endless — so its auto-scroll bailed
+//     on the first frame and a drag to the edge did nothing there at all. The ledger
+//     drives this itself off `scrollerEl()`, which already answers "which element
+//     scrolls in this scope".
+//   • **The frozen block is a WALL, not a scroll position.** `# · DATE · TRK# ·
+//     SUPPLIER` are pinned over the first 424px of the scrollport, so a pointer at
+//     `rect.left + 100` is not near the left edge of anything — it is sitting ON the
+//     pinned columns, with the scrolling cells hidden underneath. The left trigger is
+//     therefore measured from the INNER edge of that block, exactly as
+//     `columnScrollLeft` measures its visible window from `scrollLeft + frozen`. Without
+//     it a drag can never reach the cells parked under the pinned columns.
+//
+// Both deltas are zeroed at their wall, so the loop cannot grind against a scroller with
+// nowhere left to go — and a table that fits its scrollport never scrolls sideways.
+
+/** How close to an edge the pointer has to get. Matches the platform hook's feel. */
+export const DRAG_EDGE_PX = 40;
+/** Pixels per animation frame. Applied by assignment — never a smooth scroll. */
+export const DRAG_STEP_PX = 5;
+
+export interface DragScrollInput {
+    /** The pointer, in viewport coordinates. */
+    pointer: { x: number; y: number };
+    /** The scroller's own viewport rect. */
+    rect: { top: number; bottom: number; left: number; right: number };
+    /** Width of the pinned identity block — `frozenBlockWidth(cols)`. */
+    frozen: number;
+    scrollTop: number;
+    scrollLeft: number;
+    maxScrollTop: number;
+    maxScrollLeft: number;
+}
+
+/**
+ * The per-frame scroll delta a drag owes, or `{0,0}` when it owes nothing — the drag
+ * counterpart of `columnScrollLeft` returning null.
+ */
+export function dragAutoScrollDelta(input: DragScrollInput): { dx: number; dy: number } {
+    const { pointer, rect, frozen, scrollTop, scrollLeft, maxScrollTop, maxScrollLeft } = input;
+
+    let dy = 0;
+    if (pointer.y < rect.top + DRAG_EDGE_PX) dy = -DRAG_STEP_PX;
+    else if (pointer.y > rect.bottom - DRAG_EDGE_PX) dy = DRAG_STEP_PX;
+
+    // The left band starts where the PINNED columns end, not where the scrollport does.
+    let dx = 0;
+    if (pointer.x < rect.left + frozen + DRAG_EDGE_PX) dx = -DRAG_STEP_PX;
+    else if (pointer.x > rect.right - DRAG_EDGE_PX) dx = DRAG_STEP_PX;
+
+    if (dy < 0 && scrollTop <= 0) dy = 0;
+    if (dy > 0 && scrollTop >= maxScrollTop) dy = 0;
+    if (dx < 0 && scrollLeft <= 0) dx = 0;
+    if (dx > 0 && scrollLeft >= maxScrollLeft) dx = 0;
+
+    return { dx, dy };
+}
+
+// ═══ Summary-row spans — read off the column table, never counted ═══════════════
+//
+// The `Σ DAY TOTAL` rule-off and the sticky month footer are ordinary `<tr>`s that have
+// to TILE the same column table the data rows do, with each figure landing on its own
+// column. They used to derive their `colSpan`s arithmetically (`spanAll - 7`,
+// `cols.length - frozenCount - 3`, a literal `colSpan={5}`), with a `canViewPrices`
+// ternary standing in for "is TTL PRICE there". That was correct for both gating states
+// and wrong the moment anyone touched the column table: the constants encode WHERE `wt`
+// and `ttl` sit, and nothing tells you so.
+//
+// `buildColumns()` already produces two different shapes in production (the two ₱
+// columns are ABSENT for a gated viewer), so this is not a hypothetical second shape —
+// it is a live one, and a third is one product request away.
+//
+// So the spans are derived from the columns themselves: the label lane is everything
+// LEFT of `wt`, the note lane is everything BETWEEN `wt` and `ttl`, and the ₱ cell exists
+// exactly when the `ttl` column does. Insert a column anywhere and the lane containing it
+// widens by one on its own; gate the prices and the ₱ lane disappears with its column.
+//
+// The corner span is `frozenOffsets(cols).length` rather than a count of `frozen: true`
+// columns, so the footer's bottom-left corner and the frozen `left` offsets can never
+// disagree about where the pinned block ends — the corner overhanging into scrolling
+// territory is precisely the frozen-pane failure the project rule warns about.
+
+export interface SummarySpans {
+    /** `# … SKS` — the `Σ DAY TOTAL` label lane, everything left of WT. */
+    label: number;
+    /** Exactly the pinned identity block — the month footer's bottom-left corner. */
+    frozen: number;
+    /** The footer's gap between that corner and the weight figure (`SKS` today). */
+    spacer: number;
+    /** The WT column, where the net-kg figure sits. */
+    weight: number;
+    /** WT → TTL PRICE, exclusive: the "includes … from duplicates" lane. */
+    note: number;
+    /** TTL PRICE, or **0** when prices are gated and the column is absent. */
+    total: number;
+    /**
+     * Anything to the RIGHT of TTL PRICE — 0 today, and rendered as an empty filler cell
+     * so that a column appended at the far end is COVERED rather than leaving the summary
+     * rows one column short of the data rows. This lane is the difference between "tiles
+     * for the two shapes that exist" and "tiles, full stop".
+     */
+    trailing: number;
+}
+
+/**
+ * Where each figure in a summary row sits, given the column table actually rendered.
+ *
+ * Both forms tile exactly: `label + weight + note + total + trailing` and
+ * `frozen + spacer + weight + note + total + trailing` each equal `cols.length`, for ANY
+ * column table. A span of 0 means the segment has no column and its cell must not be
+ * rendered at all — `colSpan={0}` is "to the end of the column group" in HTML, which is
+ * the opposite of nothing.
+ */
+export function summarySpans(cols: DeliveryCol[]): SummarySpans {
+    const frozen = frozenOffsets(cols).length;
+    const totalIdx = cols.findIndex((c) => c.key === 'ttl');
+    const noteEnd = totalIdx >= 0 ? totalIdx : cols.length;
+
+    // A column table with no WT degenerates cleanly rather than throwing on a render
+    // path: the label lane simply swallows the whole row.
+    const wtIdx = cols.findIndex((c) => c.key === 'wt');
+    const hasWeight = wtIdx >= 0 && wtIdx < noteEnd;
+    const label = hasWeight ? wtIdx : noteEnd;
+
+    return {
+        label,
+        frozen,
+        spacer: Math.max(0, label - frozen),
+        weight: hasWeight ? 1 : 0,
+        note: Math.max(0, noteEnd - label - (hasWeight ? 1 : 0)),
+        total: totalIdx >= 0 ? 1 : 0,
+        trailing: totalIdx >= 0 ? cols.length - totalIdx - 1 : 0,
+    };
+}
+
 /** Visual row height (Excel Standard `h-8`). */
 export const ROW_H = 32;
 /** A sample sub-row is deliberately shorter — it is a detail line, not an entry. */

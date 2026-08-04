@@ -321,7 +321,11 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
             cellSelection.clearSelection();
             setActiveCell({ row: rowIdx, col: colIdx });
             endEditRef.current();
-            gridRef.current?.focus();
+            // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper into
+            // view with block AND inline "center" through every scrolling ancestor — and
+            // "center" always computes a target, so it fires even when nothing moved. That
+            // is what jolted the page on a plain cell click. Focus still moves.
+            gridRef.current?.focus({ preventScroll: true });
         }
         dragMovedRef.current = false;
     }, [cellSelection]);
@@ -435,7 +439,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
             });
         }
         editSession.commit();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [activeCell, colAddr, editSession]);
 
     const setIsEditing = React.useCallback((editing: boolean) => {
@@ -487,7 +491,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         enableEnterAnchor: false,

@@ -25,12 +25,12 @@ computed in the browser.
 | File | Role |
 |---|---|
 | `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
-| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
+| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
-| `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`), whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **73 assertions**, must stay green. |
+| `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **83 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -309,10 +309,44 @@ move one table.
   it never scrolls backwards, never overshoots, and the caret's column ends up clear of
   the pinned block at every step).
 
-Still unfixed and deliberately out of this changeset: `EditInput`'s `autoFocus` (platform
-code, `components/shared/grid/`) focuses through React's own `.focus()` call, which has
-no `preventScroll`, so *starting an edit* can still centre the row. Same for
-`GridCell.tsx:131`, which other modules' grids use.
+### Dragging a selection to the edge — the other thing that has to scroll (2026-08-04)
+
+Click-dragging a range to the edge of the sheet has to scroll it, and it did not in the
+**endless** scope at all. `useCellSelection` takes ONE `scrollContainerRef`; this grid has
+TWO scrollers — the plain wrapper in `focus`, virtuoso's own div in `endless` — so the ref
+it was handed (`scrollerRef`, the focus wrapper) was **null under endless**, and the
+platform hook's auto-scroll bailed on its first frame and never rescheduled.
+
+- **The ledger drives the loop itself now**, off the same **`scrollerEl()`** the
+  caret-follow uses — the existing per-scope plumbing, `LedgerCtx.onScroller` included,
+  reused rather than duplicated. `scrollContainerRef` is deliberately **not** passed: two
+  loops on the same axis would double the speed, and the platform one is inert without it.
+- **The frozen block is a WALL, not a scroll position.** A pointer 100px in from the left
+  edge is not near an edge — it is sitting ON the pinned `# · DATE · TRK# · SUPPLIER`
+  columns with scrolling cells hidden underneath, so a left-edge rule measured from the
+  scrollport would stall there and the covered cells would be undraggable-to. The left
+  band is therefore measured from the block's INNER edge (`rect.left + 424 + 40`), the
+  same correction `columnScrollLeft` makes with `scrollLeft + frozen`. That is the only
+  behavioural difference from the platform hook, and it applies in **both** scopes (both
+  pin the same four columns); the vertical axis and the right edge are unchanged.
+- `dragAutoScrollDelta` in `types.ts` is **pure** and asserted (6 assertions): the two
+  axes are independent, a delta is never issued at a wall, and a table that fits its
+  scrollport never scrolls sideways at all — the drag counterpart of `columnScrollLeft`
+  returning null.
+- **Instant, and contained.** The delta is applied by assignment (`scrollTop`/`scrollLeft`
+  `+=`) on that one element, so no ancestor and no document scroll can follow. It runs
+  only while the pointer is down, so it never races the caret-follow, which runs only on a
+  keyboard move.
+- One cost, accepted: `useCellSelection` still registers its own `pointermove` listener
+  while dragging even with no container to scroll. Removing it means editing shared
+  platform code that RC IN / RC OUT / Production also use.
+
+**Fixed since (2026-08-04, platform pass).** `EditInput`'s `autoFocus` used to focus
+through React's own bare `.focus()` call, which has no `preventScroll`, so *starting an
+edit* re-centred the row through every scrolling ancestor. It is now a ref callback
+calling `focus({ preventScroll: true })` (`components/shared/grid/EditInput.tsx`), and
+`GridCell.tsx` + `DatePickerCell.tsx` are guarded the same way. This grid uses
+`EditInput`, so it inherits the fix — no local change was needed.
 
 ### The virtuoso index space — RAW in, PUBLIC out (2026-08-04)
 
@@ -506,11 +540,14 @@ is **fully OPAQUE** (`bg-background` body / `bg-muted` header — never glass, n
 `backdrop-blur`), `.frozen-edge` sits on the last frozen column, and the **active-cell
 ring is at `z-20`** so it clears `.frozen-col` (z-10). The month footer's bottom-left
 corner is `.frozen-corner-bottom` + `.frozen-edge` and spans **exactly** the frozen block
-— no further, or it would overhang into scrolling territory.
+— no further, or it would overhang into scrolling territory. That span is
+`summarySpans(cols).frozen`, which IS `frozenOffsets(cols).length`: the corner and the
+`left` offsets are the same walk, so they cannot drift apart (see "Totals").
 
 The block's 424px total is not only a paint concern: it is subtracted by the horizontal
 caret-follow, or Tab would scroll a column to a position where the pinned columns cover
-it. See "Following the caret" above.
+it, and by the drag auto-scroll, or a drag could never reach the cells parked under the
+pinned columns. See "Following the caret" and "Dragging a selection to the edge" above.
 
 ### Data-quality surfacing
 
@@ -645,6 +682,30 @@ Day totals and the month footer are **SUMS OF STORED COLUMNS** (`net_weight_kg`,
 `total_price_php` — both DB-generated, exact decimal), not arithmetic re-derived from
 gross × deduction × rate. A rule-off line adds up the numbers already on screen; it does
 not recompute them.
+
+**Their `colSpan`s are read off the column table, not counted against its length
+(2026-08-04).** They used to say `colSpan={5}`, `spanAll - 7` and
+`cols.length - frozenCount - 3`, with a `canViewPrices` ternary standing in for "is TTL
+PRICE there". That was correct for both gating states and silently wrong the moment
+anyone touched the column table — those constants encode WHERE `wt` and `ttl` sit and
+nothing says so, and `buildColumns()` already emits two shapes in production. **`summarySpans(cols)`** in `types.ts` derives the lanes instead: the label runs up to `wt`,
+the net-kg figure sits ON `wt`, the duplicate note fills `wt` → `ttl` exclusive, the ₱
+cell exists exactly when the `ttl` column does, and a `trailing` filler covers anything
+right of it. Insert a column and the lane containing it widens on its own.
+
+- **Both forms tile totally:** `label + weight + note + total + trailing` and
+  `frozen + spacer + weight + note + total + trailing` each equal `cols.length`, for ANY
+  column table — asserted over both gating states and four mutations of the table.
+- **A zero lane renders NO cell.** `colSpan={0}` means "to the end of the column group"
+  in HTML, which is the opposite of nothing.
+- **`spans.frozen` is `frozenOffsets(cols).length`** — literally the same walk that
+  produces the sticky `left` offsets, so the footer's bottom-left corner and the offsets
+  can never disagree about where the pinned block ends (see "Frozen panes").
+- The ₱ **cell** follows its column so the row always tiles; the ₱ **figure** keeps its
+  own `canViewPrices` gate, belt and braces. The two agree by construction.
+- Purely a robustness change: both gating states render byte-identically to before. A
+  source scan in the verify script now refuses any `colSpan` in the ledger that is not
+  `spanAll` or a single `summarySpans` lane.
 
 ### Save
 

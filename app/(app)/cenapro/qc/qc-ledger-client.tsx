@@ -676,14 +676,24 @@ export function QcLedgerClient({
         setValue: writeAt,
     });
 
-    /** Put the moved-to cell on screen and hand the keyboard back to the scrollport. */
+    /**
+     * Put the moved-to cell on screen and hand the keyboard back to the scrollport.
+     *
+     * The `scrollIntoView` is the DELIBERATE part and stays: `nearest` on both axes is
+     * the minimum nudge, and a no-op for a cell already in view. The `focus` is NOT
+     * allowed to scroll anything — `HTMLElement.focus()` is specified to scroll its
+     * target into view with block AND inline **"center"** through every scrolling
+     * ancestor up to the document, and "center" always computes a target, so it fired on
+     * EVERY caret move and re-centred the whole page (this runs on `onAfterMove`, i.e.
+     * every Tab / Enter / arrow). `preventScroll` refuses that; focus still moves.
+     */
     const focusCell = React.useCallback((id: CoordinateId) => {
         const root = gridRef.current;
         if (!root) return;
         root
             .querySelector<HTMLElement>(`[data-row="${id.row}"][data-col="${id.col}"]`)
             ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-        root.focus();
+        root.focus({ preventScroll: true });
     }, []);
 
     const startEditing = React.useCallback(
@@ -699,7 +709,7 @@ export function QcLedgerClient({
 
     const revertCellEdit = React.useCallback(() => {
         editSession.revertChanges();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [editSession]);
 
     const setIsEditing = React.useCallback(
@@ -728,7 +738,7 @@ export function QcLedgerClient({
             revert: revertCellEdit,
             commit: () => {
                 editSession.commit();
-                gridRef.current?.focus();
+                gridRef.current?.focus({ preventScroll: true });
             },
         },
         onAfterMove: focusCell,

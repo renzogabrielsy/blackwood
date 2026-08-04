@@ -33,6 +33,10 @@ import {
   columnOffsets,
   frozenBlockWidth,
   columnScrollLeft,
+  dragAutoScrollDelta,
+  summarySpans,
+  DRAG_EDGE_PX,
+  DRAG_STEP_PX,
   minTableWidth,
   parseDeliveryDate,
   mergeFieldEdit,
@@ -49,6 +53,7 @@ import {
   FILTER_COLUMNS,
   DEFAULT_DRAFT_ROWS,
   MAX_DRAFT_ADD,
+  type DeliveryCol,
   type FieldEdits,
   type DeliveryField,
 } from '@/app/(app)/cenapro/deliveries/types'
@@ -70,6 +75,26 @@ import {
   withColumnFilter,
   type ColumnFilters,
 } from '@/app/(app)/cenapro/deliveries/ledger-url'
+
+/** The grid itself — several assertions below scan it rather than model it. */
+const LEDGER = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../app/(app)/cenapro/deliveries/deliveries-ledger.tsx',
+)
+
+/**
+ * Executable code only. The ledger's comments discuss the very identifiers the source
+ * scans forbid — that is what the comments are FOR — so a scan over raw text would trip
+ * on the prose explaining the rule. The `[^:]` guard keeps a `https://` inside a future
+ * string from decapitating a line.
+ *
+ * Every caller must then assert that something it EXPECTS is still present: a stripper
+ * that ate too much would make every "must not contain" pass vacuously, which is the
+ * failure mode these scans exist to prevent.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -379,6 +404,266 @@ check('a left-to-right Tab run scrolls forwards only, and never overshoots a vis
   assert.equal(scrollLeft, total - VIEW)
 })
 
+// ── Drag auto-scroll — a per-scope scroller, and a pinned block that is a WALL ─
+//
+// `useCellSelection` takes ONE `scrollContainerRef`, and this grid has TWO scrollers: a
+// plain wrapper in `focus`, virtuoso's own div in `endless`. It was handed the focus
+// wrapper — null under endless — so dragging a selection to the edge of the endless
+// sheet scrolled nothing at all. The ledger drives the loop itself now, off the same
+// per-scope `scrollerEl()` the caret-follow uses; these pin the arithmetic it drives it
+// with, and the source scan below pins the wiring.
+//
+// The load-bearing term is the LEFT band. `# · DATE · TRK# · SUPPLIER` are pinned over
+// the first 424px of the scrollport, so a pointer 100px in from the left edge is not
+// near an edge — it is sitting ON the pinned columns with scrolling cells hidden
+// underneath. Measuring that band from the block's inner edge is the same correction
+// `columnScrollLeft` makes when it measures its visible window from `scrollLeft + frozen`.
+
+const PORT = { top: 100, bottom: 700, left: 200, right: 1100 } // 900 × 600
+const FROZEN_W = frozenBlockWidth(buildColumns(true))
+const DRAGGING = {
+  rect: PORT,
+  frozen: FROZEN_W,
+  scrollTop: 300,
+  scrollLeft: 300,
+  maxScrollTop: 5000,
+  maxScrollLeft: minTableWidth(buildColumns(true)) - 900,
+}
+
+check('a drag in the middle of the sheet scrolls nothing at all', () => {
+  const d = dragAutoScrollDelta({ ...DRAGGING, pointer: { x: 800, y: 400 } })
+  assert.deepEqual(d, { dx: 0, dy: 0 })
+})
+
+check('the LEFT band starts where the PINNED columns end, not at the scrollport edge', () => {
+  // Anywhere on the pinned block — and 40px past it — pulls the sheet leftwards, so the
+  // cells parked underneath those columns are reachable by dragging onto them.
+  for (const x of [PORT.left + 1, PORT.left + FROZEN_W / 2, PORT.left + FROZEN_W + DRAG_EDGE_PX - 1]) {
+    assert.equal(dragAutoScrollDelta({ ...DRAGGING, pointer: { x, y: 400 } }).dx, -DRAG_STEP_PX, `x=${x}`)
+  }
+  // One pixel past the band, nothing is owed — the minimum-nudge discipline.
+  const clear = PORT.left + FROZEN_W + DRAG_EDGE_PX
+  assert.equal(dragAutoScrollDelta({ ...DRAGGING, pointer: { x: clear, y: 400 } }).dx, 0)
+  // The band a frozen-block-blind rule would have used is strictly smaller, and the
+  // difference is exactly the strip that was unreachable: 424px of pinned columns.
+  const blind = PORT.left + DRAG_EDGE_PX
+  assert.equal(clear - blind, FROZEN_W)
+  assert.equal(dragAutoScrollDelta({ ...DRAGGING, pointer: { x: blind + 1, y: 400 } }).dx, -DRAG_STEP_PX)
+})
+
+check('the two axes are independent — a sideways drag never scrolls the sheet down', () => {
+  const h = dragAutoScrollDelta({ ...DRAGGING, pointer: { x: PORT.right - 1, y: 400 } })
+  assert.deepEqual(h, { dx: DRAG_STEP_PX, dy: 0 })
+  const v = dragAutoScrollDelta({ ...DRAGGING, pointer: { x: 800, y: PORT.bottom - 1 } })
+  assert.deepEqual(v, { dx: 0, dy: DRAG_STEP_PX })
+  const up = dragAutoScrollDelta({ ...DRAGGING, pointer: { x: 800, y: PORT.top + 1 } })
+  assert.deepEqual(up, { dx: 0, dy: -DRAG_STEP_PX })
+})
+
+check('a delta is never issued at a wall, and a table that fits never scrolls sideways', () => {
+  const topLeft = dragAutoScrollDelta({
+    ...DRAGGING,
+    scrollLeft: 0,
+    scrollTop: 0,
+    pointer: { x: PORT.left + 5, y: PORT.top + 5 },
+  })
+  assert.deepEqual(topLeft, { dx: 0, dy: 0 })
+
+  const bottomRight = dragAutoScrollDelta({
+    ...DRAGGING,
+    scrollLeft: DRAGGING.maxScrollLeft,
+    scrollTop: DRAGGING.maxScrollTop,
+    pointer: { x: PORT.right - 5, y: PORT.bottom - 5 },
+  })
+  assert.deepEqual(bottomRight, { dx: 0, dy: 0 })
+
+  // The same claim `columnScrollLeft` makes with its `maxScroll <= 0` branch.
+  const fits = dragAutoScrollDelta({
+    ...DRAGGING,
+    scrollLeft: 0,
+    maxScrollLeft: 0,
+    pointer: { x: PORT.right - 5, y: 400 },
+  })
+  assert.equal(fits.dx, 0)
+})
+
+check('the ledger drives the drag off the PER-SCOPE scroller, not a one-scope ref', () => {
+  const src = readFileSync(LEDGER, 'utf8')
+  const code = stripComments(src)
+  assert.match(code, /useCellSelection\(\{/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // The hook must NOT be handed a container ref: whichever of the two scrollers it were
+  // given would be null in the other scope. That is the bug, in one prop.
+  const call = /useCellSelection\(\{[\s\S]*?\n\s*\}\)/.exec(code)
+  assert.ok(call, 'expected a useCellSelection({ … }) call in the ledger')
+  assert.ok(
+    !/scrollContainerRef/.test(call![0]),
+    'useCellSelection must not be given a single-scope scroll container ref',
+  )
+
+  // …and the loop that replaces it resolves its element through `scrollerEl()`, the
+  // helper that already knows which element scrolls in which scope.
+  assert.match(code, /dragAutoScrollDelta\(\{/, 'the ledger must drive the drag through the pure delta')
+  assert.match(
+    code,
+    /const scroller = scrollerEl\(\);[\s\S]{0,600}?dragAutoScrollDelta\(\{/,
+    'the drag loop must read its scroller from scrollerEl(), not from a scope-specific ref',
+  )
+  // Scrolling by assignment is instant by construction. A smooth scroll under a drag is
+  // its own bug, and `scrollIntoView` would walk every ancestor up to the document.
+  assert.ok(
+    !/behavior:\s*'smooth'/.test(code),
+    'no scroll in this grid may be smooth',
+  )
+})
+
+// ── Summary-row spans — read off the column table, never counted ──────────────
+//
+// The `Σ DAY TOTAL` rule-off and the sticky month footer have to TILE the same column
+// table the data rows do, with each figure landing on its own column. They used to say
+// `colSpan={5}`, `spanAll - 7` and `cols.length - frozenCount - 3` — correct for both
+// gating states and silently wrong the moment anyone touched the column table, because
+// those constants encode WHERE `wt` and `ttl` sit and nothing says so.
+//
+// `buildColumns()` already emits two shapes in production (the ₱ columns are ABSENT for
+// a gated viewer), so the second shape is not hypothetical — and a third is one product
+// request away. `summarySpans` reads the lanes off the columns instead, which is what
+// makes these assertions possible at all: no render, no DOM, just the table.
+
+/** Every column table a summary row must tile — the two live ones, plus mutations. */
+function spanCases(): { name: string; cols: DeliveryCol[] }[] {
+  const priced = buildColumns(true)
+  const gated = buildColumns(false)
+  const at = (cols: DeliveryCol[], i: number, key: string): DeliveryCol[] => [
+    ...cols.slice(0, i),
+    { key, label: key.toUpperCase(), width: 90, field: null },
+    ...cols.slice(i),
+  ]
+  return [
+    { name: 'prices visible', cols: priced },
+    { name: 'prices gated', cols: gated },
+    { name: 'a column added BEFORE wt', cols: at(priced, priced.findIndex((c) => c.key === 'sacks'), 'gross') },
+    { name: 'a column added in the NOTE lane', cols: at(priced, priced.findIndex((c) => c.key === 'whse'), 'lot') },
+    { name: 'a column added AFTER ttl', cols: at(priced, priced.length, 'paid') },
+    { name: 'a lab column removed', cols: priced.filter((c) => c.key !== 'dust') },
+  ]
+}
+
+check('the summary rows tile the column table exactly — no gap, no overhang', () => {
+  for (const { name, cols } of spanCases()) {
+    const s = summarySpans(cols)
+    assert.equal(
+      s.label + s.weight + s.note + s.total + s.trailing,
+      cols.length,
+      `Σ DAY TOTAL does not tile (${name})`,
+    )
+    assert.equal(
+      s.frozen + s.spacer + s.weight + s.note + s.total + s.trailing,
+      cols.length,
+      `the month footer does not tile (${name})`,
+    )
+    // Every lane is a legal colSpan. `colSpan={0}` is "to the end of the column group"
+    // in HTML — the opposite of nothing — so a zero lane must not be rendered at all.
+    for (const [lane, n] of Object.entries(s)) {
+      assert.ok(Number.isInteger(n) && n >= 0, `${name}: ${lane} = ${n}`)
+    }
+    assert.ok(s.label >= 1, `${name}: the label lane always has a column`)
+  }
+})
+
+check('each figure lands on its OWN column — net kg on WT, the ₱ total on TTL PRICE', () => {
+  for (const canViewPrices of [true, false]) {
+    const cols = buildColumns(canViewPrices)
+    const s = summarySpans(cols)
+    // Walk the Σ DAY TOTAL row lane by lane and name the columns each one covers.
+    assert.equal(cols[s.label].key, 'wt', 'the net-kg cell must start exactly on WT')
+    assert.equal(s.weight, 1)
+    const noteStart = s.label + s.weight
+    assert.equal(cols[noteStart].key, 'bd', 'the duplicate note starts one past WT')
+    assert.equal(cols[noteStart + s.note - 1].key, canViewPrices ? 'php_kg' : 'remarks')
+    if (canViewPrices) {
+      assert.equal(s.total, 1)
+      assert.equal(cols[noteStart + s.note].key, 'ttl', 'the ₱ figure must sit on TTL PRICE')
+    } else {
+      // No column ⇒ no cell. Not a blanked one: the row is two columns narrower.
+      assert.equal(s.total, 0)
+      assert.equal(noteStart + s.note, cols.length)
+    }
+    assert.equal(s.trailing, 0, 'nothing sits right of TTL PRICE today')
+  }
+})
+
+check('the frozen corner spans EXACTLY the pinned block, never a column further', () => {
+  for (const canViewPrices of [true, false]) {
+    const cols = buildColumns(canViewPrices)
+    const s = summarySpans(cols)
+    // The SAME walk that produces the `left` offsets, so the corner and the offsets can
+    // never disagree about where the pinned block ends.
+    assert.equal(s.frozen, frozenOffsets(cols).length)
+    assert.deepEqual(cols.slice(0, s.frozen).map((c) => c.key), ['num', 'date', 'truck', 'supplier'])
+    assert.ok(cols.slice(0, s.frozen).every((c) => c.frozen))
+    assert.ok(!cols[s.frozen].frozen, 'the corner must stop at the first scrolling column')
+    // …and its WIDTH is the same 424px the horizontal caret-follow subtracts. One number,
+    // two uses — an overhanging corner would sit over scrolling cells.
+    assert.equal(cols.slice(0, s.frozen).reduce((w, c) => w + c.width, 0), frozenBlockWidth(cols))
+    // The footer picks up exactly where the corner stops, and rejoins the day-total row
+    // at WT: the two summary rows differ ONLY in how they split the first lane.
+    assert.equal(cols[s.frozen].key, 'sacks')
+    assert.equal(s.frozen + s.spacer, s.label)
+  }
+})
+
+check('adding a column is absorbed by the lane containing it — the old arithmetic was not', () => {
+  const cols = buildColumns(true)
+  const base = summarySpans(cols)
+  const insert = (i: number, key: string): DeliveryCol[] => [
+    ...cols.slice(0, i),
+    { key, label: key.toUpperCase(), width: 90, field: null },
+    ...cols.slice(i),
+  ]
+
+  // Before WT: the label lane widens, the note lane does not.
+  const left = summarySpans(insert(cols.findIndex((c) => c.key === 'sacks'), 'gross'))
+  assert.equal(left.label, base.label + 1)
+  assert.equal(left.spacer, base.spacer + 1)
+  assert.equal(left.note, base.note)
+
+  // Between WT and TTL PRICE: the note lane widens, the label lane does not.
+  const mid = summarySpans(insert(cols.findIndex((c) => c.key === 'whse'), 'lot'))
+  assert.equal(mid.label, base.label)
+  assert.equal(mid.note, base.note + 1)
+
+  // Past TTL PRICE: covered by the trailing filler rather than left uncovered.
+  const right = summarySpans(insert(cols.length, 'paid'))
+  assert.equal(right.total, 1)
+  assert.equal(right.trailing, 1)
+
+  // What the old formulas would have done with the FIRST of those. The literal 5 puts
+  // the net-kg figure on the inserted column, and `spanAll - 7` re-tiles around it — a
+  // row that still adds up to the right number of columns with every figure one lane
+  // out. That is the failure mode: silent misplacement, not a visibly broken row.
+  const widened = insert(cols.findIndex((c) => c.key === 'sacks'), 'gross')
+  assert.notEqual(widened[5].key, 'wt')
+  assert.equal(widened[left.label].key, 'wt')
+  assert.notEqual(widened.length - 7, left.note)
+})
+
+check('no summary colSpan in the ledger is computed by arithmetic on the column count', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<tfoot>/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  const exprs = [...code.matchAll(/colSpan=\{([^}]*)\}/g)].map((m) => m[1].trim())
+  assert.ok(exprs.length >= 6, `expected the ledger's colSpan sites, found ${exprs.length}`)
+  for (const e of exprs) {
+    assert.ok(
+      /^spanAll$|^spans\.[a-z]+$/.test(e),
+      `colSpan={${e}} must be spanAll or one summarySpans lane — never arithmetic, never a literal`,
+    )
+  }
+  // `spans` must actually come from the pure function, not be rebuilt inline.
+  assert.match(code, /summarySpans\(cols\)/)
+})
+
 // ── Following the caret DOWN — which index space virtuoso's scroll APIs speak ──
 //
 // Renzo, on the live app: "hitting tab and enter takes me to the very bottom of the
@@ -431,17 +716,8 @@ check('a RAW array index survives virtuoso’s clamp; a firstItemIndex-rebased o
 })
 
 check('the ledger hands virtuoso RAW array indexes — no firstItemIndex rebase at any scroll call site', () => {
-  const LEDGER = join(
-    dirname(fileURLToPath(import.meta.url)),
-    '../app/(app)/cenapro/deliveries/deliveries-ledger.tsx',
-  )
-  const src = readFileSync(LEDGER, 'utf8')
-
   // Comments discuss `firstItemIndex` at length by design, so scan EXECUTABLE code only.
-  // The `[^:]` guard keeps a `https://` in a future string from decapitating a line.
-  const code = src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
   // A stripper that ate too much would make every "must not contain" below pass
   // vacuously — which is the failure mode this whole check exists to prevent.
   assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; the scan below would be vacuous')
