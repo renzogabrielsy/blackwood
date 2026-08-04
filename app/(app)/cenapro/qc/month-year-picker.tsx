@@ -68,6 +68,10 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
         // The active year may be a `?m=` the data no longer covers — keep it selectable
         // so the trigger never renders an empty value.
         set.add(year);
+        // The CURRENT year, always. On 1 January the newest year with receipts is last
+        // year's, and without this the operator could not reach the month they need to
+        // start typing into (2026-08-04).
+        set.add(new Date().getFullYear().toString());
         return [...set].sort().reverse();
     }, [availableMonths, year]);
 
@@ -96,10 +100,11 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
     const onYearChange = React.useCallback(
         (nextYear: string) => {
             const inYear = availableMonths.filter((m) => m.slice(0, 4) === nextYear);
-            if (inYear.length === 0) return;
-            // Prefer the same calendar month in the new year; else that year's newest.
+            // Prefer the same calendar month in the new year; else that year's newest;
+            // else the same month anyway — an empty month is now a place you can go
+            // (2026-08-04), so a year with no receipts is no longer a dead end.
             const sameMonth = inYear.find((m) => m.slice(5, 7) === monthNum);
-            go(sameMonth ?? inYear[inYear.length - 1]);
+            go(sameMonth ?? inYear[inYear.length - 1] ?? `${nextYear}-${monthNum}`);
         },
         [availableMonths, monthNum, go],
     );
@@ -109,15 +114,13 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
         [year, go],
     );
 
-    const noData = availableMonths.length === 0;
-
     return (
         <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 {label}
             </span>
 
-            <Select value={monthNum} onValueChange={onMonthChange} disabled={noData || isPending}>
+            <Select value={monthNum} onValueChange={onMonthChange} disabled={isPending}>
                 <SelectTrigger
                     size="sm"
                     aria-label="Month"
@@ -126,6 +129,11 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
                     <SelectValue placeholder="Month" />
                 </SelectTrigger>
                 <SelectContent>
+                    {/* Every month is SELECTABLE (2026-08-04). An empty one used to be
+                        `disabled`, which meant the first draw of a new month had nowhere
+                        to land — you could not open the month you needed to type into.
+                        The `· no data` suffix still says which months are empty, because
+                        an absent month is information; it is just no longer a wall. */}
                     {MONTH_NAMES.map((name, index) => {
                         const mm = String(index + 1).padStart(2, '0');
                         const has = monthsInYear.has(mm);
@@ -133,11 +141,12 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
                             <SelectItem
                                 key={mm}
                                 value={mm}
-                                disabled={!has}
                                 className="text-[11px]"
-                                // Says WHY it is greyed out rather than leaving the
-                                // operator to guess the control is broken.
-                                title={has ? undefined : `No receipts in ${name} ${year}`}
+                                title={
+                                    has
+                                        ? undefined
+                                        : `No receipts in ${name} ${year} yet — open it to add the first`
+                                }
                             >
                                 {name}
                                 {has ? '' : ' · no data'}
@@ -147,7 +156,7 @@ export function MonthYearPicker({ month, availableMonths, label = 'Month' }: Mon
                 </SelectContent>
             </Select>
 
-            <Select value={year} onValueChange={onYearChange} disabled={noData || isPending}>
+            <Select value={year} onValueChange={onYearChange} disabled={isPending}>
                 <SelectTrigger
                     size="sm"
                     aria-label="Year"
