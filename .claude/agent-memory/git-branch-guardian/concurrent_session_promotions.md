@@ -21,6 +21,27 @@ files nobody mentioned changing under your feet.
 constraint. When `app/(app)/cenapro/deliveries/**` + the `20260804*` migrations are sitting
 untracked, assume selective staging even before the brief says so, and confirm.
 
+### Is the other session actually LIVE right now? Check mtimes, don't guess
+
+`find /Users/renzosy/blackwood -newermt '-20 minutes' -type f -not -path '*/.git/*' -not -path
+'*/node_modules/*' -not -path '*/.next/*'` — **empty output means no session is writing**, so the
+dirty tree is inert leftovers and a plain `git add .` is safe. Verified 2026-08-04 on promotion
+`c8ffc53`: the brief warned about the earlier collision, but nothing had been touched in 20
+minutes and `git status` showed only the brief's own paths. `ls -lT` on the dirty dir corroborates
+(newest guardian-memory mtime was 90 minutes old).
+
+This is the cheap decider the [[main-promotion-playbook]]'s "concurrent-session mode can be OFF —
+verify, don't assume" note was missing. Run it BEFORE choosing a staging strategy.
+
+### Guardian memory left dirty by a PREVIOUS (finished) guardian session
+
+`.claude/agent-memory/git-branch-guardian/*.md` can sit uncommitted for hours because the session
+that wrote it promoted and exited without committing its own notes. Once the mtime check says
+nobody is live, **commit it — but in its own `chore(memory):` commit**, never folded into the
+brief's feature commit (that would make the `feat(...)` subject a lie). Pathspec recipe in
+[[feedback-commit-splitting]]. Leaving it dirty is what makes the NEXT session waste a gate
+deciding whether it is someone's in-flight work.
+
 ## 1. The `git add .` rule IS overridden — by an explicit path list
 
 [[staging-exclusions]] says always `git add .`. **A brief that enumerates the exact paths to
