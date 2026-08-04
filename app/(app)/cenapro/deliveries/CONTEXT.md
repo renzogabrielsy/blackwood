@@ -177,7 +177,7 @@ them rather than smoothing them over:
 
 | State | Treatment |
 |---|---|
-| `is_suspected_duplicate` (22 rows) | Rose inset rail on the frozen block + a `DUP` badge + a rose row wash. **The 2026-04-06 block is pasted twice, roughly ₱7M double-counted**, so every day total and the month footer carry an explicit "includes … from suspected duplicates" line. |
+| `is_suspected_duplicate` (22 rows) | Rose inset rail on the frozen block + a `DUP` badge + a rose row wash. **THREE consecutive days are pasted twice, ₱17,185,939 in total** — 2026-04-06 (9 rows, ₱6.94M), 04-07 (7 rows, ₱5.32M), 04-08 (6 rows, ₱4.93M). *(An earlier draft of this note said "the 2026-04-06 block, roughly ₱7M"; that is only the largest of the three — corrected 2026-08-04 from live counts.)* Every day total and the month footer carry an explicit "includes … from suspected duplicates" line, so nothing is silently double-counted — but **the human decision to keep or drop them has not been made.** |
 | `has_import_flags` (34 rows) | Sky rail + a warning icon opening a **popover** with each flag's `kind` / `detail` / the workbook's original `raw` text. |
 | `supplier_unresolved` / `destination_unresolved` (1 / 5 rows) | Amber rail + a `MAP?` badge; the cell shows the raw text; a save is refused until it resolves. |
 | unparseable date (2 rows) | Amber triangle in the date cell, with `delivery_date_raw` in the title. |
