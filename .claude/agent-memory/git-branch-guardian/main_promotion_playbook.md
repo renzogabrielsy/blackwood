@@ -37,6 +37,14 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 - Post-merge, confirm `git diff --stat main <feat>` is ALSO empty — cheap proof the merge took everything — before pushing.
 - Renzo explicitly asked (2026-08-03) for the tree diff *instead of* the ancestry commit list. Don't report the list; by the 13th promotion it is a dozen `chore: merge …` lines of pure noise.
 
+**Stronger, fully non-destructive variant (added promotion 28):**
+
+```
+git merge-tree --write-tree --name-only main <feat>
+```
+
+**Clean = exit 0 and output is a BARE tree OID with no file list below it.** Conflicted = non-zero exit plus the conflicting paths. This actually performs the merge in memory rather than inferring safety from tree equality, so it catches a real content conflict the merge-base test would miss — and it touches neither the index nor the working tree, so it is safe to run *before* `git checkout main`. Use it as the gate; keep the merge-base diff as the cheap corroborator.
+
 ## `feat/gmail-oauth-sync-auth` — the long-lived promotion branch
 
 21 promotions as of 2026-08-04 before the `feat/cenapro-deliveries-qol` split, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
@@ -122,6 +130,21 @@ A **docs-only promotion is still a full `--no-ff` promotion** (2026-08-04, `5217
 **A brief may pre-run the build and waive the gate — honour it** (2026-08-04, `434eb7b`, 3 markdown files): "`npm run build` was run before this brief and exited 0, so skip it." Markdown-only changesets have no code impact; re-running an 8-minute build to prove a `CONTEXT.md` compiles is waste. Same waiver shape as `0be5b4a` in [[concurrent-session-promotions]] §1b.
 
 **Concurrent-session mode can be OFF — verify, don't assume.** [[concurrent-session-promotions]] says to presume selective staging when `app/(app)/cenapro/deliveries/**` is in play. On `434eb7b` the brief said the same, but `git status --short` came back clean apart from the brief's own 3 paths + the standing `.claude/agent-memory*` dirt — no stray source files at all. The pre-staging `git status --short` is what decides; report it verbatim when the brief asks whether the other session is live.
+
+**Promotion 28 (`9996f34` + `45ab29b` → `d4741ca`) was the first SPLIT promotion on this branch** —
+a brief that explicitly asked for the DB migration to be reviewable alone, so the changeset became
+two `feat(cenapro):` commits: migration + `types/supabase.ts` first, then all frontend. Both pushed,
+then one `--no-ff` merge carried both plus the pending `chore(memory)` commit. When a brief names
+the split axis ("so the schema change is reviewable alone"), honour it even though the house default
+is ONE commit — and put the migration FIRST so `main` never has frontend calling an RPC signature
+that does not exist yet. Executed with `git commit -- <pathspec>` twice off a single `git add .`
+(see [[feedback-commit-splitting]]); no per-file staging.
+
+Also confirmed here: a brief's "these paths must NOT appear" list is a real gate worth running as a
+diff, not a glance — `git status --porcelain=v1 --untracked-files=all` before staging, compared
+against the expected list, resolved it in one step. And when the brief supplies a rich rationale
+(parity argument, blank-means-derive, DROP-not-overload), that rationale IS the commit body; verify
+each claim against the diff (signature, grant lines, re-export) rather than paraphrasing it blind.
 
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
