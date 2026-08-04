@@ -3053,6 +3053,7 @@ export type Database = {
           p_grade_code: string
           p_notes?: string
           p_partner_equipment_code: string
+          p_plant?: string
           p_prod_date?: string
           p_recv_date: string
           p_shift_code: string
