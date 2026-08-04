@@ -39,7 +39,7 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 ## `feat/gmail-oauth-sync-auth` — the long-lived promotion branch
 
-21 promotions as of 2026-08-04, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
+21 promotions as of 2026-08-04 before the `feat/cenapro-deliveries-qol` split, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
 
 The merge-base tree test has now held **20 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
 
@@ -72,8 +72,16 @@ causing it. Same branch, same recipe, gate clean both times. When a brief says "
 fix was correct but addressed a different mechanism," just promote — don't re-litigate the
 previous promotion or reach for a revert.
 
-**Promotion tempo on this branch is minutes, not hours.** Three promotions in one afternoon
-(`c8ffc53`, `9ee70d5`, `98805ff`). Renzo is blocked on the live app during each one, so
+**Promotion 25 (`04e9c5d` → `2d6e422`) is the THIRD consecutive fix to the same ledger's
+keyboard layer** (Escape could not undo a Backspace-cleared cell). Pattern now confirmed:
+Renzo shakes out one RC Deliveries grid interaction per promotion, minutes apart, same
+branch, same recipe. A brief that says the shared platform hook
+`lib/hooks/use-grid-keyboard-nav.ts` was deliberately NOT touched is stating a design
+constraint you should VERIFY in the staged path list — its presence would contradict the
+fix and is a stop condition.
+
+**Promotion tempo on this branch is minutes, not hours.** Four promotions in one afternoon
+(`c8ffc53`, `9ee70d5`, `98805ff`, `2d6e422`). Renzo is blocked on the live app during each one, so
 prefer the cheap gate set (`npx tsc --noEmit` + the repo's `scripts/verify-*.ts`, ~1 min
 total) over a fresh 8-minute `npm run build` when the brief already reports the build green.
 
