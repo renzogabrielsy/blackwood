@@ -185,7 +185,11 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
             setActiveCell({ row: rowIdx, col: colIdx });
             endEditRef.current();
             cellSelection.clearSelection();
-            gridRef.current?.focus();
+            // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper into
+            // view with block AND inline "center" through every scrolling ancestor — and
+            // "center" always computes a target, so it fires even when nothing moved. That
+            // is what jolted the page on a plain cell click. Focus still moves.
+            gridRef.current?.focus({ preventScroll: true });
         }
     }, [cellSelection]);
 
@@ -273,7 +277,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
 
     const revertChanges = React.useCallback(() => {
         editSession.revertChanges();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [editSession]);
 
     // --- GRID NAVIGATION (shared Blackwood Table primitives) ---
@@ -314,7 +318,7 @@ export function BulkUsageInput({ batches, destinations, productionBatches, onSuc
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         // RC OUT's moveSelection used plain Enter → straight down (no Tab-then-Enter

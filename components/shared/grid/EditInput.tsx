@@ -56,10 +56,30 @@ export function EditInput({
     // e.g. an existing weight cell would route to the delete-confirm). This ref suppresses
     // the next onBlur-commit after an Escape.
     const escapedRef = React.useRef(false);
+
+    // ── autoFocus WITHOUT the page jump (2026-08-04) ──────────────────────────────────
+    // React's own `autoFocus` prop focuses through a bare `domElement.focus()` in
+    // react-dom's `commitMount` — no options — and `HTMLElement.focus()` is specified to
+    // run "scroll an element into view" with block AND inline **"center"**, in EVERY
+    // scrolling box up to the document (an `overflow-hidden` ancestor is still
+    // programmatically scrollable, so it counts). `"center"` always computes a target, so
+    // it fires even when the cell is already fully visible: merely STARTING an edit
+    // re-centred the row and dragged the page with it.
+    //
+    // So we take the focus over and refuse only the scroll. A ref callback lands in the
+    // same commit (layout) phase `commitMount` would have, and — like react-dom — it does
+    // NOT call `select()` or `setSelectionRange()`, so the caret still lands wherever the
+    // browser puts it for a freshly focused input. Caret + selection behaviour is
+    // byte-identical; only the scroll is gone. `autoFocus` must stay OFF the <input> or
+    // React would re-add its own unguarded focus on top.
+    const focusOnMount = React.useCallback((el: HTMLInputElement | null) => {
+        el?.focus({ preventScroll: true });
+    }, []);
+
     const textAlign = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left';
     return (
         <input
-            autoFocus={autoFocus}
+            ref={autoFocus ? focusOnMount : undefined}
             value={value}
             list={list}
             inputMode={inputMode}

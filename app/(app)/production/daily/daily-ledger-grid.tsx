@@ -796,7 +796,11 @@ export function DailyLedgerGrid({
                 cellSelection.clearSelection();
                 setActiveCell({ row: rowIdx, col: colIdx });
                 endEditRef.current();
-                gridRef.current?.focus();
+                // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper
+                // into view with block AND inline "center" through every scrolling
+                // ancestor — and "center" always computes a target, so it fires even when
+                // nothing moved. That is what jolted the page on a plain cell click.
+                gridRef.current?.focus({ preventScroll: true });
             }
             dragMovedRef.current = false;
         },
@@ -1142,7 +1146,7 @@ export function DailyLedgerGrid({
             });
         }
         editSession.commit();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [activeCell, editSession]);
 
     // ─── Grid navigation (shared Blackwood Table primitives) ──────────────────
@@ -1184,7 +1188,7 @@ export function DailyLedgerGrid({
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         // Plain Enter always drops straight down (no Tab-then-Enter lane return).

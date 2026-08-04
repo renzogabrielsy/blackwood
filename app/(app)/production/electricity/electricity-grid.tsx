@@ -214,7 +214,11 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         const down = mouseDownCellRef.current;
         mouseDownCellRef.current = null;
         if (down && down.row === rowIdx && down.col === colIdx && !dragMovedRef.current) {
-            cellSelection.clearSelection(); setActiveCell({ row: rowIdx, col: colIdx }); endEditRef.current(); gridRef.current?.focus();
+            // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper into
+            // view with block AND inline "center" through every scrolling ancestor — and
+            // "center" always computes a target, so it fires even when nothing moved. That
+            // is what jolted the page on a plain cell click. Focus still moves.
+            cellSelection.clearSelection(); setActiveCell({ row: rowIdx, col: colIdx }); endEditRef.current(); gridRef.current?.focus({ preventScroll: true });
         }
         dragMovedRef.current = false;
     }, [cellSelection]);
@@ -311,7 +315,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                 next[activeCell.row] = row; return next;
             });
         }
-        editSession.commit(); gridRef.current?.focus();
+        editSession.commit(); gridRef.current?.focus({ preventScroll: true });
     }, [activeCell, editSession]);
 
     const setIsEditing = React.useCallback((editing: boolean) => {
@@ -355,7 +359,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         enableEnterAnchor: false,

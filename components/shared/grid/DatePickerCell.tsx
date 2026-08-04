@@ -65,14 +65,18 @@ export function DatePickerCell({
                 e.stopPropagation();
                 const el = inputRef.current;
                 if (!el) return;
+                // `preventScroll` on both fallbacks: HTMLElement.focus() scrolls the
+                // target into view with block AND inline "center" through every
+                // scrolling ancestor, even when it is already visible — which jolts
+                // the page out from under the click. Focus still moves.
                 if (typeof el.showPicker === 'function') {
                     try {
                         el.showPicker();
                     } catch {
-                        el.focus();
+                        el.focus({ preventScroll: true });
                     }
                 } else {
-                    el.focus();
+                    el.focus({ preventScroll: true });
                 }
             }}
         >
