@@ -655,6 +655,41 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         [navRows, cols, recordsById, draftCanonical],
     );
 
+    /**
+     * What a cell holds in the DATABASE — `getCellText` with the unsaved layer taken off.
+     *
+     * `getCellText` answers "what does this cell say right now"; this answers "what would
+     * it say if nothing were unsaved". The pair is what makes Escape-outside-edit-mode
+     * decidable: a cell is unsaved exactly when the two disagree, and putting the stored
+     * text back through `setCellText` reverts it through the SAME `mergeFieldEdit`
+     * machinery a keystroke uses — so the field leaves the edit map and the row leaves
+     * `dirtyIds` by the existing rule, not a second definition of "revert".
+     */
+    const storedCellText = React.useCallback(
+        (id: CoordinateId): string => {
+            const nav = navRows[id.row];
+            if (!nav) return '';
+            const field = cols[id.col]?.field;
+            if (!field) return '';
+
+            if (nav.kind === 'sample') {
+                const sf = sampleFieldFor(field);
+                if (!sf) return '';
+                // The STORED block, never `samplesOf` — that one hands back the draft.
+                const stored = toDrafts(recordsById.get(nav.deliveryId)?.samples ?? []);
+                return stored[nav.sampleIndex]?.[sf] ?? '';
+            }
+
+            // A draft row is stored NOWHERE, so its canonical text is what an untouched
+            // one holds: empty, except the seeded date.
+            if (nav.kind === 'draft') return draftCanonical(field);
+
+            const rec = recordsById.get(nav.deliveryId);
+            return rec ? canonicalEditText(rec, field) : '';
+        },
+        [navRows, cols, recordsById, draftCanonical],
+    );
+
     /** The stable identity of a nav row — what `invalidCells` is keyed by. */
     const rowKeyOf = React.useCallback(
         (row: number): string => {
@@ -1036,20 +1071,62 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         getSelectionSize: cellSelection.getSelectionSize,
     });
 
-    /** Delete / Backspace: blank the range if there is one, else the active cell. */
-    const clearSelectedCells = React.useCallback(() => {
+    /**
+     * What Delete / Backspace and Escape both act on: the range when there is one, else
+     * the active cell. One definition, so "Escape undoes what that Backspace touched" is
+     * true by construction rather than by two lists agreeing.
+     *
+     * The selection is deliberately LEFT INTACT by both — that is what keeps the undo
+     * aimed at the block just cleared (and it is what Excel does).
+     */
+    const selectedCells = React.useCallback((): CoordinateId[] => {
+        const out: CoordinateId[] = [];
         const r = cellSelection.getSelectedRange();
         if (r && cellSelection.getSelectionSize() > 1) {
             for (let row = r.startRow; row <= r.endRow; row++) {
                 for (let col = r.startCol; col <= r.endCol; col++) {
-                    if (addressable(row, col)) setCellText({ row, col }, '');
+                    if (addressable(row, col)) out.push({ row, col });
                 }
             }
-            return;
+            return out;
         }
         const a = activeRef.current;
-        if (a && addressable(a.row, a.col)) setCellText(a, '');
-    }, [cellSelection, addressable, setCellText]);
+        if (a && addressable(a.row, a.col)) out.push(a);
+        return out;
+    }, [cellSelection, addressable]);
+
+    /** Delete / Backspace: blank the range if there is one, else the active cell. */
+    const clearSelectedCells = React.useCallback(() => {
+        for (const id of selectedCells()) setCellText(id, '');
+    }, [selectedCells, setCellText]);
+
+    /**
+     * Escape OUTSIDE edit mode: put the selection back to what the database holds.
+     *
+     * Delete / Backspace clears a cell WITHOUT opening an editor (that is this grid's own
+     * opinion, and it stays) — so no edit session is ever started, `preEditValueRef`
+     * never snapshots anything, and `useGridEditSession.revertChanges` has nothing to
+     * restore. Escape had no meaning at all here, which is why backspacing a cell was
+     * unundoable. It has one now, and it is the existing dirty machinery, not a new undo
+     * stack: writing the stored text back through `setCellText` drops the field via
+     * `mergeFieldEdit` exactly as typing the old value by hand would.
+     *
+     * Returns whether anything was actually undone — the verdict that makes Escape
+     * two-stage (undo first, deselect second) and never a no-op with work on screen.
+     */
+    const revertSelectedCells = React.useCallback((): boolean => {
+        let reverted = false;
+        for (const id of selectedCells()) {
+            const stored = storedCellText(id);
+            if (getCellText(id) === stored) continue;
+            setCellText(id, stored);
+            // The stored value is valid by definition, so a refused commit's destructive
+            // tint must go with the text that earned it.
+            markInvalid(id, false);
+            reverted = true;
+        }
+        return reverted;
+    }, [selectedCells, storedCellText, getCellText, setCellText, markInvalid]);
 
     const rangeSlot = React.useMemo<GridRangeSlot>(
         () => ({
@@ -1142,7 +1219,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     //     WHILE EDITING still commits and moves (and still honours the Tab-run lane
     //     anchor). Shift+Enter still walks up.
     //   • DELETE / BACKSPACE clears the value outright instead of opening an empty
-    //     editor. "Clear" should not need a second keystroke to take effect.
+    //     editor. "Clear" should not need a second keystroke to take effect. The
+    //     selection SURVIVES the clear, so the undo below has something to aim at.
+    //   • ESCAPE, with no editor open, UNDOES the unsaved edits under the selection —
+    //     and only deselects once there is nothing left to undo. Without it a Backspace
+    //     would be unundoable, because it never starts an edit session to revert.
     //
     // The first branch is the guard that makes any of this safe: a keystroke aimed at
     // CHROME inside the grid — the "add rows" counter, a column header's filter button —
@@ -1158,6 +1239,24 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 return;
             }
 
+            // ── ESCAPE outside edit mode — undo first, deselect second ───────────
+            //
+            // Escape while EDITING is the shared hook's (revert + close the editor) and is
+            // untouched. Out here it used to mean nothing at all, which is precisely the
+            // bug: Backspace clears without opening an editor, so there was no session to
+            // revert and no other path that could put the value back.
+            //
+            // So it reverts the unsaved edits under the CURRENT SELECTION — the active
+            // cell, or every cell of the range. Only when there is nothing to undo does it
+            // fall through to the shared hook, which clears the range. First Escape
+            // undoes, second Escape deselects; it is never a no-op while work is on
+            // screen. Propagation is deliberately NOT stopped here: an Escape this branch
+            // declines is one nobody in the grid wants, and a Radix layer above may.
+            if (!edit.isEditing && e.key === 'Escape' && revertSelectedCells()) {
+                e.preventDefault();
+                return;
+            }
+
             if (!edit.isEditing && activeRef.current) {
                 const a = activeRef.current;
                 const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
@@ -1168,15 +1267,34 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                     edit.startEditing(a);
                     return;
                 }
-                if ((e.key === 'Delete' || e.key === 'Backspace') && plain) {
-                    e.preventDefault();
-                    clearSelectedCells();
-                    return;
-                }
             }
+
+            // ── DELETE / BACKSPACE — clear outright, and KEEP the selection ──────
+            //
+            // Handled here rather than by the shared hook's range branch, which clears
+            // the selection straight after clearing the cells (`onDelete` then `clear`).
+            // Leaving it is what Excel does and what makes the Escape above useful: the
+            // block just blanked is still the block the undo is aimed at.
+            //
+            // Not nested in the `activeRef.current` guard above, because a range dragged
+            // from a read-only cell (TTL PRICE is selectable, never active) has no active
+            // cell at all — and that range must clear, and stay, like any other.
+            if (
+                !edit.isEditing &&
+                (e.key === 'Delete' || e.key === 'Backspace') &&
+                !e.metaKey && !e.ctrlKey && !e.altKey
+            ) {
+                e.preventDefault();
+                clearSelectedCells();
+                return;
+            }
+
             handleKeyDown(e);
         },
-        [edit, activeRef, addressable, cellSelection, clearSelectedCells, handleKeyDown],
+        [
+            edit, activeRef, addressable, cellSelection,
+            clearSelectedCells, revertSelectedCells, handleKeyDown,
+        ],
     );
 
     // ═══ Paste ═══════════════════════════════════════════════════════════════════

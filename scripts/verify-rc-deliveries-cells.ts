@@ -50,6 +50,7 @@ import {
   DEFAULT_DRAFT_ROWS,
   MAX_DRAFT_ADD,
   type FieldEdits,
+  type DeliveryField,
 } from '@/app/(app)/cenapro/deliveries/types'
 import {
   activeFilterCount,
@@ -570,6 +571,169 @@ check('the "add N more rows" count is clamped, never trusted', () => {
   assert.equal(clampDraftAdd(' 5 '), 5)
   for (const bad of ['', '0', '-3', 'abc']) assert.equal(clampDraftAdd(bad), 1, bad)
   assert.equal(clampDraftAdd('999999'), MAX_DRAFT_ADD)
+})
+
+// ── Escape outside edit mode — undoing a Backspace (2026-08-04) ───────────────
+//
+// Renzo, on the live app: "when backspacing a cell, app correctly thinks something is
+// changed but when i press esc, nothing happens. It doesnt revert to before i pressed
+// backspace."
+//
+// Delete / Backspace clears a cell WITHOUT opening an editor — this grid's own opinion,
+// and it stays — so no edit session is ever started, `useGridEditSession` never
+// snapshots the old value, and Escape-while-editing (the one path that reverts) is never
+// reached. Escape out here therefore has to mean something on its own: put the SELECTION
+// back to what is stored, through the same `mergeFieldEdit` rule asserted above.
+//
+// The model below is the grid's edit layer with React taken out. `stored` is what
+// `storedCellText` reads, `edits` is the map `setCellText` maintains, `clear` is
+// `clearSelectedCells` and `revert` is `revertSelectedCells` — including its VERDICT,
+// which is the whole of the two-stage behaviour (undo first, deselect second).
+//
+// This bug class — a correct VALUE with a wrong DIRTY STATE — has now bitten twice, so
+// the composition gets pinned here rather than only its two halves.
+
+type Cell = readonly [row: string, field: DeliveryField]
+
+function sheet(stored: Record<string, FieldEdits>) {
+  const edits: Record<string, FieldEdits> = {}
+  const storedText = (c: Cell) => stored[c[0]]?.[c[1]] ?? ''
+  const text = (c: Cell) => edits[c[0]]?.[c[1]] ?? storedText(c)
+  const write = (c: Cell, value: string) => {
+    const next = mergeFieldEdit(edits[c[0]], c[1], value, storedText(c))
+    if (Object.keys(next).length === 0) delete edits[c[0]]
+    else edits[c[0]] = next
+  }
+  return {
+    text,
+    storedText,
+    /** Backspace. Note what it does NOT do: touch the selection it was aimed at. */
+    clear: (cells: Cell[]) => cells.forEach((c) => write(c, '')),
+    /** Escape. True exactly when something was undone. */
+    revert: (cells: Cell[]) => {
+      let did = false
+      for (const c of cells) {
+        const s = storedText(c)
+        if (text(c) === s) continue
+        write(c, s)
+        did = true
+      }
+      return did
+    },
+    /** Stored receipts the "N unsaved" chip counts (any key at all). */
+    dirtyReceipts: () => Object.keys(edits).sort(),
+    /** Draft rows it counts — blank text is never work (`isDirtyFieldEdits`). */
+    dirtyDrafts: () => Object.keys(edits).filter((id) => isDirtyFieldEdits(edits[id])).sort(),
+  }
+}
+
+check('Escape after a Backspace restores the stored value AND drops the dirty state', () => {
+  const s = sheet({ r1: { remarks: 'per Czarina', truck_no: 'ABC 123' } })
+  const cell: Cell = ['r1', 'remarks']
+
+  s.clear([cell])
+  assert.equal(s.text(cell), '', 'Backspace must blank the cell')
+  assert.deepEqual(s.dirtyReceipts(), ['r1'], 'clearing a stored value IS an edit — blank ≠ unchanged')
+
+  assert.equal(s.revert([cell]), true, 'Escape must report that it undid something')
+  assert.equal(s.text(cell), 'per Czarina', 'the cell must read what the database holds')
+  assert.deepEqual(s.dirtyReceipts(), [], 'and the row must leave the unsaved count entirely')
+})
+
+check('the same across a multi-cell range — every cleared cell comes back', () => {
+  const s = sheet({
+    r1: { remarks: 'per Czarina', truck_no: 'ABC 123' },
+    r2: { remarks: '', truck_no: 'XYZ 789' }, // an ALREADY-empty cell inside the block
+  })
+  const block: Cell[] = [
+    ['r1', 'remarks'], ['r1', 'truck_no'],
+    ['r2', 'remarks'], ['r2', 'truck_no'],
+  ]
+
+  s.clear(block)
+  assert.deepEqual(s.dirtyReceipts(), ['r1', 'r2'])
+  // r2's remarks was empty before the clear, so clearing it never became an edit — the
+  // undo must not invent one either.
+  assert.equal(s.revert(block), true)
+  for (const c of block) {
+    assert.equal(s.text(c), s.storedText(c), `${c[0]}.${c[1]} must be back to stored`)
+  }
+  assert.deepEqual(s.dirtyReceipts(), [], 'nothing may be left counting as unsaved')
+})
+
+check('a cleared DRAFT cell reverts to empty — and empty is not dirty', () => {
+  // A draft row is stored NOWHERE, so its canonical text is empty… except the seeded date.
+  const seeded = '2026-06-27'
+  const s = sheet({ d1: { delivery_date: seeded } })
+  const truck: Cell = ['d1', 'truck_no']
+  const date: Cell = ['d1', 'delivery_date']
+
+  s.clear([truck])
+  assert.equal(s.text(truck), '', 'blanking a blank draft cell leaves it blank')
+  assert.deepEqual(s.dirtyDrafts(), [], 'and must not arm the Save button')
+  assert.equal(s.revert([truck]), false, 'nothing to undo ⇒ Escape falls through to deselect')
+
+  // The one draft cell that does hold something is the seeded date.
+  s.clear([date])
+  assert.equal(s.text(date), '')
+  assert.equal(s.revert([truck, date]), true)
+  assert.equal(s.text(date), seeded, 'the seed is the draft’s stored text')
+  assert.deepEqual(s.dirtyDrafts(), [])
+})
+
+check('Escape is TWO-STAGE — it undoes while there is work, and only then deselects', () => {
+  const s = sheet({ r1: { remarks: 'per Czarina' } })
+  const cell: Cell = ['r1', 'remarks']
+
+  // Stage 0 — nothing typed. Escape has nothing to undo, so the grid deselects instead.
+  assert.equal(s.revert([cell]), false)
+
+  s.clear([cell])
+  // Stage 1 — undo. Neither the clear nor the undo touches the selection, which is what
+  // keeps the second Escape aimed at the same block.
+  assert.equal(s.revert([cell]), true)
+  assert.equal(s.text(cell), 'per Czarina')
+
+  // Stage 2 — nothing left to undo, so Escape means deselect again. It is never a no-op
+  // while there IS something on screen to undo.
+  assert.equal(s.revert([cell]), false)
+})
+
+check('Escape undoes only what is SELECTED — an edit elsewhere on the sheet survives', () => {
+  const s = sheet({ r1: { remarks: 'per Czarina' }, r2: { remarks: 'short load' } })
+  s.clear([['r1', 'remarks'], ['r2', 'remarks']])
+  assert.deepEqual(s.dirtyReceipts(), ['r1', 'r2'])
+
+  assert.equal(s.revert([['r1', 'remarks']]), true)
+  assert.equal(s.text(['r1', 'remarks']), 'per Czarina')
+  assert.deepEqual(s.dirtyReceipts(), ['r2'], 'the unselected row keeps its edit')
+})
+
+check('the ledger wires Escape, and its clear leaves the selection alone', () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../app/(app)/cenapro/deliveries/deliveries-ledger.tsx'),
+    'utf8',
+  )
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  assert.match(code, /onGridKeyDown/, 'comment-stripping destroyed the source; the scan below would be vacuous')
+
+  // 1. Escape outside edit mode reverts, and its verdict is what decides whether the
+  //    event is consumed — fall through and the shared hook clears the range.
+  assert.ok(
+    code.includes("e.key === 'Escape' && revertSelectedCells()"),
+    'Escape outside edit mode must run revertSelectedCells() and honour its verdict',
+  )
+
+  // 2. Clearing must NOT drop the selection, or there is nothing left for Escape to undo.
+  const from = code.indexOf('const clearSelectedCells')
+  const to = code.indexOf('const revertSelectedCells')
+  assert.ok(from > 0 && to > from, 'expected clearSelectedCells followed by revertSelectedCells')
+  assert.ok(
+    !code.slice(from, to).includes('clearSelection'),
+    'clearSelectedCells must leave the selection intact (Excel does, and Escape needs it)',
+  )
 })
 
 // ── "Is there anything to lose?" — the axis-change guard's firing condition ───
