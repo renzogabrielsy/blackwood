@@ -1867,6 +1867,309 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_rc_deliveries: {
+        Row: {
+          ash: number | null
+          base_price_php_kg: number | null
+          bd: number | null
+          created_at: string | null
+          created_by: string | null
+          deduction_pct: number | null
+          delivery_date: string | null
+          delivery_date_raw: string | null
+          delivery_year: number | null
+          destination_code: string | null
+          destination_raw: string | null
+          destination_side: string | null
+          dust: number | null
+          fc: number | null
+          grit: number | null
+          gross_weight_kg: number | null
+          id: string | null
+          import_flags: Json | null
+          is_suspected_duplicate: boolean | null
+          moisture_pct: number | null
+          net_weight_kg: number | null
+          permit_no: string | null
+          price_adjustment_php_kg: number | null
+          price_formula: string | null
+          price_php_kg: number | null
+          provenance: string | null
+          remarks: string | null
+          row_version: number | null
+          sacks: number | null
+          sheet_total_php: number | null
+          source_row: number | null
+          source_sheet: string | null
+          supplier_code: string | null
+          supplier_origin: string | null
+          supplier_raw: string | null
+          total_price_php: number | null
+          truck_no: string | null
+          updated_at: string | null
+          updated_by: string | null
+          vm: number | null
+          weight_formula: string | null
+        }
+        Insert: {
+          ash?: number | null
+          base_price_php_kg?: number | null
+          bd?: number | null
+          created_at?: string | null
+          created_by?: string | null
+          deduction_pct?: number | null
+          delivery_date?: string | null
+          delivery_date_raw?: string | null
+          delivery_year?: number | null
+          destination_code?: string | null
+          destination_raw?: string | null
+          destination_side?: string | null
+          dust?: number | null
+          fc?: number | null
+          grit?: number | null
+          gross_weight_kg?: number | null
+          id?: string | null
+          import_flags?: Json | null
+          is_suspected_duplicate?: boolean | null
+          moisture_pct?: number | null
+          net_weight_kg?: number | null
+          permit_no?: string | null
+          price_adjustment_php_kg?: number | null
+          price_formula?: string | null
+          price_php_kg?: number | null
+          provenance?: string | null
+          remarks?: string | null
+          row_version?: number | null
+          sacks?: number | null
+          sheet_total_php?: number | null
+          source_row?: number | null
+          source_sheet?: string | null
+          supplier_code?: string | null
+          supplier_origin?: string | null
+          supplier_raw?: string | null
+          total_price_php?: number | null
+          truck_no?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+          vm?: number | null
+          weight_formula?: string | null
+        }
+        Update: {
+          ash?: number | null
+          base_price_php_kg?: number | null
+          bd?: number | null
+          created_at?: string | null
+          created_by?: string | null
+          deduction_pct?: number | null
+          delivery_date?: string | null
+          delivery_date_raw?: string | null
+          delivery_year?: number | null
+          destination_code?: string | null
+          destination_raw?: string | null
+          destination_side?: string | null
+          dust?: number | null
+          fc?: number | null
+          grit?: number | null
+          gross_weight_kg?: number | null
+          id?: string | null
+          import_flags?: Json | null
+          is_suspected_duplicate?: boolean | null
+          moisture_pct?: number | null
+          net_weight_kg?: number | null
+          permit_no?: string | null
+          price_adjustment_php_kg?: number | null
+          price_formula?: string | null
+          price_php_kg?: number | null
+          provenance?: string | null
+          remarks?: string | null
+          row_version?: number | null
+          sacks?: number | null
+          sheet_total_php?: number | null
+          source_row?: number | null
+          source_sheet?: string | null
+          supplier_code?: string | null
+          supplier_origin?: string | null
+          supplier_raw?: string | null
+          total_price_php?: number | null
+          truck_no?: string | null
+          updated_at?: string | null
+          updated_by?: string | null
+          vm?: number | null
+          weight_formula?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_delivery_rows: {
+        Row: {
+          ash: number | null
+          base_price_php_kg: number | null
+          bd: number | null
+          created_at: string | null
+          created_by: string | null
+          deduction_pct: number | null
+          delivery_date: string | null
+          delivery_date_raw: string | null
+          delivery_year: number | null
+          destination_code: string | null
+          destination_has_sides: boolean | null
+          destination_kind: string | null
+          destination_name: string | null
+          destination_raw: string | null
+          destination_side: string | null
+          destination_unresolved: boolean | null
+          dust: number | null
+          fc: number | null
+          grit: number | null
+          gross_weight_kg: number | null
+          has_import_flags: boolean | null
+          id: string | null
+          import_flag_count: number | null
+          import_flags: Json | null
+          is_suspected_duplicate: boolean | null
+          moisture_pct: number | null
+          net_weight_kg: number | null
+          permit_no: string | null
+          price_adjustment_php_kg: number | null
+          price_formula: string | null
+          price_php_kg: number | null
+          provenance: string | null
+          remarks: string | null
+          row_version: number | null
+          sacks: number | null
+          sample_avg_moisture_pct: number | null
+          sample_count: number | null
+          sheet_total_matches: boolean | null
+          sheet_total_php: number | null
+          source_row: number | null
+          source_sheet: string | null
+          supplier_code: string | null
+          supplier_name: string | null
+          supplier_origin: string | null
+          supplier_raw: string | null
+          supplier_unresolved: boolean | null
+          total_price_php: number | null
+          truck_no: string | null
+          updated_at: string | null
+          updated_by: string | null
+          vm: number | null
+          weight_formula: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_delivery_samples: {
+        Row: {
+          ash: number | null
+          bd: number | null
+          created_at: string | null
+          delivery_id: string | null
+          dust: number | null
+          fc: number | null
+          grit: number | null
+          id: string | null
+          label: string | null
+          moisture_pct: number | null
+          position: number | null
+          source_row: number | null
+          vm: number | null
+        }
+        Insert: {
+          ash?: number | null
+          bd?: number | null
+          created_at?: string | null
+          delivery_id?: string | null
+          dust?: number | null
+          fc?: number | null
+          grit?: number | null
+          id?: string | null
+          label?: string | null
+          moisture_pct?: number | null
+          position?: number | null
+          source_row?: number | null
+          vm?: number | null
+        }
+        Update: {
+          ash?: number | null
+          bd?: number | null
+          created_at?: string | null
+          delivery_id?: string | null
+          dust?: number | null
+          fc?: number | null
+          grit?: number | null
+          id?: string | null
+          label?: string | null
+          moisture_pct?: number | null
+          position?: number | null
+          source_row?: number | null
+          vm?: number | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_destinations: {
+        Row: {
+          active: boolean | null
+          code: string | null
+          created_at: string | null
+          display_name: string | null
+          has_sides: boolean | null
+          kind: string | null
+          notes: string | null
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          has_sides?: boolean | null
+          kind?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          has_sides?: boolean | null
+          kind?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_suppliers: {
+        Row: {
+          active: boolean | null
+          code: string | null
+          created_at: string | null
+          display_name: string | null
+          notes: string | null
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          notes?: string | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       view_blocking_grid: {
         Row: {
           avg_ash: number | null
@@ -2756,6 +3059,10 @@ export type Database = {
         }
         Returns: Json
       }
+      cenapro_delete_rc_delivery: {
+        Args: { p_expected_row_version: number; p_id: string }
+        Returns: Json
+      }
       cenapro_flec_balance: {
         Args: { p_start_date: string; p_warehouse_code: string }
         Returns: {
@@ -2826,6 +3133,18 @@ export type Database = {
         }
         Returns: Json
       }
+      cenapro_save_rc_delivery: {
+        Args: { p_expected_row_version?: number; p_id?: string; p_patch?: Json }
+        Returns: Json
+      }
+      cenapro_save_rc_delivery_samples: {
+        Args: {
+          p_delivery_id: string
+          p_expected_row_version: number
+          p_samples?: Json
+        }
+        Returns: Json
+      }
       cenapro_set_opening_balance: {
         Args: {
           p_count: number
@@ -2877,6 +3196,10 @@ export type Database = {
         Returns: Json
       }
       fn_is_close_remark: { Args: { p_remarks: string }; Returns: boolean }
+      fn_recompute_batch_state: {
+        Args: { p_batch_code: string }
+        Returns: undefined
+      }
       fn_release_production_rows: {
         Args: { p_ids: string[]; p_table: string }
         Returns: Json
