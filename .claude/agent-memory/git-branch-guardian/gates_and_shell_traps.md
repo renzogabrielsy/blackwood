@@ -18,6 +18,9 @@ Run the gates BEFORE merging to `main`, and never trust a gate whose exit code y
 - **`cd workers/sync && npm run parity`** when the sync worker is touched — expect "parity clean", 12 cases (deliveries 2 / flecon 3 / gsheet 2 / production 2 / rc_movement_audit 1 / rc_out 2).
 - **Scoped lint:** `npx eslint <touched files>` exits **0 on warnings-only, 1 on any error**, so the plain exit code IS the "0 errors" gate — no `--max-warnings` needed. Still read the log to report the warning count (2026-08-03: 9 cenapro ledger files, exit 0, 7 warnings all pre-existing in `production-ledger-grid.tsx`).
 
+- **`npm run build` in the repo root is the WRONG gate when another session shares the tree** — its untracked files follow every `git checkout` and get compiled. Build a detached `git worktree` of the merge commit instead; full recipe (incl. the Turbopack symlinked-`node_modules` panic) in [[concurrent-session-promotions]].
+- **A red build is not automatically yours.** Judge by "no errors outside <the other session's dir>". 2026-08-04 `npx tsc --noEmit` exited 2 with exactly one error, in `app/(app)/cenapro/deliveries/actions.ts:140` — not ours, not to be fixed, not a blocker.
+
 **The "Compiled successfully" string is unreliable in BOTH directions.** Some runs print it (2026-07-30 "✓ Compiled successfully in 17.0s"; 2026-08-04 "✓ Compiled successfully in 7.4s"), some don't. Verify via **exit code 0 + the emitted route manifest**, never the string.
 
 ## SHELL TRAP — `${PIPESTATUS[0]}` is silently EMPTY in zsh
