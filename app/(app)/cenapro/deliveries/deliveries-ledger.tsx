@@ -75,6 +75,7 @@ import {
     columnCalcType,
     countUnsavedWork,
     describeUnsavedWork,
+    dragAutoScrollDelta,
     duplicateBadge,
     FILTER_COLUMNS,
     formatDestinationCell,
@@ -84,6 +85,7 @@ import {
     formatPeso,
     formatRate,
     formatSupplierCell,
+    frozenBlockWidth,
     frozenOffsets,
     columnScrollLeft,
     isDirtyFieldEdits,
@@ -101,6 +103,7 @@ import {
     readImportFlags,
     rowIssues,
     sampleFieldFor,
+    summarySpans,
     weightEditText,
     DEFAULT_DRAFT_ROWS,
     ROW_H,
@@ -963,13 +966,71 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     // coordinates that hold no cell, and the asymmetry is honoured in the two places it
     // matters: the tint is painted only where a cell exists, and `getNumericCellValue`
     // returns null there, so the pill totals only what is really on screen.
+    //
+    // `scrollContainerRef` is deliberately NOT passed. It takes ONE ref object, and this
+    // grid has two scrollers — the plain wrapper in `focus`, virtuoso's own div in
+    // `endless` — so whichever one it were handed would be null in the other scope. It
+    // was handed `scrollerRef`, so drag auto-scroll simply did not exist in the endless
+    // scope. The ledger drives it below instead, off the same `scrollerEl()` the
+    // caret-follow uses, which also lets the horizontal edge respect the frozen block.
     const cellSelection = useCellSelection({
         rowCount: navRows.length,
         colCount: cols.length,
         isSelectableColumn: selectableCol,
-        scrollContainerRef: scrollerRef,
         enabled: true,
     });
+
+    /**
+     * Auto-scroll while a drag is at the edge of the sheet.
+     *
+     * Confined to `scrollerEl()` by assignment (`scrollTop`/`scrollLeft` +=), so it is
+     * instant by construction and the document never moves — the same discipline as
+     * `scrollTo` / `scrollToCol`. It runs only while the pointer is down, so it cannot
+     * fight the caret-follow, which runs only on a keyboard move.
+     *
+     * `dragAutoScrollDelta` is pure and asserted in `verify-rc-deliveries-cells.ts`; the
+     * load-bearing part is the LEFT band, measured from the inner edge of the pinned
+     * `# · DATE · TRK# · SUPPLIER` block exactly as `columnScrollLeft` measures its
+     * visible window. Without that, a drag can never reach the cells hidden under the
+     * pinned columns — it would stall on them with nothing scrolling.
+     */
+    const frozenWidth = React.useMemo(() => frozenBlockWidth(cols), [cols]);
+    const isDraggingSelection = cellSelection.isDragging;
+    React.useEffect(() => {
+        if (!isDraggingSelection) return;
+
+        let raf = 0;
+        let pointer: { x: number; y: number } | null = null;
+        const onPointerMove = (e: PointerEvent) => {
+            pointer = { x: e.clientX, y: e.clientY };
+        };
+
+        const tick = () => {
+            const scroller = scrollerEl();
+            if (scroller && pointer) {
+                const r = scroller.getBoundingClientRect();
+                const { dx, dy } = dragAutoScrollDelta({
+                    pointer,
+                    rect: { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
+                    frozen: frozenWidth,
+                    scrollTop: scroller.scrollTop,
+                    scrollLeft: scroller.scrollLeft,
+                    maxScrollTop: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+                    maxScrollLeft: Math.max(0, scroller.scrollWidth - scroller.clientWidth),
+                });
+                if (dy !== 0) scroller.scrollTop += dy;
+                if (dx !== 0) scroller.scrollLeft += dx;
+            }
+            raf = requestAnimationFrame(tick);
+        };
+
+        document.addEventListener('pointermove', onPointerMove);
+        raf = requestAnimationFrame(tick);
+        return () => {
+            document.removeEventListener('pointermove', onPointerMove);
+            cancelAnimationFrame(raf);
+        };
+    }, [isDraggingSelection, scrollerEl, frozenWidth]);
 
     const selectionRange = cellSelection.range;
     const selectionSize = selectionRange ? cellSelection.getSelectionSize() : 0;
@@ -2414,7 +2475,13 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     };
 
     // ── Chrome rows (day header, Σ DAY TOTAL, the "add rows" control) ────────────
+    //
+    // `spanAll` is honest for the two rows that really do cover everything. The SUMMARY
+    // rows do not: each of their figures belongs on a particular column, so their spans
+    // come from `summarySpans(cols)` — read off the column table rather than counted
+    // against its length. See the note above it in `types.ts`.
     const spanAll = cols.length;
+    const spans = React.useMemo(() => summarySpans(cols), [cols]);
 
     const chromeRow = (item: LedgerItem): React.ReactNode => {
         if (item.kind === 'add-rows') {
@@ -2460,32 +2527,51 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 </td>
             );
         }
-        // Σ DAY TOTAL
+        // Σ DAY TOTAL. Four lanes, each sized off the column table: the label runs up to
+        // WT, the net-kg figure sits ON WT, the duplicate note fills WT→TTL PRICE, and
+        // the ₱ cell exists exactly when the TTL PRICE column does. A zero span means
+        // the lane has no column, and its cell is not rendered — `colSpan={0}` is "to the
+        // end of the column group" in HTML, which is the opposite of nothing.
         const t = item as Extract<LedgerItem, { kind: 'day-total' }>;
         return (
             <>
-                <td colSpan={5} className={cn(DAY_TOTAL_CELL, 'px-2')}>
+                <td colSpan={spans.label} className={cn(DAY_TOTAL_CELL, 'px-2')}>
                     <span className="font-mono text-[11px] font-bold uppercase tracking-wide">Σ Day total</span>
                 </td>
-                <td className={cn(DAY_TOTAL_CELL, 'px-2 text-right font-mono text-[11px] font-bold tabular-nums')}>
-                    {formatKg(t.netKg)}
-                </td>
-                <td colSpan={canViewPrices ? spanAll - 7 : spanAll - 6} className={cn(DAY_TOTAL_CELL, 'px-2')}>
-                    {t.dupNetKg > 0 && (
-                        <span className="font-mono text-[10px] font-medium text-rose-600 dark:text-rose-400">
-                            includes {formatKg(t.dupNetKg)} kg
-                            {canViewPrices ? ` / ₱${formatPeso(t.dupPhp)}` : ''} from suspected duplicates
-                        </span>
-                    )}
-                </td>
-                {canViewPrices && (
-                    <td className={cn(DAY_TOTAL_CELL, 'px-2')}>
-                        <span className="flex w-full items-center justify-between gap-1 font-mono text-[11px] font-bold tabular-nums">
-                            <span className="text-muted-foreground/70">₱</span>
-                            <span>{formatPeso(t.php ?? 0)}</span>
-                        </span>
+                {spans.weight > 0 && (
+                    <td
+                        colSpan={spans.weight}
+                        className={cn(DAY_TOTAL_CELL, 'px-2 text-right font-mono text-[11px] font-bold tabular-nums')}
+                    >
+                        {formatKg(t.netKg)}
                     </td>
                 )}
+                {spans.note > 0 && (
+                    <td colSpan={spans.note} className={cn(DAY_TOTAL_CELL, 'px-2')}>
+                        {t.dupNetKg > 0 && (
+                            <span className="font-mono text-[10px] font-medium text-rose-600 dark:text-rose-400">
+                                includes {formatKg(t.dupNetKg)} kg
+                                {canViewPrices ? ` / ₱${formatPeso(t.dupPhp)}` : ''} from suspected duplicates
+                            </span>
+                        )}
+                    </td>
+                )}
+                {/* The CELL follows the column (so the row always tiles); the FIGURE
+                    keeps its own `canViewPrices` gate, belt and braces. The two agree by
+                    construction — `buildColumns` omits TTL PRICE for a gated viewer. */}
+                {spans.total > 0 && (
+                    <td colSpan={spans.total} className={cn(DAY_TOTAL_CELL, 'px-2')}>
+                        {canViewPrices && (
+                            <span className="flex w-full items-center justify-between gap-1 font-mono text-[11px] font-bold tabular-nums">
+                                <span className="text-muted-foreground/70">₱</span>
+                                <span>{formatPeso(t.php ?? 0)}</span>
+                            </span>
+                        )}
+                    </td>
+                )}
+                {/* 0 columns today. It exists so a column appended past TTL PRICE is
+                    COVERED rather than leaving this row one short of the data rows. */}
+                {spans.trailing > 0 && <td colSpan={spans.trailing} className={DAY_TOTAL_CELL} />}
             </>
         );
     };
@@ -2880,10 +2966,13 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                                     <tr style={{ height: 34 }}>
                                         {/* Bottom-LEFT corner: sticky-left AND sticky-bottom, so it
                                             out-ranks both the frozen column (z-10) and the footer row
-                                            (z-20) at z-30. It spans exactly the frozen block — no
-                                            further, or it would overhang into scrolling territory. */}
+                                            (z-20) at z-30. `spans.frozen` is `frozenOffsets(cols).length`
+                                            — the SAME walk that produces the `left` offsets — so the
+                                            corner covers exactly the pinned block and can never overhang
+                                            into scrolling territory. The four lanes after it are the day
+                                            total's, minus the corner splitting off the front. */}
                                         <td
-                                            colSpan={frozenCount}
+                                            colSpan={spans.frozen}
                                             className={cn(MONTH_FOOTER_CELL, 'frozen-corner-bottom frozen-edge')}
                                             style={{ left: frozenLeft[0] }}
                                         >
@@ -2891,27 +2980,34 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                                                 Σ {period ? periodLabel(period) : 'Month'} · {monthTotals.count} receipts
                                             </span>
                                         </td>
-                                        <td className={MONTH_FOOTER_CELL} />
-                                        <td className={cn(MONTH_FOOTER_CELL, 'text-right font-mono text-[11px] font-bold tabular-nums')}>
-                                            {formatKg(monthTotals.netKg)}
-                                        </td>
-                                        <td colSpan={canViewPrices ? cols.length - frozenCount - 3 : cols.length - frozenCount - 2} className={MONTH_FOOTER_CELL}>
-                                            {monthTotals.dupCount > 0 && (
-                                                <span className="font-mono text-[10px] font-medium text-rose-600 dark:text-rose-400">
-                                                    {monthTotals.dupCount} suspected duplicate{monthTotals.dupCount === 1 ? '' : 's'} included —
-                                                    {' '}{formatKg(monthTotals.dupNetKg)} kg
-                                                    {canViewPrices ? ` / ₱${formatPeso(monthTotals.dupPhp)}` : ''}
-                                                </span>
-                                            )}
-                                        </td>
-                                        {canViewPrices && (
-                                            <td className={MONTH_FOOTER_CELL}>
-                                                <span className="flex w-full items-center justify-between gap-1 font-mono text-[11px] font-bold tabular-nums">
-                                                    <span className="text-muted-foreground/70">₱</span>
-                                                    <span>{formatPeso(monthTotals.php)}</span>
-                                                </span>
+                                        {spans.spacer > 0 && <td colSpan={spans.spacer} className={MONTH_FOOTER_CELL} />}
+                                        {spans.weight > 0 && (
+                                            <td colSpan={spans.weight} className={cn(MONTH_FOOTER_CELL, 'text-right font-mono text-[11px] font-bold tabular-nums')}>
+                                                {formatKg(monthTotals.netKg)}
                                             </td>
                                         )}
+                                        {spans.note > 0 && (
+                                            <td colSpan={spans.note} className={MONTH_FOOTER_CELL}>
+                                                {monthTotals.dupCount > 0 && (
+                                                    <span className="font-mono text-[10px] font-medium text-rose-600 dark:text-rose-400">
+                                                        {monthTotals.dupCount} suspected duplicate{monthTotals.dupCount === 1 ? '' : 's'} included —
+                                                        {' '}{formatKg(monthTotals.dupNetKg)} kg
+                                                        {canViewPrices ? ` / ₱${formatPeso(monthTotals.dupPhp)}` : ''}
+                                                    </span>
+                                                )}
+                                            </td>
+                                        )}
+                                        {spans.total > 0 && (
+                                            <td colSpan={spans.total} className={MONTH_FOOTER_CELL}>
+                                                {canViewPrices && (
+                                                    <span className="flex w-full items-center justify-between gap-1 font-mono text-[11px] font-bold tabular-nums">
+                                                        <span className="text-muted-foreground/70">₱</span>
+                                                        <span>{formatPeso(monthTotals.php)}</span>
+                                                    </span>
+                                                )}
+                                            </td>
+                                        )}
+                                        {spans.trailing > 0 && <td colSpan={spans.trailing} className={MONTH_FOOTER_CELL} />}
                                     </tr>
                                 </tfoot>
                             </table>
