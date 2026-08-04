@@ -30,7 +30,7 @@ computed in the browser.
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`), whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **67 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **73 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -191,8 +191,9 @@ two opinions on top, both because the operators live in Google Sheets:
 | **Enter** / F2 / double-click | EDIT, preserving the value |
 | Enter *while editing* | COMMIT + move down (still honouring the Tab-run lane anchor) |
 | Shift+Enter | move up |
-| Esc *while editing* | REVERT (see "Dirty state" below) |
-| **Delete / Backspace** | CLEAR the cell — or the whole range — outright, no editor |
+| Esc *while editing* | REVERT the editor + close it (see "Dirty state" below) |
+| **Esc *not* editing** | UNDO the unsaved edits under the selection; deselect once there is nothing left to undo (see "Escape" below) |
+| **Delete / Backspace** | CLEAR the cell — or the whole range — outright, no editor. **The selection survives.** |
 | Shift+click, Shift+Arrow, drag | extend a rectangular range |
 | Ctrl/Cmd+A · Ctrl/Cmd+C | select all · copy the range as TSV |
 
@@ -206,6 +207,54 @@ sample sub-rows and the draft rows.
 The grid's own `onGridKeyDown`/`onGridPaste` wrappers hold one further guard: a keystroke
 or paste aimed at a real form control inside the grid (the "add rows" counter) is not a
 grid gesture and is left alone.
+
+### Escape means two different things, because there are two modes (2026-08-04)
+
+Renzo: *"when backspacing a cell, app correctly thinks something is changed but when i
+press esc, nothing happens. It doesnt revert to before i pressed backspace."*
+
+| Mode | What Escape does | Who |
+|---|---|---|
+| **Editing** (an editor is mounted) | Restores `useGridEditSession`'s pre-edit snapshot and closes the editor. Keeps `stopImmediatePropagation` so Radix cannot swallow it. **Unchanged.** | `useGridKeyboardNav` (platform) |
+| **Not editing**, something unsaved under the selection | **UNDOES** it — the active cell, or every addressable cell of the range — back to the stored value | `revertSelectedCells()` in `deliveries-ledger.tsx` |
+| **Not editing**, nothing unsaved under the selection | Falls through to the shared hook, which clears the range (deselect) | `useGridKeyboardNav` (platform) |
+
+**Why the second row had to exist at all.** Delete / Backspace clears a cell **without
+opening an editor** (this grid's own opinion, and it stays) — so no edit session is ever
+started, `preEditValueRef` never snapshots the old value, and the editing-mode Escape is
+never reached. A backspaced cell was therefore *unundoable*: correctly marked dirty, with
+no path anywhere in the module that could put the value back.
+
+- **The undo is the existing dirty machinery, not a new undo stack.** `storedCellText(id)`
+  is `getCellText(id)` with the unsaved layer taken off (`canonicalEditText` for a
+  receipt, `draftCanonical` for a draft, the STORED draw block for a sample); writing it
+  back through `setCellText` drops the field via `mergeFieldEdit` exactly as typing the
+  old value by hand would. There is no second definition of "revert" and no second
+  definition of "dirty". It also clears the cell's `invalidCells` mark — the stored value
+  is valid by definition.
+- **Two-stage, and never a no-op with work on screen.** `revertSelectedCells()` returns
+  whether it actually undid anything; only `true` consumes the event. So the first Escape
+  undoes and the second deselects. Propagation is deliberately **not** stopped on this
+  branch (unlike the editing one) — an Escape the grid declines is one a Radix layer above
+  may want.
+- **Which is why the clear KEEPS the selection.** Delete / Backspace is handled in the
+  ledger's own `onGridKeyDown`, not by the shared hook's range branch (which does
+  `onDelete` then `clear()`), so the block just blanked is still the block the undo is
+  aimed at — what Excel does. That branch also sits OUTSIDE the `activeRef.current` guard,
+  because a range dragged from a read-only cell (TTL PRICE is selectable, never active)
+  has no active cell and must still clear, and stay.
+- **Scope is the selection, nothing wider.** An edit on a row the operator is not pointing
+  at is untouched — this is an undo of the current gesture, not a "discard all changes"
+  (that lives in the axis guard's *Discard N changes*).
+- **Draft rows behave the same because they are stored nowhere.** A draft's canonical text
+  is empty, except its **seeded date** — so reverting a cleared draft cell leaves it empty
+  and not dirty, and reverting its cleared date puts the seed back. Clearing an
+  already-blank draft cell was never an edit, so Escape reports nothing to undo and
+  deselects instead.
+- **The platform hook `lib/hooks/use-grid-keyboard-nav.ts` was NOT touched.** It is shared
+  with RC IN, RC OUT, Production Daily and QC; the whole behaviour is expressed in this
+  module's wrapper, so those grids keep their existing Escape and Delete semantics
+  verbatim.
 
 ### Following the caret — scrolling that never moves the page (2026-08-04)
 
