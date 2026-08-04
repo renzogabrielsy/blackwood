@@ -300,6 +300,84 @@ export function minTableWidth(cols: DeliveryCol[]): number {
     return cols.reduce((sum, c) => sum + c.width, 0);
 }
 
+/** Cumulative `left` offset of EVERY column, index-aligned with `cols`. */
+export function columnOffsets(cols: DeliveryCol[]): number[] {
+    const out: number[] = [];
+    let x = 0;
+    for (const c of cols) {
+        out.push(x);
+        x += c.width;
+    }
+    return out;
+}
+
+/**
+ * Total width of the pinned identity block — the strip of the scrollport that a
+ * scrolling column is hidden UNDERNEATH rather than merely scrolled past. Same walk as
+ * `frozenOffsets` (stop at the first non-frozen column), so the two can never disagree
+ * about where the frozen block ends.
+ */
+export function frozenBlockWidth(cols: DeliveryCol[]): number {
+    let x = 0;
+    for (const c of cols) {
+        if (!c.frozen) break;
+        x += c.width;
+    }
+    return x;
+}
+
+export interface ColumnScrollInput {
+    /** Index of the column the caret has just moved to. */
+    col: number;
+    cols: DeliveryCol[];
+    /** The scroller's current horizontal offset. */
+    scrollLeft: number;
+    /** The scroller's visible width. */
+    clientWidth: number;
+    /** The scroller's full scrollable width. */
+    scrollWidth: number;
+}
+
+/**
+ * The horizontal offset that brings `col` into view, or **null when nothing is owed** —
+ * which is the whole point: Tab must never move the sheet a pixel it does not have to.
+ *
+ * Two things this has to get right that a bare `scrollIntoView` does not:
+ *
+ *   • **The frozen block.** `# · DATE · TRK# · SUPPLIER` are pinned over the first 424px
+ *     of the scrollport, so the window a scrolling column is actually visible in starts
+ *     at `scrollLeft + frozenBlockWidth`, not at `scrollLeft`. Scrolling a target to its
+ *     own `left` would park it UNDERNEATH the pinned columns, which reads as "Tab went
+ *     somewhere invisible".
+ *   • **Minimum nudge.** A column already fully inside that window returns null, so a
+ *     purely VERTICAL move never shifts the sheet sideways — and a frozen column, which
+ *     is visible at every offset, returns null always.
+ */
+export function columnScrollLeft(input: ColumnScrollInput): number | null {
+    const { col, cols, scrollLeft, clientWidth, scrollWidth } = input;
+    const c = cols[col];
+    if (!c || c.frozen) return null;
+
+    // Nothing overflows ⇒ nothing to scroll. This is also the branch that keeps the
+    // maths honest: `table-fixed` + `width:100%` stretches the columns past their
+    // declared widths ONLY when there is no overflow, so the declared widths below are
+    // exact in precisely the case where they are consulted.
+    const maxScroll = Math.max(0, scrollWidth - clientWidth);
+    if (maxScroll <= 0) return null;
+
+    const left = columnOffsets(cols)[col];
+    const right = left + c.width;
+    const frozen = frozenBlockWidth(cols);
+
+    let next: number;
+    if (left < scrollLeft + frozen) next = left - frozen;
+    else if (right > scrollLeft + clientWidth) next = right - clientWidth;
+    else return null;
+
+    next = Math.max(0, Math.min(next, maxScroll));
+    return next === scrollLeft ? null : next;
+}
+
 /** Visual row height (Excel Standard `h-8`). */
 export const ROW_H = 32;
 /** A sample sub-row is deliberately shorter — it is a detail line, not an entry. */

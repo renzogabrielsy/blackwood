@@ -85,6 +85,7 @@ import {
     formatRate,
     formatSupplierCell,
     frozenOffsets,
+    columnScrollLeft,
     isDirtyFieldEdits,
     isFilterableColumn,
     isIsoDate,
@@ -343,6 +344,15 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const gridRef = React.useRef<HTMLDivElement>(null);
     const scrollerRef = React.useRef<HTMLDivElement>(null);
     const virtuosoRef = React.useRef<TableVirtuosoHandle>(null);
+    // The endless scope's scroll container is virtuoso's own div, which virtuoso owns the
+    // ref to — so it is handed back here through `LedgerCtx` (see `LedgerScroller`). The
+    // horizontal caret-follow needs a real element in BOTH scopes, and reaching for
+    // virtuoso's private `[data-virtuoso-scroller]` attribute would be a silent break on
+    // the next version bump.
+    const virtuosoScrollerRef = React.useRef<HTMLDivElement | null>(null);
+    const captureScroller = React.useCallback((el: HTMLDivElement | null) => {
+        virtuosoScrollerRef.current = el;
+    }, []);
 
     // ── Columns + geometry ───────────────────────────────────────────────────────
     // The ₱ columns are ABSENT (not blanked) for a gated viewer, so the coordinate
@@ -799,6 +809,28 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const firstItemIndexRef = React.useRef(win.firstItemIndex);
     firstItemIndexRef.current = win.firstItemIndex;
 
+    /**
+     * The ONE scroll container for the current scope. Both scopes scroll on a single
+     * element in both axes — virtuoso's scroller (`overflowX:auto` + its own
+     * `overflowY:auto`) in endless, the plain wrapper in focus.
+     */
+    const scrollerEl = React.useCallback(
+        (): HTMLDivElement | null =>
+            scope === 'endless' ? virtuosoScrollerRef.current : scrollerRef.current,
+        [scope],
+    );
+
+    /**
+     * Keep the caret's ROW visible — and move NOTHING ELSE.
+     *
+     * Every scroll here is contained to `scrollerEl()`. `Element.scrollIntoView` is not
+     * used in the focus branch (and `focus()` never scrolls at all — see `onAfterMove`)
+     * because both walk EVERY scrollable ancestor up to the document: an
+     * `overflow-hidden` ancestor is still a programmatically scrollable box, so a caret
+     * move was dragging the whole page down. The old `block:'center'` compounded it by
+     * re-centring the row on every keystroke even when it had not moved at all — which
+     * is exactly what a horizontal Tab does.
+     */
     const scrollTo = React.useCallback(
         (row: number) => {
             const nav = navRows[row];
@@ -813,18 +845,62 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             if (scope === 'endless') {
                 // `firstItemIndex` shifts virtuoso's public index space on every prepend,
                 // so the array position has to be rebased before it can be scrolled to.
+                // Virtuoso's `scrollIntoView` is its own scroller's `scrollTo` — it never
+                // touches an ancestor — and its default `calculateViewLocation` returns
+                // null for an already-visible row, so this is already a no-op on a
+                // purely horizontal move.
                 virtuosoRef.current?.scrollIntoView({ index: firstItemIndexRef.current + index, behavior: 'auto' });
                 return;
             }
             // Focus renders a plain table, so the row is a real element — found by its
             // own item key rather than a position, because `items` shifts under it.
+            const scroller = scrollerRef.current;
             const key = items[index].key;
-            const el = scrollerRef.current?.querySelector<HTMLElement>(
+            const el = scroller?.querySelector<HTMLElement>(
                 `[data-item-key="${CSS.escape(key)}"]`,
             );
-            el?.scrollIntoView({ block: 'center' });
+            if (!scroller || !el) return;
+
+            // The sticky `<thead>` and the sticky month `<tfoot>` sit OVER the scrolling
+            // rows, so the genuinely visible band is the scrollport minus both. Landing a
+            // row flush against `scrollTop` would tuck it under the header.
+            const box = scroller.getBoundingClientRect();
+            const headH = scroller.querySelector('thead')?.getBoundingClientRect().height ?? 0;
+            const footH = scroller.querySelector('tfoot')?.getBoundingClientRect().height ?? 0;
+            const r = el.getBoundingClientRect();
+            const top = box.top + headH;
+            const bottom = box.bottom - footH;
+
+            // Minimum nudge, instant, and only on the axis that owes something.
+            if (r.top < top) scroller.scrollTop -= top - r.top;
+            else if (r.bottom > bottom) scroller.scrollTop += r.bottom - bottom;
         },
         [scope, navRows, items],
+    );
+
+    /**
+     * Keep the caret's COLUMN visible. The table is ~1608px wide inside a horizontally
+     * scrolling wrapper, so Tab can walk straight off the right edge; nothing used to
+     * follow it. `columnScrollLeft` (pure, asserted in `verify-rc-deliveries-cells.ts`)
+     * decides the offset and, critically, subtracts the frozen block's width — a column
+     * scrolled to its own `left` would sit UNDER the pinned identity columns.
+     */
+    const scrollToCol = React.useCallback(
+        (col: number) => {
+            const scroller = scrollerEl();
+            if (!scroller) return;
+            const next = columnScrollLeft({
+                col,
+                cols,
+                scrollLeft: scroller.scrollLeft,
+                clientWidth: scroller.clientWidth,
+                scrollWidth: scroller.scrollWidth,
+            });
+            // Assigning `scrollLeft` is instant by construction — a smooth scroll during
+            // fast Tab entry is its own bug.
+            if (next !== null) scroller.scrollLeft = next;
+        },
+        [scrollerEl, cols],
     );
 
     const setActiveCell = React.useCallback((id: CoordinateId | null) => {
@@ -1006,8 +1082,16 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             // Moving the caret ends the range — otherwise the tint would be left behind
             // pointing at cells the operator is no longer looking at.
             cellSelection.clearSelection();
+            // Follow the caret on BOTH axes, each independently and each a no-op when it
+            // owes nothing — so a horizontal Tab moves the sheet sideways and not a pixel
+            // down, and a vertical Arrow does the reverse.
             scrollTo(id.row);
-            gridRef.current?.focus();
+            scrollToCol(id.col);
+            // `preventScroll` is not an optimisation. `focus()` is specified to scroll the
+            // element into view with block AND inline "center", in every scrollable
+            // ancestor — so re-focusing this full-height wrapper on every caret move was
+            // yanking the page down. Focus still moves; only the scroll is refused.
+            gridRef.current?.focus({ preventScroll: true });
         },
         // Tab-then-Enter returns to the run's lane — the Excel habit, and this sheet is
         // entered row-by-row across the lab columns, which is exactly the run it helps.
@@ -1028,7 +1112,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             cellSelection.clearSelection();
             setActiveCell({ row: place.navRow, col: dateCol < 0 ? 0 : dateCol });
             scrollTo(place.navRow);
-            gridRef.current?.focus();
+            gridRef.current?.focus({ preventScroll: true });
             return true;
         },
         [placeById, cols, cellSelection, setActiveCell, scrollTo],
@@ -1879,7 +1963,10 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                             if (!e.shiftKey) {
                                 setActiveCell(canEdit ? { row: navRow, col: colIndex } : null);
                             }
-                            gridRef.current?.focus();
+                            // Same reason as `onAfterMove`: a bare `focus()` re-centres
+                            // this wrapper in every scrollable ancestor, so clicking a
+                            // cell used to jolt the page too.
+                            gridRef.current?.focus({ preventScroll: true });
                         }}
                         onMouseEnter={() => cellSelection.handleCellMouseEnter(navRow, colIndex)}
                         onDoubleClick={(e) => {
@@ -2374,7 +2461,8 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
 
     // ── Virtuoso plumbing (endless only) ─────────────────────────────────────────
     const ctx = React.useMemo<LedgerCtx>(
-        () => ({ minWidth, rowClassFor, rowHeightFor, colGroup }),
+        // `captureScroller` is stable (empty deps), so it needs no dep entry of its own.
+        () => ({ minWidth, rowClassFor, rowHeightFor, colGroup, onScroller: captureScroller }),
         // `rowClassFor`/`rowHeightFor` close over dirty state, so the context must be
         // re-made when that changes — virtuoso re-renders visible rows off it.
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3387,12 +3475,29 @@ interface LedgerCtx {
     rowClassFor: (item: LedgerItem) => string;
     rowHeightFor: (item: LedgerItem) => number | undefined;
     colGroup: React.ReactNode;
+    /**
+     * Hands the scroller element back to the grid, which needs one in the endless scope
+     * too. A CALLBACK rather than a ref object: the ledger owns the ref, and a component
+     * may not write through a ref it received as a prop.
+     */
+    onScroller: (el: HTMLDivElement | null) => void;
 }
 
-const LedgerScroller = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'> & { context?: unknown }>(
-    function LedgerScroller({ style, context: _ctx, ...props }, ref) {
-        void _ctx;
-        return <div ref={ref} {...props} className="outline-none" style={{ overflowX: 'auto', ...style }} />;
+const LedgerScroller = React.forwardRef<HTMLDivElement, React.ComponentProps<'div'> & { context?: LedgerCtx }>(
+    function LedgerScroller({ style, context, ...props }, ref) {
+        // Virtuoso owns this element's ref, and the grid needs the element as well (to
+        // follow the caret sideways). So the two are merged rather than one replacing the
+        // other — virtuoso's own scrolling would break if its ref were stolen.
+        const onScroller = context?.onScroller;
+        const setRef = React.useCallback(
+            (el: HTMLDivElement | null) => {
+                if (typeof ref === 'function') ref(el);
+                else if (ref) ref.current = el;
+                onScroller?.(el);
+            },
+            [ref, onScroller],
+        );
+        return <div ref={setRef} {...props} className="outline-none" style={{ overflowX: 'auto', ...style }} />;
     },
 );
 
