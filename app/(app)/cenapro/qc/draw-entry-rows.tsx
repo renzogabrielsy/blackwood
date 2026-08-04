@@ -12,18 +12,28 @@
 // reading down it, and a grid you type straight into matches that; a form beside the grid
 // makes you look in two places and re-read where you were after every line.
 //
-// ── What is typable, and what is not (revised 2026-08-04, second pass) ──────────
+// ── What is typable (revised 2026-08-04, THIRD pass — everything) ───────────────
 // Renzo: *"when doing in add draw, i want all the cells to be editable. Same behavior as
 // production ledger. Currently its blocking me from manipulating certain columns."*
 //
-//   typed:   date · prod · shift · grade · whse · side · bags · src · mach · wt
-//            · BD · ASH · GRIT · MC
-//   derived: PLANT — and ONLY plant. `cenapro_add_partner_draw` has no `p_plant`
-//            parameter at all: it derives the plant from the source (TNK 1–4→W6,
-//            W7→W7, W6→W6, FLEC→none), and for a tank draw the plant IS the sample
-//            group's warehouse key, so a typed-wrong one would file the row into a
-//            phantom group. The cell renders the live derivation, muted, and hosts the
-//            row's remove control — computed, not locked.
+//   typed: date · prod · shift · grade · PLANT · whse · side · bags · src · mach · wt
+//          · BD · ASH · GRIT · MC
+//
+// PLANT was the last hold-out, on the argument that `cenapro_add_partner_draw` had no
+// `p_plant` parameter. Renzo: *"I don't understand how PLANT has to stay this way when
+// it's very much typeable in the production ledger?"* He is right — the RPC INSERTs into
+// `cenapro.production_event`, the same table and the same column the Production ledger
+// writes through an ordinary `SelectCell` dropdown, and this screen transcribes PARTNER
+// SLIPS, which can legitimately name a plant the source mapping does not predict. The
+// RPC gained `p_plant` on 2026-08-04, so the cell is a dropdown here too — the SAME
+// `SelectCell` + `plantBadgeClass` treatment, one colour scheme across both ledgers.
+//
+// It stays ZERO-EFFORT in the common case: the cell shows the LIVE derivation from SRC
+// (ghosted — dashed border, softened, so a derived value never reads as a typed one) and
+// nothing is sent for it. Only an explicit pick becomes an override (solid badge), and
+// `— follow SRC` puts the cell back to derived, which is exactly the server's
+// blank-means-derive rule. Clearing is therefore never "no plant": a phantom sample
+// group stays unreachable, which was the real point of the old restriction.
 //
 // WHSE / SIDE / BAGS were disabled until SRC read `FLEC`. That was a pure UI gate with
 // nothing behind it — the RPC takes all three directly and `draftBlocker` (plus the
@@ -49,8 +59,9 @@
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
-import { Check, Loader2, TriangleAlert, X } from 'lucide-react';
+import { Check, Info, Loader2, TriangleAlert, X } from 'lucide-react';
 
+import { SelectCell } from '@/components/shared/grid/SelectCell';
 import { cn } from '@/lib/utils';
 import {
     METRICS,
@@ -61,6 +72,11 @@ import {
     sampleGroupKey,
     type MetricKey,
 } from '@/lib/cenapro/ccc-analysis';
+// The PLANT badge is the Production ledger's, imported rather than re-styled: the same
+// column on the same table must not grow a second colour scheme. It lives in the pure
+// `../badges` module (the ledger re-exports it) so borrowing it costs nothing.
+import { BADGE_BASE, plantBadgeClass } from '../badges';
+import { PLANT_CODES } from '../types';
 import type { AddQcDrawInput } from './actions';
 import type { QcDrawOptions } from './data';
 
@@ -90,10 +106,21 @@ export interface DraftDraw {
      * the whole month, which is where the toolbar's ten blanks land.
      */
     anchorDate: string | null;
+    /**
+     * Both date cells start BLANK on every new row (2026-08-04). Renzo: *"when you add
+     * draw, leave the new cells in both dates column blank."* Nothing is pre-dated, so
+     * a date on a row is always a date someone typed.
+     */
     recvDate: string;
     prodDate: string;
     shift: string;
     grade: string;
+    /**
+     * The PLANT **override**, and only the override — `''` means "follow SRC", exactly
+     * as the RPC reads an omitted `p_plant`. The cell displays `effectivePlant()`, so a
+     * blank here still renders the derivation; what it never does is send one.
+     */
+    plant: string;
     whse: string;
     side: string;
     bags: string;
@@ -105,6 +132,14 @@ export interface DraftDraw {
     status: DraftStatus;
     /** The server's own message on a refusal — never a re-worded one. */
     message?: string;
+    /**
+     * A NON-BLOCKING remark that came back with a SUCCESSFUL write — today the RPC's
+     * `plant_notice` (a supplied plant disagreeing with the source) and/or its `notice`
+     * (a FLEC draw saved with no LS/RS side). It is informational, needs no answer, and
+     * never gates anything; the row simply stays on screen carrying it instead of
+     * vanishing with the refresh, so the remark has somewhere to be read.
+     */
+    notice?: string;
     /** Set by a `duplicate_warning`; the re-send carries `allowDuplicate`. */
     needsDuplicateConfirm?: boolean;
     /**
@@ -120,16 +155,23 @@ let draftSeq = 0;
 
 const BLANK_METRICS: DraftMetrics = { bd: '', ash: '', grit: '', mc: '' };
 
-/** A blank row, pre-dated to the day it was added under. */
-export function makeBlankDraft(recvDate: string, anchorDate: string | null = null): DraftDraw {
+/**
+ * A genuinely blank row — including BOTH date cells (2026-08-04).
+ *
+ * `anchorDate` is the ONLY date a blank carries, and it is layout, not data: it decides
+ * which day block the row renders in and is never read by the save path. Rows opened
+ * from a day header get that day; the toolbar's ten get `null`, the trailing block.
+ */
+export function makeBlankDraft(anchorDate: string | null = null): DraftDraw {
     draftSeq += 1;
     return {
         id: `draft-${draftSeq}`,
         anchorDate,
-        recvDate,
+        recvDate: '',
         prodDate: '',
         shift: '',
         grade: '',
+        plant: '',
         whse: '',
         side: '',
         bags: '',
@@ -142,12 +184,8 @@ export function makeBlankDraft(recvDate: string, anchorDate: string | null = nul
 }
 
 /** `n` blank rows in one go — what the "Add draw" button hands you. */
-export function makeBlankDrafts(
-    count: number,
-    recvDate: string,
-    anchorDate: string | null = null,
-): DraftDraw[] {
-    return Array.from({ length: count }, () => makeBlankDraft(recvDate, anchorDate));
+export function makeBlankDrafts(count: number, anchorDate: string | null = null): DraftDraw[] {
+    return Array.from({ length: count }, () => makeBlankDraft(anchorDate));
 }
 
 /** The metric cells with something in them, or `undefined` when the row says nothing. */
@@ -164,17 +202,24 @@ export function draftMetrics(d: DraftDraw): Partial<Record<MetricKey, string>> |
 }
 
 /**
- * Has anything been typed into this row beyond the date it was born with?
+ * Has anything been typed into this row at all?
  *
- * This is what stops ten untouched blanks from being ten validation errors on save. It
- * deliberately ignores `recvDate`: every blank arrives already dated, so counting it
- * would make every blank look meaningful.
+ * This is what stops ten untouched blanks from being ten validation errors on save.
+ *
+ * It used to skip `recvDate` deliberately, on the premise that *"every blank arrives
+ * already dated, so counting it would make every blank look meaningful"*. **That premise
+ * died on 2026-08-04**, when blanks stopped being pre-dated: a date on a row is now
+ * always a date someone typed, and skipping it would mean a row with ONLY a date typed
+ * into it looked untouched — silently dropped by Save, with no line saying why. So every
+ * cell counts now, `recvDate` and the PLANT override included.
  */
 export function isMeaningfulDraft(d: DraftDraw): boolean {
     return Boolean(
-        d.prodDate ||
+        d.recvDate.trim() ||
+            d.prodDate.trim() ||
             d.shift ||
             d.grade ||
+            d.plant ||
             d.whse ||
             d.side ||
             d.bags ||
@@ -210,6 +255,21 @@ export function derivedPlant(src: string): string {
 }
 
 /**
+ * The plant this row would OVERRIDE the derivation with, or `''` for "follow SRC".
+ *
+ * The one predicate that decides whether `p_plant` is sent, so the cell's styling, the
+ * group-key mirror and the payload can never disagree about whether a row is overridden.
+ */
+export function plantOverride(d: DraftDraw): string {
+    return canonToken(d.plant);
+}
+
+/** What will actually be STORED as this row's plant — the override, else the derivation. */
+export function effectivePlant(d: DraftDraw): string {
+    return plantOverride(d) || derivedPlant(d.src);
+}
+
+/**
  * Everything the server action needs, straight from what was typed — with the two date
  * cells normalized to `yyyy-MM-dd` on the way out.
  *
@@ -223,7 +283,7 @@ export function draftToInput(d: DraftDraw, contextYear: number, allowDuplicate =
     const recv = parseQcDate(d.recvDate, contextYear);
     const prodRaw = d.prodDate.trim();
     const prod = prodRaw ? parseQcDate(prodRaw, contextYear) : null;
-    return {
+    const input: AddQcDrawInput = {
         recvDate: 'iso' in recv ? recv.iso : d.recvDate.trim(),
         sourceLocationCode: d.src,
         partnerEquipmentCode: d.mach,
@@ -236,6 +296,14 @@ export function draftToInput(d: DraftDraw, contextYear: number, allowDuplicate =
         whseSide: d.side || null,
         allowDuplicate,
     };
+    // ── The plant is sent ONLY when it was actually overridden ────────────────────
+    // A derived value must never be echoed back as a supplied one: every row would then
+    // return `plant_source: 'supplied'`, and a verdict key that is always the same
+    // answers nothing. Blank stays blank all the way down — the server reads an omitted
+    // `p_plant` as "follow the source", which is the same rule this cell renders.
+    const override = plantOverride(d);
+    if (override) input.plant = override;
+    return input;
 }
 
 /**
@@ -282,8 +350,10 @@ export function draftBlocker(d: DraftDraw, contextYear: number): string | null {
 // the operator would never learn that the other number was thrown away.
 //
 // The key below MIRRORS the RPC's derivation (`whse_key = coalesce(warehouse_code,
-// plant_code)`, plant from the source) using the same `derivedPlant` the PLANT cell
-// already previews with. It is used ONLY to refuse — never to write, and never sent to
+// plant_code)`) using the same `effectivePlant` the PLANT cell displays — so an
+// OVERRIDDEN plant moves the mirrored group exactly as it moves the stored one, and two
+// rows that the server would file apart are not claimed to be one here. It is used ONLY
+// to refuse — never to write, and never sent to
 // the server, which re-derives the truth from each insert's own returned `sample_group`.
 // A mirror that drifts can therefore cost a spurious refusal or a missed one, never a
 // wrong value: `addQcDraws` runs the same check over the RPC's own answer.
@@ -299,8 +369,9 @@ export function draftGroupKey(d: DraftDraw, contextYear: number): string | null 
         source_location_code: src,
         // `coalesce(nullif(canon(warehouse), ''), plant)` — a whitespace-only warehouse
         // cell canonicalizes to '' and must fall through to the plant, exactly as the
-        // RPC's own `nullif` does.
-        whse_key: canonToken(d.whse) || canonToken(derivedPlant(d.src)),
+        // RPC's own `nullif` does. The plant here is the EFFECTIVE one: a typed override
+        // is what gets stored, so it is what the group is keyed by.
+        whse_key: canonToken(d.whse) || canonToken(effectivePlant(d)),
     });
 }
 
@@ -442,6 +513,18 @@ function DraftCell({
     );
 }
 
+/**
+ * The dropdown's "put it back to derived" item.
+ *
+ * It is an OPTION rather than `SelectCell`'s built-in `nullable` because that item reads
+ * "— None", and none is precisely what this cell must never mean: a cleared plant on a
+ * tank draw files the row under an empty sample-group key. Blank here means "follow
+ * SRC", the server's own rule, and the item says so. The sentinel can never collide with
+ * a real code (`W6` · `W7` · `W6/W7` · `DVO`) and is mapped back to `''` on the way in.
+ */
+const FOLLOW_SRC = 'FOLLOW SRC';
+const PLANT_OPTIONS: readonly string[] = [FOLLOW_SRC, ...PLANT_CODES];
+
 export interface DraftRowProps {
     draft: DraftDraw;
     options: QcDrawOptions;
@@ -463,7 +546,13 @@ export interface DraftRowProps {
  * the four metrics now occupy; it needed a home that costs no column and hides no
  * refusal, and a line that appears under the row it is about is the one place an
  * operator is already looking. An untouched blank says nothing and gets no second row,
- * so ten waiting blanks are still ten rows.
+ * so ten waiting blanks are still ten rows — and since blanks arrive UNDATED, "needs a
+ * date" is not the first thing ten of them shout.
+ *
+ * That same line is where a NOTICE lands: a remark the server returned with a successful
+ * write (a typed plant disagreeing with the source, a FLEC draw with no side). It reads
+ * green beside `saved`, never red, and asks for nothing — it is not a refusal and gets
+ * no confirm round trip.
  */
 export function DraftRow({ draft, options, contextYear, conflict, onChange, onRemove }: DraftRowProps) {
     const set = (patch: Partial<DraftDraw>) => onChange(draft.id, patch);
@@ -474,7 +563,10 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
         () => [...options.crushers, ...options.kilns],
         [options.crushers, options.kilns],
     );
-    const plant = derivedPlant(draft.src);
+    // The plant that would be STORED, and whether the operator put it there. A derived
+    // value is rendered ghosted so the row never claims a transcription it does not have.
+    const plantTyped = plantOverride(draft) !== '';
+    const plant = effectivePlant(draft);
     const meaningful = isMeaningfulDraft(draft);
     const blocker = meaningful ? draftBlocker(draft, contextYear) : null;
     const failed = draft.status === 'failed';
@@ -500,7 +592,14 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
             : conflict
               ? conflict
               : blocker;
-    const showStatus = busy || draft.status === 'saved' || Boolean(statusText);
+    /** A remark that came back WITH a successful write — never a reason to act. */
+    const noticeText = draft.notice?.trim() ? draft.notice.trim() : null;
+    const bodyText = statusText
+        ? noticeText
+            ? `${statusText} ${noticeText}`
+            : statusText
+        : noticeText;
+    const showStatus = busy || draft.status === 'saved' || Boolean(bodyText);
 
     return (
         <>
@@ -564,19 +663,59 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
                     upper
                 />
 
-                {/* PLANT — the one cell that is not typed, because the RPC has no
-                    parameter for it: it derives the plant from the source, and for a
-                    tank draw that plant IS the sample group's warehouse key. Rendered as
-                    a live computation (muted, on the summary-row grey) rather than a
-                    greyed-out input, and it hosts this row's remove control — the only
-                    cell in the row with room for one. */}
+                {/* PLANT — a real dropdown since 2026-08-04, the SAME `SelectCell` +
+                    `plantBadgeClass` the Production ledger renders on this very column.
+                    Left alone it shows the live derivation from SRC, ghosted (dashed,
+                    softened) so derived never reads as typed, and sends nothing; an
+                    explicit pick becomes an override and gets the solid badge;
+                    `— follow SRC` puts it back. It also hosts this row's remove control
+                    — still the only cell with room for one. */}
                 <td
-                    className={cn(CELL, 'bg-muted/40 px-1')}
-                    title="Computed from SRC by the database — TNK→W6, W7→W7, W6→W6, FLEC→none. There is no plant to type."
+                    className={cn(CELL, plantTyped ? 'bg-primary/[0.06]' : 'bg-muted/40')}
+                    title={
+                        plantTyped
+                            ? `Plant typed from the slip — this row is stored as ${plant}${
+                                  derivedPlant(draft.src)
+                                      ? `, not the ${derivedPlant(draft.src)} its source would give`
+                                      : ''
+                              }. Pick “follow SRC” to go back to the derived value.`
+                            : 'Following SRC — TNK→W6, W7→W7, W6→W6, FLEC→none. Pick a plant to override it when the partner’s slip says otherwise.'
+                    }
                 >
-                    <span className="flex items-center justify-between gap-0.5">
-                        <span className="truncate font-mono text-[11px] text-muted-foreground">
-                            {plant || '—'}
+                    {/* `items-stretch` so the dropdown trigger's `h-full` fills the
+                        row — the whole cell is the click target, as it is in the
+                        production ledger. The remove control stays centred. */}
+                    <span className="flex h-7 items-stretch gap-0.5">
+                        <span className="min-w-0 flex-1">
+                            <SelectCell
+                                value={plant}
+                                options={PLANT_OPTIONS}
+                                onChange={(next) =>
+                                    set({ plant: next === FOLLOW_SRC ? '' : next })
+                                }
+                                renderLabel={(opt) =>
+                                    opt === FOLLOW_SRC ? '— follow SRC' : opt
+                                }
+                                renderTrigger={(value) => (
+                                    <span
+                                        className={cn(
+                                            BADGE_BASE,
+                                            plantBadgeClass(value),
+                                            // Derived: same colour family, visibly
+                                            // provisional. Typed: the ledger's own badge.
+                                            !plantTyped && 'border-dashed opacity-60',
+                                        )}
+                                    >
+                                        {value}
+                                    </span>
+                                )}
+                                disabled={busy}
+                                // Doubles as the trigger's accessible name, which is why
+                                // it is a word rather than a dash: a blank cell here (no
+                                // SRC yet, or a FLEC draw, which derives no plant) would
+                                // otherwise announce itself as "—".
+                                placeholder="plant"
+                            />
                         </span>
                         <button
                             type="button"
@@ -584,7 +723,7 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
                             disabled={busy}
                             title="Remove this row"
                             aria-label="Remove this draft row"
-                            className="shrink-0 rounded p-0.5 text-muted-foreground/40 transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                            className="h-5 shrink-0 self-center rounded p-0.5 text-muted-foreground/40 transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
                         >
                             <X className="h-3 w-3" />
                         </button>
@@ -681,13 +820,18 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
                                 <Loader2 className="h-3 w-3 animate-spin" /> saving…
                             </span>
                         ) : draft.status === 'saved' ? (
-                            <span className="inline-flex items-center gap-1">
-                                <Check className="h-3 w-3" /> saved
+                            <span className="inline-flex items-start gap-1">
+                                <Check className="mt-px h-3 w-3 shrink-0" />
+                                <span>{noticeText ? `saved — ${noticeText}` : 'saved'}</span>
                             </span>
                         ) : (
                             <span className="inline-flex items-start gap-1">
-                                <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
-                                <span>{statusText}</span>
+                                {statusText ? (
+                                    <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
+                                ) : (
+                                    <Info className="mt-px h-3 w-3 shrink-0" />
+                                )}
+                                <span>{bodyText}</span>
                             </span>
                         )}
                     </td>

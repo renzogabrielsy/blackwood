@@ -3,16 +3,21 @@
  * (app/(app)/cenapro/qc/draw-entry-rows.tsx + the shared parsers in
  * lib/cenapro/ccc-analysis.ts). No DB, no browser, no test framework.
  *
- * QC entry became materially more powerful on 2026-08-04 — every cell but PLANT is now
- * typed, dates are free text that becomes `yyyy-MM-dd`, and a lab reading typed on a new
- * row is applied to the sample GROUP that row lands in. Three of those are places a
- * silent wrongness would be expensive:
+ * QC entry became materially more powerful on 2026-08-04 — EVERY cell is now typed
+ * (PLANT included, as of the third pass), dates are free text that becomes `yyyy-MM-dd`,
+ * blanks arrive UNDATED, and a lab reading typed on a new row is applied to the sample
+ * GROUP that row lands in. Four of those are places a silent wrongness would be
+ * expensive:
  *
  *   · a date that parses to the wrong year files a receipt in the wrong month;
  *   · an editability rule that drifts back to "disabled until FLEC" makes typing down a
  *     row impossible again (WHSE/SIDE/BAGS sit BEFORE SRC in the column order);
  *   · two rows landing in one sample group with different readings must be REFUSED, not
- *     merged — last-write-wins would throw a number away without saying so.
+ *     merged — last-write-wins would throw a number away without saying so;
+ *   · PLANT is now an OVERRIDE, and the derived value must never be echoed back as a
+ *     supplied one — a `plant_source` that always says `supplied` answers nothing. The
+ *     two assertions that used to pin "PLANT is never typed and no `p_plant` is ever
+ *     sent" are INVERTED below; the RPC grew `p_plant` on 2026-08-04.
  *
  * Run: npx tsx scripts/verify-qc-draw-cells.ts
  */
@@ -27,6 +32,7 @@ import {
   parseMetricValue,
   parseQcDate,
   sampleGroupKey,
+  type AddPartnerDrawResult,
 } from '@/lib/cenapro/ccc-analysis'
 import {
   COL_COUNT,
@@ -35,11 +41,13 @@ import {
   draftGroupKey,
   draftMetrics,
   draftToInput,
+  effectivePlant,
   findDraftReadingConflicts,
   isMeaningfulDraft,
   isSendableDraft,
   makeBlankDraft,
   makeBlankDrafts,
+  plantOverride,
   type DraftDraw,
 } from '@/app/(app)/cenapro/qc/draw-entry-rows'
 
@@ -69,8 +77,15 @@ function check(name: string, fn: () => void) {
 /** The context year every date assertion below reads a bare `6/27` against. */
 const YEAR = 2026
 
+/**
+ * A row that has been DATED — the baseline for every non-date assertion below.
+ *
+ * `makeBlankDraft` no longer dates anything (2026-08-04), so the date is applied here
+ * explicitly rather than inherited. The argument is the row's `anchorDate`, which is
+ * layout only and never the receipt date.
+ */
 function draft(patch: Partial<DraftDraw> = {}): DraftDraw {
-  return { ...makeBlankDraft('2026-06-27'), ...patch }
+  return { ...makeBlankDraft('2026-06-27'), recvDate: '2026-06-27', ...patch }
 }
 
 /** A row that passes every courtesy check — the baseline the negatives deviate from. */
@@ -224,31 +239,181 @@ check('the four metric cells are typable, and carried on the draft row', () => {
   assert.equal(isMeaningfulDraft(d), true, 'a reading alone makes a row meaningful')
 })
 
-check('PLANT stays derived — the RPC has no parameter for it', () => {
-  const src = stripComments(readFileSync(ROWS, 'utf8'))
-  assert.doesNotMatch(src, /draft\.plant/, 'there is no plant field on a draft row')
-  assert.doesNotMatch(src, /p_plant\b/, 'the add RPC takes no plant argument')
+// ── PLANT: derived by default, typable, and only SENT when overridden ─────────
+//
+// These four checks replace the pair that used to pin "PLANT is never typed and no
+// `p_plant` is ever sent". That rule was one function's choice, not the data model:
+// `cenapro_add_partner_draw` INSERTs into `cenapro.production_event`, the same table
+// and the same column the Production ledger writes through an ordinary dropdown, and
+// this screen transcribes partner slips that can name a plant the source does not
+// predict. The RPC gained `p_plant` on 2026-08-04. What must NOT drift is the other
+// half of the rule — blank still means "derive", never "clear".
+
+check('the derivation from SRC is unchanged, and is what a blank row shows', () => {
   assert.equal(derivedPlant('TNK 1'), 'W6')
   assert.equal(derivedPlant('tnk 4'), 'W6')
   assert.equal(derivedPlant('W7'), 'W7')
   assert.equal(derivedPlant('W6'), 'W6')
   assert.equal(derivedPlant('FLEC'), '')
   assert.equal(derivedPlant(''), '')
-  // The add path must never send a plant, whatever it previews.
-  assert.doesNotMatch(
-    stripComments(readFileSync(ACTIONS, 'utf8')),
-    /p_plant/,
-    'addPartnerDraw must not invent a plant argument',
+  // Nothing typed → the cell still displays the derivation, so the common case stays
+  // zero-effort and correct.
+  assert.equal(effectivePlant(goodTankDraft()), 'W6')
+  assert.equal(plantOverride(goodTankDraft()), '', 'an untouched plant is not an override')
+})
+
+check('a TYPED plant overrides the derivation, and is what gets stored', () => {
+  const typed = goodTankDraft({ plant: 'W7' }) // TNK 1 would derive W6
+  assert.equal(plantOverride(typed), 'W7')
+  assert.equal(effectivePlant(typed), 'W7', 'the override is the effective value')
+  assert.equal(derivedPlant(typed.src), 'W6', '…and the derivation is still knowable')
+  // Case/whitespace canonicalize the way the RPC canonicalizes them, so ` w6/w7 `
+  // reaches the server as the real code rather than as an invalid_key.
+  assert.equal(effectivePlant(goodTankDraft({ plant: ' w6/w7 ' })), 'W6/W7')
+  // A FLEC draw derives NO plant, so a typed one there is a pure addition.
+  assert.equal(effectivePlant(goodTankDraft({ src: 'FLEC', whse: 'WHSE 7', bags: '38' })), '')
+  assert.equal(
+    effectivePlant(goodTankDraft({ src: 'FLEC', whse: 'WHSE 7', bags: '38', plant: 'W6' })),
+    'W6',
   )
 })
 
-check('a blank row is scaffolding, not an unsaved change', () => {
-  const blanks = makeBlankDrafts(10, '2026-06-27')
+check('`p_plant` is sent for an override and NEVER for a derived value', () => {
+  // The whole point: echoing the derivation back would make every row return
+  // `plant_source: 'supplied'`, and a verdict key with one answer answers nothing.
+  assert.equal(
+    draftToInput(goodTankDraft(), YEAR).plant,
+    undefined,
+    'a derived W6 must not be sent as a supplied one',
+  )
+  // Blank means DERIVE, all the way down — never "clear the plant", which would file a
+  // tank draw under an empty sample-group key.
+  assert.equal(draftToInput(goodTankDraft({ plant: '   ' }), YEAR).plant, undefined)
+  assert.equal(draftToInput(goodTankDraft({ plant: '' }), YEAR).plant, undefined)
+  // An override travels, canonicalized.
+  assert.equal(draftToInput(goodTankDraft({ plant: 'W7' }), YEAR).plant, 'W7')
+  assert.equal(draftToInput(goodTankDraft({ plant: ' w6/w7 ' }), YEAR).plant, 'W6/W7')
+
+  const rows = stripComments(readFileSync(ROWS, 'utf8'))
+  assert.match(rows, /set\(\{ plant:/, 'the PLANT cell writes the override')
+  assert.match(rows, /plantBadgeClass/, 'and reuses the production ledger’s plant colours')
+
+  const actions = stripComments(readFileSync(ACTIONS, 'utf8'))
+  assert.match(actions, /args\.p_plant = plant/, 'the action forwards a typed plant')
+  // Omitted, not explicitly null: the file's own idiom for every optional argument, and
+  // the exact shape every pre-2026-08-04 call site already used.
+  assert.match(actions, /if \(plant\) args\.p_plant = plant/, 'blank is OMITTED, never sent as null')
+  assert.doesNotMatch(actions, /p_plant:\s*null/, 'an explicit null would be a different code path')
+  // The refusal stays the server's to word — no client-side plant allowlist.
+  assert.doesNotMatch(rows, /PLANT_CODES\.includes/, 'invalid_key is the RPC’s sentence, verbatim')
+})
+
+check('the three new verdict keys are typed, and read back off the RPC', () => {
+  // Compile-time: the keys exist on the shared contract with the right shapes.
+  const verdict: AddPartnerDrawResult = {
+    ok: true,
+    outcome: 'inserted',
+    plant_code: 'W7',
+    plant_source: 'supplied',
+    plant_derived: 'W6',
+    plant_notice: 'Plant W7 was entered, but TNK 1 reports to W6.',
+  }
+  assert.equal(verdict.plant_source, 'supplied')
+  assert.equal(verdict.plant_derived, 'W6')
+
+  const actions = stripComments(readFileSync(ACTIONS, 'utf8'))
+  for (const key of ['plant_source', 'plant_derived', 'plant_notice']) {
+    assert.match(actions, new RegExp(`raw\\.${key}`), `${key} must be read off the verdict`)
+  }
+  // A notice accompanies a SUCCESSFUL write, so it must never become a confirm gate —
+  // that machinery belongs to duplicate_warning alone.
+  const ledger = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(ledger, /v\.plant_notice/, 'the ledger surfaces the notice on the row')
+  assert.doesNotMatch(
+    ledger,
+    /needsDuplicateConfirm:\s*[^,\n]*plant_notice/,
+    'a plant notice must not be turned into a confirm round trip',
+  )
+})
+
+check('the sample-group mirror follows the OVERRIDDEN plant, not the derived one', () => {
+  // `whse_key = coalesce(warehouse_code, plant_code)` — plant_code is the EFFECTIVE one,
+  // so a typed W7 on a TNK 1 row lands in a different group and must be mirrored there.
+  assert.equal(
+    draftGroupKey(goodTankDraft({ plant: 'W7' }), YEAR),
+    sampleGroupKey({ sample_date: '2026-06-27', source_location_code: 'TNK 1', whse_key: 'W7' }),
+  )
+  // …and two rows that the server would file APART are not claimed to be one here.
+  const a = goodTankDraft({ metrics: { bd: '0.56', ash: '', grit: '', mc: '' } })
+  const b = goodTankDraft({ plant: 'W7', metrics: { bd: '0.61', ash: '', grit: '', mc: '' } })
+  assert.deepEqual(findDraftReadingConflicts([a, b], YEAR), [], 'different groups never conflict')
+  // On a FLEC draw the warehouse still wins, so a typed plant cannot move the group.
+  const flec = { src: 'FLEC', whse: 'WHSE 7', bags: '38' }
+  assert.equal(
+    draftGroupKey(goodTankDraft({ ...flec, plant: 'W6' }), YEAR),
+    draftGroupKey(goodTankDraft(flec), YEAR),
+  )
+})
+
+// ── Blank rows arrive UNDATED (2026-08-04) ───────────────────────────────────
+//
+// Renzo: *"when you add draw, leave the new cells in both dates column blank."* Two
+// things had to move with that, and both are load-bearing:
+//
+//   · `isMeaningfulDraft` used to skip `recvDate` on the premise that every blank was
+//     born dated. That premise is dead — a date is now always typed, so a row with ONLY
+//     a date in it must count, or Save would drop it in silence;
+//   · `anchorDate` must stay independent of `recvDate`, or a row would jump between day
+//     blocks (or into one that does not exist) between two keystrokes of retyping it.
+
+check('a blank row is scaffolding, not an unsaved change — and is UNDATED', () => {
+  const blanks = makeBlankDrafts(10)
   assert.equal(blanks.length, 10)
+  assert.equal(blanks.every((d) => d.recvDate === ''), true, 'both date cells start blank')
+  assert.equal(blanks.every((d) => d.prodDate === ''), true)
+  assert.equal(blanks.every((d) => d.plant === ''), true, 'plant starts on "follow SRC"')
+  assert.equal(blanks.every((d) => d.anchorDate === null), true, 'the toolbar’s ten trail the month')
   assert.equal(blanks.every((d) => !isMeaningfulDraft(d)), true)
   assert.equal(blanks.every((d) => !isSendableDraft(d, YEAR)), true)
-  // Every blank arrives dated, and that alone must not count as typing.
-  assert.equal(blanks.every((d) => d.recvDate === '2026-06-27'), true)
+  // Ten fresh blanks must not read as ten problems: nothing is meaningful, so the
+  // "needs a date" courtesy line never renders on any of them.
+  assert.equal(blanks.filter((d) => isMeaningfulDraft(d) && draftBlocker(d, YEAR)).length, 0)
+})
+
+check('a row with ONLY a date typed is MEANINGFUL — it can no longer be dropped silently', () => {
+  const dated = { ...makeBlankDraft(), recvDate: '6/27' }
+  assert.equal(isMeaningfulDraft(dated), true, 'a typed date is typing')
+  // It is not sendable, but it is NAMED: the courtesy check moves past the date it now
+  // has and asks for the next thing the RPC requires.
+  assert.equal(isSendableDraft(dated, YEAR), false)
+  assert.equal(draftBlocker(dated, YEAR), 'needs a source')
+  // …and an undated row that has other typing in it still asks for the date first.
+  assert.equal(draftBlocker(goodTankDraft({ recvDate: '' }), YEAR), 'needs a date')
+  // Every other single cell alone is meaningful too, PLANT included.
+  for (const patch of [
+    { prodDate: '6/25' },
+    { plant: 'W7' },
+    { src: 'TNK 1' },
+    { wt: '12500' },
+  ] as Partial<DraftDraw>[]) {
+    assert.equal(isMeaningfulDraft({ ...makeBlankDraft(), ...patch }), true, JSON.stringify(patch))
+  }
+})
+
+check('anchorDate is LAYOUT and never tracks recvDate', () => {
+  // Fixed at creation, whatever is later typed into the date cell.
+  const row = makeBlankDraft('2026-06-27')
+  assert.equal(row.anchorDate, '2026-06-27', 'the day block a row was opened under')
+  assert.equal(row.recvDate, '', '…and it is NOT the receipt date')
+  const retyped = { ...row, recvDate: '2026-07-15' }
+  assert.equal(retyped.anchorDate, '2026-06-27', 'retyping the date must not move the row')
+
+  const rows = stripComments(readFileSync(ROWS, 'utf8'))
+  assert.doesNotMatch(rows, /anchorDate:[^,\n}]*recvDate/, 'anchorDate is never derived from the date')
+  const ledger = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(ledger, /d\.anchorDate === day\.date/, 'a day block selects its drafts by anchor…')
+  assert.match(ledger, /d\.anchorDate === null/, '…and the trailing block takes the anchorless ones')
+  assert.doesNotMatch(ledger, /d\.recvDate === day\.date/, 'never by the typed date')
 })
 
 check('the courtesy check names the missing field, in typing order', () => {

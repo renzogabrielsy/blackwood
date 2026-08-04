@@ -354,6 +354,16 @@ export interface AddQcDrawInput {
     shiftCode: string;
     /** The raw text typed into the weight field. Parsed with the shared helper. */
     weightRaw: string;
+    /**
+     * The PLANT the operator OVERRODE the derivation with (2026-08-04, `p_plant`).
+     *
+     * Blank / absent = follow the source, byte-for-byte as before — so a derived value
+     * is never echoed back as a supplied one. A real `cenapro.plant` code is accepted
+     * even when it contradicts the source (the partner's slip is allowed to know
+     * better) and comes back with `plant_source: 'supplied'` plus a non-blocking
+     * `plant_notice`; anything else is refused `invalid_key` by the RPC, in its words.
+     */
+    plant?: string | null;
     prodDate?: string | null;
     /** FLEC source ONLY — required there, refused anywhere else. */
     warehouseCode?: string | null;
@@ -384,6 +394,18 @@ const ADD_OUTCOMES: readonly AddPartnerDrawOutcome[] = [
 ];
 
 const BATCH_RESOLUTIONS: readonly BatchResolution[] = ['explicit', 'running', 'calendar'];
+
+const PLANT_SOURCES: readonly NonNullable<AddPartnerDrawResult['plant_source']>[] = [
+    'derived',
+    'supplied',
+];
+
+/** Where the stored plant came from — narrowed, so an unexpected string is dropped. */
+function readPlantSource(value: unknown): AddPartnerDrawResult['plant_source'] {
+    return PLANT_SOURCES.includes(value as NonNullable<AddPartnerDrawResult['plant_source']>)
+        ? (value as NonNullable<AddPartnerDrawResult['plant_source']>)
+        : undefined;
+}
 
 function readAddOutcome(value: unknown): AddQcDrawOutcome {
     return ADD_OUTCOMES.includes(value as AddPartnerDrawOutcome)
@@ -471,6 +493,11 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
     const machine = clean(input.partnerEquipmentCode).toUpperCase();
     const grade = clean(input.gradeCode).toUpperCase();
     const shift = clean(input.shiftCode).toUpperCase();
+    // Deliberately NOT validated here. The RPC owns the list of real plants and refuses
+    // an unknown one by name, listing the valid codes and what the source would have
+    // given — a sentence this module could only ever paraphrase worse. Blank is not a
+    // refusal at all: it means "follow the source", so it is simply not sent.
+    const plant = clean(input.plant).toUpperCase();
     const prodDate = clean(input.prodDate);
     const warehouse = clean(input.warehouseCode).toUpperCase();
     const flecCountRaw = clean(input.flecCountRaw);
@@ -560,7 +587,11 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
         p_weight_kg: kg,
     };
     // Every optional argument is OMITTED when it does not apply — an explicit null on a
-    // bag field is a value the RPC would (rightly) refuse on a tank draw.
+    // bag field is a value the RPC would (rightly) refuse on a tank draw. `p_plant`
+    // follows the same idiom for a different reason: omitted, null and blank all mean
+    // "derive from the source", and omitting is the form every pre-2026-08-04 call site
+    // already used, so the derive path stays byte-for-byte the one that was proven live.
+    if (plant) args.p_plant = plant;
     if (prodDate) args.p_prod_date = prodDate;
     if (isFlec) {
         args.p_warehouse_code = warehouse;
@@ -593,7 +624,14 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
         batch: str(raw.batch),
         batch_year: num(raw.batch_year),
         batch_resolution: batchResolution,
+        // `plant_code` keeps its key and now carries the EFFECTIVE value — typed when
+        // one was supplied and accepted, derived otherwise. The three keys beside it say
+        // which, what the source alone would have given, and (only on a real
+        // disagreement) a non-blocking sentence naming both.
         plant_code: str(raw.plant_code) ?? null,
+        plant_source: readPlantSource(raw.plant_source),
+        plant_derived: str(raw.plant_derived) ?? null,
+        plant_notice: str(raw.plant_notice) ?? null,
         disposition_kind:
             disposition === 'partner_crusher' || disposition === 'partner_kiln'
                 ? disposition

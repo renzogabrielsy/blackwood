@@ -265,8 +265,29 @@ export interface AddPartnerDrawResult {
     batch?: string;
     batch_year?: number;
     batch_resolution?: BatchResolution;
-    /** Derived from the source. NULL for a FLEC draw — origin is unknowable once bagged. */
+    /**
+     * The EFFECTIVE plant that was stored — the caller's `p_plant` when one was
+     * supplied and accepted, otherwise the value derived from the source. NULL for a
+     * FLEC draw with no supplied plant: origin is unknowable once bagged.
+     */
     plant_code?: string | null;
+    /**
+     * Where `plant_code` came from (2026-08-04, `p_plant`). Mirrors the
+     * `batch_resolution` idiom so a UI can render the provenance structurally instead
+     * of parsing a sentence.
+     */
+    plant_source?: 'derived' | 'supplied';
+    /** What the SOURCE alone would have given, whether or not it was used. */
+    plant_derived?: string | null;
+    /**
+     * Non-blocking, and non-null ONLY when a supplied plant DISAGREES with the derived
+     * one. Unlike `duplicate_warning` there is no confirm round trip — the operator is
+     * transcribing a partner's slip, not resolving an ambiguity the machine can see —
+     * so this accompanies a SUCCESSFUL write and is informational.
+     *
+     * Independent of `notice` below: a FLEC draw can carry both.
+     */
+    plant_notice?: string | null;
     disposition_kind?: 'partner_crusher' | 'partner_kiln';
     /** Exactly the `cenapro_ccc_sample_groups` key the new row now belongs to. */
     sample_group?: {

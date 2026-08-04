@@ -41,7 +41,7 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 21 promotions as of 2026-08-04 before the `feat/cenapro-deliveries-qol` split, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
 
-The merge-base tree test has now held **21 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+The merge-base tree test has now held **22 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
 
 ### Branching a correctly-named `feat/*` off a mis-named one (2026-08-04, `c8ffc53`)
 
@@ -88,6 +88,18 @@ diff the staged list against the brief's list and only stop on a genuine extra. 
 `use-grid-keyboard-nav.ts` / `use-cell-selection.ts` stop condition from promotion 25 held —
 neither appeared, and the brief's "audited, no change needed" claim was true.
 
+**Promotion 27 (`47bd9db` → `a0a6bfb`) moved off RC Deliveries to the QC ledger** — same
+branch, same recipe, first `feat(` (not `fix(`) subject on it, because the changeset added
+capability (typable lab columns) rather than repairing one interaction. A brief that argues
+"more feature than fix" and names the scope is making the call for you; don't downgrade it
+to `fix(`. Also the first promotion here where the branch's PREVIOUS `chore(memory)` commit
+rode along into `main` as part of the same merge — the brief authorized promoting a pending
+`.claude/`-only commit with the feature, and the merge stat correctly showed
+`main_promotion_playbook.md` among the files. Expect that: after `git checkout main` a
+tracked memory file REVERTS to main's older copy (the memory commit is still only on the
+branch) — that is the checkout doing its job, not a lost edit, and the merge restores it.
+Write your own memory update AFTER returning to the feat branch, never while on `main`.
+
 **Splitting platform from tenant is the natural cut on a wide changeset.** Two commits via
 `git commit -F <msg> -- <pathspec>` (never per-file staging): `fix(grid):` took
 `components/shared/grid` + `app/(app)/inventory` + `app/(app)/production` + `app/(app)/cenapro/qc`
@@ -96,8 +108,8 @@ neither appeared, and the brief's "audited, no change needed" claim was true.
 rides the PLATFORM commit, not the cenapro one — check which module a shared CONTEXT.md edit
 actually describes before assigning it by path prefix.
 
-**Promotion tempo on this branch is minutes, not hours.** Five promotions in one afternoon
-(`c8ffc53`, `9ee70d5`, `98805ff`, `2d6e422`, `7aff668`). Renzo is blocked on the live app during each one, so
+**Promotion tempo on this branch is minutes, not hours.** Six promotions in one afternoon
+(`c8ffc53`, `9ee70d5`, `98805ff`, `2d6e422`, `7aff668`, `a0a6bfb`). Renzo is blocked on the live app during each one, so
 prefer the cheap gate set (`npx tsc --noEmit` + the repo's `scripts/verify-*.ts`, ~1 min
 total) over a fresh 8-minute `npm run build` when the brief already reports the build green.
 
