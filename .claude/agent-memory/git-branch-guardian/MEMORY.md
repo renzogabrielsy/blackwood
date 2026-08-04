@@ -6,6 +6,7 @@
 - [Gates and shell traps](gates_and_shell_traps.md) — build/test/parity/lint gates before `main`; the zsh `$PIPESTATUS` trap that fakes a green run.
 - [Staging exclusions](staging_exclusions.md) — what to unstage after the mandatory `git add .`; triaging untracked source files; content-level secret scan.
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — split one staged changeset into several commits via `git commit -- <pathspec>`, no per-file staging.
+- [Concurrent-session promotions](concurrent_session_promotions.md) — when ANOTHER session shares the tree: the exact-path staging override, and the worktree build gate untracked files defeat.
 
 ## Role
 
@@ -14,7 +15,7 @@
 
 ## Standing conventions
 
-- **Staging:** always `git add .`, never individual files. Exclusions happen after, via `git restore --staged`. See [Staging exclusions](staging_exclusions.md).
+- **Staging:** always `git add .`, never individual files. Exclusions happen after, via `git restore --staged`. See [Staging exclusions](staging_exclusions.md). **The ONE override:** a brief that enumerates the exact paths to stage — honour it (see Concurrent-session promotions).
 - **Trailer:** use the EXACT trailer the task prompt specifies, verbatim — it names a different model version most sessions (`Claude Opus 5`, `Claude Opus 4.8`, `Claude Fable 5` have all appeared). Pass it as its own final `-m` so it renders as a real git trailer.
 - **Conventional commits:** `feat|fix|refactor|docs|chore|test|perf|ci|build|revert(<scope>): <imperative, lowercase>`.
 - **Ship, don't hold:** when work is done the default is commit + merge to `main` + push — Renzo tests on the live Vercel app, not locally.

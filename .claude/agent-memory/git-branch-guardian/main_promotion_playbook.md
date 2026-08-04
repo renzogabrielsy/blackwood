@@ -39,7 +39,9 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 ## `feat/gmail-oauth-sync-auth` — the long-lived promotion branch
 
-17 promotions as of 2026-08-04, latest `566d68a`; earlier `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
+18 promotions as of 2026-08-04, latest `478b0c0`; earlier `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
+
+The merge-base tree test has now held **14 consecutive promotions** (empty diff, merge exit 0, every time) — including `478b0c0`, promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
 
 **Never delete this branch after a promotion** — it keeps accumulating work and is re-merged.
 
