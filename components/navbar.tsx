@@ -105,6 +105,7 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     // come first — a `prefix('/cenapro/qc')` would otherwise swallow it.
     { test: exact('/cenapro/qc/breakdown'), backLabel: 'Back to QC Ledger', backHref: '/cenapro/qc', pageTitle: 'QC Breakdown', pageDescription: 'Weighted monthly + daily lab analytics — ex-DVO, read-only' },
     { test: exact('/cenapro/qc'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'QC Ledger', pageDescription: 'Log CCC partner lab results (BD · ASH · GRIT · MC) onto the receipts' },
+    { test: prefix('/cenapro/deliveries'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'RC Deliveries', pageDescription: 'Cenapro raw-charcoal receipts — the RC 2026 sheet, live' },
     { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
     { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
     { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
@@ -171,6 +172,7 @@ const ICTC_MODULES: Module[] = [
 // Cenapro / Cebu tenant modules — kept in a separate section from ICTC.
 const CENAPRO_MODULES: Module[] = [
     { name: 'Production', href: '/cenapro/production' },
+    { name: 'RC Deliveries', href: '/cenapro/deliveries' },
     { name: 'Flec Inventory', href: '/cenapro/inventory' },
     // Both QC surfaces are listed, not just the entry one: the breakdown is a
     // destination in its own right, and a reading screen reachable only through the
