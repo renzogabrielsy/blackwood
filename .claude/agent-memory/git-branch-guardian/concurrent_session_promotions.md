@@ -16,6 +16,11 @@ followed opened with "⚠ CRITICAL — DO NOT `git add .` THIS TIME" and listed 
 **How to apply:** whenever a brief names an exact staging list, or `git status` shows source
 files nobody mentioned changing under your feet.
 
+**This is now a STANDING mode, not a one-off** — three consecutive promotions (`478b0c0`,
+`0be5b4a`, and the one between them) ran under it on 2026-08-04, each brief re-stating the
+constraint. When `app/(app)/cenapro/deliveries/**` + the `20260804*` migrations are sitting
+untracked, assume selective staging even before the brief says so, and confirm.
+
 ## 1. The `git add .` rule IS overridden — by an explicit path list
 
 [[staging-exclusions]] says always `git add .`. **A brief that enumerates the exact paths to
@@ -30,6 +35,13 @@ instruction with a named blast radius (production build breakage).
   staged set is byte-for-byte the brief's list before committing.
 - A file carrying BOTH sessions' edits (`app/(app)/cenapro/CONTEXT.md`) stays uncommitted on
   purpose. Say so in the commit body so the missing doc update reads as deliberate, not lost.
+
+## 1b. A single-markdown promotion needs NO build gate — and the brief may say so
+
+2026-08-04 (`0be5b4a`, one `handoffs/*.md` file): the brief explicitly waived `npm run build`
+— "it would fail on the other session's file anyway, and there is nothing here for it to
+verify." Honour that. Don't spend a worktree build proving a handoff doc compiles. The
+worktree recipe below is for promotions that actually carry code.
 
 ## 2. Untracked files FOLLOW the working tree — "build on main" is a lie without a worktree
 

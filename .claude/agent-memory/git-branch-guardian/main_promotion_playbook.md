@@ -39,13 +39,19 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 ## `feat/gmail-oauth-sync-auth` — the long-lived promotion branch
 
-18 promotions as of 2026-08-04, latest `478b0c0`; earlier `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
+21 promotions as of 2026-08-04, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
 
-The merge-base tree test has now held **14 consecutive promotions** (empty diff, merge exit 0, every time) — including `478b0c0`, promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+The merge-base tree test has now held **17 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+
+**Cheap pre-checkout check when the tree is dirty:** compare `git diff --name-only origin/main <feat>` against `git diff --name-only`. No overlap ⇒ `git checkout main` carries the dirty tracked files across without "local changes would be overwritten". Run it before the checkout, not after it fails.
 
 **Never delete this branch after a promotion** — it keeps accumulating work and is re-merged.
 
 A **docs-only promotion is still a full `--no-ff` promotion** (2026-08-04, `52178d9`, one `handoffs/YYYY-MM-DD-*.md` file): same recipe, same gate discipline, no shortcut to a FF. Session-handoff files are a standing CLAUDE.md convention (`handoffs/` at repo root, never deleted), so `docs(handoff): <date> <slug>` commits recur — scan them like any other file, but the build gate alone suffices when nothing under `workers/sync/` is touched.
+
+**A brief may pre-run the build and waive the gate — honour it** (2026-08-04, `434eb7b`, 3 markdown files): "`npm run build` was run before this brief and exited 0, so skip it." Markdown-only changesets have no code impact; re-running an 8-minute build to prove a `CONTEXT.md` compiles is waste. Same waiver shape as `0be5b4a` in [[concurrent-session-promotions]] §1b.
+
+**Concurrent-session mode can be OFF — verify, don't assume.** [[concurrent-session-promotions]] says to presume selective staging when `app/(app)/cenapro/deliveries/**` is in play. On `434eb7b` the brief said the same, but `git status --short` came back clean apart from the brief's own 3 paths + the standing `.claude/agent-memory*` dirt — no stray source files at all. The pre-staging `git status --short` is what decides; report it verbatim when the brief asks whether the other session is live.
 
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
