@@ -5,7 +5,7 @@ import * as React from 'react';
 import { errorToast } from '@/lib/toast';
 import { fetchDeliveryPage, type DeliveryAnchor } from './actions';
 import { cursorFrom, type DeliveryRecord } from './types';
-import type { IssueLens } from './ledger-url';
+import type { DeliveryLens } from './ledger-url';
 
 // ─── useDeliveriesWindow ─────────────────────────────────────────────────────────
 //
@@ -32,6 +32,8 @@ export interface InitialDeliveryPage {
     records: DeliveryRecord[];
     hasOlder: boolean;
     hasNewer: boolean;
+    /** How many receipts the lens+filters match in total — NOT how many are loaded. */
+    totalCount?: number | null;
     notice?: string;
 }
 
@@ -43,6 +45,13 @@ export interface DeliveriesWindow {
     hasNewer: boolean;
     loadingOlder: boolean;
     loadingNewer: boolean;
+    /**
+     * The size of the MATCHING set, from the server's own `count`. Held separately from
+     * `records.length`, which is only ever the loaded window — a filtered ledger that
+     * reported the window as the total would be exactly the lie this whole feature is
+     * built to avoid.
+     */
+    totalCount: number | null;
     notice?: string;
     fetchOlder: () => Promise<void>;
     fetchNewer: () => Promise<void>;
@@ -61,7 +70,7 @@ export interface DeliveriesWindow {
 
 export function useDeliveriesWindow(
     initial: InitialDeliveryPage,
-    lens: { issue: IssueLens | null; query: string },
+    lens: DeliveryLens,
 ): DeliveriesWindow {
     const [records, setRecords] = React.useState<DeliveryRecord[]>(initial.records);
     const [firstItemIndex, setFirstItemIndex] = React.useState(FIRST_ITEM_BASE);
@@ -69,11 +78,13 @@ export function useDeliveriesWindow(
     const [hasNewer, setHasNewer] = React.useState(initial.hasNewer);
     const [loadingOlder, setLoadingOlder] = React.useState(false);
     const [loadingNewer, setLoadingNewer] = React.useState(false);
+    const [totalCount, setTotalCount] = React.useState<number | null>(initial.totalCount ?? null);
     const [notice, setNotice] = React.useState<string | undefined>(initial.notice);
 
-    // The lens is applied SERVER-SIDE, so every page this hook pulls must carry it or
-    // the keyset walk would silently drift back to unfiltered history. Held in a ref so
-    // the stable callbacks below never need to re-bind.
+    // The lens — the data-quality cut, the free-text search AND the per-column filters —
+    // is applied SERVER-SIDE, so every page this hook pulls must carry the whole bundle
+    // or the keyset walk would silently drift back to unfiltered history halfway down
+    // the sheet. Held in a ref so the stable callbacks below never need to re-bind.
     const lensRef = React.useRef(lens);
     lensRef.current = lens;
 
@@ -102,6 +113,7 @@ export function useDeliveriesWindow(
                 direction: 'older',
                 issue: lensRef.current.issue,
                 query: lensRef.current.query,
+                filters: lensRef.current.filters,
             });
             if (page.error) {
                 errorToast(page.error);
@@ -137,6 +149,7 @@ export function useDeliveriesWindow(
                 direction: 'newer',
                 issue: lensRef.current.issue,
                 query: lensRef.current.query,
+                filters: lensRef.current.filters,
             });
             if (page.error) {
                 errorToast(page.error);
@@ -164,6 +177,7 @@ export function useDeliveriesWindow(
                 anchor,
                 issue: lensRef.current.issue,
                 query: lensRef.current.query,
+                filters: lensRef.current.filters,
             });
             if (page.error) {
                 errorToast(page.error);
@@ -173,6 +187,9 @@ export function useDeliveriesWindow(
             setFirstItemIndex(FIRST_ITEM_BASE);
             setHasOlder(page.hasOlder);
             setHasNewer(page.hasNewer);
+            // An anchor fetch carries the server's own exact count; a cursor page does
+            // not (it cannot change by scrolling), so `undefined` keeps the old number.
+            if (page.totalCount !== undefined) setTotalCount(page.totalCount);
             setNotice(page.notice);
         } finally {
             loadingOlderRef.current = false;
@@ -210,6 +227,7 @@ export function useDeliveriesWindow(
                 anchor,
                 issue: lensRef.current.issue,
                 query: lensRef.current.query,
+                filters: lensRef.current.filters,
             });
             if (firstPage.error) {
                 errorToast(firstPage.error);
@@ -235,6 +253,7 @@ export function useDeliveriesWindow(
                     direction: 'newer',
                     issue: lensRef.current.issue,
                     query: lensRef.current.query,
+                    filters: lensRef.current.filters,
                 });
                 if (page.error) {
                     errorToast(page.error);
@@ -253,6 +272,7 @@ export function useDeliveriesWindow(
             setFirstItemIndex(FIRST_ITEM_BASE);
             setHasOlder(hasOlderLocal);
             setHasNewer(hasNewerLocal);
+            if (firstPage.totalCount !== undefined) setTotalCount(firstPage.totalCount);
         } finally {
             loadingOlderRef.current = false;
             loadingNewerRef.current = false;
@@ -263,6 +283,9 @@ export function useDeliveriesWindow(
 
     const dropRecord = React.useCallback((id: string) => {
         setRecords((prev) => prev.filter((r) => (r.row.id ?? '') !== id));
+        // The matching set really did shrink by one — a stale total would then over-count
+        // the very row the operator just watched disappear.
+        setTotalCount((prev) => (prev === null ? prev : Math.max(0, prev - 1)));
     }, []);
 
     return {
@@ -272,6 +295,7 @@ export function useDeliveriesWindow(
         hasNewer,
         loadingOlder,
         loadingNewer,
+        totalCount,
         notice,
         fetchOlder,
         fetchNewer,
