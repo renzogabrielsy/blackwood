@@ -158,7 +158,9 @@ All six carry the **human-edit latch** (2026-08-03): nullable `human_edited_at` 
 - **`user_dashboard_prefs`** — `user_id` (PK), `prefs` (JSONB), `updated_at`.
 
 ### Cenapro tenant (`cenapro` schema — Tenant #2, zero ICTC coupling)
-Dimensions: `shift`, `grade`, `plant`, `warehouse`, `source_location`, `partner_equipment`. Facts: `production_event` (CI production spine, one row per workbook Production row), `warehouse_opening_balance` (APPEND-ONLY flec-count openings per warehouse/grade/side), `drift_log` (append-only drift/exclusion telemetry). See `cenapro/CENAPRO_PRODUCTION_ANALYSIS.md`.
+**Production side.** Dimensions: `shift`, `grade`, `plant`, `warehouse`, `source_location`, `partner_equipment`. Facts: `production_event` (CI production spine, one row per workbook Production row), `warehouse_opening_balance` (APPEND-ONLY flec-count openings per warehouse/grade/side), `analysis_sample` (CCC/QC lab readings per date × source × effective warehouse), `production_event_audit` (append-only trail, trigger-written), `drift_log` (append-only drift/exclusion telemetry). See `cenapro/CENAPRO_PRODUCTION_ANALYSIS.md`.
+
+**RC DELIVERIES side (raw-charcoal receipts, 2026-08-04).** A SEPARATE `rc_`-prefixed island that **shares zero dimensions with production** — a raw-charcoal yard and a finished-goods FLEC warehouse are different places with different code spaces, so never FK an `rc_*` table to `warehouse`/`source_location`/`plant`. Dimensions: `rc_supplier` (cheque payee; exists so a trader can be re-pointed without a migration), `rc_destination` (`warehouse` | `plant_feed` | `dryer`, `has_sides`). Facts: `rc_delivery` (one truck receipt, in the RC workbook's column order), `rc_delivery_sample` (1–6 moisture sub-samples per receipt, CASCADE child). **Money is decomposed and DB-computed:** `net_weight_kg`, `price_php_kg` and `total_price_php` are STORED GENERATED over `gross_weight_kg`/`deduction_pct`/`base_price_php_kg`/`price_adjustment_php_kg` — unwritable by anyone, exact decimal, never rounded (`total_price_php` repeats the full arithmetic over base columns because a generated column may not reference another; `cenapro_rc_delivery_total_consistent` CHECKs the two forms agree). **Imported rows are reference data — flagged, not fixed:** `import_flags` (jsonb) + `is_suspected_duplicate` + NULL FKs + `*_raw` originals; `delivery_date` is nullable only so an unparseable sheet date can land, and `cenapro_rc_delivery_date_present` still refuses a dateless app write. Read model `view_rc_delivery`; write path `cenapro_save_rc_delivery` / `cenapro_delete_rc_delivery` / `cenapro_save_rc_delivery_samples` (compare-and-set on `row_version`, allowlisted patch). See `app/(app)/cenapro/CONTEXT.md` → "RC Deliveries — DATA LAYER".
 
 **Enums:** `batch_status` = `STORED | IN-USE | CLOSED | FEED | SUNDRYING | SUNDRIED` (6 values) · `notification_type` = `resolve_request | resolve_approved | resolve_denied | delivery_created | delivery_edited | delivery_deleted | remarks_added | audit_comment_reply`
 
@@ -423,6 +425,7 @@ Before exploring or modifying any module, agents **MUST** read its `CONTEXT.md` 
 - `app/(app)/review-queue/CONTEXT.md` — Sync review queue
 - `app/(app)/jarvis/CONTEXT.md` — Jarvis route (UI lives in `components/jarvis/`)
 - `app/(app)/cenapro/CONTEXT.md` — Cenapro tenant (CI/Cebu)
+- `app/(app)/cenapro/deliveries/CONTEXT.md` — RC Deliveries (Cenapro raw-charcoal receipt ledger)
 - `app/(app)/admin/CONTEXT.md` — Admin Panel (User Management)
 - `components/digest/CONTEXT.md` — Home Digest bands (the `/` presentation components)
 - `components/jarvis/CONTEXT.md` — Jarvis chat UI (mounted via `app-shell.tsx`)

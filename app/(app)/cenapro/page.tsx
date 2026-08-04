@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Factory, Boxes, ArrowRight, FlaskConical, ChartNoAxesCombined } from 'lucide-react';
+import { Factory, Boxes, ArrowRight, FlaskConical, ChartNoAxesCombined, Truck } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
 // Cenapro landing — a small hub linking to the two screens.
@@ -61,6 +61,26 @@ export default function CenaproLandingPage() {
                                     <p className="mt-1 text-xs text-muted-foreground">
                                         Per-warehouse flec-count balances by grade and side, with a movement ledger
                                         that shows the running math.
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </Link>
+
+                    <Link href="/cenapro/deliveries" className="group block">
+                        <Card className="hover-lift h-full border-border transition-colors group-hover:border-primary/40">
+                            <CardContent className="flex h-full flex-col gap-3 p-5">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10 text-primary">
+                                        <Truck className="h-5 w-5" />
+                                    </div>
+                                    <ArrowRight className="h-4 w-4 text-muted-foreground/40 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                                </div>
+                                <div>
+                                    <h2 className="text-base font-semibold">RC Deliveries</h2>
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                        Every raw-charcoal receipt — truck, supplier, weight, lab panel and price —
+                                        as the operators&rsquo; own RC sheet, with the arithmetic cells intact.
                                     </p>
                                 </div>
                             </CardContent>

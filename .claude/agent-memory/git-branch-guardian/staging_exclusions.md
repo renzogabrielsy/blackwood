@@ -36,3 +36,15 @@ The secret scan must look past filenames and into content. `scripts/verify-rc-fo
 Scan pattern: `grep -nE '/Users/|/home/|/private/tmp/|sk-|eyJ|API_KEY|SERVICE_ROLE|password|token|secret' <staged files>`. Expect benign hits on `token` from any tokenizer/parser code — read the match, don't just count it.
 
 **Non-secret identifiers are fine to commit:** `scripts/trello-shipments/set-vercel-env.sh` intentionally hardcodes a Trello **board ID** as a fallback default. Board IDs are embedded in Trello URLs, not auth material; only `TRELLO_API_KEY`/`TRELLO_TOKEN` *values* are secrets.
+
+**The FIXED form of that machine-local path** (`scripts/verify-rc-deliveries-cells.ts`, 2026-08-04): scratch path first, then `const FALLBACK = 'scripts/cenapro/rc2026-extract.json'`, `existsSync(EXTRACT) ? … : existsSync(FALLBACK) ? … : null`. With the fixture committed in-repo the script actually replays on any machine. Don't flag this shape — flag only the fallback-less one.
+
+**Large business-data JSON is committable here.** `scripts/cenapro/rc2026-extract.json` (~800KB, 34k lines — real supplier names + prices) ships deliberately as the RC-deliveries import's provenance record. Private repo, project's own data, zero secret-shaped strings (`grep -c 'eyJ|sk-|SERVICE_ROLE|apikey|password'` = 0). Scan its *content*, don't reject it on size or on the words "supplier"/"price". Importers here read credentials from `process.env` (`SUPABASE_SERVICE_ROLE_KEY`) — confirm that, don't assume it.
+
+## Concurrent session + COMMIT-ONLY brief (no promotion) — `git add .` still rules
+
+2026-08-04, `c761ad0` + `12fb533` on `feat/gmail-oauth-sync-auth`. [[concurrent-session-promotions]]'s selective-staging override fires ONLY when a brief enumerates the exact paths. A brief that merely *names files to consider excluding* is not that — keep `git add .`, then `git restore --staged` the named paths. Two ways to get this wrong: sweeping their work in, and inventing a path list nobody gave you.
+
+- **The other session's pending edits to the SHARED guardian memory** (`main_promotion_playbook.md`, `concurrent_session_promotions.md`) are the one exception to "`.claude/agent-memory/` stays staged". They record ITS promotions and it commits them itself as `chore(memory): record Nth promotion …`; it may append another before it's done. Unstage, leave on disk, say so.
+- **Record your own learning in a file the other session is NOT holding** (here: this file) so it can ship in your own `chore(memory)` commit instead of getting entangled in theirs. Check mtimes + `git status` before choosing which memory file to write.
+- **A shared docs file mixing both sessions' prose** (`app/(app)/cenapro/CONTEXT.md`) is safe to commit WHOLE on a feature branch — the QC hunks documented already-shipped code (`f121671`), so committing them catches the doc up rather than shipping unfinished work. That's the opposite call from a `main` promotion, where the blast radius is production. Note the bleed in the commit body.
