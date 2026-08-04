@@ -577,3 +577,39 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
 
     return result;
 }
+
+/** One typed row's verdict, carried back with the row it belongs to. */
+export interface AddQcDrawRowResult {
+    /** The client's own row id — the ONLY way to put a verdict back on the right row. */
+    rowId: string;
+    result: AddQcDrawResult;
+}
+
+/**
+ * Save a batch of typed draw rows — the spreadsheet entry path (2026-08-04).
+ *
+ * Deliberately a LOOP over `addPartnerDraw`, not a new RPC. Every rule that makes a draw
+ * legal (the surface boundary, the source-conditional bag fields, the weight parser, the
+ * date-typo guards) already lives in that one function and in the RPC underneath it; a
+ * bulk variant would be a second place for those rules to drift.
+ *
+ * **Sequential on purpose.** `cenapro_add_partner_draw` resolves the running `batch` by
+ * looking at the rows already logged at or before the new date, so a run of same-day draws
+ * must see each other land. Firing them in parallel would have every row resolve against
+ * the pre-batch state — usually the same answer, but silently wrong on the one day a year
+ * it is not: a changeover.
+ *
+ * **Nothing is all-or-nothing.** Each row carries its own verdict, exactly like
+ * `saveQcSamples` / `saveQcWeights`, so one bad line never discards the nine good ones and
+ * the client can keep what was typed in the rows that failed. A `duplicate_warning` is a
+ * refusal the operator confirms through by re-sending that row with `allowDuplicate`.
+ */
+export async function addQcDraws(
+    rows: Array<{ rowId: string; input: AddQcDrawInput }>,
+): Promise<AddQcDrawRowResult[]> {
+    const out: AddQcDrawRowResult[] = [];
+    for (const { rowId, input } of rows) {
+        out.push({ rowId, result: await addPartnerDraw(input) });
+    }
+    return out;
+}

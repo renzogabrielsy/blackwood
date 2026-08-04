@@ -42,8 +42,16 @@ import {
 import { Chip, NarrowScreenNotice, Tile } from './qc-chrome';
 import { MetricSpark } from './qc-metric-charts';
 import { MonthYearPicker } from './month-year-picker';
-import { AddDrawPanel, type DrawLanding } from './add-draw-panel';
 import {
+    DraftRow,
+    draftBlocker,
+    draftToInput,
+    isMeaningfulDraft,
+    makeBlankDrafts,
+    type DraftDraw,
+} from './draw-entry-rows';
+import {
+    addQcDraws,
     saveQcSamples,
     saveQcWeights,
     type SaveQcSampleInput,
@@ -97,6 +105,15 @@ interface LedgerCol {
     numeric?: boolean;
 }
 
+// MACHINE / BAGS / SIDE joined the grid on 2026-08-04, when entry moved from the docked
+// composer into the rows themselves. They are not decoration: `cenapro_add_partner_draw`
+// REFUSES a draw with no `partner_equipment_code`, and refuses a FLEC draw with no
+// `flec_count` — so without a column for each, a typed row could never be saved. They
+// render on EVERY row (not only the blank ones), because a row you are typing must look
+// like the rows above it or the grid stops reading as one sheet.
+//
+// Placement follows the sentence the row already tells: when · what · WHERE it came out of
+// (whse · side · bags) · what source · into WHICH machine · how much · what the lab said.
 const COLS: LedgerCol[] = [
     { key: 'date', width: 62, label: 'Date', title: 'Receipt date at CCC' },
     { key: 'prod', width: 62, label: 'Prod', title: 'Production date of the material drawn' },
@@ -104,7 +121,21 @@ const COLS: LedgerCol[] = [
     { key: 'grade', width: 62, label: 'Grade' },
     { key: 'plant', width: 60, label: 'Plant' },
     { key: 'whse', width: 62, label: 'Whse', title: 'Warehouse (or plant, when unplaced)' },
+    { key: 'side', width: 44, label: 'Side', title: 'Warehouse side (LS / RS) — FLEC draws only' },
+    {
+        key: 'bags',
+        width: 52,
+        label: 'Bags',
+        title: 'Flec bag count — REQUIRED on a FLEC draw, refused on any other source',
+        numeric: true,
+    },
     { key: 'src', width: 62, label: 'SRC', title: 'Source location' },
+    {
+        key: 'mach',
+        width: 58,
+        label: 'Mach',
+        title: 'Partner machine — C1–C4 (crusher) or RK1–RK4 (kiln). Required: it alone decides the disposition.',
+    },
     {
         key: 'wt',
         width: 88,
@@ -119,8 +150,8 @@ const COLS: LedgerCol[] = [
 ];
 
 const MIN_WIDTH = COLS.reduce((sum, c) => sum + c.width, 0);
-/** Date → SRC. The day-header / day-total rows rule off across these seven. */
-const LABEL_SPAN = 7;
+/** Date → Mach. The day-header / day-total rows rule off across these ten. */
+const LABEL_SPAN = COLS.findIndex((c) => c.key === 'wt');
 /** Visual column index of the first analysis column (BD). */
 const FIRST_METRIC_COL = COLS.length - METRICS.length;
 /** Visual column index of WT kg — the first EDITABLE column, one left of BD. */
@@ -275,12 +306,14 @@ export function QcLedgerClient({
     const [failures, setFailures] = React.useState<SaveFailure[]>([]);
     const gridRef = React.useRef<HTMLDivElement>(null);
 
-    // ── Adding draws ──────────────────────────────────────────────────────────────
-    const [addOpen, setAddOpen] = React.useState(false);
-    const [addDate, setAddDate] = React.useState<string | null>(null);
+    // ── Adding draws — IN THE ROWS, not in a panel (2026-08-04) ───────────────────
+    // `drafts` is one ordered list for the whole month. A row's `anchorDate` says which
+    // day block it renders in (`null` = the trailing block), and is fixed at creation so
+    // retyping the date never makes a row jump out from under the cursor.
+    const [drafts, setDrafts] = React.useState<DraftDraw[]>([]);
+    const [addingDraws, setAddingDraws] = React.useState(false);
     /** The draw to point at — a row just committed, or one `already_exists` named. */
     const [markedDrawId, setMarkedDrawId] = React.useState<string | null>(null);
-    const [refreshing, startRefresh] = React.useTransition();
 
     const sources = React.useMemo(() => {
         const set = new Set<string>();
@@ -316,23 +349,42 @@ export function QcLedgerClient({
         return days[days.length - 1]?.date ?? `${month}-01`;
     }, [days, month]);
 
-    const openAdd = React.useCallback((date?: string) => {
-        setAddDate(date ?? null);
-        setAddOpen(true);
-    }, []);
+    /** How many blanks the "Add draw" button hands you. Renzo's number. */
+    const BLANK_BATCH = 10;
 
     /**
-     * A committed draw. `revalidatePath` refreshed the server tree; `router.refresh()`
-     * is what pulls it into this render, and the row is then marked so the operator can
-     * see the line they just read out land in the day they are looking at.
+     * Append blanks. `anchorDate === null` puts them in the trailing block under the
+     * month (the toolbar's ten); a date puts them INSIDE that day's block, which is what
+     * the day header's `+ ADD` does — "adding a row inside of an existing day".
      */
-    const handleInserted = React.useCallback((landing: DrawLanding) => {
-        setMarkedDrawId(landing.drawId);
-        // A source filter that excludes the new row would make a successful add look
-        // like it did nothing.
-        setSourceFilter((current) => (current === 'ALL' || current === landing.source ? current : 'ALL'));
-        startRefresh(() => router.refresh());
-    }, [router]);
+    const addBlanks = React.useCallback(
+        (count: number, anchorDate: string | null, date: string) => {
+            setDrafts((current) => [...current, ...makeBlankDrafts(count, date, anchorDate)]);
+            setAddingDraws(true);
+        },
+        [],
+    );
+
+    const patchDraft = React.useCallback((id: string, patch: Partial<DraftDraw>) => {
+        setDrafts((current) =>
+            current.map((d) =>
+                d.id === id
+                    ? // Any edit clears a previous refusal — the operator is answering it,
+                      // and a stale red message beside a corrected row reads as a new one.
+                      { ...d, ...patch, status: 'draft' as const, message: undefined }
+                    : d,
+            ),
+        );
+    }, []);
+
+    const removeDraft = React.useCallback((id: string) => {
+        setDrafts((current) => current.filter((d) => d.id !== id));
+    }, []);
+
+    /** Drop every untouched blank, keep anything typed. The "tidy up" affordance. */
+    const clearBlankDrafts = React.useCallback(() => {
+        setDrafts((current) => current.filter(isMeaningfulDraft));
+    }, []);
 
     /**
      * Bring the marked row into view once it actually exists in the render, then let the
@@ -694,6 +746,36 @@ export function QcLedgerClient({
     const totalDirty = dirtyKeys.length + dirtyWeightIds.length;
 
     /**
+     * Typed NEW rows, split by whether they can be sent yet. An UNTOUCHED blank is
+     * neither — it is scaffolding, not an unsaved change, so ten waiting blanks neither
+     * light up the Save button nor count as ten problems.
+     */
+    const { readyDrafts, blockedDrafts } = React.useMemo(() => {
+        let ready = 0;
+        let blocked = 0;
+        for (const d of drafts) {
+            if (d.status === 'saved' || !isMeaningfulDraft(d)) continue;
+            if (draftBlocker(d)) blocked += 1;
+            else ready += 1;
+        }
+        return { readyDrafts: ready, blockedDrafts: blocked };
+    }, [drafts]);
+
+    /** Untouched blanks on screen — what "Clear empty rows" would remove. */
+    const blankDrafts = React.useMemo(
+        () => drafts.filter((d) => !isMeaningfulDraft(d)).length,
+        [drafts],
+    );
+
+    /** Drafts with no day of their own — the block under the whole month. */
+    const trailingDrafts = React.useMemo(
+        () => drafts.filter((d) => d.anchorDate === null),
+        [drafts],
+    );
+
+    const totalPending = totalDirty + readyDrafts;
+
+    /**
      * Weights that could never be saved: blank, non-numeric, negative, over three
      * decimals, absurd. `weight_kg` is NOT NULL and CHECK > 0 in the database, so this
      * is caught here and reported inline rather than spent on a round trip.
@@ -742,6 +824,9 @@ export function QcLedgerClient({
         setEdits({});
         setWeightEdits({});
         setFailures([]);
+        // Typed new rows are unsaved changes like any other, so Discard clears them too.
+        setDrafts([]);
+        setAddingDraws(false);
     }, []);
 
     /**
@@ -754,7 +839,7 @@ export function QcLedgerClient({
      * that draw's typing on screen.
      */
     const save = React.useCallback(async () => {
-        if (totalDirty === 0 || saving) return;
+        if (totalPending === 0 || saving) return;
 
         // ── Blocked before anything leaves the browser ────────────────────────────
         if (emptiedKeys.length > 0 || badWeightIds.length > 0) {
@@ -815,9 +900,71 @@ export function QcLedgerClient({
             });
         }
 
+        // Typed NEW rows. Only the ones with something in them — ten untouched blanks
+        // must never become ten validation errors — and only the ones that pass the
+        // courtesy check, so an obviously-incomplete line costs no round trip.
+        const draftRows = drafts
+            .filter((d) => d.status !== 'saved' && isMeaningfulDraft(d) && !draftBlocker(d))
+            .map((d) => ({ rowId: d.id, input: draftToInput(d, d.needsDuplicateConfirm === true) }));
+
         setSaving(true);
         setFailures([]);
         try {
+            // NEW rows first. They create the sample groups the readings below attach
+            // to, so a slip transcribed and analysed in one sitting saves in one press.
+            if (draftRows.length > 0) {
+                const ids = new Set(draftRows.map((r) => r.rowId));
+                setDrafts((current) =>
+                    current.map((d) => (ids.has(d.id) ? { ...d, status: 'saving' as const } : d)),
+                );
+                const drawRun = await addQcDraws(draftRows);
+                setDrafts((current) => {
+                    const verdict = new Map(drawRun.map((r) => [r.rowId, r.result]));
+                    return current
+                        .map((d) => {
+                            const v = verdict.get(d.id);
+                            if (!v) return d;
+                            if (v.ok && v.outcome === 'inserted') {
+                                // Drop it — the saved row arrives with the refresh below.
+                                return { ...d, status: 'saved' as const };
+                            }
+                            return {
+                                ...d,
+                                status: 'failed' as const,
+                                message: v.message ?? 'could not save',
+                                // A duplicate is the operator's call: only they know
+                                // whether the slip lists two trips or they keyed one
+                                // twice. Pressing Save again re-sends it confirmed.
+                                needsDuplicateConfirm: v.outcome === 'duplicate_warning',
+                            };
+                        })
+                        .filter((d) => d.status !== 'saved');
+                });
+                const inserted = drawRun.filter((r) => r.result.ok && r.result.outcome === 'inserted');
+                if (inserted.length > 0) {
+                    toast.success(
+                        `Added ${inserted.length} draw${inserted.length === 1 ? '' : 's'}`,
+                        { duration: 2500 },
+                    );
+                    const landed = inserted[inserted.length - 1].result;
+                    if (landed.id) setMarkedDrawId(landed.id);
+                    // A source filter that hides the new rows makes a successful add
+                    // look like it did nothing.
+                    setSourceFilter('ALL');
+                }
+                const drawFailures = drawRun.filter((r) => !(r.result.ok && r.result.outcome === 'inserted'));
+                if (drawFailures.length > 0) {
+                    errorToast(
+                        `${drawFailures.length} draw${drawFailures.length === 1 ? '' : 's'} could not be added`,
+                        {
+                            description: drawFailures
+                                .map((r) => r.result.message ?? r.result.outcome)
+                                .join('\n'),
+                        },
+                    );
+                }
+            }
+
             // Weights first, then readings: fix what the number IS before recording
             // what was measured about it. (Independent rows — order is a reading
             // convenience, not a correctness requirement.)
@@ -881,7 +1028,7 @@ export function QcLedgerClient({
             setSaving(false);
         }
     }, [
-        totalDirty,
+        totalPending,
         saving,
         emptiedKeys,
         badWeightIds,
@@ -891,6 +1038,7 @@ export function QcLedgerClient({
         drawById,
         edits,
         weightEdits,
+        drafts,
         router,
     ]);
 
@@ -918,15 +1066,19 @@ export function QcLedgerClient({
                     </select>
 
                     {/* Adding is a DESKTOP action — the grid it writes into is hidden
-                        below `sm`, so the button is too. */}
+                        below `sm`, so the button is too. It appends TEN blank rows under
+                        the month rather than opening anything: a slip is several lines,
+                        and a composer that produced one line at a time made you re-find
+                        your place on the paper after every one. */}
                     <Button
                         size="sm"
-                        variant={addOpen ? 'secondary' : 'default'}
+                        variant={addingDraws ? 'secondary' : 'default'}
                         className="hidden h-7 text-xs sm:inline-flex"
-                        onClick={() => (addOpen ? setAddOpen(false) : openAdd(defaultAddDate))}
+                        onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
+                        title={`Add ${BLANK_BATCH} blank rows at the bottom of ${formatMonthHeading(month)}`}
                     >
                         <Plus className="mr-1 h-3 w-3" />
-                        {addOpen ? 'Adding draws' : 'Add draw'}
+                        {addingDraws ? `Add ${BLANK_BATCH} more` : 'Add draw'}
                     </Button>
 
                     <Chip tone={loggedGroups === liveMonthAgg.groupCount ? 'ok' : 'pending'}>
@@ -1048,12 +1200,12 @@ export function QcLedgerClient({
                                             className="px-2 py-6 text-center text-xs text-muted-foreground"
                                         >
                                             No partner receipts in {formatMonthHeading(month)}.
-                                            {sourceFilter === 'ALL' ? (
+                                            {sourceFilter === 'ALL' && drafts.length === 0 ? (
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
                                                     className="ml-2 h-6 text-[11px]"
-                                                    onClick={() => openAdd(defaultAddDate)}
+                                                    onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
                                                 >
                                                     <Plus className="mr-1 h-3 w-3" />
                                                     Add the first draw
@@ -1071,7 +1223,11 @@ export function QcLedgerClient({
                                         agg={day.agg}
                                         rowOffset={dayRowOffsets[dayIndex]}
                                         markedDrawId={markedDrawId}
-                                        onAddDraw={openAdd}
+                                        onAddDraw={(date) => addBlanks(1, date, date)}
+                                        drafts={drafts.filter((d) => d.anchorDate === day.date)}
+                                        drawOptions={drawOptions}
+                                        onDraftChange={patchDraft}
+                                        onDraftRemove={removeDraft}
                                         activeCell={activeCell}
                                         isEditing={editSession.isEditing}
                                         setActiveCell={setActiveCell}
@@ -1088,6 +1244,47 @@ export function QcLedgerClient({
                                         weightFlags={weightFlags}
                                     />
                                 ))}
+
+                                {/* The trailing entry block — the ten blanks the toolbar
+                                    hands you, under the month's last row. Rows added from
+                                    a day header render inside that day instead. */}
+                                {trailingDrafts.length > 0 ? (
+                                    <>
+                                        <tr>
+                                            <td
+                                                colSpan={COLS.length}
+                                                className={cn(
+                                                    DAY_HEADER_CELL,
+                                                    'border-t border-border text-[10px] font-semibold uppercase tracking-wider text-primary/70',
+                                                )}
+                                            >
+                                                New draws — type down the slip, then Save
+                                            </td>
+                                        </tr>
+                                        {trailingDrafts.map((draft) => (
+                                            <DraftRow
+                                                key={draft.id}
+                                                draft={draft}
+                                                options={drawOptions}
+                                                metricCount={METRICS.length}
+                                                onChange={patchDraft}
+                                                onRemove={removeDraft}
+                                            />
+                                        ))}
+                                        <tr>
+                                            <td colSpan={COLS.length} className="border-x border-border/60 px-2 py-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => addBlanks(BLANK_BATCH, null, defaultAddDate)}
+                                                    className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground"
+                                                >
+                                                    <Plus className="h-2.5 w-2.5" />
+                                                    {BLANK_BATCH} more rows
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </>
+                                ) : null}
                             </tbody>
 
                             {visibleDays.length > 0 ? (
@@ -1096,18 +1293,6 @@ export function QcLedgerClient({
                         </table>
                     </div>
 
-                    {addOpen ? (
-                        <AddDrawPanel
-                            options={drawOptions}
-                            month={month}
-                            initialDate={addDate ?? defaultAddDate}
-                            refreshing={refreshing}
-                            onClose={() => setAddOpen(false)}
-                            onInserted={handleInserted}
-                            hasDraw={(id) => drawById.has(id)}
-                            onLocateDraw={setMarkedDrawId}
-                        />
-                    ) : null}
                     </div>
                 </div>
             </div>
@@ -1118,15 +1303,24 @@ export function QcLedgerClient({
                     <Button
                         size="sm"
                         className="h-7 text-xs"
-                        disabled={totalDirty === 0 || saving}
+                        disabled={totalPending === 0 || saving}
                         onClick={() => void save()}
                     >
                         {saving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
-                        {totalDirty === 0
+                        {totalPending === 0
                             ? 'Save'
-                            : `Save ${describeDirty(dirtyKeys.length, dirtyWeightIds.length)}`}
+                            : `Save ${[
+                                  readyDrafts > 0
+                                      ? `${readyDrafts} new draw${readyDrafts === 1 ? '' : 's'}`
+                                      : null,
+                                  totalDirty > 0
+                                      ? describeDirty(dirtyKeys.length, dirtyWeightIds.length)
+                                      : null,
+                              ]
+                                  .filter(Boolean)
+                                  .join(' · ')}`}
                     </Button>
-                    {totalDirty > 0 ? (
+                    {totalPending > 0 ? (
                         <Button
                             size="sm"
                             variant="ghost"
@@ -1137,10 +1331,22 @@ export function QcLedgerClient({
                             Discard
                         </Button>
                     ) : null}
+                    {blankDrafts > 0 ? (
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs text-muted-foreground"
+                            disabled={saving}
+                            onClick={clearBlankDrafts}
+                            title="Remove the rows you did not type into. Anything typed is kept."
+                        >
+                            Clear {blankDrafts} empty row{blankDrafts === 1 ? '' : 's'}
+                        </Button>
+                    ) : null}
                     <span
                         className={cn(
                             'text-[11px]',
-                            emptiedKeys.length + badWeightIds.length > 0
+                            emptiedKeys.length + badWeightIds.length + blockedDrafts > 0
                                 ? 'text-amber-600 dark:text-amber-400'
                                 : 'text-muted-foreground',
                         )}
@@ -1149,7 +1355,9 @@ export function QcLedgerClient({
                             ? `${emptiedKeys.length} group${emptiedKeys.length === 1 ? ' has' : 's have'} every metric cleared — that would delete the reading`
                             : badWeightIds.length > 0
                               ? `${badWeightIds.length} weight${badWeightIds.length === 1 ? ' is' : 's are'} not a valid number of kilograms`
-                              : totalDirty === 0
+                              : blockedDrafts > 0
+                                ? `${blockedDrafts} new row${blockedDrafts === 1 ? ' is' : 's are'} incomplete — each says what it needs. They are skipped, not lost.`
+                              : totalPending === 0
                                 ? 'No unsaved changes'
                                 : dirtyWeightIds.length > 0
                                   ? 'Each row saves on its own — a reading against its version, a weight against the value you were shown'
@@ -1482,8 +1690,13 @@ interface DayBlockProps {
     weightFlags: Map<string, GroupFlag>;
     /** The row to point at after a commit, if it is in this day. */
     markedDrawId: string | null;
-    /** Open the composer already targeted at this day. */
+    /** Append ONE blank row inside this day — "adding a row inside an existing day". */
     onAddDraw: (date: string) => void;
+    /** Blank rows the operator opened inside THIS day, rendered under its saved rows. */
+    drafts: DraftDraw[];
+    drawOptions: QcDrawOptions;
+    onDraftChange: (id: string, patch: Partial<DraftDraw>) => void;
+    onDraftRemove: (id: string) => void;
 }
 
 function DayBlock({
@@ -1493,6 +1706,10 @@ function DayBlock({
     rowOffset,
     markedDrawId,
     onAddDraw,
+    drafts,
+    drawOptions,
+    onDraftChange,
+    onDraftRemove,
     activeCell,
     isEditing,
     setActiveCell,
@@ -1572,7 +1789,10 @@ function DayBlock({
                         <Cell>{draw.grade ?? '—'}</Cell>
                         <Cell>{draw.plant ?? '—'}</Cell>
                         <Cell>{group.whse || '—'}</Cell>
+                        <Cell muted>{draw.side ?? '—'}</Cell>
+                        <Cell muted>{draw.flecCount == null ? '—' : draw.flecCount.toLocaleString('en-US')}</Cell>
                         <Cell>{group.src}</Cell>
+                        <Cell>{draw.equip ?? '—'}</Cell>
 
                         {/* WT — nav column 0, live on EVERY row including the `〃`s. */}
                         <WeightCell
@@ -1615,6 +1835,20 @@ function DayBlock({
                     </tr>
                 );
             })}
+
+            {/* Rows opened INSIDE this day, under its saved rows and above the total —
+                so a line that belongs to this date is transcribed where it belongs
+                instead of at the bottom of the month. */}
+            {drafts.map((draft) => (
+                <DraftRow
+                    key={draft.id}
+                    draft={draft}
+                    options={drawOptions}
+                    metricCount={METRICS.length}
+                    onChange={onDraftChange}
+                    onRemove={onDraftRemove}
+                />
+            ))}
 
             {/* Day TOTAL — the sum line an accountant would rule off under the block. */}
             <tr className="h-8">

@@ -57,6 +57,10 @@ export interface QcDraw {
     plant: string | null;
     weightKg: number;
     equip: string | null;
+    /** FLEC draws only — bags taken out of the warehouse. NULL on every other source. */
+    flecCount: number | null;
+    /** FLEC draws only, and optional there — `LS` / `RS`. */
+    side: string | null;
 }
 
 /** One sample group — the unit a lab reading, and therefore a save, applies to. */
@@ -127,7 +131,7 @@ const GROUP_COLUMNS =
     'sample_date, source_location_code, whse_key, source_group, is_dvo, draw_count, total_kg, bd, ash, grit, mc, is_sampled, is_complete, missing_metric_count, sample_row_version';
 
 const EVENT_COLUMNS =
-    'id, recv_date, prod_date, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, partner_equipment_code';
+    'id, recv_date, prod_date, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, partner_equipment_code, flec_count, whse_side';
 
 function describe(what: string, message: string): string {
     return `Failed to load ${what}: ${message}`;
@@ -273,6 +277,8 @@ export async function loadQcLedgerData(
             plant: row.plant_code,
             weightKg: row.weight_kg ?? 0,
             equip: row.partner_equipment_code,
+            flecCount: row.flec_count ?? null,
+            side: row.whse_side ?? null,
         });
     }
 
