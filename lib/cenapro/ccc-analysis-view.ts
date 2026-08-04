@@ -359,19 +359,39 @@ export function monthBounds(month: string): { from: string; toExclusive: string 
     return { from: `${month}-01`, toExclusive: `${shiftMonth(month, 1)}-01` };
 }
 
+/** `YYYY-MM`, and a real month number. Guards the URL param without a date parse. */
+const MONTH_KEY_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** Is this a syntactically valid `?m=` month key? */
+export function isValidMonthKey(value: string | undefined): value is string {
+    return typeof value === 'string' && MONTH_KEY_RE.test(value);
+}
+
 /**
- * Which month a QC page should open on: a valid `?m=YYYY-MM` from the URL, else the
- * newest month that carries receipts.
+ * Which month a QC page should open on: any VALID `?m=YYYY-MM` from the URL — whether
+ * or not it carries receipts — else the newest month that does.
  *
  * BOTH routes resolve identically on purpose. They share one `?m=` axis and
  * cross-link to each other, so defaulting to different months would make the first
  * click between them look like a navigation bug — and the newest month is where the
  * outstanding entry work is, which is the point of the ledger.
+ *
+ * **An EMPTY month is reachable (2026-08-04).** This used to require the month to be in
+ * `monthKeys`, which are the months that already HAVE data — so the first draw of a new
+ * month had nowhere to land: you could not open the month you needed to type into. The
+ * month only has to be well-formed now; a month with no receipts renders its empty state
+ * and its entry rows like any other. The regex is what keeps `?m=banana` (and `?m=2026-13`)
+ * from resolving to a month that cannot exist.
  */
 export function resolveQcMonth(monthKeys: readonly string[], urlMonth: string | undefined): string {
-    if (urlMonth && monthKeys.includes(urlMonth)) return urlMonth;
+    if (isValidMonthKey(urlMonth)) return urlMonth;
     return monthKeys[monthKeys.length - 1] ?? new Date().toISOString().slice(0, 7);
 }
+
+// NOTE: `monthKeys` stays strictly "months that HAVE receipts" — the picker needs that
+// to keep its `· no data` suffix honest. Reaching an empty month is handled inside
+// `MonthYearPicker` (all twelve months always selectable, current year always offered),
+// not by padding this list.
 
 // ─── Formatters ──────────────────────────────────────────────────────────────────
 
