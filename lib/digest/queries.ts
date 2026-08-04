@@ -494,8 +494,14 @@ export async function getDigestData(): Promise<DigestData> {
   const power = anchorOn("power", powerByDate);
   const powerVal = power.value;
   const powerPrev = prevOn("power", powerByDate);
-  const netVal = valueOn(netByDate, operationalDate);
-  const netPrev = prevOperationalDate ? valueOn(netByDate, prevOperationalDate) : null;
+  // Net Flow is DERIVED from two streams that report on different schedules, so it
+  // anchors to the last day BOTH have reported (2026-08-04). On the operational date
+  // RC In already carries today's deliveries while RC Out has not filed yet, which
+  // rendered "everything in, nothing out" as a large positive net flow.
+  // `anchorOn` handles this via `resolveKpiAnchorDate`'s derived-card branch.
+  const net = anchorOn("net_flow", netByDate);
+  const netVal = net.value;
+  const netPrev = prevOn("net_flow", netByDate);
 
   /** kpi key → the day its headline value belongs to (for `dayStatus`). */
   const anchorByKpi: Record<string, string | null> = {
@@ -503,7 +509,7 @@ export async function getDigestData(): Promise<DigestData> {
     rc_out: rcOut.date,
     production: prod.date,
     power: power.date,
-    net_flow: operationalDate,
+    net_flow: net.date,
   };
 
   // ---------- avg7 (trailing 7 daily values from the windowed series) ----------

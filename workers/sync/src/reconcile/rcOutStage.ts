@@ -29,6 +29,7 @@ import { isKnownPatioAlias, normalizeProposedBlock } from "./blockAliases.js";
 import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
 import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
+import type { StaleStream } from "../lib/streamStaleness.js";
 import {
   LAG_DAYS,
   type Agreement,
@@ -106,13 +107,17 @@ export interface RcOutReconciliation {
  *  flipped IN-USE→CLOSED from a Google Sheet RC OUT close remark the R4b cutover would
  *  drop. `schedule_conflicts` is the production-PLAN Stage-3c outcome
  *  (`../reports/prodSchedule/plan.ts`) — days a human owns whose upstream (Joseph) value
- *  the sync WITHHELD and parked instead of applying. All are OPTIONAL: a run may carry
- *  any, all, or (on failure) none. */
+ *  the sync WITHHELD and parked instead of applying. `stale_streams` is the freshness
+ *  watch (`../lib/streamStaleness.ts`) — streams that have missed a planned working day,
+ *  read straight off `view_digest_stream_status`. Unlike the others it is not about what
+ *  this run WROTE; it is about what never arrived, which is exactly the failure a clean
+ *  run hides. All are OPTIONAL: a run may carry any, all, or (on failure) none. */
 export interface ReconciliationChannel {
   rc_out?: RcOutReconciliation;
   blocking?: BlockReconciliation;
   batch_closes?: BatchClose[];
   schedule_conflicts?: ScheduleConflict[];
+  stale_streams?: StaleStream[];
 }
 
 const MAIN = "MAIN";

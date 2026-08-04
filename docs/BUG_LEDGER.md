@@ -795,7 +795,31 @@ phantom-inventory fix). This was hygiene on a stored field.
 ---
 
 ## BUG-017 — Same BEFORE-trigger staleness in the UPDATE branch's `batch_code`-change path
-**Status:** OPEN — found 2026-07-27 while backfilling BUG-016a; **deliberately not fixed** (out of the authorized scope, and not fixable with the one-line idiom) · **Effort:** S–M · **Severity:** medium
+**Status:** ✅ **FIXED 2026-08-04** — migration `20260804060000_batch_state_after_trigger_and_avg_cost.sql`, applied live · **Severity:** medium
+
+> **How it was fixed.** The ledger's own spec offered two routes and called the second
+> "the cleaner fix": patch the sums, or move the whole recompute to an AFTER trigger.
+> Renzo authorised the fix on 2026-08-04, so the AFTER route was taken —
+> `tr_blackwood_delivery` is now `AFTER INSERT OR UPDATE OR DELETE`, every branch calls
+> ONE idempotent helper `fn_recompute_batch_state(batch_code)`, and the `id <> OLD.id`
+> workaround from BUG-016a is gone (under AFTER DELETE the row is genuinely absent).
+>
+> **A third instance was found while fixing it, never previously named:** the
+> `cost_basis`/`weight_kg` UPDATE branch had the identical cause. It recomputed from
+> `deliveries`, but under BEFORE the sub-select still read the row's OLD values — so
+> **editing a delivery's weight in the app recomputed the batch to the number it already
+> had**, i.e. did nothing at all.
+>
+> **Proven live, then rolled back.** Moving a 10,695 kg delivery between batches:
+> source `10,695 → 0` (Δ −10,695), target `−56,394 → −45,699` (Δ +10,695) — both sides
+> exact. Editing a weight in place `+1,000 kg`: batch `10,695 → 11,695` (Δ +1,000),
+> which under the old trigger did not move. Both `DO` blocks ended in `RAISE`; the
+> batches read back at their original values afterwards.
+>
+> **Drift sweep after the fix: zero.** All 693 batches' `current_weight` already matched
+> the recomputed value (the BUG-016a backfill had caught them), so no weights moved.
+
+<details><summary>Original report (2026-07-27)</summary>
 
 - **Finding:** in `fn_update_blackwood_state`'s UPDATE branch, when `batch_code` changes, both
   recomputes read `deliveries` *before* the row has moved:
@@ -817,10 +841,38 @@ phantom-inventory fix). This was hygiene on a stored field.
   a bigger change since the function also handles INSERT/DELETE and returns OLD/NEW).
   Then re-run the drift sweep and backfill.
 
+</details>
+
 ---
 
 ## BUG-018 — `batches.avg_cost` has two competing definitions (208 of 689 batches diverge)
-**Status:** OPEN — data-semantics call, needs Renzo (do not "fix" unilaterally) · **Effort:** S (repair) / M (decide) · **Severity:** low
+**Status:** ✅ **FIXED 2026-08-04** — migration `20260804060000`, applied live · **Severity:** low
+
+> **Renzo's decision (2026-08-04): delivery-weighted.** Asked to choose between the
+> perpetual moving average (the INSERT branch) and the plain delivery-weighted average
+> (the DELETE/UPDATE branches), he picked delivery-weighted — the definition every other
+> price surface already recomputes for itself. `avg_cost` now agrees with them instead of
+> quietly contradicting them, and there is ONE definition of it:
+> `fn_recompute_batch_state`.
+>
+> **What actually moved.** At the point of the fix **216 of 693** batches disagreed with
+> the delivery-weighted value; **61** by more than half a centavo, the largest by
+> **₱65.65/kg**. All 693 were recomputed (idempotent, so the already-correct ones were
+> rewritten with their own values). After the backfill, **0 of 693** differ once the
+> column's own `numeric(12,2)` scale is applied — the largest residual is ₱0.004966, pure
+> storage rounding.
+>
+> **Visible where the original report said it would be:** the blocking detail slide-over,
+> `view_rc_movement.php_per_kg`, and Jarvis batch lists. Those numbers changed; that is
+> the fix landing, not a regression.
+>
+> **Explicitly out of scope:** `quality_stats` has the same shape of problem — it is
+> weighted by a consumption-net `current_weight` and is only ever maintained on INSERT,
+> never recomputed on UPDATE or DELETE, so it drifts. It was left **byte-identical** here
+> because it is a separate visible number and was not part of the authorisation. It is
+> the obvious next candidate.
+
+<details><summary>Original report (2026-07-27)</summary>
 
 - **Finding (2026-07-27, sweeping for BUG-016a):** the INSERT branch of
   `fn_update_blackwood_state` maintains `avg_cost` as a **running** weighted average blended
@@ -839,6 +891,8 @@ phantom-inventory fix). This was hygiene on a stored field.
   surface) is the obvious candidate, which would mean changing the INSERT branch to recompute
   rather than blend, plus a 208-row backfill. That changes ₱ numbers a user can see, so it is
   Renzo's call, not an agent's.
+
+</details>
 
 ---
 
@@ -955,6 +1009,8 @@ analysis is the most useful record — this section is the index:
 | BUG-019 — 7 IMAP sessions per run blew Gmail's connection cap; "too many connections" misread as an auth failure | 2026-07-28 | _(uncommitted)_ |
 | BUG-020 — flecon date settlement: January backfill protected, cross-check reads post-write, out-of-year warning suppressed once settled | 2026-07-29 | _(uncommitted)_ |
 | BUG-021 — `production_schedule` ownership + conditional sync (no more unconditional upsert of the whole calendar) | 2026-07-30 | _(uncommitted)_ |
+| BUG-017 — `fn_update_blackwood_state` moved BEFORE → AFTER; batch-code moves and in-place weight/cost edits now recompute truthfully | 2026-08-04 | migration `20260804060000` (applied live) |
+| BUG-018 — `batches.avg_cost` unified on the delivery-weighted definition; all 693 batches recomputed | 2026-08-04 | migration `20260804060000` (applied live) |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none

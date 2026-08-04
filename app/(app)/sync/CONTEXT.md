@@ -585,6 +585,21 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   (the existing clean state), so the button is naturally hidden when there is nothing to copy.
   The old per-kind `KIND_LABEL` map + the recommendation-glance layer are retired here (the plain
   labels now live on each `RunFinding.kindLabel`, built in `lib/sync/findings.ts`).
+  **The card renderer is kind-AGNOSTIC** — it groups by `source`, ranks by `severity` and falls back
+  `SHORT_KIND[kind] ?? kindLabel ?? kind` — so a new finding kind needs no component change, only a
+  builder in `findings.ts` and (optionally) a `SHORT_KIND` chip word.
+
+  **`stale_stream` — the freshness watch (2026-08-04).** The one finding that is about what did NOT
+  arrive. Every other kind describes something the run saw; a run where a report simply never came in
+  is otherwise indistinguishable from a quiet day, which is how RC OUT sat 5 days stale in July 2026.
+  Worker side: `workers/sync/src/lib/streamStaleness.ts` reads `view_digest_stream_status` as Stage 3e
+  (`runSync.ts::checkStreamFreshness`, non-fatal by contract — a watchdog that can fail the thing it
+  watches is worse than no watchdog) and lands in `result.reconciliation.stale_streams`. App side:
+  `StaleStream` in `app/(app)/sync/types.ts` (MIRROR), `collectStaleStreams` in `lib/sync/cases-fold.ts`,
+  `fromStaleStream` in `lib/sync/findings.ts`. **The lateness arithmetic is NOT reimplemented** —
+  `missed_working_days` already excludes rest days and not-yet-due next-day reports, so the threshold is
+  a bare `> 0`; `>= 3` escalates to `high`. An unreadable/absent count is treated as NOT stale on
+  purpose: an alert that cries wolf is an alert that gets ignored.
 - `useSyncRun.ts` — the orchestration hook. `run(opts?)` calls `enqueueSyncRun`;
   **`stop()`** (M5.1) calls `cancelSyncRun(currentRunId)` (guarded against
   double-clicks via `cancelling`); subscribes (browser client) to `sync_run_events`

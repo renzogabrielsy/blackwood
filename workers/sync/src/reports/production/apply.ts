@@ -492,17 +492,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
         continue;
       }
 
+      // Build the patch from the SAME normalization the run findings use. Both
+      // classifier diff shapes carry the sheet value under a shape-specific key
+      // (`email` / `emailValue`) and NEITHER has ever had a `new` key — the old
+      // `"new" in entry` test therefore matched nothing, every patch came out
+      // empty, and this writer has never applied a single correction. Reading
+      // `changed` also drops the generated columns exactly once, in one place.
       const patch: Row = {};
-      if (Array.isArray(diff)) {
-        for (const entry of diff) {
-          if (entry && typeof entry === "object" && "new" in entry) patch[entry.field] = (entry as { new: unknown }).new;
-        }
-      } else {
-        for (const [f, v] of Object.entries(diff)) {
-          if (v && typeof v === "object" && "new" in (v as Record<string, unknown>)) patch[f] = (v as { new: unknown }).new;
-        }
-      }
-      for (const gen of GENERATED_COLS) delete patch[gen];
+      for (const { field, sheet } of changed) patch[field] = sheet;
       if (Object.keys(patch).length === 0) continue;
 
       ops.push({ table: tbl, id, patch });

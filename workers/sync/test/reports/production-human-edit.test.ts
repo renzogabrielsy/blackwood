@@ -101,9 +101,15 @@ function recorder(
 
 /**
  * A runs VALUE_CHANGED whose diff carries BOTH the classifier's real `{db,email}` shape
- * AND the `{new}` key apply reads, so the write path is actually exercised. (In the live
- * pipeline the classifiers emit only `{db,email}`, which is why the update is dormant —
- * see the note in apply.ts. Locking the guard must not depend on that staying true.)
+ * AND a now-vestigial `{new}` key.
+ *
+ * The `new` key was a workaround: apply.ts used to build its patch by looking for it, no
+ * classifier ever emitted it, and the writer was therefore DORMANT — so these fixtures
+ * injected one to make the write path reachable at all. That bug is fixed (2026-08-04);
+ * apply.ts now reads the real `{db,email}` / `{emailValue,dbValue}` shapes via
+ * `changedFields`, and the extra key is simply ignored. It is left in place so these
+ * tests keep asserting the LATCH rather than the patch shape — the patch shape has its
+ * own regression file, `production-value-changed-patch.test.ts`.
  */
 function runsChanged(id: string, dbKg: number, sheetKg: number) {
   return {

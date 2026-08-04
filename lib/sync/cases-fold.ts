@@ -19,6 +19,7 @@ import type {
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
+  StaleStream,
   SyncReportType,
   SyncRunResult,
   UnresolvedBatch,
@@ -169,6 +170,15 @@ export function collectBatchCloses(result: SyncRunResult): BatchClose[] {
  */
 export function collectScheduleConflicts(result: SyncRunResult): ScheduleConflict[] {
   return result.reconciliation?.schedule_conflicts ?? []
+}
+
+/**
+ * Flatten the freshness watch (Stage 3e: streams that have missed a planned working day).
+ * Lives only in `result.reconciliation.stale_streams` (optional additive field — absent on
+ * runs where every stream is current and on every run predating the watch). Pure, guarded.
+ */
+export function collectStaleStreams(result: SyncRunResult): StaleStream[] {
+  return result.reconciliation?.stale_streams ?? []
 }
 
 /**
