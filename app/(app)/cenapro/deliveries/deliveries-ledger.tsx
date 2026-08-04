@@ -806,9 +806,6 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         },
     });
 
-    const firstItemIndexRef = React.useRef(win.firstItemIndex);
-    firstItemIndexRef.current = win.firstItemIndex;
-
     /**
      * The ONE scroll container for the current scope. Both scopes scroll on a single
      * element in both axes — virtuoso's scroller (`overflowX:auto` + its own
@@ -843,13 +840,28 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             if (index < 0) return;
 
             if (scope === 'endless') {
-                // `firstItemIndex` shifts virtuoso's public index space on every prepend,
-                // so the array position has to be rebased before it can be scrolled to.
+                // ── INDEX SPACE: `index` is the RAW `items` array position. Do NOT add
+                // `firstItemIndex` to it. ────────────────────────────────────────────
+                // `firstItemIndex` offsets ONE thing only: the index virtuoso reports
+                // BACK to `itemContent` / `computeItemKey` while rendering
+                // (`react-virtuoso/dist/index.mjs:1492`, `:2782` — `originalIndex` is the
+                // array position, `index` is that plus `firstItemIndex`). It does NOT
+                // shift the space `scrollToIndex` / `scrollIntoView` speak.
+                //
+                // The proof is the clamp. Both scroll pipelines resolve their target
+                // through `jn(location, sizes, totalCount - 1)` (`:1775` for
+                // `scrollIntoView`, `:1123` for `scrollToIndex`), and `jn` ends with
+                // `Math.max(0, Math.min(totalCount - 1, index))` (`:668`) — it clamps
+                // against `totalCount`, never subtracts `firstItemIndex`. With
+                // `FIRST_ITEM_BASE = 100_000` and ~1,000 loaded rows, a rebased index
+                // therefore clamped to the LAST row on every single call: Tab and Enter
+                // navigated correctly and then threw the sheet to the very bottom.
+                //
                 // Virtuoso's `scrollIntoView` is its own scroller's `scrollTo` — it never
                 // touches an ancestor — and its default `calculateViewLocation` returns
                 // null for an already-visible row, so this is already a no-op on a
                 // purely horizontal move.
-                virtuosoRef.current?.scrollIntoView({ index: firstItemIndexRef.current + index, behavior: 'auto' });
+                virtuosoRef.current?.scrollIntoView({ index, behavior: 'auto' });
                 return;
             }
             // Focus renders a plain table, so the row is a real element — found by its

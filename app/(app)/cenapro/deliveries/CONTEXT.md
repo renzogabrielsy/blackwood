@@ -30,7 +30,7 @@ computed in the browser.
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`), whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **65 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **67 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -234,6 +234,8 @@ move one table.
   virtuoso's own `scrollTo` on its own scroller — it never touches an ancestor — and its
   default `calculateViewLocation` returns null for an already-visible row, so it is
   already a no-op on a horizontal move.
+- **…but it was handed the wrong index. See "The virtuoso index space" below** — the
+  endless scope scrolled to the very bottom on every Tab and Enter until 2026-08-04.
 - **Tab is horizontal, so horizontal scrolling had to exist at all.** The table is
   ~1608px inside an `overflow-x-auto` wrapper; Tab could walk clean off the right edge
   with nothing following it. `columnScrollLeft()` in `types.ts` decides the offset, and
@@ -262,6 +264,70 @@ Still unfixed and deliberately out of this changeset: `EditInput`'s `autoFocus` 
 code, `components/shared/grid/`) focuses through React's own `.focus()` call, which has
 no `preventScroll`, so *starting an edit* can still centre the row. Same for
 `GridCell.tsx:131`, which other modules' grids use.
+
+### The virtuoso index space — RAW in, PUBLIC out (2026-08-04)
+
+Renzo: *"hitting tab and enter takes me to the very bottom of the page… It enters and
+tabs correctly, it just sends me straight to the bottom when i hit those things."*
+Navigation was correct; only the scroll was wrong, and it went to the LAST row every
+time. Always the last row, never a near miss — that signature is a **clamp**.
+
+**The rule, and it runs in exactly one direction:**
+
+| Direction | Index space | Who |
+|---|---|---|
+| Virtuoso reports an index **OUT** to you | **PUBLIC** = array position + `firstItemIndex` | `itemContent`, `computeItemKey` |
+| You hand an index **IN** to virtuoso | **RAW** array position, `[0, items.length)` | `scrollToIndex`, `scrollIntoView`, `initialTopMostItemIndex` |
+
+`firstItemIndex` offsets **only the outbound direction**. Verified in
+`react-virtuoso@4.18.11/dist/index.mjs`:
+
+- `:1492` — `t.map(d => ({ ...d, index: d.index + firstItemIndex, originalIndex: d.index }))`.
+  That `+ firstItemIndex` is the *entire* extent of the prop's reach: `originalIndex` is
+  the array position, `index` is the public one, and `:2782` is where the table renderer
+  hands `computeItemKey` `originalIndex + firstItemIndex`.
+- `:1775` (`scrollIntoView`) and `:1123` (`scrollToIndex`) both resolve their target with
+  `jn(location, sizes, totalCount - 1)`.
+- `:668` — `jn` ends with **`Math.max(0, Math.min(totalCount - 1, index))`**. It clamps
+  against **`totalCount`**, not `firstItemIndex + totalCount`, and never subtracts
+  `firstItemIndex`. **That clamp is the proof** that the inbound APIs take the raw index.
+- `initialTopMostItemIndex` goes through the same clamp — `qe(value, totalCount)` at
+  `:1169`, then published verbatim into `scrollToIndex` at `:1210`. Raw, like the rest.
+
+**What went wrong.** `scrollTo`'s endless branch passed
+`firstItemIndexRef.current + index`. With `FIRST_ITEM_BASE = 100_000` and ~1,000 loaded
+rows, every call asked for index ~100,00N against a `totalCount` of ~1,000, so `jn`
+clamped **every** target to the last row. The rebase was not merely wrong at the seed
+value — a prepend moves `firstItemIndex` by one page, so it is wrong at every value the
+seed ever takes. **Pre-existing since `12fb533`**, not a regression from the caret-follow
+work in `82ae4f7`. The old in-code comment asserted the opposite ("the array position has
+to be rebased before it can be scrolled to"); it has been replaced with the clamp
+citation, because the rebase reads as the obvious fix and is exactly backwards.
+
+**Call-site audit** (the whole surface — there are no others in this module):
+
+| Call site | Space | Verdict |
+|---|---|---|
+| `scrollTo` → `virtuosoRef.scrollIntoView({index})` | RAW in | **Was the bug — fixed.** Passes the bare `items.findIndex(...)` position. |
+| `goToReceipt` (duplicate-peer "Go to row N") | — | **Correct, and fixed with it.** It owns no index of its own; it calls `scrollTo(navRow)`. |
+| `initialTopMostItemIndex={initialTop.current}` | RAW in | **Correct.** Walks `items` backwards for the newest receipt — an array position by construction, and read once at mount when nothing has been prepended anyway. |
+| `firstItemIndex={win.firstItemIndex}` | — | **Correct.** The prop itself. Load-bearing (a prepend and its index decrement must land in one state batch) — do not touch it or the anchoring in `use-deliveries-window.ts`. |
+| `computeItemKey={(_i, item) => item.key}` | PUBLIC out | **Immune.** Ignores the index argument entirely and keys off `item.key`. |
+| `itemContent={(_i, item) => …}` | PUBLIC out | **Immune.** Same — ignores the index. |
+| `startReached` / `endReached` | mixed out | **Immune.** Both ignore their argument. Worth knowing if that ever changes: virtuoso hands `startReached` a PUBLIC index (`:1679`) and `endReached` a RAW `totalCount - 1` (`:1670`) — the two disagree. |
+| `scrollTo`'s **focus** branch | none | **Correct.** No index at all: it finds the row by `data-item-key` and nudges the scroller's own `scrollTop`. |
+| `scrollToCol` / `columnScrollLeft` | none | **Correct.** Column geometry, unrelated axis. |
+
+`firstItemIndexRef` existed only to perform the rebase and has been **removed**, so there
+is nothing left lying around to reach for.
+
+**Pinned by two assertions** in `verify-rc-deliveries-cells.ts`, because this survived a
+full build, a lint pass and 65 assertions: one models `jn`'s clamp verbatim and shows a
+raw index resolving to itself while a rebased one collapses onto the last row for all 991
+rows; the other scans `deliveries-ledger.tsx` itself (comments stripped, with a guard
+against a vacuous pass) and refuses any arithmetic on the `scrollIntoView` index,
+`FIRST_ITEM_BASE` anywhere in the grid, the return of `firstItemIndexRef`, or any mention
+of `firstItemIndex` outside the one `<TableVirtuoso>` prop.
 
 ### Dirty state — an edit that undoes itself is not an edit
 

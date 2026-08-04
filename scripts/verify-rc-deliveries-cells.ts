@@ -17,6 +17,8 @@
  */
 import assert from 'node:assert'
 import { readFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   formatSupplierCell,
@@ -374,6 +376,102 @@ check('a left-to-right Tab run scrolls forwards only, and never overshoots a vis
   assert.ok(moves > 0 && moves < cols.length, `expected some but not all columns to scroll, got ${moves}`)
   // The run ends at the far right of the sheet, not past it.
   assert.equal(scrollLeft, total - VIEW)
+})
+
+// ── Following the caret DOWN — which index space virtuoso's scroll APIs speak ──
+//
+// Renzo, on the live app: "hitting tab and enter takes me to the very bottom of the
+// page… It enters and tabs correctly, it just sends me straight to the bottom." The
+// navigation was right; only the scroll was wrong, and it landed on the LAST row every
+// single time. That signature — always the last row, never a near miss — is a clamp.
+//
+// `firstItemIndex` (seeded at FIRST_ITEM_BASE = 100_000 in `use-deliveries-window.ts`,
+// decremented per prepend) offsets EXACTLY ONE thing: the index virtuoso reports BACK to
+// `itemContent` / `computeItemKey` while rendering — `react-virtuoso/dist/index.mjs:1492`,
+// `{ ...d, index: d.index + firstItemIndex, originalIndex: d.index }`. It does NOT shift
+// the space `scrollToIndex` / `scrollIntoView` ACCEPT. Both resolve their target through
+// `jn(location, sizes, totalCount - 1)` (`:1775` scrollIntoView, `:1123` scrollToIndex),
+// and `jn` ends at `:668` with `Math.max(0, Math.min(totalCount - 1, index))` — clamped
+// against `totalCount`, never reduced by `firstItemIndex`. The clamp IS the proof.
+//
+// So the one rule, and the reason it is asserted twice below (as arithmetic, then
+// against the source): every index handed INTO a virtuoso scroll API is the RAW `items`
+// array position, in [0, items.length). The rebase reads as the obvious fix and is
+// exactly backwards, which is how it survived a build, a lint pass and 65 assertions.
+
+/** Mirrors the module-private constant in `use-deliveries-window.ts`. */
+const FIRST_ITEM_BASE = 100_000
+
+/** react-virtuoso's `jn` clamp, verbatim (`dist/index.mjs:668`) — the bug in one line. */
+function virtuosoResolveIndex(index: number, totalCount: number): number {
+  return Math.max(0, Math.min(totalCount - 1, index))
+}
+
+check('a RAW array index survives virtuoso’s clamp; a firstItemIndex-rebased one collapses onto the last row', () => {
+  const totalCount = 991 // the real ledger
+  for (let index = 0; index < totalCount; index++) {
+    // What the fix hands over: the array position resolves to itself, every time.
+    assert.equal(virtuosoResolveIndex(index, totalCount), index, `raw index ${index}`)
+    // What the bug handed over: FIRST_ITEM_BASE + index is ~100× past totalCount, so the
+    // clamp pinned EVERY target to the last row — "straight to the bottom", on any row.
+    assert.equal(
+      virtuosoResolveIndex(FIRST_ITEM_BASE + index, totalCount),
+      totalCount - 1,
+      `rebased index ${index} must be shown collapsing onto the last row`,
+    )
+  }
+  // A prepend is the only thing that moves `firstItemIndex`, and it moves it by a page —
+  // so a "smaller" base is still astronomically past the row count. The rebase is not
+  // wrong only at the seed value; it is wrong at every value the seed ever takes.
+  assert.equal(virtuosoResolveIndex(FIRST_ITEM_BASE - 120 + 5, totalCount), totalCount - 1)
+  // And the raw index is in range by construction: it comes from `items.findIndex(...)`,
+  // which is either < items.length or the -1 the caller already returns on.
+  assert.equal(virtuosoResolveIndex(totalCount - 1, totalCount), totalCount - 1)
+})
+
+check('the ledger hands virtuoso RAW array indexes — no firstItemIndex rebase at any scroll call site', () => {
+  const LEDGER = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../app/(app)/cenapro/deliveries/deliveries-ledger.tsx',
+  )
+  const src = readFileSync(LEDGER, 'utf8')
+
+  // Comments discuss `firstItemIndex` at length by design, so scan EXECUTABLE code only.
+  // The `[^:]` guard keeps a `https://` in a future string from decapitating a line.
+  const code = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  // A stripper that ate too much would make every "must not contain" below pass
+  // vacuously — which is the failure mode this whole check exists to prevent.
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; the scan below would be vacuous')
+
+  // 1. The vertical caret-follow itself. Isolate the CALL, not the prose around it.
+  const call = /virtuosoRef\.current\?\.scrollIntoView\(\s*\{([^}]*)\}/.exec(code)
+  assert.ok(call, 'expected a virtuosoRef.current?.scrollIntoView({ … }) call in the ledger')
+  const args = call![1]
+  assert.match(args, /(^|[\s{,])index\s*(,|$)/, `scrollIntoView must take the bare array index, got {${args}}`)
+  assert.ok(!/firstItemIndex/.test(args), `scrollIntoView index must NOT be rebased, got {${args}}`)
+  assert.ok(!/\+/.test(args), `scrollIntoView index must carry no arithmetic, got {${args}}`)
+
+  // 2. `initialTopMostItemIndex` is clamped by the very same `jn`, so it speaks the same
+  //    raw space. It is fed a position found by walking `items` — raw by construction.
+  assert.match(code, /initialTopMostItemIndex=\{initialTop\.current\}/)
+  assert.ok(!/initialTopMostItemIndex=\{[^}]*firstItemIndex/.test(code))
+
+  // 3. FIRST_ITEM_BASE is module-private to the hook; it must never reach the grid at all.
+  assert.ok(!/FIRST_ITEM_BASE/.test(code), 'FIRST_ITEM_BASE must stay inside use-deliveries-window.ts')
+
+  // 4. The `firstItemIndexRef` that carried the rebase is gone — nothing left to reach for.
+  assert.ok(!/firstItemIndexRef/.test(code), 'firstItemIndexRef WAS the rebase; it must not come back')
+
+  // 5. …leaving the `<TableVirtuoso firstItemIndex>` prop as the ONE legitimate mention.
+  //    Remove it and the identifier must not appear in executable code anywhere else.
+  const PROP = 'firstItemIndex={win.firstItemIndex}'
+  assert.ok(code.includes(PROP), 'the firstItemIndex prop itself must still be passed')
+  assert.ok(
+    !code.replace(PROP, '').includes('firstItemIndex'),
+    'firstItemIndex may appear ONLY as the TableVirtuoso prop — never in a scroll argument',
+  )
 })
 
 // ── The DATE cell — free text in, yyyy-MM-dd out ──────────────────────────────
