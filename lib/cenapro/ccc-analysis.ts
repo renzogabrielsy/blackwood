@@ -20,6 +20,7 @@
 //   cenapro_save_analysis_sample() the save RPC (optimistic concurrency)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { normalizeTypedDate } from '@/lib/paste-utils';
 import type { Database } from '@/types/supabase';
 
 // ─── Metrics ─────────────────────────────────────────────────────────────────
@@ -320,4 +321,114 @@ export function parseWeightKg(raw: string): { kg: number | null; error: string |
         return { kg: null, error: 'That weight is over 10,000,000 kg — check for a mistyped digit.' };
     }
     return { kg, error: null };
+}
+
+// ─── Typed dates ─────────────────────────────────────────────────────────────
+//
+// A QC date cell is FREE TEXT that becomes `yyyy-MM-dd` when you leave it — the same
+// contract the RC Deliveries ledger settled on (`parseDeliveryDate` in
+// `app/(app)/cenapro/deliveries/types.ts`). The shared `normalizeTypedDate` already
+// speaks every form the operators use (`6/27`, `6/27/26`, `2026-06-27`, `27 Jun 26`,
+// an Excel serial); it is NOT extended here, because it is shared with the production
+// ledger and the paste path.
+//
+// What this pair adds on top is a VERDICT. `normalizeTypedDate` hands the operator's
+// text straight back when it cannot read it — perfectly right for a paste, and exactly
+// wrong for a receipt date, where a passthrough would send `6/45` to Postgres as a
+// `date` cast and come back as an error about a cell the UI already accepted.
+//
+// The pair is duplicated rather than imported from the deliveries module on purpose:
+// that module is the RC-receipt vocabulary (991 columns' worth of it) and QC has no
+// business pulling it in for fifteen lines. They must stay behaviourally identical,
+// which is what `scripts/verify-qc-draw-cells.ts` asserts.
+
+/**
+ * `yyyy-MM-dd` AND a day that exists. The second half is not pedantry:
+ * `normalizeTypedDate` returns the input unchanged when it cannot validate it, so a
+ * typed `2026-02-30` comes back still SHAPED like an ISO date. A shape test alone
+ * would wave it through.
+ */
+export function isIsoDate(text: string): boolean {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!m) return false;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    // UTC so a timezone offset can never roll the round-trip onto the neighbouring day.
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * A typed QC date cell → `yyyy-MM-dd`, or a reason it is not a date.
+ *
+ * `contextYear` is what a bare `6/27` means. The QC ledger is month-scoped, so it
+ * supplies the FOCUSED MONTH's year — the month whose rows are on screen, which is the
+ * month the slip being transcribed belongs to.
+ */
+export function parseQcDate(input: string, contextYear: number): { iso: string } | { error: string } {
+    const text = input.trim();
+    if (!text) return { error: 'a date is required.' };
+    const iso = normalizeTypedDate(text, contextYear);
+    if (!isIsoDate(iso)) {
+        return {
+            error: `"${text}" is not a date. Try 6/27, 6/27/26, 2026-06-27 or 27 Jun 26 — a bare day-and-month takes ${contextYear}.`,
+        };
+    }
+    return { iso };
+}
+
+// ─── Typed lab readings ──────────────────────────────────────────────────────
+
+/**
+ * The RANGE each metric is allowed to take, mirroring the four CHECK constraints on
+ * `cenapro.analysis_sample` (migration `20260801073405`). The database is still the
+ * authority; this exists so a mistyped decimal is named in the row instead of coming
+ * back as a constraint-violation string.
+ */
+const METRIC_RANGE: Record<MetricKey, { min: number; max: number; minExclusive: boolean }> = {
+    bd: { min: 0, max: 5, minExclusive: true },
+    ash: { min: 0, max: 100, minExclusive: false },
+    grit: { min: 0, max: 100, minExclusive: false },
+    mc: { min: 0, max: 100, minExclusive: false },
+};
+
+/**
+ * The ONE place a typed lab reading becomes a number — shared by the draft rows' live
+ * check and the server action that writes them, so the two can never disagree.
+ *
+ * A BLANK cell is not an error: it means "this row says nothing about this metric",
+ * which is the sheet's own convention and how a group ends up carrying, say, only BD.
+ */
+export function parseMetricValue(
+    metric: MetricKey,
+    raw: string,
+): { value: number | null; error: string | null } {
+    const cleaned = raw.replace(/[\s_]/g, '');
+    if (cleaned === '') return { value: null, error: null };
+    // A comma is NOT stripped the way `parseWeightKg` strips one. Every metric tops out
+    // at 100, so a comma can never be a thousands separator here — it is a decimal comma
+    // or a typo, and stripping it would silently turn `2,80` into 280.
+    if (cleaned.includes(',')) {
+        return {
+            value: null,
+            error: `${METRIC_SHORT[metric]} takes a dot for the decimal point, not a comma.`,
+        };
+    }
+    if (!/^\d*\.?\d*$/.test(cleaned) || cleaned === '.') {
+        return { value: null, error: `${METRIC_SHORT[metric]} must be a plain number.` };
+    }
+    const value = Number(cleaned);
+    if (!Number.isFinite(value)) {
+        return { value: null, error: `${METRIC_SHORT[metric]} must be a plain number.` };
+    }
+    const range = METRIC_RANGE[metric];
+    const tooLow = range.minExclusive ? value <= range.min : value < range.min;
+    if (tooLow || value > range.max) {
+        return {
+            value: null,
+            error: `${METRIC_SHORT[metric]} must be between ${range.minExclusive ? 'over ' : ''}${range.min} and ${range.max}.`,
+        };
+    }
+    return { value, error: null };
 }

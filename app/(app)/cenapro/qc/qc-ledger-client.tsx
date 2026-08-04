@@ -3,10 +3,20 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Check, Copy, Loader2, Plus, RotateCw } from 'lucide-react';
+import { Check, Copy, Loader2, Plus, RotateCw, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { GridCell, EditInput } from '@/components/shared/grid';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import {
@@ -45,8 +55,11 @@ import { MonthYearPicker } from './month-year-picker';
 import {
     DraftRow,
     draftBlocker,
+    draftMetrics,
     draftToInput,
+    findDraftReadingConflicts,
     isMeaningfulDraft,
+    isSendableDraft,
     makeBlankDrafts,
     type DraftDraw,
 } from './draw-entry-rows';
@@ -54,6 +67,8 @@ import {
     addQcDraws,
     saveQcSamples,
     saveQcWeights,
+    type AddQcDrawRow,
+    type QcGroupVersions,
     type SaveQcSampleInput,
     type SaveQcSampleResult,
     type SaveQcWeightInput,
@@ -312,8 +327,20 @@ export function QcLedgerClient({
     // retyping the date never makes a row jump out from under the cursor.
     const [drafts, setDrafts] = React.useState<DraftDraw[]>([]);
     const [addingDraws, setAddingDraws] = React.useState(false);
+    /** Open only while a Cancel would throw away typing — never for ten blanks. */
+    const [confirmCancel, setConfirmCancel] = React.useState(false);
     /** The draw to point at — a row just committed, or one `already_exists` named. */
     const [markedDrawId, setMarkedDrawId] = React.useState<string | null>(null);
+
+    /**
+     * What a bare `6/27` typed into a draft date cell means. The ledger is month-scoped
+     * — the rows on screen are one month — so the month being looked at IS the context,
+     * and a slip transcribed in June takes June's year without anyone saying so.
+     */
+    const contextYear = React.useMemo(() => {
+        const year = Number(month.slice(0, 4));
+        return Number.isFinite(year) && year > 1900 ? year : new Date().getFullYear();
+    }, [month]);
 
     const sources = React.useMemo(() => {
         const set = new Set<string>();
@@ -367,23 +394,21 @@ export function QcLedgerClient({
 
     const patchDraft = React.useCallback((id: string, patch: Partial<DraftDraw>) => {
         setDrafts((current) =>
-            current.map((d) =>
-                d.id === id
-                    ? // Any edit clears a previous refusal — the operator is answering it,
-                      // and a stale red message beside a corrected row reads as a new one.
-                      { ...d, ...patch, status: 'draft' as const, message: undefined }
-                    : d,
-            ),
+            current.map((d) => {
+                if (d.id !== id) return d;
+                // A row whose DRAW is already filed keeps its message no matter what is
+                // typed into it: the sentence explains why the row is still on screen,
+                // and clearing it would make a filed receipt look like a fresh one.
+                if (d.drawSaved) return { ...d, ...patch };
+                // Any other edit clears a previous refusal — the operator is answering
+                // it, and a stale red message beside a corrected row reads as a new one.
+                return { ...d, ...patch, status: 'draft' as const, message: undefined };
+            }),
         );
     }, []);
 
     const removeDraft = React.useCallback((id: string) => {
         setDrafts((current) => current.filter((d) => d.id !== id));
-    }, []);
-
-    /** Drop every untouched blank, keep anything typed. The "tidy up" affordance. */
-    const clearBlankDrafts = React.useCallback(() => {
-        setDrafts((current) => current.filter(isMeaningfulDraft));
     }, []);
 
     /**
@@ -764,18 +789,46 @@ export function QcLedgerClient({
         let ready = 0;
         let blocked = 0;
         for (const d of drafts) {
-            if (d.status === 'saved' || !isMeaningfulDraft(d)) continue;
-            if (draftBlocker(d)) blocked += 1;
+            if (d.status === 'saved' || d.drawSaved || !isMeaningfulDraft(d)) continue;
+            if (draftBlocker(d, contextYear)) blocked += 1;
             else ready += 1;
         }
         return { readyDrafts: ready, blockedDrafts: blocked };
-    }, [drafts]);
+    }, [drafts, contextYear]);
 
-    /** Untouched blanks on screen — what "Clear empty rows" would remove. */
-    const blankDrafts = React.useMemo(
-        () => drafts.filter((d) => !isMeaningfulDraft(d)).length,
+    /** Typed rows — what a Cancel would actually throw away. */
+    const typedDrafts = React.useMemo(
+        () => drafts.filter((d) => d.status !== 'saved' && isMeaningfulDraft(d)).length,
         [drafts],
     );
+
+    /**
+     * Two typed rows that land in ONE sample group and disagree about a metric. A
+     * reading covers the whole group, so there is no answer to pick — the save is
+     * refused here, before anything leaves the browser, and the rows are named.
+     *
+     * This is the COURTESY half: it mirrors the RPC's grouping to say so early. The
+     * authority is `addQcDraws`, which runs the same check over the group each insert
+     * actually reports — so a mirror that ever drifts costs a spurious refusal or a
+     * later one, never a silently merged reading.
+     */
+    const readingConflicts = React.useMemo(
+        () => findDraftReadingConflicts(drafts, contextYear),
+        [drafts, contextYear],
+    );
+
+    /** Draft ids sitting in a conflicted group — each row says so on its own line. */
+    const conflictedDraftIds = React.useMemo(() => {
+        const map = new Map<string, string>();
+        for (const conflict of readingConflicts) {
+            const message =
+                `this row and ${conflict.rowIds.length - 1} other in ${conflict.label} give ` +
+                `${METRIC_LABEL[conflict.metric]} as ${conflict.values.join(' and ')} — a reading ` +
+                `covers the whole sample group, so make them match or leave it on one row`;
+            for (const id of conflict.rowIds) map.set(id, message);
+        }
+        return map;
+    }, [readingConflicts]);
 
     /** Drafts with no day of their own — the block under the whole month. */
     const trailingDrafts = React.useMemo(
@@ -830,14 +883,38 @@ export function QcLedgerClient({
         return map;
     }, [failures, badWeightIds]);
 
-    const discard = React.useCallback(() => {
+    // ── The two ways out, split by WHAT they throw away ───────────────────────────
+    //
+    // There used to be three overlapping controls: `Discard` (which appeared only when
+    // something was "pending", so right after clicking Add draw there was no way out of
+    // add mode at all), and a quiet `Clear N empty rows` that tidied blanks without
+    // leaving add mode. `Clear empty rows` is gone — a blank row costs nothing on save,
+    // and it was a third near-synonym for the two below.
+    //
+    //   Discard edits — the unsaved metric + weight cells on SAVED rows.
+    //   Cancel adding — the draft rows, and add mode itself. ALWAYS available while
+    //                   adding, including with ten untouched blanks on screen, which is
+    //                   the state Renzo could not escape.
+    //
+    // Each names exactly one kind of thing, so neither is ever the wrong button.
+
+    const discardEdits = React.useCallback(() => {
         setEdits({});
         setWeightEdits({});
         setFailures([]);
-        // Typed new rows are unsaved changes like any other, so Discard clears them too.
+    }, []);
+
+    const exitAdding = React.useCallback(() => {
         setDrafts([]);
         setAddingDraws(false);
+        setConfirmCancel(false);
     }, []);
+
+    /** Confirm ONLY when there is typing to lose. Ten blanks just close. */
+    const cancelAdding = React.useCallback(() => {
+        if (typedDrafts > 0) setConfirmCancel(true);
+        else exitAdding();
+    }, [typedDrafts, exitAdding]);
 
     /**
      * ONE Save. A weight correction and a lab reading typed in the same sitting commit
@@ -852,8 +929,20 @@ export function QcLedgerClient({
         if (totalPending === 0 || saving) return;
 
         // ── Blocked before anything leaves the browser ────────────────────────────
-        if (emptiedKeys.length > 0 || badWeightIds.length > 0) {
+        if (emptiedKeys.length > 0 || badWeightIds.length > 0 || readingConflicts.length > 0) {
             setFailures([
+                ...readingConflicts.map((conflict) => ({
+                    key: `c:${conflict.groupKey}`,
+                    kind: 'sample' as const,
+                    target: conflict.groupKey,
+                    label: conflict.label,
+                    outcome: 'reading_conflict' as const,
+                    message:
+                        `${conflict.rowIds.length} new rows land in this sample group but give ` +
+                        `${METRIC_LABEL[conflict.metric]} as ${conflict.values.join(' and ')}. A ` +
+                        `reading covers the whole group, so nothing was saved — make the numbers ` +
+                        `match, or leave the reading on one of the rows.`,
+                })),
                 ...emptiedKeys.map((key) => ({
                     key: `s:${key}`,
                     kind: 'sample' as const,
@@ -913,9 +1002,24 @@ export function QcLedgerClient({
         // Typed NEW rows. Only the ones with something in them — ten untouched blanks
         // must never become ten validation errors — and only the ones that pass the
         // courtesy check, so an obviously-incomplete line costs no round trip.
-        const draftRows = drafts
-            .filter((d) => d.status !== 'saved' && isMeaningfulDraft(d) && !draftBlocker(d))
-            .map((d) => ({ rowId: d.id, input: draftToInput(d, d.needsDuplicateConfirm === true) }));
+        const draftRows: AddQcDrawRow[] = drafts
+            .filter((d) => isSendableDraft(d, contextYear))
+            .map((d) => ({
+                rowId: d.id,
+                input: draftToInput(d, contextYear, d.needsDuplicateConfirm === true),
+                // The lab cells, if any. The server applies them to whichever sample
+                // group the insert actually reports — never to a key derived here.
+                metrics: draftMetrics(d),
+            }));
+
+        /**
+         * The `sample_row_version` of every group the screen can see. A new draw that
+         * joins an EXISTING group whose reading is already logged must update it against
+         * that version, exactly as an inline edit would; without it the RPC would answer
+         * `already_exists` on a group the operator is looking at.
+         */
+        const groupVersions: QcGroupVersions = {};
+        for (const [key, group] of groupByKey) groupVersions[key] = group.rowVersion;
 
         setSaving(true);
         setFailures([]);
@@ -927,14 +1031,27 @@ export function QcLedgerClient({
                 setDrafts((current) =>
                     current.map((d) => (ids.has(d.id) ? { ...d, status: 'saving' as const } : d)),
                 );
-                const drawRun = await addQcDraws(draftRows);
+                const drawRun = await addQcDraws(draftRows, groupVersions);
                 setDrafts((current) => {
-                    const verdict = new Map(drawRun.map((r) => [r.rowId, r.result]));
+                    const verdict = new Map(drawRun.map((r) => [r.rowId, r]));
                     return current
                         .map((d) => {
-                            const v = verdict.get(d.id);
-                            if (!v) return d;
+                            const row = verdict.get(d.id);
+                            if (!row) return d;
+                            const v = row.result;
                             if (v.ok && v.outcome === 'inserted') {
+                                // The DRAW is in. If the reading typed beside it was
+                                // refused, the row stays on screen carrying that reason
+                                // — dropping it would take the numbers with it.
+                                if (row.reading && !row.reading.ok) {
+                                    return {
+                                        ...d,
+                                        status: 'failed' as const,
+                                        message: `The draw was added — this row will not be sent again. ${row.reading.message ?? 'Its reading was not saved.'}`,
+                                        needsDuplicateConfirm: false,
+                                        drawSaved: true,
+                                    };
+                                }
                                 // Drop it — the saved row arrives with the refresh below.
                                 return { ...d, status: 'saved' as const };
                             }
@@ -1040,6 +1157,8 @@ export function QcLedgerClient({
     }, [
         totalPending,
         saving,
+        contextYear,
+        readingConflicts,
         emptiedKeys,
         badWeightIds,
         dirtyKeys,
@@ -1236,6 +1355,8 @@ export function QcLedgerClient({
                                         onAddDraw={(date) => addBlanks(1, date, date)}
                                         drafts={drafts.filter((d) => d.anchorDate === day.date)}
                                         drawOptions={drawOptions}
+                                        contextYear={contextYear}
+                                        conflictedDraftIds={conflictedDraftIds}
                                         onDraftChange={patchDraft}
                                         onDraftRemove={removeDraft}
                                         activeCell={activeCell}
@@ -1276,7 +1397,8 @@ export function QcLedgerClient({
                                                 key={draft.id}
                                                 draft={draft}
                                                 options={drawOptions}
-                                                metricCount={METRICS.length}
+                                                contextYear={contextYear}
+                                                conflict={conflictedDraftIds.get(draft.id)}
                                                 onChange={patchDraft}
                                                 onRemove={removeDraft}
                                             />
@@ -1330,38 +1452,53 @@ export function QcLedgerClient({
                                   .filter(Boolean)
                                   .join(' · ')}`}
                     </Button>
-                    {totalPending > 0 ? (
+                    {totalDirty > 0 ? (
                         <Button
                             size="sm"
                             variant="ghost"
                             className="h-7 text-xs"
                             disabled={saving}
-                            onClick={discard}
+                            onClick={discardEdits}
+                            title="Throw away the unsaved readings and weights typed onto saved rows. New rows are left alone."
                         >
-                            Discard
+                            Discard edits
                         </Button>
                     ) : null}
-                    {blankDrafts > 0 ? (
+                    {/* ALWAYS available while adding — including with ten untouched
+                        blanks, which used to be a state with no way out at all (the old
+                        Discard appeared only once something counted as pending). */}
+                    {addingDraws ? (
                         <Button
                             size="sm"
                             variant="ghost"
-                            className="h-7 text-xs text-muted-foreground"
+                            className="h-7 text-xs"
                             disabled={saving}
-                            onClick={clearBlankDrafts}
-                            title="Remove the rows you did not type into. Anything typed is kept."
+                            onClick={cancelAdding}
+                            title={
+                                typedDrafts > 0
+                                    ? `Stop adding and remove the new rows — ${typedDrafts} of them have typing in them`
+                                    : 'Stop adding and remove the blank rows'
+                            }
                         >
-                            Clear {blankDrafts} empty row{blankDrafts === 1 ? '' : 's'}
+                            <X className="mr-1 h-3 w-3" />
+                            Cancel adding
                         </Button>
                     ) : null}
                     <span
                         className={cn(
                             'text-[11px]',
-                            emptiedKeys.length + badWeightIds.length + blockedDrafts > 0
+                            emptiedKeys.length +
+                                badWeightIds.length +
+                                blockedDrafts +
+                                readingConflicts.length >
+                                0
                                 ? 'text-amber-600 dark:text-amber-400'
                                 : 'text-muted-foreground',
                         )}
                     >
-                        {emptiedKeys.length > 0
+                        {readingConflicts.length > 0
+                            ? `${readingConflicts.length} sample group${readingConflicts.length === 1 ? ' has' : 's have'} two new rows giving different readings — nothing saves until they agree`
+                            : emptiedKeys.length > 0
                             ? `${emptiedKeys.length} group${emptiedKeys.length === 1 ? ' has' : 's have'} every metric cleared — that would delete the reading`
                             : badWeightIds.length > 0
                               ? `${badWeightIds.length} weight${badWeightIds.length === 1 ? ' is' : 's are'} not a valid number of kilograms`
@@ -1375,6 +1512,33 @@ export function QcLedgerClient({
                     </span>
                 </div>
             </div>
+
+            {/* Cancel only ever asks when there is something to lose, and it says how
+                much. Chrome, not a row — the one place motion is allowed here. */}
+            <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            Discard {typedDrafts} typed row{typedDrafts === 1 ? '' : 's'}?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Leaving add mode removes every new row, including the{' '}
+                            {typedDrafts} you have typed into, and what is on them is lost.
+                            Anything already saved stays saved, and the readings and weights
+                            typed onto saved rows are not touched.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep typing</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={exitAdding}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Discard {typedDrafts} row{typedDrafts === 1 ? '' : 's'}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }
@@ -1456,7 +1620,11 @@ interface SaveFailure {
     /** The group key (samples) or the draw id (weights). */
     target: string;
     label: string;
-    outcome: SaveQcSampleResult['outcome'] | SaveQcWeightResult['outcome'];
+    outcome:
+        | SaveQcSampleResult['outcome']
+        | SaveQcWeightResult['outcome']
+        /** Two typed rows, one sample group, two different readings. Nothing written. */
+        | 'reading_conflict';
     message: string;
 }
 
@@ -1569,7 +1737,10 @@ function SaveFailureBanner({
     // Reloading fixes a stale read. It cannot fix something the operator typed, so a
     // blocked sample or an unparseable weight does not offer the button.
     const reloadable = failures.some(
-        (failure) => failure.outcome !== 'no_metrics' && failure.outcome !== 'invalid',
+        (failure) =>
+            failure.outcome !== 'no_metrics' &&
+            failure.outcome !== 'invalid' &&
+            failure.outcome !== 'reading_conflict',
     );
 
     return (
@@ -1705,6 +1876,10 @@ interface DayBlockProps {
     /** Blank rows the operator opened inside THIS day, rendered under its saved rows. */
     drafts: DraftDraw[];
     drawOptions: QcDrawOptions;
+    /** What a bare `6/27` in a draft date cell means — the focused month's year. */
+    contextYear: number;
+    /** Draft id → the same-group reading disagreement it is part of, if any. */
+    conflictedDraftIds: Map<string, string>;
     onDraftChange: (id: string, patch: Partial<DraftDraw>) => void;
     onDraftRemove: (id: string) => void;
 }
@@ -1718,6 +1893,8 @@ function DayBlock({
     onAddDraw,
     drafts,
     drawOptions,
+    contextYear,
+    conflictedDraftIds,
     onDraftChange,
     onDraftRemove,
     activeCell,
@@ -1854,7 +2031,8 @@ function DayBlock({
                     key={draft.id}
                     draft={draft}
                     options={drawOptions}
-                    metricCount={METRICS.length}
+                    contextYear={contextYear}
+                    conflict={conflictedDraftIds.get(draft.id)}
                     onChange={onDraftChange}
                     onRemove={onDraftRemove}
                 />
