@@ -8,6 +8,7 @@ import {
 import { DeliveriesLedger } from './deliveries-ledger';
 import {
     axesKey,
+    parseColumnFilters,
     parseIssueLens,
     parseQuery,
     parseScope,
@@ -44,6 +45,10 @@ export default async function CenaproDeliveriesPage({
     const scope = parseScope(params.scope);
     const issue = parseIssueLens(params.issue);
     const query = parseQuery(params.q);
+    // `?f_<column>=…`, one param per filterable column. Parsed against the column table
+    // in `types.ts`, so a param naming an unfilterable column (`?f_php_kg=…`) is dropped
+    // rather than honoured — a filter is never a price oracle.
+    const filters = parseColumnFilters(params);
 
     // The month index and the two dimension lists are independent of each other and of
     // the row read — one round trip, not three in series.
@@ -61,11 +66,11 @@ export default async function CenaproDeliveriesPage({
     // The axes fingerprint keys the client so a scope/lens/search change remounts with
     // the server-prefetched window for the NEW axes — one deterministic seeding path,
     // and it resets react-virtuoso's `firstItemIndex` by construction (no scroll jump).
-    const key = axesKey({ scope, period, issue, query });
+    const key = axesKey({ scope, period, issue, query, filters });
 
     if (scope === 'focus') {
         const month = period
-            ? await fetchDeliveryMonth(period, issue, query)
+            ? await fetchDeliveryMonth(period, issue, query, filters)
             : { records: [], canViewPrices: false, error: undefined };
 
         return (
@@ -79,6 +84,7 @@ export default async function CenaproDeliveriesPage({
                 monthKeys={monthKeys}
                 issue={issue}
                 query={query}
+                filters={filters}
                 dimensions={dimensions}
                 canViewPrices={month.canViewPrices}
                 loadError={month.error ?? months.error ?? dimensions.error ?? null}
@@ -88,7 +94,13 @@ export default async function CenaproDeliveriesPage({
 
     // Endless: anchor-first — resolve the anchor from the URL, then prefetch the FIRST
     // keyset window server-side so the very first paint is already in the right place.
-    const page = await fetchDeliveryPage({ mode: 'anchor', anchor: { kind: 'latest' }, issue, query });
+    const page = await fetchDeliveryPage({
+        mode: 'anchor',
+        anchor: { kind: 'latest' },
+        issue,
+        query,
+        filters,
+    });
 
     return (
         <DeliveriesLedger
@@ -98,6 +110,7 @@ export default async function CenaproDeliveriesPage({
                 records: page.records,
                 hasOlder: page.hasOlder,
                 hasNewer: page.hasNewer,
+                totalCount: page.totalCount ?? null,
                 notice: page.notice,
             }}
             monthRecords={null}
@@ -106,6 +119,7 @@ export default async function CenaproDeliveriesPage({
             monthKeys={monthKeys}
             issue={issue}
             query={query}
+            filters={filters}
             dimensions={dimensions}
             canViewPrices={page.canViewPrices}
             loadError={page.error ?? months.error ?? dimensions.error ?? null}

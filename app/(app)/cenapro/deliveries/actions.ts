@@ -39,7 +39,11 @@ import {
     type DeliveryCursor,
 } from './types';
 import {
+    buildFilterPredicates,
     periodBounds,
+    NO_FILTERS,
+    type ColumnFilters,
+    type DeliveryLens,
     type DeliveryPeriod,
     type IssueLens,
 } from './ledger-url';
@@ -48,12 +52,18 @@ import {
 const PAGE_SIZE = 120;
 
 /**
+ * The duplicate lens is a WORKLIST, not a walk through history, and it is bounded on
+ * purpose — see `duplicatePairs()` below.
+ */
+const DUPLICATE_WORKLIST_MAX = 600;
+
+/**
  * The read model's column list. A SINGLE string literal on purpose — the typed
  * PostgREST client parses it at the type level, and `+`-concatenation defeats that
  * inference and collapses the row type to an error.
  */
 const ROW_COLS =
-    'id, delivery_date, delivery_date_raw, delivery_year, truck_no, supplier_code, supplier_name, supplier_origin, permit_no, supplier_raw, sacks, gross_weight_kg, deduction_pct, net_weight_kg, weight_formula, bd, moisture_pct, grit, ash, dust, vm, fc, destination_code, destination_name, destination_kind, destination_has_sides, destination_side, destination_raw, remarks, base_price_php_kg, price_adjustment_php_kg, price_php_kg, price_formula, total_price_php, sheet_total_php, sheet_total_matches, sample_count, sample_avg_moisture_pct, provenance, source_sheet, source_row, is_suspected_duplicate, import_flags, import_flag_count, has_import_flags, supplier_unresolved, destination_unresolved, row_version, created_at, created_by, updated_at, updated_by';
+    'id, delivery_date, delivery_date_raw, delivery_year, truck_no, supplier_code, supplier_name, supplier_origin, permit_no, supplier_raw, sacks, gross_weight_kg, deduction_pct, net_weight_kg, weight_formula, bd, moisture_pct, grit, ash, dust, vm, fc, destination_code, destination_name, destination_kind, destination_has_sides, destination_side, destination_raw, remarks, base_price_php_kg, price_adjustment_php_kg, price_php_kg, price_formula, total_price_php, sheet_total_php, sheet_total_matches, sample_count, sample_avg_moisture_pct, provenance, source_sheet, source_row, is_suspected_duplicate, import_flags, import_flag_count, has_import_flags, supplier_unresolved, destination_unresolved, row_version, created_at, created_by, updated_at, updated_by, duplicate_group_key, duplicate_group_size, duplicate_group_ordinal, duplicate_peer_ids';
 
 const SAMPLE_COLS =
     'id, delivery_id, position, label, bd, moisture_pct, grit, ash, dust, vm, fc, source_row, created_at';
@@ -82,21 +92,34 @@ function keysetPredicate(cursor: DeliveryCursor, direction: 'older' | 'newer'): 
 }
 
 /**
- * The base read query with the issue lens + free-text search already applied. Both are
- * optional and AND together. Written as one builder function (rather than a generic
- * `applyLens` helper) so the PostgREST row type is INFERRED end-to-end — a hand-written
- * generic over the filter builder loses it and collapses the row shape to an error type.
+ * The base read query with the issue lens, the per-column filters and the free-text
+ * search already applied. All three are optional and AND together. Written as one
+ * builder function (rather than a generic `applyLens` helper) so the PostgREST row type
+ * is INFERRED end-to-end — a hand-written generic over the filter builder loses it and
+ * collapses the row shape to an error type.
+ *
+ * The column filters are applied here, in SQL, and NOWHERE ELSE. Filtering the loaded
+ * window in the browser would filter the ~120 rows the keyset pager happens to be
+ * holding and silently claim that was the whole ledger.
  */
 function buildRowQuery(
     supabase: Awaited<ReturnType<typeof createClient>>,
-    issue: IssueLens | null,
-    query: string,
+    lens: { issue: IssueLens | null; query: string; filters?: ColumnFilters },
+    // `head`/`count` do not change the builder's STATIC type (verified in
+    // `PostgrestQueryBuilder.select` — only the request method and one header move), so
+    // the count query and the row query can share this one builder without a union.
+    opts?: { count: 'exact'; head: true },
 ) {
-    const q = supabase.from('cenapro_rc_delivery_rows').select(ROW_COLS);
+    const { issue, query } = lens;
+    const q = supabase.from('cenapro_rc_delivery_rows').select(ROW_COLS, opts);
 
-    const lensed =
+    let out =
+        // BOTH members of every duplicate pair. `is_suspected_duplicate` is the
+        // importer's flag on the SECOND copy only, so filtering on it returned 22
+        // orphans with their originals invisible — useless for the one decision this
+        // lens exists to support. `duplicate_group_key IS NOT NULL` returns all 44.
         issue === 'duplicate'
-            ? q.eq('is_suspected_duplicate', true)
+            ? q.not('duplicate_group_key', 'is', null)
             : issue === 'flagged'
               ? q.eq('has_import_flags', true)
               : issue === 'unmapped'
@@ -105,13 +128,30 @@ function buildRowQuery(
                   ? q.is('delivery_date', null)
                   : q;
 
+    for (const p of buildFilterPredicates(lens.filters ?? NO_FILTERS)) {
+        switch (p.op) {
+            case 'in':
+                out = out.in(p.column, p.values);
+                break;
+            case 'ilike':
+                out = out.ilike(p.column, p.pattern);
+                break;
+            case 'gte':
+                out = out.gte(p.column, p.value);
+                break;
+            case 'lte':
+                out = out.lte(p.column, p.value);
+                break;
+        }
+    }
+
     // Strip PostgREST's `or()` separators + wildcards so a comma or paren in the search
     // box cannot smuggle an extra predicate into the filter string.
     const safe = query.trim().replace(/[,()*\\.:]/g, ' ').trim();
-    if (!safe) return lensed;
+    if (!safe) return out;
 
     const like = `*${safe}*`;
-    return lensed.or(
+    return out.or(
         [
             `supplier_raw.ilike.${like}`,
             `supplier_code.ilike.${like}`,
@@ -123,6 +163,21 @@ function buildRowQuery(
             `remarks.ilike.${like}`,
         ].join(','),
     );
+}
+
+/**
+ * How many receipts the CURRENT lens+filters match, in total — not how many are loaded.
+ *
+ * A `head` request with `count: 'exact'`, so it costs one count and no payload. Run
+ * only on an ANCHOR fetch (first paint, reset, refresh); a cursor page inherits the
+ * number it was given, because the total cannot change by scrolling.
+ */
+async function countRows(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    lens: { issue: IssueLens | null; query: string; filters?: ColumnFilters },
+): Promise<number | null> {
+    const { count, error } = await buildRowQuery(supabase, lens, { count: 'exact', head: true });
+    return error ? null : (count ?? null);
 }
 
 /** Fetch the sub-samples for a page of receipts, in one round trip. */
@@ -173,6 +228,8 @@ export interface DeliveryPageInput {
     direction?: 'older' | 'newer';
     issue?: IssueLens | null;
     query?: string;
+    /** Per-column filters, pushed into SQL. Every page MUST carry them or the walk drifts. */
+    filters?: ColumnFilters;
 }
 
 export interface DeliveryPage {
@@ -180,6 +237,8 @@ export interface DeliveryPage {
     hasOlder: boolean;
     hasNewer: boolean;
     canViewPrices: boolean;
+    /** How many receipts the lens+filters match in TOTAL. `null` on a cursor page. */
+    totalCount?: number | null;
     notice?: string;
     error?: string;
 }
@@ -188,13 +247,72 @@ function pageErr(message: string, showPrices = false): DeliveryPage {
     return { records: [], hasOlder: false, hasNewer: false, canViewPrices: showPrices, error: message };
 }
 
+/**
+ * The `?issue=duplicate` lens, as a BOUNDED WORKLIST rather than a keyset walk.
+ *
+ * Two members of a pair have to sit next to each other or the lens cannot answer the
+ * question it exists for ("is this really an exact copy of that row?"), and adjacency
+ * needs the ordering `(delivery_date, duplicate_group_key, duplicate_group_ordinal)` —
+ * which is NOT the `(delivery_date, id)` the keyset cursor is expressed in. A page walk
+ * over one ordering with a cursor in another silently skips and repeats rows, so this
+ * lens does not page at all: it returns the whole worklist in one window, with
+ * `hasOlder`/`hasNewer` false so nothing ever asks for a cursor page.
+ *
+ * That is honest because the set is inherently small — it is an arbitration queue, not
+ * history (22 pairs / 44 rows today). The cap is explicit and, if it is ever reached,
+ * SAID OUT LOUD in the notice rather than silently truncating the operator's worklist.
+ */
+async function duplicatePairs(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    lens: DeliveryLens,
+    showPrices: boolean,
+): Promise<DeliveryPage> {
+    const { data, error } = await buildRowQuery(supabase, lens)
+        .order('delivery_date', { ascending: true, nullsFirst: true })
+        .order('duplicate_group_key', { ascending: true, nullsFirst: false })
+        .order('duplicate_group_ordinal', { ascending: true, nullsFirst: false })
+        .order('id', { ascending: true })
+        .limit(DUPLICATE_WORKLIST_MAX + 1);
+    if (error) return pageErr(`Failed to load the duplicate pairs: ${error.message}`, showPrices);
+
+    const fetched = data ?? [];
+    const clipped = fetched.length > DUPLICATE_WORKLIST_MAX ? fetched.slice(0, DUPLICATE_WORKLIST_MAX) : fetched;
+    const { samples, error: sErr } = await loadSamples(
+        supabase,
+        clipped.map((r) => r.id ?? '').filter(Boolean),
+    );
+    if (sErr) return pageErr(sErr, showPrices);
+
+    const totalCount = await countRows(supabase, lens);
+    return {
+        records: assemble(clipped, samples, showPrices),
+        hasOlder: false,
+        hasNewer: false,
+        canViewPrices: showPrices,
+        totalCount,
+        ...(fetched.length > DUPLICATE_WORKLIST_MAX
+            ? {
+                  notice: `More than ${DUPLICATE_WORKLIST_MAX} receipts are part of a duplicate pair — only the first ${DUPLICATE_WORKLIST_MAX} are shown. Narrow the view with a column filter.`,
+              }
+            : {}),
+    };
+}
+
 export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<DeliveryPage> {
     const supabase = await createClient();
     const showPrices = await canViewPrices();
-    const issue = input.issue ?? null;
-    const query = input.query ?? '';
+    const lens: DeliveryLens = {
+        issue: input.issue ?? null,
+        query: input.query ?? '',
+        filters: input.filters ?? NO_FILTERS,
+    };
 
-    const base = () => buildRowQuery(supabase, issue, query);
+    const base = () => buildRowQuery(supabase, lens);
+
+    // The duplicate lens is its own shape entirely — one window, paired ordering, no
+    // cursor. Handled before the anchor/cursor split so `reset`, `refreshWindow` and a
+    // stray cursor request all land on the same answer.
+    if (lens.issue === 'duplicate') return duplicatePairs(supabase, lens, showPrices);
 
     // ── Initial anchored page ────────────────────────────────────────────────────
     if (input.mode === 'anchor') {
@@ -204,10 +322,14 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
         // opens at the bottom, on the newest receipts. Nothing is newer; a full page
         // implies history above.
         if (anchor.kind === 'latest') {
-            const { data, error } = await base()
-                .order('delivery_date', { ascending: false, nullsFirst: false })
-                .order('id', { ascending: false })
-                .limit(PAGE_SIZE);
+            // The count is independent of the page — one round trip, not two in series.
+            const [{ data, error }, totalCount] = await Promise.all([
+                base()
+                    .order('delivery_date', { ascending: false, nullsFirst: false })
+                    .order('id', { ascending: false })
+                    .limit(PAGE_SIZE),
+                countRows(supabase, lens),
+            ]);
             if (error) return pageErr(`Failed to load receipts: ${error.message}`, showPrices);
             const fetched = (data ?? []).reverse();
             const { samples, error: sErr } = await loadSamples(
@@ -220,6 +342,7 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
                 hasOlder: fetched.length === PAGE_SIZE,
                 hasNewer: false,
                 canViewPrices: showPrices,
+                totalCount,
             };
         }
 
@@ -227,16 +350,25 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
         // INCLUSIVE. The month is a jump target only; the window still spans all history
         // in both directions from there.
         const { from } = periodBounds({ year: anchor.year, month: anchor.month });
-        const { data: firstRows, error: firstErr } = await base()
-            .gte('delivery_date', from)
-            .order('delivery_date', { ascending: true, nullsFirst: true })
-            .order('id', { ascending: true })
-            .limit(1);
+        const [{ data: firstRows, error: firstErr }, totalCount] = await Promise.all([
+            base()
+                .gte('delivery_date', from)
+                .order('delivery_date', { ascending: true, nullsFirst: true })
+                .order('id', { ascending: true })
+                .limit(1),
+            countRows(supabase, lens),
+        ]);
         if (firstErr) return pageErr(`Failed to resolve the month anchor: ${firstErr.message}`, showPrices);
 
         const first = firstRows?.[0];
         if (!first) {
-            const fallback = await fetchDeliveryPage({ mode: 'anchor', anchor: { kind: 'latest' }, issue, query });
+            const fallback = await fetchDeliveryPage({
+                mode: 'anchor',
+                anchor: { kind: 'latest' },
+                issue: lens.issue,
+                query: lens.query,
+                filters: lens.filters,
+            });
             return {
                 ...fallback,
                 notice: `Nothing on or after ${from} — showing the newest receipts instead.`,
@@ -264,10 +396,17 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
             hasOlder: true,
             hasNewer,
             canViewPrices: showPrices,
+            totalCount,
         };
     }
 
     // ── Cursor page ──────────────────────────────────────────────────────────────
+    //
+    // A filter changes nothing here, and that is the point: every predicate is a plain
+    // conjunct on the SAME `ORDER BY (delivery_date, id)`, so the cursor still names a
+    // unique position in the filtered set and the walk just steps over a sparser one.
+    // What WOULD break it is a page that forgot the filters — hence `input.filters` is
+    // threaded through every call site, including the hook's `lensRef`.
     const cursor = input.cursor;
     const direction = input.direction ?? 'newer';
     if (!cursor) return pageErr('A cursor page needs a cursor.', showPrices);
@@ -298,6 +437,7 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
         hasOlder: asc ? true : more,
         hasNewer: asc ? more : true,
         canViewPrices: showPrices,
+        totalCount: null,
     };
 }
 
@@ -313,17 +453,35 @@ export async function fetchDeliveryMonth(
     period: DeliveryPeriod,
     issue: IssueLens | null = null,
     query = '',
+    filters: ColumnFilters = NO_FILTERS,
 ): Promise<DeliveryMonth> {
     const supabase = await createClient();
     const showPrices = await canViewPrices();
     const { from, to } = periodBounds(period);
+    const lens: DeliveryLens = { issue, query, filters };
 
-    const { data, error } = await buildRowQuery(supabase, issue, query)
+    const scoped = buildRowQuery(supabase, lens)
         .gte('delivery_date', from)
-        .lte('delivery_date', to)
-        .order('delivery_date', { ascending: true, nullsFirst: true })
-        .order('source_row', { ascending: true, nullsFirst: false })
-        .order('id', { ascending: true });
+        .lte('delivery_date', to);
+
+    // Under the duplicate lens the two members of a pair must be ADJACENT, and
+    // `source_row` is precisely what differs between an original and its paste (639 vs
+    // 664) — ordering by it would put the two halves of a pair pages apart. The focus
+    // scope loads a whole month in one query, so there is no cursor to keep in step and
+    // the ordering can simply change.
+    const ordered =
+        issue === 'duplicate'
+            ? scoped
+                  .order('delivery_date', { ascending: true, nullsFirst: true })
+                  .order('duplicate_group_key', { ascending: true, nullsFirst: false })
+                  .order('duplicate_group_ordinal', { ascending: true, nullsFirst: false })
+                  .order('id', { ascending: true })
+            : scoped
+                  .order('delivery_date', { ascending: true, nullsFirst: true })
+                  .order('source_row', { ascending: true, nullsFirst: false })
+                  .order('id', { ascending: true });
+
+    const { data, error } = await ordered;
 
     if (error) {
         return { records: [], canViewPrices: showPrices, error: `Failed to load the month: ${error.message}` };
@@ -411,6 +569,10 @@ function readVersion(raw: unknown): number | null {
     return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
+function readId(raw: unknown): string | null {
+    return typeof raw === 'string' && raw.trim() ? raw : null;
+}
+
 function readMessage(raw: unknown): string | null {
     return typeof raw === 'string' && raw.trim() ? raw : null;
 }
@@ -428,6 +590,13 @@ export interface SaveDeliveriesResult {
  * Save a batch of receipts. One RPC call per receipt for the field patch, plus one for
  * the sample block when it changed — sequenced, never parallel, because the patch bumps
  * the very `row_version` the samples call has to present.
+ *
+ * An input with `id: null` is a DRAFT row from the bottom of the sheet. The RPC takes
+ * that as an INSERT, and refuses the call outright if an expected version rides along —
+ * so both `p_id` and `p_expected_row_version` are OMITTED rather than sent as null (the
+ * generated Args type makes them optional, which is exactly the shape the insert branch
+ * wants). The new id and version come back on the result so the client can turn the
+ * draft into a real row without a second save re-inserting it.
  */
 export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveDeliveriesResult> {
     const supabase = await createClient();
@@ -435,7 +604,8 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
     const results: SaveDeliveryResult[] = [];
 
     for (const input of inputs) {
-        const base = { id: input.id, label: input.label };
+        const base = { key: input.key, id: input.id, label: input.label };
+        const isInsert = input.id === null;
 
         // ₱ boundary: a viewer who cannot SEE a price cannot WRITE one. Refused here,
         // per receipt, rather than filtered silently — a silent drop would look like a
@@ -454,16 +624,18 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
             }
         }
 
+        let id = input.id;
         let version = input.expectedRowVersion;
         let touched = false;
 
-        // ── 1. The field patch ───────────────────────────────────────────────────
+        // ── 1. The field patch (or the insert) ───────────────────────────────────
         if (input.patch && Object.keys(input.patch).length > 0) {
-            const { data, error } = await supabase.rpc('cenapro_save_rc_delivery', {
-                p_id: input.id,
-                p_expected_row_version: version,
-                p_patch: input.patch,
-            });
+            const { data, error } = await supabase.rpc(
+                'cenapro_save_rc_delivery',
+                isInsert
+                    ? { p_patch: input.patch }
+                    : { p_id: input.id!, p_expected_row_version: version ?? undefined, p_patch: input.patch },
+            );
             if (error) {
                 results.push({ ...base, ok: false, outcome: 'rpc_error', rowVersion: null, message: error.message });
                 continue;
@@ -483,17 +655,30 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
             }
             touched = true;
             if (nextVersion !== null) version = nextVersion;
+            id = readId(r.id) ?? id;
+        } else if (isInsert) {
+            // A draft with nothing in its patch has nothing to insert. Refused rather
+            // than silently reported as saved — the client already filters these out,
+            // so reaching here means the two disagree and the operator should be told.
+            results.push({
+                ...base,
+                ok: false,
+                outcome: 'invalid',
+                rowVersion: null,
+                message: 'A new receipt needs at least one value.',
+            });
+            continue;
         }
 
         // ── 2. The sample block (replace-in-full), on the FRESH version ───────────
-        if (input.samples) {
+        if (input.samples && id !== null && version !== null) {
             const { data, error } = await supabase.rpc('cenapro_save_rc_delivery_samples', {
-                p_delivery_id: input.id,
+                p_delivery_id: id,
                 p_expected_row_version: version,
                 p_samples: input.samples,
             });
             if (error) {
-                results.push({ ...base, ok: false, outcome: 'rpc_error', rowVersion: version, message: error.message });
+                results.push({ ...base, id, ok: false, outcome: 'rpc_error', rowVersion: version, message: error.message });
                 continue;
             }
             const r = (data ?? {}) as RawRpcResult;
@@ -502,6 +687,7 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
             if (!ok) {
                 results.push({
                     ...base,
+                    id,
                     ok: false,
                     outcome: readOutcome(r.outcome, 'rpc_error'),
                     rowVersion: nextVersion,
@@ -515,6 +701,7 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
 
         results.push({
             ...base,
+            id,
             ok: true,
             outcome: touched ? 'saved' : 'noop',
             rowVersion: version,

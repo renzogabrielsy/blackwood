@@ -2017,6 +2017,10 @@ export type Database = {
           destination_raw: string | null
           destination_side: string | null
           destination_unresolved: boolean | null
+          duplicate_group_key: string | null
+          duplicate_group_ordinal: number | null
+          duplicate_group_size: number | null
+          duplicate_peer_ids: string[] | null
           dust: number | null
           fc: number | null
           grit: number | null

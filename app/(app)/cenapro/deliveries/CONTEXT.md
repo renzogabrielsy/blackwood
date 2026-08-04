@@ -25,12 +25,12 @@ computed in the browser.
 | File | Role |
 |---|---|
 | `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
-| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); `sampleFieldFor` (which columns a sub-row occupies); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
-| `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`. No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). |
-| `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, and sequences a combined field+samples save. |
-| `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
-| `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, context menu, save, delete. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs + the column geometry, ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — 20 assertions, must stay green. |
+| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
+| `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
+| `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
+| `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
+| `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **56 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -67,6 +67,41 @@ tabular-nums` right-aligned, ₱ in accounting format (symbol pinned left, figur
 right), remarks `max-w-[200px] truncate` with the full text in the cell `title`.
 
 `#` and `TTL PRICE` carry `field: null`, which is what makes them unaddressable.
+`isSelectableColumn()` is one column WIDER than that: a range may cover `TTL PRICE`
+(the pill is a reader, and a run of receipt totals is the most useful thing on the sheet
+to add up) but never `#` (a row ordinal has no arithmetic meaning).
+
+`DeliveryCol` carries **pure column metadata and nothing else** — `field`,
+`isSelectableColumn()`, `columnCalcType()` and (2026-08-04) `filterKind` /
+`filterColumn`. Everything the filter feature needs is therefore decidable from the
+column table alone, which is why the whole grammar is testable from the verify script
+without touching the grid.
+
+### Cell geometry — the interactive layer fills the `<td>`, always
+
+Each `<td>` is `p-0` with an explicit `height` (32px receipt / draft, 26px draw) and the
+interactive layer inside it is **`absolute inset-0`**, not `h-full`.
+
+That is a correctness rule, not a styling preference. `h-full` is a percentage height
+against a table cell the browser has not committed to, so it collapsed onto the cell's
+own TEXT — and two apparently separate complaints were the same bug: the active ring
+(`ring-inset`) traced the text box rather than the cell, so a selected cell looked like a
+small rectangle floating inside its own borders; and an **empty** cell's layer had zero
+height and therefore **no hit area at all**, which is why an empty REMARKS cell could not
+be clicked, let alone edited. `inset-0` fills the box whether the cell holds text or
+nothing.
+
+Consequences worth keeping in mind when editing this file:
+- the `<td>` needs a containing block. Non-frozen cells get `relative`; frozen cells
+  already have one (`.frozen-col` is `position: sticky`), and must NOT be given a second.
+- cell content no longer contributes to row height, so the row height comes entirely
+  from the `<tr>`/`<td>` height — never delete it.
+- **exactly ONE `bg-*` class** is applied to the layer, chosen by an explicit ternary
+  (`invalid` › `selected` › `dirty`). Stacking Tailwind background utilities and hoping
+  is not a rule: they are emitted in Tailwind's order, not the order they are written.
+- every tint rides on this inner layer, ABOVE the frozen cell's opaque `bg-background` —
+  which is what keeps the frozen-pane rule intact (opaque base, translucent state on top,
+  no bleed-through).
 
 ### SUPPLIER and WAREHOUSE — one Excel cell, several DB fields
 
@@ -118,6 +153,134 @@ round-trip is `weightEditText` / `priceEditText`.
   991/991 against the workbook); reproducing that in floating-point JavaScript is
   precisely how a payment ledger goes wrong.
 
+### DATE is a text cell that parses itself (Excel's habit)
+
+There is no `<input type="date">` anywhere in this grid. DATE is a plain text cell on the
+**same edit path as every other column** — type-over, F2, double-click, Escape — and the
+loose text an operator types is transcribed on commit, exactly the way Excel transcribes
+a date cell when you tab out of it.
+
+- `parseDeliveryDate(text, contextYear)` in `types.ts` is the single verdict. It reuses
+  the shared `normalizeTypedDate` from `lib/paste-utils` (`6/27`, `6/27/26`, `2026-06-27`,
+  `27 Jun 26`, an Excel serial) — deliberately **not extended**, because that helper is
+  shared with the production ledger and the paste paths.
+- What this module adds on top is a **refusal**. `normalizeTypedDate` hands the operator's
+  text back unchanged when it cannot read it, so `2026-02-30` comes out still looking like
+  an ISO date; `isIsoDate()` therefore checks the day EXISTS (UTC round-trip), not merely
+  that it is ISO-shaped. A shape test alone would post February 30th to Postgres and
+  surface a raw cast error about a cell the UI had just called fine.
+- **The context year** is what a bare `6/27` means: the focused month's year in the focus
+  scope; otherwise the year of the receipt being edited; otherwise the newest dated row in
+  the window; finally today's year. The paste path uses the same year, so a pasted `6/27`
+  and a typed `6/27` can never land on different years.
+- Unreadable text raises a persistent `errorToast()` and the cell **keeps the operator's
+  text and stays dirty**. `buildPatch` re-checks with `isIsoDate` as the last gate before
+  the RPC, so a cell left in that state blocks the save rather than posting.
+- Display stays `yyyy-MM-dd`, `font-mono`. The amber `AlertTriangle` still marks an
+  imported row whose `delivery_date_raw` never parsed.
+
+### Select ≠ edit
+
+The shared state machine (`useGridKeyboardNav`) already separates the two; this grid adds
+two opinions on top, both because the operators live in Google Sheets:
+
+| Gesture | Result |
+|---|---|
+| Click / arrows / Tab | SELECT only — never enters edit mode |
+| Printable character | EDIT, seeded with that character (replaces the old value) |
+| **Enter** / F2 / double-click | EDIT, preserving the value |
+| Enter *while editing* | COMMIT + move down (still honouring the Tab-run lane anchor) |
+| Shift+Enter | move up |
+| Esc *while editing* | REVERT (see "Dirty state" below) |
+| **Delete / Backspace** | CLEAR the cell — or the whole range — outright, no editor |
+| Shift+click, Shift+Arrow, drag | extend a rectangular range |
+| Ctrl/Cmd+A · Ctrl/Cmd+C | select all · copy the range as TSV |
+
+Enter-opens-the-cell and Delete-clears-outright are the two departures from Excel; Enter
+*while editing* still commits and moves, so the Tab-run → Enter lane return survives.
+
+This holds for EVERY editable column — the DATE cell included (item 8 removed the reason
+it was special-cased), empty cells (the geometry fix gave them a hit area), REMARKS, the
+sample sub-rows and the draft rows.
+
+The grid's own `onGridKeyDown`/`onGridPaste` wrappers hold one further guard: a keystroke
+or paste aimed at a real form control inside the grid (the "add rows" counter) is not a
+grid gesture and is left alone.
+
+### Dirty state — an edit that undoes itself is not an edit
+
+`setCellText` routes through **`mergeFieldEdit`**, which DROPS the field from the edit map
+when the new text equals the value already stored (and drops the row entirely when its
+last field goes). The sample equivalent compares the whole draw block and drops it when
+it matches the stored one, draw for draw.
+
+This exists because `useGridEditSession.revertChanges` cancels an Escape by calling the
+same setter with the pre-edit snapshot — a perfectly correct VALUE and a perfectly wrong
+DIRTY STATE. The field stayed in `edits`, so the row stayed in `dirtyIds`, the "N unsaved"
+chip kept counting it and Save stayed lit with nothing to write. Fixing it as a general
+rule rather than an Escape special case means typing a value back by hand is just as
+clean as pressing Escape.
+
+Note the asymmetry that is deliberate: **clearing** a stored value is still an edit
+(`remarks: ''` must reach the patch as `null`), so only an exact match to the stored text
+clears the flag.
+
+`invalidCells` is keyed by `<rowKey>:<colKey>`, never by row INDEX — the row axis moves
+under the selection (a page loads, a lens changes, blank rows appear), and a positional
+key would silently re-point a "this cell is invalid" mark at somebody else's cell.
+
+### Blank rows at the bottom (draft receipts)
+
+Google Sheets keeps a run of blank rows under the last real one plus an
+`Add [N] more rows at the bottom` control; so does this ledger. **20** by default, and the
+control's count defaults to 20 (clamped 1–500 by `clampDraftAdd`).
+
+- A draft is a fully addressable, fully editable nav row — it just has no `id` yet. It
+  renders muted with a `+` in the `#` lane and a faint left rail. No animation.
+- **An untouched draft is not unsaved work.** `isDirtyFieldEdits` requires a non-blank
+  value, so the Save button and the unsaved-count chip ignore the pool entirely.
+- Its DATE cell is **seeded** (not edited) with the newest date in view — the focused
+  month's first day when that month is empty. It shows muted until the operator makes it
+  theirs, and re-typing the same date does not make the row dirty.
+- Saving goes through the SAME path as everything else: `cenapro_save_rc_delivery` INSERTs
+  when `p_id IS NULL` (and refuses the call if an expected version rides along, so both
+  travel as null). `saveDeliveries` omits both params rather than sending null, threads the
+  new `id` + `row_version` back on the result, and each input carries a client `key` so a
+  verdict can be matched to a row that had no id when it was sent.
+- Two requirements are checked CLIENT-SIDE first so the operator meets them as a sentence
+  rather than a database error: a date, and a supplier that resolves. The existing rule is
+  unchanged — validation runs first and **one bad cell blocks the WHOLE batch**.
+- Drafts render only where a blank row means something: never under an issue lens or a
+  search (those views are a CUT of history), and in `endless` only when the window is at
+  the true newest end — otherwise blanks would sit in the MIDDLE of history.
+- They are appended AFTER everything and never counted in any total, so react-virtuoso's
+  `firstItemIndex` anchoring is untouched (it only ever shifts on a PREPEND).
+  `initialTopMostItemIndex` opens on the newest RECEIPT, not on the last blank row.
+- After an insert the endless window **re-anchors on `latest`** rather than refreshing in
+  place: the new receipt did not exist when the window was read, and its date decides where
+  it belongs. That is also what keeps the blank rows on screen.
+
+### The floating selection pill
+
+Rectangular selection feeds the platform's `FloatingStatusBar` (mounted once in
+`app-shell.tsx`, fed through `status-bar-context`) via `useCellSelection` +
+`useCellAggregation` — the same instruments as RC IN.
+
+- Defaults per column: SKS / WT / TTL PRICE → **SUM**; the seven lab values and **PHP/KG →
+  AVERAGE**, because PHP/KG is a RATE and a column of summed rates means nothing. The
+  operator can override in the pill.
+- **It sums STORED values only.** `net_weight_kg`, `price_php_kg` and `total_price_php` are
+  DB-generated exact decimals; a pill that re-derived them in floating-point JavaScript
+  would quietly disagree with the ledger it is summarising. An unsaved edit does not move
+  the total, and a draft row (nothing stored) contributes nothing.
+- **Price gating:** the two ₱ columns are ABSENT from `buildColumns()` for a gated viewer,
+  so they are not in the selection space at all; the aggregator additionally guards on
+  `canViewPrices`. A gated viewer can never surface a ₱ figure in the pill.
+- **The row-shape asymmetry is honoured.** A rectangle can cover coordinates where no cell
+  exists (a draw has no weight, no sacks, no price). The tint is painted only where a cell
+  exists and `getNumericCellValue` returns `null` there, so the pill totals only what is
+  really on screen — the selection counterpart of the per-CELL `NavResolver` below.
+
 ### Sample sub-rows, and why the grid needs its own `NavResolver`
 
 A receipt's moisture draws render as indented CHILD rows directly beneath it. A draw is
@@ -151,8 +314,9 @@ mean is a different measurement with a different meaning.
 
 - **endless** (default, omits the param) — `react-virtuoso`'s `TableVirtuoso` with
   `firstItemIndex` prepend anchoring, bidirectional keyset paging over
-  `(delivery_date, id)`, server-prefetched first window. Month boundaries show as a badge
-  on the date cell.
+  `(delivery_date, id)`, server-prefetched first window. *(A month-start badge used to
+  ride on the first date cell of each month; it was removed 2026-08-04 — it read as a
+  row highlight rather than a marker, and the sheet is already in date order.)*
   - **NULL dates are handled explicitly.** Canonical order is `delivery_date ASC NULLS
     FIRST, id ASC`, and a plain `delivery_date.gt.X` never matches a NULL — so the two
     undated receipts would sit at the head of history and be permanently unreachable.
@@ -160,6 +324,9 @@ mean is a different measurement with a different meaning.
     PostgREST.
 - **focus** — month-scoped (`?year=&month=`), day-grouped, with `Σ DAY TOTAL` rule-off
   rows and a **sticky month footer**.
+
+Column filters and the search work in BOTH scopes; the duplicate lens is the one view
+that pages in neither (see "Duplicate pairing" above).
 
 ### Frozen panes
 
@@ -177,14 +344,125 @@ them rather than smoothing them over:
 
 | State | Treatment |
 |---|---|
-| `is_suspected_duplicate` (22 rows) | Rose inset rail on the frozen block + a `DUP` badge + a rose row wash. **THREE consecutive days are pasted twice, ₱17,185,939 in total** — 2026-04-06 (9 rows, ₱6.94M), 04-07 (7 rows, ₱5.32M), 04-08 (6 rows, ₱4.93M). *(An earlier draft of this note said "the 2026-04-06 block, roughly ₱7M"; that is only the largest of the three — corrected 2026-08-04 from live counts.)* Every day total and the month footer carry an explicit "includes … from suspected duplicates" line, so nothing is silently double-counted — but **the human decision to keep or drop them has not been made.** |
+| `is_suspected_duplicate` (22 rows) | Rose inset rail on the frozen block + a **`DUP n/N` badge opening the peer popover** + a rose row wash. **THREE consecutive days are pasted twice, ₱17,185,939 in total** — 2026-04-06 (9 rows, ₱6.94M), 04-07 (7 rows, ₱5.32M), 04-08 (6 rows, ₱4.93M). *(An earlier draft of this note said "the 2026-04-06 block, roughly ₱7M"; that is only the largest of the three — corrected 2026-08-04 from live counts.)* Every day total and the month footer carry an explicit "includes … from suspected duplicates" line, so nothing is silently double-counted — but **the human decision to keep or drop them has not been made.** |
+| `duplicate_group_key IS NOT NULL`, unflagged (22 rows) | The ORIGINALS the flagged rows were pasted from — see "Duplicate pairing" below. A **thinner, 40%-opacity rose rail, no row wash**, and an OUTLINE `TWIN n/N` badge onto the same popover. |
 | `has_import_flags` (34 rows) | Sky rail + a warning icon opening a **popover** with each flag's `kind` / `detail` / the workbook's original `raw` text. |
 | `supplier_unresolved` / `destination_unresolved` (1 / 5 rows) | Amber rail + a `MAP?` badge; the cell shows the raw text; a save is refused until it resolves. |
-| unparseable date (2 rows) | Amber triangle in the date cell, with `delivery_date_raw` in the title. |
+| unparseable date | Amber triangle in the date cell, with `delivery_date_raw` in the title. **Currently 0 rows** — the two `5/262026` receipts (`source_row` 1020/1021) were dated to 2026-05-06 in the app and keep their raw text, so `?issue=undated` is empty today (verified live 2026-08-04). The lens and the trap it guards both stay: `delivery_date` is still nullable for `sheet_import` rows. |
 
 Each is also a **URL lens** (`?issue=duplicate|unmapped|flagged|undated`), pushed into the
-SQL query rather than filtering after the fact, so a link to "the 22 suspected duplicates"
-is shareable.
+SQL query rather than filtering after the fact, so a link to the duplicate worklist is
+shareable.
+
+### Duplicate pairing — which row is this a copy OF? (2026-08-04)
+
+Renzo: *"for suspected duplicates, it would be nice to see which rows it is duping. So
+that we know its actually a dupe with an exact copy of a row."*
+
+The read model gained four columns (`duplicate_group_key` / `_size` / `_ordinal` /
+`duplicate_peer_ids`, migration `20260804072000` — see `../CONTEXT.md` → "Duplicate
+pairing"), and this module uses them in three places.
+
+**BEHAVIOUR CHANGE: `?issue=duplicate` now returns 44 rows, not 22.** It filtered on
+`is_suspected_duplicate`, and the importer flagged only the SECOND copy of each pasted
+receipt — so the lens returned 22 orphans with their 22 originals invisible, which is
+exactly the shape that cannot answer "is it really an exact copy of that row?". It now
+filters `duplicate_group_key IS NOT NULL`: **22 groups × 2 = 44 rows, on exactly
+2026-04-06 / 04-07 / 04-08** (verified live over PostgREST, `content-range 0-43/44`).
+
+- **The two members of a pair are ADJACENT**, which needs the ordering
+  `(delivery_date, duplicate_group_key, duplicate_group_ordinal, id)` — and that is NOT
+  the `(delivery_date, id)` the keyset cursor is expressed in. A cursor in one ordering
+  walking a result in another silently skips and repeats rows, so **the duplicate lens
+  does not page at all**: `duplicatePairs()` in `actions.ts` returns the whole worklist
+  in ONE window with `hasOlder`/`hasNewer` false, so nothing ever asks for a cursor page.
+  Honest because the set is an arbitration queue, not history; the cap
+  (`DUPLICATE_WORKLIST_MAX = 600`) is explicit and, if reached, said out loud in the
+  page's `notice` rather than silently truncating. The focus scope reorders the same way
+  and has no cursor to keep in step. *(Ordering by `source_row`, which focus normally
+  uses, is the one thing that would NOT work — `source_row` is precisely what differs
+  between an original and its paste, 639 vs 664.)*
+- **Flagged ≠ paired, and the UI never conflates them.** `duplicateBadge(row)` in
+  `types.ts` is the ONE verdict: `DUP n/N` (filled rose) on the importer's accusation,
+  `TWIN n/N` (outline rose, thinner rail, **no row wash** — the wash IS the accusation)
+  on an original, and a bare `DUP` with no peer when a human has edited one copy and the
+  group has dissolved. A receipt with neither wears nothing.
+- **The badge opens a popover naming the peer** — date · truck · supplier · net kg · ₱
+  total, its row number in the current view, and "Go to row N" which selects it and
+  scrolls to it (virtuoso `scrollIntoView` in endless; `data-item-key` + `scrollIntoView`
+  in focus). A peer outside the loaded window says so plainly and offers the lens that is
+  guaranteed to load both, rather than fetching behind the operator's back.
+- **Price gating:** the popover's ₱ line renders only when `canViewPrices` — and the peer
+  row was already `stripPrices()`-nulled server-side, so it is belt and braces. The four
+  duplicate columns themselves are **NOT** in `stripPrices()` and must not be: the group
+  key is a one-way md5 that discloses only that two rows are equal, and "this receipt is
+  duplicated" is an operational fact every role needs.
+- **Nothing here changes data.** No dedup, no delete, no clearing of flags. The
+  ₱17.2M keep-or-drop call is Renzo's; this is the instrument, not the decision.
+
+### Per-column filters (`?f_<column>=…`, 2026-08-04)
+
+**Filterable:** DATE · TRK# · SUPPLIER · BD · MOIST · GRIT · ASH · DUST · VM · FC ·
+WAREHOUSE · REMARKS. **Not filterable:** SKS · WT · PHP/KG · TTL PRICE (Renzo's own
+exclusion list).
+
+**Every filter is pushed into the SQL query.** The endless scope is a keyset pager
+holding a ~120-row window, not the 991 rows, so a filter applied to the loaded window
+would filter what happens to be in memory and lie about the rest — the same class of
+error the totals rule guards against. `buildRowQuery()` in `actions.ts` is the one place
+the lens, the filters and the search are applied, and `countRows()` reuses it verbatim
+for the match count.
+
+**The grammar** — one param per column, named `f_` + the column KEY:
+
+| Kind | Columns | Param | Predicate |
+|---|---|---|---|
+| `set` | SUPPLIER, WAREHOUSE | `?f_supplier=BRIX,PALAWAN` | `.in('supplier_code', …)` |
+| `text` | TRK#, REMARKS | `?f_remarks=czarina` | `.ilike(col, '*czarina*')` |
+| `range` | BD MOIST GRIT ASH DUST VM FC | `?f_moist=8..12` | `.gte` + `.lte` (either side may be empty) |
+| `dateRange` | DATE | `?f_date=2026-04-01..2026-04-30` | `.gte` + `.lte` |
+
+- **`filterKind` / `filterColumn` live on `DeliveryCol`** and `FILTER_COLUMNS` is derived
+  from `BASE_COLS` — never from `buildColumns(canViewPrices)`. `PRICE_COLS` is therefore
+  never consulted when a URL is parsed, so **a forged `?f_php_kg=30..40` has nowhere to
+  land**: a filter can never become a price oracle (a binary search on the match count
+  would otherwise read out the number the ₱ boundary exists to hide). Asserted.
+- **Keyset paging survives a filter** because every predicate is a plain conjunct on the
+  **unchanged** `ORDER BY (delivery_date, id)` — the cursor still names a unique position
+  in the filtered set and the walk just steps over a sparser one. What breaks it is a
+  page that *forgets* the filters, so the bundle is threaded through `DeliveryPageInput`
+  and the hook's `lensRef` into every single fetch. Verified live: two consecutive
+  filtered keyset pages, zero overlap, strictly monotonic, every row still matching.
+- **NULL dates.** `.gte`/`.lte` on `delivery_date` never match NULL, which is the correct
+  answer (an undated receipt is inside no date range) — but note it is the mirror of the
+  trap next door in `keysetPredicate()`, where the NULL group MUST be named explicitly.
+- **Focus scope + DATE filter AND together.** A filter that misses the focused month is a
+  legal query returning nothing, so `dateFilterMissesPeriod()` drives an empty-state line
+  saying which of the two to widen.
+- **State lives in the URL** and participates in `axesKey(...)`, so a filter change
+  remounts the client against a window the server prefetched WITH the filter, and a
+  filtered view is shareable. Each popover edits a DRAFT and applies on Apply/Enter — a
+  control that wrote per keystroke would be a server round trip per keystroke.
+- **Dimension values come from `fetchDeliveryDimensions()`** (12 traders, 16 yards), never
+  from the loaded rows — deriving them from what is on screen would offer only the values
+  the pager happened to have fetched.
+- **Text is sanitised before it reaches PostgREST**: `*` `%` are its `ilike` wildcards and
+  `,` `(` `)` separate an `or()` list, so all of them are stripped. An inverted range
+  (`12..8`) is swapped rather than honoured — as typed it matches nothing, and nothing is
+  not what the operator meant.
+- **UI.** A `ListFilter` trigger in each filterable header — on the LEFT of a numeric
+  column (whose label hugs the right edge) and on the RIGHT of a text one, so it never
+  covers the label; the header stays **fully opaque** with an inset bottom bar marking an
+  active filter (frozen-pane rule — the popovers get glass, the sticky header does not).
+  A chip row under the toolbar spells out every active filter with its own X plus a
+  single **Clear all**, and the toolbar shows the SERVER's match count (`count: 'exact'`
+  on anchor fetches only, never `records.length`, which is just the loaded window).
+  The seven lab columns were widened 62→64 / 66→72 to fit the trigger without crushing
+  the label; `minTableWidth` sums the same table, so the geometry stays honest.
+- **Header controls never swallow grid keystrokes.** `isGridChrome()` extends the
+  previous `isFormField` guard with a `[data-grid-chrome]` marker, carried by the filter
+  triggers and the two in-cell popover triggers — Enter on one opens the popover instead
+  of opening the selected cell for editing.
 
 ### Totals
 
@@ -195,16 +473,77 @@ not recompute them.
 
 ### Save
 
-One Save button, batching every dirty receipt. **Validation runs first and a single bad
-cell blocks the WHOLE batch** — half-committing a sheet an operator is midway through is
-worse than refusing it, because they would then have to work out which rows landed. The
-error toast names every offending receipt.
+One Save button, batching every dirty row — stored receipts (UPDATE) and filled-in blank
+rows (INSERT) alike. **Validation runs first and a single bad cell blocks the WHOLE
+batch** — half-committing a sheet an operator is midway through is worse than refusing it,
+because they would then have to work out which rows landed. The error toast names every
+offending row.
 
 A receipt with both field edits and sample edits is **sequenced server-side**: the field
 patch runs first (bumping `row_version` via the `fn_touch_rc_delivery` trigger) and its
 returned version is threaded into the samples call. Firing both with the same expected
 version would make the second conflict with the first. Nothing retries and nothing
 force-writes — a genuine `version_conflict` means another human moved.
+
+`handleSave` **returns a verdict** (`Promise<boolean>`) — `true` only when nothing was
+refused by validation, nothing came back `version_conflict` / `forbidden` / `invalid`, and
+no dirty row was left out of the batch. It exists for the guard below, which may not
+navigate away from work that did not land. It also takes `{ requery }` (default `true`):
+the guard passes `false` to suppress the post-save `win.reset` / `router.refresh`, because
+the URL write it is holding re-renders the page on the server anyway.
+
+### Changing the view destroys unsaved work — so it is guarded (2026-08-04)
+
+Every axis lives in the URL, and writing one changes `axesKey(...)`, which **remounts** the
+client against a server-prefetched window for the new axes. All edit state is local, so all
+of it goes. That was survivable when a search box and four lenses were the only triggers;
+with twelve filter popovers, twelve chip X's and a Clear all it is not — and the blank rows
+now hold hand-typed receipts. Eight typed, one filter narrowed to check something, eight
+gone.
+
+- **One choke point.** `requestAxisChange(mutate, {onApplied, onCancelled})` in
+  `deliveries-ledger.tsx` is the ONLY code that writes the URL. Everything routes through
+  it: the scope toggle, the month dropdown, the four issue lenses, the search commit
+  (Enter + blur), the search X, each filter popover's Apply, each active-filter chip's X,
+  and Clear all (toolbar **and** empty state). There is no `router.replace` anywhere else,
+  and a new control that writes params outside it is a bug, not a variation.
+- **It fires on the REMOUNT condition, not on "the URL changed".** Two questions come
+  before the operator is asked anything: does the query string change at all (clicking the
+  scope you are already on, re-applying the same filter, blurring an unchanged search box →
+  no), and does `axesKey` change (making an implicit month explicit tidies the URL without
+  moving the key → React keeps the instance, every edit survives, so navigate straight
+  through). It predicts the key with the **same pure parsers `page.tsx` uses**, against the
+  same `monthKeys`, so client and server cannot disagree. **A guard that cries wolf is the
+  failure mode that gets guards ignored**, which is why both questions are asked first.
+- **Dirty is not redefined.** `countUnsavedWork(dirtyIds, dirtyDraftIds)` in `types.ts`
+  counts the two sets the grid already derives from `mergeFieldEdit` / `isDirtyFieldEdits`,
+  and its `total` is what the "N unsaved" chip shows, what the Save button's `disabled`
+  reads, and what the guard fires on — ONE number, so "the guard prompted while Save was
+  greyed out" is not a state the code can express. An untouched draft and a cell typed back
+  to its stored value stay invisible to it, exactly as before.
+- **The prompt names both kinds of loss separately** (`describeUnsavedWork`) — *"3 edited
+  receipts and 8 typed new rows"* — because they are different: an edited receipt still
+  exists in the database with its old values, a typed blank row exists nowhere at all.
+  Three outcomes:
+  - **Save and continue** — `await handleSave({requery:false})`, then navigate **only if it
+    returned true**. Sequenced, never fired in parallel with the axis write; a refusal of
+    any kind keeps the prompt open over the work, with the existing persistent `errorToast`
+    naming it.
+  - **Discard N changes** — clears the edit maps explicitly (rather than relying on the
+    remount to do it) and navigates.
+  - **Cancel** — nothing is written. Every control is URL-derived, so the header triggers,
+    the chips and the toggles are unchanged by construction, and the filter popover
+    re-seeds from the URL on its next open — an abandoned draft never looks applied. The
+    search box is the one control holding local text, and it is put back to the query
+    actually running (`onCancelled`) rather than left claiming a search it did not apply.
+- **`beforeunload` covers the other exit** — tab close, reload, a link out of the app —
+  registered only while dirty. It does **NOT** cover a client-side route change to another
+  Blackwood module: the App Router exposes no cancellable navigation event, and faking one
+  (patching history, intercepting every anchor) is global surgery that breaks on a version
+  bump. The gap is known and deliberate.
+- Styling is the primitive's: `AlertDialogContent` already carries
+  `bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80` and
+  `animate-modal-enter`. Nothing in the grid beneath animates.
 
 ### PRICE GATING (security boundary)
 
@@ -229,9 +568,12 @@ number does.)
 ### Motion
 
 **No animation on rows, cells or selection** — no stagger, no transition on the active
-ring or the cell tints. The only animated chrome is the toolbar (`animate-fade-in` on the
-unsaved-count chip) and the toolbar's own frosted bar
-(`bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60`). Row hover is
+ring, the range tint, the cell tints or the draft rows. The only animated chrome is the
+toolbar (`animate-fade-in` on the unsaved-count chip and on each active-filter chip), the
+toolbar's own frosted bar (`bg-background/95 backdrop-blur
+supports-backdrop-filter:bg-background/60`), and the two `AlertDialog`s — the delete
+confirmation and the unsaved-work guard — which inherit `animate-modal-enter` and the
+dialog glass from `AlertDialogContent` itself rather than declaring their own. Row hover is
 `transition-colors duration-150`.
 
 ### Errors
@@ -246,7 +588,10 @@ messages use sonner directly.
 
 - `@/components/shared/grid` — `EditInput`, `GridContextMenu` + `GridMenuItem`.
 - `@/lib/hooks/use-grid-keyboard-nav` (`useGridKeyboardNav`, `CoordinateId`,
-  `NavResolver`), `use-grid-edit-session`, `use-grid-paste`, `use-grid-context-menu`.
+  `NavResolver`, `GridRangeSlot`), `use-grid-edit-session`, `use-grid-paste`,
+  `use-grid-context-menu`.
+- `@/lib/hooks/use-cell-selection`, `use-cell-aggregation`, `use-clipboard-copy` +
+  `@/components/providers/status-bar-context` (`useStatusBar`) — the floating pill.
 - `@/lib/cenapro/rc-formula` — `parseWeightInput`, `parsePriceInput`, `formulaCellText`,
   `weightFormulaFrom`, `priceFormulaFrom`.
 - `@/lib/auth` — `canViewPrices()`; `@/lib/supabase/server` — `createClient()`.
