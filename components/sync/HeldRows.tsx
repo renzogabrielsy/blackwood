@@ -79,6 +79,7 @@ const SHORT_KIND: Record<string, string> = {
   unresolved_batch_id: 'unknown batch',
   batch_closed: 'closed',
   batch_close_unmatched: 'close unmatched',
+  stale_stream: 'report overdue',
 }
 
 function fmtNumber(n: number): string {

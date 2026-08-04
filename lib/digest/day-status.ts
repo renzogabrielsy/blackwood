@@ -136,12 +136,54 @@ export function streamForKpi(
 }
 
 /**
+ * The last day on which EVERY named stream has reported — i.e. the most recent
+ * date for which a figure derived from all of them is complete.
+ *
+ * It is the MINIMUM of their `through_date`s, and the reasoning is that
+ * `through_date` is a high-water mark: a stream that has reported through the
+ * 3rd has also settled the 1st. So the earliest high-water mark is the latest
+ * date none of them can still change.
+ *
+ * Returns null if any stream is missing or has never reported — with nothing to
+ * anchor to, the caller falls back rather than inventing a date.
+ */
+export function resolveCompleteThroughDate(
+  kpiKeys: string[],
+  streams: StreamFreshness[]
+): string | null {
+  const dates: string[] = [];
+  for (const key of kpiKeys) {
+    const through = streamForKpi(key, streams)?.throughDate;
+    if (!through) return null;
+    dates.push(through);
+  }
+  if (dates.length === 0) return null;
+  return dates.reduce((min, d) => (d < min ? d : min));
+}
+
+/** KPI cards derived from more than one stream → the streams they need. */
+const DERIVED_KPI_INPUTS: Record<string, string[]> = {
+  // Net Flow = RC In − RC Out. Both sides must have spoken for the number to mean
+  // anything (2026-08-04).
+  net_flow: ["rc_in", "rc_out"],
+};
+
+/**
  * The day a KPI card's headline value belongs to.
  *
- * Same-day streams (RC In) and derived cards stay on the operational date.
- * A lag-by-design stream anchors to its latest REPORTED day, which comes
- * from SQL (`view_digest_stream_status.through_date`) — never from scanning
- * the daily series in TypeScript.
+ * Same-day streams (RC In) stay on the operational date. A lag-by-design stream
+ * anchors to its latest REPORTED day, which comes from SQL
+ * (`view_digest_stream_status.through_date`) — never from scanning the daily
+ * series in TypeScript.
+ *
+ * **A DERIVED card anchors to the last day ALL of its inputs have reported
+ * (2026-08-04, Renzo's decision).** Net Flow used to sit on the operational date,
+ * where RC In already carries today's deliveries and RC Out (which reports the
+ * morning after) does not — so the card read a large positive that was really
+ * "everything in, nothing out". Subtracting a stream that has not spoken yet is
+ * not a net flow, it is one side of one. Anchoring to the last complete day makes
+ * the number a real in-minus-out again; it is a day or two behind, and the card's
+ * existing `AsOfChip` already says which day it is showing.
  */
 export function resolveKpiAnchorDate({
   kpiKey,
@@ -152,13 +194,39 @@ export function resolveKpiAnchorDate({
   operationalDate: string | null;
   streams: StreamFreshness[];
 }): string | null {
+  const inputs = DERIVED_KPI_INPUTS[kpiKey];
+  if (inputs) return resolveCompleteThroughDate(inputs, streams) ?? operationalDate;
+
   const stream = streamForKpi(kpiKey, streams);
   if (!stream?.reportsNextDay) return operationalDate;
   return stream.throughDate ?? null;
 }
 
+/**
+ * The previous COMPLETE day for a derived card — the comparison point for its delta.
+ *
+ * The anchor is set by whichever input is furthest behind (the minimum
+ * `through_date`), so the previous complete day is that same stream's previous
+ * reported day. Stepping back one calendar day instead would land on a rest day
+ * half the time; stepping back by the *other* stream's history would compare a
+ * complete day against an incomplete one, which is the bug being fixed.
+ */
+export function resolveCompletePrevDate(
+  kpiKeys: string[],
+  streams: StreamFreshness[]
+): string | null {
+  let binding: StreamFreshness | undefined;
+  for (const key of kpiKeys) {
+    const s = streamForKpi(key, streams);
+    if (!s?.throughDate) return null;
+    if (!binding?.throughDate || s.throughDate < binding.throughDate) binding = s;
+  }
+  return binding?.prevReportedDate ?? null;
+}
+
 /** The reported day immediately before the anchor, for a meaningful delta.
- *  Same-day / derived cards keep comparing against `prevOperationalDate`. */
+ *  Same-day cards keep comparing against `prevOperationalDate`; a DERIVED card
+ *  compares against the previous day all of its inputs had reported. */
 export function resolveKpiPrevDate({
   kpiKey,
   prevOperationalDate,
@@ -168,6 +236,9 @@ export function resolveKpiPrevDate({
   prevOperationalDate: string | null;
   streams: StreamFreshness[];
 }): string | null {
+  const inputs = DERIVED_KPI_INPUTS[kpiKey];
+  if (inputs) return resolveCompletePrevDate(inputs, streams) ?? prevOperationalDate;
+
   const stream = streamForKpi(kpiKey, streams);
   if (!stream?.reportsNextDay) return prevOperationalDate;
   return stream.prevReportedDate ?? null;
@@ -202,8 +273,21 @@ export function resolveKpiDayStatus({
   plan,
   streams,
 }: ResolveKpiArgs): KpiDayStatus {
-  // Net flow is a derived balance — never a "late report". Leave it neutral.
-  if (kpiKey === "net_flow") return { state: "reported" };
+  // Net flow is a derived balance — never a "late report". Its inputs' lateness is
+  // already reported by their OWN cards, and repeating it here would double-count one
+  // missing report as two problems. It stays neutral, permanently `reported`.
+  //
+  // But it is no longer anchored to today (2026-08-04): it now sits on the last day
+  // BOTH of its inputs reported, so it MUST say which day that is. Without the chip the
+  // card would silently show a day-old balance as if it were the current one — quieter
+  // than the bug it replaces, and just as wrong to read. `asOf` is set only when the
+  // anchor actually trails the operational date, so on a fully caught-up day the chip
+  // disappears exactly as it does for every other card.
+  if (kpiKey === "net_flow") {
+    return anchorDate && operationalDate && anchorDate < operationalDate
+      ? { state: "reported", asOf: anchorDate }
+      : { state: "reported" };
+  }
 
   const stream = streamForKpi(kpiKey, streams);
   const restToday = plan?.shifts === 0;

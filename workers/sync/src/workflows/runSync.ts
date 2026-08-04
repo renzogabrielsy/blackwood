@@ -81,6 +81,7 @@ import {
   type ScheduleConflict,
 } from "../reports/prodSchedule/refresh.js";
 import { planGsheetCloses, toChannelBatchCloses, type BatchClose, type BatchDirEntry } from "../lib/gsheetCloseScan.js";
+import { findStaleStreams, describeStaleStream, type StaleStream } from "../lib/streamStaleness.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -308,16 +309,28 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     { name: "close:gsheet_batches" },
   );
 
+  // ── Stage 3e: freshness watch — READ-ONLY, never a write, never a gate. Reads
+  // `view_digest_stream_status` and reports any stream that has missed a planned
+  // working day. This runs LAST, after every writer, so it judges the state the run
+  // actually leaves behind. It is the one finding that is about what did NOT arrive:
+  // a run where nothing came in is otherwise indistinguishable from a quiet day, and
+  // that is precisely how RC OUT went 5 days stale in July without anyone noticing.
+  const staleStreams = await DBOS.runStep(() => checkStreamFreshness(runId), {
+    name: "check:stream_freshness",
+  });
+
   // Merge the orthogonal reconciliation channels (any may be absent).
   const hasCloses = batchCloses.length > 0;
   const hasScheduleConflicts = scheduleConflicts.length > 0;
+  const hasStaleStreams = staleStreams.length > 0;
   const reconciliation: ReconciliationChannel | undefined =
-    rcOutRecon || blockingRecon || hasCloses || hasScheduleConflicts
+    rcOutRecon || blockingRecon || hasCloses || hasScheduleConflicts || hasStaleStreams
       ? {
           ...(rcOutRecon ?? {}),
           ...(blockingRecon ? { blocking: blockingRecon } : {}),
           ...(hasCloses ? { batch_closes: batchCloses } : {}),
           ...(hasScheduleConflicts ? { schedule_conflicts: scheduleConflicts } : {}),
+          ...(hasStaleStreams ? { stale_streams: staleStreams } : {}),
         }
       : undefined;
 
@@ -971,6 +984,48 @@ async function refreshProdSchedule(runId: string): Promise<ScheduleConflict[]> {
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return [];
+  }
+}
+
+/**
+ * checkStreamFreshness — the freshness watch (Stage 3e).
+ *
+ * Reads `view_digest_stream_status` and emits ONE beat naming every stream that has
+ * missed a planned working day. The lateness arithmetic is entirely the view's (rest
+ * days and not-yet-due next-day reports are already excluded there), so this only
+ * decides how to say it.
+ *
+ * NON-FATAL, like every other Stage-3 channel: any throw is swallowed and returns [].
+ * A watchdog that can fail the thing it watches is worse than no watchdog.
+ *
+ * Returns the stale streams so runSync can fold them into
+ * `result.reconciliation.stale_streams` → the panel's findings list.
+ */
+async function checkStreamFreshness(runId: string): Promise<StaleStream[]> {
+  try {
+    const db = DbClient.fromEnv();
+    const emit = makeEmitter(db, runId, "_run");
+    const stale = await findStaleStreams(db);
+
+    if (stale.length === 0) {
+      await emit("reconcile", "Every report stream is up to date.", 99, undefined, "info");
+      return [];
+    }
+
+    const worst = stale[0].missed_working_days;
+    const names = stale.map((s) => s.label).join(", ");
+    await emit(
+      "reconcile",
+      `${stale.length} report stream(s) behind: ${names}. Worst is ${worst} working day(s) with no report.`,
+      99,
+      stale.map(describeStaleStream).join(" "),
+      "warn",
+    );
+    return stale;
+  } catch (err) {
+    // Never fails the run — see the module note.
+    DBOS.logger.warn(`stream freshness check skipped: ${String(err)}`);
     return [];
   }
 }

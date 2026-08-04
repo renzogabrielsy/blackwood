@@ -162,10 +162,20 @@ describe("production_batch follows the RUNNING STATE, not the calendar", () => {
       ["3X50", "AUGUST"],
       ["4X8", "JULY"], // unmarked = "the currently running batch"
     ]);
-    // Downtime is a whole-DAY fact with no marker → same rule as an unmarked row.
-    expect(mc.downtime).toHaveLength(1);
-    expect(mc.downtime[0].production_batch).toBe("JULY");
-    expect(mc.downtime[0].transaction_date).toBe("2026-08-01");
+    // Downtime carries no marker, and on a CHANGEOVER day the single "whoever was
+    // running" answer is wrong for one of the two batches. Since 2026-08-04 it is
+    // apportioned by same-day output instead (Renzo's decision).
+    //   JULY   = 1326 + 1140 + 500 =  2,966 kg
+    //   AUGUST =                     11,830 kg   → 14,796 kg total
+    //   JULY gets round(30 × 2966/14796) = 6 min; AUGUST gets the remaining 24.
+    expect(mc.downtime).toHaveLength(2);
+    expect(mc.downtime.map((d) => [d.production_batch, d.dt_hrs, d.dt_mins])).toEqual([
+      ["JULY", 0, 6],
+      ["AUGUST", 0, 24],
+    ]);
+    for (const d of mc.downtime) expect(d.transaction_date).toBe("2026-08-01");
+    // The shift is one physical shift — its LENGTH is not split.
+    for (const d of mc.downtime) expect(d.shift_hrs).toBe(12);
   });
 
   it("an ORDINARY day past a month boundary is corrected (July sheet, JULY batch — not the calendar's AUGUST)", () => {
@@ -384,6 +394,112 @@ describe("resolveRunningBatch — the DB seed", () => {
         "2026-07-31",
       ),
     ).toBe("JUNE");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7b — changeover downtime is APPORTIONED, not dumped on the ending batch.
+// ---------------------------------------------------------------------------
+/**
+ * Renzo's decision, 2026-08-04. MC records downtime once for the whole shift with no
+ * marker saying which batch it belongs to; on a changeover day that single answer is
+ * wrong for one of the two. Attributing all of it to the ENDING batch (the old rule)
+ * made every new batch look flawless on its first day.
+ *
+ * The invariant that matters most is CONSERVATION: whatever MC wrote down must still be
+ * the total after the split, on every ratio, forever. The second part is computed as
+ * `total - first` rather than rounded independently, which is what guarantees it.
+ */
+describe("changeover downtime is split by same-day output", () => {
+  const split = (julyKg: number, augustKg: number, mins: number) => {
+    const wb = fakeMc([
+      {
+        sheet: "08-01-26",
+        runs: [
+          { grade: "CEBU 3X50", shift: "ENDING", ttl: julyKg, sacks: 10 },
+          { grade: "2X6", shift: "STARTING", ttl: augustKg, sacks: 20 },
+        ],
+        downtimeMins: mins,
+      },
+    ]);
+    return extractMc(wb, 2026, "2026-01-01", { runningBatch: "JULY" }).downtime;
+  };
+
+  const totalMins = (rows: { dt_hrs: number; dt_mins: number }[]) =>
+    rows.reduce((s, d) => s + d.dt_hrs * 60 + d.dt_mins, 0);
+
+  it("an even split is even", () => {
+    const d = split(5000, 5000, 40);
+    expect(d.map((r) => [r.production_batch, r.dt_mins])).toEqual([
+      ["JULY", 20],
+      ["AUGUST", 20],
+    ]);
+  });
+
+  it("CONSERVES the total on a ratio that does not divide cleanly", () => {
+    const d = split(1000, 2000, 7); // 7 × 1/3 = 2.33…
+    expect(totalMins(d)).toBe(7);
+    expect(d.map((r) => r.dt_mins)).toEqual([2, 5]);
+  });
+
+  it("CONSERVES the total across many awkward ratios", () => {
+    for (const [j, a, m] of [
+      [1, 99999, 1],
+      [99999, 1, 1],
+      [7, 13, 59],
+      [12345, 54321, 137],
+      [2966, 11830, 30],
+    ] as const) {
+      expect(totalMins(split(j, a, m))).toBe(m);
+    }
+  });
+
+  it("re-normalizes each part to satisfy CHECK (dt_mins < 60)", () => {
+    // 400 min split 50/50 → 200 min each → 3h20m each, NOT 0h200m.
+    const d = split(5000, 5000, 400);
+    expect(d.map((r) => [r.dt_hrs, r.dt_mins])).toEqual([
+      [3, 20],
+      [3, 20],
+    ]);
+    for (const r of d) expect(r.dt_mins).toBeLessThan(60);
+    expect(totalMins(d)).toBe(400);
+  });
+
+  it("does NOT split when the starting batch produced nothing — that would be an invention", () => {
+    const d = split(5000, 0, 30);
+    expect(d).toHaveLength(1);
+    expect(d[0].production_batch).toBe("JULY");
+    expect(d[0].dt_mins).toBe(30);
+    expect(d[0].warnings.join(" ")).toMatch(/NOT split/);
+  });
+
+  it("does NOT split when the ending batch produced nothing", () => {
+    const d = split(0, 5000, 30);
+    expect(d).toHaveLength(1);
+    expect(d[0].dt_mins).toBe(30);
+    expect(d[0].warnings.join(" ")).toMatch(/NOT split/);
+  });
+
+  it("leaves an ORDINARY (non-changeover) day completely alone", () => {
+    const wb = fakeMc([
+      {
+        sheet: "08-02-26",
+        runs: [{ grade: "CEBU 3X50", shift: null, ttl: 15600, sacks: 600 }],
+        downtimeMins: 45,
+      },
+    ]);
+    const d = extractMc(wb, 2026, "2026-01-01", { runningBatch: "JULY" }).downtime;
+    expect(d).toHaveLength(1);
+    expect(d[0].production_batch).toBe("JULY");
+    expect(d[0].dt_mins).toBe(45);
+    expect(d[0].warnings.join(" ")).not.toMatch(/split/);
+  });
+
+  it("explains itself in warnings, naming both sides", () => {
+    const d = split(2966, 11830, 30);
+    expect(d[0].warnings.join(" ")).toMatch(/JULY → AUGUST/);
+    expect(d[0].warnings.join(" ")).toMatch(/2966 of 14796 kg/);
+    expect(d[1].warnings.join(" ")).toMatch(/11830 of 14796 kg/);
   });
 });
 

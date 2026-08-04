@@ -644,10 +644,28 @@ export interface ScheduleConflict {
 }
 
 /**
+ * One report stream that has missed at least one PLANNED working day (app-side MIRROR of
+ * the worker's `lib/streamStaleness.ts::StaleStream`). Read straight off
+ * `view_digest_stream_status`; rest days and not-yet-due next-day reports are already
+ * excluded there, so any row here is genuinely late. Never a ₱/cost field.
+ */
+export interface StaleStream {
+  /** `deliveries` | `rc_out` | `production` | `electricity` | `trucks`. */
+  stream: string
+  label: string
+  /** Latest date the stream has actually reported; null if it never has. */
+  through_date: string | null
+  operational_date: string | null
+  /** Planned working days between the two, exclusive. Always >= 1. */
+  missed_working_days: number
+  reports_next_day: boolean
+}
+
+/**
  * The top-level `result.reconciliation` channel. All members are OPTIONAL: a run may carry
  * the rc_out same-fact reconciliation, the RB blocking cross-check, the gsheet batch
- * close-scan, the production-plan conflicts, any combination, or (on a shadow-stage
- * failure) none. The collect* folds guard each with optional chaining.
+ * close-scan, the production-plan conflicts, the freshness watch, any combination, or (on a
+ * shadow-stage failure) none. The collect* folds guard each with optional chaining.
  */
 export interface ReconciliationChannel {
   rc_out?: TableReconciliation
@@ -656,6 +674,12 @@ export interface ReconciliationChannel {
   batch_closes?: BatchClose[]
   /** Production-plan days the sync withheld because a human owns them (Stage 3c). */
   schedule_conflicts?: ScheduleConflict[]
+  /**
+   * Streams that have gone quiet (Stage 3e). The ONE finding that is about what did NOT
+   * arrive rather than what this run wrote — a run where nothing came in otherwise looks
+   * identical to a quiet day, which is how RC OUT went 5 days stale in July 2026.
+   */
+  stale_streams?: StaleStream[]
 }
 
 // ============================================================

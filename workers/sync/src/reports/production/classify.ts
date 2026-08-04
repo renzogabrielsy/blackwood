@@ -100,7 +100,7 @@ export interface DowntimeDbRow {
   dt_hrs?: number | null;
   dt_mins?: number | null;
   dt_reason?: string | null;
-  remarks?: string | null;
+  // No `remarks` — `production_downtime` has no such column. See downtimeFieldDiff.
 }
 export interface WasteDbRow {
   id?: string | null;
@@ -305,8 +305,15 @@ function downtimeFieldDiff(email: DowntimeRow, db: DowntimeDbRow): Record<string
   for (const f of ["shift_hrs", "dt_hrs", "dt_mins"] as const) {
     if (!numsEqual(email[f], db[f])) diff[f] = { db: normNum(db[f]), email: normNum(email[f]) };
   }
-  for (const f of ["dt_reason", "remarks"] as const) {
-    if (normStr(email[f]) !== normStr(db[f])) diff[f] = { db: db[f] ?? null, email: email[f] ?? null };
+  // `remarks` is DELIBERATELY not compared: `production_downtime` has no such
+  // column. The extractor still builds one ("Time ranges: …") and the insert
+  // path drops it, so the DB side is permanently undefined — comparing them
+  // made every downtime row with time ranges a permanent phantom VALUE_CHANGED,
+  // and once the apply path started emitting patches it would have put a
+  // non-allowlisted key in them, refusing the whole op (`unsupported_field`)
+  // and taking the row's REAL dt_hrs/dt_mins/dt_reason corrections down with it.
+  if (normStr(email.dt_reason) !== normStr(db.dt_reason)) {
+    diff.dt_reason = { db: db.dt_reason ?? null, email: email.dt_reason ?? null };
   }
   return diff;
 }

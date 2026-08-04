@@ -29,6 +29,7 @@ import type {
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
+  StaleStream,
   SyncReportType,
   SyncRunResult,
   UnresolvedBatch,
@@ -44,6 +45,7 @@ import {
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
+  collectStaleStreams,
   collectUnresolvedBatches,
 } from './cases-fold'
 
@@ -533,6 +535,47 @@ function fromScheduleConflict(c: ScheduleConflict): RunFinding {
 }
 
 /**
+ * A report stream that has gone QUIET — it has missed at least one planned working day.
+ *
+ * Every other finding describes something this run saw. This one describes something it
+ * did NOT see, which is the failure a clean run hides: a sync where a stream simply never
+ * arrived looks exactly like a sync on a quiet day. RC OUT sat 5 days stale in July 2026
+ * for precisely that reason.
+ *
+ * The lateness arithmetic is `view_digest_stream_status.missed_working_days` — rest days
+ * and not-yet-due next-day reports are already excluded there, so any row that reaches
+ * here is genuinely late. Nothing to resolve in-app: the fix is upstream, in somebody's
+ * inbox. `attention` at one day, escalating to `high` once a stream has missed three,
+ * by which point it is not a late report, it is a broken pipe.
+ */
+function fromStaleStream(s: StaleStream): RunFinding {
+  const days = s.missed_working_days === 1 ? '1 working day' : `${s.missed_working_days} working days`
+  const last = s.through_date
+    ? `Its last report covers ${s.through_date}`
+    : 'It has never reported'
+  return {
+    key: `stale_stream:${s.stream}`,
+    kind: 'stale_stream',
+    kindLabel: 'Report stream has gone quiet',
+    source: s.label,
+    title: `${s.label} has missed ${days}`,
+    location: s.through_date ?? '—',
+    data: {
+      stream: s.stream,
+      through_date: s.through_date,
+      operational_date: s.operational_date,
+      missed_working_days: s.missed_working_days,
+      reports_next_day: s.reports_next_day,
+    },
+    reason:
+      `${last}, and ${days} of planned production have passed since without one. ` +
+      `Rest days and reports that aren't due yet are already excluded, so this is a real gap. ` +
+      `Nothing is wrong with the sync — the report has not arrived. Chase the sender.`,
+    severity: s.missed_working_days >= 3 ? 'high' : 'attention',
+  }
+}
+
+/**
  * A production-batch CHANGEOVER: MC's report marked the last runs of the batch that
  * was running (`ENDING`) and the first runs of a brand-new one (`STARTING`) on the
  * same day. The new batch's NAME is written nowhere in the workbook, so the sync
@@ -720,6 +763,10 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 10. Production rows the sync refused to overwrite (the human-edit latch).
   for (const e of collectProductionHumanEdits(result)) out.push(fromProductionHumanEdit(e))
 
+  // 11. Streams that have gone quiet (Stage 3e) — the one finding about what did NOT
+  //     arrive. Last, because it describes the state the whole run leaves behind.
+  for (const s of collectStaleStreams(result)) out.push(fromStaleStream(s))
+
   return out
 }
 
@@ -777,6 +824,7 @@ const SHORT_KIND: Record<string, string> = {
   schedule_conflict: 'schedule day held',
   production_batch_started: 'new production batch',
   production_human_edited: 'your edit kept',
+  stale_stream: 'report overdue',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -791,6 +839,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   schedule_conflict: 'Schedule day you edited — the plan email disagrees',
   production_batch_started: 'New production batch opened',
   production_human_edited: 'Row you edited — the report disagrees',
+  stale_stream: 'Report stream has gone quiet',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

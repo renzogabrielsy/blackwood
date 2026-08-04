@@ -196,7 +196,33 @@ convention (rc_out.md §2).**
 > | marked `ENDING` | the batch that was already running |
 > | marked `STARTING` | the **next name in the month sequence** after the running batch (NOT the sheet's calendar month) |
 > | unmarked | the batch that was already running |
-> | downtime (whole-day, carries no marker) | the batch that was already running |
+> | downtime, ORDINARY day (carries no marker) | the batch that was already running |
+> | downtime, CHANGEOVER day | **SPLIT across both batches by same-day output** (2026-08-04) |
+>
+> **Changeover downtime — apportioned, not dumped (2026-08-04, Renzo's decision).**
+> MC records downtime ONCE for the whole shift with no marker saying whose it is. On a
+> changeover day that single answer is wrong for one of the two batches, and the old rule
+> ("an unmarked fact follows the running batch") put the entire stoppage on the batch that
+> was ENDING — making every new batch look flawless on its first day and every old one
+> look worse than it was. `splitChangeoverDowntime()` (`extractMc.ts`) now emits TWO
+> downtime rows, apportioned by each batch's `ttl_kg` on that date.
+>
+> - **`dt_hrs` + `dt_mins` are split; `shift_hrs` is NOT.** Both batches ran inside the
+>   same physical shift, and its length is a fact about the shift, not a share either
+>   batch owns.
+> - **`dt_reason` is copied verbatim** to both rows. Annotating it ("split across…")
+>   would make the classifier see a VALUE_CHANGED against the stored text on every
+>   future run, forever.
+> - **Conservation is exact.** The second part is `total − first`, never independently
+>   rounded, so the two rows always sum back to the minutes MC wrote down. Each part is
+>   then PD-5 re-normalized (`hrs += mins/60; mins %= 60`) to satisfy
+>   `CHECK (dt_mins >= 0 AND dt_mins < 60)`.
+> - **Falls back to ONE row whenever a split would be a guess** — no changeover, zero
+>   downtime, or either batch produced nothing measurable. A proportional split against a
+>   zero denominator is not a split, it is an invention; the row stays whole and a warning
+>   says so.
+> - No backfill was needed: the only changeover on record (2026-08-01) carried **0 minutes**
+>   of downtime, so the new rule is a no-op there.
 >
 > The running batch is SEEDED from the DB — `resolveRunningBatch()` over
 > `production_shifts` at or below the `since` floor (which, since `since` is sheet-level
@@ -464,9 +490,17 @@ A refusal becomes a `ProductionHumanEdit` note on `apply.production_human_edits`
 
 `fn_release_production_rows(table, ids)` clears the latch. Without it ownership ratchets one way and the data slowly freezes — the failure the schedule work called out. Release is EXPLICIT only: a row is never auto-released just because the workbook later agrees (that would break "a row a human edited is never overwritten"). The stamp cannot be cleared by an ordinary write — the trigger re-stamps any authenticated PATCH, including one sending `human_edited_at: null`; the RPC announces itself with the transaction-local GUC `blackwood.release_human_edit`. App entry point: `releaseProductionRows` in `app/(app)/production/actions.ts`. Read model: `view_production_human_edited`.
 
-### The write path this guards is currently DORMANT
+### The write path this guards went LIVE on 2026-08-04
 
-The classifiers emit `{field:{db,email}}` (runs/downtime/waste) and `[{field,emailValue,dbValue}]` (electricity/trucks). Step 5's patch builder reads a `.new` key **neither shape carries** — faithfully mirroring `sync_production.py` — so in the live pipeline the patch is always empty and no UPDATE is attempted (`updates` is always 0 for production). Repairing that shape would start writing MC's values over the DB and is a separate, deliberate decision; this change only guarantees the guard is already underneath it. **The refusal FINDING fires today regardless**, because it is emitted before the empty-patch skip: the disagreement is real whether or not there is a write to attempt.
+Until then it was **dormant, and silently so**. The classifiers emit `{field:{db,email}}` (runs/downtime/waste) and `[{field,emailValue,dbValue}]` (electricity/trucks); step 5's patch builder read a `.new` key **neither shape carries** — faithfully mirroring `sync_production.py` — so every patch came out empty, every op was skipped, and `updates` was always 0 for production. The sync had **never applied a single correction** from MC's or Ivy's workbook, and reported success each time.
+
+Step 5 now builds the patch from `changedFields()` — the same normalizer the refusal findings already used, which understands both shapes and drops the generated columns in one place. Renzo authorised switching it on (2026-08-04) precisely because the latch above is now underneath it: MC's values can only land on rows no human has claimed.
+
+**One landmine was found and defused in the same change.** `downtimeFieldDiff` compared a `remarks` field, but **`production_downtime` has no `remarks` column** — the extractor builds one (`"Time ranges: …"`) and the insert path drops it, so the DB side was permanently absent and every downtime row carrying time ranges was a self-renewing phantom `VALUE_CHANGED`. Harmless while dormant; on the first live run it would have put a non-allowlisted key in the patch, and `fn_apply_production_upstream` refuses the **whole op** on one unknown key (`unsupported_field`) — taking that row's genuine `dt_hrs`/`dt_mins`/`dt_reason` corrections down with it. `remarks` is no longer diffed for downtime, and `DowntimeDbRow` no longer declares it.
+
+**The refusal FINDING fired throughout the dormant period**, because it is emitted before the empty-patch skip: the disagreement was real whether or not there was a write to attempt.
+
+Regression cover: `test/reports/production-value-changed-patch.test.ts` — both diff shapes drive `applyProduction` from **real classifier output** (no hand-shaped `new` key), generated columns are asserted out, the phantom `remarks` is asserted absent, and a mirror of the RPC's allowlist asserts no classifier can emit a key the RPC would refuse. Five of its eight tests fail against the old builder.
 
 ### Re-proving it against the live DB
 

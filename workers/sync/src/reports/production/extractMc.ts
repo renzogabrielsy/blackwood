@@ -569,6 +569,87 @@ function extractDowntime(
   };
 }
 
+/**
+ * Split a changeover day's single downtime row across the TWO batches that ran, in
+ * proportion to what each of them produced that day (Renzo's decision, 2026-08-04).
+ *
+ * The problem: on a changeover day production splits across two batches, but MC records
+ * downtime ONCE for the whole shift with no marker saying whose it is. Something has to
+ * decide. Until now the whole stoppage was attributed to the batch that was ENDING,
+ * on the reasoning that an unmarked row follows the running batch — defensible, but it
+ * makes the new batch look flawless on its first day and the old one look worse than it
+ * was, every single changeover.
+ *
+ * What is split and what is NOT:
+ *   - `dt_hrs` + `dt_mins` are split. They are the quantity being attributed.
+ *   - `shift_hrs` is NOT. Both batches ran inside the SAME physical shift, and its
+ *     length is a fact about the shift, not a quantity either batch owns a share of.
+ *   - `dt_reason` is copied verbatim to both. Annotating it would make every future run
+ *     see a VALUE_CHANGED against the stored text forever.
+ *
+ * Conservation is exact: the second part is `total - first`, never a second rounding, so
+ * the two rows always sum back to the minutes MC wrote down. Each part is then
+ * re-normalized to satisfy `CHECK (dt_mins >= 0 AND dt_mins < 60)` — the same PD-5 split
+ * the single-row path applies.
+ *
+ * Falls back to ONE row (the old behaviour) whenever the split would be a guess: no
+ * changeover, no downtime, or either batch produced nothing measurable that day. A
+ * proportional split against a zero denominator is not a split, it is an invention.
+ */
+export function splitChangeoverDowntime(
+  downtime: DowntimeRow,
+  runs: RunRow[],
+  plan: SheetBatchPlan,
+): DowntimeRow[] {
+  const starting = plan.starting;
+  if (starting === null || starting === plan.running) return [downtime];
+
+  const totalMins = downtime.dt_hrs * 60 + downtime.dt_mins;
+  if (totalMins <= 0) return [downtime];
+
+  const kgFor = (batch: string): number =>
+    runs
+      .filter((r) => r.production_batch === batch)
+      .reduce((sum, r) => sum + (typeof r.ttl_kg === "number" && Number.isFinite(r.ttl_kg) ? r.ttl_kg : 0), 0);
+
+  const runningKg = kgFor(plan.running);
+  const startingKg = kgFor(starting);
+  const totalKg = runningKg + startingKg;
+  // Either side silent → nothing to apportion against. Keep the whole stoppage where
+  // it was, and say why in a warning rather than inventing a ratio.
+  if (totalKg <= 0 || runningKg <= 0 || startingKg <= 0) {
+    return [
+      {
+        ...downtime,
+        warnings: [
+          ...downtime.warnings,
+          `changeover ${plan.running} → ${starting}: downtime NOT split ` +
+            `(${plan.running} ${runningKg} kg, ${starting} ${startingKg} kg) — ` +
+            `kept whole on ${downtime.production_batch}`,
+        ],
+      },
+    ];
+  }
+
+  const runningMins = Math.round((totalMins * runningKg) / totalKg);
+  const startingMins = totalMins - runningMins; // exact conservation, never re-rounded
+
+  const part = (batch: string, mins: number, kg: number): DowntimeRow => ({
+    ...downtime,
+    production_batch: batch,
+    // PD-5: the DB CHECK requires dt_mins < 60.
+    dt_hrs: Math.floor(mins / 60),
+    dt_mins: mins % 60,
+    warnings: [
+      ...downtime.warnings,
+      `changeover ${plan.running} → ${starting}: ${totalMins} min of downtime split by ` +
+        `same-day output; ${batch} took ${mins} min (${kg} of ${totalKg} kg)`,
+    ],
+  });
+
+  return [part(plan.running, runningMins, runningKg), part(starting, startingMins, startingKg)];
+}
+
 // ── Section C — electricity ─────────────────────────────────────────────────
 function emitElectricity(
   meter: string,
@@ -753,14 +834,17 @@ function extractSheet(
   const runs = extractRuns(ws, titleStripped, txnIso, plan);
   // Downtime carries no marker of its own and is a whole-DAY fact, so it follows
   // the same rule as an unmarked run row: the batch that was already running.
-  const downtime = extractDowntime(ws, titleStripped, txnIso, plan.running);
+  // On a CHANGEOVER day that single answer is wrong for one of the two batches, so
+  // the stoppage is apportioned by same-day output instead (2026-08-04, Renzo's call).
+  const downtimeRow = extractDowntime(ws, titleStripped, txnIso, plan.running);
+  const downtime = downtimeRow !== null ? splitChangeoverDowntime(downtimeRow, runs, plan) : [];
   const electricity = extractElectricity(ws, titleStripped, txnIso);
   const trucks = extractTrucks(ws, titleStripped, txnIso);
   const dayTotal = extractDayTotal(ws);
 
   return {
     runs,
-    downtime: downtime !== null ? [downtime] : [],
+    downtime,
     electricity,
     trucks,
     txnIso,
