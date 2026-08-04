@@ -33,6 +33,14 @@ minutes and `git status` showed only the brief's own paths. `ls -lT` on the dirt
 This is the cheap decider the [[main-promotion-playbook]]'s "concurrent-session mode can be OFF —
 verify, don't assume" note was missing. Run it BEFORE choosing a staging strategy.
 
+**Confirmed OFF twice running** — `c8ffc53` then `9ee70d5` (promotion 23, 2026-08-04). Both times
+the `find -newermt '-20 minutes'` came back empty AND `git status --porcelain -uall` showed only
+the brief's own paths plus the standing `.claude/agent-memory-local/**` dirt — **zero untracked
+files at all**. Concurrent mode is the exception on this branch, not the rule; the standing-mode
+note above was written from a 3-promotion burst and should not be read as "always assume it".
+When both checks are clean, plain `git add .` + the `agent-memory-local` restore is correct and
+needs no further hedging.
+
 ### Guardian memory left dirty by a PREVIOUS (finished) guardian session
 
 `.claude/agent-memory/git-branch-guardian/*.md` can sit uncommitted for hours because the session

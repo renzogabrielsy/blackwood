@@ -58,6 +58,13 @@ prove it in the report).
 `feat/cenapro-deliveries-qol` (promotion `c8ffc53`) is the first branch cut this way. Same
 promotion recipe, no `dev`, no PR.
 
+**A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
+23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
+belonged to the same module, so it committed straight onto `feat/cenapro-deliveries-qol` and
+re-promoted. The merge-base gate stays trivially clean because the previous promotion made
+that branch's old tip an ancestor of `main` — so the merge-base IS the last promotion's tree.
+Don't cut `feat/<slug>-fix`; the name still describes the work.
+
 **Cheap pre-checkout check when the tree is dirty:** compare `git diff --name-only origin/main <feat>` against `git diff --name-only`. No overlap ⇒ `git checkout main` carries the dirty tracked files across without "local changes would be overwritten". Run it before the checkout, not after it fails.
 
 **Never delete this branch after a promotion** — it keeps accumulating work and is re-merged.
