@@ -41,7 +41,29 @@ git diff --stat origin/main $(git merge-base origin/main <feat>)
 
 21 promotions as of 2026-08-04, latest `434eb7b`; earlier `c9c4f1a`, `0be5b4a`, `478b0c0`, `566d68a`, `8ff1c77`, `52178d9`, `db95d03`, `ca18c6d`, `70dfa60`, `3450d3c`, `96e825b`, `c3608d5`, `7ac5674`, `070e52e`, `437be13`, `65c21e3`, `a773826`, `ff776f8`, `e51045f`, `8be1fa3`.
 
-The merge-base tree test has now held **17 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+The merge-base tree test has now held **18 consecutive promotions** (empty diff, merge clean, every time) — including `478b0c0` and `0be5b4a`, both promoted from a working tree a second Claude session was editing concurrently ([[concurrent-session-promotions]]).
+
+### Branching a correctly-named `feat/*` off a mis-named one (2026-08-04, `c8ffc53`)
+
+`feat/gmail-oauth-sync-auth` accumulates work whose name stopped describing it long ago. When a
+brief's changeset has nothing to do with the branch name, **cut a new branch from the current
+HEAD** (`git checkout -b feat/<slug>`) rather than piling on. It costs nothing here because after
+each promotion HEAD is already an ancestor of `main` (`git merge-base --is-ancestor HEAD main`,
+exit 0) and the trees are identical (`git diff --stat <HEAD> <main>` empty) — so the new branch's
+merge-base with `main` IS `main`'s tree and the gate passes trivially. `main` being AHEAD of the
+branch base by its own merge commits is the normal steady state, not divergence; the `--no-ff`
+merge back preserves every one of them (`git merge-base --is-ancestor <old-main-tip> main` to
+prove it in the report).
+
+`feat/cenapro-deliveries-qol` (promotion `c8ffc53`) is the first branch cut this way. Same
+promotion recipe, no `dev`, no PR.
+
+**A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
+23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
+belonged to the same module, so it committed straight onto `feat/cenapro-deliveries-qol` and
+re-promoted. The merge-base gate stays trivially clean because the previous promotion made
+that branch's old tip an ancestor of `main` — so the merge-base IS the last promotion's tree.
+Don't cut `feat/<slug>-fix`; the name still describes the work.
 
 **Cheap pre-checkout check when the tree is dirty:** compare `git diff --name-only origin/main <feat>` against `git diff --name-only`. No overlap ⇒ `git checkout main` carries the dirty tracked files across without "local changes would be overwritten". Run it before the checkout, not after it fails.
 

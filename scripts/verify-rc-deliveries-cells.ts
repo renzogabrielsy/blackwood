@@ -28,6 +28,9 @@ import {
   sampleFieldFor,
   buildColumns,
   frozenOffsets,
+  columnOffsets,
+  frozenBlockWidth,
+  columnScrollLeft,
   minTableWidth,
   parseDeliveryDate,
   mergeFieldEdit,
@@ -229,6 +232,148 @@ check('a sample sub-row addresses only the label lane and the seven lab lanes', 
     const col = cols.find((c) => c.key === key)!
     assert.equal(sampleFieldFor(col.field), null, key)
   }
+})
+
+// ── Following the caret sideways, past the frozen block ───────────────────────
+//
+// Tab walks ACROSS a ~1608px table inside a scroller a good deal narrower than that, so
+// something has to bring the target column into view — and the thing that must NOT
+// happen is any of it leaking onto another axis or another scrollport. Two failures
+// this pins down: a column scrolled to its own `left` lands UNDERNEATH the four pinned
+// identity columns (visible offset ≠ 0), and a column that is already on screen must
+// cost zero scrolling, because that is every Tab that only changes rows.
+
+const VIEW = 900 // a realistic scrollport: narrower than the table, wider than the frozen block
+
+check('the frozen block is 4 columns wide and agrees with the cumulative offsets', () => {
+  const cols = buildColumns(true)
+  const left = frozenOffsets(cols)
+  assert.equal(frozenBlockWidth(cols), left[left.length - 1] + cols[left.length - 1].width)
+  assert.equal(frozenBlockWidth(cols), 44 + 92 + 78 + 210) // # · DATE · TRK# · SUPPLIER
+  // Gating prices removes only trailing columns, so the frozen block is unchanged.
+  assert.equal(frozenBlockWidth(buildColumns(false)), frozenBlockWidth(cols))
+})
+
+check('column offsets are index-aligned and sum to the table min-width', () => {
+  for (const cols of [buildColumns(true), buildColumns(false)]) {
+    const off = columnOffsets(cols)
+    assert.equal(off.length, cols.length)
+    assert.equal(off[0], 0)
+    for (let i = 1; i < cols.length; i++) assert.equal(off[i], off[i - 1] + cols[i - 1].width)
+    assert.equal(off[cols.length - 1] + cols[cols.length - 1].width, minTableWidth(cols))
+  }
+})
+
+check('a frozen column never asks for a horizontal scroll — it is pinned, always visible', () => {
+  const cols = buildColumns(true)
+  const total = minTableWidth(cols)
+  for (let col = 0; col < frozenOffsets(cols).length; col++) {
+    for (const scrollLeft of [0, 200, 400, total - VIEW]) {
+      assert.equal(
+        columnScrollLeft({ col, cols, scrollLeft, clientWidth: VIEW, scrollWidth: total }),
+        null,
+        `frozen col ${col} at ${scrollLeft}`,
+      )
+    }
+  }
+})
+
+check('a column already fully in view costs nothing — the Tab that must not move the sheet', () => {
+  const cols = buildColumns(true)
+  const off = columnOffsets(cols)
+  const frozen = frozenBlockWidth(cols)
+  const total = minTableWidth(cols)
+  // Park the scroller so SKS..(whatever fits) is in the window, then re-ask for each
+  // column that is genuinely inside it.
+  const scrollLeft = 0
+  for (let col = 0; col < cols.length; col++) {
+    const visible = off[col] >= scrollLeft + frozen && off[col] + cols[col].width <= scrollLeft + VIEW
+    if (!visible) continue
+    assert.equal(
+      columnScrollLeft({ col, cols, scrollLeft, clientWidth: VIEW, scrollWidth: total }),
+      null,
+      cols[col].key,
+    )
+  }
+})
+
+check('nothing scrolls when the table fits the scrollport', () => {
+  const cols = buildColumns(true)
+  const total = minTableWidth(cols)
+  for (let col = 0; col < cols.length; col++) {
+    assert.equal(
+      columnScrollLeft({ col, cols, scrollLeft: 0, clientWidth: total + 200, scrollWidth: total + 200 }),
+      null,
+      cols[col].key,
+    )
+  }
+})
+
+check('a column off the RIGHT edge is nudged the minimum — its right edge lands on the edge', () => {
+  const cols = buildColumns(true)
+  const off = columnOffsets(cols)
+  const total = minTableWidth(cols)
+  const col = cols.findIndex((c) => c.key === 'remarks')
+  const next = columnScrollLeft({ col, cols, scrollLeft: 0, clientWidth: VIEW, scrollWidth: total })
+  assert.equal(next, off[col] + cols[col].width - VIEW)
+  // …and the nudge is genuinely minimal: one pixel less would still clip it.
+  assert.ok(next !== null && off[col] + cols[col].width - next === VIEW)
+})
+
+check('a column hidden UNDER the frozen block clears it — not merely reaches left:0', () => {
+  const cols = buildColumns(true)
+  const off = columnOffsets(cols)
+  const frozen = frozenBlockWidth(cols)
+  const total = minTableWidth(cols)
+  const col = cols.findIndex((c) => c.key === 'sacks') // the first scrolling column
+  // Scrolled hard right, then Tab wraps back to SKS on the next row.
+  const next = columnScrollLeft({ col, cols, scrollLeft: total - VIEW, clientWidth: VIEW, scrollWidth: total })
+  assert.equal(next, off[col] - frozen)
+  assert.equal(next, 0) // SKS starts exactly where the frozen block ends
+  // The generalised claim: whatever the target, it ends up clear of the pinned columns.
+  for (let c = 0; c < cols.length; c++) {
+    const n = columnScrollLeft({ col: c, cols, scrollLeft: total - VIEW, clientWidth: VIEW, scrollWidth: total })
+    if (n === null || cols[c].frozen) continue
+    assert.ok(off[c] >= n + frozen, `${cols[c].key} would sit under the frozen block`)
+  }
+})
+
+check('the offset is clamped to the scroller — never negative, never past the end', () => {
+  const cols = buildColumns(true)
+  const total = minTableWidth(cols)
+  const max = total - VIEW
+  for (let col = 0; col < cols.length; col++) {
+    for (const scrollLeft of [0, 300, max]) {
+      const n = columnScrollLeft({ col, cols, scrollLeft, clientWidth: VIEW, scrollWidth: total })
+      if (n === null) continue
+      assert.ok(n >= 0 && n <= max, `${cols[col].key} from ${scrollLeft} → ${n}`)
+    }
+  }
+})
+
+check('a left-to-right Tab run scrolls forwards only, and never overshoots a visible cell', () => {
+  const cols = buildColumns(true)
+  const off = columnOffsets(cols)
+  const frozen = frozenBlockWidth(cols)
+  const total = minTableWidth(cols)
+  let scrollLeft = 0
+  let moves = 0
+  for (let col = 0; col < cols.length; col++) {
+    const n = columnScrollLeft({ col, cols, scrollLeft, clientWidth: VIEW, scrollWidth: total })
+    if (n !== null) {
+      assert.ok(n > scrollLeft, `col ${cols[col].key} scrolled BACKWARDS (${scrollLeft} → ${n})`)
+      scrollLeft = n
+      moves++
+    }
+    if (cols[col].frozen) continue
+    // Whatever happened, the column the caret is on is now fully visible and clear of
+    // the pinned block — which is the only claim the operator can actually see.
+    assert.ok(off[col] >= scrollLeft + frozen, `${cols[col].key} left edge`)
+    assert.ok(off[col] + cols[col].width <= scrollLeft + VIEW, `${cols[col].key} right edge`)
+  }
+  assert.ok(moves > 0 && moves < cols.length, `expected some but not all columns to scroll, got ${moves}`)
+  // The run ends at the far right of the sheet, not past it.
+  assert.equal(scrollLeft, total - VIEW)
 })
 
 // ── The DATE cell — free text in, yyyy-MM-dd out ──────────────────────────────
