@@ -543,7 +543,10 @@ export function ScheduleMonthGrid({
 
   const revertCellEdit = React.useCallback(() => {
     editSession.revertChanges();
-    gridRef.current?.focus();
+    // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper into view
+    // with block "center" through every scrolling ancestor — even when it is already
+    // fully visible — so committing/reverting an edit jogged the page.
+    gridRef.current?.focus({ preventScroll: true });
   }, [editSession]);
 
   // Coordinate resolver = the canonical moveSelection math. `isEditable` is
@@ -572,7 +575,7 @@ export function ScheduleMonthGrid({
       revert: revertCellEdit,
       commit: () => {
         editSession.commit();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
       },
     },
     // Plain Enter always drops straight down (matches RC IN / RC OUT).

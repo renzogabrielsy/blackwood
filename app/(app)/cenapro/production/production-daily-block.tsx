@@ -674,7 +674,12 @@ export function ProductionDailyBlock({ rows, plantView, selectedPeriod, onSaveSu
         if (!root) return;
         const el = root.querySelector<HTMLElement>(`[data-navid="${CSS.escape(id)}"]`);
         if (!el) return;
-        el.focus();
+        // `preventScroll`: HTMLElement.focus() otherwise scrolls the cell into view with
+        // block "center" through EVERY scrolling ancestor — even when it is already fully
+        // visible — so a purely lateral caret move dragged the page with it. The `select()`
+        // and the explicit `scrollIntoView({block:'nearest'})` below are the intended
+        // behaviour and are preserved: 'nearest' is a no-op for an already-visible cell.
+        el.focus({ preventScroll: true });
         (el as HTMLInputElement).select?.();
         el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }, []);
@@ -1558,7 +1563,20 @@ export function IdentitySuggestInput({
     // True once the user moved the highlight with the arrow keys — an EXPLICIT pick that
     // Tab/Enter should accept even on an empty query (where there's no prefix match to auto-snap).
     const navigatedRef = React.useRef(false);
-    const inputRef = React.useRef<HTMLInputElement>(null);
+    const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+    // ── autofocus WITHOUT the page jump (2026-08-05) — same idiom as EditInput ────────
+    // react-dom implements the `autoFocus` attribute as a bare `domElement.focus()` with
+    // no options, and `HTMLElement.focus()` scrolls the element into view with block
+    // "center" through EVERY scrolling ancestor, even when it is already fully visible —
+    // so merely MOUNTING this editor jogged the page. This ref callback lands in the same
+    // commit (layout) phase and, like react-dom, calls no `select()`/`setSelectionRange()`,
+    // so caret behaviour is byte-identical. It keeps `inputRef` populated (the dropdown's
+    // mouse-pick blurs through it). `autoFocus` must stay OFF the <input>.
+    const focusOnMount = React.useCallback((el: HTMLInputElement | null) => {
+        inputRef.current = el;
+        el?.focus({ preventScroll: true });
+    }, []);
 
     // Prefix-filter the valid set case-insensitively (space-insensitive too, e.g. "tnk1").
     const q = value.trim().toUpperCase().replace(/\s+/g, '');
@@ -1594,8 +1612,7 @@ export function IdentitySuggestInput({
     return (
         <div className="relative h-full w-full">
             <input
-                ref={inputRef}
-                autoFocus
+                ref={focusOnMount}
                 value={value}
                 data-navid={navIdProp}
                 placeholder={focused ? '' : placeholder}

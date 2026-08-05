@@ -19,7 +19,7 @@ import {
     Loader2,
 } from 'lucide-react';
 import { errorToast } from '@/lib/toast';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -549,7 +549,15 @@ const ProductionRow = React.memo(function ProductionRow({
         <tr
             hidden={rowHidden}
             className={cn(
-                'group h-8 border-b border-border/30 transition-all duration-150 hover:bg-muted',
+                // The horizontal RULE is on the CELLS (`[&>*]:`), never on the <tr>. This
+                // table is `border-collapse: separate` (load-bearing: under `collapse` a
+                // border belongs to the TABLE rather than the cell, so a sticky frozen
+                // column's borders scroll away), and in the separated-borders model the CSS
+                // spec paints borders on table CELLS ONLY — the `border-b border-border/30`
+                // that used to sit here was never painted. Same /30 weight it always meant,
+                // side-specific colour so tailwind-merge cannot restyle the cells'
+                // `border-r`. Row height is unchanged (cells are border-box).
+                'group h-8 [&>*]:border-b [&>*]:border-b-border/30 transition-all duration-150 hover:bg-muted',
                 // Direction tint first so the dirty borders + hover/selection read on top.
                 directionTint,
                 rowHidden && 'hidden',
@@ -623,7 +631,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     {...selProps(3)}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.batch}
                         onChange={(e) => updateRow(rowIdx, 'batch', e.target.value.toUpperCase())}
                         className={cn(inputClass, 'font-mono text-xs uppercase')}
@@ -688,7 +696,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     {...selProps(9)}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         type="number"
                         step="1"
                         value={row.weight_kg}
@@ -720,7 +728,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     {...selProps(10)}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.ccc_flec}
                         list="ledger-ccc-flec-suggestions"
                         onChange={(e) => updateRow(rowIdx, 'ccc_flec', e.target.value.toUpperCase())}
@@ -741,7 +749,7 @@ const ProductionRow = React.memo(function ProductionRow({
                     {...selProps(11)}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         type="number"
                         step="1"
                         value={row.flec_count}
@@ -919,7 +927,10 @@ export function ProductionLedgerGrid({
                 selClear();
                 setActiveCell({ row: rowIdx, col: colIdx });
                 setIsEditing(false);
-                gridRef.current?.focus();
+                // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper
+                // into view with block "center" through every scrolling ancestor — even
+                // when it is already fully visible — so clicking a cell jogged the page.
+                gridRef.current?.focus({ preventScroll: true });
             }
             dragMovedRef.current = false;
         },
@@ -1079,7 +1090,7 @@ export function ProductionLedgerGrid({
     // (no onAfterCommit is configured, so it has no side effect beyond isEditing=false).
     const revertChanges = React.useCallback(() => {
         const cell = activeCellRef.current;
-        if (!cell) { editSession.commit(); gridRef.current?.focus(); return; }
+        if (!cell) { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); return; }
         const field = COL_MAP[cell.col];
         if (field) {
             const snapshot = editSession.preEditValueRef.current ?? '';
@@ -1093,7 +1104,7 @@ export function ProductionLedgerGrid({
             });
         }
         editSession.commit();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [editSession]);
 
     // ─── Grid navigation (shared Blackwood Table primitives) ───────────────────────
@@ -1154,7 +1165,7 @@ export function ProductionLedgerGrid({
         edit: {
             start: (id, char) => startEditing(id.row, id.col, char),
             revert: revertChanges,
-            commit: () => { editSession.commit(); gridRef.current?.focus(); },
+            commit: () => { editSession.commit(); gridRef.current?.focus({ preventScroll: true }); },
         },
         range: rangeSlot,
         // The ledger's moveActive used plain Enter → straight down (no Tab-then-Enter
@@ -1594,7 +1605,10 @@ export function ProductionLedgerGrid({
                         the anti-seam right divider. Z-scale: corner 30 > header row 20 >
                         frozen body col 10 > normal scrolling cells. */}
                     <thead className="frozen-row bg-muted">
-                        <tr className="border-b">
+                        {/* Rule on the CELLS — a <tr> border is inert under
+                            `border-collapse: separate` (see the row renderer above). Full
+                            weight: this is the header↔body boundary. */}
+                        <tr className="[&>*]:border-b [&>*]:border-b-border">
                             <th className="frozen-corner h-8 border-r border-border/40 bg-muted px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ left: 0 }}>#</th>
                             <th className="frozen-corner h-8 bg-muted px-2 text-left text-muted-foreground" style={{ left: 36 }}>
                                 <DateSortHeader label="Recv" sortKey="recv_date" activeKey={dateSortKey} dir={dateSortDir} onSort={handleDateSort} />

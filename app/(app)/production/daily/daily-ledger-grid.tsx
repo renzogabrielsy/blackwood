@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { Save, RotateCcw, ChevronsUpDown, Copy, ArrowUpFromLine, ArrowDownFromLine, Trash2, ChevronUp, ChevronDown, MessageSquare, ListFilter } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -463,7 +463,7 @@ function NoteCell({ value, onChange, placeholder, label }: NoteCellProps) {
                     </p>
                 )}
                 <Textarea
-                    autoFocus
+                    ref={focusNoScroll}
                     rows={4}
                     value={value}
                     placeholder={placeholder}
@@ -1608,8 +1608,9 @@ export function DailyLedgerGrid({
                             <col style={{ width: '56px' }} />
                         </colgroup>
                         <TableHeader className="bg-muted backdrop-blur-sm sticky top-0 z-50 shadow-sm">
-                            {/* Section headers */}
-                            <TableRow className="hover:bg-transparent border-b border-foreground/10" style={{ height: '20px' }}>
+                            {/* Section headers. Rule on the CELLS — a <tr> border is inert
+                                under `border-collapse: separate` (see the body row below). */}
+                            <TableRow className="hover:bg-transparent [&>*]:border-b [&>*]:border-b-foreground/10" style={{ height: '20px' }}>
                                 {/* # — sticky, z-40 (header + column intersection) */}
                                 <TableHead className="h-5 px-1 py-0 font-mono font-bold text-center text-[9px] border-r border-foreground/10 w-[28px] sticky z-40 bg-muted" style={{ left: 0 }} />
                                 {/* Identity — sticky */}
@@ -1629,8 +1630,8 @@ export function DailyLedgerGrid({
                                     Waste
                                 </TableHead>
                             </TableRow>
-                            {/* Column headers */}
-                            <TableRow className="hover:bg-transparent border-b border-foreground/20" style={{ height: '28px' }}>
+                            {/* Column headers — the header↔body boundary. Rule on the CELLS. */}
+                            <TableRow className="hover:bg-transparent [&>*]:border-b [&>*]:border-b-foreground/20" style={{ height: '28px' }}>
                                 {/* # — sticky col 0 */}
                                 <TableHead className="w-[28px] h-7 px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/10 sticky z-40 bg-muted" style={{ left: 0 }}>#</TableHead>
                                 {/* Identity — sticky cols 1-3 */}
@@ -1732,7 +1733,20 @@ export function DailyLedgerGrid({
                                         key={rowIdx}
                                         hidden={rowHidden}
                                         className={cn(
-                                            'group transition-all duration-150 border-b border-border/30',
+                                            // The horizontal RULE is on the CELLS (`[&>*]:`),
+                                            // never on the <tr>. This table is
+                                            // `border-collapse: separate` (load-bearing: under
+                                            // `collapse` a border belongs to the TABLE rather
+                                            // than the cell, so the sticky frozen columns lose
+                                            // their edges), and in the separated-borders model
+                                            // the CSS spec paints borders on table CELLS ONLY —
+                                            // the `border-b border-border/30` that used to sit
+                                            // here was never painted, which is why the ledger
+                                            // showed columns with no rows. Same /30 weight,
+                                            // side-specific colour so tailwind-merge cannot
+                                            // restyle the cells' own `border-r`. Row height is
+                                            // unchanged (cells are border-box).
+                                            'group transition-all duration-150 [&>*]:border-b [&>*]:border-b-border/30',
                                             rowHidden && 'hidden',
                                             isDeleted && 'opacity-40 line-through',
                                             isDirtyRow && !isSecondary && 'border-l-2 border-l-amber-400',
@@ -1783,7 +1797,7 @@ export function DailyLedgerGrid({
                                         <TableCell className={cn('px-0 py-0 border-r border-border/30 bg-background group-hover:bg-muted/50 transition-colors duration-150 sticky z-30', isSecondary && 'text-muted-foreground/30')} style={{ height: '28px', left: 124 }}>
                                             {!isSecondary ? (
                                                 <GridCell col={2} row={rowIdx} value={row.batch} className="font-mono font-semibold text-center text-xs" {...commonCellProps} {...selProps(rowIdx, 2)}>
-                                                    <Input autoFocus value={row.batch} onChange={e => updateRow(rowIdx, 'batch', e.target.value)} className={cn(inputClass, 'font-mono font-semibold text-center text-xs uppercase')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 2); }} />
+                                                    <Input ref={focusNoScroll} value={row.batch} onChange={e => updateRow(rowIdx, 'batch', e.target.value)} className={cn(inputClass, 'font-mono font-semibold text-center text-xs uppercase')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 2); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full flex items-center justify-center text-muted-foreground/30 text-[10px] font-mono">↑</div>
@@ -1795,7 +1809,7 @@ export function DailyLedgerGrid({
                                             {!isSecondary ? (
                                                 <GridCell col={3} row={rowIdx} value={row.shift_code} className="font-mono font-semibold text-center text-xs" {...commonCellProps} {...selProps(rowIdx, 3)}>
                                                     <Input
-                                                        autoFocus
+                                                        ref={focusNoScroll}
                                                         value={row.shift_code}
                                                         onChange={e => updateRow(rowIdx, 'shift_code', e.target.value.toUpperCase())}
                                                         className={cn(inputClass, 'font-mono font-semibold text-center text-xs uppercase')}
@@ -1812,7 +1826,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-background group-hover:bg-muted/50 transition-colors duration-150 sticky z-30" style={{ height: '28px', left: 240 }}>
                                             <GridCell col={4} row={rowIdx} value={row.customer} className="font-mono font-semibold text-center text-xs" {...commonCellProps} {...selProps(rowIdx, 4)}>
                                                 <Input
-                                                    autoFocus
+                                                    ref={focusNoScroll}
                                                     value={row.customer}
                                                     onChange={e => updateRow(rowIdx, 'customer', e.target.value.toUpperCase())}
                                                     className={cn(inputClass, 'font-mono font-semibold text-center text-xs uppercase')}
@@ -1826,7 +1840,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-background group-hover:bg-muted/50 transition-colors duration-150 sticky z-30" style={{ height: '28px', left: 312 }}>
                                             <GridCell col={5} row={rowIdx} value={row.grade} className="font-mono font-semibold text-center text-xs" {...commonCellProps} {...selProps(rowIdx, 5)}>
                                                 <Input
-                                                    autoFocus
+                                                    ref={focusNoScroll}
                                                     value={row.grade}
                                                     onChange={e => updateRow(rowIdx, 'grade', e.target.value.toUpperCase())}
                                                     className={cn(inputClass, 'font-mono font-semibold text-center text-xs uppercase')}
@@ -1839,7 +1853,7 @@ export function DailyLedgerGrid({
                                         {/* ── TTL KG — sticky col 6 ── */}
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-background group-hover:bg-muted/50 transition-colors duration-150 sticky z-30" style={{ height: '28px', left: 372 }}>
                                             <GridCell col={6} row={rowIdx} value={formatKg(row.ttl_kg)} className="font-mono font-semibold text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 6)}>
-                                                <Input autoFocus type="number" step="1" value={row.ttl_kg} onChange={e => updateRow(rowIdx, 'ttl_kg', e.target.value)} className={cn(inputClass, 'font-mono font-semibold text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
+                                                <Input ref={focusNoScroll} type="number" step="1" value={row.ttl_kg} onChange={e => updateRow(rowIdx, 'ttl_kg', e.target.value)} className={cn(inputClass, 'font-mono font-semibold text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
                                             </GridCell>
                                         </TableCell>
 
@@ -1859,7 +1873,7 @@ export function DailyLedgerGrid({
                                                 }
                                             >
                                                 <Input
-                                                    autoFocus
+                                                    ref={focusNoScroll}
                                                     value={row.run_remarks}
                                                     onChange={e => updateRow(rowIdx, 'run_remarks', e.target.value)}
                                                     className={cn(inputClass, 'font-mono text-xs text-left px-2')}
@@ -1872,7 +1886,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-amber-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={8} row={rowIdx} value={row.dt_hrs} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 8)}>
-                                                    <Input autoFocus type="number" step="1" min="0" value={row.dt_hrs} onChange={e => updateShiftData(rowIdx, 'dt_hrs', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 8); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="1" min="0" value={row.dt_hrs} onChange={e => updateShiftData(rowIdx, 'dt_hrs', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 8); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -1883,7 +1897,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-amber-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={9} row={rowIdx} value={row.dt_mins} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 9)}>
-                                                    <Input autoFocus type="number" step="1" min="0" max="59" value={row.dt_mins} onChange={e => updateShiftData(rowIdx, 'dt_mins', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 9); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="1" min="0" max="59" value={row.dt_mins} onChange={e => updateShiftData(rowIdx, 'dt_mins', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 9); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -1936,7 +1950,7 @@ export function DailyLedgerGrid({
                                                         />
                                                     }
                                                 >
-                                                    <Input autoFocus value={row.dt_reason} onChange={e => updateShiftData(rowIdx, 'dt_reason', e.target.value)} className={cn(inputClass, 'text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }} />
+                                                    <Input ref={focusNoScroll} value={row.dt_reason} onChange={e => updateShiftData(rowIdx, 'dt_reason', e.target.value)} className={cn(inputClass, 'text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 12); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -1979,7 +1993,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={15} row={rowIdx} value={formatKg(row.rs1a)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 15)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.rs1a} onChange={e => updateShiftData(rowIdx, 'rs1a', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 15); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.rs1a} onChange={e => updateShiftData(rowIdx, 'rs1a', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 15); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -1990,7 +2004,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={16} row={rowIdx} value={formatKg(row.rs1b)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 16)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.rs1b} onChange={e => updateShiftData(rowIdx, 'rs1b', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 16); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.rs1b} onChange={e => updateShiftData(rowIdx, 'rs1b', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 16); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2001,7 +2015,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={17} row={rowIdx} value={formatKg(row.bf)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 17)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.bf} onChange={e => updateShiftData(rowIdx, 'bf', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 17); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.bf} onChange={e => updateShiftData(rowIdx, 'bf', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 17); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2012,7 +2026,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={18} row={rowIdx} value={formatKg(row.rs23)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 18)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.rs23} onChange={e => updateShiftData(rowIdx, 'rs23', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 18); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.rs23} onChange={e => updateShiftData(rowIdx, 'rs23', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 18); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2023,7 +2037,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={19} row={rowIdx} value={formatKg(row.rs5)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 19)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.rs5} onChange={e => updateShiftData(rowIdx, 'rs5', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 19); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.rs5} onChange={e => updateShiftData(rowIdx, 'rs5', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 19); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2034,7 +2048,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={20} row={rowIdx} value={formatKg(row.trml1)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 20)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.trml1} onChange={e => updateShiftData(rowIdx, 'trml1', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 20); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.trml1} onChange={e => updateShiftData(rowIdx, 'trml1', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 20); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2045,7 +2059,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 border-r border-border/30 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={21} row={rowIdx} value={formatKg(row.trml2)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 21)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.trml2} onChange={e => updateShiftData(rowIdx, 'trml2', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 21); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.trml2} onChange={e => updateShiftData(rowIdx, 'trml2', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 21); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2056,7 +2070,7 @@ export function DailyLedgerGrid({
                                         <TableCell className="px-0 py-0 bg-red-500/[0.03]" style={{ height: '28px' }}>
                                             {showDtWaste ? (
                                                 <GridCell col={22} row={rowIdx} value={formatKg(row.grit)} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 22)}>
-                                                    <Input autoFocus type="number" step="0.5" value={row.grit} onChange={e => updateShiftData(rowIdx, 'grit', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 22); }} />
+                                                    <Input ref={focusNoScroll} type="number" step="0.5" value={row.grit} onChange={e => updateShiftData(rowIdx, 'grit', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 22); }} />
                                                 </GridCell>
                                             ) : (
                                                 <div className="h-full w-full bg-muted/30" />
@@ -2074,7 +2088,9 @@ export function DailyLedgerGrid({
                             Non-frozen footer cells get sticky bottom-0 at z-40.
                             This mirrors the header's z-50 (header corners) / z-40 (body frozen cols) stacking. */}
                         <TableFooter>
-                            <TableRow className="hover:bg-transparent border-t-2 border-foreground/20" style={{ height: '32px' }}>
+                            {/* The mirror of the header: rule on the CELLS (`[&>*]:`), since a
+                                <tr> border is inert under `border-collapse: separate`. */}
+                            <TableRow className="hover:bg-transparent [&>*]:border-t-2 [&>*]:border-t-foreground/20" style={{ height: '32px' }}>
 
                                 {/* # — frozen corner: sticky bottom-0 + left-0 at z-50 */}
                                 <TableCell className="h-8 px-1 py-0 text-[9px] font-mono font-bold text-muted-foreground uppercase tracking-wide border-r border-foreground/10 bg-muted sticky bottom-0 z-50" style={{ left: 0 }}>

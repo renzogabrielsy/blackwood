@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { Save, RotateCcw, X, MessageSquareText } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -567,7 +567,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                         {/* DATE */}
                                         <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                             <GridCell col={1} row={rowIdx} value={row.reading_date} className="font-mono text-center" {...commonCellProps} {...selProps(rowIdx, 1)}>
-                                                <Input autoFocus value={row.reading_date} onChange={e => updateRow(rowIdx, 'reading_date', e.target.value)} className={cn(inputClass, 'font-mono text-center text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 1); }} />
+                                                <Input ref={focusNoScroll} value={row.reading_date} onChange={e => updateRow(rowIdx, 'reading_date', e.target.value)} className={cn(inputClass, 'font-mono text-center text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 1); }} />
                                             </GridCell>
                                         </TableCell>
                                         {/* METER */}
@@ -575,7 +575,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                             <GridCell col={2} row={rowIdx} value={row.meter} className="font-mono text-center" {...commonCellProps} {...selProps(rowIdx, 2)}>
                                                 {row._meter_select === '__custom__' ? (
                                                     <Input
-                                                        autoFocus
+                                                        ref={focusNoScroll}
                                                         value={row.meter}
                                                         onChange={e => updateRow(rowIdx, 'meter', e.target.value)}
                                                         className={cn(inputClass, 'font-mono text-center text-xs')}
@@ -599,13 +599,13 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                         {/* START KWH */}
                                         <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                             <GridCell col={3} row={rowIdx} value={row.start_kwh} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 3)}>
-                                                <Input autoFocus type="number" step="0.01" value={row.start_kwh} onChange={e => updateRow(rowIdx, 'start_kwh', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 3); }} />
+                                                <Input ref={focusNoScroll} type="number" step="0.01" value={row.start_kwh} onChange={e => updateRow(rowIdx, 'start_kwh', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 3); }} />
                                             </GridCell>
                                         </TableCell>
                                         {/* END KWH */}
                                         <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                             <GridCell col={4} row={rowIdx} value={row.end_kwh} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 4)}>
-                                                <Input autoFocus type="number" step="0.01" value={row.end_kwh} onChange={e => updateRow(rowIdx, 'end_kwh', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 4); }} />
+                                                <Input ref={focusNoScroll} type="number" step="0.01" value={row.end_kwh} onChange={e => updateRow(rowIdx, 'end_kwh', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 4); }} />
                                             </GridCell>
                                         </TableCell>
                                         {/* DIFF — computed */}
@@ -615,7 +615,7 @@ export function ElectricityGrid({ initialData, onSaveSuccess }: ElectricityGridP
                                         {/* MULT — editable meter multiplier */}
                                         <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                             <GridCell col={6} row={rowIdx} value={row.meter_multiplier} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, 6)}>
-                                                <Input autoFocus type="number" step="0.01" value={row.meter_multiplier} onChange={e => updateRow(rowIdx, 'meter_multiplier', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
+                                                <Input ref={focusNoScroll} type="number" step="0.01" value={row.meter_multiplier} onChange={e => updateRow(rowIdx, 'meter_multiplier', e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, 6); }} />
                                             </GridCell>
                                         </TableCell>
                                         {/* TTL KWH — computed (diff × multiplier) */}

@@ -50,6 +50,45 @@ All 5 grids share the same pattern (modelled after `bulk-delivery-input.tsx`):
 - **Status bar:** pushes selection count + aggregates to `StatusBarProvider`
 - **Error toasts:** `errorToast()` from `lib/toast.ts` — HARD RULE
 
+### Two traps every grid in this module shares (2026-08-05)
+
+**1. A cell editor may NEVER use React's `autoFocus`.** `HTMLElement.focus()` is specified
+to run "scroll an element into view" with block AND inline **`"center"`**, in every
+scrolling box up to the document — and `"center"` always computes a target, so it fires
+**even when the element is already fully visible**. React's `autoFocus` prop is unfixable
+from the outside: react-dom's `commitMount` is a bare `domElement.focus()` with no options.
+So merely *starting an edit* jogged the whole page. Every cell editor here now passes
+**`ref={focusNoScroll}`** (`lib/utils.ts`) instead — a ref callback doing
+`focus({ preventScroll: true })`, landing in the same commit/layout phase `commitMount`
+would have and, like react-dom, calling no `select()`/`setSelectionRange()`, so caret
+behaviour is byte-identical. Same idiom as `components/shared/grid/EditInput.tsx` (the
+canonical prior art) — there is ONE idiom, not two. Every `gridRef.current?.focus()` in
+this module passes `{ preventScroll: true }` for the same reason. **A `.focus()` on a cell
+or a grid wrapper without the option is a bug.**
+
+**2. Under `border-collapse: separate`, a border on a `<tr>` is NEVER PAINTED.** The CSS
+spec paints borders on table **cells** only in the separated-borders model — a `border-b`
+declared on `<tr>`, `<tbody>`, `<col>` or `<colgroup>` is ignored outright. The Daily and
+Trucks grids (both `borderCollapse: 'separate'`) had their row rules on the `<tr>`, so they
+rendered vertical column lines and **no horizontal ones at all**. The rule now lives on the
+cells via a child variant — `[&>*]:border-b [&>*]:border-b-border/30` on the row element,
+which emits real CSS against the `<td>`/`<th>`. **`borderCollapse: 'separate'` is
+LOAD-BEARING and must never be flipped to `collapse`:** under `collapse` a border belongs
+to the TABLE rather than the cell, so a `position: sticky` frozen column's borders scroll
+away and the pinned block loses its edges — strictly worse. Never "fix" a missing rule by
+putting it back on the `<tr>`.
+- The colour is **side-specific** (`border-b-border/30`, `border-t-foreground/20`). An
+  all-sides `border-border/30` lands in the same tailwind-merge group as the cells' own
+  `border-r` colour and silently restyles the vertical line.
+- **Row heights are unchanged** — Tailwind preflight makes cells `border-box`, so the 1px
+  rule draws inside each cell's explicit `height`.
+- **Electricity is NOT affected** — `electricity-grid.tsx` uses plain `border-collapse`,
+  where row borders do render. Do not "fix" it.
+- Still latent and deliberately left: the `border-l-2` dirty/new-row marker on the Daily
+  and Trucks `<tr>`s is inert for the same reason. Fixing it means moving it onto the FIRST
+  cell only (a `[&>*]:` variant would draw it on every cell) — see the Cenapro ledger,
+  which already puts that marker on its `<td>`.
+
 ## Daily Tab Layout (as of 2026-05-28)
 ONE unified ledger inside `overflow-x-auto`. `table minWidth: 1800px`. Columns grouped into sections: Identity (blue) · Production (green) · Downtime (amber) · Waste (red). Each ledger row = one `production_runs` entry. Downtime/Waste columns appear only on the primary grade row per shift; secondary rows have muted gray cells. See `daily/CONTEXT.md` for full column order and multi-grade rendering rules.
 
