@@ -97,6 +97,7 @@ import {
     minTableWidth,
     num,
     parseDeliveryDate,
+    needsDaySpacer,
     parseDestinationCell,
     parseSupplierCell,
     priceEditText,
@@ -105,6 +106,7 @@ import {
     sampleFieldFor,
     summarySpans,
     weightEditText,
+    DAY_SPACER_ROW_H,
     DEFAULT_DRAFT_ROWS,
     ROW_H,
     SAMPLE_ROW_H,
@@ -201,6 +203,13 @@ type NavRow =
 
 type LedgerItem =
     | { kind: 'day'; key: string; label: string; count: number }
+    /**
+     * The ENDLESS sheet's day boundary: a blank skipped row and nothing else. It carries
+     * no data, no label and no totals — which is the point, and the reason it is a
+     * separate kind from `day` rather than a variant of it. Note the absence of a
+     * `navRow`: the keyboard never sees it (see `needsDaySpacer` in `types.ts`).
+     */
+    | { kind: 'day-gap'; key: string }
     | { kind: 'delivery'; key: string; navRow: number; rec: DeliveryRecord; num: number }
     | { kind: 'sample'; key: string; navRow: number; deliveryId: string; sampleIndex: number }
     | { kind: 'day-total'; key: string; netKg: number; php: number | null; dupNetKg: number; dupPhp: number }
@@ -2561,6 +2570,26 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 </td>
             );
         }
+        // The endless scope's day boundary. A GAP, not a header and not a sum: no label,
+        // no count, no figure — and NO RULE. The receipt above it already closes the day
+        // with its own full-weight `border-b-border` (ROW_RULE.delivery); a second line
+        // under the blank would read as an empty table row rather than as breathing room.
+        //
+        // `spanAll` (= `cols.length`, the same constant the day heading and the add-rows
+        // control use) rather than new arithmetic, so a column added anywhere is covered.
+        // The cell is FULLY OPAQUE — `bg-background`, no alpha, no backdrop-filter —
+        // because every surface in a frozen-pane table has to be, and a translucent
+        // spacer would show the scrolling rows through the gap. No animation.
+        if (item.kind === 'day-gap') {
+            return (
+                <td
+                    colSpan={spanAll}
+                    aria-hidden="true"
+                    className="bg-background p-0"
+                    style={{ height: DAY_SPACER_ROW_H }}
+                />
+            );
+        }
         if (item.kind === 'day') {
             return (
                 <td colSpan={spanAll} className={DAY_HEADER_CELL}>
@@ -2722,6 +2751,9 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const rowHeightFor = (item: LedgerItem): number | undefined => {
         if (item.kind === 'delivery' || item.kind === 'draft') return ROW_H;
         if (item.kind === 'sample') return SAMPLE_ROW_H;
+        // Virtuoso measures what it renders, but an explicit height keeps the endless
+        // list from mis-measuring the one row family with no content to size it.
+        if (item.kind === 'day-gap') return DAY_SPACER_ROW_H;
         return undefined;
     };
 
@@ -3930,6 +3962,14 @@ function flatten(
     }
 
     let currentDay = '';
+    /**
+     * The date of the row ABOVE — `undefined` until the first receipt has been emitted,
+     * which is the whole of the "no leading gap at the top of the sheet" rule. Held
+     * separately from `currentDay` (which drives the focus scope's day headings) because
+     * `currentDay` is seeded with `''`, and `''` is a real value here: it is what an
+     * UNDATED receipt normalises to.
+     */
+    let prevDate: string | undefined;
     let dayNet = 0;
     let dayPhp = 0;
     let dayDupNet = 0;
@@ -3969,6 +4009,17 @@ function flatten(
                 count: dayCounts.get(date) ?? 0,
             });
         }
+
+        // ── The endless sheet's ONLY day treatment: a skipped row ────────────────
+        // Endless has no headings and no `Σ DAY TOTAL`, so days used to run into one
+        // another. A blank row is the whole feature — no label, no count, no rule. It is
+        // deliberately NOT pushed onto `navRows`, so the keyboard axis is byte-identical
+        // with and without it, and `scrollTo`'s `items.findIndex(… it.navRow === row)`
+        // keeps working by construction (a non-nav item simply never matches).
+        if (scope === 'endless' && needsDaySpacer(prevDate, date)) {
+            items.push({ kind: 'day-gap', key: `gap:${id}` });
+        }
+        prevDate = date;
 
         rowNum++;
         const navRow = navRows.length;

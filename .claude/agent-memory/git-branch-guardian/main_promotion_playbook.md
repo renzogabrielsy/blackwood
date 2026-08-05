@@ -160,6 +160,24 @@ Also: `git status -sb` reports a bare `## main` (no `...origin/main`) on this re
 with `git push origin main` and prove the result with `git rev-parse main origin/main`
 (identical OIDs) plus `git ls-remote origin main`, not with the `-sb` ahead/behind marker.
 
+**Promotion 30 (`44f452d` → `e5523f3`) — the tightest shape yet: ONE file, 5 lines, and the
+first `style(cenapro):` subject.** A pure Tailwind class-token change (border opacity weights on
+the RC Deliveries grid), immediate follow-up to promotion 29 on the same file. Confirms the
+type vocabulary extends past the CLAUDE.md list when the brief names one: `style` is right for a
+visual-weight-only change with zero behaviour delta, and the brief specified it.
+
+Two habits paid again, both cheap: (1) the "STOP if you see these" path list was clean for the
+THIRD consecutive promotion on this branch — concurrent-session mode really is the exception
+here, so keep presuming `git add .` and verifying, per [[concurrent-session-promotions]];
+(2) the bare-`## main` trap above fired exactly as written, and `git ls-remote` settled it in one
+call. No CONTEXT.md update rode along this time — correct, since no files/actions/behaviours
+changed, only class tokens; don't reflexively expect the CONTEXT.md sibling on style commits.
+
+Gates were run by the ORCHESTRATOR before handoff (verify script 83 assertions, `tsc --noEmit` 0,
+`npm run build` 0, lint at exact baseline) and the brief said so explicitly — when the brief
+states gate results with numbers, take them and don't re-run a 2-minute build for a 5-line
+class-token diff. Re-run only when the brief is silent or the diff touches logic.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
