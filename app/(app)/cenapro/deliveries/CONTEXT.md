@@ -30,7 +30,7 @@ computed in the browser.
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **100 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **105 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -266,8 +266,12 @@ it was special-cased), empty cells (the geometry fix gave them a hit area), REMA
 sample sub-rows and the draft rows.
 
 The grid's own `onGridKeyDown`/`onGridPaste` wrappers hold one further guard: a keystroke
-or paste aimed at a real form control inside the grid (the "add rows" counter) is not a
-grid gesture and is left alone.
+or paste aimed at a real form control inside the grid (the "add rows" counter, a column
+header's filter box, the cell editor's own input) is not a grid gesture and is left alone.
+**The one exception is the paste sink** — a hidden `<textarea>` that is a form control by
+construction but is the grid's own ear; `isGridChrome` exempts it explicitly, and must,
+or every keystroke would bail on the first line of `onGridKeyDown`. See *"The paste
+SINK"* under **The clipboard** below.
 
 ### Escape means two different things, because there are two modes (2026-08-04)
 
@@ -665,8 +669,97 @@ way. The exchange format is now decided in ONE place — the pure helpers
 `parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste`
 in `types.ts` — so it is asserted without a browser.
 
+#### The paste SINK — READ THIS BEFORE TOUCHING THE PASTE PATH (2026-08-05)
+
+> **Never put `onPaste` on a non-editable `<div>` and expect it to fire.** This grid did,
+> and paste was dead for three rounds of fixes.
+
+Renzo, after the second round: *"delete works and copy seems to work but pasting into
+cells be it empty or populated really doesn't work still."* — no error, no toast, nothing.
+Both earlier rounds had fixed genuine faults **inside** `applyClipboardPaste` (see the two
+defects below). Neither helped, because **the handler was never running.**
+
+**Why.** `Delete`, `Escape`, the arrows and `Ctrl/Cmd+C` are all `keydown`, and a keydown
+is delivered to whatever element holds focus — a `<div tabIndex={-1}>` included. That is
+exactly why those four gestures work here: `focusGrid()` puts focus on the grid wrapper
+and `onGridKeyDown` hears everything. **`paste` is a clipboard event and plays by a
+different rule:** the browser dispatches it at an element that can *accept* a paste. A
+focused non-editable div cannot, so the event is dispatched at **`document.body`** instead
+(stricter engines disable the paste command outright and dispatch nothing). `document.body`
+is an **ancestor** of React's root container, so an event targeted there never travels
+through the grid — React's `onPaste={onGridPaste}` on the wrapper could not fire, ever.
+
+**The corroboration is structural, and it is in this repo.** Every grid here where paste
+demonstrably works — `bulk-delivery-input.tsx`, `bulk-usage-input.tsx`,
+`production-ledger-grid.tsx` — has a real `<input>` under the caret, so the browser always
+has a legitimate target and the container's `onPaste` catches it on the way up. This
+ledger is the **only** grid whose cells are non-editable `<div>`s in nav mode. That is the
+whole of the difference.
+*(An earlier framing of this bug claimed copy had been broken the same way and was fixed
+by moving off the `copy` DOM event. That is not what happened — copy was never on a DOM
+clipboard event here; it was on a keydown path whose guards were too tight
+(`activeCell !== null && size > 1`). The evidence for the sink is the structural one
+above, not that one.)*
+
+**The fix — two complementary delivery paths, one application.**
+
+| Path | What it covers | Where |
+|---|---|---|
+| **The sink** | The browser delivers the event *somewhere legitimate*, and that somewhere is inside the grid | a real `<textarea>` inside the grid wrapper, marked `PASTE_SINK_ATTR` |
+| **The `document` fallback** | The engine dispatches at `document.body` anyway, where React can never see it | one bubble-phase `document.addEventListener('paste', …)` |
+
+- **The sink must be a real, rendered, focusable, EDITABLE element.** `display:none`,
+  `visibility:hidden`, `hidden` and `sr-only` all make an element **unfocusable**, and an
+  unfocusable sink is no sink. It is hidden by `opacity-0` + `size-px` + `-z-10`, kept out
+  of every click with `pointer-events-none`, off the Tab order with `tabIndex={-1}`, out of
+  the a11y tree with `aria-hidden`, and carries `select-text` because WebKit applies the
+  wrapper's `select-none` to editable descendants too. `readOnly` is **not** an option —
+  a readOnly textarea is not a paste target in Chromium. `onInput` empties it, so a
+  keystroke the grid declines to handle cannot accumulate inside it.
+- **`focusGrid()` is the ONE way focus reaches the grid.** It focuses the sink (falling
+  back to the wrapper), always with `preventScroll: true` — see the caret-follow rules
+  below. All three caret sites (`onAfterMove`, a cell's `onMouseDown`, `goToReceipt`) go
+  through it; a surviving `gridRef.current.focus()` would be a cell whose next Ctrl/Cmd+V
+  lands nowhere, so the verify script forbids the string outright.
+- **The sink is exempt from `isGridChrome`, and the exemption comes FIRST.** `isGridChrome`
+  treats every `INPUT`/`TEXTAREA`/`SELECT` as a control the grid does not own, and
+  `onGridKeyDown`'s first line is `if (!edit.isEditing && isGridChrome(e.target)) return;`.
+  Without the exemption the sink — a textarea, and the thing holding focus — would silently
+  kill Delete, Escape, Ctrl/Cmd+C, type-to-edit and the arrows.
+- **It never steals the caret from an open cell editor.** The three caret sites are user
+  gestures and are always safe (the shared hook calls `edit.commit()` *before* any move, so
+  the editor is already on its way out). The one unprompted focus move is a narrow effect:
+  it fires only when `edit.isEditing` is false **as read after render**, only when a cell is
+  selected, and only when focus has been genuinely orphaned on `document.body` — which is
+  what happens when the editor unmounts on Escape and takes the caret with it. A filter
+  popover or the search box is never `document.body`, so neither is ever interrupted.
+- **The two paths cannot double-apply**, and a doubled paste writes a second copy of a
+  receipt — precisely the fault this ledger already flags 22 rows for. Two interlocks:
+  *(a)* the React handler stamps `handledPasteRef` with the native event, and the document
+  listener refuses a stamped event — which holds because React's root listener runs **before**
+  a **bubble-phase** listener on `document` (capture would invert it, so capture is forbidden);
+  *(b)* structurally, the document listener ignores any event whose target is inside
+  `gridRef` — including one `onGridPaste` deliberately *declined*, because that paste
+  belongs to the control it hit. There is exactly **one** React `onPaste` in the file.
+- **The document fallback is guarded four ways:** not `isGridChrome` (a text field, the
+  search box, a Radix-portalled filter popover, anything `data-grid-chrome`); not while a
+  cell editor is mounted; and only when the grid holds the caret **or** holds focus.
+
+**Every paste path now ends in a message.** `if (!text) return;` — the most silent line in
+the module — is gone. The complete set of outcomes:
+
+| Situation | What the operator sees |
+|---|---|
+| Clipboard holds no text | `toast.info` *"Nothing pasted — the clipboard holds no text."* |
+| Clipboard parses to no cells | `toast.info` *"Nothing pasted — the clipboard held no cells."* |
+| No cell selected | persistent `errorToast` *"Nothing was pasted — no cell is selected."* |
+| Block lands entirely on non-editable cells | `toast.info` *"…that block lands outside the editable cells."* |
+| Rows past the end / columns past `REMARKS` | persistent `errorToast` naming the count **and** the reason |
+| It worked | `toast.success` *"Pasted N rows · M new rows"* |
+| Paste aimed at a real control inside the grid | *nothing from the grid* — and correctly so: the browser performs that control's own paste |
+
 **PASTE (`applyClipboardPaste` in the ledger; the platform `useGridPaste` is no longer
-used here).** Two defects, both silent:
+used here).** Two further defects, both silent, both fixed in earlier rounds:
 
 1. **The block was truncated to the rows that already existed.** `useGridPaste` builds
    its own row array and appends to it happily, but the adapter that wrote that array

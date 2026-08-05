@@ -259,6 +259,40 @@ const MONTH_FOOTER_CELL = 'frozen-row-bottom frozen-edge-top bg-muted px-2 py-1 
 
 const dash = <span className="text-muted-foreground/40">—</span>;
 
+// ─── THE PASTE SINK — why a spreadsheet grid needs a hidden <textarea> ───────────
+//
+// Renzo, after two rounds of paste fixes: *"delete works and copy seems to work but
+// pasting into cells be it empty or populated really doesn't work still."* Both earlier
+// rounds fixed real defects INSIDE `applyClipboardPaste`. Neither made paste work,
+// because the handler was never being reached.
+//
+// `paste` is not a keyboard event. Delete, Escape, the arrows and Ctrl/Cmd+C all arrive
+// as `keydown` on whatever element holds focus — and a `<div tabIndex={-1}>` holds focus
+// perfectly well, which is exactly why those four gestures work here. A CLIPBOARD event
+// is delivered by a different rule: the browser dispatches it at the element that can
+// ACCEPT a paste. A focused non-editable div cannot, so the event is dispatched at
+// `document.body` instead (or, in stricter engines, the paste command is disabled and no
+// event is dispatched at all). `document.body` is an ANCESTOR of React's root container,
+// so an event targeted there never travels through the grid — and React's
+// `onPaste={onGridPaste}` on the grid wrapper never fires. Silently.
+//
+// Every grid in this app where paste is known to work (`bulk-delivery-input.tsx`,
+// `bulk-usage-input.tsx`, `production-ledger-grid.tsx`) has a real `<input>` under the
+// caret, so the browser always has somewhere legitimate to deliver to and the
+// container's `onPaste` catches it on the way up. This grid is the only one whose cells
+// are non-editable `<div>`s in nav mode. That is the whole of the difference.
+//
+// So the grid grows an ear: one genuinely focusable, genuinely EDITABLE `<textarea>`,
+// visually hidden but never `display:none` / `visibility:hidden` (neither can hold
+// focus), living inside the grid wrapper. Every place that used to call
+// `gridRef.current.focus()` now calls `focusGrid()`, which focuses the sink. A paste
+// then lands on the sink, bubbles to the wrapper, and `onGridPaste` runs — in every
+// browser, with no reliance on how any engine treats a focused div. This is the same
+// device Handsontable, ag-Grid and Excel-on-web all use, and for the same reason.
+//
+// DO NOT "SIMPLIFY" THIS BACK to `onPaste` on the wrapper alone. That is the bug.
+const PASTE_SINK_ATTR = 'data-grid-paste-sink';
+
 // ─── Cell geometry ───────────────────────────────────────────────────────────────
 //
 // The interactive layer of a cell is ABSOLUTELY POSITIONED over the whole `<td>` box,
@@ -399,6 +433,29 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const virtuosoScrollerRef = React.useRef<HTMLDivElement | null>(null);
     const captureScroller = React.useCallback((el: HTMLDivElement | null) => {
         virtuosoScrollerRef.current = el;
+    }, []);
+
+    // The grid's ear for clipboard events — see PASTE_SINK_ATTR above for why it exists
+    // and why removing it silently breaks paste and nothing else.
+    const sinkRef = React.useRef<HTMLTextAreaElement>(null);
+
+    /**
+     * Put keyboard focus where the grid hears BOTH families of gesture.
+     *
+     * The sink, not the wrapper: a keydown reaches the wrapper either way (it bubbles out
+     * of the sink), but a `paste` only ever reaches an element that can accept one.
+     * Falls back to the wrapper if the sink has not mounted — the empty-state branch
+     * renders neither, so this is belt-and-braces rather than a real path.
+     *
+     * `preventScroll` is not an optimisation. `focus()` is specified to scroll the target
+     * into view with block AND inline "center" in EVERY scrollable ancestor, so a
+     * re-focus on each caret move was yanking the whole page down (see `onAfterMove`).
+     * Focus still moves; only the scroll is refused. The sink is absolutely positioned at
+     * the wrapper's top-left, so it is never out of view to begin with.
+     */
+    const focusGrid = React.useCallback(() => {
+        const el: HTMLElement | null = sinkRef.current ?? gridRef.current;
+        el?.focus({ preventScroll: true });
     }, []);
 
     // ── Columns + geometry ───────────────────────────────────────────────────────
@@ -889,6 +946,39 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     });
 
     /**
+     * `edit.isEditing`, readable from a plain DOM listener. Synced during RENDER, so
+     * anything that reads it OUTSIDE a React handler (the document-level paste fallback)
+     * sees the settled value. It is deliberately NOT consulted by `focusGrid`'s call
+     * sites: within a single handler `edit.commit()` has already run but the state has
+     * not landed yet, so a guard there would refuse the very refocus that keeps the
+     * caret alive when the editor unmounts.
+     */
+    const editingRef = React.useRef(false);
+    editingRef.current = edit.isEditing;
+
+    /**
+     * Give focus back to the paste sink when the grid still holds a caret but the browser
+     * has dropped focus on `<body>`.
+     *
+     * That happens whenever the cell editor unmounts without a move — Escape reverts,
+     * `setIsEditing(false)` runs, the focused `<input>` is removed and focus falls to the
+     * document. From there Delete, Escape, Ctrl/Cmd+C and Ctrl/Cmd+V all go nowhere, and
+     * the operator has to click a cell again to wake the grid up.
+     *
+     * Narrow on purpose. It fires ONLY when an editor is closed (`edit.isEditing` is read
+     * after render, so it is the settled value — the sink must never steal the caret from
+     * a live editor), only when a cell is selected, and only when focus is genuinely
+     * orphaned. A filter popover, the search box or anything else that legitimately holds
+     * focus is never `document.body`, so it is never touched.
+     */
+    React.useEffect(() => {
+        if (edit.isEditing || activeCell === null) return;
+        const el = document.activeElement;
+        if (el !== null && el !== document.body) return;
+        focusGrid();
+    }, [edit.isEditing, activeCell, focusGrid]);
+
+    /**
      * The ONE scroll container for the current scope. Both scopes scroll on a single
      * element in both axes — virtuoso's scroller (`overflowX:auto` + its own
      * `overflowY:auto`) in endless, the plain wrapper in focus.
@@ -1365,11 +1455,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             // down, and a vertical Arrow does the reverse.
             scrollTo(id.row);
             scrollToCol(id.col);
-            // `preventScroll` is not an optimisation. `focus()` is specified to scroll the
-            // element into view with block AND inline "center", in every scrollable
-            // ancestor — so re-focusing this full-height wrapper on every caret move was
-            // yanking the page down. Focus still moves; only the scroll is refused.
-            gridRef.current?.focus({ preventScroll: true });
+            // `focusGrid` focuses the paste SINK, not this wrapper — see PASTE_SINK_ATTR.
+            // It is always safe here: the shared hook's editing branch has already called
+            // `edit.commit()` before any move, so the editor is on its way out and the
+            // caret is not being stolen from it.
+            focusGrid();
         },
         // Tab-then-Enter returns to the run's lane — the Excel habit, and this sheet is
         // entered row-by-row across the lab columns, which is exactly the run it helps.
@@ -1390,10 +1480,10 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             cellSelection.clearSelection();
             setActiveCell({ row: place.navRow, col: dateCol < 0 ? 0 : dateCol });
             scrollTo(place.navRow);
-            gridRef.current?.focus({ preventScroll: true });
+            focusGrid();
             return true;
         },
-        [placeById, cols, cellSelection, setActiveCell, scrollTo],
+        [placeById, cols, cellSelection, setActiveCell, scrollTo, focusGrid],
     );
 
     // ═══ SELECT ≠ EDIT ═══════════════════════════════════════════════════════════
@@ -1651,17 +1741,108 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         ],
     );
 
-    /** Paste is a grid gesture — unless the caret is in a control the grid does not own. */
-    const onGridPaste = React.useCallback(
-        (e: React.ClipboardEvent) => {
-            if (isGridChrome(e.target)) return;
-            const text = e.clipboardData.getData('text/plain');
-            if (!text) return;
-            e.preventDefault();
+    // ═══ Getting the paste EVENT at all — the third defect ═══════════════════════
+    //
+    // Rounds 1 and 2 both fixed real faults inside `applyClipboardPaste`, and paste still
+    // did not work, because `onGridPaste` was never running. `paste` is a CLIPBOARD event,
+    // not a keyboard one: the browser delivers it to an element that can accept a paste,
+    // and the focused `<div tabIndex={-1}>` wrapper cannot. See PASTE_SINK_ATTR at the top
+    // of this file for the full account. Two delivery paths now exist, and they are
+    // complementary rather than redundant:
+    //
+    //   1. **The sink.** A real `<textarea>` inside the wrapper holds focus, so the event
+    //      is delivered there and bubbles into `onGridPaste`. This is the path that works
+    //      in every engine.
+    //   2. **The document fallback.** If an engine dispatches the event at `document.body`
+    //      anyway — body is an ANCESTOR of React's root container, so React's own listener
+    //      can never see it — a plain listener on `document` picks it up.
+    //
+    // Neither may apply the same block twice: a doubled paste writes a second copy of a
+    // receipt, which is precisely the fault this ledger already flags 22 rows for.
+
+    /** The last native paste this grid consumed — the double-apply interlock. */
+    const handledPasteRef = React.useRef<ClipboardEvent | null>(null);
+
+    /**
+     * A clipboard payload → the paste. Split out of `applyClipboardPaste` so BOTH delivery
+     * paths read the payload identically and say the same thing when there is nothing in
+     * it. The `if (!text) return;` this replaces was the most silent line in the module.
+     */
+    const pasteFromClipboard = React.useCallback(
+        (data: DataTransfer | null) => {
+            // The sink is a real textarea, so a paste the browser DID deliver could also
+            // have landed in it. Emptied on every gesture (and again on `onInput`) so it
+            // can never accumulate the operator's data or grow a scrollbar.
+            if (sinkRef.current) sinkRef.current.value = '';
+
+            const text = data?.getData('text/plain') ?? '';
+            if (!text) {
+                toast.info('Nothing pasted — the clipboard holds no text.');
+                return;
+            }
             applyClipboardPaste(text);
         },
         [applyClipboardPaste],
     );
+
+    /**
+     * Paste is a grid gesture — unless it is aimed at a control the grid does not own.
+     *
+     * The only silent branch left in the whole paste path, and it is silent correctly: a
+     * paste into the "add rows" counter, a column header's filter box or the cell editor's
+     * own input IS that control's paste, and it is left alone (no `preventDefault`) so the
+     * browser performs it normally. The sink is exempt from that test inside
+     * `isGridChrome` — it is a textarea, but it is the grid's ear, not chrome.
+     */
+    const onGridPaste = React.useCallback(
+        (e: React.ClipboardEvent) => {
+            if (isGridChrome(e.target)) return;
+            handledPasteRef.current = e.nativeEvent;
+            e.preventDefault();
+            pasteFromClipboard(e.clipboardData);
+        },
+        [pasteFromClipboard],
+    );
+
+    // The document listener is attached ONCE; `pasteFromClipboard`'s identity changes on
+    // every render (it closes over the row axis), and re-binding a document listener that
+    // often is how one gets left behind on a fast unmount.
+    const pasteFromClipboardRef = React.useRef(pasteFromClipboard);
+    pasteFromClipboardRef.current = pasteFromClipboard;
+
+    React.useEffect(() => {
+        const onDocumentPaste = (e: ClipboardEvent) => {
+            // ── NEVER TWICE ──────────────────────────────────────────────────────
+            // Two independent interlocks. (a) The stamp: React's root listener runs
+            // BEFORE a bubble-phase listener on `document`, so anything `onGridPaste`
+            // consumed is already marked. (b) The structural one: anything whose target
+            // is inside the grid is the React path's territory by definition — including
+            // a target `onGridPaste` deliberately DECLINED (a real form control), whose
+            // paste must go to that control and not to the grid.
+            if (handledPasteRef.current === e) return;
+            const target = e.target;
+            if (target instanceof Node && gridRef.current?.contains(target)) return;
+
+            // Someone else's paste: a text field, the search box, a filter popover (Radix
+            // portals those OUT of the grid), anything marked `data-grid-chrome`.
+            if (isGridChrome(target)) return;
+            // Never over an open cell editor — that paste belongs to the editor's input.
+            if (editingRef.current) return;
+            // …and only when this grid is what the operator is actually working in: it
+            // holds the caret, or it holds focus. A paste aimed at the rest of the page is
+            // not the ledger's to steal.
+            const focused = gridRef.current?.contains(document.activeElement) ?? false;
+            if (activeRef.current === null && !focused) return;
+
+            handledPasteRef.current = e;
+            e.preventDefault();
+            pasteFromClipboardRef.current(e.clipboardData);
+        };
+        // BUBBLE phase, deliberately — capture would run ahead of React's root listener
+        // and invert the interlock above.
+        document.addEventListener('paste', onDocumentPaste);
+        return () => document.removeEventListener('paste', onDocumentPaste);
+    }, []);
 
     // ═══ Context menu ════════════════════════════════════════════════════════════
     const menu = useGridContextMenu<MenuRef>({ width: 232, height: 220 });
@@ -2416,10 +2597,13 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                             if (!e.shiftKey) {
                                 setActiveCell(canEdit ? { row: navRow, col: colIndex } : null);
                             }
-                            // Same reason as `onAfterMove`: a bare `focus()` re-centres
-                            // this wrapper in every scrollable ancestor, so clicking a
-                            // cell used to jolt the page too.
-                            gridRef.current?.focus({ preventScroll: true });
+                            // The paste sink, not the wrapper — a click is the gesture that
+                            // most often precedes a Ctrl/Cmd+V, and the wrapper cannot
+                            // receive one (see PASTE_SINK_ATTR). Same `preventScroll`
+                            // reason as `onAfterMove`: a bare `focus()` re-centres its
+                            // target in every scrollable ancestor, so clicking a cell used
+                            // to jolt the page too.
+                            focusGrid();
                         }}
                         onMouseEnter={() => cellSelection.handleCellMouseEnter(navRow, colIndex)}
                         onDoubleClick={(e) => {
@@ -3232,9 +3416,45 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                     onKeyDown={onGridKeyDown}
                     onPaste={onGridPaste}
                     onBlur={(e) => {
+                        // The sink and the cell editor are both INSIDE this wrapper, so
+                        // focus moving between them (and between either and the wrapper)
+                        // is never a blur of the grid — `contains` covers it, and
+                        // `onBlur`/focusout bubbles from whichever of them lost focus.
                         if (!e.currentTarget.contains(e.relatedTarget)) setActiveCell(null);
                     }}
                 >
+                    {/* ── The paste sink ────────────────────────────────────────────
+                        The grid's ear for clipboard events. See PASTE_SINK_ATTR at the
+                        top of this file: without a genuinely focusable, genuinely
+                        EDITABLE element holding focus, the browser does not deliver a
+                        `paste` into this subtree and `onGridPaste` never runs.
+
+                        It must stay a real, rendered, non-`display:none`,
+                        non-`visibility:hidden` element — both of those are unfocusable,
+                        and an unfocusable sink is no sink. `opacity-0` + 1px + `-z-10`
+                        hide it; `pointer-events-none` keeps it out of every click;
+                        `select-text` undoes the wrapper's `select-none`, which WebKit
+                        otherwise applies to editable descendants too.
+
+                        `tabIndex={-1}` keeps it off the Tab order (the grid's own Tab
+                        moves the caret, and `useGridKeyboardNav` preventDefaults it), and
+                        `onInput` empties it so a keystroke the grid declines to handle
+                        cannot accumulate inside it. */}
+                    <textarea
+                        ref={sinkRef}
+                        {...{ [PASTE_SINK_ATTR]: '' }}
+                        aria-hidden="true"
+                        tabIndex={-1}
+                        readOnly={false}
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
+                        className="pointer-events-none absolute left-0 top-0 -z-10 size-px resize-none select-text overflow-hidden border-0 bg-transparent p-0 text-transparent opacity-0 outline-none"
+                        onInput={(e) => {
+                            e.currentTarget.value = '';
+                        }}
+                    />
                     {scope === 'endless' ? (
                         <>
                             {win.loadingOlder && <EdgeSpinner where="top" label="Loading earlier receipts…" />}
@@ -4356,15 +4576,21 @@ function draftLabel(edits: FieldEdits, defaultDate: string): string {
 /**
  * Is the focus/keydown/paste target a control the grid does NOT own?
  *
- * Two families: a real form field (the "add rows" counter), and anything explicitly
- * marked `data-grid-chrome` — today the column headers' filter buttons. Marking wins
- * over guessing: a header filter trigger is a `<button>`, which no tag test would
- * catch, and Enter on it must open the filter rather than open the selected CELL for
- * editing.
+ * Two families: a real form field (the "add rows" counter, the cell editor's own input),
+ * and anything explicitly marked `data-grid-chrome` — today the column headers' filter
+ * buttons. Marking wins over guessing: a header filter trigger is a `<button>`, which no
+ * tag test would catch, and Enter on it must open the filter rather than open the
+ * selected CELL for editing.
+ *
+ * THE ONE EXEMPTION IS THE PASTE SINK. It has to be a real `<textarea>` (see
+ * `PASTE_SINK_ATTR`), so the form-field family would swallow it — and then the very first
+ * line of `onGridKeyDown` would bail on EVERY keystroke, because the sink is what holds
+ * focus. It is the grid's own ear, not a control the grid does not own.
  */
 function isGridChrome(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null;
     if (!el || typeof el.tagName !== 'string') return false;
+    if (typeof el.closest === 'function' && el.closest(`[${PASTE_SINK_ATTR}]`) !== null) return false;
     const tag = el.tagName.toUpperCase();
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true) return true;
     return typeof el.closest === 'function' && el.closest('[data-grid-chrome]') !== null;

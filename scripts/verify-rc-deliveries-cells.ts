@@ -1217,6 +1217,186 @@ check('the ledger pastes against its OWN row model — the truncating bridge is 
   assert.match(code, /if \(field === 'price' && !canViewPrices\) continue;/)
 })
 
+// ── The paste SINK — why `onPaste` on a div was never going to fire ───────────
+//
+// Renzo, after TWO rounds of paste fixes: "delete works and copy seems to work but
+// pasting into cells be it empty or populated really doesn't work still." Both rounds
+// repaired genuine faults INSIDE `applyClipboardPaste` — a truncating adapter, then an
+// `if (activeCell)` with no `else`. Neither made paste work, because the handler was
+// never reached.
+//
+// Delete, Escape, the arrows and Ctrl/Cmd+C are `keydown`, and a keydown is delivered to
+// whatever element holds focus — a `<div tabIndex={-1}>` included, which is exactly why
+// those four gestures DO work here. `paste` is a CLIPBOARD event: the browser delivers it
+// to an element that can ACCEPT a paste. The focused wrapper cannot, so the event goes to
+// `document.body` instead — an ANCESTOR of React's root container, which React's own
+// listener can therefore never see. `onPaste={onGridPaste}` never ran, and every fix
+// downstream of it was invisible.
+//
+// Every grid in this app where paste demonstrably works (`bulk-delivery-input.tsx`,
+// `bulk-usage-input.tsx`, `production-ledger-grid.tsx`) has a real `<input>` under the
+// caret. This ledger is the only one whose cells are non-editable `<div>`s in nav mode.
+// That is the whole of the difference — and the reason the sink is not optional.
+//
+// These scans exist so a later "simplification" back to `onPaste` on a div fails loudly
+// instead of silently reintroducing a bug that already survived two rounds of fixes.
+
+check('the grid keeps a REAL, FOCUSABLE, EDITABLE paste sink — not a hidden div', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // Exactly one, and it is a <textarea>. A <div>, a `contentEditable` span or a
+  // `readOnly` input would all fail to receive a paste in at least one engine.
+  assert.equal((code.match(/<textarea/g) ?? []).length, 1, 'exactly one paste sink, and it must be a textarea')
+  const sink = code.slice(code.indexOf('<textarea'), code.indexOf('/>', code.indexOf('<textarea')) + 2)
+  assert.ok(sink.length > 200, 'expected the sink element; the slice found nothing')
+
+  // Identified by ONE constant, shared with the `isGridChrome` exemption below.
+  assert.match(code, /const PASTE_SINK_ATTR = 'data-grid-paste-sink';/)
+  assert.match(sink, /\[PASTE_SINK_ATTR\]/, 'the sink must be findable by the same attribute isGridChrome exempts')
+  assert.match(sink, /ref=\{sinkRef\}/)
+
+  // FOCUSABLE. `display:none` and `visibility:hidden` cannot hold focus, and an
+  // unfocusable sink is no sink at all — it is hidden by opacity and size instead.
+  const classes = (/className="([^"]*)"/.exec(sink)?.[1] ?? '').split(/\s+/).filter(Boolean)
+  assert.ok(classes.length > 5, 'expected the sink’s class list')
+  for (const forbidden of ['hidden', 'invisible', 'sr-only', 'collapse']) {
+    assert.ok(!classes.includes(forbidden), `the sink must not be hidden with "${forbidden}" — it could not hold focus`)
+  }
+  assert.ok(!/hidden|invisible/.test(sink.replace(/aria-hidden="true"|overflow-hidden/g, '')), 'nothing may make the sink unfocusable')
+  assert.ok(classes.includes('opacity-0'), 'hidden by opacity, which leaves it focusable')
+  assert.ok(classes.includes('size-px'), 'and by size')
+  assert.ok(classes.includes('pointer-events-none'), 'it must never intercept a click on the header corner it sits over')
+  // The wrapper is `select-none`; WebKit applies that to editable descendants too.
+  assert.ok(classes.includes('select-text'), 'the sink must undo the grid wrapper’s select-none')
+  // EDITABLE: a readOnly textarea is not a paste target in Chromium.
+  assert.ok(!/readOnly=\{true\}|readOnly\s*\/|\breadOnly\b(?!=\{false\})/.test(sink), 'a readOnly sink cannot receive a paste')
+  // Off the Tab order (the grid's own Tab moves the caret) and out of the a11y tree.
+  assert.match(sink, /tabIndex=\{-1\}/)
+  assert.match(sink, /aria-hidden="true"/)
+  // A keystroke the grid declines to handle must not accumulate inside it.
+  assert.match(sink, /onInput=\{\(e\) => \{\s*e\.currentTarget\.value = '';/)
+
+  // Focus goes to the SINK, everywhere. A single surviving `gridRef.current.focus()` at a
+  // caret call site is a cell whose next Ctrl/Cmd+V lands nowhere.
+  assert.match(code, /const focusGrid = React\.useCallback\(\(\) => \{/)
+  assert.match(code, /const el: HTMLElement \| null = sinkRef\.current \?\? gridRef\.current;/)
+  assert.match(code, /el\?\.focus\(\{ preventScroll: true \}\)/, 'focus() must still refuse to scroll — see the caret-follow rules')
+  assert.ok(
+    !/gridRef\.current\?\.focus\(/.test(code),
+    'every caret-focus site must go through focusGrid(); the wrapper cannot receive a paste',
+  )
+  assert.ok((code.match(/focusGrid\(\)/g) ?? []).length >= 4, 'the three caret sites plus the orphan-focus effect')
+})
+
+check('the sink is exempt from isGridChrome — or every keystroke bails on line one', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  const fn = code.slice(code.indexOf('function isGridChrome'), code.indexOf('function rowLabel'))
+  assert.ok(fn.length > 200, 'expected isGridChrome ahead of rowLabel')
+
+  // `isGridChrome` treats every INPUT/TEXTAREA/SELECT as a control the grid does not own,
+  // and `onGridKeyDown`'s FIRST line is `if (!edit.isEditing && isGridChrome(e.target))
+  // return;`. The sink is a textarea and is what holds focus — so without this exemption
+  // the sink would silently kill Delete, Escape, Ctrl/Cmd+C, type-to-edit and the arrows.
+  const exempt = fn.indexOf(`closest(\`[\${PASTE_SINK_ATTR}]\`) !== null) return false`)
+  assert.ok(exempt > 0, 'isGridChrome must exempt the paste sink')
+  assert.ok(
+    exempt < fn.indexOf(`tag === 'TEXTAREA'`),
+    'the exemption must come BEFORE the form-control test, or the sink is swallowed by it',
+  )
+  // And the guard it protects is still the first thing onGridKeyDown does.
+  assert.match(code, /if \(!edit\.isEditing && isGridChrome\(e\.target\)\) return;/)
+})
+
+check('the sink never steals the caret from an open cell editor', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // The ONLY unprompted focus move (the three caret sites are user gestures). It must
+  // refuse while an editor is mounted — a `focus()` there would yank the caret out
+  // mid-keystroke — and it reads `edit.isEditing` from an EFFECT, i.e. post-render, so it
+  // sees the settled value rather than the mid-handler one.
+  const eff = code.slice(code.indexOf('React.useEffect(() => {\n        if (edit.isEditing'))
+  const body = eff.slice(0, eff.indexOf('}, [edit.isEditing, activeCell, focusGrid]);'))
+  assert.ok(body.length > 40, 'expected the orphaned-focus effect')
+  assert.match(body, /if \(edit\.isEditing \|\| activeCell === null\) return;/)
+  // …and only when focus is genuinely orphaned. A filter popover or the search box is
+  // never document.body, so neither is ever interrupted.
+  assert.match(body, /if \(el !== null && el !== document\.body\) return;/)
+  assert.match(body, /focusGrid\(\);/)
+
+  // The DOM-readable mirror the document listener uses. It must be assigned during
+  // render, never derived inside the listener.
+  assert.match(code, /const editingRef = React\.useRef\(false\);\s*editingRef\.current = edit\.isEditing;/)
+})
+
+check('a document-level paste is caught, guarded, and can never double-apply', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  const eff = code.slice(code.indexOf('const onDocumentPaste = (e: ClipboardEvent)'))
+  const body = eff.slice(0, eff.indexOf("document.addEventListener('paste'"))
+  assert.ok(body.length > 300, 'expected the document-level paste fallback')
+
+  // ── Guards, all four ────────────────────────────────────────────────────────
+  // 1. Not a real control, the search box, a filter popover (Radix portals those OUT of
+  //    the grid), or anything marked data-grid-chrome — the SAME test the React path uses.
+  assert.match(body, /if \(isGridChrome\(target\)\) return;/)
+  // 2. Never over an open cell editor.
+  assert.match(body, /if \(editingRef\.current\) return;/)
+  // 3. Only when this grid is what the operator is working in.
+  assert.match(body, /if \(activeRef\.current === null && !focused\) return;/)
+  assert.match(body, /gridRef\.current\?\.contains\(document\.activeElement\)/)
+  // 4. …and it still goes through the one payload reader, so it cannot skip a message.
+  assert.match(body, /pasteFromClipboardRef\.current\(e\.clipboardData\)/)
+  assert.match(body, /e\.preventDefault\(\);/)
+
+  // ── The double-apply interlock, both halves ─────────────────────────────────
+  // (a) the stamp — React's root listener runs before a bubble-phase document listener…
+  assert.match(body, /if \(handledPasteRef\.current === e\) return;/)
+  assert.match(code, /handledPasteRef\.current = e\.nativeEvent;/, 'the React path must stamp the native event')
+  assert.match(body, /handledPasteRef\.current = e;/, 'the document path must stamp too')
+  // (b) …and the structural one: the grid subtree is the React path's territory, including
+  //     a target it deliberately DECLINED (that paste belongs to the control it hit).
+  assert.match(body, /gridRef\.current\?\.contains\(target\)\) return;/)
+  // …which only holds if the listener is on the BUBBLE phase. `true` here inverts it.
+  assert.match(code, /document\.addEventListener\('paste', onDocumentPaste\);\s*\n\s*return \(\) => document\.removeEventListener\('paste', onDocumentPaste\);/)
+  assert.ok(!/addEventListener\('paste', onDocumentPaste, true\)/.test(code), 'capture phase would run ahead of React and invert the interlock')
+
+  // ONE React paste handler in the whole grid. A second one (on the sink, say) would fire
+  // alongside this one on the same bubble path and apply the block twice.
+  assert.equal((code.match(/onPaste=/g) ?? []).length, 1, 'exactly one React onPaste — on the grid wrapper')
+  assert.match(code, /onPaste=\{onGridPaste\}/)
+})
+
+check('no paste gesture can end without the operator being told something', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // `if (!text) return;` — the single most silent line in the module — is gone.
+  assert.ok(!/if \(!text\) return;/.test(code), 'an empty clipboard must SAY it was empty')
+  assert.match(code, /toast\.info\('Nothing pasted — the clipboard holds no text\.'\)/)
+
+  // Every other refusal, each named. These are the complete set of ways
+  // `applyClipboardPaste` can decline to write.
+  assert.match(code, /errorToast\('Nothing was pasted — no cell is selected\./)
+  assert.match(code, /toast\.info\('Nothing pasted — the clipboard held no cells\.'\)/)
+  assert.match(code, /toast\.info\('Nothing pasted — that block lands outside the editable cells\.'\)/)
+  assert.match(code, /errorToast\('Part of that block could not be pasted\./)
+  assert.match(code, /toast\.success\(`Pasted \$\{rowsTouched\}/)
+
+  // Both delivery paths funnel through ONE payload reader, so neither can grow a quiet
+  // early return of its own.
+  const reader = code.slice(code.indexOf('const pasteFromClipboard = React.useCallback'))
+  const fn = reader.slice(0, reader.indexOf('[applyClipboardPaste],'))
+  assert.ok(fn.length > 200, 'expected pasteFromClipboard')
+  assert.equal((fn.match(/return;/g) ?? []).length, 1, 'exactly one early return, and it toasts first')
+  assert.match(fn, /if \(sinkRef\.current\) sinkRef\.current\.value = '';/, 'the sink is emptied on every gesture')
+  assert.match(fn, /applyClipboardPaste\(text\)/)
+})
+
 check('the copy payload is the DB\u2019s figures, not the cell\u2019s decoration', () => {
   const code = stripComments(readFileSync(LEDGER, 'utf8'))
   assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
