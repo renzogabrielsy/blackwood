@@ -292,11 +292,11 @@ const CELL_BASE =
 // line to the row family's weight as well.
 const ROW_RULE: Record<NavRow['kind'], string> = {
     /** A receipt — the sheet's primary row. Matches the vertical rule's weight. */
-    delivery: 'border-b border-b-border/30',
+    delivery: 'border-b border-b-border',
     /** A moisture draw. Lighter, because it is a CHILD of the receipt above it. */
-    sample: 'border-b border-b-border/20',
+    sample: 'border-b border-b-border/60',
     /** A blank row waiting to be typed into. Same quiet weight as a draw. */
-    draft: 'border-b border-b-border/20',
+    draft: 'border-b border-b-border/60',
 };
 
 /** Range-selection tint — the platform's, matched to the other Blackwood grids. */
@@ -2132,7 +2132,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 className={cn(
                     // Side-specific colour, so `ROW_RULE`'s `border-b-border/…` cannot
                     // land in the same tailwind-merge group and restyle this one.
-                    'border-r border-r-border/30 p-0 align-middle',
+                    'border-r border-r-border p-0 align-middle',
                     // The horizontal rule, per row family. It rides here rather than on
                     // the `<tr>` because `border-collapse: separate` paints cell borders
                     // only — and it must reach the FROZEN cells too, which are the ones
@@ -2660,7 +2660,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                         key={col.key}
                         title={col.title}
                         className={cn(
-                            'h-8 border-b border-r border-b-border border-r-border/40 bg-muted px-2 align-middle text-[10px] font-bold uppercase tracking-wide text-muted-foreground',
+                            'h-8 border-b border-r border-b-border border-r-border bg-muted px-2 align-middle text-[10px] font-bold uppercase tracking-wide text-muted-foreground',
                             col.numeric ? 'text-right' : 'text-left',
                             ci < frozenCount ? 'frozen-corner' : '',
                             ci === frozenCount - 1 && 'frozen-edge',
