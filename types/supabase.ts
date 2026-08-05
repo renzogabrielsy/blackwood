@@ -2026,9 +2026,11 @@ export type Database = {
           grit: number | null
           gross_weight_kg: number | null
           has_import_flags: boolean | null
+          has_unresolved_flags: boolean | null
           id: string | null
           import_flag_count: number | null
           import_flags: Json | null
+          import_flags_state: Json | null
           is_suspected_duplicate: boolean | null
           moisture_pct: number | null
           net_weight_kg: number | null
@@ -2038,6 +2040,7 @@ export type Database = {
           price_php_kg: number | null
           provenance: string | null
           remarks: string | null
+          resolved_flag_count: number | null
           row_version: number | null
           sacks: number | null
           sample_avg_moisture_pct: number | null
@@ -2053,6 +2056,7 @@ export type Database = {
           supplier_unresolved: boolean | null
           total_price_php: number | null
           truck_no: string | null
+          unresolved_flag_count: number | null
           updated_at: string | null
           updated_by: string | null
           vm: number | null
