@@ -266,6 +266,21 @@ Also re-confirmed: dirty `.claude/agent-memory-local/**` was identical on both b
 complaint — the cheap pre-checkout check above, run as a branch-to-branch diff rather than a
 name-overlap comparison.
 
+### Promotion 35 (2026-08-05, `76f6570`) — the docs-only changeset with a STOP guard
+
+First brief to hand me an **explicit expected-file manifest plus a STOP condition**: it named the
+two docs files and said that if anything under `app/`, `lib/`, `components/`, `scripts/`,
+`workers/`, `supabase/`, `types/supabase.ts`, or any migration appeared in the sweep, I must stop
+and report, because the tree was clean after the last promotion and any source file would mean an
+unexpected writer had touched it. **Treat that as the pattern for docs-only work:** after
+`git add .`, diff the staged path list against the manifest *before* drafting the commit message —
+the check is a tripwire for a concurrent session, not busywork. Here it passed (only
+`.agents/prompts/liquidation-feature.md` + the new `handoffs/` file staged).
+
+Also: the branch's pending `.claude/`-only commit `91c4e60` was already pushed to origin, so the
+branch was only ahead by the new docs commit — check `git status -sb`'s ahead count rather than
+assuming an unpushed predecessor still needs republishing.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
