@@ -267,6 +267,38 @@ const dash = <span className="text-muted-foreground/40">—</span>;
 const CELL_BASE =
     'absolute inset-0 flex items-center px-2 outline-none cursor-default select-none';
 
+// ─── The horizontal cell rule — WHY IT LIVES ON THE `<td>` AND NOT THE `<tr>` ────
+//
+// Both tables are `border-collapse: separate` (load-bearing: under `collapse` a border
+// belongs to the TABLE rather than the cell, so a `position: sticky` frozen column's
+// borders scroll away and the pinned block loses its edges — a far worse bug than a
+// missing line). **In the separated-borders model the CSS spec paints borders on table
+// CELLS ONLY**: a border declared on `<tr>`, `<tbody>`, `<col>` or `<colgroup>` is
+// ignored outright.
+//
+// So the `border-b` that used to sit on `rowClassFor`'s `<tr>` never rendered, and the
+// sheet read as columns with no rows — which is not what an operator coming from Excel
+// expects to see. The weight now rides on the `<td>`, keyed off the SAME
+// `navRows[navRow].kind` lookup that already decides the row's height, so the two can
+// never disagree about which family a row belongs to.
+//
+// It is deliberately ONE table in ONE place. Do NOT re-add a `border-b` to the row —
+// it would be silently inert and would read as if the weight lived in two places.
+// Row heights are unaffected: Tailwind's preflight makes every cell `border-box`, so
+// the 1px rule is drawn INSIDE the explicit 32px / 26px cell height.
+// Note the SIDE-SPECIFIC colour (`border-b-border/…`, never `border-border/…`). The
+// cell already sets its vertical rule with `border-r`; an all-sides colour utility here
+// would be in the same tailwind-merge group and would silently restyle that vertical
+// line to the row family's weight as well.
+const ROW_RULE: Record<NavRow['kind'], string> = {
+    /** A receipt — the sheet's primary row. Matches the vertical rule's weight. */
+    delivery: 'border-b border-b-border/30',
+    /** A moisture draw. Lighter, because it is a CHILD of the receipt above it. */
+    sample: 'border-b border-b-border/20',
+    /** A blank row waiting to be typed into. Same quiet weight as a draw. */
+    draft: 'border-b border-b-border/20',
+};
+
 /** Range-selection tint — the platform's, matched to the other Blackwood grids. */
 const SELECT_TINT = 'bg-primary/10 dark:bg-primary/20';
 /** A cell holding unsaved text. */
@@ -2082,7 +2114,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         const exists = cellExists(navRow, colIndex);
         const invalid = invalidCells.has(`${rowKeyOf(navRow)}:${col.key}`);
         const selected = exists && cellSelection.isSelected(navRow, colIndex);
-        const cellH = navRows[navRow]?.kind === 'sample' ? SAMPLE_ROW_H : ROW_H;
+        const navKind = navRows[navRow]?.kind;
+        const cellH = navKind === 'sample' ? SAMPLE_ROW_H : ROW_H;
+        // The row's horizontal rule. It has to be a CELL border — see ROW_RULE: under
+        // `border-collapse: separate` a border on the `<tr>` is not painted at all.
+        const rowRule = navKind ? ROW_RULE[navKind] : '';
         // ONE background class, chosen explicitly. Stacking `bg-*` utilities and hoping
         // is not a rule — Tailwind emits them in its own order, not the order they are
         // written, so which one won would be luck. Invalid outranks selected outranks
@@ -2094,7 +2130,17 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             <td
                 key={col.key}
                 className={cn(
-                    'border-r border-border/30 p-0 align-middle',
+                    // Side-specific colour, so `ROW_RULE`'s `border-b-border/…` cannot
+                    // land in the same tailwind-merge group and restyle this one.
+                    'border-r border-r-border/30 p-0 align-middle',
+                    // The horizontal rule, per row family. It rides here rather than on
+                    // the `<tr>` because `border-collapse: separate` paints cell borders
+                    // only — and it must reach the FROZEN cells too, which are the ones
+                    // that look most broken without it. They are opaque (`bg-background`
+                    // / `bg-muted`), so the border paints cleanly on them; it runs along
+                    // the bottom edge and `.frozen-edge`'s inset RIGHT border + shadow is
+                    // a different edge, so the two never fight.
+                    rowRule,
                     // `relative` only when the cell is not already a containing block:
                     // `.frozen-col` is `position: sticky`, which is one, and layering a
                     // `relative` on top of it would fight the CSS that pins the column.
@@ -2587,8 +2633,14 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     // an overlay would sit exactly where a right-aligned numeric header's text is. It
     // goes on the LEFT of a numeric column (whose label hugs the right edge) and on the
     // RIGHT of a text one, so it never covers the label in either family.
+    //
+    // The header's own bottom rule is on the `<th>`, not the `<tr>` — same reason as
+    // ROW_RULE: `border-collapse: separate` paints cell borders only, so the `border-b`
+    // this row used to carry was inert and the header ran straight into the first
+    // receipt. Full-weight `border-border` (not the body's /30), because this is the
+    // header↔body boundary rather than another row division.
     const headerRow = (
-        <tr className="border-b">
+        <tr>
             {cols.map((col, ci) => {
                 const filterable = isFilterableColumn(col);
                 const active = filters[col.key] !== undefined;
@@ -2608,7 +2660,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                         key={col.key}
                         title={col.title}
                         className={cn(
-                            'h-8 border-r border-border/40 bg-muted px-2 align-middle text-[10px] font-bold uppercase tracking-wide text-muted-foreground',
+                            'h-8 border-b border-r border-b-border border-r-border/40 bg-muted px-2 align-middle text-[10px] font-bold uppercase tracking-wide text-muted-foreground',
                             col.numeric ? 'text-right' : 'text-left',
                             ci < frozenCount ? 'frozen-corner' : '',
                             ci === frozenCount - 1 && 'frozen-edge',
@@ -2642,20 +2694,25 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     );
 
     // ── Row wrapper (shared by both containers) ──────────────────────────────────
+    //
+    // NO `border-b` here, deliberately. Under `border-collapse: separate` a border on a
+    // `<tr>` is never painted — the row's horizontal rule lives on the `<td>` (`ROW_RULE`,
+    // applied in `renderCell`). Re-adding one here would be inert AND would split the
+    // weight table across two files.
     const rowClassFor = (item: LedgerItem): string => {
         if (item.kind === 'delivery') {
             const dirty = dirtyIds.has(item.rec.row.id ?? '');
             const dup = item.rec.row.is_suspected_duplicate;
             return cn(
-                'group border-b border-border/30 transition-colors duration-150 hover:bg-muted',
+                'group transition-colors duration-150 hover:bg-muted',
                 dup && 'bg-rose-500/[0.05]',
                 dirty && 'bg-amber-500/[0.07]',
             );
         }
-        if (item.kind === 'sample') return 'group border-b border-border/20 bg-muted/20 transition-colors duration-150 hover:bg-muted/40';
+        if (item.kind === 'sample') return 'group bg-muted/20 transition-colors duration-150 hover:bg-muted/40';
         if (item.kind === 'draft') {
             return cn(
-                'group border-b border-border/20 bg-muted/[0.15] transition-colors duration-150 hover:bg-muted/40',
+                'group bg-muted/[0.15] transition-colors duration-150 hover:bg-muted/40',
                 dirtyDraftIds.has(item.draftId) && 'bg-amber-500/[0.07]',
             );
         }

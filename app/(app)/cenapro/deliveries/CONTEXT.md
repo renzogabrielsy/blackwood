@@ -103,6 +103,66 @@ Consequences worth keeping in mind when editing this file:
   which is what keeps the frozen-pane rule intact (opaque base, translucent state on top,
   no bleed-through).
 
+### Cell borders — the `border-collapse: separate` trap (2026-08-05)
+
+Renzo: *"could you add horizontal lines as well for the borders? they are used to the
+shape of seeing the cell borders on the table so this might seem very weird to them if it
+looks like theres no borders on the rows and stuff."*
+
+The grid drew **vertical** cell lines and no **horizontal** ones, so it did not read as a
+spreadsheet. The horizontal rules had been written — they just never rendered.
+
+**The rule, and it is absolute: both tables are `border-collapse: separate`, and in the
+separated-borders model the CSS spec paints borders on table CELLS ONLY.** A border
+declared on `<tr>`, `<tbody>`, `<col>` or `<colgroup>` is ignored outright. So
+`rowClassFor`'s `border-b border-border/30` (delivery), `/20` (sample sub-rows), `/20`
+(draft rows) and the header `<tr className="border-b">` were all **inert**, while the
+`<td>`'s own `border-r` rendered fine — which is exactly why only the verticals showed.
+The `Σ DAY TOTAL`, day-header and month-footer rows always looked right because their
+borders were on cells (`DAY_TOTAL_CELL` / `DAY_HEADER_CELL`) from the start.
+
+- **`borderCollapse: 'separate'` is LOAD-BEARING and must never be changed to
+  `collapse`.** Under `collapse` a border belongs to the TABLE rather than the cell, so a
+  `position: sticky` frozen column's borders scroll away and the pinned block loses its
+  edges — a much worse bug than a missing line. (Same reason the RC Movement matrix and
+  the flecon view say so in their own files.) **Never "fix" a future missing border by
+  putting it back on the `<tr>`, and never by flipping to `collapse`.**
+- **The weight lives in ONE place: `ROW_RULE` in `deliveries-ledger.tsx`**, a
+  `Record<NavRow['kind'], string>` applied by `renderCell` and keyed off the **same
+  `navRows[navRow].kind` lookup that already decides the row's height** — so the two can
+  never disagree about which family a row is in. `rowClassFor` carries no `border-b` at
+  all any more; re-adding one would be both inert and a second copy of the table.
+  Hierarchy preserved verbatim: receipts `/30`, sample sub-rows `/20` (lighter — they are
+  children), draft rows `/20`.
+- **The colour is SIDE-SPECIFIC** (`border-b-border/…`, and the cell's vertical rule was
+  changed to `border-r-border/30` to match). An all-sides `border-border/20` would land in
+  the same tailwind-merge group as the `border-r` colour and silently restyle the vertical
+  line to the row family's weight.
+- **The header's rule is on the `<th>`** — `border-b border-b-border` at full weight,
+  because this is the header↔body boundary, not another row division. Its `border-r` stays
+  at `/40`.
+- **Frozen cells get the horizontal line too**, which matters most: they are the ones that
+  looked broken without it. They are opaque (`bg-background` body / `bg-muted` header), so
+  a cell-level border paints cleanly on them, and it runs along a **different edge** from
+  `.frozen-edge` (inset RIGHT border + shadow) and `.frozen-edge-top` (sticky footer) — the
+  three never fight.
+- **Row heights are unchanged.** Tailwind's preflight makes every cell `border-box`, so the
+  1px rule is drawn INSIDE the explicit `height` on the `<td>` (`ROW_H = 32` receipt/draft,
+  `SAMPLE_ROW_H = 26` draw). Nothing grows, so virtuoso's measured row heights do not
+  desynchronise and `minTableWidth` is untouched.
+- **Both scopes are identical by construction** — `endless` and `focus` share `renderCell`
+  and `headerRow`, so there is no per-scope border code to drift.
+- **No animation was added** — the rule is a static border; row hover is still
+  `transition-colors duration-150`.
+
+**Latent elsewhere (not fixed in this pass).** The same inert-`<tr>`-border bug exists
+wherever `border-collapse: separate` meets a row-level `border-b`:
+`cenapro/production/production-endless-sheet.tsx` (`:374` header, `:430`/`:453` rows),
+`cenapro/production/production-ledger-grid.tsx` (`:552` row, `:1597` header),
+`production/daily/daily-ledger-grid.tsx` (`:1735`) and `production/trucks/trucks-grid.tsx`
+(`:763`). The **QC ledger is NOT affected** — `qc-ledger-client.tsx` uses plain
+`border-collapse`, where row borders do render.
+
 ### SUPPLIER and WAREHOUSE — one Excel cell, several DB fields
 
 The sheet has ONE supplier column (`BRIX - SOUTH HILONGOS`, `PALAWAN RANDY PSAU
