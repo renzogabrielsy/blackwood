@@ -35,6 +35,14 @@ Bit me twice in one run (2026-07-30): `VERIFY_EXIT=` and `ESLINT_EXIT=` both cam
 - When you must keep the pipe, `${pipestatus[1]}` IS reliable (confirmed 2026-08-03 and 2026-08-04 on `git push … | tail -5`).
 - The background-task output file only holds the echoed exit code, **not** the command's stdout — always capture builds to your own log file if you need to grep them.
 
+## SHELL TRAP — you cannot grep for a NUL byte via an argv pattern
+
+2026-08-05: `grep -qU $'\x00' "$f"` flagged **all 20 staged files** as containing NUL. It is a false positive with no exceptions — NUL terminates a C string, so the pattern reaches grep as the EMPTY string, which matches every line of every file. A scan that flags 100% of its inputs is broken, not alarming.
+
+- **Cheapest real check: git already did it.** `git diff --staged --numstat` prints `-` in the add/del columns for a binary (NUL-containing) file. All-numeric columns = all text. One command, no extra tooling.
+- **Direct check when you need per-file certainty:** `perl -0777 -ne 'exit(1) if /\x00/' "$f"` — slurps the whole file, exit 1 = NUL found.
+- General rule: **any scan whose hit-rate is ~100% is a bug in the scan.** Re-derive before reporting it as a finding.
+
 ## Route-table gate for route-group moves
 
 A move like `app/(app)/x/` → `app/(app)/x/(group)/` is supposed to leave URLs unchanged, and a silently-swallowed route still compiles. Grep the build log's emitted route manifest for the specific entries (2026-07-30 confirmed `ƒ /production` + `ƒ /production/schedule`; 2026-08-04 confirmed `ƒ /cenapro/qc` + `ƒ /cenapro/qc/breakdown`). A green build alone is not the gate.
