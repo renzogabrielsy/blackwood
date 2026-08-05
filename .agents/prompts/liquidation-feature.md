@@ -290,12 +290,16 @@ the number:**
 - **A carried remainder (the normal case) is recorded by recording nothing.** The balance is
   simply non-zero and stays that way. The design requirement is *the deliberate absence of an
   error state*: no "unreconciled" badge, no auto-close, no nightly job that zeroes small
-  balances, no red. To distinguish "expected" from "unpaid" without guessing, put the habit on
-  the dimension: **`rc_supplier.rounds_to_php` numeric NULL DEFAULT 0** — 0 = pays to the
-  centavo, 1 = to the peso, 1000 = to the thousand. The balance view then exposes
-  `within_rounding`, and the UI can say *"₱132.88 — within ZAPANTA's stated rounding"* instead of
-  flagging it. A **stated business fact living as data on a re-pointable dimension**, exactly the
-  pattern `rc_supplier` was created to serve, changeable in the app without a migration.
+  balances, no red.
+
+  > **DECIDED 2026-08-05 — do NOT build a per-supplier rounding rule.** An earlier draft proposed
+  > `rc_supplier.rounds_to_php` plus a `within_rounding` column so the UI could say *"within
+  > ZAPANTA's stated rounding"*. Renzo: *"the rounding off is a habit for some but to which
+  > decimal point we're rounding off is not the same all the time so just leave it alone."*
+  > The habit is real but not stable enough to encode, and a rule that is right most of the time
+  > is worse than no rule — it would license the UI to call a genuine shortfall "expected".
+  > **Drop the column and the concept.** The requirement is simply that a non-zero balance is
+  > never treated as an error.
 - **A genuine write-off (rare, permanent forgiveness) is an explicit human act with a record.**
   Model it as a payment with method `adjustment`, an amount equal to the remainder, a required
   remark, plus its allocation. That keeps ONE invariant across the whole ledger — *every peso
@@ -369,13 +373,159 @@ written by a trigger, with no UPDATE or DELETE grant to anyone. Section 3.2 is t
 
 ---
 
-## 5. Questions for Renzo — about how the business actually works
+## 5. ANSWERED by Renzo, 2026-08-05 — these are decisions now, not questions
 
-**These are not implementation details. Each one changes the shape of the tables, and an agent
-guessing at them will build the wrong thing. Do not let an agent answer them.**
+**Treat every line below as settled unless it says OPEN.** The original questions are kept for
+context; Renzo's answer follows each in bold, with the design consequence underneath.
 
-They are written as questions about the work, not about the software. The short italic line
-under each says what the answer decides, so whoever builds it knows why it mattered.
+| # | Decision |
+|---|---|
+| 1 | Cheque is **always to a single supplier**, may cover **many deliveries** of that supplier. `supplier_code` stays **NOT NULL**; no payment grouping needed. **OPEN sub-question — see 5a.** |
+| 2 | **Cheque and bank transfer only.** Drop `'cash'` from the method CHECK. `'adjustment'` stays (it is a write-off mechanism, not a payment method the operator picks). |
+| 3 | **99.99% outgoing** — but not 100%, so `direction` stays. Model it; keep it out of the way in the UI. |
+| 4 | **Store bank name AND account number**, but they are **not front-of-screen**. Bank name reads primarily; account number is secondary detail. `bank_account_label` becomes a real account record rather than a label-only field. |
+| 5 | **Sign confirmed: negative = we owe the supplier.** Renzo's convention, verbatim, stated in the column COMMENT. |
+| 6 | **A balance can be closed and restarted whenever the human chooses.** Not a calendar reset. "Most of the time balances zero out because we pay out the remaining balances." **This is a new first-class concept — see 5b.** |
+| 7 | **Per-delivery breakdown is needed**, just not for every supplier. "Not for BRIX but this happens with other suppliers, it depends." So the drill-down is real, not optional polish. |
+| 8 | **Do NOT build a per-supplier rounding rule.** "The rounding off is a habit for some but to which decimal point we're rounding off is not the same all the time so just leave it alone." **Drop `rc_supplier.rounds_to_php` and the `within_rounding` column entirely.** The requirement reduces to: *a non-zero balance is never an error state* — no badge, no red, no auto-close, no nightly job. |
+| 9 | **Both carrying and writing off must be possible.** "I would like the choice to do either." Confirms the `method = 'adjustment'` write-off path alongside doing nothing. |
+| 10 | The eight ₱0 receipts are **incomplete entries, not ₱0 payable.** So the priceability predicate is REQUIRED — an unpriced receipt must never read as settled. |
+| 11 | Receipt EDITED with money against it → **warn the user.** Not silent, not refused. |
+| 12 | Receipt DELETED with money against it → **warn the user.** Not refused. **OPEN — see 5c.** |
+| 13 | Over-allocation → **record it.** "It will be reflected in the running balance anyway." No refusal, no CHECK against `total_price_php`. The per-*payment* invariant (allocations ≤ amount) still holds; the per-*receipt* one does not. |
+| 14 | **No cheque status lifecycle.** But: **detect and highlight SKIPPED CHEQUE NUMBERS** in reports. New requirement — see 5d. |
+| 15 | **Admins / everyone** may record a payment. No permission narrower than `canViewPrices()`. |
+| 16 | Renzo asked what "payment change" meant — answered as an ICTC-style edit history. **OPEN pending his confirmation — see 5e.** |
+
+### 5a-RESOLVED / 5c-RESOLVED / 5e-RESOLVED — Renzo, second pass 2026-08-05
+
+**5e — the ICTC audit feature is CONFIRMED for Cenapro, on BOTH deliveries and payments.**
+Model it on `public.audit_logs` (diff + snapshot + actor + timestamp) and on
+`cenapro.production_event_audit` (append-only, trigger-written, no UPDATE/DELETE grant).
+`cenapro.rc_delivery` gets one too — it currently has none, which is why the 22 duplicate
+deletions left no trace. **This is independently valuable and does not depend on liquidation; it
+can ship first.**
+
+**5a — supplier subgroups, auto-verified.** Renzo: *"Paquibot would have a subgroup of suppliers
+like Llanto. The system should be able to understand that if a cheque is labeled Paquibot but is
+being assigned to a Llanto delivery, then it should push through because it verified that Llanto
+is a sub-supplier of Paquibot. And yes, this would mean we would need a way to setup subgroups."*
+
+So `rc_supplier` gains a parent/child relationship and a small UI to maintain it, and the
+allocation path checks **payee == delivery's supplier OR delivery's supplier is a descendant of
+the payee**. Two design notes:
+- **The group is a PAYMENT fact, not a delivery fact** — it says who may be paid for whom. Keep it
+  on the supplier dimension, make it explicitly maintained (never inferred from name similarity),
+  and audit changes to it: re-pointing a parent silently changes which allocations were legal.
+- **Show both levels.** Assume the balance screen lists each trader with its own running number
+  AND a group total for the parent. Renzo did not state a preference; this is the assumption to
+  confirm on first sight of the screen rather than a further blocking question.
+- Depth: assume **one level** (parent → children), not arbitrary nesting, until proven otherwise.
+
+> ⚠️ **Renzo used ICTC names deliberately: *"we will be eventually including ictc anyway."***
+> That is a real architectural fork and it has a **prerequisite nobody has costed**. ICTC's
+> `public.deliveries.supplier` is **free text** with a `canonical_supplier()` helper — there is no
+> supplier dimension at all. Cenapro's `rc_supplier` is a proper dimension. So "include ICTC
+> later" means giving ICTC a supplier dimension first, which is its own migration and its own
+> reconciliation of historic free-text values.
+> **Recommendation: build liquidation in the `cenapro` schema now, in a shape that ports, and do
+> NOT genericise it yet.** `CLAUDE.md` forbids Cenapro↔ICTC coupling; a shared *pattern* is
+> correct, shared *tables* are not. Revisit only when ICTC actually needs it.
+
+**5c — reversibility instead of a block.** Renzo: *"I said warn because I didn't want to feel like
+I was locked up to one choice — what if an entry was a duplicate and it was already assigned
+money. Maybe the best thing to do would be to ensure reverting is robust throughout this
+feature?"*
+
+Agreed, and it replaces the block-vs-warn argument entirely. The rules:
+- **Deleting a delivery that has money against it warns, then RELEASES the allocation** — the
+  amount returns to the cheque's unassigned pool. It is never silently destroyed, because the
+  cheque would otherwise still exist carrying money that no longer adds up.
+- **Payments and allocations are SOFT-deleted** (`deleted_at`), not hard-deleted. They are money
+  records, not transcribed reference data.
+- **Every mutation carries a full snapshot**, so anything can be reconstructed even when it was
+  hard-removed upstream.
+- Renzo's own example — a duplicate receipt that already had money assigned — is exactly the case
+  release-and-warn serves: the receipt goes, the cheque keeps its value, and the money is
+  re-assignable rather than stranded.
+
+**5d — confirmed.** Skipped cheque numbers are detected per cheque book, which makes the bank
+ACCOUNT structurally necessary (still not front-of-screen).
+
+---
+
+### 5a. (original) OPEN — sub-suppliers
+
+Renzo: *"can be for multiple deliveries of that one supplier (and maybe their sub supplier with a
+different name from them)."*
+
+The schema already anticipated this — `rc_supplier` exists as the **cheque-payee** dimension
+precisely so PALAWAN can be split into RANDY / BROOKE'S without a migration. What is not yet
+decided is whether a sub-supplier is a **separate `rc_supplier` row that rolls up to a parent
+payee**, or an **origin under one payee** (`supplier_origin` already exists on the receipt).
+
+**Ask:** when a cheque to BRIX covers deliveries booked under a different trading name — is the
+running balance you want to see **one number for BRIX including that name**, or **two separate
+balances**? That decides whether `rc_supplier` needs a `parent_code` and whether the balance view
+groups by payee or by trader.
+
+### 5b. NEW — closing and restarting a balance
+
+Renzo: *"we should be able to start a new running balance whenever we choose to do so, but most of
+the time balances zero out because we pay out the remaining balances."*
+
+Not a period boundary and not automatic — a **human-initiated closing point** per supplier. The
+model needs a small table, roughly `cenapro.rc_balance_period(supplier_code, opened_on,
+closed_on, closing_note, closed_by)`, and the balance view reports **since the current open
+point** while remaining able to show the whole history. Nothing is deleted at a close; it is a
+marker, not a truncation.
+
+**Do not confuse this with rounding (8).** A balance that zeroes out because it was paid off is
+the normal case; a balance carrying a small remainder forever is also normal. Neither is an error.
+
+### 5c. OPEN — what happens to the money when a receipt is deleted
+
+Renzo said **warn**, not refuse (12). But a warning alone leaves a question the model must answer:
+once the receipt is gone, **what happens to the payment that was assigned to it?**
+
+**Ask:** should that amount go back to being unassigned on the cheque — free to point at another
+delivery — or should the deletion be blocked after all once money is involved? Warning and then
+silently destroying an allocation is the one option that must not ship, because the cheque would
+still exist with money that no longer adds up.
+
+### 5d. NEW — skipped cheque numbers
+
+Renzo: *"it would be nice to have a skipped cheque number highlighted in reports and stuff."*
+
+Cheque books are sequential, so a gap means a cheque was voided, lost, or never recorded — a real
+control. This is a **reporting/derived concern, not a column**: given `(bank_account, cheque_no)`
+it is a SQL gap-detection query over the recorded numbers per book. It does NOT require the cheque
+status lifecycle Renzo declined in (14) — a gap is detectable without knowing *why*.
+
+Note this makes the bank ACCOUNT load-bearing after all (4): a sequence belongs to a cheque book,
+which belongs to an account, not merely to a bank.
+
+### 5e. OPEN — what "a record of every payment change" means
+
+Renzo asked: *"define payment change. What exactly is that? are you talking about a running log
+for change history for the edits? similar to the ictc feature?"*
+
+**Yes — exactly the ICTC feature.** On the ICTC side, `public.audit_logs` records every insert,
+edit and delete with a before/after diff, who did it and when, and the app surfaces it as an
+activity trail with comments and resolve requests. Cenapro's `production_event` already has a
+smaller version of the same idea (`production_event_audit`, append-only, written by a trigger).
+`cenapro.rc_delivery` has **none** — which is why the 22 duplicate deletions left no trace.
+
+For payments this would mean: every cheque recorded, amended, re-assigned or deleted leaves a row
+saying what changed, from what to what, and who did it — so that a disagreement with a supplier
+six months later can be answered from the system instead of from memory.
+
+**Ask:** confirm you want that on payments, and say whether you also want it retrofitted to
+deliveries.
+
+---
+
+*(Original questions retained below for context.)*
 
 ### How you pay
 
@@ -511,7 +661,121 @@ under each says what the answer decides, so whoever builds it knows why it matte
 
 ---
 
-## 7. Phased build order
+## 7. Build plan — REVISED 2026-08-05, after Renzo answered every question
+
+Eight steps. Each ships something usable on its own and nothing is built twice. Ordering rule:
+**foundations that are expensive to retrofit first, then the smallest thing that answers "what do
+we owe this trader", then the surface that earns the feature.**
+
+### Step 1 — Correct the docs, and give Cenapro the ICTC audit trail
+`cenapro.rc_delivery_audit` — append-only, trigger-written, no UPDATE/DELETE grant to anyone —
+modelled on `cenapro.production_event_audit` and `public.audit_logs` (diff + snapshot + actor +
+timestamp). Surface it in the deliveries ledger as a per-row history. Also correct the stale
+counts everywhere (971 receipts; duplicates resolved by deletion; the write path now exercised).
+*Ships alone, independently valuable, and exactly what was missing when the 22 duplicates
+vanished. Doing it first means every later step is recorded from day one — retrofitting an audit
+onto a system already writing money is the expensive version.*
+
+### Step 2 — Supplier subgroups
+`rc_supplier` gains a parent/child link (**one level**, not chains) plus a small screen to
+maintain it. Changes to the grouping are audited — re-pointing a parent retroactively changes
+which past payments were legitimate. **Explicitly maintained, never inferred from name similarity.**
+*Small. Needed by Steps 3 and 4; useless to defer past them.*
+
+### Step 3 — Banks, accounts, payments, and the running balance
+`rc_bank` + `rc_bank_account` (name to the front, account number as secondary detail),
+`rc_payment` (cheque | bank_transfer | adjustment; always-positive amount with a separate
+`direction`; `stated_term` as intent only), soft delete, audit trigger, the write RPCs, and
+`view_rc_supplier_balance` — **payments minus PRICEABLE receipts, signed Renzo's way**, rolled up
+across a supplier's subgroup.
+*The first step that answers "what do we owe BRIX", which nothing can answer today. Note it
+delivers a real balance **before allocation exists** — allocation refines the number, it does not
+enable it.*
+
+### Step 4 — Allocation: assigning a payment to deliveries
+`rc_payment_allocation` (many-to-many, amount on the edge, `UNIQUE(payment_id, delivery_id)`), the
+whole-block replace RPC gated on the payment's `row_version`, sub-supplier validation on the
+allocation path, `view_rc_delivery_settlement`, and the working screen: pick a supplier, see
+unsettled deliveries oldest-first with a running remainder, fill amounts, save atomically.
+Over-allocation is **recorded, not refused**. Deleting a delivery **warns and RELEASES** its
+allocation back to the cheque's unassigned pool.
+*The phase that earns the feature — the median cheque covers four to eight receipts.*
+
+### Step 5 — Cash advances, drawn down
+A list of payments carrying an unallocated remainder, and the ability to attach one to a delivery
+after the fact. **UI only — the data model has supported this since Step 4** (an advance is simply
+a payment whose allocations sum to less than its amount).
+
+### Step 6 — Closing and restarting a balance
+`cenapro.rc_balance_period(supplier_code, opened_on, closed_on, closing_note, closed_by)`. A
+human-initiated marker, never automatic, never a calendar reset; nothing is deleted at a close.
+The balance reports since the current open point while retaining full history.
+
+### Step 7 — Cheque books and skipped numbers
+Sequence-gap detection per cheque book, surfaced in reports. Needs no cheque status lifecycle — a
+gap is detectable without knowing why it exists.
+
+### Step 8 — Reporting
+Per-supplier statements, aging, month-end payables. **Genuinely deferrable** — a live balance
+already answers the daily question, and the balance deliberately never has to close.
+
+### 7a. The UI shape — wireframed with Renzo 2026-08-05, approved "alright as a start"
+
+Steps 3–5 are the only steps that are mostly screen; 1, 2, 6 and 7 are database work with a thin
+form on top. Three screens cover all three steps:
+
+1. **Supplier balances** (step 3) — one row per trader: name, signed running balance, last paid,
+   and a count of unpriced receipts. A parent trader renders as a group row with its children
+   nested and indented beneath, each carrying its own number as well as the group total.
+   Minus = we owe them; plus = they owe us. Stated on the screen, not just in a column comment.
+2. **Record a payment** (step 3) — supplier · date · method · amount · bank (name to the front,
+   account as small secondary text) · cheque no. Two exits: `Save`, and `Save and assign →` which
+   goes straight to screen 3. Stated term sits quietly at the edge — it is intent, not arithmetic.
+3. **Spread a cheque across deliveries** (steps 4 **and 5**) — the cheque and its total in the
+   header, **unassigned amount top-right** (it is the number being steered to zero, so it must not
+   require scrolling). Below it, that supplier's deliveries oldest-first with **two separate
+   money columns — "still owed" and "assign"** — plus a `Fill oldest first` helper. A
+   sub-supplier's delivery appears in the parent's list with a small trader label.
+
+**Step 5 needs no screen of its own.** A cash advance is screen 3 with nothing assigned yet — same
+table, different entry point. This removes a build step: step 5 becomes a filter, not a feature.
+
+**Direction: BOTH. Two doors onto one screen.** An earlier draft picked cheque-first. Renzo:
+*"cheque first or delivery first should both be available… it differs per suppliers slightly so
+it's better to be open to both options."* Correct, and cheap — **both doors create the same
+allocation rows, so the write path, the RPC and the validation are built once.** Only the entry
+point differs.
+
+- **Cheque-first** — start from a payment, spread it across that supplier's deliveries. Leftover
+  money stays as an advance. This is the **downpayment / bulk-settlement** rhythm.
+- **Delivery-first** — start from a supplier's unsettled deliveries, tick some, then either
+  `Use an existing cheque…` (any payment with unassigned money) or `Record a payment for this`
+  pre-filled with the selected total. Creating a payment for exactly the selected total **is** the
+  `straight` term Renzo described — pay the exact amount upon delivery.
+
+So the two doors are not arbitrary UI taste; they mirror the payment terms the business already
+uses. Build both in step 4.
+
+> **Reuse note.** The RC Deliveries ledger already has range selection and a floating status bar
+> that totals the selection (`lib/hooks/use-cell-selection.ts`, `use-cell-aggregation.ts`,
+> `components/floating-status-bar.tsx`). Delivery-first is that selection plus one action, so it
+> may be a **mode on the ledger operators already use** rather than a new screen. Evaluate that
+> before building a second grid.
+
+**Unpriced deliveries cannot be selected** on the delivery-first door — shown greyed with "not
+priced" where the money would be. This is the section 3.4 priceability rule surfacing as UI: a
+receipt with no weight or no price is not a ₱0 debt that can be settled, it is an unknown.
+
+**Deliberately not designed yet:** where liquidation sits in the nav; the payment history shown
+from the deliveries ledger side; and the close-a-balance action (step 6).
+
+### Superseded
+The five-phase plan below predates Renzo's answers. Its Phase 4 (cheque status lifecycle) was
+**declined outright** — do not build it. Retained only for its reasoning about what is deferrable.
+
+---
+
+## 7b. The original phased order (SUPERSEDED — see 7 above)
 
 **Phase 0 — decisions and cleanup. No code.** Answer section 5. Correct the stale docs. Roughly
 an hour, and it prevents building the wrong tables.
