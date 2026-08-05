@@ -178,6 +178,28 @@ Gates were run by the ORCHESTRATOR before handoff (verify script 83 assertions, 
 states gate results with numbers, take them and don't re-run a 2-minute build for a 5-line
 class-token diff. Re-run only when the brief is silent or the diff touches logic.
 
+**Promotion 31 (`be0dbc4` → `0d0a61d`) — FOURTH consecutive clean `git add .` on this branch**,
+same 4-file shape as promotion 29 (ledger + `types.ts` + CONTEXT.md + the verify script). The
+"STOP if you see these" list was clean again; `.claude/agent-memory-local/**` was the only
+exclusion, as always. `feat(cenapro):` for a day-spacer row in the endless RC Deliveries view.
+
+Two things worth carrying forward:
+- **A pending `chore(memory):` commit can already be PUSHED and still need promoting.** `18f3ba8`
+  sat on the branch tip at origin, so after committing, `git status -sb` read `ahead 1` — not
+  `ahead 2`. Don't read the ahead-count as the promotion count; use
+  `git log --oneline main..<branch>` to enumerate what the merge will actually carry (it carried
+  2). Same trap family as the untracked-main-upstream one above: `-sb` markers answer a different
+  question than the one being asked.
+- **Checking out `main` with dirty `agent-memory-local` files is safe** — git prints the carried
+  `M` paths on switch, which looks alarming mid-merge but is just the dirty tree following you.
+  Switch back to the feature branch after pushing `main`; don't leave Renzo parked on `main`.
+
+Gates again came from the orchestrator with numbers (verify 89 assertions, up from 83; formula 22;
+qc-draw 36; `tsc` 0; build 0; lint at exact baseline) — took them, per promotion 30's rule. The
+diff touched logic this time, but it was self-asserting: the feature's core claim (a spacer row
+never enters `navRows`) is checked in-repo by comparing serialised `navRows` both ways, which is
+exactly the kind of assertion that makes re-running a build redundant rather than prudent.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.

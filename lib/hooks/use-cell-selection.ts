@@ -67,6 +67,20 @@ export function useCellSelection(config: CellSelectionConfig) {
   const rafIdRef = useRef<number | null>(null);
 
   // Synchronous ref updates during render for performance (avoiding race conditions with batched state updates)
+  //
+  // NOTE (2026-08-05): this render-time sync is the FALLBACK, not the mechanism. React
+  // applies a state update AFTER the event handler returns, so any handler that sets the
+  // anchor and then reads it back in the SAME tick sees the previous value. Every setter
+  // below therefore writes its ref synchronously as well — the same discipline
+  // `isDraggingRef` already used, and for the same reason.
+  //
+  // The gesture that made it matter: `useGridKeyboardNav`'s "Shift+Arrow from a single
+  // cell" branch calls `range.seedFromActive()` (→ `handleCellMouseDown`) and then
+  // `range.extend(e)` (→ `handleKeyDown`) back to back. With a stale `anchorRef`,
+  // `handleKeyDown` saw NO anchor, took its "start a selection at (0,0)" branch, and its
+  // setters landed last — so shift+arrow selected the TOP-LEFT of the sheet instead of
+  // extending from the caret, and the Delete that followed blanked cells the operator
+  // was not looking at.
   // eslint-disable-next-line react-hooks/refs
   anchorRef.current = anchor;
   // eslint-disable-next-line react-hooks/refs
@@ -198,6 +212,8 @@ export function useCellSelection(config: CellSelectionConfig) {
 
   // --- Handlers ---
   const clearSelection = useCallback(() => {
+    anchorRef.current = null;
+    focusRef.current = null;
     setAnchor(null);
     setFocus(null);
     isDraggingRef.current = false;
@@ -206,8 +222,12 @@ export function useCellSelection(config: CellSelectionConfig) {
 
   const selectAll = useCallback(() => {
     if (rowCount === 0 || colCount === 0) return;
-    setAnchor({ row: 0, col: 0 });
-    setFocus({ row: rowCount - 1, col: colCount - 1 });
+    const start = { row: 0, col: 0 };
+    const end = { row: rowCount - 1, col: colCount - 1 };
+    anchorRef.current = start;
+    focusRef.current = end;
+    setAnchor(start);
+    setFocus(end);
   }, [rowCount, colCount]);
 
   const handleCellMouseDown = useCallback(
@@ -220,9 +240,14 @@ export function useCellSelection(config: CellSelectionConfig) {
 
       if (e.shiftKey && anchorRef.current) {
         // Extend range: keep anchor, move focus
+        focusRef.current = coord;
         setFocus(coord);
       } else {
-        // New selection
+        // New selection. The refs are written FIRST so a caller that seeds the anchor
+        // and extends it in the same tick (the Shift+Arrow branch of
+        // use-grid-keyboard-nav) reads the anchor it just set, not the previous render's.
+        anchorRef.current = coord;
+        focusRef.current = coord;
         setAnchor(coord);
         setFocus(coord);
       }
@@ -240,6 +265,7 @@ export function useCellSelection(config: CellSelectionConfig) {
       if (!isColSelectable(col)) return;
 
       const coord = clamp({ row, col });
+      focusRef.current = coord;
       setFocus(coord);
     },
     [isColSelectable, clamp]
@@ -286,6 +312,8 @@ export function useCellSelection(config: CellSelectionConfig) {
       // If no selection exists, start at (0,0)
       if (!currentAnchor) {
         const start = { row: 0, col: 0 };
+        anchorRef.current = start;
+        focusRef.current = start;
         setAnchor(start);
         setFocus(start);
         return;
@@ -308,6 +336,7 @@ export function useCellSelection(config: CellSelectionConfig) {
 
       if (!isColSelectable(next.col)) return;
 
+      focusRef.current = next;
       setFocus(next);
     },
     [selectAll, clearSelection, colCount, isColSelectable, clamp]

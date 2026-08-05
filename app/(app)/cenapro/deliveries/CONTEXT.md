@@ -25,12 +25,12 @@ computed in the browser.
 | File | Role |
 |---|---|
 | `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
-| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
+| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags`; and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is opaque/ruleless/unanimated), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **89 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), ending in a **replay over all 991 real receipts**. `npx tsx scripts/verify-rc-deliveries-cells.ts` — **100 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -255,7 +255,8 @@ two opinions on top, both because the operators live in Google Sheets:
 | **Esc *not* editing** | UNDO the unsaved edits under the selection; deselect once there is nothing left to undo (see "Escape" below) |
 | **Delete / Backspace** | CLEAR the cell — or the whole range — outright, no editor. **The selection survives.** |
 | Shift+click, Shift+Arrow, drag | extend a rectangular range |
-| Ctrl/Cmd+A · Ctrl/Cmd+C | select all · copy the range as TSV |
+| Ctrl/Cmd+A · Ctrl/Cmd+C | select all · copy the **range or the single active cell** as TSV |
+| Ctrl/Cmd+V | paste a TSV block from the anchor, **creating blank rows if it runs past the end** |
 
 Enter-opens-the-cell and Delete-clears-outright are the two departures from Excel; Enter
 *while editing* still commits and moves, so the Tab-run → Enter lane return survives.
@@ -575,16 +576,36 @@ MOIST from N draws"** using `sample_avg_moisture_pct` (computed in SQL, not Type
 It is never automatic: the receipt's reading is what the lab signed off, and a six-draw
 mean is a different measurement with a different meaning.
 
-### The day spacer — endless groups days with a skipped row (2026-08-05)
+### The day spacer — endless groups days with an ACTUAL empty row (2026-08-05)
 
 Renzo: *"Make this specific table smart enough to auto skip a table row to separate and
 group days together. Nothing fancy. If input rows dont separate them in the first place
-then they should auto separate when they click save."*
+then they should auto separate when they click save."* — and, on the first attempt:
+*"It should be literally just an empty row, not some made up effect on screen, it just
+looks weird. Just place an actual row in between days."*
 
 The **focus** scope already groups days with a heading and a `Σ DAY TOTAL` rule-off. The
 **endless** scope had nothing, so receipts ran continuously with no sign of where one day
 ended. Endless now emits a **blank spacer row** on each day boundary — and that is the
 whole feature. **It is not a second day-header system:** no label, no count, no total.
+
+**It is a real row of the spreadsheet, not an effect between rows (2026-08-05, second
+pass).** The first version shipped as a 10px sliver with no borders and one `colSpan`
+cell; it read as a rendering artefact. It is now indistinguishable from a row somebody
+left blank:
+
+- **`DAY_SPACER_ROW_H === ROW_H`** (32px). The identity is asserted — a spacer of any
+  other height is the artefact again.
+- **One `<td>` PER COLUMN**, from `cols.map(...)`, never a `colSpan`. That is what runs
+  the vertical `border-r border-r-border` rules through it; a spanning cell erases every
+  one of them, which is exactly what gave the old version away.
+- **The same horizontal rule the receipts draw** — `border-b border-b-border`, on the
+  CELL (`border-collapse: separate` never paints a `<tr>` border; see the section above).
+- **The frozen block behaves like a data row's**: `.frozen-col` with the cumulative
+  `left` offset, `.frozen-edge` on the last pinned column, and fully OPAQUE
+  `bg-background`. Without that, the scrolling rows bleed through the pinned block at
+  every gap.
+- Still **not addressable**, no hover state, no animation.
 
 - **`needsDaySpacer(prevDate, date)` in `types.ts` is the single rule.**
   `prevDate === undefined` means nothing is above it yet, which is the whole of "never a
@@ -596,19 +617,20 @@ whole feature. **It is not a second day-header system:** no label, no count, no 
 - **The focus branch is untouched** — it keeps `kind: 'day'` and `kind: 'day-total'`
   verbatim. The spacer is a separate `LedgerItem` kind (`day-gap`) emitted only when
   `scope === 'endless'`.
-- **`DAY_SPACER_ROW_H = 10`** — roughly a third of `ROW_H = 32`. Enough to read as a
-  break, not enough to spend a screenful of a dense sheet on nothing.
-- **No rule on it, deliberately.** The receipt above already closes the day with its own
-  full-weight `border-b-border` (`ROW_RULE.delivery`); a second line under the blank would
-  read as an *empty table row* rather than as breathing room, and `border-collapse:
-  separate` means it would have to go on the cell anyway. Clean empty space, day above
-  closed off.
-- **Fully OPAQUE** (`bg-background`, no alpha, no `backdrop-blur`), per the frozen-pane
-  rule — a translucent spacer would show the scrolling rows through the gap. It spans
-  `colSpan={spanAll}` (`cols.length`, the same constant the day heading and the add-rows
-  control use), so a column added anywhere is covered with no new arithmetic; the verify
-  script asserts that number against `summarySpans` in **both** gating states. **No
-  animation, no hover state.**
+- **`DAY_SPACER_ROW_H = ROW_H`** (32px) — see the block above. The first pass used 10px
+  with no rules; *"it just looks weird"* was exactly right, and the height was only half
+  of why.
+- **It carries the rules, it does not skip them.** The first pass argued a spacer with a
+  border "would read as an empty table row rather than as breathing room" — which was the
+  wrong goal. An empty table row is precisely what was asked for, so it draws
+  `border-r border-r-border` on every cell and `border-b border-b-border` underneath,
+  the same weights `ROW_RULE.delivery` uses.
+- **Fully OPAQUE** (`bg-background`, no alpha, no `backdrop-blur`) on the frozen cells,
+  per the frozen-pane rule — a translucent spacer would show the scrolling rows through
+  the pinned block. The cell count comes from `cols.map(...)` (one per column), so a
+  column added anywhere is covered with no new arithmetic; the verify script asserts that
+  count against `summarySpans` in **both** gating states. **No animation, no hover
+  state.**
 - **It is NOT addressable, and that is the load-bearing part.** The spacer never enters
   `navRows`, so the keyboard coordinate space, the per-cell `NavResolver`, arrow/Tab
   movement and range selection are **byte-identical** with and without it (asserted).
@@ -630,6 +652,115 @@ whole feature. **It is not a second day-header system:** no label, no count, no 
   every read comes back in canonical `(delivery_date, id)` order — so the regroup **is**
   the server's sort. Typing 08-01 / 08-03 / 08-01 and saving yields one 08-01 group and
   one spacer. Asserted as a regression rather than reimplemented.
+
+### The clipboard — paste IN, copy OUT (2026-08-05)
+
+Renzo: *"allow us to copy and paste into existing entries and empty entries (from google
+sheet, into the app)"* · *"allow us to delete multiple cells at once via selecting
+multiple cells."* · *"allow us to copy data from the app so its pastable into google
+sheet"*.
+
+All three gestures were already wired, and all three were broken in a different, silent
+way. The exchange format is now decided in ONE place — the pure helpers
+`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste`
+in `types.ts` — so it is asserted without a browser.
+
+**PASTE (`applyClipboardPaste` in the ledger; the platform `useGridPaste` is no longer
+used here).** Two defects, both silent:
+
+1. **The block was truncated to the rows that already existed.** `useGridPaste` builds
+   its own row array and appends to it happily, but the adapter that wrote that array
+   back into this grid's edit MAP looped `r < Math.min(after.length, navRows.length)`.
+   Pasting a 30-row slip into a sheet showing 20 blank rows wrote 20, threw 10 away, and
+   toasted *"Pasted 30 rows"*.
+2. **With no active cell it did nothing at all** — not even `preventDefault`.
+   `handleGridPaste` is `if (activeCell) {…}` with no `else`, so a paste before anything
+   had been clicked, or after clicking TTL PRICE (read-only ⇒ the active cell is set to
+   `null`), vanished without a word.
+
+- **A block taller than the sheet CREATES the rows it needs**, through the same
+  `makeDraftIds` → `draftIds` / `draftEdits` path the *Add N more rows* control uses.
+  There is no second way to make a draft row. New rows only exist where a blank row
+  MEANS something (`showDrafts`: never under a lens or a search, and in endless only at
+  the true newest end) — where they are absent the overflow is **reported**, never
+  appended into the middle of history. `MAX_DRAFT_ADD = 500` caps one gesture, and what
+  it refuses is said out loud.
+- **Nothing is truncated in silence.** No anchor, rows past the end, columns past
+  `REMARKS` — each raises a persistent `errorToast` naming the count and the reason.
+- **Every existing refusal is unchanged**: an unresolvable supplier/warehouse still
+  refuses at commit and again at save; a pasted date goes through `parseDeliveryDate`
+  with the same context year a typed one gets (`contextYearFor(row)`, `fallbackYear` for
+  a row that does not exist yet); a cell the row does not have (a moisture draw has no
+  weight) is skipped by the same `addressable` rule the keyboard uses; the ₱ columns are
+  absent from `cols` for a gated viewer, and `field === 'price' && !canViewPrices` is the
+  belt to that braces.
+- **A numeric column strips the rendering Sheets copied with it** (`₱`, thousands
+  commas, stray quotes) — and only a numeric column, because a supplier origin or a
+  remark may legitimately contain a comma. A formula (`=27045*88%`) pastes through intact.
+
+**COPY (`clipboardCellText` + `copySelectionToClipboard`; the platform
+`useClipboardCopy` is no longer used here).** Three defects:
+
+1. **It was only reachable through the platform nav hook's RANGE branch**, guarded by
+   BOTH `activeCell !== null` (`use-grid-keyboard-nav.ts:133`) and
+   `range.isRangeSelected` — which is `size > 1`. So **Ctrl/Cmd+C on a single selected
+   cell reached nothing at all**, and neither did a drag begun on TTL PRICE (selectable,
+   never active). It is intercepted in the ledger's own `onGridKeyDown` now, ahead of the
+   shared hook, and covers the single cell, the range and the no-active-cell range.
+2. **The payload was the cell's EDIT text.** WT reads back as `=27045*88%` and PHP/KG as
+   `=39.5+2.7`, so a copied block landed in the operator's own sheet as **live formulas**
+   — locale-sensitive (`88%`), recalculating, editable — and TTL PRICE went through
+   `formatPeso`, i.e. `6,940,123.45`, which Sheets reads as text.
+3. **Nothing was escaped.** One REMARKS cell holding a line break shredded every row
+   below it.
+
+- **VALUE, not formula — and the value is the DATABASE's.** WT copies `net_weight_kg`,
+  PHP/KG copies `price_php_kg`, TTL PRICE copies `total_price_php`. All three are STORED
+  GENERATED exact decimals, so `clipboardNumber` emits the DB's own digits **verbatim**
+  when the source is already a plain numeric string — no `Number()` round trip, nothing
+  re-derived. The formula is a derivation; the figure is the fact, and a payment ledger
+  exports facts. (A DRAFT row has nothing stored, so it copies the operator's own text —
+  inventing a figure there is the arithmetic this module refuses to do.)
+- **TSV, properly.** Tab between columns, newline between rows, `tsvEscape` on every cell
+  (quote + doubled `""`), which is the convention Sheets and Excel both parse. Dates are
+  `yyyy-MM-dd`, lab values are bare numbers, and nothing carries `₱` or a thousands
+  separator.
+- **A gated viewer can never get ₱ on the clipboard** — `buildColumns(false)` omits both
+  ₱ columns, so they are not in the coordinate space a copy range can address, and
+  `clipboardCellText` guards again.
+- **One definition.** The context menu's *Copy row as TSV* builds its payload from the
+  same `clipboardCellText`; the old `displayText` (which emitted the on-screen
+  formatting) is gone.
+- **A refused clipboard write says so.** `navigator.clipboard.writeText` had no rejection
+  handler at all, so an insecure origin or an unfocused document was an unhandled promise
+  and a silent no-op. Both copy paths now `errorToast`.
+
+**DELETE over a multi-cell selection — the real cause was the SELECTION, not the
+delete.** `clearSelectedCells` was already correct (it iterates `selectedCells()`, which
+returns the whole range when its size > 1, filtered by `addressable`, and deliberately
+leaves the selection intact so Escape can undo it). What did not work was **building** the
+range with the keyboard: `useGridKeyboardNav`'s "Shift+Arrow from a single cell" branch
+calls `range.seedFromActive()` and then `range.extend(e)` back to back **in one event
+handler**, and React applies a state update only after the handler returns — so
+`useCellSelection`'s `anchorRef`, which was synced during RENDER only, was still the
+previous value when `extend` read it. `extend` took its *"no anchor ⇒ start a selection at
+(0,0)"* branch and its setters landed last, so **shift+arrow selected the top-left corner
+of the sheet** instead of extending from the caret, and the Delete that followed blanked
+cells the operator was not looking at. Drag-selection was unaffected (a drag spans several
+renders). Fixed in the platform hook — see below.
+
+**Platform change (`lib/hooks/use-cell-selection.ts`).** Every `setAnchor` / `setFocus`
+now writes its ref synchronously as well, which is the discipline the same file already
+used for `isDraggingRef` and for the same reason; the render-time assignment stays as the
+fallback. It is a platform fix because the race is in the platform hook's contract with
+`useGridKeyboardNav`, and **every consumer has the identical bug and can only benefit**:
+RC IN (`delivery-master-table.tsx`, `bulk-delivery-input.tsx`), RC OUT
+(`rc-out-table.tsx`, `bulk-usage-input.tsx`), Production Daily / Electricity / Trucks and
+the Cenapro production grids all wire the same `seedFromActive` → `extend` range slot, so
+shift+arrow started their selections at (0,0) too. No behaviour that any of them could
+want is changed — a ref that agrees with state sooner is strictly more correct.
+`lib/hooks/use-grid-keyboard-nav.ts`, `use-grid-paste.ts` and `use-clipboard-copy.ts` were
+**NOT** touched; the other grids keep using the latter two verbatim.
 
 ### Two scopes (`?scope=endless|focus`)
 

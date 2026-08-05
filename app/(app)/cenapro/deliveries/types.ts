@@ -45,7 +45,7 @@ import {
     priceFormulaFrom,
     weightFormulaFrom,
 } from '@/lib/cenapro/rc-formula';
-import { normalizeTypedDate } from '@/lib/paste-utils';
+import { normalizeTypedDate, stripNumericFormatting, trimCellValue } from '@/lib/paste-utils';
 
 // ─── Row shapes (derived from the generated types — never hand-authored) ─────────
 
@@ -529,24 +529,28 @@ export const SAMPLE_ROW_H = 26;
 // ═══ The day spacer — a skipped row, not a second day-header system ═════════════
 //
 // Renzo: *"Make this specific table smart enough to auto skip a table row to separate
-// and group days together. Nothing fancy."*
+// and group days together. Nothing fancy."* — and then, on the 10px sliver that shipped
+// first: *"It should be literally just an empty row, not some made up effect on screen,
+// it just looks weird. Just place an actual row in between days."*
 //
 // In the ENDLESS scope the receipts run continuously with nothing marking where one day
 // ends and the next begins. The FOCUS scope already answers that with a day heading and
 // a `Σ DAY TOTAL` rule-off; endless deliberately does not want either — a heading every
 // few rows in an infinite sheet is chrome, not information. So the endless answer is a
-// literal blank row: no label, no count, no total, no rule.
+// literal blank ROW OF THE SHEET: full receipt height, a cell per column, the same
+// vertical and horizontal rules every other row draws — a row you could have left blank
+// yourself, not a rendered effect between rows.
 //
 // It is NOT addressable. The spacer never enters `navRows`, so the keyboard coordinate
 // space, the per-cell `NavResolver`, arrow/Tab movement and range selection are
 // byte-identical with and without it — asserted in `verify-rc-deliveries-cells.ts`.
 
 /**
- * Height of the blank between-days row — roughly a third of a receipt (`ROW_H = 32`).
- * Enough to read as a break, not enough to spend a screenful of an Excel-dense sheet on
- * nothing.
+ * Height of the blank between-days row. It is EXACTLY `ROW_H`, and that identity is the
+ * feature: a spacer of any other height reads as a rendering artefact rather than as an
+ * empty row of the spreadsheet.
  */
-export const DAY_SPACER_ROW_H = 10;
+export const DAY_SPACER_ROW_H = ROW_H;
 
 /**
  * Does a blank spacer row belong ABOVE the receipt dated `date`?
@@ -995,6 +999,178 @@ export function parseDeliveryDate(
         };
     }
     return { iso };
+}
+
+// ═══ The clipboard — TSV in, TSV out ════════════════════════════════════════════
+//
+// Renzo: *"allow us to copy and paste into existing entries and empty entries (from
+// google sheet, into the app)"* · *"allow us to copy data from the app so its pastable
+// into google sheet"*.
+//
+// The operators live in Google Sheets, so the clipboard is a real interchange format
+// here, not a convenience. Everything below is PURE so the exchange is decided in one
+// place and asserted without a browser (`verify-rc-deliveries-cells.ts`).
+//
+// Three rules, and each of them was a real defect:
+//
+//   1. **A cell may contain a tab or a newline.** REMARKS is free text. A payload that
+//      joins raw cell text with `\t` / `\n` shreds the row alignment the moment one
+//      remark holds a line break — the block pastes into Sheets as gibberish. So the
+//      writer QUOTES (`tsvEscape`) and the reader UNDERSTANDS quotes
+//      (`parseClipboardTable`), which is the convention Sheets and Excel both speak.
+//   2. **A spreadsheet wants a NUMBER, not a rendering.** `₱6,940,123.45` is text to
+//      Sheets. `clipboardNumber` emits the DB's own decimal digits — and it emits them
+//      VERBATIM when the source is already a plain numeric string, because
+//      `net_weight_kg` / `price_php_kg` / `total_price_php` are STORED GENERATED exact
+//      decimals and re-deriving them through a JavaScript float is precisely how a
+//      payment ledger goes wrong.
+//   3. **A pasted number arrives WITH its rendering.** Sheets copies `27,045` and
+//      `₱39.50`, so a numeric column strips formatting on the way in — and only a
+//      numeric column, because a supplier origin may legitimately contain a comma.
+
+/**
+ * Split a clipboard payload into a rectangle of cell texts.
+ *
+ * Tab between columns, newline between rows — plus the quoting convention Sheets and
+ * Excel use, so a cell holding a tab or a line break survives the round trip. A doubled
+ * `""` inside a quoted cell is one literal quote.
+ *
+ * TRAILING blank rows are dropped (Sheets ends its payload with a newline; that is not
+ * an extra row). A blank row in the MIDDLE is kept — pasting a blank cell over a value
+ * clears it, which is what Excel does and what this grid's paste already did.
+ */
+export function parseClipboardTable(text: string): string[][] {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let cell = '';
+    let quoted = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+
+        if (quoted) {
+            if (ch === '"') {
+                if (text[i + 1] === '"') {
+                    cell += '"';
+                    i++;
+                } else {
+                    quoted = false;
+                }
+            } else {
+                cell += ch;
+            }
+            continue;
+        }
+
+        if (ch === '"' && cell === '') {
+            quoted = true;
+        } else if (ch === '\t') {
+            row.push(cell);
+            cell = '';
+        } else if (ch === '\n' || ch === '\r') {
+            // CRLF is ONE row break, not two.
+            if (ch === '\r' && text[i + 1] === '\n') i++;
+            row.push(cell);
+            rows.push(row);
+            row = [];
+            cell = '';
+        } else {
+            cell += ch;
+        }
+    }
+    row.push(cell);
+    rows.push(row);
+
+    while (rows.length > 0 && rows[rows.length - 1].every((c) => c === '')) rows.pop();
+    return rows;
+}
+
+/** The mirror of `parseClipboardTable`: quote a cell that would otherwise break the grid. */
+export function tsvEscape(value: string): string {
+    return /[\t\n\r"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/**
+ * A number the way a spreadsheet wants it: digits, a decimal point, nothing else.
+ *
+ * PostgREST hands `numeric` back as a STRING, and that string is the database's exact
+ * decimal. When it already looks like a plain number it is emitted verbatim — no
+ * `Number()` round trip, so `total_price_php` reaches the clipboard as the ledger holds
+ * it rather than as the nearest float.
+ */
+export function clipboardNumber(v: number | string | null | undefined): string {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+    const t = v.trim();
+    if (/^-?\d+(\.\d+)?$/.test(t)) return t;
+    const n = num(t);
+    return n === null ? '' : String(n);
+}
+
+/**
+ * Clean ONE pasted cell for its target column.
+ *
+ * DATE goes through the same verdict a typed date does, with the same context year, so a
+ * pasted `6/27` and a typed `6/27` can never land on different years. A numeric column
+ * loses the rendering Sheets copied with it (`₱`, thousands commas, stray quotes); a
+ * TEXT column keeps every character, because a supplier origin or a remark may contain
+ * exactly those.
+ */
+export function cleanPastedCell(col: DeliveryCol, raw: string, contextYear: number): string {
+    const text = trimCellValue(raw);
+    if (!text) return '';
+    if (col.field === 'delivery_date') {
+        const parsed = parseDeliveryDate(text, contextYear);
+        return 'error' in parsed ? text : parsed.iso;
+    }
+    return col.numeric ? stripNumericFormatting(text) : text;
+}
+
+/** What a paste of a given shape, dropped at a given anchor, can actually land on. */
+export interface PastePlanInput {
+    /** The anchor cell — the block's top-left corner. */
+    startRow: number;
+    startCol: number;
+    /** The clipboard block's shape. */
+    blockRows: number;
+    blockCols: number;
+    /** The grid as it stands. */
+    navRowCount: number;
+    colCount: number;
+    /** Are blank draft rows on screen at all? (A lens/search view has none.) */
+    canCreateRows: boolean;
+    /** Defensive ceiling on one gesture — `MAX_DRAFT_ADD`. */
+    maxNewRows: number;
+}
+
+export interface PastePlan {
+    /** How many blank rows to append so the block fits. */
+    newRows: number;
+    /** Block rows that land nowhere and will NOT be written. */
+    droppedRows: number;
+    /** Block columns that fall past the last column of the sheet. */
+    droppedCols: number;
+}
+
+/**
+ * Where a pasted block goes — the arithmetic, on its own, so it can be asserted.
+ *
+ * The rule this exists to express: **a block taller than the rows available CREATES the
+ * rows it needs.** The old adapter looped `r < Math.min(block.length, navRows.length)`,
+ * so pasting a 30-row slip into a sheet showing 20 blank rows wrote 20 and threw 10 away
+ * without a word. Blank rows only exist where a blank row MEANS something (never under a
+ * lens or a search), so when they are absent the overflow is reported rather than
+ * invented — `droppedRows` is what the operator is told about.
+ */
+export function planPaste(input: PastePlanInput): PastePlan {
+    const needed = Math.max(0, input.startRow + input.blockRows - input.navRowCount);
+    const newRows = input.canCreateRows ? Math.min(needed, Math.max(0, input.maxNewRows)) : 0;
+    const lastTargetCol = input.startCol + input.blockCols - 1;
+    return {
+        newRows,
+        droppedRows: needed - newRows,
+        droppedCols: Math.max(0, lastTargetCol - (input.colCount - 1)),
+    };
 }
 
 // ═══ Unsaved cell text, and when it stops being unsaved ═════════════════════════
