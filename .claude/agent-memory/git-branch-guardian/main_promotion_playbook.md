@@ -146,6 +146,20 @@ against the expected list, resolved it in one step. And when the brief supplies 
 (parity argument, blank-means-derive, DROP-not-overload), that rationale IS the commit body; verify
 each claim against the diff (signature, grant lines, re-export) rather than paraphrasing it blind.
 
+**Promotion 29 (`0ba1d57` → `c502b40`) — back to the one-file `fix(cenapro):` shape** after the
+split. Two staged paths only (`deliveries-ledger.tsx` + its `CONTEXT.md`), pending
+`chore(memory)` commit rode along again, `git merge-tree` gate clean, merge exit 0. Notable:
+the brief listed a "STOP if you see these" set (`components/shared/grid/**`, `lib/hooks/**`,
+`app/(app)/cenapro/qc/**`, `globals.css`, `workers/`, `supabase/`) and the pre-staging
+`git status --porcelain` had NO stray source files — concurrent-session mode was OFF again,
+second time running (cf. `434eb7b`). Presume-then-verify keeps paying; don't pre-emptively
+switch to exact-path staging without the status proving it.
+
+Also: `git status -sb` reports a bare `## main` (no `...origin/main`) on this repo — local
+`main` has no upstream tracking configured. That is NOT an un-pushed state; push explicitly
+with `git push origin main` and prove the result with `git rev-parse main origin/main`
+(identical OIDs) plus `git ls-remote origin main`, not with the `-sb` ahead/behind marker.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
