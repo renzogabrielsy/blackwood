@@ -218,6 +218,36 @@ formula 22; `tsc` 0; build 0; lint 166/28 at exact baseline) — took them, per 
 Pre-merge `git merge-tree $(git merge-base …)` conflict-marker count was 0, merge exit 0, and the
 pending `chore(memory)` commit rode along for the fifth time.
 
+**Promotion 33 (`2085a7d` → `32f1623`) — SIXTH consecutive clean `git add .`**, back to a single
+`fix(cenapro):` over 3 files (ledger + CONTEXT.md + verify script). Per-file stop-list from
+promotion 32 held again and was clean.
+
+**Third round on ONE reported symptom is not a red flag — read the brief's root-cause claim as the
+commit body.** Renzo's "paste doesn't work" produced fixes in promotions 32 and this one; the first
+two repaired real defects *downstream of a dead entry point* (`onPaste` on a non-editable div never
+fired, because a clipboard event is dispatched at an element that can ACCEPT a paste, unlike a
+keydown which goes to whatever holds focus). When a brief explains why the earlier correct fixes
+did not resolve the symptom, that explanation is the most valuable part of the message — carry it
+into the body verbatim in substance, and don't treat the repeat as scope creep or reach for a revert
+(same lesson as promotions 23/24, now confirmed three deep).
+
+**A brief may CORRECT its own earlier rationale — honour the correction in the message.** This one
+noted the implementing agent had disproved a claim from the original brief (copy was never an
+`onCopy` DOM event, so the "controlled experiment" was not real evidence; the input-vs-div split
+was). Commit bodies must not repeat a rationale the brief has retracted — read the whole brief
+before drafting, including its self-corrections near the end.
+
+**Two divergence checks disagree — trust `merge-tree`, not `--is-ancestor`.** Here
+`git merge-base --is-ancestor main <feat>` reported DIVERGED (main carried 2 prior promotion merge
+commits), exactly the false alarm §"Do NOT use rev-list" warns about. `git log --oneline <feat>..main`
+showed those two were merge commits with no unique content, and `git merge-tree --write-tree` came
+back a bare tree OID (clean). Don't stall on ancestry; run the merge-tree gate.
+
+Also re-confirmed: dirty `.claude/agent-memory-local/**` was identical on both branches
+(`git diff main <feat> -- <path>` empty), so `git checkout main` carried it across without
+complaint — the cheap pre-checkout check above, run as a branch-to-branch diff rather than a
+name-overlap comparison.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
