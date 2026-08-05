@@ -1867,6 +1867,58 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_rc_bank_accounts: {
+        Row: {
+          account_label: string | null
+          account_no: string | null
+          active: boolean | null
+          bank_active: boolean | null
+          bank_code: string | null
+          bank_display_name: string | null
+          bank_sort_order: number | null
+          created_at: string | null
+          display_label: string | null
+          id: string | null
+          notes: string | null
+          row_version: number | null
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_banks: {
+        Row: {
+          active: boolean | null
+          code: string | null
+          created_at: string | null
+          display_name: string | null
+          notes: string | null
+          row_version: number | null
+          sort_order: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          notes?: string | null
+          row_version?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          active?: boolean | null
+          code?: string | null
+          created_at?: string | null
+          display_name?: string | null
+          notes?: string | null
+          row_version?: number | null
+          sort_order?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       cenapro_rc_deliveries: {
         Row: {
           ash: number | null
@@ -2199,6 +2251,223 @@ export type Database = {
           notes?: string | null
           sort_order?: number | null
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_payment_audit: {
+        Row: {
+          amount_php: number | null
+          changed: Json | null
+          changed_at: string | null
+          changed_by: string | null
+          changed_by_role: string | null
+          cheque_no: string | null
+          id: number | null
+          method: string | null
+          operation: string | null
+          payment_date: string | null
+          payment_id: string | null
+          snapshot: Json | null
+          source: string | null
+          supplier_code: string | null
+        }
+        Insert: {
+          amount_php?: number | null
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          cheque_no?: string | null
+          id?: number | null
+          method?: string | null
+          operation?: string | null
+          payment_date?: string | null
+          payment_id?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+        }
+        Update: {
+          amount_php?: number | null
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          cheque_no?: string | null
+          id?: number | null
+          method?: string | null
+          operation?: string | null
+          payment_date?: string | null
+          payment_id?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_payments: {
+        Row: {
+          account_label: string | null
+          account_no: string | null
+          amount_php: number | null
+          balance_effect_php: number | null
+          bank_account_id: string | null
+          bank_account_label: string | null
+          bank_code: string | null
+          bank_display_name: string | null
+          cheque_date: string | null
+          cheque_no: string | null
+          created_at: string | null
+          created_by: string | null
+          deleted_at: string | null
+          deleted_by: string | null
+          direction: string | null
+          group_code: string | null
+          group_display_name: string | null
+          id: string | null
+          is_cash: boolean | null
+          is_deleted: boolean | null
+          method: string | null
+          payment_date: string | null
+          reference_no: string | null
+          remarks: string | null
+          row_version: number | null
+          stated_term: string | null
+          supplier_code: string | null
+          supplier_name: string | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_audit: {
+        Row: {
+          changed: Json | null
+          changed_at: string | null
+          changed_by: string | null
+          changed_by_role: string | null
+          display_name: string | null
+          id: number | null
+          operation: string | null
+          parent_code: string | null
+          snapshot: Json | null
+          source: string | null
+          supplier_code: string | null
+        }
+        Insert: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          display_name?: string | null
+          id?: number | null
+          operation?: string | null
+          parent_code?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+        }
+        Update: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          display_name?: string | null
+          id?: number | null
+          operation?: string | null
+          parent_code?: string | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_balances: {
+        Row: {
+          active: boolean | null
+          adjustment_count: number | null
+          adjustment_php: number | null
+          cash_in_php: number | null
+          cash_net_php: number | null
+          cash_out_php: number | null
+          display_name: string | null
+          first_payment_date: string | null
+          first_receipt_date: string | null
+          group_code: string | null
+          group_display_name: string | null
+          group_sort_order: number | null
+          is_child: boolean | null
+          is_parent: boolean | null
+          is_unassigned: boolean | null
+          last_payment_date: string | null
+          last_receipt_date: string | null
+          parent_code: string | null
+          payment_count: number | null
+          payments_php: number | null
+          receipt_count: number | null
+          receipts_php: number | null
+          running_balance_php: number | null
+          sort_order: number | null
+          supplier_code: string | null
+          unpriced_awaiting_both_count: number | null
+          unpriced_awaiting_price_count: number | null
+          unpriced_awaiting_weight_count: number | null
+          unpriced_receipt_count: number | null
+          unpriced_receipt_kg: number | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_group_balances: {
+        Row: {
+          adjustment_count: number | null
+          adjustment_php: number | null
+          any_active: boolean | null
+          cash_in_php: number | null
+          cash_net_php: number | null
+          cash_out_php: number | null
+          child_count: number | null
+          first_payment_date: string | null
+          first_receipt_date: string | null
+          group_code: string | null
+          group_display_name: string | null
+          group_sort_order: number | null
+          is_unassigned: boolean | null
+          last_payment_date: string | null
+          last_receipt_date: string | null
+          payment_count: number | null
+          payments_php: number | null
+          receipt_count: number | null
+          receipts_php: number | null
+          running_balance_php: number | null
+          supplier_codes: string[] | null
+          supplier_count: number | null
+          unpriced_awaiting_both_count: number | null
+          unpriced_awaiting_price_count: number | null
+          unpriced_awaiting_weight_count: number | null
+          unpriced_receipt_count: number | null
+          unpriced_receipt_kg: number | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_groups: {
+        Row: {
+          active: boolean | null
+          child_codes: string[] | null
+          child_count: number | null
+          code: string | null
+          created_at: string | null
+          display_name: string | null
+          group_code: string | null
+          group_display_name: string | null
+          group_sort_order: number | null
+          is_child: boolean | null
+          is_parent: boolean | null
+          notes: string | null
+          parent_code: string | null
+          parent_display_name: string | null
+          row_version: number | null
+          sort_order: number | null
+          updated_at: string | null
         }
         Relationships: []
       }
@@ -3126,6 +3395,10 @@ export type Database = {
         Args: { p_expected_row_version: number; p_id: string }
         Returns: Json
       }
+      cenapro_delete_rc_payment: {
+        Args: { p_expected_row_version: number; p_id: string }
+        Returns: Json
+      }
       cenapro_flec_balance: {
         Args: { p_start_date: string; p_warehouse_code: string }
         Returns: {
@@ -3182,6 +3455,10 @@ export type Database = {
           warehouse_code: string
         }[]
       }
+      cenapro_restore_rc_payment: {
+        Args: { p_expected_row_version: number; p_id: string }
+        Returns: Json
+      }
       cenapro_save_analysis_sample: {
         Args: {
           p_ash?: number
@@ -3196,6 +3473,18 @@ export type Database = {
         }
         Returns: Json
       }
+      cenapro_save_rc_bank: {
+        Args: {
+          p_code: string
+          p_expected_row_version?: number
+          p_patch?: Json
+        }
+        Returns: Json
+      }
+      cenapro_save_rc_bank_account: {
+        Args: { p_expected_row_version?: number; p_id?: string; p_patch?: Json }
+        Returns: Json
+      }
       cenapro_save_rc_delivery: {
         Args: { p_expected_row_version?: number; p_id?: string; p_patch?: Json }
         Returns: Json
@@ -3205,6 +3494,18 @@ export type Database = {
           p_delivery_id: string
           p_expected_row_version: number
           p_samples?: Json
+        }
+        Returns: Json
+      }
+      cenapro_save_rc_payment: {
+        Args: { p_expected_row_version?: number; p_id?: string; p_patch?: Json }
+        Returns: Json
+      }
+      cenapro_save_rc_supplier: {
+        Args: {
+          p_code: string
+          p_expected_row_version?: number
+          p_patch?: Json
         }
         Returns: Json
       }
