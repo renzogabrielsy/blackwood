@@ -200,6 +200,24 @@ diff touched logic this time, but it was self-asserting: the feature's core clai
 never enters `navRows`) is checked in-repo by comparing serialised `navRows` both ways, which is
 exactly the kind of assertion that makes re-running a build redundant rather than prudent.
 
+**Promotion 32 (`9799659` + `e121639` → `53b01e2`) — first TWO-commit promotion on this branch**,
+and the FIFTH consecutive clean `git add .` (only `.claude/agent-memory-local/**` unstaged). Split
+executed with `git commit -- <pathspec>` off one staged set, per [[feedback-commit-splitting]]:
+`fix(cenapro):` for 5 code/doc files, then `docs(cenapro):` for a lone `.agents/prompts/*.md`
+planning brief. A doc that is a *planning brief for future work* is its own change-line — do not
+fold it into the fix commit even though it shipped in the same tree.
+
+**The stop-list can be per-FILE inside a directory that is otherwise expected.** The brief named
+`lib/hooks/use-grid-keyboard-nav.ts`, `use-grid-paste.ts`, `use-clipboard-copy.ts` as STOP-if-seen
+while `lib/hooks/use-cell-selection.ts` was a REQUIRED path. Read the stop-list literally as file
+paths; never generalise it to the parent directory, or you'll refuse the very change you were sent
+to land. Verified the distinction by diffing the staged list against both lists before committing.
+
+Gates came from the orchestrator with numbers again (verify 100 assertions, up from 89; qc-draw 36;
+formula 22; `tsc` 0; build 0; lint 166/28 at exact baseline) — took them, per promotion 30's rule.
+Pre-merge `git merge-tree $(git merge-base …)` conflict-marker count was 0, merge exit 0, and the
+pending `chore(memory)` commit rode along for the fifth time.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
