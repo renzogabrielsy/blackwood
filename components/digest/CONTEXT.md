@@ -185,6 +185,22 @@ scrolling inside its own card (commits `9471122` / `5d92772`).
   a single container fade with per-row `transition-colors` hover only.
 - **Recharts** with `isAnimationActive={false}` on sparklines; theme-token colors
   (`var(--chart-1..5)`) for dark-mode safety.
+- **Focus never scrolls — `schedule-month-grid.tsx` (2026-08-05).** `HTMLElement.focus()`
+  is specified to scroll its target into view with block AND inline **`"center"`** through
+  every scrolling ancestor, and `"center"` always computes a target — so it fires even
+  when the element is already fully visible, re-centring the row and dragging the whole
+  page. Both `gridRef.current?.focus()` sites in the schedule grid (the custom
+  `revertCellEdit`, and the Tab/Enter `commit`) now pass **`{ preventScroll: true }`**.
+  Its cell editor is the shared `EditInput`, which was already guarded, so the grid needed
+  no other change. **A `.focus()` on a grid wrapper or cell without the option is a bug** —
+  see "Focus must never scroll" in `components/shared/grid/CONTEXT.md`.
+  - The schedule grid's `<table>` is plain `border-collapse`, so its row-level borders
+    render. Note for anyone adding sticky frozen columns to a digest table: that forces
+    `border-collapse: separate`, and in the separated-borders model the CSS spec paints
+    borders on table CELLS ONLY — every `<tr>`/`<tbody>`/`<col>` border goes inert in the
+    same instant. Move them onto the cells with a `[&>*]:border-b
+    [&>*]:border-b-<side-specific-colour>` child variant, never back onto the `<tr>`, and
+    never "fix" it by flipping to `collapse` (that makes a sticky column lose its edges).
 
 ## Dependencies
 - `lib/digest/queries.ts` / `lib/digest/types.ts` — the data contract (do not edit lightly).

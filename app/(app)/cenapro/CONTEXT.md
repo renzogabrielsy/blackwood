@@ -168,7 +168,7 @@ The Flec Inventory STARTING block is written through a **dedicated append-only R
 
 Cenapro's **raw-charcoal receipts** — the Cenapro analogue of ICTC's `public.deliveries`, sourced from the **"RC 2026" tab of Cenapro's RC workbook**. 991 receipts + 244 moisture sub-samples are loaded. The **route is live at `/cenapro/deliveries`** — see its own **`deliveries/CONTEXT.md`** for the UI (columns, the two single-column cells, the formula cells, the per-cell nav resolver, the two scopes, price gating). The rest of this section is the schema, the read model, the write path and the import that it sits on. Liquidation (assigning cheques to receipts) is the feature this exists to support.
 
-**Migrations:** `supabase/migrations/20260804070000_cenapro_rc_deliveries.sql` (tables, generated money columns, touch trigger, RLS, views, accessors, RPCs, dimension seed), `20260804071000_cenapro_rc_delivery_sheet_total_witness.sql` (adds `sheet_total_matches` to the read model) and `20260804072000_cenapro_rc_delivery_duplicate_groups.sql` (adds the duplicate-pair surface — see "Duplicate pairing" below). **Importer:** `scripts/cenapro/import-rc-deliveries.mjs` + its committed source `scripts/cenapro/rc2026-extract.json`.
+**Migrations:** `supabase/migrations/20260804070000_cenapro_rc_deliveries.sql` (tables, generated money columns, touch trigger, RLS, views, accessors, RPCs, dimension seed), `20260804071000_cenapro_rc_delivery_sheet_total_witness.sql` (adds `sheet_total_matches` to the read model) `20260804072000_cenapro_rc_delivery_duplicate_groups.sql` (adds the duplicate-pair surface — see "Duplicate pairing" below) and `20260805090000_cenapro_rc_delivery_flag_resolution.sql` (adds the flag-resolution surface — see "Flag resolution" below). **Importer:** `scripts/cenapro/import-rc-deliveries.mjs` + its committed source `scripts/cenapro/rc2026-extract.json`.
 
 ### Three decisions that govern everything here
 1. **Deliveries share ZERO dimensions with production.** `cenapro.rc_supplier` / `cenapro.rc_destination` are NEW tables, deliberately NOT `cenapro.warehouse` / `source_location` / `plant`. A raw-charcoal yard (`WHSE A`, `WHSE 13`, `W6 PROD`, `DRYER`) is a different physical place with a different code space from a finished-goods FLEC warehouse. **Never add an FK from an `rc_*` table to a production dimension.**
@@ -224,8 +224,45 @@ Chosen over pushing the total into the read view because liquidation will SUM an
 
 **A STORED GENERATED signature column + index is NOT possible and would not help.** `md5(ROW(...)::text)` is not IMMUTABLE and Postgres refuses it outright (`generation expression is not immutable`, verified live); and no index can prune `count(*) OVER (PARTITION BY …)`, which must see every row regardless. The signature CTE therefore projects only `(id, delivery_date, source_row, created_at, signature)` so the sort payload stays narrow. Measured on the live 991 rows, a realistic keyset page (`WHERE (delivery_date,id) > (…) ORDER BY delivery_date NULLS FIRST, id LIMIT 100`) goes **3.7 ms → 12.0 ms**; the keyset predicate still pushes into `idx_cenapro_rc_delivery_date` (it now uses the index where the old shape chose a seq scan). The pre-existing per-row LATERAL sample rollup remains the plan's biggest buffer consumer (1089 buffers over 514 loops) — revisit it alongside this window if the table ever reaches tens of thousands of rows.
 
+### Flag resolution — is the flag's problem STILL TRUE? (2026-08-05)
+
+**`import_flags` IS NEVER MUTATED. Not by this migration, not by the importer, not by any server action.** It is the permanent record of what the extractor saw on the day — the only surviving witness that the workbook literally said `WHSE A/R#16` — and "flagged, never fixed" (decision 3) is why. What migration `20260805090000` adds is the ability to **DERIVE, on read**, whether each flag's underlying condition still holds. Nothing is cleared, nothing is deleted, and the migration contains no `UPDATE` at all.
+
+**Why it was needed.** Renzo repaired most of the flagged rows, and the `?issue=flagged` lens became a lie: **12 receipts carry a flag but only 2 still have a live problem** (live, 2026-08-05). A worklist where five in six entries are already done is a worklist nobody opens, and every future repair makes it worse.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `import_flags_state` | `jsonb` | The same array as `import_flags`, each element carrying an extra derived **`resolved`** boolean. Every key the extractor wrote is preserved verbatim — this **adds** a field, it never edits or drops one. Always an array (empty, never NULL), matching `import_flags`. |
+| `unresolved_flag_count` | `int` | How many of this row's flags still describe a LIVE problem. **This is the honest worklist size.** |
+| `resolved_flag_count` | `int` | How many describe a condition a human has since repaired. |
+| `has_unresolved_flags` | `boolean` | `unresolved_flag_count > 0` — **the predicate the `?issue=flagged` lens should filter on.** `has_import_flags` is now the wrong test (12 vs 2). |
+
+`import_flag_count` / `has_import_flags` are **unchanged and stay** — they are the historical record. The new pair is the live one.
+
+**The predicate per kind.** Each asks ONE question of the row's CURRENT state, never of the flag's own text. Counts are live 2026-08-05 over 971 receipts.
+
+| kind | flags | RESOLVED ⟺ | live |
+|---|---|---|---|
+| `destination_unmapped` | 5 | `destination_code IS NOT NULL` | 5 resolved (all now `WHSE 3A`) |
+| `supplier_no_trader_prefix` | 3 | `supplier_code IS NOT NULL` | 3 resolved (all `NEGROS`) |
+| `date_unparseable` | 2 | `delivery_date IS NOT NULL` | 2 resolved (both `2026-05-06`) |
+| `bd_out_of_range` | 1 | `bd IS NOT NULL` | **1 unresolved** (`source_row` 928) |
+| `supplier_unmapped` | 1 | `supplier_code IS NOT NULL` | **1 unresolved** (`source_row` 343) |
+| `suspected_duplicate` | 0 | `NOT is_suspected_duplicate` **AND** no exact twin remains | none carry this kind |
+| *anything else* | — | **never resolved** | — |
+
+Three of those need their reasoning stated, because guessing them wrong hides a real problem:
+
+- **`supplier_no_trader_prefix` is NOT informational and NOT permanently unresolved.** Its text ("`MANAGAYTAY` has no trader prefix; mapped to NEGROS for review") describes a property of an **immutable historical string**, so a predicate over the string could never become false — permanent, un-clearable noise, exactly what this change exists to remove. It gets the **same predicate as `supplier_unmapped`**, deliberately: both flags say "we may not know who to pay", one because the importer could not decide and one because it guessed, and both are answered by "is there a payee on this row now?". If a human ever clears `supplier_code`, the flag correctly fires again. What the database genuinely **cannot** see is whether a human has *reviewed and agreed with* the guess — there is no acknowledgement column, and deriving one from `row_version` would be a fiction (all three sit at `row_version` 1, which means *untouched*, not *unreviewed*). That residual belongs in the UI copy, not in a resolution state.
+- **`bd_out_of_range` does NOT test a range.** There is **no BD range anywhere in this schema** — the lab columns deliberately carry no range CHECK (see "Data quality is data, not constraints" above), so a threshold invented here would be a number with no authority masquerading as a rule. The predicate asks the question the flag actually created: the extractor **refused to store** `23995.0`, so the receipt has **no BD reading at all**. That is real, checkable and closeable — someone looks the reading up and types it in. (Only 4 of 971 receipts have a NULL `bd`, so a missing BD is exceptional, not the norm.)
+- **An UNKNOWN kind is never resolved.** A new extractor version, or an element that is not even a JSON object, counts as unresolved and is wrapped rather than dropped so it still renders. Getting a verdict wrong in the "resolved" direction silently hides a problem; getting it wrong the other way merely leaves a row where a human will see it. That asymmetry decides the default.
+
+**Price gating: none.** Two counts, a boolean, and the extractor's own `{kind, detail, raw}` text — no `stripPrices()` entry is needed in `deliveries/types.ts`, same reasoning as the duplicate columns. "This receipt still has an open data problem" is an operational fact every role needs.
+
+**Implementation + cost.** The array is expanded by a set-returning expression in its **own CTE guarded to `import_flags <> '[]'`**, so 959 of the 971 receipts never enter the SRF and are `LEFT JOIN`ed to a `COALESCE`d zero — not a correlated subquery per flag, which would run once per row of the ledger page for no result. On the endless ledger's own page query (`ORDER BY delivery_date DESC NULLS LAST, id DESC LIMIT 120`): **`shared hit=2132` → `shared hit=2145`, i.e. +13 buffers**, one guarded pass over a 36-block table, no new window and a 12-row sort. The one plan-shape change is that `grouped` is now referenced twice and is therefore materialised as a CTE Scan rather than inlined. The pre-existing per-row sample-rollup LATERAL (2020 buffers) remains the view's dominant cost, unchanged.
+
 ### Views
-- **`cenapro.view_rc_delivery`** (`security_invoker`) — the read model: the fact row + `supplier_name` / `destination_name` / `destination_kind` / `destination_has_sides` + `sample_count` / `sample_avg_moisture_pct` (SQL `avg`, rounded to 3 dp — never in TypeScript) + the data-quality surface `sheet_total_matches` / `import_flag_count` / `has_import_flags` / `supplier_unresolved` / `destination_unresolved` + the duplicate-pair surface `duplicate_group_key` / `duplicate_group_size` / `duplicate_group_ordinal` / `duplicate_peer_ids` (see "Duplicate pairing" above). **The four duplicate columns are APPENDED at the end** — the original 52 keep their exact names, types and order, because several consumers `select('*')`. That is why migration `20260804072000` uses `CREATE OR REPLACE VIEW` on the inner view (Postgres refuses the replace if any existing column moved, which makes the column list self-verifying) and only DROP+CREATEs the `public` accessor, whose `SELECT v.*` was expanded at creation time.
+- **`cenapro.view_rc_delivery`** (`security_invoker`) — the read model: the fact row + `supplier_name` / `destination_name` / `destination_kind` / `destination_has_sides` + `sample_count` / `sample_avg_moisture_pct` (SQL `avg`, rounded to 3 dp — never in TypeScript) + the data-quality surface `sheet_total_matches` / `import_flag_count` / `has_import_flags` / `supplier_unresolved` / `destination_unresolved` + the duplicate-pair surface `duplicate_group_key` / `duplicate_group_size` / `duplicate_group_ordinal` / `duplicate_peer_ids` (see "Duplicate pairing" above) + the flag-resolution surface `import_flags_state` / `unresolved_flag_count` / `resolved_flag_count` / `has_unresolved_flags` (see "Flag resolution" above). **Every new column is APPENDED at the end** — the original 52 keep their exact names, types and order, then the four duplicate columns, then the four resolution columns, because several consumers `select('*')`. That is why migrations `20260804072000` and `20260805090000` both use `CREATE OR REPLACE VIEW` on the inner view (Postgres refuses the replace if any existing column moved, which makes the column list self-verifying) and only DROP+CREATE the `public` accessor, whose `SELECT v.*` was expanded at creation time.
 - **`public.cenapro_rc_deliveries`**, **`public.cenapro_rc_delivery_samples`**, **`public.cenapro_rc_suppliers`**, **`public.cenapro_rc_destinations`** — thin single-table projections, therefore **AUTO-UPDATABLE** (`is_insertable_into=YES`, `is_updatable=YES`, no INSTEAD OF trigger), exactly like `public.cenapro_production_events`. **Writers must OMIT the four generated columns** (`delivery_year`, `net_weight_kg`, `price_php_kg`, `total_price_php`) — the base table rejects an explicit value (`cannot insert a non-DEFAULT value into column "total_price_php"`), by design.
 - **`public.cenapro_rc_delivery_rows`** — read-only accessor over the enriched view (`is_insertable_into=NO`).
 
@@ -243,6 +280,8 @@ RLS enabled on all four tables with the platform single-org posture (`TO authent
 `node scripts/cenapro/import-rc-deliveries.mjs [--dry-run] [--refresh] [--input=PATH] [--sheet=NAME]` — REST/443 with the service-role key (the sandbox cannot reach Postgres :5432). Idempotency key is `UNIQUE (source_sheet, source_row)`, a **full** (not partial) unique constraint so PostgREST's `on_conflict=` can target it; both columns are NULL on app rows and NULLs are distinct in a unique index, so hand-entered receipts are unconstrained. **Default resolution is `ignore-duplicates`** — an already-imported row is left alone, because by then a human may have resolved its flags in the app; `--refresh` switches to `merge-duplicates` as an explicit, destructive choice. Proven idempotent: a second run left the counts at 991 / 244.
 
 **Verified live after import** — 991 deliveries · 244 samples · 12 suppliers · 16 destinations; `total_price_php IS DISTINCT FROM sheet_total_php` = **0 rows**; `deduction_pct NOT NULL` = 142; `price_adjustment_php_kg NOT NULL` = 12; `is_suspected_duplicate` = 22; `delivery_date IS NULL` = 2; rows carrying `import_flags` = 34 (22 suspected_duplicate · 5 destination_unmapped · 3 supplier_no_trader_prefix · 2 date_unparseable · 1 bd_out_of_range · 1 supplier_unmapped). The whole write path (insert → update → stale-version conflict → unsupported field → blind-write refusal → samples → sample version conflict → delete → cascade → delete-again) was proven as the `authenticated` role in a rolled-back transaction, 16/16.
+
+**Those are IMPORT-DAY figures and history has moved on.** Live at 2026-08-05: **971** receipts (the 20 pasted duplicates were deleted, so `is_suspected_duplicate` = **0** and no row carries a `suspected_duplicate` flag), **12** rows carrying `import_flags` (the 22 duplicate flags went with the deleted rows), `delivery_date IS NULL` = **0**, `supplier_code IS NULL` = **1**, `destination_code IS NULL` = **2** (both `SEVILLA` lab-sample rows 1321/1322, which have no `destination_raw` either, so neither is `destination_unresolved`). Of the 12 surviving flags, **10 describe a condition a human has already repaired and 2 are still live** — see "Flag resolution" above, which is why `has_import_flags` is no longer the right lens predicate.
 
 **Verified live after the duplicate-pairing migration (2026-08-04)** — 22 groups, every one of size 2, across exactly three days: **2026-04-06** 9 groups (₱6,940,941.50) · **2026-04-07** 7 groups (₱5,315,502.20) · **2026-04-08** 6 groups (₱4,929,495.00) = **₱17,185,938.70** carried by the 22 copies. All 22 `is_suspected_duplicate` rows resolve exactly one peer; all 22 sit at `duplicate_group_ordinal = 2` and their 22 previously-invisible originals at ordinal 1. All 44 peer edges are reciprocal, none dangling, none self-referencing; `duplicate_group_key IS NULL` ⟺ `duplicate_peer_ids IS NULL` ⟺ `duplicate_group_size = 1` on every row. No other date in the 991 produces a group. `anon` still holds **zero** grants on either view; both remain `security_invoker=true` with `SELECT` to `authenticated` + `service_role` only. **No data was modified** — the migration is view-only, per decision 3.
 
@@ -606,6 +645,35 @@ The one remap: `2025-12-02|FLEC|WHSE 5` → `…|WHSE 7`, because the only Dec-2
 
 ### Grants trap (applies to every future `cenapro` object)
 The `cenapro` schema carries a DEFAULT ACL `{anon=r, authenticated=arwd, service_role=arwd}` from the original `create_cenapro_schema` migration. **Every new relation is born with `anon=SELECT` and `authenticated=INSERT/UPDATE/DELETE`, silently, whatever the CREATE says** — which contradicts the Phase-4 "anon has no data access" posture and makes a read-only reporting view look writable. The views migration REVOKEs both explicitly; do the same for anything new.
+
+### Two traps the Cenapro production grids share (2026-08-05)
+
+**1. A cell editor may never use React's `autoFocus`.** react-dom's `commitMount` is a bare
+`domElement.focus()`, and `HTMLElement.focus()` scrolls the element into view with block/inline
+**`"center"` through every scrolling ancestor** — and because `"center"` always computes a target,
+it fires *even when the element is already fully visible*. So starting an edit jogged the page.
+`production-ledger-grid.tsx` (4 `<Input>`) and `draft-entry-zone.tsx` (3) now use
+`ref={focusNoScroll}` from `lib/utils.ts`; `production-daily-block.tsx`'s `TypeaheadInput` uses a
+merged ref callback so its own `inputRef` stays populated. Every `gridRef.current?.focus()` in
+`production-ledger-grid` (4), `production-endless-sheet` (3), `production-endless-pivots` (3) and
+`production-daily-block` (1) now passes `{ preventScroll: true }`. The two `.select()` companions
+and `production-daily-block`'s deliberate `scrollIntoView({block:'nearest'})` are **preserved** —
+`nearest` is a no-op for a visible cell, so that scroll is the grid's own caret-follow and intended.
+
+**2. Row borders declared on a `<tr>` are inert.** These grids set `border-collapse: separate`,
+which is load-bearing here — under `collapse` a border belongs to the TABLE rather than the cell,
+so a `position: sticky` frozen column's borders scroll away and the pinned block loses its edges.
+But in the separated-borders model **the CSS spec paints borders on table CELLS ONLY**: a border
+on `<tr>`, `<tbody>`, `<col>` or `<colgroup>` is ignored outright. So the `border-b` on
+`production-endless-sheet`'s header + both body rows, and `production-ledger-grid`'s row + header,
+was never painted — the sheets read as columns with no rows. The rule now rides on the cells via
+`[&>*]:border-b [&>*]:border-b-border/30` (full-weight `border-b-border` for the header↔body
+boundary). **Never re-add a `<tr>` border; never flip to `collapse`.** Row heights are unchanged —
+preflight makes cells `border-box`, so the 1px rule draws inside the explicit height and
+virtuoso's measurement in the endless sheet is undisturbed.
+
+*Both were fixed first on `/cenapro/deliveries`; see that module's CONTEXT.md for the original
+diagnosis.*
 
 ## See Also
 - [Blackwood Table (shared grid primitives)](../../../components/shared/grid/CONTEXT.md) — the production ledger + the endless sheet's draft entry zone consume the shared keyboard-nav / edit-session / paste hooks and the shared `GridCell`/`SelectCell`/`DatePickerCell`; the **QC Ledger** (`qc/qc-ledger-client.tsx`) consumes `useGridKeyboardNav` (COORDINATE resolver) + `useGridEditSession` + `GridCell`/`EditInput` over its four analysis columns; the **Daily Block** (`production-daily-block.tsx`, Phase 3 retrofit) consumes `useGridKeyboardNav` (DOM-order resolver `createDomOrderNavResolver`) + `useGridEditSession` + the shared `EditInput`/`EDIT_INPUT` and now follows the canonical click-to-select / type-to-edit model. RC IN's `bulk-delivery-input.tsx` is the canonical reference migration.

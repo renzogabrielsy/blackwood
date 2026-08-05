@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { RotateCcw, Trash2 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { GridCell } from '@/components/shared/grid/GridCell';
 import {
@@ -118,7 +118,7 @@ function EditableDataCells({ rowIdx, row, updateRow, onPaste, onCommitDate, comm
                 {...selProps(rowIdx, col)}
             >
                 <Input
-                    autoFocus
+                    ref={focusNoScroll}
                     value={row[field]}
                     onChange={(e) => updateRow(rowIdx, field, opts?.upper ? e.target.value.toUpperCase() : e.target.value)}
                     className={cn(inputClass, 'font-mono text-xs', textAlign, opts?.upper && 'uppercase')}
@@ -143,7 +143,7 @@ function EditableDataCells({ rowIdx, row, updateRow, onPaste, onCommitDate, comm
             {...selProps(rowIdx, col)}
         >
             <Input
-                autoFocus
+                ref={focusNoScroll}
                 type="number"
                 step="1"
                 value={row[field]}
@@ -167,7 +167,7 @@ function EditableDataCells({ rowIdx, row, updateRow, onPaste, onCommitDate, comm
             {...selProps(rowIdx, col)}
         >
             <Input
-                autoFocus
+                ref={focusNoScroll}
                 value={row[field]}
                 onChange={(e) => updateRow(rowIdx, field, e.target.value)}
                 className={cn(inputClass, 'text-center font-mono text-[11px]')}

@@ -90,11 +90,25 @@ Key semantics:
   now pass **`{ preventScroll: true }`**; the master table already did. Focus still moves;
   only the scroll is refused. See "Focus must never scroll" in
   `components/shared/grid/CONTEXT.md`.
-  - **Still open in this file:** the per-column editors are shadcn `<Input autoFocus>`,
-    not the shared `EditInput`, so react-dom's own unguarded `.focus()` still runs when an
-    edit STARTS (15 sites). Fixing it means swapping `autoFocus` for a ref callback
-    (`el?.focus({ preventScroll: true })`) at each site — a mechanical change deliberately
-    left out of the platform pass.
+  - **CLOSED 2026-08-05.** The 15 sites in this file are done: 13 shadcn `<Input>` cell
+    editors now take **`ref={focusNoScroll}`** (`lib/utils.ts`) instead of `autoFocus`, and
+    the 2 `<AutocompletePopover autoFocus>` cells (SUPPLIER, BLOCK) keep the prop — the
+    component itself now honours it with a ref callback rather than passing React's
+    `autoFocus` down to its `<Input>` (see `components/shared/AutocompletePopover.tsx`).
+    **React's `autoFocus` prop is unfixable from the outside** — react-dom's `commitMount`
+    is a bare `domElement.focus()` with no options — so a cell editor must simply not use
+    it. The ref callback lands in the same commit/layout phase `commitMount` would have
+    and, like react-dom, calls no `select()`/`setSelectionRange()`, so caret and selection
+    behaviour are byte-identical; only the scroll is refused. ONE idiom, matching
+    `components/shared/grid/EditInput.tsx`.
+  - **This table's row borders are fine** — `bulk-delivery-input.tsx` uses plain
+    `border-collapse` on the `<table>`, so a `<tr>`-level `border-b` renders. The Cenapro
+    ledgers and the Production Daily/Trucks grids are `border-collapse: separate`, where
+    the CSS spec paints borders on table CELLS ONLY and a row-level border is ignored
+    outright. If this grid ever gains sticky frozen columns (which force `separate`), every
+    row-level border in it goes inert in the same instant — move them to the cells with a
+    `[&>*]:border-b [&>*]:border-b-<side-specific-colour>` child variant, never back onto
+    the `<tr>`.
 - **Escape-after-Delete audit (2026-08-04) — no gap here, nothing changed.**
   A **single-cell** Delete/Backspace goes through `useGridKeyboardNav`'s
   `edit.start(active, '')`, which snapshots the pre-edit value before blanking, so Escape

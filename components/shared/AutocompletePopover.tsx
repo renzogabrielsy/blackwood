@@ -77,6 +77,21 @@ export function AutocompletePopover({
     const inputRef = React.useRef<HTMLInputElement>(null);
     const [selectedIndex, setSelectedIndex] = React.useState(0);
 
+    // ── The `autoFocus` PROP is honoured by a ref callback, never by React's own
+    // `autoFocus` attribute (2026-08-05). react-dom's `commitMount` implements the
+    // attribute as a bare `domElement.focus()` with no options, and `HTMLElement.focus()`
+    // scrolls the element into view with block/inline "center" through EVERY scrolling
+    // ancestor — even when it is already fully visible. In a bulk-input grid that meant
+    // merely STARTING an edit jogged the page. The callback lands in the same commit
+    // (layout) phase `commitMount` would have and, like react-dom, calls no `select()` /
+    // `setSelectionRange()`, so caret behaviour is byte-identical; only the scroll is gone.
+    // Same idiom as `components/shared/grid/EditInput.tsx`. `autoFocus` must stay OFF the
+    // <Input> or React re-adds its own unguarded focus on top.
+    const focusOnMount = React.useCallback((el: HTMLInputElement | null) => {
+        inputRef.current = el;
+        el?.focus({ preventScroll: true });
+    }, []);
+
     // Filter items by value substring match, limit to 5
     const filtered = React.useMemo(
         () => items.filter(item => item.value.toLowerCase().includes(value.toLowerCase())).slice(0, 5),
@@ -143,7 +158,7 @@ export function AutocompletePopover({
             <PopoverTrigger asChild>
                 <div className="w-full h-full relative">
                     <Input
-                        ref={inputRef}
+                        ref={autoFocus ? focusOnMount : inputRef}
                         value={value}
                         onChange={(e) => {
                             onChange(e.target.value);
@@ -166,7 +181,6 @@ export function AutocompletePopover({
                         className={className}
                         placeholder={placeholder}
                         style={style}
-                        autoFocus={autoFocus}
                     />
                 </div>
             </PopoverTrigger>

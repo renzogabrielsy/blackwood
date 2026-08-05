@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { Plus, X, MessageSquareText, PencilLine, MessageSquarePlus } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -824,7 +824,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={3} value={row.transaction_date} {...commonCellProps} {...selectionPropsForCol(3)}>
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.transaction_date}
                         onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
                         className={cn(inputClass, "font-bold text-center font-mono")}
@@ -882,7 +882,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={6} value={row.block_loc} {...commonCellProps} {...selectionPropsForCol(6)}>
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.block_loc}
                         onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
                         className={cn(inputClass, "font-bold text-center font-mono")}
@@ -895,7 +895,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={7} value={row.truck_plate} {...commonCellProps} {...selectionPropsForCol(7)} className="text-center font-mono">
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.truck_plate}
                         onChange={(e) => updateRow(index, 'truck_plate', e.target.value)}
                         className={cn(inputClass, "text-center font-mono")}
@@ -908,7 +908,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={8} value={row.weight_kg} {...commonCellProps} {...selectionPropsForCol(8)}>
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         type="number" step="1"
                         value={row.weight_kg}
                         onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
@@ -922,7 +922,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={9} value={row.sacks} {...commonCellProps} {...selectionPropsForCol(9)} className="text-center font-mono">
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         type="number"
                         value={row.sacks}
                         onChange={(e) => updateRow(index, 'sacks', e.target.value)}
@@ -935,43 +935,43 @@ const BulkInputRow = React.memo(function BulkInputRow({
             {/* 10: MC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={10} value={row.mc} {...commonCellProps} {...selectionPropsForCol(10)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.01" value={row.mc} onChange={(e) => updateRow(index, 'mc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 11: GRIT */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={11} value={row.grit} {...commonCellProps} {...selectionPropsForCol(11)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.01" value={row.grit} onChange={(e) => updateRow(index, 'grit', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 12: ASTM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={12} value={row.bd_astm} {...commonCellProps} {...selectionPropsForCol(12)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.001" value={row.bd_astm} onChange={(e) => updateRow(index, 'bd_astm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 13: JIS */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={13} value={row.bd_jis} {...commonCellProps} {...selectionPropsForCol(13)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.001" value={row.bd_jis} onChange={(e) => updateRow(index, 'bd_jis', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 14: VM */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={14} value={row.vm} {...commonCellProps} {...selectionPropsForCol(14)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.01" value={row.vm} onChange={(e) => updateRow(index, 'vm', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 15: ASH */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={15} value={row.ash} {...commonCellProps} {...selectionPropsForCol(15)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.01" value={row.ash} onChange={(e) => updateRow(index, 'ash', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
             {/* 16: FC */}
             <TableCell className="px-1 py-0 border-r" style={{ height: `${rowHeight}px` }}>
                 <GridCell col={16} value={row.fc} {...commonCellProps} {...selectionPropsForCol(16)} className="text-center font-mono">
-                    <Input autoFocus type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
+                    <Input ref={focusNoScroll} type="number" step="0.01" value={row.fc} onChange={(e) => updateRow(index, 'fc', e.target.value)} className={cn(inputClass, "text-center font-mono")} style={inputStyle} />
                 </GridCell>
             </TableCell>
 
@@ -1008,7 +1008,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                         <div className="flex items-center justify-between h-full w-full relative">
                             <span className="text-muted-foreground absolute left-0 pl-1 z-10" style={inputStyle}>₱</span>
                             <Input
-                                autoFocus
+                                ref={focusNoScroll}
                                 type="number"
                                 step="0.01"
                                 value={row.cost_basis}

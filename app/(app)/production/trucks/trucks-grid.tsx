@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { Save, RotateCcw } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -704,8 +704,11 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                     </colgroup>
 
                     <TableHeader className="bg-muted backdrop-blur-sm sticky top-0 z-50 shadow-sm">
-                        {/* Header row 1 — group labels. DATE spans both header rows. */}
-                        <TableRow className="hover:bg-transparent border-b border-foreground/10" style={{ height: '22px' }}>
+                        {/* Header row 1 — group labels. DATE spans both header rows, so its
+                            rule lands at the bottom of the whole header block (as it should).
+                            Rule on the CELLS — a <tr> border is inert under
+                            `border-collapse: separate` (see the body row below). */}
+                        <TableRow className="hover:bg-transparent [&>*]:border-b [&>*]:border-b-foreground/10" style={{ height: '22px' }}>
                             <TableHead
                                 rowSpan={2}
                                 className="h-auto px-1 py-0 font-mono font-bold text-center text-[10px] border-r border-foreground/20 bg-muted sticky z-40 shadow-[2px_0_4px_rgba(0,0,0,0.12)] align-middle"
@@ -726,8 +729,9 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                                 </TableHead>
                             ))}
                         </TableRow>
-                        {/* Header row 2 — subcolumn labels per plate group. */}
-                        <TableRow className="hover:bg-transparent border-b border-foreground/20" style={{ height: '24px' }}>
+                        {/* Header row 2 — subcolumn labels per plate group. The header↔body
+                            boundary; rule on the CELLS. */}
+                        <TableRow className="hover:bg-transparent [&>*]:border-b [&>*]:border-b-foreground/20" style={{ height: '24px' }}>
                             {plateColumns.map(({ plate }, i) => {
                                 const lastGroup = i === plateColumns.length - 1;
                                 return (
@@ -760,7 +764,17 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                                 <TableRow
                                     key={rowIdx}
                                     className={cn(
-                                        'group transition-colors duration-150 border-b border-border/30 hover:bg-muted/50',
+                                        // The horizontal RULE is on the CELLS (`[&>*]:`), never
+                                        // on the <tr>. This table is `border-collapse: separate`
+                                        // (load-bearing: under `collapse` a border belongs to
+                                        // the TABLE rather than the cell, so the sticky DATE
+                                        // column loses its edges), and in the separated-borders
+                                        // model the CSS spec paints borders on table CELLS ONLY
+                                        // — the `border-b border-border/30` that used to sit
+                                        // here was never painted. Same /30 weight, side-specific
+                                        // colour so tailwind-merge cannot restyle the cells'
+                                        // own `border-r`. Row height is unchanged (border-box).
+                                        'group transition-colors duration-150 [&>*]:border-b [&>*]:border-b-border/30 hover:bg-muted/50',
                                         isDirtyRow && 'border-l-2 border-l-amber-400'
                                     )}
                                     style={{ height: '28px' }}
@@ -798,13 +812,13 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                                                 {/* START KM */}
                                                 <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                                     <GridCell col={startColIdx} row={rowIdx} value={cell.start_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, startColIdx)}>
-                                                        <Input autoFocus type="number" step="1" value={cell.start_km} onChange={e => updateCell(rowIdx, { plate, field: 'start_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, startColIdx); }} />
+                                                        <Input ref={focusNoScroll} type="number" step="1" value={cell.start_km} onChange={e => updateCell(rowIdx, { plate, field: 'start_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, startColIdx); }} />
                                                     </GridCell>
                                                 </TableCell>
                                                 {/* END KM */}
                                                 <TableCell className="px-0 py-0 border-r border-border/30" style={{ height: '28px' }}>
                                                     <GridCell col={endColIdx} row={rowIdx} value={cell.end_km} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, endColIdx)}>
-                                                        <Input autoFocus type="number" step="1" value={cell.end_km} onChange={e => updateCell(rowIdx, { plate, field: 'end_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, endColIdx); }} />
+                                                        <Input ref={focusNoScroll} type="number" step="1" value={cell.end_km} onChange={e => updateCell(rowIdx, { plate, field: 'end_km' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, endColIdx); }} />
                                                     </GridCell>
                                                 </TableCell>
                                                 {/* TTL KM — computed, read-only, tinted, selectable for aggregation */}
@@ -824,7 +838,7 @@ export function TrucksGrid({ initialData, onSaveSuccess }: TrucksGridProps) {
                                                 {/* FUEL */}
                                                 <TableCell className={cn('px-0 py-0', !lastGroup && 'border-r border-foreground/20')} style={{ height: '28px' }}>
                                                     <GridCell col={fuelColIdx} row={rowIdx} value={cell.fuel_liters} className="font-mono text-right pr-1" {...commonCellProps} {...selProps(rowIdx, fuelColIdx)}>
-                                                        <Input autoFocus type="number" step="0.01" min="0" value={cell.fuel_liters} onChange={e => updateCell(rowIdx, { plate, field: 'fuel_liters' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, fuelColIdx); }} />
+                                                        <Input ref={focusNoScroll} type="number" step="0.01" min="0" value={cell.fuel_liters} onChange={e => updateCell(rowIdx, { plate, field: 'fuel_liters' }, e.target.value)} className={cn(inputClass, 'font-mono text-right text-xs')} onPaste={e => { e.stopPropagation(); handleSmartPaste(e, rowIdx, fuelColIdx); }} />
                                                     </GridCell>
                                                 </TableCell>
                                             </React.Fragment>

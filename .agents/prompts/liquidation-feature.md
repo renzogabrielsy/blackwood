@@ -369,41 +369,105 @@ written by a trigger, with no UPDATE or DELETE grant to anyone. Section 3.2 is t
 
 ---
 
-## 5. Open decisions — only Renzo can answer these
+## 5. Questions for Renzo — about how the business actually works
 
-**Do not let an agent answer them.**
+**These are not implementation details. Each one changes the shape of the tables, and an agent
+guessing at them will build the wrong thing. Do not let an agent answer them.**
 
-1. **Can one cheque span more than one supplier?** If yes, `supplier_code` cannot be NOT NULL and
-   we need one payment row per supplier under a shared group id.
-2. **Confirm the sign.** Negative = we owe the supplier (your notes) — the reverse of the usual
-   payables ledger. Should the screens read your way, or the accountant's way?
-3. **Does the balance reset at year end, or run forever?** "Never closes" — does that also mean
-   "never restarts on January 1"?
-4. **The eight ₱0 receipts.** Five on 2026-08-04 have a price but no weight; one PALAWAN receipt
-   on 2026-05-19 has 11,010 kg and no price; two SEVILLA "SAMPLE" rows have neither. Which are
-   genuinely ₱0 payable, and which are just "not priced yet"? Should an unpriced receipt show as
-   a pending line, be excluded, or mark the supplier's balance provisional?
-5. **Is the rounding habit stated per supplier** ("ZAPANTA always rounds to the nearest ₱1,000")
-   **or decided ad hoc per cheque?**
-6. **Can a remainder ever be written off — permanently forgiven — or is it always carried?**
-7. **Can a receipt be over-allocated?** Refuse it, or record it and show the receipt as negative?
-   (Refusing to record something that really happened is how a ledger starts lying.)
-8. **What happens when a receipt with money against it is EDITED** and its total moves? Silently
-   re-balance, warn, or refuse the edit? Today the grid will happily edit it and nothing knows
-   allocations exist.
-9. **What happens when a receipt with money against it is DELETED?** Proposal: refuse the delete
-   outright while any allocation points at it — confirm.
-10. **Do bounced / cancelled / voided cheques need modelling now,** or is "edit the payment"
-    enough?
-11. **Do you need the bank ACCOUNT, or is the bank name enough?** And do you want a real account
-    number stored at all, or is a label enough?
-12. **Is 'cash' a real method here,** or is it always cheque or transfer?
-13. **Does money ever flow the other way** — a supplier refunding CI?
-14. **Who may RECORD a payment?** `canViewPrices()` decides who can *see* money. Is recording it
-    Owner/Admin only, or anyone who can see prices?
-15. **The 22 duplicates.** Docs say 991 and open; the database says 969 and closed. Correct the
-    docs to "resolved by deletion" — and is a hard delete with no audit row the pattern you want
-    repeated for the next correction?
+They are written as questions about the work, not about the software. The short italic line
+under each says what the answer decides, so whoever builds it knows why it mattered.
+
+### How you pay
+
+1. **When you write one cheque, is it ever for more than one supplier at once — or is a cheque
+   always to a single trader?**
+   *Decides whether a payment belongs to exactly one supplier, or needs to be splittable.*
+
+2. **Do you ever pay in cash, or is it always a cheque or a bank transfer?**
+   *Decides whether cash is a third method or a case that never happens.*
+
+3. **Does money ever come back the other way — a supplier refunding you, or returning an
+   overpayment — or does it only ever go out?**
+   *Decides whether payments need a direction at all.*
+
+4. **When you write a cheque, do you need to record which of your accounts it came from, or is
+   knowing it was BDO enough?** And if you do need the account, is a name like "BDO current –
+   Cebu" enough, or does the actual account number have to be stored?
+   *Decides how far the bank detail goes. Cheque numbers are only unique per account, so this
+   also decides how we stop the same cheque being entered twice.*
+
+### How you track what's owed
+
+5. **We'll show one number per supplier. You said a minus means you owe them — confirming that's
+   how you want to read it.** It's the opposite of how an accountant would write it, and we'd
+   rather the screen match how you think than match the textbook.
+   *Decides the sign convention everywhere — the colour, the wording, and how a cash advance reads.*
+
+6. **Does that number start fresh each January, or does it just keep running from whenever you
+   started with that trader?**
+   *Decides whether the balance has a period boundary at all.*
+
+7. **When you look at BRIX, is one running number enough — or do you also need to see which
+   individual deliveries are still unpaid?**
+   *Decides whether the first screen is a summary or a working list.*
+
+### Rounding
+
+8. **Is a supplier's rounding a standing habit — "Zapanta always rounds to the nearest thousand"
+   — or is it decided cheque by cheque?**
+   *If it's standing, we record it once per trader and the system never again flags that leftover
+   as unpaid. If it's ad hoc, we can't tell a deliberate remainder from a real one by looking.*
+
+9. **When a few pesos are left over and are never going to be paid, does it just sit there
+   forever — or does someone eventually say "write that off"?**
+   *These are two different things. Carrying it needs no record at all; writing it off is a
+   decision someone made and should be able to point at later.*
+
+### Deliveries that don't have a price yet
+
+10. **Eight receipts currently show zero pesos, for three different reasons — and I don't think
+    any of them are genuinely free:**
+    - Five trucks from **4 Aug** have an agreed price but **no weight recorded yet**.
+    - One **Palawan** load on **19 May** (truck 8951) has **11,010 kg but no price at all**.
+    - Two **Sevilla** rows from **14 Jul** are marked `SAMPLE` and have neither.
+
+    **For each: is that "nothing is owed", or "something is owed, we just can't say how much
+    yet"?** And when a supplier's balance includes receipts like these, should the screen warn
+    you the number is incomplete?
+    *This is the one that will quietly break the feature if we get it wrong — the obvious way to
+    build a balance would treat all eight as fully paid the moment they exist.*
+
+### When things change, or go wrong
+
+11. **Once you've paid against a delivery and someone then corrects that delivery's weight or
+    price — what should happen?** Quietly adjust what's still owed, warn whoever's editing, or
+    refuse the edit until the payment is sorted out?
+    *Today the grid will happily edit it and nothing knows a payment exists.*
+
+12. **Same question for deleting. If a delivery already has money against it, should the system
+    stop someone deleting it?**
+    *My proposal is yes, refuse outright — but it's your call.*
+
+13. **Can you ever pay a supplier more than a delivery is worth, by mistake or on purpose?**
+    Should the system refuse to record that, or record it and show the delivery as overpaid?
+    *Refusing to record something that actually happened is usually how these systems start lying.*
+
+14. **Do cheques bounce, get cancelled, or get voided often enough that it needs tracking as its
+    own thing — or is "just fix the entry" good enough for now?**
+    *Decides whether cheque status ships in the first version or later.*
+
+### Who does what
+
+15. **Who in the office should be allowed to record a payment?** Everyone who can already see
+    prices, or only you and the admins?
+    *Seeing money and moving money are different permissions.*
+
+16. **One about process rather than the feature.** When you deleted those 22 duplicate
+    deliveries, **nothing anywhere recorded that it happened** — no log, no trace. For deliveries
+    copied out of a workbook that's arguably fine. For cheques it wouldn't be. **Do you want a
+    permanent record of every change to a payment — and should deliveries get one too?**
+    *Decides whether an audit trail is in the first version. It's much cheaper to build in than
+    to add afterwards.*
 
 ---
 

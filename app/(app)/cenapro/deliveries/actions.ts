@@ -63,7 +63,7 @@ const DUPLICATE_WORKLIST_MAX = 600;
  * inference and collapses the row type to an error.
  */
 const ROW_COLS =
-    'id, delivery_date, delivery_date_raw, delivery_year, truck_no, supplier_code, supplier_name, supplier_origin, permit_no, supplier_raw, sacks, gross_weight_kg, deduction_pct, net_weight_kg, weight_formula, bd, moisture_pct, grit, ash, dust, vm, fc, destination_code, destination_name, destination_kind, destination_has_sides, destination_side, destination_raw, remarks, base_price_php_kg, price_adjustment_php_kg, price_php_kg, price_formula, total_price_php, sheet_total_php, sheet_total_matches, sample_count, sample_avg_moisture_pct, provenance, source_sheet, source_row, is_suspected_duplicate, import_flags, import_flag_count, has_import_flags, supplier_unresolved, destination_unresolved, row_version, created_at, created_by, updated_at, updated_by, duplicate_group_key, duplicate_group_size, duplicate_group_ordinal, duplicate_peer_ids';
+    'id, delivery_date, delivery_date_raw, delivery_year, truck_no, supplier_code, supplier_name, supplier_origin, permit_no, supplier_raw, sacks, gross_weight_kg, deduction_pct, net_weight_kg, weight_formula, bd, moisture_pct, grit, ash, dust, vm, fc, destination_code, destination_name, destination_kind, destination_has_sides, destination_side, destination_raw, remarks, base_price_php_kg, price_adjustment_php_kg, price_php_kg, price_formula, total_price_php, sheet_total_php, sheet_total_matches, sample_count, sample_avg_moisture_pct, provenance, source_sheet, source_row, is_suspected_duplicate, import_flags, import_flag_count, has_import_flags, supplier_unresolved, destination_unresolved, row_version, created_at, created_by, updated_at, updated_by, duplicate_group_key, duplicate_group_size, duplicate_group_ordinal, duplicate_peer_ids, import_flags_state, unresolved_flag_count, resolved_flag_count, has_unresolved_flags';
 
 const SAMPLE_COLS =
     'id, delivery_id, position, label, bd, moisture_pct, grit, ash, dust, vm, fc, source_row, created_at';
@@ -121,7 +121,13 @@ function buildRowQuery(
         issue === 'duplicate'
             ? q.not('duplicate_group_key', 'is', null)
             : issue === 'flagged'
-              ? q.eq('has_import_flags', true)
+              // LIVE problems only — `has_unresolved_flags`, NOT `has_import_flags`.
+              // A flag is never cleared (it is the only witness to what the workbook
+              // literally said), so the historical boolean returned 12 receipts when
+              // only 2 still had anything to do. A worklist that is five-sixths done
+              // is a worklist nobody opens. `import_flags` is untouched and still
+              // travels on every row — the popover shows the full history.
+              ? q.eq('has_unresolved_flags', true)
               : issue === 'unmapped'
                 ? q.or('supplier_unresolved.eq.true,destination_unresolved.eq.true')
                 : issue === 'undated'

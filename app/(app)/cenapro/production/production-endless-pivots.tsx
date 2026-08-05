@@ -1331,7 +1331,12 @@ export function ProductionEndlessPivots({
         const root = gridRef.current;
         if (!root) return;
         const el = root.querySelector<HTMLElement>(`[data-navid="${CSS.escape(navId)}"]`);
-        if (el) { el.focus(); (el as HTMLInputElement).select?.(); return; }
+        // `preventScroll`: HTMLElement.focus() otherwise scrolls the cell into view with
+        // block "center" through every scrolling ancestor — even when it is already fully
+        // visible — so a purely lateral caret move dragged the page with it. The explicit
+        // `scrollIntoView` below (for a cell that is NOT mounted) is the scroll we want.
+        // The `select()` is preserved: a caret arriving on a cell selects its text.
+        if (el) { el.focus({ preventScroll: true }); (el as HTMLInputElement).select?.(); return; }
         // not mounted — scroll its day into view, then focus after it renders
         const cell = navModelRef.current?.byId.get(navId);
         const dayIdx = cell ? navModelRef.current?.dayIndexByDate.get(cell.dayDate) : undefined;
@@ -1344,7 +1349,7 @@ export function ProductionEndlessPivots({
         if (!pendingFocusRef.current) return;
         const navId = pendingFocusRef.current;
         const el = gridRef.current?.querySelector<HTMLElement>(`[data-navid="${CSS.escape(navId)}"]`);
-        if (el) { pendingFocusRef.current = null; el.focus(); (el as HTMLInputElement).select?.(); }
+        if (el) { pendingFocusRef.current = null; el.focus({ preventScroll: true }); (el as HTMLInputElement).select?.(); }
     });
 
     // ─── data-derived keyboard nav resolver ──────────────────────────────────────────
@@ -1456,7 +1461,7 @@ export function ProductionEndlessPivots({
         const idx = model.order.indexOf(navId);
         const next = idx >= 0 ? model.order[idx + 1] : null;
         if (next) { setActiveNavId(next); requestAnimationFrame(() => focusNavId(next)); }
-        else { gridRef.current?.focus(); }
+        else { gridRef.current?.focus({ preventScroll: true }); }
     }, [focusNavId]);
 
     const confirmInsert = React.useCallback((row: ProductionEventDirtyRow) => {

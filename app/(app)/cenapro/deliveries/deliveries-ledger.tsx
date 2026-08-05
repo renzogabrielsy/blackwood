@@ -16,6 +16,7 @@ import {
     CornerDownRight,
     Crosshair,
     Droplets,
+    History,
     Infinity as InfinityIcon,
     Inbox,
     ListFilter,
@@ -77,6 +78,7 @@ import {
     dragAutoScrollDelta,
     duplicateBadge,
     FILTER_COLUMNS,
+    flagSummary,
     formatDestinationCell,
     formatInt,
     formatKg,
@@ -102,7 +104,6 @@ import {
     parseSupplierCell,
     planPaste,
     priceEditText,
-    readImportFlags,
     rowIssues,
     sampleFieldFor,
     summarySpans,
@@ -120,6 +121,7 @@ import {
     type DeliveryRecord,
     type DuplicateBadge,
     type FieldEdits,
+    type FlagSummary,
     type RcDeliverySampleRow,
     type SamplePayload,
     type SaveDeliveryInput,
@@ -2644,7 +2646,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                       ? 'twin'
                       : 'none',
         );
-        const flags = readImportFlags(row.import_flags);
+        // ONE flag verdict per row, and `rowIssues` above reached it through the same
+        // `flagSummary` call — so the sky rail and the icon below can never disagree
+        // about whether this receipt still has a live problem. `flags` still carries
+        // EVERY flag, resolved ones included: the popover is the history.
+        const flagState = flagSummary(row);
         const dirtyTint = (f: DeliveryField) => (rowEdits[f] !== undefined ? DIRTY_TINT : undefined);
         const pendingMoney = rowEdits.wt !== undefined || rowEdits.price !== undefined;
 
@@ -2708,7 +2714,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                             {row.supplier_unresolved && (
                                 <span className={cn(BADGE, 'shrink-0 bg-amber-500/20 text-amber-700 dark:text-amber-400')}>MAP?</span>
                             )}
-                            {flags.length > 0 && <FlagPopover flags={flags} />}
+                            {flagState.flags.length > 0 && <FlagPopover state={flagState} />}
                         </span>,
                         { tint: dirtyTint('supplier'), title: text },
                     );
@@ -4178,37 +4184,98 @@ function DuplicatePeerPopover({
     );
 }
 
-function FlagPopover({ flags }: { flags: ReturnType<typeof readImportFlags> }) {
+// ─── The import-flag popover ─────────────────────────────────────────────────────
+//
+// A flag is NEVER cleared — it is the only surviving witness to what the workbook
+// literally said, and `import_flags` is untouched by this component, by the ledger and
+// by every server action. What the read model added (`import_flags_state`) is a DERIVED
+// verdict per flag: does the condition it describes still hold?
+//
+// So this popover has two jobs, and the second is why it is not simply hidden once a row
+// is repaired:
+//   • a LIVE flag keeps the treatment it has always had — sky, warning triangle, the
+//     detail and the workbook's own `raw` text;
+//   • a RESOLVED flag renders MUTED and struck through with a check, plus one line
+//     saying what repaired it — and it still shows `raw`, because not losing the
+//     workbook's original text is the entire reason a flag is never cleared.
+//
+// The TRIGGER carries the same distinction. A row with a live problem wears the sky
+// warning triangle it always did. A row whose flags are ALL history would otherwise lose
+// its badge outright and take its history with it, so it gets a deliberately quiet
+// affordance instead: a `History` glyph at 40% muted, no colour, no ring — enough to
+// open, not enough to read as a problem. It is not in the `flagged` lens and wears no
+// rail. Glass is correct on the content (a popover floats over empty space); the frozen
+// cells underneath stay opaque.
+function FlagPopover({ state }: { state: FlagSummary }) {
+    const { flags, unresolved, resolved, live } = state;
+    const label = live
+        ? `${unresolved} unresolved import flag${unresolved === 1 ? '' : 's'}`
+        : `${resolved} resolved import flag${resolved === 1 ? '' : 's'} — history only`;
+
     return (
         <Popover>
             <PopoverTrigger asChild>
                 <button
                     data-grid-chrome=""
                     type="button"
-                    aria-label={`${flags.length} import flag${flags.length === 1 ? '' : 's'}`}
+                    title={label}
+                    aria-label={label}
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="shrink-0 text-sky-500 hover:text-sky-600"
+                    className={cn(
+                        'shrink-0',
+                        live
+                            ? 'text-sky-500 hover:text-sky-600'
+                            : 'text-muted-foreground/40 hover:text-muted-foreground',
+                    )}
                 >
-                    <AlertTriangle className="size-3" />
+                    {live ? <AlertTriangle className="size-3" /> : <History className="size-3" />}
                 </button>
             </PopoverTrigger>
             <PopoverContent align="start" className="w-80 bg-popover/95 p-2 backdrop-blur-lg">
                 <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                    Import flags — kept, not fixed
+                    {live
+                        ? `Import flags — ${unresolved} still open`
+                        : 'Import flags — all resolved'}
                 </p>
                 <ul className="space-y-1.5">
                     {flags.map((f, i) => (
-                        <li key={i} className="text-[11px] leading-snug">
-                            <span className="font-mono font-bold text-foreground">{f.kind}</span>
+                        <li
+                            key={i}
+                            className={cn('text-[11px] leading-snug', f.resolved && 'opacity-60')}
+                        >
+                            <span className="flex items-center gap-1">
+                                {f.resolved && (
+                                    <Check className="size-3 shrink-0 text-emerald-600 dark:text-emerald-500" />
+                                )}
+                                <span
+                                    className={cn(
+                                        'font-mono font-bold',
+                                        f.resolved ? 'text-muted-foreground line-through' : 'text-foreground',
+                                    )}
+                                >
+                                    {f.kind}
+                                </span>
+                            </span>
                             <span className="block text-muted-foreground">{f.detail}</span>
                             {f.raw && (
                                 <span className="block font-mono text-[10px] text-muted-foreground/70">
                                     workbook wrote: {f.raw}
                                 </span>
                             )}
+                            {f.note && (
+                                <span className="block text-[10px] text-emerald-700 dark:text-emerald-500">
+                                    {f.note}
+                                </span>
+                            )}
                         </li>
                     ))}
                 </ul>
+                <p className="mt-2 border-t border-border/50 pt-1.5 text-[10px] leading-snug text-muted-foreground/70">
+                    Flags are never cleared — they record what the workbook said on the day of the
+                    import. A repaired one is kept here as history and drops out of the
+                    <span className="font-medium"> Import flags </span>
+                    filter; nothing above has been edited or deleted.
+                </p>
             </PopoverContent>
         </Popover>
     );

@@ -4,7 +4,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 import { errorToast } from '@/lib/toast';
 import { Plus, X, PencilLine, MessageSquarePlus } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, focusNoScroll } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -718,7 +718,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isDragActive={cellDragging}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.transaction_date}
                         onChange={(e) => updateRow(index, 'transaction_date', e.target.value)}
                         className={cn(inputClass, "font-bold text-center font-mono")}
@@ -797,7 +797,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isDragActive={cellDragging}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         type="number" step="1"
                         value={row.weight_kg}
                         onChange={(e) => updateRow(index, 'weight_kg', e.target.value)}
@@ -842,7 +842,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isDragActive={cellDragging}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.remarks}
                         onChange={(e) => updateRow(index, 'remarks', e.target.value)}
                         className={cn(inputClass, "font-bold text-left")}
@@ -863,7 +863,7 @@ const BulkInputRow = React.memo(function BulkInputRow({
                     isDragActive={cellDragging}
                 >
                     <Input
-                        autoFocus
+                        ref={focusNoScroll}
                         value={row.block_loc}
                         onChange={(e) => updateRow(index, 'block_loc', e.target.value)}
                         className={cn(inputClass, "font-bold text-center font-mono")}

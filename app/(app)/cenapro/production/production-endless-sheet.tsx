@@ -370,8 +370,13 @@ function HeaderFilter({
 
 function HeaderRow({ wiring }: { wiring: HeaderFilterWiring }) {
     const th = 'h-8 px-2 text-left align-middle text-[11px] font-bold uppercase tracking-wide text-muted-foreground';
+    // The horizontal rule is on the CELLS (`[&>*]:`), never on the <tr>: this table is
+    // `border-collapse: separate` (load-bearing for the sticky frozen columns), and in the
+    // separated-borders model the CSS spec paints borders on table CELLS ONLY — a `border-b`
+    // on a <tr>/<tbody>/<col> is ignored outright. Full weight here because this is the
+    // header↔body boundary, not another row division.
     return (
-        <tr className="border-b">
+        <tr className="[&>*]:border-b [&>*]:border-b-border">
             <th className="frozen-corner h-8 border-r border-border/40 bg-muted px-1 text-center font-mono text-[10px] font-bold text-muted-foreground" style={{ left: FROZEN_LEFT[0] }}>#</th>
             <th className={cn(th, 'frozen-corner bg-muted')} style={{ left: FROZEN_LEFT[1] }}>Recv</th>
             <th className={cn(th, 'frozen-corner bg-muted')} style={{ left: FROZEN_LEFT[2] }}>Prod</th>
@@ -419,6 +424,16 @@ const EndlessTableHead = React.forwardRef<HTMLTableSectionElement, React.Compone
 
 // The <tr> owns the row tint. Committed rows keep the IN/OUT direction tint; draft rows
 // get a distinct amber-primary draft tint (+ a destructive wash on a validation error).
+//
+// It does NOT own the horizontal RULE. This table is `border-collapse: separate` (load-
+// bearing: under `collapse` a border belongs to the TABLE rather than the cell, so a sticky
+// frozen column's borders scroll away), and in the separated-borders model the CSS spec
+// paints borders on table CELLS ONLY — the `border-b border-border/30` that used to sit on
+// these <tr>s was never painted, which is why the sheet showed columns with no rows. The
+// rule is applied to every child cell via `[&>*]:`, at the same /30 weight it always meant,
+// with a SIDE-SPECIFIC colour (`border-b-border/30`) so it cannot restyle the cells' own
+// `border-r` through tailwind-merge. Row heights are unchanged (preflight makes cells
+// border-box, so the 1px rule draws inside the explicit ROW_H).
 const EndlessTableRow = ({ item, context, children, style, ...props }: ItemProps<LedgerItem> & { context?: LedgerCtx }) => {
     if (item.kind === 'draft') {
         const hasError = context?.errorKeys.has(`d:${item.draftIndex}`) ?? false;
@@ -427,7 +442,7 @@ const EndlessTableRow = ({ item, context, children, style, ...props }: ItemProps
                 {...props}
                 style={{ ...style, height: ROW_H }}
                 className={cn(
-                    'group border-b border-border/30 transition-colors duration-150 hover:bg-muted/50',
+                    'group [&>*]:border-b [&>*]:border-b-border/30 transition-colors duration-150 hover:bg-muted/50',
                     hasError ? 'bg-destructive/[0.06]' : 'bg-primary/[0.04]',
                 )}
             >
@@ -450,7 +465,7 @@ const EndlessTableRow = ({ item, context, children, style, ...props }: ItemProps
             {...props}
             style={{ ...style, height: ROW_H }}
             className={cn(
-                'group border-b border-border/30 transition-colors duration-150 hover:bg-muted',
+                'group [&>*]:border-b [&>*]:border-b-border/30 transition-colors duration-150 hover:bg-muted',
                 isDeleted ? 'bg-rose-50 line-through opacity-40 dark:bg-rose-950/40' : edited ? 'bg-amber-500/[0.07]' : rowDirectionTint(dir),
                 hasError && 'bg-destructive/[0.06]',
             )}
@@ -843,7 +858,10 @@ export function ProductionEndlessSheet({
                 cellSelection.clearSelection();
                 setActiveCell({ row: rowIdx, col: colIdx });
                 endEditRef.current();
-                gridRef.current?.focus();
+                // `preventScroll`: HTMLElement.focus() otherwise scrolls the grid wrapper
+                // into view with block "center" through every scrolling ancestor — even
+                // when it is already fully visible — so clicking a cell jogged the page.
+                gridRef.current?.focus({ preventScroll: true });
             }
             dragMovedRef.current = false;
         },
@@ -1008,7 +1026,7 @@ export function ProductionEndlessSheet({
 
     const revertChanges = React.useCallback(() => {
         editSession.revertChanges();
-        gridRef.current?.focus();
+        gridRef.current?.focus({ preventScroll: true });
     }, [editSession]);
 
     const baseResolver = React.useMemo(
@@ -1064,7 +1082,7 @@ export function ProductionEndlessSheet({
             revert: revertChanges,
             commit: () => {
                 editSession.commit();
-                gridRef.current?.focus();
+                gridRef.current?.focus({ preventScroll: true });
             },
         },
         range: rangeSlot,
