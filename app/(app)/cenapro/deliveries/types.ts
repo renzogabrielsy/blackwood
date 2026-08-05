@@ -526,6 +526,46 @@ export const ROW_H = 32;
 /** A sample sub-row is deliberately shorter — it is a detail line, not an entry. */
 export const SAMPLE_ROW_H = 26;
 
+// ═══ The day spacer — a skipped row, not a second day-header system ═════════════
+//
+// Renzo: *"Make this specific table smart enough to auto skip a table row to separate
+// and group days together. Nothing fancy."*
+//
+// In the ENDLESS scope the receipts run continuously with nothing marking where one day
+// ends and the next begins. The FOCUS scope already answers that with a day heading and
+// a `Σ DAY TOTAL` rule-off; endless deliberately does not want either — a heading every
+// few rows in an infinite sheet is chrome, not information. So the endless answer is a
+// literal blank row: no label, no count, no total, no rule.
+//
+// It is NOT addressable. The spacer never enters `navRows`, so the keyboard coordinate
+// space, the per-cell `NavResolver`, arrow/Tab movement and range selection are
+// byte-identical with and without it — asserted in `verify-rc-deliveries-cells.ts`.
+
+/**
+ * Height of the blank between-days row — roughly a third of a receipt (`ROW_H = 32`).
+ * Enough to read as a break, not enough to spend a screenful of an Excel-dense sheet on
+ * nothing.
+ */
+export const DAY_SPACER_ROW_H = 10;
+
+/**
+ * Does a blank spacer row belong ABOVE the receipt dated `date`?
+ *
+ * `prevDate === undefined` means there is no row above it yet, which is the whole of the
+ * "never a leading gap at the top of the sheet" rule — the first receipt in the window is
+ * never preceded by a spacer, whatever it is dated.
+ *
+ * An UNDATED receipt is normalised to `''` by the caller (canonical order is
+ * `delivery_date ASC NULLS FIRST, id ASC`, so the undated group sits at the head of
+ * history). That falls out correctly with no special case: two consecutive undated
+ * receipts compare equal and get no spacer, and the undated → first-dated-day transition
+ * differs and gets one, like any other boundary.
+ */
+export function needsDaySpacer(prevDate: string | undefined, date: string): boolean {
+    if (prevDate === undefined) return false;
+    return prevDate !== date;
+}
+
 // ─── The floating selection pill's per-column default ────────────────────────────
 //
 // Which aggregate the status-bar pill offers FIRST for a column. A weight, a sack

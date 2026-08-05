@@ -44,6 +44,9 @@ import {
   isSelectableColumn,
   columnCalcType,
   clampDraftAdd,
+  needsDaySpacer,
+  DAY_SPACER_ROW_H,
+  ROW_H,
   countUnsavedWork,
   describeUnsavedWork,
   hasUnsavedWork,
@@ -749,6 +752,256 @@ check('the ledger hands virtuoso RAW array indexes — no firstItemIndex rebase 
     !code.replace(PROP, '').includes('firstItemIndex'),
     'firstItemIndex may appear ONLY as the TableVirtuoso prop — never in a scroll argument',
   )
+})
+
+// ── The day spacer — a skipped row that the keyboard cannot see ───────────────
+//
+// Renzo: *"Make this specific table smart enough to auto skip a table row to separate
+// and group days together. Nothing fancy. If input rows dont separate them in the first
+// place then they should auto separate when they click save."*
+//
+// The FOCUS scope already groups days with a heading and a `Σ DAY TOTAL`; ENDLESS had
+// nothing at all, so days ran into one another. The endless answer is a literal blank
+// row — no label, no count, no total, no rule — and the one thing it must never do is
+// enter the keyboard's coordinate space. `navRows` is the row axis every arrow key, Tab
+// run, range selection and per-cell `NavResolver` branch is expressed in; an extra entry
+// there would silently re-point every one of them.
+//
+// So the assertion that actually protects the grid is the third one: the nav axis is
+// BYTE-IDENTICAL with and without spacers.
+
+/** The ledger's `flatten`, modelled down to the two axes this section is about. */
+interface ModelRow {
+  id: string
+  /** `null` = an undated receipt — the head of canonical order, not the tail. */
+  date: string | null
+  samples?: number
+}
+interface ModelItem {
+  kind: 'day-gap' | 'delivery' | 'sample'
+  key: string
+}
+interface ModelNav {
+  kind: 'delivery' | 'sample'
+  deliveryId: string
+  sampleIndex?: number
+}
+
+function flattenModel(
+  rows: readonly ModelRow[],
+  scope: 'endless' | 'focus',
+  opts: { spacers?: boolean } = {},
+): { items: ModelItem[]; navRows: ModelNav[] } {
+  const spacers = opts.spacers ?? true
+  const items: ModelItem[] = []
+  const navRows: ModelNav[] = []
+  let prevDate: string | undefined
+
+  for (const r of rows) {
+    const date = r.date ?? ''
+    if (spacers && scope === 'endless' && needsDaySpacer(prevDate, date)) {
+      items.push({ kind: 'day-gap', key: `gap:${r.id}` })
+    }
+    prevDate = date
+
+    navRows.push({ kind: 'delivery', deliveryId: r.id })
+    items.push({ kind: 'delivery', key: `d:${r.id}` })
+    for (let i = 0; i < (r.samples ?? 0); i++) {
+      navRows.push({ kind: 'sample', deliveryId: r.id, sampleIndex: i })
+      items.push({ kind: 'sample', key: `s:${r.id}:${i}` })
+    }
+  }
+  return { items, navRows }
+}
+
+/** `delivery_date ASC NULLS FIRST, id ASC` — what every read of the ledger returns. */
+function canonicalOrder(rows: readonly ModelRow[]): ModelRow[] {
+  return [...rows].sort((a, b) => {
+    const ad = a.date ?? ''
+    const bd = b.date ?? ''
+    if (ad !== bd) {
+      if (ad === '') return -1
+      if (bd === '') return 1
+      return ad < bd ? -1 : 1
+    }
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  })
+}
+
+const gapsIn = (items: readonly ModelItem[]) => items.filter((i) => i.kind === 'day-gap')
+
+check('a spacer lands on every day change, and never before the first row', () => {
+  // The boundary rule on its own, first — everything below is this function in a loop.
+  assert.equal(needsDaySpacer(undefined, '2026-08-01'), false, 'no leading gap at the top of the sheet')
+  assert.equal(needsDaySpacer(undefined, ''), false, '…not even when the sheet opens on an undated receipt')
+  assert.equal(needsDaySpacer('2026-08-01', '2026-08-02'), true)
+  assert.equal(needsDaySpacer('2026-08-01', '2026-08-01'), false)
+
+  const rows: ModelRow[] = [
+    { id: 'a', date: '2026-08-01' },
+    { id: 'b', date: '2026-08-01' },
+    { id: 'c', date: '2026-08-02' },
+    { id: 'd', date: '2026-08-02' },
+    { id: 'e', date: '2026-08-05' }, // a gap in the calendar is still ONE boundary
+  ]
+  const { items } = flattenModel(rows, 'endless')
+
+  // One per boundary — three days ⇒ two spacers, not three.
+  assert.deepEqual(gapsIn(items).map((i) => i.key), ['gap:c', 'gap:e'])
+  assert.notEqual(items[0].kind, 'day-gap', 'the sheet must never open on a blank row')
+
+  // Every spacer sits IMMEDIATELY above the first receipt of its day, and every day
+  // change has one. Walk the pairs rather than trusting the list above.
+  for (let i = 1; i < rows.length; i++) {
+    const at = items.findIndex((it) => it.key === `d:${rows[i].id}`)
+    const boundary = rows[i].date !== rows[i - 1].date
+    assert.equal(items[at - 1].kind === 'day-gap', boundary, `boundary before ${rows[i].id}`)
+  }
+
+  // FOCUS is untouched: it keeps its day headings and `Σ DAY TOTAL` and gets no spacers.
+  assert.equal(gapsIn(flattenModel(rows, 'focus').items).length, 0)
+
+  // Short enough to read as a break rather than as an empty row of the sheet.
+  assert.ok(DAY_SPACER_ROW_H > 0 && DAY_SPACER_ROW_H < ROW_H / 2, 'a spacer is ~a third of a receipt row')
+})
+
+check('the UNDATED group is a day like any other — no gap inside it, one gap leaving it', () => {
+  // Canonical order is `delivery_date ASC NULLS FIRST`, so undated receipts sit at the
+  // HEAD of history. Two of them exist in this ledger today (the `5/262026` pair), and
+  // `delivery_date` stays nullable for `sheet_import` rows, so this is live, not
+  // hypothetical.
+  const rows: ModelRow[] = [
+    { id: 'u1', date: null },
+    { id: 'u2', date: null },
+    { id: 'a', date: '2026-01-04' },
+    { id: 'b', date: '2026-01-04' },
+    { id: 'c', date: '2026-01-05' },
+  ]
+  const { items } = flattenModel(rows, 'endless')
+  assert.deepEqual(gapsIn(items).map((i) => i.key), ['gap:a', 'gap:c'])
+  // Explicitly: nothing between the two undated receipts, and nothing above the first.
+  const u2 = items.findIndex((i) => i.key === 'd:u2')
+  assert.equal(items[u2 - 1].key, 'd:u1')
+  assert.notEqual(items[0].kind, 'day-gap')
+
+  // A window that is ENTIRELY undated has no boundary at all.
+  assert.equal(gapsIn(flattenModel(rows.slice(0, 2), 'endless').items).length, 0)
+  // …and one that is entirely one day likewise.
+  assert.equal(gapsIn(flattenModel(rows.slice(2, 4), 'endless').items).length, 0)
+  // A single-row window is the degenerate case of "never before the first row".
+  assert.equal(gapsIn(flattenModel([rows[0]], 'endless').items).length, 0)
+})
+
+check('navRows is BYTE-IDENTICAL with and without spacers — the keyboard model is untouched', () => {
+  // This is the assertion the whole feature is gated on. Every arrow key, Tab run, range
+  // selection and `NavResolver` branch is expressed in `navRows` coordinates; one extra
+  // entry would re-point all of them by one row, silently.
+  const rows: ModelRow[] = [
+    { id: 'u1', date: null, samples: 2 },
+    { id: 'a', date: '2026-08-01' },
+    { id: 'b', date: '2026-08-01', samples: 3 },
+    { id: 'c', date: '2026-08-02', samples: 1 },
+    { id: 'd', date: '2026-08-03' },
+  ]
+  const withGaps = flattenModel(rows, 'endless', { spacers: true })
+  const without = flattenModel(rows, 'endless', { spacers: false })
+
+  assert.deepEqual(withGaps.navRows, without.navRows)
+  assert.equal(JSON.stringify(withGaps.navRows), JSON.stringify(without.navRows))
+  // And the spacers really were added — otherwise the equality above is vacuous.
+  assert.equal(gapsIn(withGaps.items).length, 3)
+  assert.equal(gapsIn(without.items).length, 0)
+  assert.equal(withGaps.items.length, without.items.length + 3)
+
+  // The caret can never land on one: `scrollTo` maps a navRow to an items index with
+  // `items.findIndex(it => (delivery|sample|draft) && it.navRow === row)`, and a spacer
+  // carries no `navRow` at all, so it can never match. Modelled here as "every items
+  // entry that a nav row resolves to is an addressable kind".
+  for (let row = 0; row < withGaps.navRows.length; row++) {
+    const nav = withGaps.navRows[row]
+    const key = nav.kind === 'delivery' ? `d:${nav.deliveryId}` : `s:${nav.deliveryId}:${nav.sampleIndex}`
+    const at = withGaps.items.findIndex((i) => i.key === key)
+    assert.ok(at >= 0, `nav row ${row} must resolve to an items entry`)
+    assert.notEqual(withGaps.items[at].kind, 'day-gap')
+  }
+})
+
+check('the spacer spans the WHOLE column table in both gating states', () => {
+  // It renders `colSpan={spanAll}` — `cols.length`, the same constant the day heading and
+  // the add-rows control use, so a column added anywhere is covered with no new
+  // arithmetic. Assert it against `summarySpans`, which is the module's authority on how
+  // a non-data row tiles: the lanes must add up to exactly the same number.
+  for (const canViewPrices of [true, false]) {
+    const cols = buildColumns(canViewPrices)
+    const spanAll = cols.length
+    const s = summarySpans(cols)
+    assert.equal(s.label + s.weight + s.note + s.total + s.trailing, spanAll)
+    assert.equal(s.frozen + s.spacer + s.weight + s.note + s.total + s.trailing, spanAll)
+    assert.ok(spanAll > 0, 'colSpan={0} is "to the end of the group" in HTML — the opposite of nothing')
+  }
+  // The two shapes really do differ, or the loop above proves nothing.
+  assert.equal(buildColumns(true).length, buildColumns(false).length + 2)
+})
+
+check('typed drafts regroup by date after save — the re-anchor re-reads canonical order', () => {
+  // Drafts are appended at the BOTTOM in creation order and are deliberately NOT grouped
+  // while typing (a row that jumped between groups mid-keystroke is the hazard the QC
+  // ledger's `anchorDate` exists to avoid). So an operator can type 08-01, 08-03, 08-01.
+  const typed: ModelRow[] = [
+    { id: 'n1', date: '2026-08-01' },
+    { id: 'n2', date: '2026-08-03' },
+    { id: 'n3', date: '2026-08-01' },
+  ]
+  // As typed, that is two separate 08-01 groups — which is exactly the "rows dont
+  // separate them in the first place" state Renzo described.
+  assert.deepEqual(gapsIn(flattenModel(typed, 'endless').items).map((i) => i.key), ['gap:n2', 'gap:n3'])
+
+  // On save, `handleSave` re-anchors the endless window on `latest` rather than splicing
+  // the new rows in client-side, and every read of the ledger comes back in canonical
+  // `(delivery_date ASC NULLS FIRST, id ASC)` order. So the regroup is the SORT, and it
+  // is the server's — no client-side re-ordering exists or is needed.
+  const refetched = canonicalOrder([...typed, { id: 'm0', date: '2026-07-31' }])
+  assert.deepEqual(refetched.map((r) => r.id), ['m0', 'n1', 'n3', 'n2'])
+  const { items } = flattenModel(refetched, 'endless')
+  assert.deepEqual(gapsIn(items).map((i) => i.key), ['gap:n1', 'gap:n2'])
+  // …and the two 08-01 receipts are now adjacent, with nothing between them.
+  const n1 = items.findIndex((i) => i.key === 'd:n1')
+  assert.equal(items[n1 + 1].key, 'd:n3')
+})
+
+check('the ledger emits the spacer in endless only, addressably nowhere, and paints it opaque', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+  assert.match(code, /'day-gap'/, 'the spacer kind must be in the executable source, not only in prose')
+
+  // 1. NOT ADDRESSABLE. There are exactly three kinds of nav row, and none of them is the
+  //    spacer — this is what keeps the keyboard model byte-identical.
+  const pushes = [...code.matchAll(/navRows\.push\(\{\s*kind:\s*'([a-z-]+)'/g)].map((m) => m[1])
+  assert.deepEqual(pushes, ['delivery', 'sample', 'draft'])
+  assert.ok(!/navRows\.push\([^)]*day-gap/.test(code), 'a spacer must never enter the keyboard axis')
+
+  // 2. ENDLESS ONLY — the focus scope keeps its headings and `Σ DAY TOTAL` untouched.
+  assert.match(code, /scope === 'endless' && needsDaySpacer\(prevDate, date\)/)
+  assert.match(code, /needsDaySpacer/, 'the boundary rule must come from the pure helper, not be re-inlined')
+
+  // 3. The rendered cell. Isolate the branch so the day HEADING's classes cannot satisfy
+  //    the checks below on its behalf.
+  const start = code.indexOf("item.kind === 'day-gap'")
+  const end = code.indexOf("item.kind === 'day'", start)
+  assert.ok(start > 0 && end > start, 'expected a day-gap branch followed by the day-heading branch')
+  const branch = code.slice(start, end)
+
+  assert.match(branch, /colSpan=\{spanAll\}/, 'the span must come from the column table')
+  assert.match(branch, /DAY_SPACER_ROW_H/, 'the height must be the shared constant')
+  assert.match(branch, /bg-background/, 'a frozen-pane table has no translucent surfaces')
+  assert.ok(!/backdrop/.test(branch), 'never glass — the scrolling rows would show through the gap')
+  assert.ok(!/bg-[a-z]+\/\d/.test(branch), 'no alpha background on a spacer')
+  assert.ok(!/border/.test(branch), 'no rule: the receipt above already closes the day')
+  assert.ok(!/animate-|transition|hover:/.test(branch), 'no animation and no hover state on a spacer')
+
+  // 4. The post-save regroup is the SERVER's canonical re-read, not a client-side splice.
+  assert.match(code, /await win\.reset\(\{ kind: 'latest' \}\)/)
+  assert.ok(!/setRecords/.test(code), 'the window is owned by use-deliveries-window.ts, not spliced here')
 })
 
 // ── The DATE cell — free text in, yyyy-MM-dd out ──────────────────────────────
