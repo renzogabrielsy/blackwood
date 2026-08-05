@@ -222,6 +222,24 @@ pending `chore(memory)` commit rode along for the fifth time.
 `fix(cenapro):` over 3 files (ledger + CONTEXT.md + verify script). Per-file stop-list from
 promotion 32 held again and was clean.
 
+**Promotion 34 (`35374d9`+`1a5c41a`+`2a05e39`+`e5322d`… → `aff9bdb`) — SEVENTH consecutive clean
+`git add .`, and the LARGEST split so far: 30 files → FOUR commits.** Brief prescribed the split and
+the ordering; migration commit went FIRST so `main` never has a moment where the UI selects a column
+that does not exist yet. Order-within-a-promotion is a real constraint when a changeset spans SQL +
+its consumers — even though all four land in one merge, `main`'s per-commit history is what a
+bisect/revert walks.
+
+**Splitting 30 staged files four ways: use DIRECTORY pathspecs, not file lists.** `git commit -- <dir>`
+(e.g. `'app/(app)/cenapro/production' 'app/(app)/production' components/digest`) covered the 3rd
+commit's 9-file sweep in one line. Quote any path containing `(app)` — zsh globs the parens. Confirm
+completeness with a final `git status --porcelain` showing only the known exclusions, rather than
+counting files per commit.
+
+**Brief-supplied NEGATIVE expectations are a real gate.** This one named `lib/hooks/**`,
+`components/shared/grid/**` and `workers/` as paths that must NOT appear, with instructions to stop
+if they did. Ran `git diff --staged --name-only | grep -E '^(…)'` right after staging — cheap, and
+it converts "I think the changeset is what was described" into a verified claim.
+
 **Third round on ONE reported symptom is not a red flag — read the brief's root-cause claim as the
 commit body.** Renzo's "paste doesn't work" produced fixes in promotions 32 and this one; the first
 two repaired real defects *downstream of a dead entry point* (`onPaste` on a non-editable div never
