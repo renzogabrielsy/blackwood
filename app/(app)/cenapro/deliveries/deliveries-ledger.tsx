@@ -52,7 +52,6 @@ import {
 import { EditInput, GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
 import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
-import { useGridPaste } from '@/lib/hooks/use-grid-paste';
 import {
     useGridKeyboardNav,
     type CoordinateId,
@@ -61,10 +60,8 @@ import {
 } from '@/lib/hooks/use-grid-keyboard-nav';
 import { useCellSelection } from '@/lib/hooks/use-cell-selection';
 import { useCellAggregation, type AggregationType } from '@/lib/hooks/use-cell-aggregation';
-import { useClipboardCopy } from '@/lib/hooks/use-clipboard-copy';
 import { useStatusBar } from '@/components/providers/status-bar-context';
 import { errorToast } from '@/lib/toast';
-import { trimCellValue } from '@/lib/paste-utils';
 import { cn } from '@/lib/utils';
 import { parsePriceInput, parseWeightInput } from '@/lib/cenapro/rc-formula';
 
@@ -72,6 +69,8 @@ import { deleteDelivery, saveDeliveries, type DeliveryAnchor } from './actions';
 import {
     buildColumns,
     clampDraftAdd,
+    cleanPastedCell,
+    clipboardNumber,
     columnCalcType,
     countUnsavedWork,
     describeUnsavedWork,
@@ -96,18 +95,22 @@ import {
     mergeFieldEdit,
     minTableWidth,
     num,
+    parseClipboardTable,
     parseDeliveryDate,
     needsDaySpacer,
     parseDestinationCell,
     parseSupplierCell,
+    planPaste,
     priceEditText,
     readImportFlags,
     rowIssues,
     sampleFieldFor,
     summarySpans,
+    tsvEscape,
     weightEditText,
     DAY_SPACER_ROW_H,
     DEFAULT_DRAFT_ROWS,
+    MAX_DRAFT_ADD,
     ROW_H,
     SAMPLE_ROW_H,
     type DeliveryCol,
@@ -1151,27 +1154,105 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         [setCellSelectionCount, setCellAggregates],
     );
 
-    /** Display text for the range copy — what the cell reads on screen. */
-    const getCellDisplayValue = React.useCallback(
+    // ═══ Copy — the payload Google Sheets actually wants ═════════════════════════
+    //
+    // Renzo: *"allow us to copy data from the app so its pastable into google sheet"*.
+    //
+    // What was wrong, and it was three separate things:
+    //
+    //   1. **Copy was only reachable through the platform nav hook's RANGE branch**
+    //      (`useGridKeyboardNav` → `range.onCopy`), which is guarded by BOTH
+    //      `activeCell !== null` (`use-grid-keyboard-nav.ts:133`) and
+    //      `range.isRangeSelected` — and `isRangeSelected` is `size > 1`. So Ctrl/Cmd+C
+    //      on ONE selected cell reached nothing at all, and a drag begun on TTL PRICE
+    //      (selectable, never active) reached nothing either. It is intercepted in
+    //      `onGridKeyDown` now, ahead of the shared hook, and covers both.
+    //   2. **The payload was the cell's EDIT text.** WT reads back as `=27045*88%` and
+    //      PHP/KG as `=39.5+2.7`, so a copied block arrived in the operator's own sheet
+    //      as LIVE FORMULAS — locale-sensitive (`88%`), recalculating, editable — where
+    //      they expected the ledger's figures. And TTL PRICE went through `formatPeso`,
+    //      i.e. `6,940,123.45`, which Sheets reads as text.
+    //   3. **Nothing was escaped.** One REMARKS cell holding a line break was enough to
+    //      shred every row below it.
+    //
+    // ── VALUE, not formula — and the value is the DATABASE's ─────────────────────
+    // The two formula lanes copy `net_weight_kg` and `price_php_kg`, and TTL PRICE
+    // copies `total_price_php`. All three are STORED GENERATED exact decimals; the rule
+    // in this module is that they are COPIED, never re-derived, so `clipboardNumber`
+    // emits the DB's own digits verbatim rather than a JavaScript float of them. The
+    // formula is a derivation, the figure is the fact, and a payment ledger exports
+    // facts. (A DRAFT row has nothing stored yet, so it copies the operator's own text —
+    // there is no stored figure to prefer, and inventing one here is the arithmetic this
+    // module refuses to do.)
+    const clipboardCellText = React.useCallback(
         (row: number, col: number): string => {
             const nav = navRows[row];
             const c = cols[col];
             if (!nav || !c) return '';
-            if (c.key === 'ttl') {
-                if (nav.kind !== 'delivery' || !canViewPrices) return '';
-                return formatPeso(recordsById.get(nav.deliveryId)?.row.total_price_php);
-            }
             if (!cellExists(row, col)) return '';
+
+            const stored = nav.kind === 'delivery' ? recordsById.get(nav.deliveryId)?.row : undefined;
+
+            // TTL PRICE — read-only, and the whole reason a range may cover it.
+            if (c.key === 'ttl') {
+                return canViewPrices ? clipboardNumber(stored?.total_price_php) : '';
+            }
+
+            const field = c.field;
+            if (!field) return '';
+            // The ₱ columns are ABSENT from `cols` for a gated viewer, so this is
+            // unreachable then — the guard is the belt to that braces. Nothing on the
+            // clipboard may carry ₱ for a role that cannot see it.
+            if (field === 'price' && !canViewPrices) return '';
+
+            if (stored) {
+                if (field === 'wt') return clipboardNumber(stored.net_weight_kg);
+                if (field === 'price') return clipboardNumber(stored.price_php_kg);
+            }
             return getCellText({ row, col });
         },
         [navRows, cols, recordsById, canViewPrices, cellExists, getCellText],
     );
 
-    const { handleKeyDown: handleCopyKeyDown } = useClipboardCopy({
-        getSelectedRange: cellSelection.getSelectedRange,
-        getCellValue: getCellDisplayValue,
-        getSelectionSize: cellSelection.getSelectionSize,
-    });
+    /**
+     * Ctrl/Cmd+C — the selected rectangle, or the single active cell, as TSV.
+     *
+     * Tab between columns, newline between rows, and `tsvEscape` on every cell so a
+     * remark holding a tab or a line break cannot move the columns underneath it.
+     */
+    const copySelectionToClipboard = React.useCallback(async (): Promise<void> => {
+        const r = cellSelection.getSelectedRange();
+        const a = activeRef.current;
+        const box = r ?? (a ? { startRow: a.row, startCol: a.col, endRow: a.row, endCol: a.col } : null);
+        if (!box) {
+            // The keystroke is consumed either way (nothing in this grid is text-
+            // selectable), so say why rather than leaving it looking dead.
+            toast.info('Nothing copied — select a cell or drag a block first.');
+            return;
+        }
+
+        const lines: string[] = [];
+        for (let row = box.startRow; row <= box.endRow; row++) {
+            const cells: string[] = [];
+            for (let col = box.startCol; col <= box.endCol; col++) {
+                cells.push(tsvEscape(clipboardCellText(row, col)));
+            }
+            lines.push(cells.join('\t'));
+        }
+        const tsv = lines.join('\n');
+        const count = (box.endRow - box.startRow + 1) * (box.endCol - box.startCol + 1);
+
+        try {
+            await navigator.clipboard.writeText(tsv);
+            toast.success(`Copied ${count} cell${count === 1 ? '' : 's'}`);
+        } catch (err) {
+            // The old path had no rejection handler at all, so a refused clipboard was
+            // an unhandled promise and a silent no-op.
+            errorToast('The selection could not be copied to the clipboard.', {
+                description: `${err instanceof Error ? err.message : String(err)}\n\nThe browser refuses clipboard writes on an insecure origin (plain http) and when the page has lost focus. Click inside the sheet and try again.`,
+            });
+        }
+    }, [cellSelection, clipboardCellText]);
 
     /**
      * What Delete / Backspace and Escape both act on: the range when there is one, else
@@ -1249,13 +1330,19 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 const r = cellSelection.getSelectedRange();
                 return r ? { row: r.startRow, col: r.startCol } : null;
             },
-            onCopy: (e) => handleCopyKeyDown(e),
+            // Unreachable in practice — `onGridKeyDown` intercepts Ctrl/Cmd+C ahead of
+            // the shared hook so a SINGLE cell copies too. Wired to the same function
+            // rather than to a second one, so the payload has exactly one definition.
+            onCopy: (e) => {
+                e.preventDefault();
+                void copySelectionToClipboard();
+            },
             onDelete: (e) => {
                 e.preventDefault();
                 clearSelectedCells();
             },
         }),
-        [isRangeSelected, cellSelection, handleCopyKeyDown, clearSelectedCells],
+        [isRangeSelected, cellSelection, copySelectionToClipboard, clearSelectedCells],
     );
 
     const { handleKeyDown } = useGridKeyboardNav<CoordinateId>({
@@ -1341,6 +1428,20 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 return;
             }
 
+            // ── COPY — ahead of the shared hook, deliberately ────────────────────
+            //
+            // `useGridKeyboardNav` only reaches `range.onCopy` when an active cell
+            // EXISTS and the range holds MORE THAN ONE cell, so Ctrl/Cmd+C on a single
+            // selected cell used to do nothing whatsoever. Intercepting here covers the
+            // single cell, the range, and a range dragged from TTL PRICE (which is
+            // selectable but never active, so the hook's `activeCell === null` guard
+            // dropped it).
+            if (!edit.isEditing && (e.metaKey || e.ctrlKey) && (e.key === 'c' || e.key === 'C')) {
+                e.preventDefault();
+                void copySelectionToClipboard();
+                return;
+            }
+
             // ── ESCAPE outside edit mode — undo first, deselect second ───────────
             //
             // Escape while EDITING is the shared hook's (revert + close the editor) and is
@@ -1394,83 +1495,172 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             handleKeyDown(e);
         },
         [
-            edit, activeRef, addressable, cellSelection,
+            edit, activeRef, addressable, cellSelection, copySelectionToClipboard,
             clearSelectedCells, revertSelectedCells, handleKeyDown,
         ],
     );
 
     // ═══ Paste ═══════════════════════════════════════════════════════════════════
     //
-    // The shared TSV paste, bridged to this grid's edit MAP. The hook thinks in rows; a
-    // thin `setRows` adapter turns the array it produces back into per-receipt edits,
-    // dropping any cell the paste landed on that is not addressable on that row — so a
-    // block pasted across a receipt and its sub-samples writes only where a cell exists,
-    // by the same rule the keyboard uses.
+    // Renzo: *"allow us to copy and paste into existing entries and empty entries (from
+    // google sheet, into the app)"*.
     //
-    // Built ON DEMAND rather than in a memo. `getCellText` closes over the edit map, so
-    // it changes on EVERY KEYSTROKE — and a memo here would re-read every cell of every
-    // row (1,200+ rows × 17 columns) on each one, to serve a gesture that happens once
-    // in a while. A paste can afford to pay for its own snapshot.
-    const readAllPasteRows = React.useCallback(
-        (): PasteRow[] => navRows.map((_, r) => readPasteRow(r, cols, getCellText)),
-        [navRows, cols, getCellText],
-    );
-
-    const applyPaste = React.useCallback<React.Dispatch<React.SetStateAction<PasteRow[]>>>(
-        (update) => {
-            const before = readAllPasteRows();
-            const after = typeof update === 'function' ? update(before) : update;
-            let written = 0;
-            for (let r = 0; r < Math.min(after.length, navRows.length); r++) {
-                const row = after[r];
-                for (let c = 0; c <= lastCol; c++) {
-                    const field = cols[c].field;
-                    if (field === null) continue;
-                    const key = pasteKey(c);
-                    const next = row[key];
-                    if (next === undefined || next === before[r]?.[key]) continue;
-                    if (!addressable(r, c)) continue;
-                    setCellText({ row: r, col: c }, next);
-                    written++;
-                }
+    // This used to go through the platform's `useGridPaste`, and it could not do the job
+    // for two reasons that were both silent:
+    //
+    //   1. **The block was TRUNCATED to the rows that already existed.** The hook builds
+    //      its own row array and cheerfully appends to it, but the adapter that wrote
+    //      that array back into this grid's edit MAP looped
+    //      `r < Math.min(after.length, navRows.length)`. Pasting a 30-row slip into a
+    //      sheet showing 20 blank rows wrote 20, dropped 10, and toasted "Pasted 30 rows".
+    //   2. **With no active cell it did nothing at all** — not even `preventDefault`.
+    //      `handleGridPaste` is `if (activeCell) {…}` and no else, so a paste before
+    //      anything had been clicked, or after clicking a read-only cell (TTL PRICE sets
+    //      the active cell to null), vanished without a word.
+    //
+    // So the paste is expressed here, against this grid's own row model. The geometry is
+    // `planPaste` in `types.ts` — pure, and asserted — and the load-bearing part of it is
+    // that **a block taller than the sheet CREATES the blank rows it needs**, through the
+    // same `makeDraftIds` / `draftEdits` path the "Add N more rows" control uses. There
+    // is no second way to make a draft row.
+    //
+    // What is deliberately UNCHANGED: an unresolvable supplier or warehouse is still
+    // refused at commit and again at save; a pasted date goes through `parseDeliveryDate`
+    // with the same context year a typed one gets; a cell the row does not have (a
+    // moisture draw has no weight) is skipped by the same `addressable` rule the keyboard
+    // uses; and the ₱ columns are absent from `cols` for a gated viewer, so a paste can
+    // never reach one.
+    const applyClipboardPaste = React.useCallback(
+        (text: string) => {
+            const block = parseClipboardTable(text);
+            if (block.length === 0) {
+                toast.info('Nothing pasted — the clipboard held no cells.');
+                return;
             }
-            if (written === 0) toast.info('Nothing pasted — that block lands outside the editable cells.');
-        },
-        [readAllPasteRows, navRows.length, cols, lastCol, addressable, setCellText],
-    );
 
-    const pasteColumnMap = React.useMemo(
-        () => cols.map((c, i) => (c.field === null ? null : (pasteKey(i) as keyof PasteRow))),
-        [cols],
-    );
-    /** Which synthetic paste keys are the DATE lane — the one column that needs
-     *  Excel-style shorthand transcription (`6/2` → `yyyy-MM-dd`). */
-    const dateKeys = React.useMemo(
-        () => new Set(cols.map((c, i) => (c.field === 'delivery_date' ? pasteKey(i) : '')).filter(Boolean)),
-        [cols],
-    );
+            const anchor = activeRef.current;
+            if (!anchor) {
+                errorToast('Nothing was pasted — no cell is selected.', {
+                    description:
+                        'A paste needs a top-left corner to start from. Click the cell the block should begin in, then paste again.',
+                });
+                return;
+            }
 
-    const { handleGridPaste } = useGridPaste<PasteRow>({
-        columnMap: pasteColumnMap,
-        setRows: applyPaste,
-        createEmptyRow: () => ({}),
-        cleanCellValue: (raw, key) => {
-            const trimmed = trimCellValue(raw);
-            if (!dateKeys.has(String(key))) return trimmed;
-            // Same shorthand rule the typed DATE cell uses, and the same context year —
-            // a pasted `6/27` and a typed `6/27` must not land on different years.
-            const parsed = parseDeliveryDate(trimmed, fallbackYear);
-            return 'error' in parsed ? trimmed : parsed.iso;
+            const blockCols = block.reduce((w, r) => Math.max(w, r.length), 0);
+            const plan = planPaste({
+                startRow: anchor.row,
+                startCol: anchor.col,
+                blockRows: block.length,
+                blockCols,
+                navRowCount: navRows.length,
+                colCount: cols.length,
+                // Blank rows only exist where a blank row MEANS something — never under a
+                // lens or a search, and in endless only at the true newest end. Where they
+                // are absent, the overflow is REPORTED, not invented in the middle of
+                // history.
+                canCreateRows: showDrafts,
+                maxNewRows: MAX_DRAFT_ADD,
+            });
+
+            const newIds = plan.newRows > 0 ? makeDraftIds(plan.newRows) : [];
+            // Edits for rows that do not exist yet cannot go through `setCellText` — it
+            // resolves a coordinate through `navRows`, and these rows only join it on the
+            // next render. They are built here and merged in one `setDraftEdits` call.
+            const newEdits: Record<string, FieldEdits> = {};
+            let written = 0;
+            let rowsTouched = 0;
+
+            for (let r = 0; r < block.length; r++) {
+                const targetRow = anchor.row + r;
+                const isNew = targetRow >= navRows.length;
+                const newId = isNew ? newIds[targetRow - navRows.length] : undefined;
+                if (isNew && newId === undefined) continue; // refused above; counted in plan.droppedRows
+
+                let touched = false;
+                for (let c = 0; c < block[r].length; c++) {
+                    const targetCol = anchor.col + c;
+                    if (targetCol > lastCol) break;
+                    const col = cols[targetCol];
+                    const field = col.field;
+                    if (field === null) continue;
+                    if (field === 'price' && !canViewPrices) continue;
+                    if (!isNew && !addressable(targetRow, targetCol)) continue;
+
+                    const value = cleanPastedCell(
+                        col,
+                        block[r][c],
+                        isNew ? fallbackYear : contextYearFor(targetRow),
+                    );
+
+                    if (isNew) {
+                        newEdits[newId!] = mergeFieldEdit(
+                            newEdits[newId!],
+                            field,
+                            value,
+                            draftCanonical(field),
+                        );
+                    } else {
+                        setCellText({ row: targetRow, col: targetCol }, value);
+                    }
+                    written++;
+                    touched = true;
+                }
+                if (touched) rowsTouched++;
+            }
+
+            if (newIds.length > 0) {
+                setDraftIds((prev) => [...prev, ...newIds]);
+                setDraftEdits((prev) => {
+                    const next = { ...prev };
+                    for (const [id, e] of Object.entries(newEdits)) {
+                        if (Object.keys(e).length > 0) next[id] = e;
+                    }
+                    return next;
+                });
+            }
+
+            if (written === 0) {
+                toast.info('Nothing pasted — that block lands outside the editable cells.');
+            } else {
+                const extra = plan.newRows > 0 ? ` · ${plan.newRows} new row${plan.newRows === 1 ? '' : 's'}` : '';
+                toast.success(`Pasted ${rowsTouched} row${rowsTouched === 1 ? '' : 's'}${extra}`);
+            }
+
+            // Never truncate in silence — the whole point of the rewrite.
+            if (plan.droppedRows > 0 || plan.droppedCols > 0) {
+                const parts: string[] = [];
+                if (plan.droppedRows > 0) {
+                    parts.push(
+                        showDrafts
+                            ? `${plan.droppedRows} row${plan.droppedRows === 1 ? '' : 's'} ran past the ${MAX_DRAFT_ADD}-row limit on a single paste. Save what landed, then paste the rest.`
+                            : `${plan.droppedRows} row${plan.droppedRows === 1 ? '' : 's'} ran past the last row of this view, and this view has no blank rows to grow into — a lens, a search or a scrolled-back window is a CUT of history, so a new receipt cannot be appended to it. Clear the filter (or scroll to the newest end) and paste again.`,
+                    );
+                }
+                if (plan.droppedCols > 0) {
+                    parts.push(
+                        `${plan.droppedCols} column${plan.droppedCols === 1 ? '' : 's'} ran past ${cols[lastCol].label}. Start the paste further left.`,
+                    );
+                }
+                errorToast('Part of that block could not be pasted.', { description: parts.join('\n\n') });
+            }
         },
-    });
+        [
+            navRows.length, cols, lastCol, addressable, setCellText, canViewPrices,
+            showDrafts, fallbackYear, contextYearFor, draftCanonical,
+        ],
+    );
 
     /** Paste is a grid gesture — unless the caret is in a control the grid does not own. */
     const onGridPaste = React.useCallback(
         (e: React.ClipboardEvent) => {
             if (isGridChrome(e.target)) return;
-            handleGridPaste(e, activeRef.current);
+            const text = e.clipboardData.getData('text/plain');
+            if (!text) return;
+            e.preventDefault();
+            applyClipboardPaste(text);
         },
-        [handleGridPaste],
+        [applyClipboardPaste],
     );
 
     // ═══ Context menu ════════════════════════════════════════════════════════════
@@ -1560,17 +1750,34 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         setDraftIds((prev) => [...prev, ...makeDraftIds(n)]);
     }, []);
 
+    /**
+     * "Copy row as TSV" from the context menu — the SAME payload the Ctrl+C range copy
+     * produces, cell for cell. It used to have a second definition of its own
+     * (`displayText`, which emitted `formatKg` / `formatRate`, i.e. thousands separators
+     * a spreadsheet reads as text), and two definitions of the clipboard is exactly how
+     * one of them silently rots.
+     *
+     * The columns are `isSelectableColumn`'s — everything a range may cover, so `#` (a
+     * row ordinal, meaningless outside this view) is out and TTL PRICE is in.
+     */
     const copyRow = React.useCallback(
         (deliveryId: string) => {
-            const rec = recordsById.get(deliveryId);
-            if (!rec) return;
+            const place = placeById.get(deliveryId);
+            if (!place) return;
             const tsv = cols
-                .filter((c) => c.field !== null)
-                .map((c) => displayText(rec, c.field!, canViewPrices))
+                .map((c, ci) => (isSelectableColumn(c) ? tsvEscape(clipboardCellText(place.navRow, ci)) : null))
+                .filter((v): v is string => v !== null)
                 .join('\t');
-            void navigator.clipboard.writeText(tsv).then(() => toast.success('Row copied as TSV'));
+            void navigator.clipboard
+                .writeText(tsv)
+                .then(() => toast.success('Row copied as TSV'))
+                .catch((err: unknown) => {
+                    errorToast('The row could not be copied to the clipboard.', {
+                        description: `${err instanceof Error ? err.message : String(err)}\n\nThe browser refuses clipboard writes on an insecure origin (plain http) and when the page has lost focus.`,
+                    });
+                });
         },
-        [recordsById, cols, canViewPrices],
+        [placeById, cols, clipboardCellText],
     );
 
     // A blank row is not a receipt yet — it has no draws to add, no stored total to copy
@@ -2570,24 +2777,46 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 </td>
             );
         }
-        // The endless scope's day boundary. A GAP, not a header and not a sum: no label,
-        // no count, no figure — and NO RULE. The receipt above it already closes the day
-        // with its own full-weight `border-b-border` (ROW_RULE.delivery); a second line
-        // under the blank would read as an empty table row rather than as breathing room.
+        // ── The endless scope's day boundary: AN ACTUAL EMPTY ROW ────────────────
         //
-        // `spanAll` (= `cols.length`, the same constant the day heading and the add-rows
-        // control use) rather than new arithmetic, so a column added anywhere is covered.
-        // The cell is FULLY OPAQUE — `bg-background`, no alpha, no backdrop-filter —
-        // because every surface in a frozen-pane table has to be, and a translucent
-        // spacer would show the scrolling rows through the gap. No animation.
+        // Renzo, on the 10px ruleless sliver that shipped first: *"It should be literally
+        // just an empty row, not some made up effect on screen, it just looks weird. Just
+        // place an actual row in between days."*
+        //
+        // So it is a row of the spreadsheet, indistinguishable from one somebody left
+        // blank: full `ROW_H` (= `DAY_SPACER_ROW_H`), one `<td>` PER COLUMN rather than a
+        // single spanning cell — that is what carries the vertical `border-r` rules
+        // through it — and the same `border-b-border` the receipt rows draw. A `colSpan`
+        // here would erase every vertical line and give the artefact away.
+        //
+        // The frozen block is treated exactly as a data row's is: `.frozen-col` with its
+        // cumulative `left` offset, `.frozen-edge` on the last pinned column, and FULLY
+        // OPAQUE `bg-background` (no alpha, no backdrop-filter) — a translucent cell here
+        // would show the scrolling rows through the pinned block at the gap.
+        //
+        // Still NOT addressable (it never enters `navRows`), no hover state, no animation.
         if (item.kind === 'day-gap') {
             return (
-                <td
-                    colSpan={spanAll}
-                    aria-hidden="true"
-                    className="bg-background p-0"
-                    style={{ height: DAY_SPACER_ROW_H }}
-                />
+                <>
+                    {cols.map((col, ci) => {
+                        const isFrozen = ci < frozenCount;
+                        return (
+                            <td
+                                key={col.key}
+                                aria-hidden="true"
+                                className={cn(
+                                    'border-r border-r-border border-b border-b-border p-0 align-middle',
+                                    isFrozen && 'frozen-col bg-background',
+                                    isFrozen && ci === frozenCount - 1 && 'frozen-edge',
+                                )}
+                                style={{
+                                    height: DAY_SPACER_ROW_H,
+                                    ...(isFrozen ? { left: frozenLeft[ci] } : {}),
+                                }}
+                            />
+                        );
+                    })}
+                </>
             );
         }
         if (item.kind === 'day') {
@@ -4224,22 +4453,6 @@ function canonicalEditText(rec: DeliveryRecord, field: DeliveryField): string {
     }
 }
 
-/** What a cell shows in DISPLAY mode — used by the TSV copy. */
-function displayText(rec: DeliveryRecord, field: DeliveryField, showPrices: boolean): string {
-    const r = rec.row;
-    switch (field) {
-        case 'delivery_date': return r.delivery_date ?? r.delivery_date_raw ?? '';
-        case 'truck_no': return r.truck_no ?? '';
-        case 'supplier': return formatSupplierCell(r);
-        case 'sacks': return formatInt(r.sacks);
-        case 'wt': return formatKg(r.net_weight_kg);
-        case 'destination': return formatDestinationCell(r);
-        case 'remarks': return r.remarks ?? '';
-        case 'price': return showPrices ? formatRate(r.price_php_kg) : '';
-        default: return formatLab(r[field as 'bd' | 'moisture_pct' | 'grit' | 'ash' | 'dust' | 'vm' | 'fc'], labDecimals(field));
-    }
-}
-
 function weightTitle(row: DeliveryRecord['row'], pending: string | undefined): string {
     const source = pending ?? weightEditText(row);
     const parsed = parseWeightInput(source);
@@ -4408,27 +4621,6 @@ function buildPatch(
     return { patch, errors };
 }
 
-// ── Paste bridge ────────────────────────────────────────────────────────────────
-//
-// `useGridPaste` thinks in rows of `{ field: value }`. This grid's edit state is a map
-// keyed by receipt id, so the paste target is a synthetic row keyed by COLUMN INDEX —
-// which also keeps two columns that edit the same nominal field distinct.
-
-type PasteRow = Record<string, string>;
-
-function pasteKey(colIndex: number): string {
-    return `c${colIndex}`;
-}
-
-function readPasteRow(
-    row: number,
-    cols: DeliveryCol[],
-    getCellText: (id: CoordinateId) => string,
-): PasteRow {
-    const out: PasteRow = {};
-    for (let c = 0; c < cols.length; c++) {
-        if (cols[c].field === null) continue;
-        out[pasteKey(c)] = getCellText({ row, col: c });
-    }
-    return out;
-}
+// (The old `useGridPaste` bridge — a synthetic row keyed by column index — is gone. The
+// paste is expressed directly against this grid's row model in `applyClipboardPaste`,
+// because the bridge could not create the rows a taller-than-the-sheet block needs.)

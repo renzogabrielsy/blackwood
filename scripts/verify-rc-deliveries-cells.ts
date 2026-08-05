@@ -29,6 +29,11 @@ import {
   priceEditText,
   sampleFieldFor,
   buildColumns,
+  cleanPastedCell,
+  clipboardNumber,
+  parseClipboardTable,
+  planPaste,
+  tsvEscape,
   frozenOffsets,
   columnOffsets,
   frozenBlockWidth,
@@ -861,8 +866,10 @@ check('a spacer lands on every day change, and never before the first row', () =
   // FOCUS is untouched: it keeps its day headings and `Σ DAY TOTAL` and gets no spacers.
   assert.equal(gapsIn(flattenModel(rows, 'focus').items).length, 0)
 
-  // Short enough to read as a break rather than as an empty row of the sheet.
-  assert.ok(DAY_SPACER_ROW_H > 0 && DAY_SPACER_ROW_H < ROW_H / 2, 'a spacer is ~a third of a receipt row')
+  // A spacer is EXACTLY a receipt row tall. Renzo, on the 10px sliver that shipped
+  // first: "It should be literally just an empty row, not some made up effect on
+  // screen." Any other height reads as a rendering artefact between rows.
+  assert.equal(DAY_SPACER_ROW_H, ROW_H, 'a spacer is a full, ordinary row of the sheet')
 })
 
 check('the UNDATED group is a day like any other — no gap inside it, one gap leaving it', () => {
@@ -926,18 +933,21 @@ check('navRows is BYTE-IDENTICAL with and without spacers — the keyboard model
   }
 })
 
-check('the spacer spans the WHOLE column table in both gating states', () => {
-  // It renders `colSpan={spanAll}` — `cols.length`, the same constant the day heading and
-  // the add-rows control use, so a column added anywhere is covered with no new
-  // arithmetic. Assert it against `summarySpans`, which is the module's authority on how
-  // a non-data row tiles: the lanes must add up to exactly the same number.
+check('the spacer covers every column with a CELL of its own, in both gating states', () => {
+  // It is a real empty row now, so it emits one `<td>` per column rather than one
+  // spanning cell — that is what runs the vertical `border-r` rules through it. The
+  // count it has to match is the same one every other tiling row matches, so assert it
+  // against `summarySpans`, the module's authority on how a non-data row tiles.
   for (const canViewPrices of [true, false]) {
     const cols = buildColumns(canViewPrices)
-    const spanAll = cols.length
+    const cellCount = cols.length
     const s = summarySpans(cols)
-    assert.equal(s.label + s.weight + s.note + s.total + s.trailing, spanAll)
-    assert.equal(s.frozen + s.spacer + s.weight + s.note + s.total + s.trailing, spanAll)
-    assert.ok(spanAll > 0, 'colSpan={0} is "to the end of the group" in HTML — the opposite of nothing')
+    assert.equal(s.label + s.weight + s.note + s.total + s.trailing, cellCount)
+    assert.equal(s.frozen + s.spacer + s.weight + s.note + s.total + s.trailing, cellCount)
+    assert.ok(cellCount > 0, 'a row with no cells is not a row')
+    // The frozen block the spacer has to repaint opaquely is the SAME block the data
+    // rows pin, so a column moved into or out of it is absorbed with no new arithmetic.
+    assert.equal(frozenOffsets(cols).length, s.frozen)
   }
   // The two shapes really do differ, or the loop above proves nothing.
   assert.equal(buildColumns(true).length, buildColumns(false).length + 2)
@@ -984,24 +994,337 @@ check('the ledger emits the spacer in endless only, addressably nowhere, and pai
   assert.match(code, /scope === 'endless' && needsDaySpacer\(prevDate, date\)/)
   assert.match(code, /needsDaySpacer/, 'the boundary rule must come from the pure helper, not be re-inlined')
 
-  // 3. The rendered cell. Isolate the branch so the day HEADING's classes cannot satisfy
+  // 3. The rendered row. Isolate the branch so the day HEADING's classes cannot satisfy
   //    the checks below on its behalf.
   const start = code.indexOf("item.kind === 'day-gap'")
   const end = code.indexOf("item.kind === 'day'", start)
   assert.ok(start > 0 && end > start, 'expected a day-gap branch followed by the day-heading branch')
   const branch = code.slice(start, end)
 
-  assert.match(branch, /colSpan=\{spanAll\}/, 'the span must come from the column table')
+  // ── AN ACTUAL EMPTY ROW, not an effect between rows ──────────────────────────
+  // One `<td>` per column (that is what carries the vertical rules through it), never
+  // a single spanning cell.
+  assert.match(branch, /cols\.map\(/, 'the spacer emits a cell PER COLUMN, from the column table')
+  assert.ok(!/colSpan/.test(branch), 'a colSpan would erase every vertical rule and give the artefact away')
   assert.match(branch, /DAY_SPACER_ROW_H/, 'the height must be the shared constant')
+  // The same rules every other row draws — vertical AND horizontal, on the CELL
+  // (`border-collapse: separate` never paints a `<tr>` border).
+  assert.match(branch, /border-r border-r-border/, 'the vertical rule, exactly as a data row draws it')
+  assert.match(branch, /border-b border-b-border/, 'the horizontal rule, exactly as a receipt row draws it')
+  // The frozen block is pinned and repainted OPAQUELY, like a data row's.
+  assert.match(branch, /frozen-col/, 'the pinned columns must still be pinned across the gap')
+  assert.match(branch, /frozen-edge/, 'the seam at the frozen↔scroll boundary is hidden here too')
+  assert.match(branch, /left: frozenLeft\[ci\]/, 'cumulative left offsets, the same walk as every other row')
   assert.match(branch, /bg-background/, 'a frozen-pane table has no translucent surfaces')
-  assert.ok(!/backdrop/.test(branch), 'never glass — the scrolling rows would show through the gap')
+  assert.ok(!/backdrop/.test(branch), 'never glass — the scrolling rows would show through the pinned block')
   assert.ok(!/bg-[a-z]+\/\d/.test(branch), 'no alpha background on a spacer')
-  assert.ok(!/border/.test(branch), 'no rule: the receipt above already closes the day')
   assert.ok(!/animate-|transition|hover:/.test(branch), 'no animation and no hover state on a spacer')
 
   // 4. The post-save regroup is the SERVER's canonical re-read, not a client-side splice.
   assert.match(code, /await win\.reset\(\{ kind: 'latest' \}\)/)
   assert.ok(!/setRecords/.test(code), 'the window is owned by use-deliveries-window.ts, not spliced here')
+})
+
+// ── The clipboard: paste IN, copy OUT ─────────────────────────────────────────
+//
+// Renzo: *"allow us to copy and paste into existing entries and empty entries (from
+// google sheet, into the app)"* · *"allow us to delete multiple cells at once via
+// selecting multiple cells."* · *"allow us to copy data from the app so its pastable
+// into google sheet"*.
+//
+// The operators live in Google Sheets, so the clipboard is a real interchange format
+// here. Everything the exchange decides is pure and lives in `types.ts`, which is what
+// makes it assertable without a browser — and the three gestures had three separate,
+// silent defects, each of which is pinned below.
+
+check('a clipboard block is parsed as a rectangle — tabs, CRLF, and quoted cells', () => {
+  assert.deepEqual(parseClipboardTable('a\tb\nc\td'), [['a', 'b'], ['c', 'd']])
+  // Sheets ends its payload with a newline; that is not an extra row.
+  assert.deepEqual(parseClipboardTable('a\tb\n'), [['a', 'b']])
+  assert.deepEqual(parseClipboardTable('a\tb\r\nc\td\r\n'), [['a', 'b'], ['c', 'd']])
+  // A blank cell is a real instruction — pasting it over a value CLEARS the value.
+  assert.deepEqual(parseClipboardTable('a\t\tc'), [['a', '', 'c']])
+  // …and a blank row in the MIDDLE is kept, for the same reason.
+  assert.deepEqual(parseClipboardTable('a\n\nb'), [['a'], [''], ['b']])
+  // The quoting convention Sheets and Excel both speak: a REMARKS cell may hold a tab
+  // or a line break, and without this the whole block below it shifts a column left.
+  assert.deepEqual(parseClipboardTable('a\t"line one\nline two"\tc'), [['a', 'line one\nline two', 'c']])
+  assert.deepEqual(parseClipboardTable('"tab\there"\tb'), [['tab\there', 'b']])
+  assert.deepEqual(parseClipboardTable('"say ""hi"""\tb'), [['say "hi"', 'b']])
+  assert.deepEqual(parseClipboardTable(''), [])
+})
+
+check('every cell text survives escape → parse, including the ones that used to shred a row', () => {
+  const cells = [
+    'BRIX - SOUTH HILONGOS',
+    'PALAWAN RANDY PSAU 282509-8',
+    'wet load,\nre-weighed at the gate', // a remark with a line break — the real defect
+    'a\tb', // a remark with a tab
+    'he said "ok"',
+    '',
+    '2026-06-27',
+    '23799.6',
+  ]
+  // One row of every awkward cell, round-tripped as a whole block.
+  const payload = cells.map(tsvEscape).join('\t')
+  assert.deepEqual(parseClipboardTable(payload), [cells])
+
+  // And as a COLUMN, so the newline case is exercised across row boundaries too.
+  const column = cells.map((c) => tsvEscape(c)).join('\n')
+  assert.deepEqual(parseClipboardTable(column), cells.map((c) => [c]))
+
+  // Only the cells that need quoting get quoted — a quoted every-cell payload would
+  // still parse, but it would be unreadable in any other tool.
+  assert.equal(tsvEscape('BRIX - SOUTH HILONGOS'), 'BRIX - SOUTH HILONGOS')
+  assert.equal(tsvEscape('23799.6'), '23799.6')
+})
+
+check('a copied number is the DATABASE\u2019s own decimal — no symbol, no separators, no float', () => {
+  // PostgREST hands `numeric` back as a STRING, and that string is the exact decimal the
+  // ledger holds. `total_price_php` / `net_weight_kg` / `price_php_kg` are STORED
+  // GENERATED columns: the rule in this module is that they are COPIED, never re-derived.
+  assert.equal(clipboardNumber('6940123.45'), '6940123.45')
+  assert.equal(clipboardNumber('23799.60'), '23799.60', 'the DB\u2019s trailing zero is the DB\u2019s, not a float\u2019s')
+  assert.equal(clipboardNumber('-12.5'), '-12.5')
+  assert.equal(clipboardNumber(42), '42')
+  assert.equal(clipboardNumber(null), '')
+  assert.equal(clipboardNumber(undefined), '')
+  assert.equal(clipboardNumber(''), '')
+  // Nothing a spreadsheet reads as TEXT ever reaches the clipboard from a numeric cell.
+  for (const v of ['6940123.45', '23799.60', '39.5']) {
+    assert.ok(!/[₱,]/.test(clipboardNumber(v)), `"${v}" must carry no currency symbol and no thousands separator`)
+  }
+})
+
+check('a GATED viewer has no \u20b1 column to copy or paste into, at all', () => {
+  // The structural half of the price boundary: `buildColumns(false)` omits both ₱
+  // columns, so they are not in the coordinate space a copy range or a paste anchor can
+  // address. There is no "hide it afterwards" step to forget.
+  const gated = buildColumns(false)
+  assert.ok(!gated.some((c) => c.key === 'php_kg' || c.key === 'ttl'))
+  assert.ok(!gated.some((c) => c.field === 'price'))
+  assert.ok(buildColumns(true).some((c) => c.field === 'price'), 'the ungated shape must differ, or this proves nothing')
+})
+
+check('a pasted cell is cleaned FOR ITS COLUMN — dates parsed, numbers stripped, text untouched', () => {
+  const cols = buildColumns(true)
+  const col = (key: string): DeliveryCol => cols.find((c) => c.key === key)!
+
+  // DATE goes through the same verdict a TYPED date gets, with the same context year, so
+  // a pasted `6/27` and a typed `6/27` can never land on different years.
+  assert.equal(cleanPastedCell(col('date'), '6/27', 2026), '2026-06-27')
+  assert.equal(cleanPastedCell(col('date'), '6/27/25', 2026), '2025-06-27')
+  assert.equal(cleanPastedCell(col('date'), '2026-06-27', 2026), '2026-06-27')
+  // Unreadable text is KEPT verbatim — the cell stays dirty and the save refuses it by
+  // name. It is never silently turned into some other day.
+  assert.equal(cleanPastedCell(col('date'), 'sometime tuesday', 2026), 'sometime tuesday')
+  assert.equal(cleanPastedCell(col('date'), '2026-02-30', 2026), '2026-02-30')
+
+  // A numeric column loses the rendering Sheets copied with it.
+  assert.equal(cleanPastedCell(col('wt'), '27,045', 2026), '27045')
+  assert.equal(cleanPastedCell(col('php_kg'), '₱39.50', 2026), '39.50')
+  assert.equal(cleanPastedCell(col('sacks'), '"1,200"', 2026), '1200')
+  // …but a formula pastes through intact, because WT and PHP/KG hold arithmetic.
+  assert.equal(cleanPastedCell(col('wt'), '=27045*88%', 2026), '=27045*88%')
+
+  // A TEXT column keeps every character — a supplier origin or a remark may legitimately
+  // contain a comma, and stripping it would re-point a cheque.
+  assert.equal(cleanPastedCell(col('supplier'), 'BRIX - SOUTH HILONGOS', 2026), 'BRIX - SOUTH HILONGOS')
+  assert.equal(cleanPastedCell(col('remarks'), 'wet, re-weighed', 2026), 'wet, re-weighed')
+  assert.equal(cleanPastedCell(col('whse'), 'WHSE A- LFT', 2026), 'WHSE A- LFT')
+  assert.equal(cleanPastedCell(col('remarks'), '  trimmed  ', 2026), 'trimmed')
+  assert.equal(cleanPastedCell(col('remarks'), '', 2026), '')
+})
+
+check('a paste TALLER than the sheet creates the blank rows it needs — it never truncates in silence', () => {
+  // The defect this replaces: the old adapter looped
+  // `r < Math.min(block.length, navRows.length)`, so a 30-row slip pasted into a sheet
+  // showing 20 blank rows wrote 20, dropped 10, and toasted "Pasted 30 rows".
+  const base = { startCol: 1, blockCols: 4, colCount: 17, canCreateRows: true, maxNewRows: MAX_DRAFT_ADD }
+
+  // Fits exactly — nothing created, nothing dropped.
+  assert.deepEqual(planPaste({ ...base, startRow: 0, blockRows: 10, navRowCount: 10 }), {
+    newRows: 0, droppedRows: 0, droppedCols: 0,
+  })
+  // Runs 10 rows past the end ⇒ 10 blank rows are CREATED, none dropped.
+  assert.deepEqual(planPaste({ ...base, startRow: 0, blockRows: 30, navRowCount: 20 }), {
+    newRows: 10, droppedRows: 0, droppedCols: 0,
+  })
+  // The anchor counts: the same block dropped 5 rows lower needs 5 more rows.
+  assert.deepEqual(planPaste({ ...base, startRow: 5, blockRows: 30, navRowCount: 20 }), {
+    newRows: 15, droppedRows: 0, droppedCols: 0,
+  })
+  // A view with no blank rows (a lens, a search, a scrolled-back window) cannot grow —
+  // the overflow is REPORTED rather than appended into the middle of history.
+  assert.deepEqual(
+    planPaste({ ...base, startRow: 0, blockRows: 30, navRowCount: 20, canCreateRows: false }),
+    { newRows: 0, droppedRows: 10, droppedCols: 0 },
+  )
+  // The defensive ceiling on one gesture is explicit, and what it refuses is SAID.
+  const huge = planPaste({ ...base, startRow: 0, blockRows: 2000, navRowCount: 0 })
+  assert.equal(huge.newRows, MAX_DRAFT_ADD)
+  assert.equal(huge.newRows + huge.droppedRows, 2000)
+  // Columns past the last one are refused the same way, never wrapped onto the next row.
+  assert.equal(planPaste({ ...base, startRow: 0, blockRows: 1, navRowCount: 5, startCol: 15, blockCols: 4 }).droppedCols, 2)
+  assert.equal(planPaste({ ...base, startRow: 0, blockRows: 1, navRowCount: 5, startCol: 13, blockCols: 4 }).droppedCols, 0)
+})
+
+check('a paste block maps to the right columns from a NON-ZERO anchor', () => {
+  // The column a block cell lands in is `anchor.col + offset`, clipped at the last
+  // column — never wrapped, and never shifted by the frozen block (the frozen columns
+  // are ordinary members of the coordinate space; only their PAINTING is special).
+  const cols = buildColumns(true)
+  const anchorCol = cols.findIndex((c) => c.key === 'bd') // 6 — mid-sheet, past the pins
+  assert.ok(anchorCol > 0)
+
+  const block = parseClipboardTable('0.480\t9.10\t1.20\t14.5')
+  const landed = block[0].map((_, i) => cols[anchorCol + i]?.key)
+  assert.deepEqual(landed, ['bd', 'moist', 'grit', 'ash'])
+
+  // Anchored at the last column, only the first cell has anywhere to go.
+  const last = cols.length - 1
+  assert.equal(planPaste({
+    startRow: 0, startCol: last, blockRows: 1, blockCols: 4,
+    navRowCount: 5, colCount: cols.length, canCreateRows: true, maxNewRows: MAX_DRAFT_ADD,
+  }).droppedCols, 3)
+})
+
+check('the ledger pastes against its OWN row model — the truncating bridge is gone', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // The platform hook could not create rows THIS grid understands (a draft id + an entry
+  // in `draftEdits`), so it is no longer used here. The other seven grids keep it.
+  assert.ok(!/useGridPaste/.test(code), 'the truncating useGridPaste bridge must be gone')
+  assert.ok(!/Math\.min\(after\.length, navRows\.length\)/.test(code), 'the truncation itself must be gone')
+  assert.match(code, /planPaste\(\{/, 'the geometry comes from the pure, asserted helper')
+  assert.match(code, /parseClipboardTable\(text\)/)
+  assert.match(code, /cleanPastedCell\(/)
+
+  // Rows are created through the SAME path the "Add N more rows" control uses. Two ways
+  // to make a draft row is two ways for a draft row to be wrong.
+  assert.match(code, /makeDraftIds\(plan\.newRows\)/)
+  assert.match(code, /canCreateRows: showDrafts/, 'blank rows only exist where a blank row means something')
+
+  // A paste with no anchor used to vanish without a word — no write, no preventDefault,
+  // no message. It must now SAY so, persistently.
+  assert.match(code, /errorToast\('Nothing was pasted — no cell is selected\./)
+  assert.match(code, /errorToast\('Part of that block could not be pasted\./)
+
+  // The refusals that were already right stay right: a cell the row does not have is
+  // skipped by the keyboard's own rule, and a gated viewer can reach no ₱ column.
+  assert.match(code, /if \(!isNew && !addressable\(targetRow, targetCol\)\) continue;/)
+  assert.match(code, /if \(field === 'price' && !canViewPrices\) continue;/)
+})
+
+check('the copy payload is the DB\u2019s figures, not the cell\u2019s decoration', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // 1. REACHABLE. Copy used to run only through `useGridKeyboardNav`'s RANGE branch,
+  //    which needs BOTH an active cell and a selection LARGER THAN ONE CELL — so
+  //    Ctrl/Cmd+C on a single selected cell reached nothing at all. It is intercepted in
+  //    the ledger's own handler now, ahead of the shared hook.
+  assert.ok(!/useClipboardCopy/.test(code), 'the range-only copy hook is no longer the path')
+  assert.match(
+    code,
+    /\(e\.metaKey \|\| e\.ctrlKey\) && \(e\.key === 'c' \|\| e\.key === 'C'\)/,
+    'Ctrl/Cmd+C must be handled for a single cell as well as a range',
+  )
+  // The single-cell fallback: the active cell becomes a 1×1 box.
+  assert.match(code, /startRow: a\.row, startCol: a\.col, endRow: a\.row, endCol: a\.col/)
+
+  // 2. VALUES, NOT FORMULAS — and the values are the DATABASE's. WT and PHP/KG read back
+  //    as `=27045*88%` / `=39.5+2.7` on focus, so the old payload pasted into the
+  //    operator's own sheet as LIVE, locale-sensitive formulas. The three generated
+  //    columns are copied verbatim; nothing here re-derives money.
+  const fn = code.slice(code.indexOf('const clipboardCellText'), code.indexOf('const copySelectionToClipboard'))
+  assert.ok(fn.length > 200, 'expected the clipboard cell function ahead of the copy handler')
+  assert.match(fn, /clipboardNumber\(stored\.net_weight_kg\)/)
+  assert.match(fn, /clipboardNumber\(stored\.price_php_kg\)/)
+  assert.match(fn, /clipboardNumber\(stored\?\.total_price_php\)/)
+  assert.ok(!/parseWeightInput|parsePriceInput/.test(fn), 'a generated column is COPIED, never recomputed')
+  assert.ok(!/formatPeso|formatKg|formatRate|formatInt/.test(fn), 'no thousands separators, no ₱ — a spreadsheet reads those as text')
+
+  // 3. ESCAPED. One remark holding a line break used to shred every row below it.
+  assert.match(code, /tsvEscape\(clipboardCellText\(row, col\)\)/)
+  assert.match(code, /cells\.join\('\\t'\)/)
+  assert.match(code, /lines\.join\('\\n'\)/)
+
+  // 4. ONE definition of the payload. The context menu's "Copy row as TSV" used to build
+  //    its own through `displayText`, which emitted the on-screen formatting.
+  assert.ok(!/function displayText/.test(code), 'a second clipboard definition is how one of them rots')
+  assert.match(code, /tsvEscape\(clipboardCellText\(place\.navRow, ci\)\)/)
+
+  // 5. A refused clipboard write must SAY so — the old path had no rejection handler at
+  //    all, so it was an unhandled promise and a silent no-op.
+  assert.match(code, /errorToast\('The selection could not be copied to the clipboard\./)
+  assert.match(code, /errorToast\('The row could not be copied to the clipboard\./)
+})
+
+check('a multi-cell selection clears every addressable cell in it — and SURVIVES the clear', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  // Delete/Backspace is handled by the LEDGER, not by the shared hook's range branch
+  // (which does `onDelete` then `clear()`), so the block just blanked is still the block
+  // Escape's undo is aimed at. The `for (const id of selectedCells())` loop is the whole
+  // of "every addressable cell in the range".
+  assert.match(code, /const clearSelectedCells = React\.useCallback\(\(\) => \{\s*for \(const id of selectedCells\(\)\) setCellText\(id, ''\);/)
+  const del = code.slice(code.indexOf("e.key === 'Delete' || e.key === 'Backspace'"))
+  const body = del.slice(0, del.indexOf('handleKeyDown(e);'))
+  assert.match(body, /clearSelectedCells\(\);/)
+  assert.ok(!/cellSelection\.clearSelection\(\)/.test(body), 'the selection must survive the clear')
+
+  // `selectedCells()` is the ONE definition Delete and Escape share, and it filters by
+  // `addressable` so a rectangle covering a moisture draw's missing lanes writes nowhere.
+  assert.match(code, /if \(addressable\(row, col\)\) out\.push\(\{ row, col \}\);/)
+})
+
+check('shift+arrow extends from the CARET, not from (0,0) — the selection race', () => {
+  // The gesture Renzo could not use: "select multiple cells" by shift+arrow.
+  //
+  // `useGridKeyboardNav`'s "Shift+Arrow from a single cell" branch calls
+  // `range.seedFromActive()` and then `range.extend(e)` BACK TO BACK, in one event
+  // handler. React applies a state update after the handler returns, so
+  // `useCellSelection`'s `anchorRef` — which was only synced during RENDER — was still
+  // the previous value when `extend` read it. `extend` therefore took its "no anchor ⇒
+  // start a selection at (0,0)" branch, and its setters landed LAST: shift+arrow
+  // selected the top-left corner of the sheet instead of extending from the caret, and
+  // the Delete that followed blanked cells the operator was not looking at.
+  //
+  // The fix is the discipline the hook already used for `isDraggingRef`: every setter
+  // writes its ref synchronously. Scanned rather than modelled, because the thing being
+  // asserted IS the ordering of two writes in the real source.
+  const src = readFileSync(join(__dirname, '../lib/hooks/use-cell-selection.ts'), 'utf8')
+  const code = stripComments(src)
+  assert.match(code, /export function useCellSelection/, 'comment-stripping destroyed the source')
+
+  const mouseDown = code.slice(
+    code.indexOf('const handleCellMouseDown'),
+    code.indexOf('const handleCellMouseEnter'),
+  )
+  assert.ok(mouseDown.length > 200, 'expected handleCellMouseDown ahead of handleCellMouseEnter')
+  assert.match(mouseDown, /anchorRef\.current = coord;/, 'the anchor must be readable in the SAME tick it is set')
+  assert.match(mouseDown, /focusRef\.current = coord;/)
+  // Every other setter follows the same rule, or the ref goes stale somewhere else.
+  const enter = code.slice(code.indexOf('const handleCellMouseEnter'), code.indexOf('const handleMouseUp'))
+  assert.match(enter, /focusRef\.current = coord;/)
+  const clear = code.slice(code.indexOf('const clearSelection'), code.indexOf('const selectAll'))
+  assert.match(clear, /anchorRef\.current = null;/)
+  assert.match(clear, /focusRef\.current = null;/)
+  const keys = code.slice(code.indexOf('const handleKeyDown'))
+  assert.match(keys, /focusRef\.current = next;/, 'shift+arrow must publish its new focus synchronously too')
+
+  // Every `setAnchor(` / `setFocus(` in the hook is paired with a ref write. Counted
+  // rather than eyeballed: an unpaired setter is exactly how this comes back.
+  const setters = (code.match(/set(Anchor|Focus)\(/g) ?? []).length
+  const refWrites = (code.match(/(anchor|focus)Ref\.current = /g) ?? []).length
+  assert.ok(setters > 0, 'no setters found — the scan would be vacuous')
+  assert.ok(
+    refWrites >= setters,
+    `every anchor/focus setter needs a synchronous ref write (${setters} setters, ${refWrites} ref writes)`,
+  )
 })
 
 // ── The DATE cell — free text in, yyyy-MM-dd out ──────────────────────────────
