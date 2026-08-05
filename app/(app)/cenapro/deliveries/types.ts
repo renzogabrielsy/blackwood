@@ -69,6 +69,17 @@ export interface ImportFlag {
     source_row?: number | null;
 }
 
+/**
+ * The same complaint, plus the read model's DERIVED verdict on whether the condition
+ * it describes is still true today (`import_flags_state`). See `flagSummary` below.
+ */
+export interface ImportFlagState extends ImportFlag {
+    /** `true` ⇒ a human has since repaired the underlying data. */
+    resolved: boolean;
+    /** For a resolved flag: what repaired it, in one sentence. `null` while live. */
+    note: string | null;
+}
+
 /** A receipt plus its samples — the unit the grid renders and the actions save. */
 export interface DeliveryRecord {
     row: RcDeliveryRow;
@@ -1299,7 +1310,10 @@ export function rowIssues(row: RcDeliveryRow): RowIssue[] {
     if (row.is_suspected_duplicate) out.push('duplicate');
     if (row.supplier_unresolved || row.destination_unresolved) out.push('unmapped');
     if (!row.delivery_date && row.delivery_date_raw) out.push('undated');
-    if (row.has_import_flags && !row.is_suspected_duplicate) out.push('flagged');
+    // LIVE flags only — a flag whose problem a human has since repaired is history,
+    // not a queue entry. `flagSummary` is the ONE place that verdict is reached, and
+    // the grid's rail, its badge and this issue set all read it. See the block below.
+    if (flagSummary(row).live && !row.is_suspected_duplicate) out.push('flagged');
     return out;
 }
 
@@ -1318,6 +1332,105 @@ export function readImportFlags(raw: unknown): ImportFlag[] {
             },
         ];
     });
+}
+
+// ─── Flag resolution — is the flag's problem STILL TRUE? ────────────────────────
+//
+// `import_flags` records what the extractor saw ON THE DAY, and it is NEVER cleared,
+// edited or deleted — it is the only surviving witness that the workbook literally said
+// `WHSE A/R#16` ("flagged, never fixed"). So it does not stop describing a problem when
+// a human repairs one, and the `?issue=flagged` lens drifted into a lie: 12 receipts
+// carried a flag while only 2 still had a live problem.
+//
+// The READ MODEL now derives the verdict per flag (`import_flags_state`, plus the counts
+// and `has_unresolved_flags`) — migration `20260805090000`. Nothing is mutated. This
+// module's job is only to (a) narrow the jsonb, (b) decide the ONE predicate the rail,
+// the badge and the `flagged` issue all share, and (c) say what repaired a resolved
+// flag. What changed here is what the UI EMPHASISES, never what is stored.
+//
+// TWO fail-safes, both in the "still a problem" direction, matching the backend's own
+// asymmetry — a wrong `resolved` silently hides a real problem, a wrong `unresolved`
+// merely leaves a row where a human will see it:
+//   • an element whose `resolved` is not literally `true` counts as UNRESOLVED (so an
+//     unknown `kind`, or a row read before the state column existed, stays in the queue);
+//   • `has_unresolved_flags` is ORed in, so a boolean saying "still live" is never
+//     overridden by an array that lost its verdicts.
+
+/** The row fields the flag surface reads. Structural, so a partial row still works. */
+export interface FlagSurfaceRow {
+    import_flags?: unknown;
+    import_flags_state?: unknown;
+    has_unresolved_flags?: boolean | null;
+    supplier_code?: string | null;
+    destination_code?: string | null;
+    delivery_date?: string | null;
+    bd?: number | null;
+}
+
+export interface FlagSummary {
+    /** Every flag the row carries — live AND historical. Never filtered. */
+    flags: ImportFlagState[];
+    unresolved: number;
+    resolved: number;
+    /** At least one flag still describes a live problem. THE lens/rail predicate. */
+    live: boolean;
+    /** The row carries flags and every one of them is history. */
+    historyOnly: boolean;
+}
+
+/**
+ * What repaired a resolved flag, read off the row's CURRENT state — the same state the
+ * SQL predicate asked about. Presentation copy, kept here so the popover renders it and
+ * the verify script can assert it without a browser.
+ */
+function resolutionNote(kind: string, row: FlagSurfaceRow): string {
+    const named = (v: unknown) => (typeof v === 'string' && v ? ` (${v})` : '');
+    switch (kind) {
+        case 'supplier_unmapped':
+        case 'supplier_no_trader_prefix':
+            return `Resolved — the receipt now names a payee${named(row.supplier_code)}.`;
+        case 'destination_unmapped':
+            return `Resolved — the receipt now has a warehouse${named(row.destination_code)}.`;
+        case 'date_unparseable':
+            return `Resolved — the receipt now has a date${named(row.delivery_date)}.`;
+        case 'bd_out_of_range':
+            return `Resolved — the receipt now has a BD reading${
+                typeof row.bd === 'number' ? ` (${row.bd})` : ''
+            }.`;
+        case 'suspected_duplicate':
+            return 'Resolved — no exact twin of this receipt is left in the ledger.';
+        default:
+            return 'Resolved — the condition this flag describes no longer holds.';
+    }
+}
+
+/**
+ * The ONE flag verdict. Everything on screen that reacts to a flag — the sky rail, the
+ * warning badge, the quiet history affordance, the `flagged` issue and therefore this
+ * client's agreement with the SQL lens — reads this and only this.
+ */
+export function flagSummary(row: FlagSurfaceRow): FlagSummary {
+    // `import_flags_state` is the array WITH verdicts; `import_flags` is the same array
+    // without them. Falling back to the latter costs nothing and keeps every flag
+    // visible (as unresolved) if the state column is ever absent from a projection.
+    const source = Array.isArray(row.import_flags_state) ? row.import_flags_state : row.import_flags;
+    const rawArr: unknown[] = Array.isArray(source) ? source : [];
+
+    // Walked element-by-element rather than zipped against `readImportFlags` by INDEX:
+    // that helper DROPS a non-object element, so a single malformed entry would shift
+    // every verdict after it onto the wrong flag. One flag in, one flag out, always.
+    const flags: ImportFlagState[] = rawArr.map((el) => {
+        const [f] = readImportFlags([el]);
+        const base: ImportFlag = f ?? { kind: 'unknown', detail: '', raw: null, source_row: null };
+        const resolved =
+            !!el && typeof el === 'object' && (el as Record<string, unknown>).resolved === true;
+        return { ...base, resolved, note: resolved ? resolutionNote(base.kind, row) : null };
+    });
+
+    const unresolved = flags.filter((f) => !f.resolved).length;
+    const resolved = flags.length - unresolved;
+    const live = unresolved > 0 || row.has_unresolved_flags === true;
+    return { flags, unresolved, resolved, live, historyOnly: flags.length > 0 && !live };
 }
 
 // ═══ Save payloads (the UI ⇄ server-action contract) ════════════════════════════

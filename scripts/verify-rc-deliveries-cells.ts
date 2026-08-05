@@ -56,6 +56,8 @@ import {
   describeUnsavedWork,
   hasUnsavedWork,
   duplicateBadge,
+  flagSummary,
+  rowIssues,
   filterSpec,
   isFilterableColumn,
   FILTER_COLUMNS,
@@ -64,6 +66,7 @@ import {
   type DeliveryCol,
   type FieldEdits,
   type DeliveryField,
+  type RcDeliveryRow,
 } from '@/app/(app)/cenapro/deliveries/types'
 import {
   activeFilterCount,
@@ -88,6 +91,12 @@ import {
 const LEDGER = join(
   dirname(fileURLToPath(import.meta.url)),
   '../app/(app)/cenapro/deliveries/deliveries-ledger.tsx',
+)
+
+/** The server actions — the flag lens's SQL predicate is scanned rather than modelled. */
+const ACTIONS = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../app/(app)/cenapro/deliveries/actions.ts',
 )
 
 /**
@@ -2210,6 +2219,278 @@ check('a NULL peer array never becomes a dangling jump target', () => {
     duplicate_peer_ids: null,
   })!
   assert.deepEqual(b.peerIds, [])
+})
+
+// ── Flag resolution — is the flag's problem STILL TRUE? (item 10) ─────────────
+//
+// `import_flags` is NEVER cleared: it is the only surviving witness to what the workbook
+// literally said. So it kept describing problems Renzo had already fixed, and the
+// `?issue=flagged` lens became a lie — 12 receipts carried a flag, 2 still had anything
+// to do. The read model now derives the verdict per flag; `flagSummary` is the ONE place
+// the UI reaches it, and everything that reacts to a flag reads that one call.
+//
+// The whole risk here is a verdict wrong in the RESOLVED direction — that silently drops
+// a real problem out of the only queue anybody looks at. Every fail-safe below therefore
+// leans the other way.
+
+/** A row for the flag surface. Cast because the view type has ~60 columns. */
+function flagRow(o: Record<string, unknown>): RcDeliveryRow {
+  return o as unknown as RcDeliveryRow
+}
+
+const F_DEST = { kind: 'destination_unmapped', detail: "'WHSE A/R#16' did not match", raw: 'WHSE A/R#16' }
+const F_BD = { kind: 'bd_out_of_range', detail: 'BD 23995.0 is far outside the band', raw: '23995' }
+
+check('a fully repaired row leaves the queue but KEEPS its history', () => {
+  const row = flagRow({
+    destination_code: 'WHSE 3A',
+    import_flags: [F_DEST],
+    import_flags_state: [{ ...F_DEST, resolved: true }],
+    has_unresolved_flags: false,
+    unresolved_flag_count: 0,
+    resolved_flag_count: 1,
+  })
+  const s = flagSummary(row)
+  assert.equal(s.live, false, 'nothing here is still a problem')
+  assert.equal(s.historyOnly, true, 'so the row needs the QUIET affordance, not the badge')
+  assert.equal(s.unresolved, 0)
+  assert.equal(s.resolved, 1)
+  // The flag itself is never filtered out — losing it would be exactly the mutation
+  // this whole design exists to refuse.
+  assert.equal(s.flags.length, 1, 'the flag is still there to render')
+  assert.equal(s.flags[0]!.raw, 'WHSE A/R#16', "the workbook's own text survives")
+})
+
+check('the rail/badge predicate is `rowIssues`, and it fires on LIVE flags only', () => {
+  // One predicate, one place: the ledger's rail reads `rowIssues`, and its icon reads
+  // the same `flagSummary` verdict. If these two ever disagree, a repaired row wears a
+  // sky rail with nothing to fix behind it — the bug in miniature.
+  const repaired = flagRow({
+    destination_code: 'WHSE 3A',
+    import_flags_state: [{ ...F_DEST, resolved: true }],
+    has_unresolved_flags: false,
+  })
+  const live = flagRow({
+    bd: null,
+    import_flags_state: [{ ...F_BD, resolved: false }],
+    has_unresolved_flags: true,
+  })
+  assert.ok(!rowIssues(repaired).includes('flagged'), 'a repaired row wears no sky rail')
+  assert.ok(rowIssues(live).includes('flagged'), 'a live one still does')
+  // …and the two surfaces agree, by construction.
+  assert.equal(flagSummary(repaired).live, false)
+  assert.equal(flagSummary(live).live, true)
+})
+
+check('an UNKNOWN kind is never resolved — the fail-safe direction', () => {
+  // The backend chose "a kind this CASE has never heard of counts as unresolved".
+  // The UI must not undo that: a `resolved` that is missing, null, or the STRING
+  // "true" is not a verdict, and anything short of literal `true` stays in the queue.
+  for (const el of [
+    { kind: 'brand_new_extractor_kind', detail: 'who knows' },
+    { kind: 'x', detail: '', resolved: null },
+    { kind: 'x', detail: '', resolved: 'true' },
+    { kind: 'x', detail: '', resolved: 1 },
+  ]) {
+    const s = flagSummary(flagRow({ import_flags_state: [el] }))
+    assert.equal(s.unresolved, 1, `${JSON.stringify(el)} must stay unresolved`)
+    assert.equal(s.live, true)
+    assert.equal(s.historyOnly, false)
+  }
+})
+
+check('`import_flags_state` preserves kind / detail / raw verbatim', () => {
+  // The state column ADDS a field; it never edits or drops one. If the popover ever
+  // stops showing `raw`, the flag has quietly stopped being a record of anything.
+  const s = flagSummary(
+    flagRow({
+      supplier_code: 'NEGROS',
+      import_flags_state: [
+        {
+          kind: 'supplier_no_trader_prefix',
+          detail: "'MANAGAYTAY' has no trader prefix; mapped to NEGROS for review",
+          raw: 'MANAGAYTAY',
+          source_row: 512,
+          resolved: true,
+        },
+      ],
+    }),
+  )
+  const f = s.flags[0]!
+  assert.equal(f.kind, 'supplier_no_trader_prefix')
+  assert.equal(f.detail, "'MANAGAYTAY' has no trader prefix; mapped to NEGROS for review")
+  assert.equal(f.raw, 'MANAGAYTAY')
+  assert.equal(f.source_row, 512)
+  assert.equal(f.resolved, true)
+})
+
+check('a resolved flag says what repaired it, naming the value', () => {
+  const note = (kind: string, row: Record<string, unknown>) =>
+    flagSummary(flagRow({ ...row, import_flags_state: [{ kind, detail: '', resolved: true }] }))
+      .flags[0]!.note!
+  assert.match(note('destination_unmapped', { destination_code: 'WHSE 3A' }), /warehouse \(WHSE 3A\)/)
+  assert.match(note('supplier_unmapped', { supplier_code: 'BRIX' }), /payee \(BRIX\)/)
+  assert.match(note('supplier_no_trader_prefix', { supplier_code: 'NEGROS' }), /payee \(NEGROS\)/)
+  assert.match(note('date_unparseable', { delivery_date: '2026-05-06' }), /date \(2026-05-06\)/)
+  assert.match(note('bd_out_of_range', { bd: 0.55 }), /BD reading \(0\.55\)/)
+  // A kind with no bespoke sentence still gets one, and a LIVE flag gets none at all.
+  assert.match(note('something_new', {}), /no longer holds/)
+  assert.equal(
+    flagSummary(flagRow({ import_flags_state: [{ kind: 'bd_out_of_range', detail: '' }] })).flags[0]!.note,
+    null,
+  )
+})
+
+check('`has_unresolved_flags` is ORed in — a live boolean is never overridden', () => {
+  // If the derived array ever loses its verdicts while the boolean still says "live",
+  // the row stays in the queue. Wrong in the safe direction, on purpose.
+  const s = flagSummary(
+    flagRow({ import_flags_state: [{ ...F_BD, resolved: true }], has_unresolved_flags: true }),
+  )
+  assert.equal(s.live, true)
+  assert.equal(s.historyOnly, false, 'it is NOT history-only while the DB says otherwise')
+})
+
+check('with no state column at all, every flag counts as unresolved', () => {
+  // A projection that forgot `import_flags_state` must not silently empty the queue.
+  const s = flagSummary(flagRow({ import_flags: [F_DEST, F_BD] }))
+  assert.equal(s.flags.length, 2, 'both still render')
+  assert.equal(s.unresolved, 2)
+  assert.equal(s.live, true)
+  // And a row with no flags at all is neither live nor history.
+  const none = flagSummary(flagRow({ import_flags: [], import_flags_state: [] }))
+  assert.deepEqual([none.flags.length, none.live, none.historyOnly], [0, false, false])
+})
+
+check('a malformed element cannot shift the verdicts onto the wrong flag', () => {
+  // `readImportFlags` DROPS a non-object element, so zipping it against the raw array
+  // by index would hand flag #2 the verdict written for #1. One flag in, one flag out.
+  const s = flagSummary(
+    flagRow({
+      bd: null,
+      import_flags_state: [
+        'not an object',
+        { ...F_DEST, resolved: true },
+        { ...F_BD, resolved: false },
+      ],
+    }),
+  )
+  assert.equal(s.flags.length, 3, 'the junk element is wrapped, not dropped')
+  assert.equal(s.flags[0]!.resolved, false, 'junk is never resolved')
+  assert.equal(s.flags[1]!.kind, 'destination_unmapped')
+  assert.equal(s.flags[1]!.resolved, true)
+  assert.equal(s.flags[2]!.kind, 'bd_out_of_range')
+  assert.equal(s.flags[2]!.resolved, false)
+})
+
+check('the live ledger: 12 flagged receipts, 2 the lens should still show', () => {
+  // The exact shape of the data on 2026-08-05, per the migration's own live counts:
+  // 5 destination_unmapped (all now WHSE 3A) · 3 supplier_no_trader_prefix (all NEGROS)
+  // · 2 date_unparseable (both 2026-05-06) · 1 bd_out_of_range (source_row 928, bd still
+  // NULL) · 1 supplier_unmapped (source_row 343, supplier still unknown).
+  const rows: RcDeliveryRow[] = [
+    ...Array.from({ length: 5 }, () =>
+      flagRow({
+        destination_code: 'WHSE 3A',
+        import_flags_state: [{ ...F_DEST, resolved: true }],
+        has_unresolved_flags: false,
+      }),
+    ),
+    ...Array.from({ length: 3 }, () =>
+      flagRow({
+        supplier_code: 'NEGROS',
+        import_flags_state: [{ kind: 'supplier_no_trader_prefix', detail: '', resolved: true }],
+        has_unresolved_flags: false,
+      }),
+    ),
+    ...Array.from({ length: 2 }, () =>
+      flagRow({
+        delivery_date: '2026-05-06',
+        import_flags_state: [{ kind: 'date_unparseable', detail: '', raw: '5/262026', resolved: true }],
+        has_unresolved_flags: false,
+      }),
+    ),
+    flagRow({
+      source_row: 928,
+      bd: null,
+      import_flags_state: [{ ...F_BD, resolved: false }],
+      has_unresolved_flags: true,
+    }),
+    flagRow({
+      source_row: 343,
+      supplier_code: null,
+      import_flags_state: [
+        { kind: 'supplier_unmapped', detail: '', raw: 'HILONGOS - BRIX', resolved: false },
+      ],
+      has_unresolved_flags: true,
+    }),
+  ]
+  assert.equal(rows.length, 12, 'every one of them still carries a flag — nothing was cleared')
+  assert.equal(rows.filter((r) => flagSummary(r).flags.length > 0).length, 12)
+  assert.equal(rows.filter((r) => flagSummary(r).live).length, 2, 'the honest worklist size')
+  assert.equal(rows.filter((r) => rowIssues(r).includes('flagged')).length, 2, 'and 2 rails')
+  assert.equal(
+    rows.filter((r) => flagSummary(r).historyOnly).length,
+    10,
+    'the other 10 keep a quiet, openable history',
+  )
+})
+
+check('the SQL lens filters on the unresolved predicate, not the historical one', () => {
+  const src = stripComments(readFileSync(ACTIONS, 'utf8'))
+  assert.ok(src.includes('cenapro_rc_delivery_rows'), 'the scan is reading the right file')
+  assert.ok(
+    // Only whitespace may sit between the two — `stripComments` leaves the blank lines
+    // where the reasoning was, so the gap is generous but still cannot span a branch.
+    /issue === 'flagged'\s*\?\s*q\.eq\('has_unresolved_flags', true\)/.test(src),
+    'the `flagged` lens must filter on has_unresolved_flags',
+  )
+  assert.ok(
+    !/q\.eq\('has_import_flags'/.test(src),
+    'has_import_flags is the HISTORICAL boolean — it must not gate the lens',
+  )
+  // The projection must still carry all four derived columns, in ONE string literal:
+  // splitting it with `+` collapses PostgREST's row type to an error.
+  const cols = /const ROW_COLS =\s*\n?\s*'([^']+)';/.exec(src)
+  assert.ok(cols, 'ROW_COLS must remain a single quoted string literal')
+  for (const c of [
+    'import_flags',
+    'import_flags_state',
+    'unresolved_flag_count',
+    'resolved_flag_count',
+    'has_unresolved_flags',
+  ]) {
+    assert.ok(cols![1]!.split(', ').includes(c), `ROW_COLS must select ${c}`)
+  }
+})
+
+check('the grid reaches the flag verdict in exactly ONE place', () => {
+  const src = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.ok(src.includes('rowIssues(row)'), 'the scan is reading the right file')
+  // One call, feeding both the icon and (through `rowIssues`) the rail.
+  assert.equal(
+    (src.match(/flagSummary\(/g) ?? []).length,
+    1,
+    'a second flagSummary call site is a second definition of "still a problem"',
+  )
+  assert.ok(
+    !src.includes('readImportFlags'),
+    'the raw reader must not feed the badge — it has no verdict attached',
+  )
+  assert.ok(
+    !src.includes('has_import_flags'),
+    'the historical boolean has no business driving anything on screen',
+  )
+  // A fully-resolved row must still be able to open its history.
+  assert.ok(
+    /flagState\.flags\.length > 0 && <FlagPopover/.test(src),
+    'the popover trigger must key off the FLAG COUNT, not off `live` — otherwise a repaired row loses its history entirely',
+  )
+  assert.ok(src.includes('<History className='), 'the quiet history affordance must exist')
+  assert.ok(
+    /line-through/.test(src),
+    'a resolved flag must render as struck-through history, not as a live complaint',
+  )
 })
 
 // ── Replay against the real sheet ─────────────────────────────────────────────

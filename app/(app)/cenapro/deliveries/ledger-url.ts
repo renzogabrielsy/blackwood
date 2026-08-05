@@ -130,7 +130,12 @@ export const ISSUE_HINTS: Record<IssueLens, string> = {
     // point of the keep-or-drop decision.
     duplicate: 'Every receipt that has an exact twin — the flagged paste AND the original it was pasted from, side by side',
     unmapped: 'Supplier or warehouse text that never resolved to a known code',
-    flagged: 'Rows carrying at least one import complaint',
+    // LIVE complaints only. A flag is never cleared — it records what the workbook said
+    // on the day — so filtering on "has a flag" listed every receipt ever flagged,
+    // repaired or not, and the queue stopped being worth opening. The read model derives
+    // whether each flag's condition still holds; this lens filters on THAT. A repaired
+    // row keeps its flags and shows them under a quiet history glyph.
+    flagged: 'Rows with an import complaint that is still true today — repaired ones drop out but keep their history',
     undated: 'Rows whose date could not be parsed; the operator’s literal text is preserved',
 };
 
