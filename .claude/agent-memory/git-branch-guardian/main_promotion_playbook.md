@@ -64,7 +64,7 @@ merge back preserves every one of them (`git merge-base --is-ancestor <old-main-
 prove it in the report).
 
 `feat/cenapro-deliveries-qol` (promotion `c8ffc53`) is the first branch cut this way. Same
-promotion recipe, no `dev`, no PR.
+promotion recipe, no `dev`, no PR. Latest promotion off it: `a86643a` (2026-08-05, #36).
 
 **A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
 23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
@@ -280,6 +280,33 @@ the check is a tripwire for a concurrent session, not busywork. Here it passed (
 Also: the branch's pending `.claude/`-only commit `91c4e60` was already pushed to origin, so the
 branch was only ahead by the new docs commit — check `git status -sb`'s ahead count rather than
 assuming an unpushed predecessor still needs republishing.
+
+### Promotion 36 (2026-08-05, `a86643a`) — the first NOTHING-TO-COMMIT promotion
+
+Pure merge job: the three liquidation commits (`6a84e9a` audit trail, `edcfea1` subgroups +
+payments, `96eb88b` agent memory) were **already committed AND pushed** by the implementing
+session, so there was no `git add .` step at all — `git status --porcelain` held only the
+standing `.claude/agent-memory-local/**` dirt. When a brief hands you named commit hashes to
+verify rather than a changeset to stage, the job is gate → merge → push → prove; don't invent
+a staging step. Verify each named hash landed with `git merge-base --is-ancestor <hash> main`.
+
+Largest promotion on this branch: 30 files, +9,483/−88, including three
+`supabase/migrations/2026080511*.sql` (~3,100 lines of SQL) and a new `app/(app)/cenapro/liquidation/`
+route tree. **Migrations in the diff were NOT a schema-race risk here** — the brief stated all three
+were already applied to the production Supabase project, making the deploy code-only. That claim is
+the thing to repeat in the merge body; it is what makes shipping UI + migration in one merge safe.
+
+Secret-scan discipline on a 635KB diff: capture `git diff <old-main>..HEAD` to the scratchpad, then
+grep only `^+` lines for the pattern set (`service_role_key`, `eyJhbGciOi`, `sk-…`, private-key
+headers, quoted `password=`/`api_key=`, `/Users/renzosy`). Clean here. Binary check via
+`git diff --numstat … | grep -E '^-\s+-'` — the NUL-grep trap in [[gates-and-shell-traps]] stays
+avoided by never grepping for `\x00` through argv.
+
+Gates were all pre-run by the orchestrator with numbers (tsc clean; build green with
+`/cenapro/liquidation`, `/banks`, `/subgroups` in the manifest; lint at the exact 166/28 baseline;
+`verify-rc-deliveries-cells.ts` 116 assertions, up from 100; `verify-rc-formula.ts` 22) — taken, per
+promotion 30's rule. Both gates clean again (`merge-tree` bare OID, merge-base tree diff empty):
+that is now **24 consecutive clean promotions**.
 
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
