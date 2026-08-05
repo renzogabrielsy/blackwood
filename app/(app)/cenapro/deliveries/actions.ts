@@ -28,8 +28,15 @@ import { revalidatePath } from 'next/cache';
 import { canViewPrices } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import {
+    readAuditChanges,
+    redactAuditJson,
     stripPrices,
+    UNKNOWN_ACTOR,
+    type AuditEntity,
+    type AuditOperation,
     type DeliveryDimensions,
+    type DeliveryHistoryEntry,
+    type DeliveryHistoryResult,
     type DeliveryRecord,
     type RcDeliveryRow,
     type RcDeliverySampleRow,
@@ -545,6 +552,129 @@ export async function fetchDeliveryMonthKeys(): Promise<{ monthKeys: string[]; e
         if (d) seen.add(d.slice(0, 7));
     }
     return { monthKeys: [...seen] };
+}
+
+// ═══ READ — one receipt's audit trail ═══════════════════════════════════════════
+//
+// `public.cenapro_rc_delivery_audit` is the SELECT-only accessor over
+// `cenapro.rc_delivery_audit` (migration `20260805100000`) — the trigger-written,
+// append-only trail of every INSERT/UPDATE/DELETE on `rc_delivery` AND its CASCADE
+// child `rc_delivery_sample`. Both entities live in ONE table keyed by the PARENT
+// `delivery_id`, so a receipt's whole story is a single indexed query.
+//
+// ⚠ THE ₱ HAZARD, and it is why this is not a two-line fetcher.
+// `changed` and `snapshot` are FREE-FORM JSONB holding every column of the base table,
+// `total_price_php` included. `stripPrices()` nulls NAMED FIELDS on a row shape and
+// cannot reach inside a blob — so returning these rows as they come out of PostgREST
+// would hand a gated viewer every price in the ledger. The keys are deleted HERE,
+// before the payload returns, by `redactAuditJson`, which reads the SAME `PRICE_FIELDS`
+// list `stripPrices` does. The network response is the leak.
+//
+// A row whose ONLY moved column was a price is still RETURNED, as "1 price field
+// changed" with no figures. Dropping it would make the history lie by silence: a change
+// certainly happened, and "who touched this receipt and when" is an operational fact
+// every role needs — the same reasoning that keeps `duplicate_group_key` out of
+// `stripPrices()`. What the boundary hides is FIGURES, not the existence of the ledger.
+
+/** A SINGLE string literal, same reason as `ROW_COLS` — `+` defeats type inference. */
+const AUDIT_COLS =
+    'id, delivery_id, entity, sample_id, sample_position, delivery_date, supplier_code, truck_no, operation, changed, snapshot, source, changed_at, changed_by, changed_by_role';
+
+/**
+ * Defensive ceiling on ONE receipt's history. A hand-edited receipt has a handful of
+ * entries; a moisture-draw save replaces the whole block, so six draws is up to twelve
+ * rows in one write. 300 is far past any honest history and stops a runaway loop from
+ * paging the whole trail into a dialog.
+ */
+const HISTORY_MAX = 300;
+
+function historyErr(message: string, showPrices: boolean): DeliveryHistoryResult {
+    return { entries: [], canViewPrices: showPrices, error: message };
+}
+
+/** The DB CHECK guarantees one of three; the view's type is nullable, so narrow once. */
+function readAuditOperation(raw: unknown): AuditOperation {
+    return raw === 'INSERT' || raw === 'DELETE' ? raw : 'UPDATE';
+}
+
+function readAuditEntity(raw: unknown): AuditEntity {
+    return raw === 'sample' ? 'sample' : 'delivery';
+}
+
+export async function getDeliveryHistory(deliveryId: string): Promise<DeliveryHistoryResult> {
+    const supabase = await createClient();
+    const showPrices = await canViewPrices();
+
+    if (!deliveryId.trim()) return historyErr('No receipt was named.', showPrices);
+
+    const { data, error } = await supabase
+        .from('cenapro_rc_delivery_audit')
+        .select(AUDIT_COLS)
+        .eq('delivery_id', deliveryId)
+        // Newest first. `id` breaks the tie because a sample-block replace writes several
+        // rows inside ONE statement and therefore at one identical `changed_at`.
+        .order('changed_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(HISTORY_MAX);
+
+    if (error) return historyErr(`Failed to load this receipt's history: ${error.message}`, showPrices);
+
+    const rows = data ?? [];
+
+    // ── Who made each change ─────────────────────────────────────────────────────
+    //
+    // `changed_by` is `auth.uid()` with DELIBERATELY NO foreign key to `profiles`: an
+    // audit row must outlive the account that wrote it, and an `ON DELETE SET NULL`
+    // would erase the actor from history exactly when it matters. So this is a separate
+    // lookup over the DISTINCT uuids, and a miss renders as "Unknown user" rather than
+    // throwing — a deleted account is an expected state here, not an error.
+    const actorIds = [
+        ...new Set(rows.map((r) => r.changed_by).filter((v): v is string => typeof v === 'string' && v !== '')),
+    ];
+    const actors = new Map<string, string>();
+    if (actorIds.length > 0) {
+        const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, display_name, email')
+            .in('id', actorIds);
+        for (const p of profiles ?? []) {
+            if (!p.id) continue;
+            actors.set(p.id, (p.display_name ?? '').trim() || (p.email ?? '').trim() || UNKNOWN_ACTOR);
+        }
+    }
+
+    const entries: DeliveryHistoryEntry[] = rows.map((row, i) => {
+        const changed = redactAuditJson(row.changed, showPrices);
+        const snapshot = redactAuditJson(row.snapshot, showPrices);
+        return {
+            key: row.id === null || row.id === undefined ? `row-${i}` : String(row.id),
+            entity: readAuditEntity(row.entity),
+            operation: readAuditOperation(row.operation),
+            samplePosition: typeof row.sample_position === 'number' ? row.sample_position : null,
+            changedAt: row.changed_at ?? '',
+            // NULL `changed_by` is a service-role / importer / psql write. Passed through
+            // as null so the dialog can say "system" — never rendered as a blank name.
+            actorName: row.changed_by ? (actors.get(row.changed_by) ?? UNKNOWN_ACTOR) : null,
+            actorRole: row.changed_by_role ?? null,
+            source: row.source ?? null,
+            changes: readAuditChanges(changed.json),
+            redactedChanges: changed.removed,
+            snapshot: snapshot.json,
+            deliveryDate: row.delivery_date ?? null,
+            supplierCode: row.supplier_code ?? null,
+            truckNo: row.truck_no ?? null,
+        };
+    });
+
+    return {
+        entries,
+        canViewPrices: showPrices,
+        ...(rows.length >= HISTORY_MAX
+            ? {
+                  notice: `Only the ${HISTORY_MAX} most recent entries are shown — this receipt has a longer history than the dialog will load.`,
+              }
+            : {}),
+    };
 }
 
 // ═══ WRITE ══════════════════════════════════════════════════════════════════════

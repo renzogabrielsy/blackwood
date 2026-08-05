@@ -119,19 +119,44 @@ export function cursorFrom(row: RcDeliveryRow): DeliveryCursor {
 //
 // Note that `price_formula` is in the list. It is not a number, but `=39.5+2.7` states
 // the price as plainly as the number does.
+//
+// ── The list is a CONSTANT with two consumers (2026-08-05) ───────────────────────
+// It used to be an object literal inside `stripPrices`, which was fine while a row
+// shape was the only thing that crossed the boundary. It is not any more: the audit
+// trail (`public.cenapro_rc_delivery_audit`) carries `changed` / `snapshot` as
+// free-form jsonb holding EVERY column, `total_price_php` included, and `stripPrices`
+// nulls NAMED FIELDS — it will not look inside a blob. So the names live here once and
+// are read by BOTH `stripPrices` (rows) and `redactAuditJson` (jsonb). A field added to
+// one and forgotten in the other is a hole in the boundary at exactly the surface
+// nobody is looking at, and one list is what makes that impossible.
+//
+// `satisfies` proves at compile time that every name is a real column of the read
+// model, so a typo cannot silently redact nothing.
+
+export const PRICE_FIELDS = [
+    'base_price_php_kg',
+    'price_adjustment_php_kg',
+    'price_php_kg',
+    'price_formula',
+    'total_price_php',
+    'sheet_total_php',
+    'sheet_total_matches',
+] as const satisfies readonly (keyof RcDeliveryRow)[];
+
+export type PriceField = (typeof PRICE_FIELDS)[number];
+
+/** Is this column name money, or a plain statement of money? */
+export function isPriceColumn(column: string): boolean {
+    return (PRICE_FIELDS as readonly string[]).includes(column);
+}
+
+const NULLED_PRICES = Object.fromEntries(PRICE_FIELDS.map((f) => [f, null])) as {
+    [K in PriceField]: null;
+};
 
 /** Null every ₱ field on a row. Called in the SERVER fetch, before the payload leaves. */
 export function stripPrices(row: RcDeliveryRow): RcDeliveryRow {
-    return {
-        ...row,
-        base_price_php_kg: null,
-        price_adjustment_php_kg: null,
-        price_php_kg: null,
-        price_formula: null,
-        total_price_php: null,
-        sheet_total_php: null,
-        sheet_total_matches: null,
-    };
+    return { ...row, ...NULLED_PRICES };
 }
 
 // ─── Columns ────────────────────────────────────────────────────────────────────
@@ -1431,6 +1456,352 @@ export function flagSummary(row: FlagSurfaceRow): FlagSummary {
     const resolved = flags.length - unresolved;
     const live = unresolved > 0 || row.has_unresolved_flags === true;
     return { flags, unresolved, resolved, live, historyOnly: flags.length > 0 && !live };
+}
+
+// ═══ The audit trail — one receipt's whole story ════════════════════════════════
+//
+// Migration `20260805100000` gave `cenapro.rc_delivery` (and its CASCADE child
+// `rc_delivery_sample`) a trigger-written, append-only trail, read through the
+// SELECT-only accessor `public.cenapro_rc_delivery_audit`. Both entities land in ONE
+// table keyed by the PARENT `delivery_id`, so a receipt's history is a single indexed
+// query rather than a UNION.
+//
+// It exists because on 2026-08-04 twenty-two receipts were hard-DELETEd — ₱17,185,938.70
+// of payable total — and nothing anywhere recorded it. Liquidation is about to point
+// CHEQUES at these rows; a supplier disagreement six months from now has to be
+// answerable from the system rather than from memory.
+//
+// ── THE HAZARD, and it is the reason this block is in `types.ts` ─────────────────
+// `changed` and `snapshot` are FREE-FORM JSONB carrying every column of the base table,
+// `total_price_php` included. `stripPrices()` nulls NAMED FIELDS on a row shape and
+// cannot reach inside a blob — so a history action that merely fetched and rendered
+// would hand a gated viewer every price in the ledger, and the NETWORK RESPONSE is the
+// leak. `redactAuditJson` below deletes the keys, it is called SERVER-SIDE in
+// `actions.ts::getDeliveryHistory` before the payload returns, and it reads the SAME
+// `PRICE_FIELDS` list `stripPrices` does.
+//
+// Everything here is PURE, so the dialog renders it and the verify script can assert it
+// without a browser.
+
+/** The read-only accessor's row. `cenapro` is not exposed to PostgREST; this view is. */
+export type RcDeliveryAuditRow = Database['public']['Views']['cenapro_rc_delivery_audit']['Row'];
+
+/**
+ * The day the trail begins. NOTHING before it was ever recorded — the migration wrote
+ * not one historical row, because inventing one would put a fabrication in the one
+ * table whose entire value is that it is not fabricated. The empty state says this date
+ * out loud rather than implying the receipt was never touched.
+ */
+export const AUDIT_TRAIL_START = '2026-08-05';
+
+export type AuditOperation = 'INSERT' | 'UPDATE' | 'DELETE';
+/** `delivery` = the receipt itself; `sample` = one of its moisture draws. */
+export type AuditEntity = 'delivery' | 'sample';
+
+/** One column that actually moved, already redacted, labelled and ordered. */
+export interface AuditFieldChange {
+    column: string;
+    label: string;
+    from: unknown;
+    to: unknown;
+}
+
+/** One row of the trail, as the dialog consumes it. */
+export interface DeliveryHistoryEntry {
+    /** React key — the trail's own identity, never a row index. */
+    key: string;
+    entity: AuditEntity;
+    operation: AuditOperation;
+    /** The draw's 1-based position, for a `sample` entry. */
+    samplePosition: number | null;
+    /** ISO timestamp. `''` only if the trail ever hands one back without it. */
+    changedAt: string;
+    /**
+     * The person who made the change, or **null for a write with no `auth.uid()`** —
+     * a service-role / importer / psql write. Rendered as "system", never as a blank:
+     * "nobody" and "not a logged-in human" are different answers.
+     */
+    actorName: string | null;
+    /** PostgREST role behind the write (`authenticated` / `service_role` / …). */
+    actorRole: string | null;
+    /** Which surface wrote it. NULL on everything today — no writer sets the GUC. */
+    source: string | null;
+    changes: AuditFieldChange[];
+    /**
+     * How many ₱ columns moved but were REDACTED out of `changes` for this viewer.
+     * The entry still renders — see the note on `redactAuditJson`.
+     */
+    redactedChanges: number;
+    /** The full row (NEW on INSERT/UPDATE, OLD on DELETE), ₱-redacted. */
+    snapshot: Record<string, unknown> | null;
+    /** Denormalised identity, so a DELETED receipt's trail is still readable. */
+    deliveryDate: string | null;
+    supplierCode: string | null;
+    truckNo: string | null;
+}
+
+export interface DeliveryHistoryResult {
+    entries: DeliveryHistoryEntry[];
+    canViewPrices: boolean;
+    /** Set when the per-receipt cap was reached — said out loud, never silently clipped. */
+    notice?: string;
+    error?: string;
+}
+
+/** A `changed_by` we could not resolve to a profile. There is deliberately no FK. */
+export const UNKNOWN_ACTOR = 'Unknown user';
+
+/**
+ * Drop every ₱ key from an audit blob, and say how many went.
+ *
+ * Works on BOTH shapes because both are flat objects keyed by column: `snapshot` is
+ * `{col: value}` and `changed` is `{col: {old, new}}`. Guarding at the key level rather
+ * than the value level is what makes that true — and what makes it safe if the trigger
+ * ever records a new money column, since `PRICE_FIELDS` is the only thing to update.
+ *
+ * `showPrices` is a PARAMETER rather than a caller-side `if`, so there is exactly one
+ * code path into the payload and no way to build an entry that skipped the gate.
+ */
+export function redactAuditJson(
+    raw: unknown,
+    showPrices: boolean,
+): { json: Record<string, unknown>; removed: number } {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { json: {}, removed: 0 };
+    const out: Record<string, unknown> = {};
+    let removed = 0;
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+        if (!showPrices && isPriceColumn(key)) {
+            removed++;
+            continue;
+        }
+        out[key] = value;
+    }
+    return { json: out, removed };
+}
+
+/**
+ * Two columns the diff deliberately does not list, both pure bookkeeping and both
+ * already stated elsewhere on the same entry:
+ *
+ *   • `updated_by` — the touch trigger sets it to `auth.uid()`, which is the very value
+ *     the audit row's own `changed_by` carries. The actor line says it once.
+ *   • `delivery_year` — a STORED GENERATED mirror of `delivery_date`, so it only ever
+ *     moves because the date directly above it did.
+ *
+ * Nothing else is hidden. `updated_at` and `row_version` never arrive in the first
+ * place — the trigger excludes them, because it bumps both on every single write.
+ */
+const AUDIT_BOOKKEEPING_COLUMNS = new Set(['updated_by', 'delivery_year']);
+
+/** Plumbing a SNAPSHOT summary never shows. The diff still lists all of these. */
+const AUDIT_SNAPSHOT_SKIP = new Set([
+    'id', 'delivery_id', 'row_version', 'created_at', 'created_by', 'updated_at', 'updated_by',
+    'delivery_year', 'source_sheet',
+]);
+
+/** The sheet's own names, so a diff reads like the grid it describes. */
+const AUDIT_LABELS: Record<string, string> = {
+    delivery_date: 'DATE',
+    delivery_date_raw: 'Date (as written)',
+    delivery_year: 'Year',
+    truck_no: 'TRK#',
+    supplier_code: 'SUPPLIER',
+    supplier_origin: 'Origin',
+    permit_no: 'Permit',
+    supplier_raw: 'Supplier (as written)',
+    sacks: 'SKS',
+    gross_weight_kg: 'Gross WT',
+    deduction_pct: 'Deduction',
+    net_weight_kg: 'WT (net)',
+    weight_formula: 'WT formula',
+    bd: 'BD',
+    moisture_pct: 'MOIST',
+    grit: 'GRIT',
+    ash: 'ASH',
+    dust: 'DUST',
+    vm: 'VM',
+    fc: 'FC',
+    destination_code: 'WAREHOUSE',
+    destination_side: 'Side',
+    destination_raw: 'Warehouse (as written)',
+    remarks: 'REMARKS',
+    base_price_php_kg: 'PHP/KG base',
+    price_adjustment_php_kg: 'PHP/KG add-on',
+    price_php_kg: 'PHP/KG',
+    price_formula: 'PHP/KG formula',
+    total_price_php: 'TTL PRICE',
+    sheet_total_php: 'Sheet total',
+    provenance: 'Provenance',
+    source_row: 'Sheet row',
+    import_flags: 'Import flags',
+    is_suspected_duplicate: 'Suspected duplicate',
+    // `rc_delivery_sample`'s own columns.
+    position: 'Draw #',
+    label: 'Draw label',
+};
+
+export function auditColumnLabel(column: string): string {
+    return AUDIT_LABELS[column] ?? column;
+}
+
+/**
+ * Left-to-right, the sheet's order — so a diff of four columns reads in the order the
+ * operator would have typed them. Anything unlisted sorts after, in name order, which
+ * keeps a column added to the table tomorrow visible rather than silently first.
+ */
+const AUDIT_COLUMN_ORDER: readonly string[] = [
+    'delivery_date', 'delivery_date_raw', 'truck_no',
+    'supplier_code', 'supplier_origin', 'permit_no', 'supplier_raw',
+    'position', 'label',
+    'sacks', 'gross_weight_kg', 'deduction_pct', 'net_weight_kg', 'weight_formula',
+    'bd', 'moisture_pct', 'grit', 'ash', 'dust', 'vm', 'fc',
+    'destination_code', 'destination_side', 'destination_raw', 'remarks',
+    'base_price_php_kg', 'price_adjustment_php_kg', 'price_php_kg', 'price_formula',
+    'total_price_php', 'sheet_total_php',
+    'provenance', 'source_row', 'import_flags', 'is_suspected_duplicate',
+];
+
+function auditColumnRank(column: string): number {
+    const i = AUDIT_COLUMN_ORDER.indexOf(column);
+    return i === -1 ? AUDIT_COLUMN_ORDER.length : i;
+}
+
+/**
+ * Narrow the trigger's `{col: {old, new}}` into an ordered, labelled list.
+ *
+ * `?? null` rather than `||` throughout: a change TO `0`, `''` or `false` is a real
+ * change and must not be flattened into "nothing".
+ */
+export function readAuditChanges(raw: unknown): AuditFieldChange[] {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const out: AuditFieldChange[] = [];
+    for (const [column, delta] of Object.entries(raw as Record<string, unknown>)) {
+        if (AUDIT_BOOKKEEPING_COLUMNS.has(column)) continue;
+        const d = (delta && typeof delta === 'object' && !Array.isArray(delta)
+            ? (delta as Record<string, unknown>)
+            : {});
+        out.push({
+            column,
+            label: auditColumnLabel(column),
+            from: d.old ?? null,
+            to: d.new ?? null,
+        });
+    }
+    return out.sort(
+        (a, b) => auditColumnRank(a.column) - auditColumnRank(b.column) || a.column.localeCompare(b.column),
+    );
+}
+
+/** The columns a created / deleted receipt is summarised by, in the sheet's order. */
+export const AUDIT_SUMMARY_COLUMNS: readonly string[] = [
+    'delivery_date', 'truck_no', 'supplier_code', 'sacks', 'net_weight_kg',
+    'destination_code', 'total_price_php',
+];
+
+/**
+ * Every column of a SAMPLE snapshot worth showing, in sheet order and skipping the
+ * plumbing. A draw is mostly nulls (one moisture reading is the common case), so the
+ * caller drops the empties rather than rendering seven dashes.
+ */
+export function auditSnapshotColumns(
+    snapshot: Record<string, unknown> | null,
+    order: readonly string[],
+): string[] {
+    if (!snapshot) return [];
+    return order.filter((c) => !AUDIT_SNAPSHOT_SKIP.has(c) && c in snapshot);
+}
+
+export const AUDIT_SAMPLE_SUMMARY_COLUMNS: readonly string[] = [
+    'position', 'label', 'moisture_pct', 'bd', 'grit', 'ash', 'dust', 'vm', 'fc',
+];
+
+/** A formatted audit value, plus what the renderer needs to lay it out. */
+export interface AuditValueText {
+    text: string;
+    /** Accounting layout: ₱ pinned left, figure right. */
+    peso: boolean;
+    /** `true` when the value is NULL — rendered as an em dash, not as "0". */
+    empty: boolean;
+    /** Right-align + `font-mono tabular-nums`. */
+    numeric: boolean;
+}
+
+const AUDIT_RATE_COLUMNS = new Set(['base_price_php_kg', 'price_adjustment_php_kg', 'price_php_kg']);
+const AUDIT_PESO_COLUMNS = new Set(['total_price_php', 'sheet_total_php']);
+const AUDIT_KG_COLUMNS = new Set(['gross_weight_kg', 'net_weight_kg']);
+const AUDIT_INT_COLUMNS = new Set(['sacks', 'source_row', 'position', 'delivery_year']);
+const AUDIT_LAB_COLUMNS = new Set(['bd', 'moisture_pct', 'grit', 'ash', 'dust', 'vm', 'fc']);
+
+/**
+ * One audit value, formatted the way its column is formatted in the grid — kg to the
+ * ledger's own precision, lab values to 2 dp (BD to 3), ₱ in accounting form, dates as
+ * `yyyy-MM-dd`. The formatters are the module's existing ones; nothing new is invented,
+ * so a figure in the history and the same figure in the sheet can never disagree.
+ *
+ * `delivery_date` needs no parsing — Postgres serialises a `date` to `yyyy-MM-dd`, which
+ * is already the project format. It is sliced defensively in case a timestamp ever lands
+ * in the column.
+ */
+export function formatAuditValue(column: string, value: unknown): AuditValueText {
+    const numericCol =
+        AUDIT_RATE_COLUMNS.has(column) ||
+        AUDIT_PESO_COLUMNS.has(column) ||
+        AUDIT_KG_COLUMNS.has(column) ||
+        AUDIT_INT_COLUMNS.has(column) ||
+        AUDIT_LAB_COLUMNS.has(column) ||
+        column === 'deduction_pct';
+
+    if (value === null || value === undefined || value === '') {
+        return { text: '—', peso: false, empty: true, numeric: numericCol };
+    }
+    if (typeof value === 'boolean') {
+        return { text: value ? 'yes' : 'no', peso: false, empty: false, numeric: false };
+    }
+    if (typeof value === 'object') {
+        // `import_flags` and anything else structural. Compact JSON beats "[object Object]".
+        return { text: JSON.stringify(value), peso: false, empty: false, numeric: false };
+    }
+
+    const scalar = value as number | string;
+    if (AUDIT_PESO_COLUMNS.has(column)) {
+        return { text: formatPeso(scalar), peso: true, empty: false, numeric: true };
+    }
+    if (AUDIT_RATE_COLUMNS.has(column)) {
+        return { text: formatRate(scalar), peso: true, empty: false, numeric: true };
+    }
+    if (AUDIT_KG_COLUMNS.has(column)) {
+        return { text: formatKg(scalar), peso: false, empty: false, numeric: true };
+    }
+    if (AUDIT_INT_COLUMNS.has(column)) {
+        return { text: formatInt(scalar), peso: false, empty: false, numeric: true };
+    }
+    if (AUDIT_LAB_COLUMNS.has(column)) {
+        return { text: formatLab(scalar, labDecimals(column)), peso: false, empty: false, numeric: true };
+    }
+    if (column === 'deduction_pct') {
+        const n = num(scalar);
+        return { text: n === null ? String(scalar) : `${n}%`, peso: false, empty: false, numeric: true };
+    }
+    if (column === 'delivery_date') {
+        return { text: String(scalar).slice(0, 10), peso: false, empty: false, numeric: true };
+    }
+    return { text: String(scalar), peso: false, empty: false, numeric: false };
+}
+
+/** What an entry's headline says. One sentence, no jargon, no row ids. */
+export function auditHeadline(entity: AuditEntity, operation: AuditOperation): string {
+    if (entity === 'sample') {
+        return operation === 'INSERT'
+            ? 'Moisture draw added'
+            : operation === 'DELETE'
+              ? 'Moisture draw removed'
+              : 'Moisture draw edited';
+    }
+    return operation === 'INSERT'
+        ? 'Receipt created'
+        : operation === 'DELETE'
+          ? 'Receipt deleted'
+          : 'Receipt edited';
 }
 
 // ═══ Save payloads (the UI ⇄ server-action contract) ════════════════════════════

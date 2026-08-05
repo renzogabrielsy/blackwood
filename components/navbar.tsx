@@ -106,6 +106,12 @@ const BREADCRUMB_REGISTRY: BreadcrumbEntry[] = [
     { test: exact('/cenapro/qc/breakdown'), backLabel: 'Back to QC Ledger', backHref: '/cenapro/qc', pageTitle: 'QC Breakdown', pageDescription: 'Weighted monthly + daily lab analytics — ex-DVO, read-only' },
     { test: exact('/cenapro/qc'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'QC Ledger', pageDescription: 'Log CCC partner lab results (BD · ASH · GRIT · MC) onto the receipts' },
     { test: prefix('/cenapro/deliveries'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'RC Deliveries', pageDescription: 'Cenapro raw-charcoal receipts — the RC 2026 sheet, live' },
+    // Liquidation: the SUBGROUPS maintenance screen is nested under the balances
+    // screen, so its `exact` entry must come first — a `prefix('/cenapro/liquidation')`
+    // would otherwise swallow it (the same trap the QC pair above documents).
+    { test: exact('/cenapro/liquidation/subgroups'), backLabel: 'Back to Liquidation', backHref: '/cenapro/liquidation', pageTitle: 'Supplier Subgroups', pageDescription: 'Which trader may be paid for which — one level, stated by hand' },
+    { test: exact('/cenapro/liquidation/banks'), backLabel: 'Back to Liquidation', backHref: '/cenapro/liquidation', pageTitle: 'Banks & Accounts', pageDescription: 'CI’s own banks and the accounts cheques are drawn on — retire, never delete' },
+    { test: prefix('/cenapro/liquidation'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Liquidation', pageDescription: 'What CI owes each raw-charcoal trader — minus means we owe them' },
     { test: prefix('/cenapro/production'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Production', pageDescription: 'CI production events — bagging & partner draws' },
     { test: prefix('/cenapro/inventory'), backLabel: 'Back to Cenapro', backHref: '/cenapro', pageTitle: 'Cenapro · Flec Inventory', pageDescription: 'Per-warehouse flec balances & movement ledger' },
     { test: prefix('/cenapro'), backLabel: 'Back to Dashboard', backHref: '/', pageTitle: 'Cenapro', pageDescription: 'CI / Cebu production & flec inventory — second tenant' },
@@ -173,6 +179,7 @@ const ICTC_MODULES: Module[] = [
 const CENAPRO_MODULES: Module[] = [
     { name: 'Production', href: '/cenapro/production' },
     { name: 'RC Deliveries', href: '/cenapro/deliveries' },
+    { name: 'Liquidation', href: '/cenapro/liquidation' },
     { name: 'Flec Inventory', href: '/cenapro/inventory' },
     // Both QC surfaces are listed, not just the entry one: the breakdown is a
     // destination in its own right, and a reading screen reachable only through the
