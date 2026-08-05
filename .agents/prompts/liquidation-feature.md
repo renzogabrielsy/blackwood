@@ -1,8 +1,13 @@
 # Liquidation — payments, cheques and the per-supplier running balance (Cenapro RC)
 
-> **Status: BRIEF ONLY. No code, no migration, nothing applied.** This document exists to be
-> read and corrected by Renzo before anything is built. Section 5 lists decisions that change
-> the shape of the tables — they are prerequisites, not follow-ups.
+> **Status (updated 2026-08-05): STEP 1 IS BUILT AND APPLIED. Steps 2–8 are still brief-only.**
+> The audit trail (§7 Step 1) shipped as migration `20260805100000_cenapro_rc_delivery_audit.sql`
+> — `cenapro.rc_delivery_audit`, live and verified. **Nothing else** has been built: no banks, no
+> payments, no allocations, no supplier subgroups, no balance view. Section 5 lists decisions that
+> change the shape of those tables — they are prerequisites, not follow-ups. Section 3's facts were
+> re-measured live on 2026-08-05; §3.1 and §3.3 are now RESOLVED and §3.4 has moved (see the notes
+> in place). **Everything in §2 and §3 is a snapshot with a date on it — re-measure before relying
+> on a number here.**
 
 ## Read first, in this order
 
@@ -39,35 +44,45 @@ gets closed out at month end. It runs continuously, and it is often deliberately
 
 ## 2. Facts on the ground — real numbers, queried read-only 2026-08-05
 
-| Fact | Value |
+> **Re-measured 2026-08-05.** An earlier draft of this table said 969 receipts, all
+> `sheet_import`, 0 app-created, and 0 sheet-total mismatches. All four were already drifting
+> as it was written. Corrected below.
+
+| Fact | Value (live 2026-08-05) |
 |---|---|
-| Receipts | **969** (all `provenance = 'sheet_import'`; 0 app-created rows) |
-| Date span | 2026-01-02 → 2026-08-04 |
-| Total payable | **₱726,664,785.5625** over 17,472,782.65 net kg |
+| Receipts | **971** — **969** `provenance = 'sheet_import'` + **2 `app`-created** |
+| Rows edited in the app (`row_version > 1`) | **13** |
+| Date span | 2026-01-02 → **2026-08-05** |
+| Total payable | **₱729,637,074.1125** over 17,566,712.65 net kg |
 | Suppliers | 12, all active; 1 receipt still has no `supplier_code` |
 | Destinations | 16; 0 unresolved receipts remaining |
 | Moisture sub-samples | 244 |
-| Receipts with import flags | 12 |
+| Receipts with import flags | 12 — but only **2** still describe a live problem |
 | Receipts with a NULL date | 0 |
-| `total_price_php` != `sheet_total_php` | 0 |
+| Suspected duplicates / duplicate groups | **0** — the 22 copies were deleted 2026-08-04 (§3.1) |
+| `total_price_php` != `sheet_total_php` | **7**, not 0 — see §3.9 |
+| Receipts that cannot be priced yet | **5** (§3.4) |
 
 **Concentration — three traders carry 68% of the money:**
 
 | Supplier | Receipts | ₱ | Span |
 |---|---|---|---|
-| BRIX | 281 | 211,101,728.75 | Jan 3 → Aug 4 |
+| BRIX | 281 | 212,669,462.50 | Jan 3 → Aug 4 |
 | ZAPANTA | 214 | 201,265,010.50 | Jan 2 → Aug 3 |
 | DENCIO | 98 | 85,671,911.50 | Jan 5 → Aug 3 |
-| ALI UNGA | 77 | 71,954,431.70 | Jan 7 → Aug 1 |
-| NEGROS | 89 | 68,627,017.06 | Jan 8 → Aug 4 |
+| ALI UNGA | 79 | 71,954,431.70 | Jan 7 → **Aug 5** |
+| NEGROS | 89 | 69,297,652.0625 | Jan 8 → Aug 4 |
 | PALAWAN | 126 | 55,280,642.50 | Jan 6 → Jul 23 |
+| PULVERA | 21 | 9,963,919.20 | Jan 6 → Aug 4 |
 | RAGMERD | 14 | 9,520,858.85 | Jan 13 → Apr 7 |
-| PULVERA | 21 | 9,517,989.20 | Jan 6 → Aug 4 |
 | ANDRAQUE | 26 | 8,352,225.70 | Jan 8 → Jul 30 |
-| NOVAL | 17 | 3,198,225.35 | Jan 26 → Aug 4 |
+| NOVAL | 17 | 3,486,215.15 | Jan 26 → Aug 4 |
 | OBENZA | 3 | 1,310,000.70 | Mar 23 → Jul 17 |
 | SEVILLA | 2 | 0.00 | Jul 14 (both "SAMPLE") |
 | *(unmapped)* | 1 | 864,743.75 | Feb 23 |
+
+*(Re-measured 2026-08-05. ALI UNGA gained the 2 app-created receipts; BRIX, NEGROS, PULVERA
+and NOVAL gained value when the five weightless 2026-08-04 receipts were finally weighed.)*
 
 **Shape of a month:** ~121 receipts and ~₱90.8M. Range: January 152 receipts / ₱129.7M down to
 April 108 / ₱75.0M. 171 delivery days across seven months, ~5.7 receipts a day.
@@ -76,8 +91,8 @@ April 108 / ₱75.0M. 171 delivery days across seven months, ~5.7 receipts a day
 receipts, ₱44.5M). 548 supplier-day cells (avg 1.77 receipts, max 7).
 
 **Shape of a receipt:** p10 ₱278,357.50 · median ₱828,240 · p90 ₱1,057,920 · p99 ₱1,190,228.
-**444 of 969 receipts are not a whole peso, and 19 carry sub-centavo fractions** (the
-₱1,027,132.875 row is real).
+**447 of 971 receipts are not a whole peso, and 19 carry sub-centavo fractions** (the
+₱1,027,132.875 row is real). *(Re-measured 2026-08-05; was 444 of 969.)*
 
 **What this sizes:** a full year is roughly 1,450 receipts. If a cheque typically covers a week
 of one supplier's trucks, that is on the order of 500–800 payments and 1,500–2,500 allocations
@@ -91,34 +106,75 @@ the allocation surface is the whole product**, not a detail.
 
 Each was checked live. Each is load-bearing.
 
-**3.1 — The 22 duplicate receipts are gone, and every document still says otherwise.**
-`CLAUDE.md`, both `CONTEXT.md` files and the 2026-08-04 handoff all describe 991 receipts, 22
+**3.1 — ✅ RESOLVED 2026-08-05. The 22 duplicate receipts are gone, and the documents said otherwise.**
+`CLAUDE.md`, both `CONTEXT.md` files and the 2026-08-04 handoff all described 991 receipts, 22
 flagged suspected duplicates, 22 unflagged twins, and a ₱17,185,939 keep-or-drop decision "not
-yet made". Live: **969 receipts, 0 rows with `is_suspected_duplicate`, 0 rows with a
-`duplicate_group_key`**, and the total dropped by exactly ₱17,185,938.70. The decision was made
-and executed as a hard DELETE. Fix the docs in the same changeset as any liquidation work.
+yet made". Live: **971 receipts (969 imported + 2 app-created), 0 rows with
+`is_suspected_duplicate`, 0 rows with a `duplicate_group_key`**, and the total dropped by exactly
+₱17,185,938.70. The decision was made and executed as a hard DELETE.
 
-**3.2 — That deletion left no trace anywhere.** `public.audit_logs` contains **zero** rows
-mentioning `cenapro` or `rc_delivery`, and `cenapro.rc_delivery` has no audit table (unlike
-`cenapro.production_event`, which has the trigger-written append-only `production_event_audit`).
-Defensible for reference data transcribed from a workbook nobody can re-interview. **For a
-cheque it is not.**
+**Corrected in `CLAUDE.md`, `app/(app)/cenapro/CONTEXT.md`, `app/(app)/cenapro/deliveries/CONTEXT.md`
+and `TIMELINE.md` on 2026-08-05**, alongside Step 1. Three further errors surfaced while checking,
+each now fixed: the docs said **20** receipts were deleted (991 − 971 = 20 only because 2 app rows
+were created afterwards — it was 22, cross-checked by 34 − 22 = 12 surviving flags);
+`destination_unresolved` was claimed at 5 (live **0**); and `sheet_total_matches` was claimed
+false on 0 rows (live **7** — see §3.9). **The duplicate-pairing columns still EXIST and still
+WORK** — `duplicate_group_key` / `_size` / `_ordinal` / `duplicate_peer_ids` are derived on every
+read and will pair on sight the next time a receipt is pasted twice. They are not removed, not
+disabled, not deprecated. They simply match nothing today, and the docs now say exactly that.
 
-**3.3 — The handoff's "single most important state fact" is stale.** It reads: *"All 991 rows
-are `provenance = 'sheet_import'`. Not one row has been created or edited in the app."* Live:
-**8 rows sit at `row_version = 2`**, each with a non-null `updated_by`, edited 2026-08-04
-between 05:50 and 08:20 UTC. The UPDATE path has been exercised for real. The INSERT path still
-has not: **0 rows with `provenance = 'app'`.**
+**3.2 — ✅ RESOLVED 2026-08-05 (this became Step 1). That deletion left no trace anywhere.**
+`public.audit_logs` contains **zero** rows mentioning `cenapro` or `rc_delivery`, and
+`cenapro.rc_delivery` had no audit table (unlike `cenapro.production_event`, which has the
+trigger-written append-only `production_event_audit`). Defensible for reference data transcribed
+from a workbook nobody can re-interview. **For a cheque it is not.**
+
+**Fixed by `supabase/migrations/20260805100000_cenapro_rc_delivery_audit.sql`** —
+`cenapro.rc_delivery_audit`, ONE append-only table covering `rc_delivery` **and** its CASCADE
+child `rc_delivery_sample`, discriminated by `entity` and always keyed by the parent
+`delivery_id`. Read through `public.cenapro_rc_delivery_audit`. Written only by SECURITY DEFINER
+triggers; `authenticated` proved unable to forge, erase or rewrite a row. **The trail starts
+2026-08-05 and nothing was backfilled** — the 22 deletions are unrecoverable, and inventing rows
+for them would put a fabrication in the one table whose value is that it is not fabricated.
+Full rationale in `app/(app)/cenapro/CONTEXT.md` → "Audit trail".
+
+**Two consequences for the steps that follow.** (a) `rc_payment` / `rc_payment_allocation` should
+get the same treatment **in their own migration, at creation time** — §4.7's "audit trail, from
+day one" is now a pattern to copy, not a thing to design. (b) The audit view is **₱-bearing** and
+`stripPrices()` cannot protect it: `changed` and `snapshot` are free-form jsonb carrying
+`total_price_php`, and `stripPrices()` nulls named fields on a row shape, never inside a blob.
+Any action reading it must delete the ₱ keys **out of the jsonb** before returning.
+
+**3.3 — ✅ RESOLVED 2026-08-05. The handoff's "single most important state fact" was stale, and
+has since gone further out of date.** It reads: *"All 991 rows are `provenance = 'sheet_import'`.
+Not one row has been created or edited in the app."* **Both halves are now false.** Live:
+**13 rows sit at `row_version > 1`** (it was 8 when this section was first written), and
+**2 rows carry `provenance = 'app'`** — so the INSERT path has now been exercised too, which it
+had not been a day earlier. Corrected in the same doc pass as §3.1.
+
+The design consequence is unchanged but now concrete: **`rc_delivery` is a live, human-edited
+table, not a frozen import.** Liquidation must not assume a receipt's weight or price is stable
+once a cheque points at it — which is what decisions 11 and 12 in section 5 are about, and why
+§5c's release-and-warn rule matters more than it looked.
 
 **3.4 — The biggest technical conflict: `total_price_php = 0` does not mean "₱0 owed".**
 The generated column `COALESCE`s both factors to zero, deliberately, so a receipt with no
 weight or no price reads ₱0 rather than NULL — which is what the workbook prints and what a SUM
-needs. **Eight receipts read ₱0 today and none of them is genuinely free charcoal:**
+needs. **Five receipts read ₱0 today and none of them is genuinely free charcoal** *(re-measured
+2026-08-05; it was eight, and the change is the most instructive fact in this section — see below)*:
 
-- 2026-08-04 — five receipts (NOVAL, BRIX x2, NEGROS, PULVERA) have an agreed
-  `base_price_php_kg` (₱28.25–₱38.20) and **no `gross_weight_kg` yet**.
+- 2026-08-05 — **two ALI UNGA receipts, both `provenance = 'app'`**, entered with an agreed
+  `base_price_php_kg` of ₱42.00 and **no `gross_weight_kg` yet**.
 - 2026-05-19 — one PALAWAN receipt, truck 8951, **11,010 kg and no price at all**, remarks `BLK1`.
 - 2026-07-14 — two SEVILLA rows marked `SAMPLE`, neither weight nor price.
+
+> **The five 2026-08-04 receipts that used to be here have been WEIGHED and are now priced**
+> (NOVAL, BRIX ×2, NEGROS, PULVERA — ₱2.97M between them). **And two brand-new ones took their
+> place the same way**: priced on arrival, weight to follow. That is the finding. *"Priced but not
+> yet weighed"* is not an import artefact that will drain away — **it is a normal daily stage in
+> the life of a receipt**, it recurs, and it is exactly the state the in-app INSERT path creates.
+> The priceability predicate is therefore permanent infrastructure, not a migration-era
+> workaround, and the count of unpriceable receipts will never settle at zero for long.
 
 **A per-supplier balance computed as `SUM(total_price_php) − SUM(payments)` therefore silently
 under-states what CI owes, and shows every one of those receipts as fully settled the instant it
@@ -153,6 +209,28 @@ Uniqueness is per bank (strictly, per account).
 to hang a supplier's stated rounding habit; it is exactly the wrong place to hang a bank,
 because the banks in the notes (BDO, Chinabank, Metrobank, AUB) are **CI's** banks, not the
 supplier's.
+
+**3.9 — NEW 2026-08-05: `sheet_total_matches` is now FALSE on 7 receipts, and 2 of those are a
+false alarm the view creates itself.** The read model defines it as
+`NOT (total_price_php IS DISTINCT FROM sheet_total_php)`. Two different things now trip it:
+
+- **5 imported rows — correct, and must NOT be "fixed".** The 2026-08-04 receipts
+  (`source_row` 1421–1425) arrived with a price and no weight, so the workbook printed
+  `TTL PRICE` = 0 and that 0 is faithfully preserved in `sheet_total_php`. They were weighed in
+  the app on 2026-08-05, so the DB-computed total is now right and the frozen workbook witness is
+  simply behind. `sheet_total_php` records **what the sheet said**, not a second opinion on what
+  is owed. Anyone who "repairs" it to clear the flag destroys the only independent witness.
+- **2 app-created rows — a genuine wart.** An `app` receipt has `sheet_total_php IS NULL` and a
+  non-NULL total, so `IS DISTINCT FROM` is true and it reads "doesn't match the sheet". It never
+  came from a sheet. **The witness is only meaningful for `provenance = 'sheet_import'`**, and the
+  column does not say so.
+
+**Consequence for liquidation:** do not use `sheet_total_matches` as a data-quality gate on
+anything payable — it will reject good rows for two unrelated reasons, neither of them "the money
+is wrong". If a UI wants to show it, scope it to imported rows. Fixing the view is a one-line
+change (`provenance = 'sheet_import' AND …`) but it is **not** in Step 1's scope and was
+deliberately left alone: it is a read-model change with UI consumers, and this pass was additive
+only.
 
 ---
 
@@ -279,8 +357,8 @@ so in the column comment.
 The notes: *"some suppliers prefer rounded numbers so some suppliers will have an existing
 running balance just because they don't want us liquidating to the decimal."*
 
-The live data explains why this happens at all: **444 of 969 receipts are not a whole peso, and
-19 carry sub-centavo fractions.** The awkward remainder is generated by the receipts themselves,
+The live data explains why this happens at all: **447 of 971 receipts are not a whole peso, and
+19 carry sub-centavo fractions** (re-measured 2026-08-05). The awkward remainder is generated by the receipts themselves,
 not by the payment. A supplier who insists on a ₱1,027,000 cheque against a ₱1,027,132.875
 receipt is not being paid short — they are choosing to carry ₱132.875.
 
@@ -321,7 +399,7 @@ TypeScript."* Within SQL there are still three candidates, and only one is right
   this project has already paid for that lesson once: BUG-017, where `tr_blackwood_delivery`
   fired BEFORE and recomputed from a table that did not yet agree with the write about to happen.
   A view has no staleness surface to get wrong.
-- **Not a materialised view.** At 969 receipts, 12 suppliers and a projected few thousand
+- **Not a materialised view.** At 971 receipts, 12 suppliers and a projected few thousand
   allocations a year, a plain aggregate is microseconds. Revisit at tens of thousands of rows —
   and the existing note about the per-row LATERAL sample rollup in `view_rc_delivery` is the
   place to look first if it ever comes to that.
@@ -405,6 +483,15 @@ Model it on `public.audit_logs` (diff + snapshot + actor + timestamp) and on
 `cenapro.rc_delivery` gets one too — it currently has none, which is why the 22 duplicate
 deletions left no trace. **This is independently valuable and does not depend on liquidation; it
 can ship first.**
+
+> **✅ The DELIVERIES half is BUILT (2026-08-05)** — `cenapro.rc_delivery_audit`, covering the
+> receipt and its sub-samples. The **PAYMENTS half is not**, because `rc_payment` /
+> `rc_payment_allocation` do not exist yet; build their trail **in the same migration that
+> creates them**, cloning `20260805100000_cenapro_rc_delivery_audit.sql`. Two things that
+> migration settled and the payment version should reuse verbatim: a soft-deleted payment
+> (§5c) still fires DELETE-shaped audit rows only on a real DELETE, so the trail and
+> `deleted_at` answer different questions and both are needed; and the diff must exclude
+> whatever the touch trigger bumps, or the no-op skip can never fire.
 
 **5a — supplier subgroups, auto-verified.** Renzo: *"Paquibot would have a subgroup of suppliers
 like Llanto. The system should be able to understand that if a cheque is labeled Paquibot but is
@@ -667,7 +754,7 @@ Eight steps. Each ships something usable on its own and nothing is built twice. 
 **foundations that are expensive to retrofit first, then the smallest thing that answers "what do
 we owe this trader", then the surface that earns the feature.**
 
-### Step 1 — Correct the docs, and give Cenapro the ICTC audit trail
+### Step 1 — ✅ SHIPPED 2026-08-05 (data layer) — Correct the docs, and give Cenapro the ICTC audit trail
 `cenapro.rc_delivery_audit` — append-only, trigger-written, no UPDATE/DELETE grant to anyone —
 modelled on `cenapro.production_event_audit` and `public.audit_logs` (diff + snapshot + actor +
 timestamp). Surface it in the deliveries ledger as a per-row history. Also correct the stale
@@ -675,6 +762,25 @@ counts everywhere (971 receipts; duplicates resolved by deletion; the write path
 *Ships alone, independently valuable, and exactly what was missing when the 22 duplicates
 vanished. Doing it first means every later step is recorded from day one — retrofitting an audit
 onto a system already writing money is the expensive version.*
+
+**DONE:** migration `supabase/migrations/20260805100000_cenapro_rc_delivery_audit.sql`, applied
+and verified live. ONE table for the receipt **and** its sub-samples, discriminated by `entity`,
+always keyed by the parent `delivery_id`; the STORED GENERATED money columns are deliberately kept
+**in** the diff; `updated_at`/`row_version` excluded so a no-op write records nothing; **AFTER**
+triggers because generated columns are not computed until BEFORE triggers finish; RLS on with a
+SELECT-only policy so a future blanket grant still cannot forge a row. Docs corrected across
+`CLAUDE.md`, both `CONTEXT.md`s and `TIMELINE.md` (§3.1). Full write-up:
+`app/(app)/cenapro/CONTEXT.md` → "Audit trail".
+
+**STILL TO DO in this step:**
+- **The per-row history UI** — nothing reads `public.cenapro_rc_delivery_audit` yet. Note the
+  ₱ trap in §3.2: `stripPrices()` cannot reach inside `changed`/`snapshot` jsonb.
+- **`types/supabase.ts` regeneration** for the new view (skipped: parallel writer in the module).
+  Use the CLI, never the MCP type generator — it drops `graphql_public`.
+- **Optional:** have the three `cenapro_save_rc_delivery*` RPCs set
+  `cenapro.audit_source` so `source` stops being NULL. Clear it immediately after the statement
+  it describes — the GUC is transaction-local, and a half-true provenance column is worse than
+  none.
 
 ### Step 2 — Supplier subgroups
 `rc_supplier` gains a parent/child link (**one level**, not chains) plus a small screen to

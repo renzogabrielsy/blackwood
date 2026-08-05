@@ -1999,6 +1999,60 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_rc_delivery_audit: {
+        Row: {
+          changed: Json | null
+          changed_at: string | null
+          changed_by: string | null
+          changed_by_role: string | null
+          delivery_date: string | null
+          delivery_id: string | null
+          entity: string | null
+          id: number | null
+          operation: string | null
+          sample_id: string | null
+          sample_position: number | null
+          snapshot: Json | null
+          source: string | null
+          supplier_code: string | null
+          truck_no: string | null
+        }
+        Insert: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          delivery_date?: string | null
+          delivery_id?: string | null
+          entity?: string | null
+          id?: number | null
+          operation?: string | null
+          sample_id?: string | null
+          sample_position?: number | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+          truck_no?: string | null
+        }
+        Update: {
+          changed?: Json | null
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_role?: string | null
+          delivery_date?: string | null
+          delivery_id?: string | null
+          entity?: string | null
+          id?: number | null
+          operation?: string | null
+          sample_id?: string | null
+          sample_position?: number | null
+          snapshot?: Json | null
+          source?: string | null
+          supplier_code?: string | null
+          truck_no?: string | null
+        }
+        Relationships: []
+      }
       cenapro_rc_delivery_rows: {
         Row: {
           ash: number | null

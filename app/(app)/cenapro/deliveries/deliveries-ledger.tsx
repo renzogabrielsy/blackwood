@@ -51,6 +51,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { EditInput, GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
+import { DeliveryHistoryDialog } from './delivery-history-dialog';
 import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import {
@@ -513,6 +514,12 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const [invalidCells, setInvalidCells] = React.useState<Set<string>>(new Set());
     const [saving, setSaving] = React.useState(false);
     const [deleteTarget, setDeleteTarget] = React.useState<DeliveryRecord | null>(null);
+    /**
+     * The receipt whose audit trail is open. Holds the RECORD rather than the id so the
+     * dialog's header can name the row with the same `rowLabel` the delete prompt and
+     * every save error use — one identity line, everywhere.
+     */
+    const [historyTarget, setHistoryTarget] = React.useState<DeliveryRecord | null>(null);
 
     // ── Draft receipts (the blank rows at the bottom) ─────────────────────────────
     //
@@ -1847,7 +1854,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     }, []);
 
     // ═══ Context menu ════════════════════════════════════════════════════════════
-    const menu = useGridContextMenu<MenuRef>({ width: 232, height: 220 });
+    // `height` is the edge-FLIP estimate, not a layout value — it decides whether the
+    // menu opens above or below the pointer near the viewport bottom. It grew with the
+    // "View history" item (7 items + 2 separators on the receipt menu); leaving it at
+    // the old 220 would let the last item fall off screen at the foot of the sheet.
+    const menu = useGridContextMenu<MenuRef>({ width: 232, height: 252 });
 
     const addSample = React.useCallback(
         (deliveryId: string, afterIndex?: number) => {
@@ -2009,6 +2020,19 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 onSelect: (ref) => fillMoistureFromSamples(ref.deliveryId),
             },
             { kind: 'item', label: 'Copy row as TSV', icon: Copy, onSelect: (ref) => copyRow(ref.deliveryId) },
+            {
+                // The audit trail (`cenapro.rc_delivery_audit`, 2026-08-05) covers the
+                // receipt AND its moisture draws in one list. A DRAFT row is excluded by
+                // construction — the draft menu above is a separate array, and a blank
+                // row has no receipt behind it to have a history.
+                kind: 'item',
+                label: 'View history',
+                icon: History,
+                onSelect: (ref) => {
+                    const rec = recordsById.get(ref.deliveryId);
+                    if (rec) setHistoryTarget(rec);
+                },
+            },
             {
                 kind: 'item',
                 label: 'Discard changes on this row',
@@ -3639,6 +3663,19 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            {/* The per-receipt audit trail. `DialogContent` already carries the project's
+                dialog glass; the dialog adds `animate-modal-enter` and nothing inside it
+                animates. `onClosed` puts the caret back on the grid's paste sink — Radix
+                would aim it at the context-menu item that opened this, which has already
+                unmounted, leaving focus on <body> and the next keystroke nowhere. */}
+            <DeliveryHistoryDialog
+                deliveryId={historyTarget?.row.id ?? null}
+                label={historyTarget ? rowLabel(historyTarget) : ''}
+                open={historyTarget !== null}
+                onOpenChange={(o) => !o && setHistoryTarget(null)}
+                onClosed={focusGrid}
+            />
         </div>
     );
 }

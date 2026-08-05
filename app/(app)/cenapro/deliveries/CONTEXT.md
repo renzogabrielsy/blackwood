@@ -7,9 +7,14 @@ live grid. It is the Cenapro analogue of ICTC's RC IN (`public.deliveries`), bui
 the **QC Ledger's interaction standard** on the platform's **Blackwood Table**
 primitives.
 
-991 receipts + 244 moisture sub-samples are already imported and reconciled to the
-centavo against the source workbook (see the parent `../CONTEXT.md` → "RC Deliveries").
-This module is the UI on top of that.
+**971 receipts** + 244 moisture sub-samples are loaded (see the parent `../CONTEXT.md` →
+"RC Deliveries" → **"Live state"** for the full live/import-day table). 991 came in from
+the workbook and were reconciled to the centavo against it; the **22 duplicates were
+hard-DELETEd on 2026-08-04** (₱17,185,938.70) and **2 receipts have since been created in
+the app** — so `provenance` is now 969 `sheet_import` + 2 `app`, and **13 rows sit at
+`row_version > 1`**. This module is the UI on top of that. Since 2026-08-05 every write
+here is trailed in `cenapro.rc_delivery_audit`, and each receipt's own trail is readable
+from the row context menu (*View history*) — see "Audit trail" below.
 
 **The feature this exists to support is liquidation** (assigning cheques and payments to
 receipts). That is why the money columns are decomposed rather than opaque, why an
@@ -25,9 +30,10 @@ computed in the browser.
 | File | Role |
 |---|---|
 | `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
-| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; `stripPrices()` (the ONE ₱ boundary); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
+| `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; **`PRICE_FIELDS` + `stripPrices()` + `redactAuditJson()`** (the ONE ₱ boundary — one list, two consumers: named fields on a row shape, and keys inside the audit trail's jsonb); **the audit vocabulary** (`RcDeliveryAuditRow`, `DeliveryHistoryEntry`, `AUDIT_TRAIL_START`, `readAuditChanges` / `auditColumnLabel` / `formatAuditValue` / `auditHeadline` / `auditSnapshotColumns`); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
-| `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
+| `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, **`getDeliveryHistory`** (one receipt's audit trail, ₱-redacted server-side), `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
+| `delivery-history-dialog.tsx` | **Client** — the per-receipt audit trail, opened from the grid's row context menu (*View history*). Renders one entry per `cenapro.rc_delivery_audit` row, newest first, with the receipt AND its moisture draws in one list. See "Audit trail" below. Imports nothing from ICTC's `DeliveryHistoryDialog` — same reading experience, entirely separate wiring. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
 | `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. **the flag-resolution surface** (the 12→2 lens shape modelled from the live counts, the rail/badge predicate, the unknown-`kind` fail-safe, the `has_unresolved_flags` OR, the no-state-column fallback, `kind`/`detail`/`raw` preservation, the per-kind resolution sentence, a malformed element that must not shift verdicts, plus source scans that the lens filters on `has_unresolved_flags`, that `ROW_COLS` is still ONE literal carrying all four derived columns, and that the grid reaches the verdict in exactly one place while a fully-repaired row keeps an openable history), `npx tsx scripts/verify-rc-deliveries-cells.ts` — **116 assertions**, must stay green. |
@@ -734,7 +740,8 @@ above, not that one.)*
   what happens when the editor unmounts on Escape and takes the caret with it. A filter
   popover or the search box is never `document.body`, so neither is ever interrupted.
 - **The two paths cannot double-apply**, and a doubled paste writes a second copy of a
-  receipt — precisely the fault this ledger already flags 22 rows for. Two interlocks:
+  receipt — precisely the fault this ledger flagged 22 rows for (all since deleted; the
+  detection still runs, it just has nothing to catch today). Two interlocks:
   *(a)* the React handler stamps `handledPasteRef` with the native event, and the document
   listener refuses a stamped event — which holds because React's root listener runs **before**
   a **bubble-phase** listener on `document` (capture would invert it, so capture is forbidden);
@@ -896,11 +903,11 @@ them rather than smoothing them over:
 
 | State | Treatment |
 |---|---|
-| `is_suspected_duplicate` (22 rows) | Rose inset rail on the frozen block + a **`DUP n/N` badge opening the peer popover** + a rose row wash. **THREE consecutive days are pasted twice, ₱17,185,939 in total** — 2026-04-06 (9 rows, ₱6.94M), 04-07 (7 rows, ₱5.32M), 04-08 (6 rows, ₱4.93M). *(An earlier draft of this note said "the 2026-04-06 block, roughly ₱7M"; that is only the largest of the three — corrected 2026-08-04 from live counts.)* Every day total and the month footer carry an explicit "includes … from suspected duplicates" line, so nothing is silently double-counted — but **the human decision to keep or drop them has not been made.** |
-| `duplicate_group_key IS NOT NULL`, unflagged (22 rows) | The ORIGINALS the flagged rows were pasted from — see "Duplicate pairing" below. A **thinner, 40%-opacity rose rail, no row wash**, and an OUTLINE `TWIN n/N` badge onto the same popover. |
+| `is_suspected_duplicate` (**0 rows today**, was 22) | Rose inset rail on the frozen block + a **`DUP n/N` badge opening the peer popover** + a rose row wash. **The keep-or-drop decision has since been MADE and EXECUTED:** the 22 copies — three consecutive days pasted twice, ₱17,185,938.70 in total (2026-04-06 9 rows ₱6.94M · 04-07 7 rows ₱5.32M · 04-08 6 rows ₱4.93M) — were hard-DELETEd on 2026-08-04, so nothing renders this treatment today. **The rendering is not removed and still works**; it fires again the moment a receipt is pasted twice. The day-total and month-footer "includes … from suspected duplicates" lines are correspondingly dormant. |
+| `duplicate_group_key IS NOT NULL`, unflagged (**0 rows today**, was 22) | The ORIGINALS the flagged rows were pasted from — see "Duplicate pairing" below. A **thinner, 40%-opacity rose rail, no row wash**, and an OUTLINE `TWIN n/N` badge onto the same popover. With their copies deleted the 22 originals no longer pair with anything, so they render as ordinary receipts — which is correct. |
 | `has_unresolved_flags` (**2 rows**) | Sky rail + a warning icon opening a **popover** with each flag's `kind` / `detail` / the workbook's original `raw` text. **Live problems only** — see "Flag resolution" below. |
 | flags, all of them repaired (**10 rows**) | **No rail, no badge, no lens membership.** A quiet `History` glyph at 40% muted opens the SAME popover, so the history stays reachable without reading as a problem. |
-| `supplier_unresolved` / `destination_unresolved` (1 / 5 rows) | Amber rail + a `MAP?` badge; the cell shows the raw text; a save is refused until it resolves. |
+| `supplier_unresolved` / `destination_unresolved` (**1 / 0 rows**, verified live 2026-08-05) | Amber rail + a `MAP?` badge; the cell shows the raw text; a save is refused until it resolves. The one remaining is the 2026-02-23 receipt with no payee (₱864,743.75) — it is the one receipt liquidation structurally cannot settle. `destination_unresolved` is 0 because the five unmapped yards were repaired to `WHSE 3A`; the two receipts that still have a NULL `destination_code` (the `SEVILLA` lab-sample rows 1321/1322) carry no `destination_raw` either, so they are not "unresolved" — nothing was ever typed to resolve. |
 | unparseable date | Amber triangle in the date cell, with `delivery_date_raw` in the title. **Currently 0 rows** — the two `5/262026` receipts (`source_row` 1020/1021) were dated to 2026-05-06 in the app and keep their raw text, so `?issue=undated` is empty today (verified live 2026-08-04). The lens and the trap it guards both stay: `delivery_date` is still nullable for `sheet_import` rows. |
 
 Each is also a **URL lens** (`?issue=duplicate|unmapped|flagged|undated`), pushed into the
@@ -916,12 +923,19 @@ The read model gained four columns (`duplicate_group_key` / `_size` / `_ordinal`
 `duplicate_peer_ids`, migration `20260804072000` — see `../CONTEXT.md` → "Duplicate
 pairing"), and this module uses them in three places.
 
+> **STATUS 2026-08-05 — this all still WORKS, and currently matches NOTHING.** The 22
+> duplicate copies were hard-DELETEd on 2026-08-04, so `duplicate_group_key IS NOT NULL`
+> returns **0 rows** and `?issue=duplicate` is empty. Nothing below was removed or turned
+> off; the pairing is re-derived on every read and will light up the next time a receipt
+> is pasted twice. Read the counts below as the 2026-08-04 state that shaped the design.
+
 **BEHAVIOUR CHANGE: `?issue=duplicate` now returns 44 rows, not 22.** It filtered on
 `is_suspected_duplicate`, and the importer flagged only the SECOND copy of each pasted
 receipt — so the lens returned 22 orphans with their 22 originals invisible, which is
 exactly the shape that cannot answer "is it really an exact copy of that row?". It now
 filters `duplicate_group_key IS NOT NULL`: **22 groups × 2 = 44 rows, on exactly
-2026-04-06 / 04-07 / 04-08** (verified live over PostgREST, `content-range 0-43/44`).
+2026-04-06 / 04-07 / 04-08** (verified live over PostgREST, `content-range 0-43/44`
+— on 2026-08-04, when those rows still existed).
 
 - **The two members of a pair are ADJACENT**, which needs the ordering
   `(delivery_date, duplicate_group_key, duplicate_group_ordinal, id)` — and that is NOT
@@ -952,6 +966,12 @@ filters `duplicate_group_key IS NOT NULL`: **22 groups × 2 = 44 rows, on exactl
   duplicated" is an operational fact every role needs.
 - **Nothing here changes data.** No dedup, no delete, no clearing of flags. The
   ₱17.2M keep-or-drop call is Renzo's; this is the instrument, not the decision.
+  **He made it on 2026-08-04 and dropped them** — all 22 copies hard-DELETEd,
+  ₱17,185,938.70 off the total. This surface did not do that and would not have; a
+  human did it directly. It also left **no audit trace of any kind**, which is what
+  produced `cenapro.rc_delivery_audit` the next day (see `../CONTEXT.md` → "Audit
+  trail"). From 2026-08-05 the same deletion would be fully recorded — row, actor,
+  timestamp, and the payable total it carried.
 
 ### Flag resolution — the queue shows LIVE problems, the history stays (2026-08-05)
 
@@ -1021,6 +1041,149 @@ columns) and a source scan of the ledger (exactly one `flagSummary` call, no
 `readImportFlags`, no `has_import_flags`, the count-keyed trigger, the `History` glyph
 and the strike-through).
 
+### Audit trail — every write from this grid is now recorded (2026-08-05)
+
+**The data layer landed first, then the UI on top of it the same day. Read the DATA LAYER
+half below before touching the dialog — the ₱ hazard in it is the whole reason the dialog
+is not a two-line fetch.**
+
+#### DATA LAYER
+
+Migration `20260805100000_cenapro_rc_delivery_audit.sql` added `cenapro.rc_delivery_audit`,
+read through **`public.cenapro_rc_delivery_audit`** (SELECT only). It trails every
+INSERT / UPDATE / DELETE on **both** `rc_delivery` and its sub-samples in ONE table, keyed
+by `delivery_id` — so a receipt's whole history is `select … where delivery_id = $1 order by
+changed_at desc`, one indexed query, sub-samples included. Full schema and rationale live in
+`../CONTEXT.md` → **"Audit trail"**. What matters at this layer:
+
+- **It catches this grid.** The trigger fires on every writer — the three save RPCs, direct
+  DML through the auto-updatable accessor, the importer. It cannot be bypassed by a save
+  path this module adds later, and it needs no change to `actions.ts`.
+- **A save that changes nothing writes nothing.** `changed` excludes `updated_at` and
+  `row_version`, so the touch trigger's unconditional bump never manufactures a phantom
+  entry. Matches this module's own dirty-state rule (an edit that undoes itself is not an
+  edit) — the trail agrees with the grid about what counts as a change.
+- **The money is in the diff.** A `WT` or `PHP/KG` edit records `net_weight_kg`,
+  `price_php_kg` and `total_price_php` moving alongside the base column that moved them, so
+  "who changed what this receipt is worth" is answerable without recomputing anything.
+- **⚠ It is ₱-BEARING, and `stripPrices()` does not reach it.** `changed` and `snapshot` are
+  free-form jsonb carrying every column, `total_price_php` included. `stripPrices()` in
+  `types.ts` nulls named fields on a row shape and **will not touch a jsonb blob**. So a
+  history popover cannot just fetch and render: the server action must **redact the ₱ keys
+  out of `changed`/`snapshot` before the payload returns** when `!canViewPrices()`, exactly
+  like every other read here. The network response is the leak. That is the single
+  non-obvious hazard in building this UI.
+- **`source` is NULL on everything.** No writer sets `cenapro.audit_source` today. If a
+  history UI wants to say *which surface* made a change, the save RPCs need a
+  `set_config('cenapro.audit_source', 'rc_deliveries_grid', true)` — and it must be cleared
+  immediately after the statement it describes, because a transaction-local GUC left set
+  will mislabel any later write in the same transaction.
+- **The trail starts 2026-08-05.** Every receipt older than that has an empty history, and
+  that is the honest answer — not a bug to paper over with a synthetic "imported" entry.
+
+#### THE UI — `delivery-history-dialog.tsx` (2026-08-05, Step 1b)
+
+Opened from the grid's **row context menu → "View history"**. There is no second
+affordance and no second menu: the receipt menu and the DRAFT menu are separate arrays,
+so a blank row cannot reach it by construction — a row that has never been saved has no
+history and no id to look one up with. `useGridContextMenu`'s edge-flip estimate went
+`height: 220 → 252` with the extra item; it is a flip estimate, not a layout value, but
+leaving it stale drops the last item off the bottom of the viewport.
+
+**The ₱ decision, and it is a decision — state it when changing anything here.**
+`changed` and `snapshot` are ₱-bearing jsonb and `stripPrices()` cannot reach inside a
+blob (see the DATA LAYER note above). So:
+
+- **The keys are DELETED server-side in `getDeliveryHistory`, before the payload returns**,
+  by `redactAuditJson(raw, showPrices)` — which reads the SAME `PRICE_FIELDS` list
+  `stripPrices()` reads. `showPrices` is a PARAMETER rather than a caller-side `if`, so
+  there is one code path into the payload and no way to build an entry that skipped the
+  gate. The network response is the leak; the renderer is never the boundary.
+- **`PRICE_FIELDS` is now a shared constant** (`types.ts`), `satisfies readonly (keyof
+  RcDeliveryRow)[]` so a typo cannot silently redact nothing. It has exactly two
+  consumers. **A money column added to one and forgotten in the other is a hole in the
+  boundary at the surface nobody looks at** — which is precisely why the list moved out of
+  `stripPrices`'s object literal.
+- **A row whose ONLY changed column was a price still RENDERS**, as *"1 price field
+  changed — figures hidden by your role"*, with no figure and no column name. It is **not**
+  omitted. Omitting it would make the history lie by silence: a change certainly happened,
+  and *"who touched this receipt and when"* is an operational fact every role needs — the
+  same reasoning that keeps `duplicate_group_key` out of `stripPrices()`. What the boundary
+  hides is FIGURES, not the existence of the ledger. The count is carried as
+  `redactedChanges` on the entry; the ₱ column NAMES are not sent, because the two ₱
+  columns are ABSENT from a gated viewer's grid entirely and naming them here would
+  re-introduce what `buildColumns(false)` removes.
+- **`deduction_pct` is deliberately NOT redacted.** The brief that commissioned this listed
+  it among the ₱ keys; the module's ₱ boundary does not, and the boundary wins. A gated
+  viewer already sees the deduction in the WT cell (`=27045*88%` — `buildColumns(false)`
+  drops PHP/KG and TTL PRICE but keeps WT, and `stripPrices()` nulls `price_formula` but
+  not `weight_formula`). Redacting it only in the history would be a SECOND, divergent
+  definition of "is this a price".
+
+**What the dialog shows.**
+
+| Entry | Renders as |
+|---|---|
+| `delivery` INSERT | "Receipt created" + a snapshot summary (DATE · TRK# · SUPPLIER · SKS · WT · WAREHOUSE · TTL PRICE) |
+| `delivery` DELETE | "Receipt deleted" + the same summary, read off `snapshot` — **the point of the whole table**: the 22 rows deleted on 2026-08-04 took ₱17,185,938.70 and left nothing behind. A deletion now keeps its numbers. |
+| `delivery` UPDATE | field-by-field `old → new`, in the sheet's own left-to-right column order |
+| `sample` * | "Moisture draw added / removed / edited" + `#N`, indented, on a `bg-muted/20` wash and wearing the `Droplets` glyph rather than the operation's — a `Trash2` beside "Moisture draw removed" reads as though the RECEIPT were deleted |
+
+- **Values are formatted by their column, with the module's EXISTING formatters** —
+  `formatKg` / `formatPeso` / `formatRate` / `formatInt` / `formatLab` + `labDecimals`
+  (BD 3 dp, the rest 2 dp), dates `yyyy-MM-dd`, ₱ in **accounting form** (symbol pinned
+  left, figure pinned right, `min-w-[7.5rem]` so a column of totals lines up). Nothing new
+  was invented, so a figure in the history and the same figure in the sheet cannot
+  disagree. A NULL renders as an em dash and **loses the strike-through** — a struck em
+  dash reads as a rendering fault (the `no-underline` must stay AFTER `line-through`;
+  tailwind-merge keeps the last of a conflicting group, not the most specific).
+- **Actor.** `changed_by` → `public.profiles` in a SEPARATE lookup over the distinct uuids.
+  There is deliberately **no FK** (an audit row must outlive the account), so a miss
+  renders **"Unknown user"** and never throws. **`changed_by IS NULL` renders as
+  *"system"*** — a service-role / importer / psql write — never as a blank name.
+- **Time** is `formatDistanceToNow` with the absolute `yyyy-MM-dd HH:mm:ss` on hover.
+- **Two bookkeeping columns are not listed in a diff**, both already stated elsewhere on
+  the same entry: `updated_by` (identical to the audit row's own `changed_by`, which the
+  actor line already names) and `delivery_year` (a STORED GENERATED mirror of
+  `delivery_date`, directly above it). **Nothing else is hidden** — `provenance`,
+  `source_row`, `import_flags`, `created_by` all still show. `updated_at` and `row_version`
+  never arrive at all; the trigger excludes them.
+- **Ordering is `changed_at DESC, id DESC`.** The `id` tiebreak is load-bearing: the
+  samples RPC replaces the WHOLE block, so one moisture edit writes several rows at one
+  identical `changed_at`. The dialog says so in a footer line rather than leaving a burst
+  of draw entries looking like a mystery.
+- **`HISTORY_MAX = 300`**, and reaching it is **said out loud** in a `notice` rather than
+  silently clipping — same discipline as `DUPLICATE_WORKLIST_MAX`.
+- **The empty state is the common case for a while, and it must say WHY**: *"No changes
+  recorded since 2026-08-05 … which is not the same as nothing having happened."* A bare
+  "no history" would be a claim the database cannot make about a receipt from April.
+- **Errors are inline**, not a toast: a bordered destructive banner with its own **Copy**
+  button, per the HARD RULE (persistent + copyable). It is the module's existing
+  load-error idiom.
+- **Focus.** `DialogContent` gets `onCloseAutoFocus={e => {e.preventDefault(); onClosed()}}`
+  and the ledger passes `focusGrid`. Radix would restore focus to the TRIGGER — a
+  context-menu item that has already unmounted — leaving the caret on `<body>` and the
+  next keystroke nowhere. `focusGrid` uses `{ preventScroll: true }`, so closing the dialog
+  does not jog the sheet (see "Following the caret").
+- **Motion.** `animate-modal-enter` on `DialogContent` (which already ships the dialog
+  glass `bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80`) —
+  the same idiom `_shared/edit-delivery-dialog.tsx` and `blend-proposal-dialog.tsx` use.
+  **Nothing inside the dialog animates**: entries are data, and a history that fades in one
+  row at a time is chrome pretending to be information. No `stagger-children` — the list is
+  unbounded.
+- **Zero ICTC coupling.** `inventory/rc-in/components/DeliveryHistoryDialog.tsx` +
+  `audit-shared.tsx` are the shape this is modelled on and **nothing is imported from
+  them**. They are bound to `public.audit_logs`, `audit_comments`, notifications and
+  resolve-requests — none of which exist for Cenapro — and the tenant wall forbids the
+  import regardless. The reading experience is copied; the wiring is not.
+- **The grid was barely touched**: one import, one `historyTarget` state, one menu item,
+  one flip-height constant, one mounted dialog. No render path, no nav resolver, no
+  clipboard, no save path changed.
+
+**Not yet done, deliberately.** `source` is NULL on every row (no writer sets
+`cenapro.audit_source`), so the dialog only shows it when it is present and shows nothing
+today. Wiring it is a save-RPC change, not a UI one — see the DATA LAYER note above.
+
 ### Per-column filters (`?f_<column>=…`, 2026-08-04)
 
 **Filterable:** DATE · TRK# · SUPPLIER · BD · MOIST · GRIT · ASH · DUST · VM · FC ·
@@ -1028,7 +1191,7 @@ WAREHOUSE · REMARKS. **Not filterable:** SKS · WT · PHP/KG · TTL PRICE (Renz
 exclusion list).
 
 **Every filter is pushed into the SQL query.** The endless scope is a keyset pager
-holding a ~120-row window, not the 991 rows, so a filter applied to the loaded window
+holding a ~120-row window, not the full 971 rows, so a filter applied to the loaded window
 would filter what happens to be in memory and lie about the rest — the same class of
 error the totals rule guards against. `buildRowQuery()` in `actions.ts` is the one place
 the lens, the filters and the search are applied, and `countRows()` reuses it verbatim
@@ -1209,6 +1372,17 @@ number does.)
   look like a successful save that lost the operator's typing.
 - Visibility is never re-derived with an inline `profiles.select('role')` lookup — that
   would ignore the impersonation cookie.
+- **The audit view is the one ₱ surface `stripPrices()` cannot protect — and it is now
+  read.** `public.cenapro_rc_delivery_audit` carries `changed` / `snapshot` as free-form
+  jsonb containing every column, `total_price_php` included. `stripPrices()` nulls **named
+  fields on a row shape** — it will not reach inside a jsonb blob. **`getDeliveryHistory`
+  therefore deletes the ₱ keys out of the jsonb** with `redactAuditJson(raw, showPrices)`
+  before the payload returns. Both it and `stripPrices()` read the ONE shared list
+  **`PRICE_FIELDS`** (`types.ts`), which is `satisfies readonly (keyof RcDeliveryRow)[]`
+  so a typo cannot silently redact nothing. **Any future action that reads this view must
+  go through `redactAuditJson` too** — the fields list has two consumers today and must
+  never grow a third definition. See "Audit trail" above for the full decision, including
+  why a price-only change still renders and why `deduction_pct` is not in the list.
 
 ### Motion
 
@@ -1216,9 +1390,11 @@ number does.)
 ring, the range tint, the cell tints or the draft rows. The only animated chrome is the
 toolbar (`animate-fade-in` on the unsaved-count chip and on each active-filter chip), the
 toolbar's own frosted bar (`bg-background/95 backdrop-blur
-supports-backdrop-filter:bg-background/60`), and the two `AlertDialog`s — the delete
+supports-backdrop-filter:bg-background/60`), the two `AlertDialog`s — the delete
 confirmation and the unsaved-work guard — which inherit `animate-modal-enter` and the
-dialog glass from `AlertDialogContent` itself rather than declaring their own. Row hover is
+dialog glass from `AlertDialogContent` itself rather than declaring their own, and the
+history `Dialog`, which declares `animate-modal-enter` explicitly (`DialogContent` ships
+the glass but not that entrance) and animates **nothing** inside itself. Row hover is
 `transition-colors duration-150`.
 
 ### Errors
@@ -1245,7 +1421,12 @@ messages use sonner directly.
 - `@/types/supabase` — every row shape is derived from the generated `Database` type.
 - `react-virtuoso` (`TableVirtuoso`, endless scope only), `date-fns`, `sonner`,
   `lucide-react`.
-- Shadcn: `button`, `input`, `popover`, `alert-dialog`, `dropdown-menu`.
+- Shadcn: `button`, `input`, `popover`, `alert-dialog`, `dialog`, `dropdown-menu`.
+- **Not a dependency, and must never become one:** `app/(app)/inventory/rc-in/components/`
+  (`DeliveryHistoryDialog.tsx`, `audit-shared.tsx`, `lib/field-labels.ts`). ICTC's history
+  UI is the model for this module's dialog and is imported by exactly nothing here — it is
+  wired to `public.audit_logs` + `audit_comments` + notifications, and the tenant wall
+  forbids the coupling.
 
 ## See Also
 
