@@ -222,6 +222,24 @@ pending `chore(memory)` commit rode along for the fifth time.
 `fix(cenapro):` over 3 files (ledger + CONTEXT.md + verify script). Per-file stop-list from
 promotion 32 held again and was clean.
 
+**Promotion 34 (`35374d9`+`1a5c41a`+`2a05e39`+`e5322d`… → `aff9bdb`) — SEVENTH consecutive clean
+`git add .`, and the LARGEST split so far: 30 files → FOUR commits.** Brief prescribed the split and
+the ordering; migration commit went FIRST so `main` never has a moment where the UI selects a column
+that does not exist yet. Order-within-a-promotion is a real constraint when a changeset spans SQL +
+its consumers — even though all four land in one merge, `main`'s per-commit history is what a
+bisect/revert walks.
+
+**Splitting 30 staged files four ways: use DIRECTORY pathspecs, not file lists.** `git commit -- <dir>`
+(e.g. `'app/(app)/cenapro/production' 'app/(app)/production' components/digest`) covered the 3rd
+commit's 9-file sweep in one line. Quote any path containing `(app)` — zsh globs the parens. Confirm
+completeness with a final `git status --porcelain` showing only the known exclusions, rather than
+counting files per commit.
+
+**Brief-supplied NEGATIVE expectations are a real gate.** This one named `lib/hooks/**`,
+`components/shared/grid/**` and `workers/` as paths that must NOT appear, with instructions to stop
+if they did. Ran `git diff --staged --name-only | grep -E '^(…)'` right after staging — cheap, and
+it converts "I think the changeset is what was described" into a verified claim.
+
 **Third round on ONE reported symptom is not a red flag — read the brief's root-cause claim as the
 commit body.** Renzo's "paste doesn't work" produced fixes in promotions 32 and this one; the first
 two repaired real defects *downstream of a dead entry point* (`onPaste` on a non-editable div never
@@ -247,6 +265,21 @@ Also re-confirmed: dirty `.claude/agent-memory-local/**` was identical on both b
 (`git diff main <feat> -- <path>` empty), so `git checkout main` carried it across without
 complaint — the cheap pre-checkout check above, run as a branch-to-branch diff rather than a
 name-overlap comparison.
+
+### Promotion 35 (2026-08-05, `76f6570`) — the docs-only changeset with a STOP guard
+
+First brief to hand me an **explicit expected-file manifest plus a STOP condition**: it named the
+two docs files and said that if anything under `app/`, `lib/`, `components/`, `scripts/`,
+`workers/`, `supabase/`, `types/supabase.ts`, or any migration appeared in the sweep, I must stop
+and report, because the tree was clean after the last promotion and any source file would mean an
+unexpected writer had touched it. **Treat that as the pattern for docs-only work:** after
+`git add .`, diff the staged path list against the manifest *before* drafting the commit message —
+the check is a tripwire for a concurrent session, not busywork. Here it passed (only
+`.agents/prompts/liquidation-feature.md` + the new `handoffs/` file staged).
+
+Also: the branch's pending `.claude/`-only commit `91c4e60` was already pushed to origin, so the
+branch was only ahead by the new docs commit — check `git status -sb`'s ahead count rather than
+assuming an unpushed predecessor still needs republishing.
 
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
