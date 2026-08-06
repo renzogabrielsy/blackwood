@@ -5,6 +5,7 @@ import {
     fetchDeliveryPage,
     type DeliveryAnchor,
 } from './actions';
+import { fetchPaymentDimensions } from '../liquidation/actions';
 import { DeliveriesLedger } from './deliveries-ledger';
 import {
     axesKey,
@@ -50,11 +51,20 @@ export default async function CenaproDeliveriesPage({
     // rather than honoured — a filter is never a price oracle.
     const filters = parseColumnFilters(params);
 
-    // The month index and the two dimension lists are independent of each other and of
-    // the row read — one round trip, not three in series.
-    const [months, dimensions] = await Promise.all([
+    // The month index, the two dimension lists and the payment pickers are independent of
+    // each other and of the row read — one round trip, not four in series.
+    //
+    // ── THE PAYMENT PICKERS (liquidation Step 4) ─────────────────────────────────
+    // The trader list and the bank-account list feed the "Add cheque" form, which is the
+    // liquidation module's own dialog rendered from this page. They are fetched HERE
+    // rather than lazily in the client so recording a cheque costs no round trip, and they
+    // are behind `canViewPrices()` INSIDE the fetcher — a gated viewer does not even learn
+    // which bank accounts exist, and the button they would feed is not rendered for that
+    // role either.
+    const [months, dimensions, payment] = await Promise.all([
         fetchDeliveryMonthKeys(),
         fetchDeliveryDimensions(),
+        fetchPaymentDimensions(),
     ]);
     const monthKeys = months.monthKeys;
     const period = resolvePeriod(monthKeys, params.year, params.month);
@@ -87,6 +97,8 @@ export default async function CenaproDeliveriesPage({
                 filters={filters}
                 dimensions={dimensions}
                 canViewPrices={month.canViewPrices}
+                paymentSuppliers={payment.suppliers}
+                paymentAccounts={payment.accounts}
                 loadError={month.error ?? months.error ?? dimensions.error ?? null}
             />
         );
@@ -122,6 +134,8 @@ export default async function CenaproDeliveriesPage({
             filters={filters}
             dimensions={dimensions}
             canViewPrices={page.canViewPrices}
+            paymentSuppliers={payment.suppliers}
+            paymentAccounts={payment.accounts}
             loadError={page.error ?? months.error ?? dimensions.error ?? null}
         />
     );

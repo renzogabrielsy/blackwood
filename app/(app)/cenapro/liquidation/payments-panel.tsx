@@ -24,7 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useState, useTransition } from 'react';
-import { Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Loader2, Plus, RotateCcw, SplitSquareHorizontal, Trash2, Wallet } from 'lucide-react';
 
 import {
     AlertDialog,
@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 
 import { deletePayment, fetchSupplierPayments, restorePayment } from './actions';
 import { PaymentDialog } from './payment-dialog';
+import { SpreadPanel } from './spread-panel';
 import {
     formatDate,
     formatPeso,
@@ -57,7 +58,7 @@ import {
     num,
     termLabel,
     type BankAccountRow,
-    type PaymentRow,
+    type PaymentStateRow,
     type SupplierGroupRow,
 } from './types';
 
@@ -71,9 +72,13 @@ const COLS = [
     { key: 'ref', label: 'CHEQUE / REF', width: 118 },
     { key: 'bank', label: 'DRAWN ON', width: 150 },
     { key: 'amount', label: 'AMOUNT', width: 146, numeric: true },
+    // Step 4: what has been pointed at receipts, and what has not. `unallocated_php` on a
+    // live outgoing payment IS the outstanding cash advance (§4.4) — which is why Step 5
+    // needs no screen of its own, only this column and a filter.
+    { key: 'assigned', label: 'ASSIGNED', width: 138, numeric: true },
     { key: 'term', label: 'TERM', width: 96 },
-    { key: 'remarks', label: 'REMARKS', width: 200 },
-    { key: 'actions', label: '', width: 84 },
+    { key: 'remarks', label: 'REMARKS', width: 180 },
+    { key: 'actions', label: '', width: 148 },
 ] as const;
 
 const MIN_W = COLS.reduce((s, c) => s + c.width, 0);
@@ -84,6 +89,12 @@ export interface PaymentsPanelProps {
     /** `null` while the sheet is closing — the body is keyed on it, so it never flickers. */
     supplierCode: string | null;
     supplierName: string;
+    /**
+     * Open with the "money left" filter already on — the drill-down from the balance
+     * screen's NOT YET ASSIGNED cell. It seeds local state rather than driving it, so the
+     * operator can turn it off without going back.
+     */
+    initialAdvanceOnly?: boolean;
     suppliers: SupplierGroupRow[];
     accounts: BankAccountRow[];
     /** Called after any write, so the balance table behind the sheet can re-read. */
@@ -106,8 +117,15 @@ export function PaymentsPanel(props: PaymentsPanelProps) {
                 </SheetHeader>
 
                 {/* Keyed on the trader so opening a SECOND one never shows the first one's
-                    payments while the fetch is in flight — the loading state is remounted. */}
-                <PanelBody key={props.supplierCode ?? 'none'} {...props} />
+                    payments while the fetch is in flight — the loading state is remounted.
+                    The advance flag is part of the key because it SEEDS local state: without
+                    it, drilling into the same trader's advances right after opening their
+                    full list would leave the filter off, and the drill-down would silently
+                    do nothing. */}
+                <PanelBody
+                    key={`${props.supplierCode ?? 'none'}:${props.initialAdvanceOnly ? 'adv' : 'all'}`}
+                    {...props}
+                />
             </SheetContent>
         </Sheet>
     );
@@ -115,7 +133,7 @@ export function PaymentsPanel(props: PaymentsPanelProps) {
 
 interface BodyState {
     loading: boolean;
-    payments: PaymentRow[];
+    payments: PaymentStateRow[];
     error: string | null;
 }
 
@@ -124,6 +142,7 @@ const IDLE: BodyState = { loading: false, payments: [], error: null };
 function PanelBody({
     supplierCode,
     supplierName,
+    initialAdvanceOnly = false,
     suppliers,
     accounts,
     onChanged,
@@ -138,8 +157,19 @@ function PanelBody({
      */
     const [reloadToken, setReloadToken] = useState(0);
     const [dialogOpen, setDialogOpen] = useState(false);
-    const [editing, setEditing] = useState<PaymentRow | null>(null);
-    const [voiding, setVoiding] = useState<PaymentRow | null>(null);
+    const [editing, setEditing] = useState<PaymentStateRow | null>(null);
+    const [voiding, setVoiding] = useState<PaymentStateRow | null>(null);
+    /** The cheque being spread across receipts (Step 4). `null` when the screen is closed. */
+    const [spreading, setSpreading] = useState<string | null>(null);
+    /**
+     * `WHERE is_advance` — Step 5's entire feature.
+     *
+     * §4.4: a cash advance IS a payment whose allocations sum to less than its amount, so
+     * "the list of payments carrying an unallocated remainder" is a FILTER on this list,
+     * not a screen of its own. Off by default: an advance is an ordinary state, not a
+     * worklist.
+     */
+    const [advanceOnly, setAdvanceOnly] = useState(initialAdvanceOnly);
     const [pending, startTransition] = useTransition();
 
     useEffect(() => {
@@ -177,7 +207,7 @@ function PanelBody({
         onChanged();
     }, [onChanged]);
 
-    function handleVoid(row: PaymentRow) {
+    function handleVoid(row: PaymentStateRow) {
         if (!row.id || row.row_version === null || row.row_version === undefined) return;
         const id = row.id;
         const version = row.row_version;
@@ -195,7 +225,7 @@ function PanelBody({
         });
     }
 
-    function handleRestore(row: PaymentRow) {
+    function handleRestore(row: PaymentStateRow) {
         if (!row.id || row.row_version === null || row.row_version === undefined) return;
         const id = row.id;
         const version = row.row_version;
@@ -214,10 +244,13 @@ function PanelBody({
 
     const live = state.payments.filter((p) => !p.is_deleted);
     const voided = state.payments.filter((p) => p.is_deleted);
+    /** Live outgoing payments with money nobody has pointed at a receipt yet. */
+    const advances = live.filter((p) => p.is_advance === true);
+    const shown = advanceOnly ? advances : state.payments;
 
     return (
         <>
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
                 <p className="text-xs text-muted-foreground">
                     {state.loading
                         ? 'Loading…'
@@ -225,18 +258,36 @@ function PanelBody({
                               voided.length > 0 ? ` · ${voided.length} voided` : ''
                           }`}
                 </p>
-                <Button
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => {
-                        setEditing(null);
-                        setDialogOpen(true);
-                    }}
-                    disabled={!supplierCode}
-                >
-                    <Plus className="size-3.5" />
-                    Record a payment
-                </Button>
+                <div className="flex items-center gap-1.5">
+                    {/* Step 5, in one control. An advance is a payment with an unassigned
+                        remainder — nothing more — so this is a filter rather than a
+                        feature. It appears only when there is something to filter TO. */}
+                    {advances.length > 0 && (
+                        <Button
+                            variant={advanceOnly ? 'default' : 'outline'}
+                            size="sm"
+                            aria-pressed={advanceOnly}
+                            className="h-7 text-[11px]"
+                            onClick={() => setAdvanceOnly((v) => !v)}
+                            title="Show only the payments that still have money nobody has pointed at a receipt. That unassigned remainder IS the outstanding cash advance — it is a normal state, not a problem."
+                        >
+                            <Wallet className="size-3" />
+                            {advances.length} with money left
+                        </Button>
+                    )}
+                    <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                            setEditing(null);
+                            setDialogOpen(true);
+                        }}
+                        disabled={!supplierCode}
+                    >
+                        <Plus className="size-3.5" />
+                        Record a payment
+                    </Button>
+                </div>
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto">
@@ -254,6 +305,24 @@ function PanelBody({
                             Nothing has been paid to {supplierName} through this system. Everything owed for
                             their receipts is still showing on the balance.
                         </p>
+                    </div>
+                ) : shown.length === 0 ? (
+                    // The filter is on and matches nothing. Say which filter, and offer the
+                    // way back — an empty table under an active filter reads as lost data.
+                    <div className="animate-fade-up p-8 text-center">
+                        <p className="text-sm font-medium">Every payment is fully assigned</p>
+                        <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+                            None of {supplierName}&rsquo;s payments has money left over, so there is no
+                            outstanding advance.
+                        </p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-3 h-7 text-[11px]"
+                            onClick={() => setAdvanceOnly(false)}
+                        >
+                            Show all payments
+                        </Button>
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
@@ -288,7 +357,7 @@ function PanelBody({
                                 </tr>
                             </thead>
                             <tbody>
-                                {state.payments.map((p) => (
+                                {shown.map((p) => (
                                     <PaymentRowCells
                                         key={p.id ?? ''}
                                         row={p}
@@ -297,6 +366,7 @@ function PanelBody({
                                             setEditing(p);
                                             setDialogOpen(true);
                                         }}
+                                        onSpread={() => p.id && setSpreading(p.id)}
                                         onVoid={() => setVoiding(p)}
                                         onRestore={() => handleRestore(p)}
                                     />
@@ -314,6 +384,16 @@ function PanelBody({
                 suppliers={suppliers}
                 accounts={accounts}
                 editing={editing}
+                onSaved={afterWrite}
+            />
+
+            {/* The cheque-first door onto the shared allocation surface (§7a screen 3).
+                Opened from a payment row, so the operator is already looking at the cheque
+                they mean to spread. */}
+            <SpreadPanel
+                open={spreading !== null}
+                onOpenChange={(o) => !o && setSpreading(null)}
+                paymentId={spreading}
                 onSaved={afterWrite}
             />
 
@@ -358,12 +438,15 @@ function PaymentRowCells({
     row,
     busy,
     onEdit,
+    onSpread,
     onVoid,
     onRestore,
 }: {
-    row: PaymentRow;
+    row: PaymentStateRow;
     busy: boolean;
     onEdit: () => void;
+    /** Open the spread screen on this cheque — the cheque-first allocation door. */
+    onSpread: () => void;
     onVoid: () => void;
     onRestore: () => void;
 }) {
@@ -371,6 +454,9 @@ function PaymentRowCells({
     const effect = num(row.balance_effect_php);
     const incoming = row.direction === 'incoming';
     const remarks = (row.remarks ?? '').trim();
+    const allocated = num(row.allocated_php) ?? 0;
+    const unallocated = num(row.unallocated_php) ?? 0;
+    const allocCount = num(row.allocation_count) ?? 0;
 
     // Row rules go on the CELLS. A `<tr>` border is never painted in the separated
     // borders model this table uses, so it would silently do nothing.
@@ -415,8 +501,34 @@ function PaymentRowCells({
                     </span>
                 ) : null}
             </td>
+            {/* ASSIGNED — how much of this payment is pointed at receipts, and how much
+                is not. The remainder on a live outgoing payment IS the outstanding cash
+                advance (§4.4), which is why it is stated plainly rather than flagged: an
+                advance is a normal state of a cheque, not an exception. */}
+            <td className={cell}>
+                <span className="flex items-baseline justify-between gap-2 font-mono tabular-nums">
+                    <span className="text-muted-foreground">₱</span>
+                    <span>{formatPeso(allocated)}</span>
+                </span>
+                <span
+                    className="block text-right text-[10px] leading-none text-muted-foreground no-underline"
+                    title={
+                        row.method === 'adjustment'
+                            ? 'A write-off can be pointed at particular receipts too — it moves the balance without cash leaving the bank.'
+                            : unallocated > 0
+                              ? 'Money on this payment that nobody has pointed at a receipt yet. That is an outstanding advance — perfectly normal, and it needs no action.'
+                              : 'Every peso of this payment is assigned to a receipt.'
+                    }
+                >
+                    {unallocated > 0
+                        ? `₱${formatPeso(unallocated)} left`
+                        : allocCount > 0
+                          ? `across ${allocCount}`
+                          : 'none assigned'}
+                </span>
+            </td>
             <td className={cn(cell, 'text-muted-foreground')}>{termLabel(row.stated_term) || '—'}</td>
-            <td className={cn(cell, 'max-w-[200px] truncate')} title={remarks}>
+            <td className={cn(cell, 'max-w-[180px] truncate')} title={remarks}>
                 {remarks || '—'}
             </td>
             <td className={cn(cell, 'text-right')}>
@@ -434,6 +546,20 @@ function PaymentRowCells({
                     </Button>
                 ) : (
                     <div className="flex items-center justify-end gap-0.5">
+                        {/* The cheque-first door. Primary among the row's actions because
+                            spreading a cheque across receipts is the job; editing it is the
+                            correction. */}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-1.5 text-[11px]"
+                            onClick={onSpread}
+                            disabled={busy}
+                            title="Choose which receipts this payment settles. The whole block saves in one go — nothing is half-applied."
+                        >
+                            <SplitSquareHorizontal className="size-3" />
+                            Assign
+                        </Button>
                         <Button
                             variant="ghost"
                             size="sm"

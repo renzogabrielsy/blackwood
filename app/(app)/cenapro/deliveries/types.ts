@@ -37,9 +37,28 @@
 // them to the row shape, in `weightEditText` / `priceEditText` — the two functions that
 // decide what an operator sees when the cell takes focus, and therefore the two that
 // make an IMPORTED row indistinguishable from one typed this morning.
+//
+// ── Settlement (liquidation Step 4, 2026-08-06) ──────────────────────────────────
+// The liquidation vocabulary is IMPORTED from `../liquidation/types`, not re-declared.
+// `settlement_status`, the "not priced yet" wording and the `is_allocatable` affordance
+// are DATABASE facts with exactly one correct reading, and both doors onto the allocation
+// surface have to agree about them — which they cannot do if each module keeps its own
+// copy. Both files are PURE Cenapro tenant modules (no React, no Supabase, no
+// 'use client'), so the import crosses no layer and drags nothing into the bundle.
+//
+// **Settlement is NOT on this module's read model.** `cenapro.view_rc_delivery` was
+// deliberately left untouched by the Step 4 migration (60 columns, UI consumers, a
+// 116-assertion verify script), so settlement rides ALONGSIDE a receipt on
+// `DeliveryRecord.settlement`, fetched in its own round trip exactly the way the moisture
+// sub-samples are. That is also why the settlement fields do NOT join `PRICE_FIELDS`:
+// they are not fields of `RcDeliveryRow` and `satisfies keyof RcDeliveryRow` would refuse
+// them. They are gated one step EARLIER and more strongly instead — the settlement query
+// is not issued at all for a viewer who may not see prices. See `loadSettlements` in
+// `actions.ts`.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import type { Database } from '@/types/supabase';
+import type { DeliverySettlementRow } from '../liquidation/types';
 import {
     formulaCellText,
     priceFormulaFrom,
@@ -80,10 +99,19 @@ export interface ImportFlagState extends ImportFlag {
     note: string | null;
 }
 
-/** A receipt plus its samples — the unit the grid renders and the actions save. */
+/**
+ * A receipt plus its samples — the unit the grid renders and the actions save.
+ *
+ * `settlement` (liquidation Step 4) rides ALONGSIDE the row rather than on it, because
+ * `cenapro.view_rc_delivery` was deliberately left untouched: settlement state lives in
+ * its own view, and the moment a `paid` flag appears on the receipt there are two truths
+ * about the same money. It is `null` for a viewer who may not see prices — the query is
+ * never issued — and `undefined` before the settlement fetch has landed.
+ */
 export interface DeliveryRecord {
     row: RcDeliveryRow;
     samples: RcDeliverySampleRow[];
+    settlement?: DeliverySettlementRow | null;
 }
 
 /** The two dimension lists, read once on the server and threaded down. */
@@ -309,12 +337,33 @@ const PRICE_COLS: DeliveryCol[] = [
         numeric: true,
         field: null,
     },
+    // ── SETTLEMENT (liquidation Step 4) ──────────────────────────────────────────
+    //
+    // It is what makes the DELIVERY-FIRST door possible at all: you cannot liquidate
+    // what you cannot see, and until this column existed the only way to know whether a
+    // receipt had been paid for was to leave the ledger.
+    //
+    // In the ₱ group, and therefore ABSENT for a gated viewer, for the same reason
+    // PHP/KG and TTL PRICE are: `balance_php` is money. It reads `field: null` — the
+    // cell is derived state, not an editable one; settlement is written by assigning a
+    // payment, never by typing in this column.
+    {
+        key: 'settle',
+        label: 'PAID?',
+        width: 150,
+        title: 'What is still owed on this receipt, and its state: unpaid · part paid · paid · over · not priced. Derived from the payments assigned to it — never typed here, and never stored on the receipt. Right-click the row to assign a cheque.',
+        field: null,
+    },
 ];
 
 /**
- * The column set for this viewer. When prices are gated the two ₱ columns are ABSENT
+ * The column set for this viewer. When prices are gated the ₱ columns are ABSENT
  * — not blanked — so the keyboard coordinate space has no unreachable holes in it and
  * the table geometry stays honest.
+ *
+ * Step 4 added `settle` to that group. It carries a peso figure (`balance_php`), so it
+ * belongs on the same side of the boundary as the other two: for a gated viewer the
+ * column does not exist, and the settlement query behind it is never issued.
  */
 export function buildColumns(canViewPrices: boolean): DeliveryCol[] {
     return canViewPrices ? [...BASE_COLS, ...PRICE_COLS] : [...BASE_COLS];

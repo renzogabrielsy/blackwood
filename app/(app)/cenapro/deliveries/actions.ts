@@ -45,6 +45,10 @@ import {
     type SaveOutcome,
     type DeliveryCursor,
 } from './types';
+// The allocation read model lives in the liquidation module, which OWNS the liquidation
+// vocabulary. Importing the type keeps one definition of a settlement row across both
+// doors; see the header of `types.ts` for why the cross-module import is correct here.
+import type { DeliverySettlementRow } from '../liquidation/types';
 import {
     buildFilterPredicates,
     periodBounds,
@@ -74,6 +78,14 @@ const ROW_COLS =
 
 const SAMPLE_COLS =
     'id, delivery_id, position, label, bd, moisture_pct, grit, ash, dust, vm, fc, source_row, created_at';
+
+/**
+ * `public.cenapro_rc_delivery_settlement` — liquidation Step 4's read model, fetched
+ * ALONGSIDE a page of receipts rather than joined into `cenapro_rc_delivery_rows`, which
+ * the allocation migration deliberately left untouched.
+ */
+const SETTLEMENT_COLS =
+    'delivery_id, supplier_code, supplier_display_name, group_code, group_display_name, delivery_date, truck_no, destination_code, net_weight_kg, total_price_php, is_priceable, is_allocatable, allocated_php, balance_php, allocation_count, payment_ids, last_allocated_at, settlement_status, row_version';
 
 // ═══ Shared plumbing ════════════════════════════════════════════════════════════
 
@@ -193,6 +205,45 @@ async function countRows(
     return error ? null : (count ?? null);
 }
 
+/**
+ * The settlement state of a page of receipts, in one round trip — liquidation Step 4.
+ *
+ * ── WHY IT IS A SEPARATE QUERY AND NOT A COLUMN ──────────────────────────────────
+ * `cenapro.view_rc_delivery` is DELIBERATELY untouched by the allocation migration: 60
+ * columns, several UI consumers and a 116-assertion verify script hang off its shape, and
+ * settlement state on the receipt itself would be a second truth about the same money
+ * (there is no `paid` flag on `cenapro.rc_delivery` and there never will be). So it rides
+ * alongside, exactly the way the moisture sub-samples do.
+ *
+ * ── THE ₱ GATE IS EARLIER AND STRONGER HERE THAN `stripPrices()` ─────────────────
+ * `balance_php` / `allocated_php` / `total_price_php` are money, and there is no useful
+ * redacted settlement row — strip the pesos and what is left is a date and a truck number.
+ * The settlement fields also CANNOT join `PRICE_FIELDS`, which is
+ * `satisfies readonly (keyof RcDeliveryRow)[]` and would refuse a name that is not a
+ * column of this module's read model. So the query is simply NOT ISSUED for a gated
+ * viewer, and `buildColumns(false)` drops the PAID? column that would have shown it. The
+ * network response is the leak; the surest way to keep money out of it is not to fetch it.
+ */
+async function loadSettlements(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    ids: string[],
+    showPrices: boolean,
+): Promise<{ settlements: Map<string, DeliverySettlementRow>; error: string | null }> {
+    if (!showPrices || ids.length === 0) return { settlements: new Map(), error: null };
+    const { data, error } = await supabase
+        .from('cenapro_rc_delivery_settlement')
+        .select(SETTLEMENT_COLS)
+        .in('delivery_id', ids);
+    if (error) {
+        return { settlements: new Map(), error: `Failed to load payment state: ${error.message}` };
+    }
+    const out = new Map<string, DeliverySettlementRow>();
+    for (const s of data ?? []) {
+        if (s.delivery_id) out.set(s.delivery_id, s);
+    }
+    return { settlements: out, error: null };
+}
+
 /** Fetch the sub-samples for a page of receipts, in one round trip. */
 async function loadSamples(
     supabase: Awaited<ReturnType<typeof createClient>>,
@@ -209,11 +260,52 @@ async function loadSamples(
     return { samples: data ?? [], error: null };
 }
 
-/** Stitch rows + samples into the render unit, price-gating on the way out. */
+/**
+ * Everything that hangs off a page of receipts — the moisture draws AND the settlement
+ * state — in ONE parallel round trip rather than two in series.
+ *
+ * Both are keyed by `delivery_id` and neither depends on the other, so there is no reason
+ * for the second to wait on the first. A settlement error does NOT fail the page: the
+ * receipts are still worth showing, and the PAID? column simply reads as unknown.
+ */
+async function loadChildren(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    ids: string[],
+    showPrices: boolean,
+): Promise<{
+    samples: RcDeliverySampleRow[];
+    settlements: Map<string, DeliverySettlementRow>;
+    /** FATAL to the page. Only ever the sample read — see the return below. */
+    error: string | null;
+    /** NON-fatal: the receipts still render, the PAID? column says it did not load. */
+    settlementError: string | null;
+}> {
+    const [sample, settle] = await Promise.all([
+        loadSamples(supabase, ids),
+        loadSettlements(supabase, ids, showPrices),
+    ]);
+    return {
+        samples: sample.samples,
+        settlements: settle.settlements,
+        // ── ONLY THE SAMPLE ERROR IS FATAL, AND THE ASYMMETRY IS DELIBERATE ──────
+        // A moisture draw is part of the receipt's own shape — the grid renders
+        // addressable sub-rows off it, so a page missing its draws is a page whose
+        // keyboard coordinate space is wrong. Settlement is a SEPARATE view bolted
+        // alongside: if it fails, 971 receipts are still worth showing, and every PAID?
+        // cell already has an honest fallback (an em dash reading "Payment state has not
+        // loaded for this receipt"). Failing the whole page over it would take the
+        // ledger down for something that is not the ledger.
+        error: sample.error,
+        settlementError: settle.error,
+    };
+}
+
+/** Stitch rows + samples + settlement into the render unit, price-gating on the way out. */
 function assemble(
     rows: RcDeliveryRow[],
     samples: RcDeliverySampleRow[],
     showPrices: boolean,
+    settlements?: Map<string, DeliverySettlementRow>,
 ): DeliveryRecord[] {
     const byDelivery = new Map<string, RcDeliverySampleRow[]>();
     for (const s of samples) {
@@ -225,6 +317,10 @@ function assemble(
     return rows.map((row) => ({
         row: showPrices ? row : stripPrices(row),
         samples: byDelivery.get(row.id ?? '') ?? [],
+        // `null` rather than `undefined` when the gate refused or the receipt has no
+        // settlement row: the two mean different things to the grid, and "the query never
+        // ran" must not read as "still loading".
+        settlement: showPrices ? (settlements?.get(row.id ?? '') ?? null) : null,
     }));
 }
 
@@ -290,15 +386,16 @@ async function duplicatePairs(
 
     const fetched = data ?? [];
     const clipped = fetched.length > DUPLICATE_WORKLIST_MAX ? fetched.slice(0, DUPLICATE_WORKLIST_MAX) : fetched;
-    const { samples, error: sErr } = await loadSamples(
+    const { samples, settlements, error: sErr } = await loadChildren(
         supabase,
         clipped.map((r) => r.id ?? '').filter(Boolean),
+        showPrices,
     );
     if (sErr) return pageErr(sErr, showPrices);
 
     const totalCount = await countRows(supabase, lens);
     return {
-        records: assemble(clipped, samples, showPrices),
+        records: assemble(clipped, samples, showPrices, settlements),
         hasOlder: false,
         hasNewer: false,
         canViewPrices: showPrices,
@@ -345,13 +442,14 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
             ]);
             if (error) return pageErr(`Failed to load receipts: ${error.message}`, showPrices);
             const fetched = (data ?? []).reverse();
-            const { samples, error: sErr } = await loadSamples(
+            const { samples, settlements, error: sErr } = await loadChildren(
                 supabase,
                 fetched.map((r) => r.id ?? '').filter(Boolean),
+                showPrices,
             );
             if (sErr) return pageErr(sErr, showPrices);
             return {
-                records: assemble(fetched, samples, showPrices),
+                records: assemble(fetched, samples, showPrices, settlements),
                 hasOlder: fetched.length === PAGE_SIZE,
                 hasNewer: false,
                 canViewPrices: showPrices,
@@ -399,13 +497,14 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
         const fetched = data ?? [];
         const hasNewer = fetched.length > PAGE_SIZE;
         const rows = hasNewer ? fetched.slice(0, PAGE_SIZE) : fetched;
-        const { samples, error: sErr } = await loadSamples(
+        const { samples, settlements, error: sErr } = await loadChildren(
             supabase,
             rows.map((r) => r.id ?? '').filter(Boolean),
+            showPrices,
         );
         if (sErr) return pageErr(sErr, showPrices);
         return {
-            records: assemble(rows, samples, showPrices),
+            records: assemble(rows, samples, showPrices, settlements),
             hasOlder: true,
             hasNewer,
             canViewPrices: showPrices,
@@ -439,14 +538,15 @@ export async function fetchDeliveryPage(input: DeliveryPageInput): Promise<Deliv
     // window in canonical (oldest-first) order and can prepend it wholesale.
     const rows = asc ? clipped : clipped.reverse();
 
-    const { samples, error: sErr } = await loadSamples(
+    const { samples, settlements, error: sErr } = await loadChildren(
         supabase,
         rows.map((r) => r.id ?? '').filter(Boolean),
+        showPrices,
     );
     if (sErr) return pageErr(sErr, showPrices);
 
     return {
-        records: assemble(rows, samples, showPrices),
+        records: assemble(rows, samples, showPrices, settlements),
         hasOlder: asc ? true : more,
         hasNewer: asc ? more : true,
         canViewPrices: showPrices,
@@ -500,13 +600,14 @@ export async function fetchDeliveryMonth(
         return { records: [], canViewPrices: showPrices, error: `Failed to load the month: ${error.message}` };
     }
     const rows = data ?? [];
-    const { samples, error: sErr } = await loadSamples(
+    const { samples, settlements, error: sErr } = await loadChildren(
         supabase,
         rows.map((r) => r.id ?? '').filter(Boolean),
+        showPrices,
     );
     if (sErr) return { records: [], canViewPrices: showPrices, error: sErr };
 
-    return { records: assemble(rows, samples, showPrices), canViewPrices: showPrices };
+    return { records: assemble(rows, samples, showPrices, settlements), canViewPrices: showPrices };
 }
 
 // ═══ READ — dimensions + the month index ════════════════════════════════════════
@@ -688,6 +789,12 @@ interface RawRpcResult {
     row_version?: unknown;
     message?: unknown;
     samples_deleted?: unknown;
+    // Liquidation Step 4 — `cenapro_delete_rc_delivery`'s additive keys.
+    allocation_count?: unknown;
+    allocated_php?: unknown;
+    payments?: unknown;
+    allocations_released?: unknown;
+    allocations_released_php?: unknown;
 }
 
 const OUTCOMES: readonly SaveOutcome[] = [
@@ -854,32 +961,140 @@ export async function saveDeliveries(inputs: SaveDeliveryInput[]): Promise<SaveD
     };
 }
 
-export interface DeleteDeliveryResult {
-    ok: boolean;
-    outcome: SaveOutcome | 'deleted';
-    samplesDeleted: number;
-    message: string | null;
+/** One cheque named in a `has_allocations` refusal, so the warning can carry real numbers. */
+export interface BlockingPayment {
+    paymentId: string;
+    paymentDate: string | null;
+    method: string | null;
+    chequeNo: string | null;
+    /** The cheque's face value. */
+    amountPhp: number | null;
+    /** How much of it is assigned to THIS receipt. */
+    allocatedPhp: number | null;
 }
 
+export interface DeleteDeliveryResult {
+    ok: boolean;
+    /**
+     * `has_allocations` is liquidation Step 4's refusal: the receipt has money against it
+     * and the caller did not say to release it. It is a QUESTION, not a failure — see
+     * `blocking` below.
+     */
+    outcome: SaveOutcome | 'deleted' | 'has_allocations';
+    samplesDeleted: number;
+    message: string | null;
+    /** How many payments point at this receipt, and for how much in total. */
+    allocationCount: number;
+    allocatedPhp: number | null;
+    /** The cheques involved, by name and amount. Empty unless `has_allocations`. */
+    blocking: BlockingPayment[];
+    /** On a successful release: what went back to the payments' unassigned pools. */
+    releasedCount: number;
+    releasedPhp: number | null;
+}
+
+function emptyDelete(
+    ok: boolean,
+    outcome: DeleteDeliveryResult['outcome'],
+    message: string | null,
+): DeleteDeliveryResult {
+    return {
+        ok, outcome, message,
+        samplesDeleted: 0, allocationCount: 0, allocatedPhp: null, blocking: [],
+        releasedCount: 0, releasedPhp: null,
+    };
+}
+
+/** The `payments` array the RPC returns with a `has_allocations` refusal. */
+function readBlocking(raw: unknown): BlockingPayment[] {
+    if (!Array.isArray(raw)) return [];
+    const out: BlockingPayment[] = [];
+    for (const item of raw) {
+        if (typeof item !== 'object' || item === null) continue;
+        const p = item as Record<string, unknown>;
+        const paymentId = typeof p.payment_id === 'string' ? p.payment_id : null;
+        if (!paymentId) continue;
+        out.push({
+            paymentId,
+            paymentDate: typeof p.payment_date === 'string' ? p.payment_date : null,
+            method: typeof p.method === 'string' ? p.method : null,
+            chequeNo: typeof p.cheque_no === 'string' ? p.cheque_no : null,
+            amountPhp: readNumeric(p.amount_php),
+            allocatedPhp: readNumeric(p.allocated_php),
+        });
+    }
+    return out;
+}
+
+/** PostgREST hands a `numeric` back as a number OR a string, depending on the column. */
+function readNumeric(raw: unknown): number | null {
+    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+    if (typeof raw === 'string' && raw.trim() !== '') {
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
+}
+
+/**
+ * Delete one receipt.
+ *
+ * ── STEP 4 CHANGED THIS, AND THE CHANGE IS A QUESTION RATHER THAN A FAILURE ──────
+ * If the receipt has money assigned to it, the RPC now REFUSES with outcome
+ * `has_allocations`, carrying the real allocated total and the real cheques involved — so
+ * the UI can warn with numbers instead of a generic scare. §5c, Renzo: *"what if an entry
+ * was a duplicate and it was already assigned money."*
+ *
+ * Passing `releaseAllocations` re-calls it with `p_release_allocations => true`, which
+ * removes those edges in the SAME transaction and then deletes the receipt. The money
+ * returns to each cheque's unassigned pool automatically, because `unallocated_php` is
+ * derived rather than stored — it is never destroyed.
+ *
+ * **With no allocations at all, this behaves exactly as it did before.** The new argument
+ * defaults to false in SQL as well as here, and the return payload keeps every key it had;
+ * the rest are additive.
+ */
 export async function deleteDelivery(
     id: string,
     expectedRowVersion: number,
+    releaseAllocations = false,
 ): Promise<DeleteDeliveryResult> {
     const supabase = await createClient();
     const { data, error } = await supabase.rpc('cenapro_delete_rc_delivery', {
         p_id: id,
         p_expected_row_version: expectedRowVersion,
+        // Sent only when releasing, so the ordinary delete is byte-for-byte the call it
+        // has always been and the SQL default is what decides.
+        ...(releaseAllocations ? { p_release_allocations: true } : {}),
     });
-    if (error) {
-        return { ok: false, outcome: 'rpc_error', samplesDeleted: 0, message: error.message };
-    }
+    if (error) return emptyDelete(false, 'rpc_error', error.message);
+
     const r = (data ?? {}) as RawRpcResult;
     const ok = r.ok === true;
-    if (ok) revalidatePath('/cenapro/deliveries');
+    if (ok) {
+        revalidatePath('/cenapro/deliveries');
+        // Releasing money moves the trader's advance and every affected cheque's
+        // unassigned figure, so the liquidation screens are stale too.
+        if (readNumeric(r.allocations_released) ?? 0) {
+            revalidatePath('/cenapro/liquidation');
+        }
+    }
     return {
         ok,
-        outcome: ok ? 'deleted' : readOutcome(r.outcome, 'rpc_error'),
+        // `has_allocations` belongs to the DELETE path only, so it is narrowed here rather
+        // than added to `OUTCOMES` — a save result can never legitimately carry it, and a
+        // shared list would let one appear where nothing handles it.
+        outcome: ok
+            ? 'deleted'
+            : r.outcome === 'has_allocations'
+              ? 'has_allocations'
+              : readOutcome(r.outcome, 'rpc_error'),
         samplesDeleted: typeof r.samples_deleted === 'number' ? r.samples_deleted : 0,
         message: readMessage(r.message),
+        allocationCount: Math.round(readNumeric(r.allocation_count) ?? 0),
+        allocatedPhp: readNumeric(r.allocated_php),
+        blocking: readBlocking(r.payments),
+        releasedCount: Math.round(readNumeric(r.allocations_released) ?? 0),
+        releasedPhp: readNumeric(r.allocations_released_php),
     };
 }

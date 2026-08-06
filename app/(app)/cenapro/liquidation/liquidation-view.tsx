@@ -147,6 +147,15 @@ interface Measures {
     receipts: number | string | null;
     paid: number | string | null;
     receipt_count: number | string | null;
+    /**
+     * ALL-TIME in BOTH lenses, on purpose — the same deliberate asymmetry as the unpriced
+     * counts. An unassigned remainder on a payment dated BEFORE an opening-balance cutoff
+     * is still money nobody has pointed at a receipt; windowing it away would hide a live
+     * operational fact behind a stated figure. `advance_php_window` exists for a screen
+     * that wants both; the all-time one is primary.
+     */
+    advance_php: number | string | null;
+    advance_payment_count: number | string | null;
     /** ALL-TIME in BOTH lenses, on purpose. See rule 4 in the header. */
     unpriced_receipt_count: number | string | null;
     unpriced_receipt_kg: number | string | null;
@@ -169,6 +178,8 @@ function measuresOf(r: SupplierBalanceRow | SupplierGroupBalanceRow, lens: Balan
         receipts: all ? r.receipts_all_php : r.receipts_php,
         paid: all ? r.payments_all_php : r.payments_php,
         receipt_count: all ? r.receipt_count_all : r.receipt_count,
+        advance_php: r.advance_php,
+        advance_payment_count: r.advance_payment_count,
         unpriced_receipt_count: r.unpriced_receipt_count,
         unpriced_receipt_kg: r.unpriced_receipt_kg,
         unpriced_awaiting_weight_count: r.unpriced_awaiting_weight_count,
@@ -269,7 +280,9 @@ export function LiquidationView({
     loadError,
 }: LiquidationViewProps) {
     const router = useRouter();
-    const [panel, setPanel] = useState<{ code: string; name: string } | null>(null);
+    const [panel, setPanel] = useState<{ code: string; name: string; advancesOnly: boolean } | null>(
+        null,
+    );
     const [panelOpen, setPanelOpen] = useState(false);
     const [opening, setOpening] = useState<{ row: SupplierBalanceRow; name: string } | null>(null);
     const [openingOpen, setOpeningOpen] = useState(false);
@@ -345,8 +358,14 @@ export function LiquidationView({
         return out;
     }, [suppliers, groups, lens]);
 
-    function openPanel(code: string, name: string) {
-        setPanel({ code, name });
+    /**
+     * Open one trader's payments. `advancesOnly` is the drill-down from the NOT YET
+     * ASSIGNED cell — the panel opens with its "money left" filter already on, which is
+     * the whole of Step 5: an advance is a payment with an unassigned remainder, so the
+     * way in is a filter rather than a screen.
+     */
+    function openPanel(code: string, name: string, advancesOnly = false) {
+        setPanel({ code, name, advancesOnly });
         setPanelOpen(true);
     }
 
@@ -446,6 +465,11 @@ export function LiquidationView({
                                     line={line}
                                     lens={lens}
                                     onOpen={() => line.code && openPanel(line.code, line.name)}
+                                    onOpenAdvances={
+                                        line.code
+                                            ? () => openPanel(line.code!, line.name, true)
+                                            : undefined
+                                    }
                                     onSetOpening={
                                         line.row
                                             ? () => openOpeningDialog(line.row!, line.name)
@@ -466,6 +490,7 @@ export function LiquidationView({
                 }}
                 supplierCode={panel?.code ?? null}
                 supplierName={panel?.name ?? ''}
+                initialAdvanceOnly={panel?.advancesOnly ?? false}
                 suppliers={dimensionSuppliers}
                 accounts={accounts}
                 onChanged={() => router.refresh()}
@@ -573,16 +598,24 @@ function BalanceRow({
     line,
     lens,
     onOpen,
+    onOpenAdvances,
     onSetOpening,
 }: {
     line: Line;
     lens: BalanceLens;
     onOpen: () => void;
+    /**
+     * Open this trader's payments filtered to the ones still carrying unassigned money.
+     * Absent on a group header and the no-payee row, which have no payments of their own.
+     */
+    onOpenAdvances?: () => void;
     /** Absent on a group header and on the no-payee row — neither can carry an opening. */
     onSetOpening?: () => void;
 }) {
     const m = line.measures;
     const dir = balanceDirection(m.balance);
+    const advance = num(m.advance_php) ?? 0;
+    const advanceCount = num(m.advance_payment_count) ?? 0;
     const unpricedCount = num(m.unpriced_receipt_count) ?? 0;
     const unpricedKg = num(m.unpriced_receipt_kg) ?? 0;
     const unpricedWindow = num(m.unpriced_receipt_count_window) ?? 0;
@@ -796,6 +829,52 @@ function BalanceRow({
                     <span>₱</span>
                     <span className="text-foreground">{formatPeso(m.paid)}</span>
                 </span>
+            </td>
+
+            {/* NOT YET ASSIGNED — the outstanding advance, and the drill-down into it.
+                No colour and no badge: a trader carrying an advance is ordinary business,
+                and §4.4 is explicit that an advance needs no feature of its own. Clicking
+                it opens this trader's payments already filtered to the ones with money
+                left, which is Step 5 in its entirety. */}
+            <td className={numCell}>
+                {advance > 0 ? (
+                    <button
+                        type="button"
+                        className="w-full text-right transition-colors duration-150 hover:text-primary focus-visible:outline-none focus-visible:ring-[2px] focus-visible:ring-ring/50"
+                        // The whole ROW is a button (it opens the unfiltered payments list),
+                        // so this must not bubble or both would fire at once.
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenAdvances?.();
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        disabled={!onOpenAdvances}
+                        title={`₱${formatPeso(
+                            advance,
+                        )} has been paid to this trader without being pointed at any particular receipt${
+                            advanceCount > 0
+                                ? `, across ${advanceCount} payment${advanceCount === 1 ? '' : 's'}`
+                                : ''
+                        }. That is an outstanding advance — normal, and already counted inside PAID rather than on top of it. Whole history, never windowed. Open the payments with money left.`}
+                    >
+                        <span className="flex items-baseline justify-between gap-2">
+                            <span className="text-muted-foreground">₱</span>
+                            <span>{formatPeso(advance)}</span>
+                        </span>
+                        {advanceCount > 0 ? (
+                            <span className="block text-right text-[10px] font-normal leading-tight text-muted-foreground">
+                                {advanceCount} payment{advanceCount === 1 ? '' : 's'} with money left
+                            </span>
+                        ) : null}
+                    </button>
+                ) : (
+                    <span
+                        className="text-muted-foreground/50"
+                        title="Every payment to this trader has been pointed at particular receipts — there is no outstanding advance."
+                    >
+                        —
+                    </span>
+                )}
             </td>
 
             <td className={numCell}>{formatCount(m.receipt_count)}</td>

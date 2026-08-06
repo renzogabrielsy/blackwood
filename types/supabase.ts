@@ -2218,6 +2218,30 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_rc_delivery_settlement: {
+        Row: {
+          allocated_php: number | null
+          allocation_count: number | null
+          balance_php: number | null
+          delivery_date: string | null
+          delivery_id: string | null
+          destination_code: string | null
+          group_code: string | null
+          group_display_name: string | null
+          is_allocatable: boolean | null
+          is_priceable: boolean | null
+          last_allocated_at: string | null
+          net_weight_kg: number | null
+          payment_ids: string[] | null
+          row_version: number | null
+          settlement_status: string | null
+          supplier_code: string | null
+          supplier_display_name: string | null
+          total_price_php: number | null
+          truck_no: string | null
+        }
+        Relationships: []
+      }
       cenapro_rc_destinations: {
         Row: {
           active: boolean | null
@@ -2254,14 +2278,49 @@ export type Database = {
         }
         Relationships: []
       }
+      cenapro_rc_payment_allocations: {
+        Row: {
+          amount_php: number | null
+          cheque_no: string | null
+          created_at: string | null
+          created_by: string | null
+          deleted_at: string | null
+          deleted_by: string | null
+          delivery_date: string | null
+          delivery_id: string | null
+          delivery_supplier_code: string | null
+          delivery_supplier_name: string | null
+          delivery_total_php: number | null
+          id: string | null
+          is_deleted: boolean | null
+          is_subgroup_allocation: boolean | null
+          method: string | null
+          note: string | null
+          payee_group_code: string | null
+          payment_amount_php: number | null
+          payment_date: string | null
+          payment_id: string | null
+          payment_is_deleted: boolean | null
+          payment_supplier_code: string | null
+          payment_supplier_name: string | null
+          row_version: number | null
+          truck_no: string | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Relationships: []
+      }
       cenapro_rc_payment_audit: {
         Row: {
+          allocation_id: string | null
           amount_php: number | null
           changed: Json | null
           changed_at: string | null
           changed_by: string | null
           changed_by_role: string | null
           cheque_no: string | null
+          delivery_id: string | null
+          entity: string | null
           id: number | null
           method: string | null
           operation: string | null
@@ -2272,12 +2331,15 @@ export type Database = {
           supplier_code: string | null
         }
         Insert: {
+          allocation_id?: string | null
           amount_php?: number | null
           changed?: Json | null
           changed_at?: string | null
           changed_by?: string | null
           changed_by_role?: string | null
           cheque_no?: string | null
+          delivery_id?: string | null
+          entity?: string | null
           id?: number | null
           method?: string | null
           operation?: string | null
@@ -2288,12 +2350,15 @@ export type Database = {
           supplier_code?: string | null
         }
         Update: {
+          allocation_id?: string | null
           amount_php?: number | null
           changed?: Json | null
           changed_at?: string | null
           changed_by?: string | null
           changed_by_role?: string | null
           cheque_no?: string | null
+          delivery_id?: string | null
+          entity?: string | null
           id?: number | null
           method?: string | null
           operation?: string | null
@@ -2302,6 +2367,45 @@ export type Database = {
           snapshot?: Json | null
           source?: string | null
           supplier_code?: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_payment_state: {
+        Row: {
+          account_label: string | null
+          account_no: string | null
+          allocated_php: number | null
+          allocation_count: number | null
+          amount_php: number | null
+          balance_effect_php: number | null
+          bank_account_id: string | null
+          bank_account_label: string | null
+          bank_code: string | null
+          bank_display_name: string | null
+          cheque_date: string | null
+          cheque_no: string | null
+          created_at: string | null
+          created_by: string | null
+          deleted_at: string | null
+          deleted_by: string | null
+          direction: string | null
+          group_code: string | null
+          group_display_name: string | null
+          id: string | null
+          is_advance: boolean | null
+          is_cash: boolean | null
+          is_deleted: boolean | null
+          method: string | null
+          payment_date: string | null
+          reference_no: string | null
+          remarks: string | null
+          row_version: number | null
+          stated_term: string | null
+          supplier_code: string | null
+          supplier_name: string | null
+          unallocated_php: number | null
+          updated_at: string | null
+          updated_by: string | null
         }
         Relationships: []
       }
@@ -2389,6 +2493,9 @@ export type Database = {
           adjustment_count: number | null
           adjustment_count_all: number | null
           adjustment_php: number | null
+          advance_payment_count: number | null
+          advance_php: number | null
+          advance_php_window: number | null
           carried_payment_count: number | null
           carried_payment_php: number | null
           carried_receipt_count: number | null
@@ -2430,6 +2537,7 @@ export type Database = {
           running_balance_php: number | null
           sort_order: number | null
           supplier_code: string | null
+          unassigned_incoming_php: number | null
           unpriced_awaiting_both_count: number | null
           unpriced_awaiting_price_count: number | null
           unpriced_awaiting_weight_count: number | null
@@ -2446,6 +2554,9 @@ export type Database = {
           adjustment_count: number | null
           adjustment_count_all: number | null
           adjustment_php: number | null
+          advance_payment_count: number | null
+          advance_php: number | null
+          advance_php_window: number | null
           any_active: boolean | null
           carried_payment_count: number | null
           carried_payment_php: number | null
@@ -2484,6 +2595,7 @@ export type Database = {
           running_balance_php: number | null
           supplier_codes: string[] | null
           supplier_count: number | null
+          unassigned_incoming_php: number | null
           unpriced_awaiting_both_count: number | null
           unpriced_awaiting_price_count: number | null
           unpriced_awaiting_weight_count: number | null
@@ -3466,8 +3578,22 @@ export type Database = {
         }
         Returns: Json
       }
+      cenapro_allocate_delivery_to_payment: {
+        Args: {
+          p_amount_php?: number
+          p_delivery_id?: string
+          p_expected_row_version?: number
+          p_note?: string
+          p_payment_id: string
+        }
+        Returns: Json
+      }
       cenapro_delete_rc_delivery: {
-        Args: { p_expected_row_version: number; p_id: string }
+        Args: {
+          p_expected_row_version: number
+          p_id: string
+          p_release_allocations?: boolean
+        }
         Returns: Json
       }
       cenapro_delete_rc_payment: {
@@ -3534,6 +3660,10 @@ export type Database = {
         Args: { p_expected_row_version: number; p_id: string }
         Returns: Json
       }
+      cenapro_restore_rc_payment_allocation: {
+        Args: { p_expected_row_version: number; p_id: string }
+        Returns: Json
+      }
       cenapro_save_analysis_sample: {
         Args: {
           p_ash?: number
@@ -3574,6 +3704,14 @@ export type Database = {
       }
       cenapro_save_rc_payment: {
         Args: { p_expected_row_version?: number; p_id?: string; p_patch?: Json }
+        Returns: Json
+      }
+      cenapro_save_rc_payment_allocations: {
+        Args: {
+          p_allocations?: Json
+          p_expected_row_version?: number
+          p_payment_id: string
+        }
         Returns: Json
       }
       cenapro_save_rc_supplier: {

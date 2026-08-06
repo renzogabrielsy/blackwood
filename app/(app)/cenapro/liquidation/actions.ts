@@ -32,14 +32,21 @@ import { createClient } from '@/lib/supabase/server';
 import {
     LIQUIDATION_OUTCOMES,
     PRICE_GATE_NOTE,
+    allocationsPayload,
+    fillOldestFirst,
+    num,
+    type AllocationInput,
     type BankAccountRow,
     type BankRow,
+    type DeliverySettlementRow,
     type LiquidationOutcome,
     type LiquidationResult,
+    type PaymentAllocationRow,
     type PaymentPatch,
-    type PaymentRow,
+    type PaymentStateRow,
     type RpcPatch,
     type SetOpeningBalanceArgs,
+    type SpreadLine,
     type SupplierBalanceRow,
     type SupplierGroupBalanceRow,
     type SupplierGroupRow,
@@ -54,6 +61,12 @@ function revalidateLiquidation() {
     revalidatePath('/cenapro/liquidation');
     revalidatePath('/cenapro/liquidation/subgroups');
     revalidatePath('/cenapro/liquidation/banks');
+    // Step 4: the RECEIPT LEDGER is now a consumer too. `/cenapro/deliveries` renders a
+    // settlement column read from `cenapro_rc_delivery_settlement`, and both allocation
+    // doors call the same write path — so an assignment made from the spread screen has to
+    // move the ledger's column, and one made from the ledger's own context menu has to
+    // move the balance. One helper, so a new write path cannot forget either side.
+    revalidatePath('/cenapro/deliveries');
 }
 
 /**
@@ -82,14 +95,32 @@ const PAYMENT_MAX = 500;
 // with holes in it.
 //
 // A SINGLE string literal per relation — `+` concatenation defeats type inference.
+// Step 4 (allocation) widened both balance views again: `advance_php` +
+// `advance_payment_count` + `unassigned_incoming_php` + `advance_php_window`. Step 3
+// deliberately omitted them — with no allocations, every peso of every payment was
+// unallocated, so the column would have read 100% on every row and taught the UI
+// something false. They are computable now, and they are appended below.
 const BALANCE_COLS =
-    'supplier_code, display_name, active, sort_order, is_unassigned, parent_code, group_code, group_display_name, group_sort_order, is_parent, is_child, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, opening_as_of_date, has_opening_balance, opening_note, opening_set_at, opening_revision_id, opening_revision_count, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window';
+    'supplier_code, display_name, active, sort_order, is_unassigned, parent_code, group_code, group_display_name, group_sort_order, is_parent, is_child, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, opening_as_of_date, has_opening_balance, opening_note, opening_set_at, opening_revision_id, opening_revision_count, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window, advance_php, advance_payment_count, unassigned_incoming_php, advance_php_window';
 
 const GROUP_BALANCE_COLS =
-    'group_code, group_display_name, group_sort_order, is_unassigned, supplier_count, child_count, supplier_codes, any_active, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, has_opening_balance, opening_supplier_count, opening_as_of_date, opening_as_of_date_min, opening_as_of_date_max, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window';
+    'group_code, group_display_name, group_sort_order, is_unassigned, supplier_count, child_count, supplier_codes, any_active, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, has_opening_balance, opening_supplier_count, opening_as_of_date, opening_as_of_date_min, opening_as_of_date_max, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window, advance_php, advance_payment_count, unassigned_incoming_php, advance_php_window';
 
+// `cenapro_rc_payment_state` is `cenapro_rc_payments` + four columns, so this is the
+// payments projection plus what has been assigned out of each one. Read the STATE view
+// everywhere, never the plainer one: a payments list that cannot say how much of a cheque
+// is still unassigned sends the operator to a second screen to find out, and
+// `unallocated_php` has exactly ONE definition (that view) which the balance also reads.
 const PAYMENT_COLS =
-    'id, supplier_code, supplier_name, group_code, group_display_name, payment_date, method, amount_php, direction, stated_term, bank_account_id, bank_code, bank_display_name, account_label, account_no, bank_account_label, cheque_no, cheque_date, reference_no, remarks, balance_effect_php, is_cash, is_deleted, deleted_at, deleted_by, row_version, created_at, created_by, updated_at, updated_by';
+    'id, supplier_code, supplier_name, group_code, group_display_name, payment_date, method, amount_php, direction, stated_term, bank_account_id, bank_code, bank_display_name, account_label, account_no, bank_account_label, cheque_no, cheque_date, reference_no, remarks, balance_effect_php, is_cash, is_deleted, deleted_at, deleted_by, row_version, created_at, created_by, updated_at, updated_by, allocated_php, unallocated_php, allocation_count, is_advance';
+
+/** One row per receipt: what it is worth, what is assigned, what is still owed. */
+const SETTLEMENT_COLS =
+    'delivery_id, supplier_code, supplier_display_name, group_code, group_display_name, delivery_date, truck_no, destination_code, net_weight_kg, total_price_php, is_priceable, is_allocatable, allocated_php, balance_php, allocation_count, payment_ids, last_allocated_at, settlement_status, row_version';
+
+/** One payment→receipt edge, both ends folded in. Soft-deleted edges INCLUDED. */
+const ALLOCATION_COLS =
+    'id, payment_id, delivery_id, amount_php, payee_group_code, note, payment_supplier_code, payment_supplier_name, payment_date, method, cheque_no, payment_amount_php, payment_is_deleted, delivery_supplier_code, delivery_supplier_name, delivery_date, truck_no, delivery_total_php, is_subgroup_allocation, is_deleted, deleted_at, deleted_by, row_version, created_at, created_by, updated_at, updated_by';
 
 const OPENING_HISTORY_COLS =
     'id, supplier_code, supplier_display_name, as_of_date, opening_balance_php, note, is_current, created_at, created_by';
@@ -170,10 +201,21 @@ export interface PaymentDimensionsResult {
 }
 
 /**
- * The two lists the payment form picks from. NOT ₱-bearing in themselves, but only ever
- * fetched for a screen that is, so the caller is already behind the gate.
+ * The two lists the payment form picks from.
+ *
+ * ── IT GATES ITSELF, AND IT DID NOT USED TO ──────────────────────────────────────
+ * Neither list carries a ₱ column, and while this was only reached from
+ * `/cenapro/liquidation` — a route gated in its own `page.tsx` before anything renders —
+ * relying on the caller was defensible. Step 4 gave it a SECOND caller,
+ * `/cenapro/deliveries`, which serves gated and ungated viewers alike: a Production role
+ * loading the receipt ledger would have been handed CI's bank-account list, with the
+ * account numbers on it. Relying on a caller's gate is exactly how a boundary leaks the
+ * first time someone adds a caller, so the check moved in here where it cannot be
+ * forgotten. The liquidation route is unaffected — it was already behind the same gate.
  */
 export async function fetchPaymentDimensions(): Promise<PaymentDimensionsResult> {
+    if (!(await canViewPrices())) return { suppliers: [], accounts: [], error: null };
+
     const supabase = await createClient();
 
     const [supplierRes, accountRes] = await Promise.all([
@@ -199,7 +241,14 @@ export async function fetchPaymentDimensions(): Promise<PaymentDimensionsResult>
 }
 
 export interface SupplierPaymentsResult {
-    payments: PaymentRow[];
+    /**
+     * Read from `cenapro_rc_payment_state`, so every row already carries
+     * `allocated_php` / `unallocated_php` / `allocation_count` / `is_advance`. Step 4
+     * changed this from `cenapro_rc_payments` (a strict subset): the panel's whole job is
+     * to make a payment something other than write-only, and "how much of this cheque is
+     * still unassigned" is now the most useful thing on the row.
+     */
+    payments: PaymentStateRow[];
     canViewPrices: boolean;
     error: string | null;
 }
@@ -226,7 +275,7 @@ export async function fetchSupplierPayments(supplierCode: string): Promise<Suppl
 
     const supabase = await createClient();
     const { data, error } = await supabase
-        .from('cenapro_rc_payments')
+        .from('cenapro_rc_payment_state')
         .select(PAYMENT_COLS)
         .eq('supplier_code', code)
         .order('payment_date', { ascending: false })
@@ -382,6 +431,262 @@ export async function fetchOpeningBalanceHistory(
         })),
         canViewPrices: true,
         error: null,
+    };
+}
+
+// ═══ READ — allocation (Step 4) ═════════════════════════════════════════════════
+//
+// Two doors, and each needs a different slice of the SAME two views. Neither door gets a
+// read the other cannot reuse.
+//
+// ── Every one of these is ₱-BEARING and the query is NOT ISSUED when the gate refuses ──
+// `cenapro_rc_delivery_settlement` carries `total_price_php`, `allocated_php` and
+// `balance_php`; `cenapro_rc_payment_state` carries the cheque's face value. There is no
+// useful redacted version of either — remove the money and a settlement row is a date and
+// a truck number. So the gate is the same coarse, early one the rest of this module uses:
+// refuse, return empty, and never let the money into the network response in the first
+// place. This is deliberately STRONGER than `deliveries/types.ts::stripPrices()`, which
+// nulls named fields on a row it still returns.
+
+/** How many receipts one spread screen will list. A trader's whole history is ~280 rows. */
+const SPREAD_MAX = 1000;
+
+/** Payments a delivery-first assignment may choose from. Small by construction. */
+const PAYMENT_PICKER_MAX = 200;
+
+export interface SpreadResult {
+    /** The payment being spread, WITH its `unallocated_php`. `null` when it is gone. */
+    payment: PaymentStateRow | null;
+    /**
+     * The payee's own receipts AND its sub-suppliers' — resolved through
+     * `group_code`, the ONE definition, never re-derived from names. Oldest first.
+     */
+    settlements: DeliverySettlementRow[];
+    /** The edges already saved against THIS payment. Live ones only. */
+    allocations: PaymentAllocationRow[];
+    canViewPrices: boolean;
+    error: string | null;
+}
+
+/**
+ * Everything the spread screen renders, in one call.
+ *
+ * The receipt list is scoped by **`group_code`**, not by `supplier_code`: a cheque made
+ * out to a parent may legitimately settle a sub-supplier's delivery (§5a), and the DB
+ * enforces exactly that rule on the write path. Scoping the list any other way would
+ * offer the operator a set of receipts the RPC would then refuse — or hide ones it would
+ * accept.
+ *
+ * Ordered **oldest first** because that is how a cheque is actually spread, and it is what
+ * `Fill oldest first` walks.
+ */
+export async function fetchSpread(paymentId: string): Promise<SpreadResult> {
+    const showPrices = await canViewPrices();
+    if (!showPrices) {
+        return { payment: null, settlements: [], allocations: [], canViewPrices: false, error: null };
+    }
+
+    const id = paymentId.trim();
+    if (!id) {
+        return { payment: null, settlements: [], allocations: [], canViewPrices: true, error: 'No payment was named.' };
+    }
+
+    const supabase = await createClient();
+
+    const { data: payment, error: payErr } = await supabase
+        .from('cenapro_rc_payment_state')
+        .select(PAYMENT_COLS)
+        .eq('id', id)
+        .maybeSingle();
+
+    if (payErr) {
+        return {
+            payment: null, settlements: [], allocations: [], canViewPrices: true,
+            error: `Failed to load the payment: ${payErr.message}`,
+        };
+    }
+    if (!payment) {
+        return { payment: null, settlements: [], allocations: [], canViewPrices: true, error: null };
+    }
+
+    // The payee's GROUP, read from its one definition rather than assembled here.
+    const groupCode = payment.group_code ?? payment.supplier_code ?? '';
+
+    const [settleRes, allocRes] = await Promise.all([
+        supabase
+            .from('cenapro_rc_delivery_settlement')
+            .select(SETTLEMENT_COLS)
+            .eq('group_code', groupCode)
+            .order('delivery_date', { ascending: true, nullsFirst: true })
+            .order('delivery_id', { ascending: true })
+            .limit(SPREAD_MAX),
+        supabase
+            .from('cenapro_rc_payment_allocations')
+            .select(ALLOCATION_COLS)
+            .eq('payment_id', id)
+            .eq('is_deleted', false)
+            .order('delivery_date', { ascending: true, nullsFirst: true }),
+    ]);
+
+    const error = settleRes.error?.message ?? allocRes.error?.message ?? null;
+    return {
+        payment,
+        settlements: settleRes.data ?? [],
+        allocations: allocRes.data ?? [],
+        canViewPrices: true,
+        error: error ? `Failed to load the receipts to spread across: ${error}` : null,
+    };
+}
+
+export interface AllocationTargetsResult {
+    /**
+     * Payments that could still take money — the payee's own AND, when the receipt
+     * belongs to a sub-supplier, the parent's. Only live payments with something left.
+     */
+    payments: PaymentStateRow[];
+    /** The receipt's settlement state, so the picker can default the amount honestly. */
+    settlement: DeliverySettlementRow | null;
+    canViewPrices: boolean;
+    error: string | null;
+}
+
+/**
+ * The delivery-first door's payload: *which cheques could pay for THIS receipt.*
+ *
+ * Renzo: *"right click on a delivery and then assign a cheque to it."* The candidate set
+ * is every live payment whose payee resolves to the receipt's own `group_code` and which
+ * still has `unallocated_php > 0` — i.e. exactly the payments the RPC would accept. A
+ * picker that offered a fully-assigned cheque would be offering a guaranteed refusal.
+ *
+ * Note the group is read off the SETTLEMENT row (which gets it from
+ * `view_rc_supplier_group`), not from the delivery's `supplier_code`: a sub-supplier's
+ * receipt has to find its PARENT's cheques, which is the entire point of §5a.
+ */
+export async function fetchAllocationTargets(deliveryId: string): Promise<AllocationTargetsResult> {
+    const showPrices = await canViewPrices();
+    if (!showPrices) {
+        return { payments: [], settlement: null, canViewPrices: false, error: null };
+    }
+
+    const id = deliveryId.trim();
+    if (!id) {
+        return { payments: [], settlement: null, canViewPrices: true, error: 'No receipt was named.' };
+    }
+
+    const supabase = await createClient();
+    const { data: settlement, error: sErr } = await supabase
+        .from('cenapro_rc_delivery_settlement')
+        .select(SETTLEMENT_COLS)
+        .eq('delivery_id', id)
+        .maybeSingle();
+
+    if (sErr) {
+        return {
+            payments: [], settlement: null, canViewPrices: true,
+            error: `Failed to load the receipt’s settlement state: ${sErr.message}`,
+        };
+    }
+    if (!settlement) {
+        return { payments: [], settlement: null, canViewPrices: true, error: null };
+    }
+
+    // No payee ⇒ no cheque can ever point at it, and the RPC refuses by name. Say so
+    // rather than issuing a query whose answer is meaningless.
+    const groupCode = settlement.group_code;
+    if (!settlement.supplier_code || !groupCode) {
+        return { payments: [], settlement, canViewPrices: true, error: null };
+    }
+
+    const { data, error } = await supabase
+        .from('cenapro_rc_payment_state')
+        .select(PAYMENT_COLS)
+        .eq('group_code', groupCode)
+        .eq('is_deleted', false)
+        .gt('unallocated_php', 0)
+        .order('payment_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(PAYMENT_PICKER_MAX);
+
+    return {
+        payments: data ?? [],
+        settlement,
+        canViewPrices: true,
+        error: error ? `Failed to load the payments with money left: ${error.message}` : null,
+    };
+}
+
+export interface SettlementsResult {
+    settlements: DeliverySettlementRow[];
+    canViewPrices: boolean;
+    error: string | null;
+}
+
+/**
+ * The settlement state of an explicit set of receipts — what the deliveries ledger's
+ * multi-select "record a cheque for these" needs, and nothing more.
+ *
+ * Batched by id rather than by supplier: the operator's selection is the question, and
+ * re-deriving it from a supplier filter would answer a different one.
+ */
+export async function fetchSettlementsFor(deliveryIds: string[]): Promise<SettlementsResult> {
+    const showPrices = await canViewPrices();
+    if (!showPrices) return { settlements: [], canViewPrices: false, error: null };
+
+    const ids = deliveryIds.map((s) => s.trim()).filter(Boolean);
+    if (ids.length === 0) return { settlements: [], canViewPrices: true, error: null };
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .from('cenapro_rc_delivery_settlement')
+        .select(SETTLEMENT_COLS)
+        .in('delivery_id', ids.slice(0, SPREAD_MAX))
+        .order('delivery_date', { ascending: true, nullsFirst: true })
+        .order('delivery_id', { ascending: true });
+
+    return {
+        settlements: data ?? [],
+        canViewPrices: true,
+        error: error ? `Failed to load the selected receipts’ settlement state: ${error.message}` : null,
+    };
+}
+
+export interface DeliveryAllocationsResult {
+    /** Every edge on this receipt, soft-deleted ones INCLUDED (they are the history). */
+    allocations: PaymentAllocationRow[];
+    canViewPrices: boolean;
+    error: string | null;
+}
+
+/**
+ * Which payments have been assigned to ONE receipt — the deliveries ledger's
+ * "what is already on this row" panel.
+ *
+ * Soft-deleted edges are included on purpose, the same reasoning as voided payments: a
+ * released assignment belongs on a history list, and nobody can restore what they cannot
+ * see. Anything doing arithmetic filters `is_deleted` itself.
+ */
+export async function fetchDeliveryAllocations(
+    deliveryId: string,
+): Promise<DeliveryAllocationsResult> {
+    const showPrices = await canViewPrices();
+    if (!showPrices) return { allocations: [], canViewPrices: false, error: null };
+
+    const id = deliveryId.trim();
+    if (!id) return { allocations: [], canViewPrices: true, error: 'No receipt was named.' };
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .from('cenapro_rc_payment_allocations')
+        .select(ALLOCATION_COLS)
+        .eq('delivery_id', id)
+        .order('payment_date', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(PAYMENT_PICKER_MAX);
+
+    return {
+        allocations: data ?? [],
+        canViewPrices: true,
+        error: error ? `Failed to load this receipt’s payments: ${error.message}` : null,
     };
 }
 
@@ -653,6 +958,265 @@ export async function setOpeningBalance(input: SetOpeningBalanceArgs): Promise<L
 
     if (error) return rpcFailure(error.message);
     const result = readResult(data, 'inserted');
+    if (result.ok) revalidateLiquidation();
+    return result;
+}
+
+// ═══ WRITE — allocation (Step 4). ONE write path, two doors. ════════════════════
+//
+// `public.cenapro_save_rc_payment_allocations` replaces one payment's WHOLE live
+// allocation block in a single atomic call, and
+// `public.cenapro_allocate_delivery_to_payment` is a thin convenience for the
+// delivery-first door that is IMPLEMENTED ON TOP OF IT in SQL — it merges its one edge
+// into the payment's live block and delegates. So there is one code path, one set of
+// invariants and zero duplicated validation, in the database as well as here.
+//
+// Every refusal these RPCs return names precisely which of a dozen rules was broken —
+// the overshoot in pesos, both traders when a subgroup does not cover an edge, the receipt
+// with no payee by date and truck. It is passed through VERBATIM. `errorToast` shows it.
+
+export interface SavePaymentAllocationsInput {
+    paymentId: string;
+    /** The PARENT PAYMENT's version. A cheque's edges are edited as one block. */
+    expectedRowVersion: number;
+    /** The whole new block. `[]` un-assigns the payment completely. */
+    allocations: AllocationInput[];
+}
+
+/**
+ * Spread one payment across receipts — the cheque-first door, and the only place a block
+ * is written.
+ *
+ * **Atomic, and that is the requirement, not a nicety.** "Apply this cheque across four
+ * receipts" must never half-apply: the RPC bumps the parent first (which row-locks it and
+ * fires the compare-and-set), soft-deletes the edges the new block no longer mentions, then
+ * upserts the whole block in ONE statement so the constraint trigger sees the final state
+ * exactly once. A legal rearrangement — move ₱200k from receipt A to receipt B — would trip
+ * the invariant halfway through if it were several statements.
+ *
+ * Edges left out of `allocations` are SOFT-deleted and restorable (§5c), never destroyed.
+ */
+export async function savePaymentAllocations(
+    input: SavePaymentAllocationsInput,
+): Promise<LiquidationResult> {
+    if (!(await canViewPrices())) return FORBIDDEN();
+
+    const id = input.paymentId.trim();
+    if (!id) return rpcFailure('No payment was named.', 'invalid');
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('cenapro_save_rc_payment_allocations', {
+        p_payment_id: id,
+        p_expected_row_version: input.expectedRowVersion,
+        p_allocations: input.allocations,
+    });
+
+    if (error) return rpcFailure(error.message);
+    const result = readResult(data, 'saved');
+    if (result.ok) revalidateLiquidation();
+    return result;
+}
+
+export interface AllocateDeliveryInput {
+    paymentId: string;
+    expectedRowVersion: number;
+    deliveryId: string;
+    /**
+     * `null` means **as much as is needed and as much as is available** —
+     * `LEAST(what the receipt still owes, what the payment still has unassigned)`,
+     * computed in SQL because that is where money arithmetic belongs. The RPC refuses it
+     * when the receipt has no price yet (there is no "still owed" to fill) and when
+     * nothing is left on the cheque.
+     */
+    amountPhp: number | null;
+    note?: string | null;
+}
+
+/**
+ * Assign ONE receipt to an existing payment — the delivery-first door.
+ *
+ * **It SETS the edge, it does not add to it.** Calling it twice with ₱300,000 leaves
+ * ₱300,000 assigned, not ₱600,000: the block RPC underneath is a replace, and an "add"
+ * would make the same call twice mean two different things. The previous amount comes back
+ * in the response so the UI can say *"was ₱400,000, now ₱300,000."*
+ */
+export async function allocateDeliveryToPayment(
+    input: AllocateDeliveryInput,
+): Promise<LiquidationResult> {
+    if (!(await canViewPrices())) return FORBIDDEN();
+
+    const paymentId = input.paymentId.trim();
+    const deliveryId = input.deliveryId.trim();
+    if (!paymentId || !deliveryId) {
+        return rpcFailure('Both a payment and a receipt are required.', 'invalid');
+    }
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('cenapro_allocate_delivery_to_payment', {
+        p_payment_id: paymentId,
+        p_expected_row_version: input.expectedRowVersion,
+        p_delivery_id: deliveryId,
+        // OMITTED rather than sent as null when the caller wants the SQL default:
+        // `p_amount_php => NULL` and "no argument" mean the same thing to the RPC, and
+        // omitting keeps the two indistinguishable at this layer too.
+        ...(input.amountPhp === null ? {} : { p_amount_php: input.amountPhp }),
+        ...(input.note ? { p_note: input.note } : {}),
+    });
+
+    if (error) return rpcFailure(error.message);
+    const result = readResult(data, 'saved');
+    if (result.ok) revalidateLiquidation();
+    return result;
+}
+
+export interface AllocateOldestFirstInput {
+    paymentId: string;
+    /** The receipts to cover, in the order they should be covered. */
+    deliveryIds: string[];
+}
+
+/**
+ * Spread a payment across an explicit set of receipts, oldest first, in ONE atomic call.
+ *
+ * ── WHAT THIS IS FOR ─────────────────────────────────────────────────────────────
+ * The delivery-first door's *"record a cheque for these receipts"*. §7a: creating a
+ * payment for exactly the selected total **is** the `straight` term Renzo described — pay
+ * the exact amount upon delivery — so the natural completion of that flow is to point the
+ * new cheque at the receipts it was written for, without making the operator do it twice.
+ *
+ * ── WHY IT IS ONE CALL AND NOT N ─────────────────────────────────────────────────
+ * `cenapro_allocate_delivery_to_payment` could be called once per receipt, and each call
+ * would compute its own amount in SQL — but N calls are N transactions, so a failure
+ * halfway leaves a HALF-APPLIED CHEQUE, which is the exact thing the block RPC exists to
+ * make impossible. So the block is assembled here and written once.
+ *
+ * ── THE ARITHMETIC, AND WHY IT IS ALLOWED HERE ───────────────────────────────────
+ * `fillOldestFirst` distributes the payment over `balance_php` values **read from
+ * `cenapro_rc_delivery_settlement`** — it does not compute a balance, it chooses a
+ * DISTRIBUTION over balances the database supplied. Every figure it consumes and every
+ * figure it produces is then re-validated by the RPC and the constraint trigger. It also
+ * SKIPS a receipt with no price yet, which is the one rule that matters most: an unpriced
+ * receipt has no known outstanding amount, so filling it would assign nothing and mark it
+ * settled forever.
+ *
+ * The payment's `row_version` is read here rather than passed in, because the caller has
+ * just created it and has no version to hold. The RPC still compare-and-sets against what
+ * was read, so a concurrent change between the read and the write is still caught.
+ */
+export async function allocateOldestFirst(
+    input: AllocateOldestFirstInput,
+): Promise<LiquidationResult> {
+    if (!(await canViewPrices())) return FORBIDDEN();
+
+    const paymentId = input.paymentId.trim();
+    const ids = input.deliveryIds.map((s) => s.trim()).filter(Boolean);
+    if (!paymentId) return rpcFailure('No payment was named.', 'invalid');
+    if (ids.length === 0) return rpcFailure('No receipts were named.', 'invalid');
+
+    const supabase = await createClient();
+
+    const [payRes, settleRes] = await Promise.all([
+        supabase
+            .from('cenapro_rc_payment_state')
+            .select('id, amount_php, unallocated_php, row_version, is_deleted')
+            .eq('id', paymentId)
+            .maybeSingle(),
+        supabase
+            .from('cenapro_rc_delivery_settlement')
+            .select(SETTLEMENT_COLS)
+            .in('delivery_id', ids.slice(0, SPREAD_MAX))
+            .order('delivery_date', { ascending: true, nullsFirst: true })
+            .order('delivery_id', { ascending: true }),
+    ]);
+
+    if (payRes.error) return rpcFailure(payRes.error.message);
+    if (settleRes.error) return rpcFailure(settleRes.error.message);
+
+    const payment = payRes.data;
+    if (!payment || payment.is_deleted) {
+        return rpcFailure('That payment no longer exists, or it has been voided.', 'not_found');
+    }
+    if (payment.row_version === null || payment.row_version === undefined) {
+        return rpcFailure('That payment is missing its version token — reload and try again.', 'invalid');
+    }
+
+    const available = num(payment.unallocated_php) ?? 0;
+    if (available <= 0) {
+        return rpcFailure(
+            'Every peso of that payment is already assigned to other receipts, so there is nothing left to spread.',
+            'invalid',
+        );
+    }
+
+    // Existing edges are preserved: the block RPC is a REPLACE, so anything already
+    // assigned that is not in this block would be released. A cheque recorded seconds ago
+    // has none, but this function must not depend on that.
+    const { data: existing } = await supabase
+        .from('cenapro_rc_payment_allocations')
+        .select('delivery_id, amount_php, note')
+        .eq('payment_id', paymentId)
+        .eq('is_deleted', false);
+
+    const keep: AllocationInput[] = [];
+    const held = new Set<string>();
+    for (const e of existing ?? []) {
+        const amt = num(e.amount_php);
+        if (!e.delivery_id || amt === null || amt <= 0) continue;
+        keep.push({ delivery_id: e.delivery_id, amount_php: amt, note: e.note ?? null });
+        held.add(e.delivery_id);
+    }
+
+    const lines: SpreadLine[] = (settleRes.data ?? [])
+        .filter((s): s is DeliverySettlementRow & { delivery_id: string } => !!s.delivery_id)
+        // A receipt this payment already covers is not filled again — its existing edge is
+        // carried through untouched above.
+        .filter((s) => !held.has(s.delivery_id))
+        .map((s) => ({ deliveryId: s.delivery_id, settlement: s, existing: null, isSubgroup: false }));
+
+    const filled = fillOldestFirst(lines, available);
+    const fresh = allocationsPayload(filled);
+
+    if (fresh.length === 0) {
+        return rpcFailure(
+            'None of those receipts could be filled — they are either already settled or have no agreed price yet, so nobody knows what is owed on them. Assign an amount by hand if you mean to.',
+            'invalid',
+        );
+    }
+
+    const { data, error } = await supabase.rpc('cenapro_save_rc_payment_allocations', {
+        p_payment_id: paymentId,
+        p_expected_row_version: payment.row_version,
+        p_allocations: [...keep, ...fresh],
+    });
+
+    if (error) return rpcFailure(error.message);
+    const result = readResult(data, 'saved');
+    if (result.ok) revalidateLiquidation();
+    return result;
+}
+
+/**
+ * Un-release one allocation.
+ *
+ * Gated on the ALLOCATION's own version rather than the payment's — this is a single-row
+ * act on a row the block editor is not holding, and the "allocations ≤ amount" invariant is
+ * guaranteed by the constraint trigger regardless. §5c asked for reverting to be robust
+ * THROUGHOUT the feature, and a soft delete you cannot undo is not reversibility.
+ */
+export async function restorePaymentAllocation(
+    id: string,
+    expectedRowVersion: number,
+): Promise<LiquidationResult> {
+    if (!(await canViewPrices())) return FORBIDDEN();
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('cenapro_restore_rc_payment_allocation', {
+        p_id: id,
+        p_expected_row_version: expectedRowVersion,
+    });
+
+    if (error) return rpcFailure(error.message);
+    const result = readResult(data, 'restored');
     if (result.ok) revalidateLiquidation();
     return result;
 }
