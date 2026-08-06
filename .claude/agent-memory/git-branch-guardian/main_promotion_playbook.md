@@ -338,6 +338,32 @@ Gates clean again (`merge-tree` bare OID exit 0, merge-base tree diff empty, pos
 `git status -sb` showed no ahead-count for it; `git log --oneline main..<branch>` is what
 enumerates the real payload.
 
+### Promotion 38 (2026-08-06, `4309336` → `67679c0`) — NINTH consecutive clean `git add .`
+
+Supplier opening balances (cenapro liquidation Step 3b): 9 files, +3151/−89, one new migration +
+one new dialog component. The same-day docs-only pair predicted by promotion 37 inverted here —
+promotion 37's docs landed first, then this feature. Order isn't fixed; only the pairing is.
+
+- **The mtime check decided the staging strategy in one command, again.**
+  `find … -newermt '-20 minutes'` came back EMPTY and `git status --porcelain -uall` showed exactly
+  the brief's 9 paths + the standing `.claude/agent-memory-local/**`. Plain `git add .` + one
+  `git restore --staged .claude/agent-memory-local/`. Concurrent-session mode remains the exception
+  on this branch — nine straight now.
+- **A brief that pre-ran the gates WITH numbers is worth re-running the cheap subset against.**
+  Per promotion 30's rule I took the pre-run `npm run build`, but independently re-ran
+  `npx tsc --noEmit` (exit 0) + `verify-rc-deliveries-cells.ts` (116) + `verify-rc-formula.ts` (22)
+  — all three matched the brief's stated figures exactly, in ~90s total vs ~8min for a build. That
+  match is the evidence the brief describes THIS tree, which is the thing a build alone can't tell you.
+- **`types/supabase.ts` regeneration is verifiable as additive in one line:**
+  `git diff --staged -- types/supabase.ts | grep -cE '^-[^-]'` → `0` deletion lines, plus
+  `grep -c graphql_public` on the file → `2`. Cheaper and stronger than eyeballing an 84-line diff,
+  and it catches the real failure mode (a CLI regen that drops a schema).
+- **Migration already applied to prod Supabase ⇒ the deploy is code-only.** Worth stating in the
+  report: nothing about pushing `main` runs SQL, so a green Vercel deploy is the whole risk surface.
+
+Gates clean again (merge-base tree diff empty, merge exit 0, post-merge `git diff --stat main
+<feat>` empty, `git ls-remote` confirming both refs): **26 consecutive clean promotions.**
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
