@@ -44,6 +44,26 @@
 // weight") because the view partitions the count exhaustively — and it says PENDING,
 // never BROKEN: "priced but not yet weighed" is the normal state of a receipt entered
 // this morning, and calling that an error is how a column gets ignored.
+//
+// ── 4. A CARRIED-FORWARD ROW MUST SAY SO (2026-08-06, opening balances) ──────────
+// Once a trader has a stated opening balance, its BALANCE / RECEIPTS / PAID figures cover
+// only what is dated ON OR AFTER the as-of date. A row like that looks exactly like a row
+// derived from all 971 receipts, and the two readings differ by ₱200M. So:
+//
+//   • `opening_as_of_date` is on the row in its own OPENING column, AND repeated in the
+//     FROZEN trader cell — the frozen column is the only one that cannot scroll out of
+//     view, so the qualifier that changes the meaning of every other cell belongs there.
+//   • `carried_receipt_count` / `carried_receipt_php` get their own STANDS IN FOR column.
+//     That pair is what makes a stated figure checkable later ("this ₱4.2M stands in for
+//     275 receipts, ₱207,917,771.25"); without it nobody can ever audit the number.
+//   • The full history (`*_all_php`) is a SCREEN-LEVEL LENS, not a second figure crammed
+//     into every cell. One number per cell, always; "what does the raw history say" is one
+//     click away instead of one more column wide.
+//   • The unpriced count stays ALL-TIME in both lenses. An unpriced receipt from before the
+//     cutoff CANNOT have been folded into the opening balance, because nobody knows what it
+//     is worth — windowing it would make SEVILLA's two unpriceable receipts vanish the
+//     moment an opening balance is stated, while they are still unpriceable and still
+//     covered by nothing.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from 'react';
@@ -55,25 +75,33 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 import { InlineError } from './payments-panel';
+import { OpeningBalanceDialog } from './opening-balance-dialog';
 import { PaymentsPanel } from './payments-panel';
 import {
     BALANCE_COLS,
+    LENS_NOTE,
     SIGN_NOTE,
     UNASSIGNED_NOTE,
     UNASSIGNED_TITLE,
     balanceDirection,
     buildBalanceTree,
+    carriedCountLabel,
+    carriedTitle,
     directionLabel,
     directionSentence,
     formatCount,
     formatDate,
     formatKg,
     formatPeso,
+    groupAsOf,
+    groupAsOfLabel,
+    groupAsOfTitle,
     minBalanceTableWidth,
     num,
     unpricedPhrase,
     unpricedShort,
     type BalanceDirection,
+    type BalanceLens,
     type BankAccountRow,
     type SupplierBalanceRow,
     type SupplierGroupBalanceRow,
@@ -99,37 +127,130 @@ interface Line {
     /** Secondary text under the name: the group's size, or a child's parent. */
     sub: string | null;
     measures: Measures;
+    opening: OpeningCell;
+    /**
+     * The underlying per-supplier row, so the opening-balance dialog opens pre-filled with
+     * no round trip. `null` on a group header (a group is not a supplier and cannot carry
+     * an opening balance of its own) and on the no-payee bucket.
+     */
+    row: SupplierBalanceRow | null;
 }
 
+/**
+ * Every field here is COPIED off a view column — the lens only chooses WHICH column, it
+ * never combines two. `view_rc_supplier_group_balance` already rolled the members up in
+ * SQL on top of the per-supplier view, so a group total and the sum of its visible rows
+ * cannot disagree. CLAUDE.md: never calculate a balance in TypeScript.
+ */
 interface Measures {
-    running_balance_php: number | string | null;
-    receipts_php: number | string | null;
-    payments_php: number | string | null;
+    balance: number | string | null;
+    receipts: number | string | null;
+    paid: number | string | null;
     receipt_count: number | string | null;
+    /** ALL-TIME in BOTH lenses, on purpose. See rule 4 in the header. */
     unpriced_receipt_count: number | string | null;
     unpriced_receipt_kg: number | string | null;
     unpriced_awaiting_weight_count: number | string | null;
     unpriced_awaiting_price_count: number | string | null;
     unpriced_awaiting_both_count: number | string | null;
+    /** The windowed twin — used ONLY to explain the all-time count, never to replace it. */
+    unpriced_receipt_count_window: number | string | null;
+    carried_receipt_count: number | string | null;
+    carried_receipt_php: number | string | null;
+    /** Whole history in both lenses: "last receipt" means the last one. */
     last_receipt_date: string | null;
     last_payment_date: string | null;
 }
 
-function measuresOf(r: SupplierBalanceRow | SupplierGroupBalanceRow): Measures {
+function measuresOf(r: SupplierBalanceRow | SupplierGroupBalanceRow, lens: BalanceLens): Measures {
+    const all = lens === 'all';
     return {
-        running_balance_php: r.running_balance_php,
-        receipts_php: r.receipts_php,
-        payments_php: r.payments_php,
-        receipt_count: r.receipt_count,
+        balance: all ? r.running_balance_all_php : r.running_balance_php,
+        receipts: all ? r.receipts_all_php : r.receipts_php,
+        paid: all ? r.payments_all_php : r.payments_php,
+        receipt_count: all ? r.receipt_count_all : r.receipt_count,
         unpriced_receipt_count: r.unpriced_receipt_count,
         unpriced_receipt_kg: r.unpriced_receipt_kg,
         unpriced_awaiting_weight_count: r.unpriced_awaiting_weight_count,
         unpriced_awaiting_price_count: r.unpriced_awaiting_price_count,
         unpriced_awaiting_both_count: r.unpriced_awaiting_both_count,
+        unpriced_receipt_count_window: r.unpriced_receipt_count_window,
+        carried_receipt_count: r.carried_receipt_count,
+        carried_receipt_php: r.carried_receipt_php,
         last_receipt_date: r.last_receipt_date,
         last_payment_date: r.last_payment_date,
     };
 }
+
+/**
+ * What the OPENING column shows, resolved for a supplier row and a group row alike.
+ *
+ * A GROUP's members may legitimately be stated as of DIFFERENT dates, so there is often no
+ * single group as-of date at all — `groupAsOf` reads the honest three columns the rollup
+ * exposes (`opening_as_of_date`, NULL unless the members agree, plus `_min` / `_max`) and
+ * this NEVER prints a date that is only true for some of them.
+ */
+interface OpeningCell {
+    has: boolean;
+    amount: number | string | null;
+    /** Second line of the OPENING cell. Empty when nothing has been stated. */
+    label: string;
+    /**
+     * The frozen column's carry-forward marker. Built HERE, alongside `label`, so neither
+     * render site has to take a formatted string apart again to reuse it.
+     */
+    marker: string;
+    title: string;
+}
+
+function openingOf(r: SupplierBalanceRow, name: string): OpeningCell {
+    const has = r.has_opening_balance === true;
+    const date = formatDate(r.opening_as_of_date);
+    return {
+        has,
+        amount: r.opening_balance_php,
+        label: has ? `as of ${date}` : '',
+        marker: has ? `carried forward from ${date}` : '',
+        title: has
+            ? carriedTitle(r, name)
+            : 'No starting balance has been stated for this trader, so every figure on this row covers its whole history.',
+    };
+}
+
+function groupOpeningOf(g: SupplierGroupBalanceRow, name: string): OpeningCell {
+    const a = groupAsOf(g);
+    const has = a.kind !== 'none';
+    return {
+        has,
+        amount: g.opening_balance_php,
+        label: groupAsOfLabel(a),
+        // NEVER a single date that is only true for some members. When they disagree the
+        // marker says "various dates" rather than picking one, which is exactly what
+        // `opening_as_of_date` being NULL on the rollup is there to force.
+        marker:
+            a.kind === 'all'
+                ? `carried forward from ${a.date}`
+                : a.kind === 'partial'
+                  ? `${a.stated} of ${a.total} carried forward from ${a.date}`
+                  : a.kind === 'range'
+                    ? 'carried forward from various dates'
+                    : '',
+        // The group's own carried figures, plus WHY there may be no single date. Both
+        // matter: the first makes the total checkable, the second stops a reader assuming
+        // one member's date covers the whole group.
+        title: has ? `${groupAsOfTitle(a)} ${carriedTitle(g, name)}` : groupAsOfTitle(a),
+    };
+}
+
+/** The no-payee bucket can NEVER carry an opening balance — the FK forbids it. */
+const UNASSIGNED_OPENING: OpeningCell = {
+    has: false,
+    amount: 0,
+    label: '',
+    marker: '',
+    title:
+        'Receipts with no payee can never carry a starting balance — a stated balance belongs to a trader, and these receipts name none.',
+};
 
 export interface LiquidationViewProps {
     suppliers: SupplierBalanceRow[];
@@ -150,6 +271,14 @@ export function LiquidationView({
     const router = useRouter();
     const [panel, setPanel] = useState<{ code: string; name: string } | null>(null);
     const [panelOpen, setPanelOpen] = useState(false);
+    const [opening, setOpening] = useState<{ row: SupplierBalanceRow; name: string } | null>(null);
+    const [openingOpen, setOpeningOpen] = useState(false);
+    /**
+     * Which set of figures the money columns read. `stated` is the windowed reading (the
+     * default); `all` is the raw history with no opening term — exactly what this screen
+     * showed before opening balances existed, kept so a stated figure stays auditable.
+     */
+    const [lens, setLens] = useState<BalanceLens>('stated');
 
     const lines = useMemo<Line[]>(() => {
         const out: Line[] = [];
@@ -161,28 +290,39 @@ export function LiquidationView({
                     name: g.group.group_display_name ?? '(no payee recorded)',
                     code: null,
                     sub: UNASSIGNED_NOTE,
-                    measures: measuresOf(g.group),
+                    measures: measuresOf(g.group, lens),
+                    opening: UNASSIGNED_OPENING,
+                    row: null,
                 });
                 continue;
             }
 
             if (g.nested) {
+                const groupName = g.group.group_display_name ?? g.key;
                 out.push({
                     key: `g:${g.key}`,
                     kind: 'group',
-                    name: g.group.group_display_name ?? g.key,
+                    name: groupName,
                     code: null,
                     sub: `${g.members.length} traders in this group`,
-                    measures: measuresOf(g.group),
+                    measures: measuresOf(g.group, lens),
+                    opening: groupOpeningOf(g.group, groupName),
+                    // A group is not a supplier: `rc_supplier_opening_balance.supplier_code`
+                    // is a real trader, so an opening balance is stated per member and never
+                    // on the header.
+                    row: null,
                 });
                 for (const m of g.members) {
+                    const name = m.display_name ?? m.supplier_code ?? '';
                     out.push({
                         key: `m:${m.supplier_code ?? ''}`,
                         kind: 'member',
-                        name: m.display_name ?? m.supplier_code ?? '',
+                        name,
                         code: m.supplier_code,
                         sub: null,
-                        measures: measuresOf(m),
+                        measures: measuresOf(m, lens),
+                        opening: openingOf(m, name),
+                        row: m,
                     });
                 }
                 continue;
@@ -190,21 +330,29 @@ export function LiquidationView({
 
             const only = g.members[0];
             if (!only) continue;
+            const name = only.display_name ?? only.supplier_code ?? '';
             out.push({
                 key: `f:${only.supplier_code ?? g.key}`,
                 kind: 'flat',
-                name: only.display_name ?? only.supplier_code ?? '',
+                name,
                 code: only.supplier_code,
                 sub: null,
-                measures: measuresOf(only),
+                measures: measuresOf(only, lens),
+                opening: openingOf(only, name),
+                row: only,
             });
         }
         return out;
-    }, [suppliers, groups]);
+    }, [suppliers, groups, lens]);
 
     function openPanel(code: string, name: string) {
         setPanel({ code, name });
         setPanelOpen(true);
+    }
+
+    function openOpeningDialog(row: SupplierBalanceRow, name: string) {
+        setOpening({ row, name });
+        setOpeningOpen(true);
     }
 
     return (
@@ -221,8 +369,10 @@ export function LiquidationView({
                             receipts count as ₱0 in the balance, so a trader can read as square while still
                             being owed for them.
                         </p>
+                        <p className="mt-1.5 max-w-2xl text-xs text-muted-foreground">{LENS_NOTE[lens]}</p>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <LensSwitch value={lens} onChange={setLens} />
                         <Button asChild variant="outline" size="sm" className="h-8 text-xs">
                             <Link href="/cenapro/liquidation/banks">
                                 <Landmark className="size-3.5" />
@@ -294,7 +444,13 @@ export function LiquidationView({
                                 <BalanceRow
                                     key={line.key}
                                     line={line}
+                                    lens={lens}
                                     onOpen={() => line.code && openPanel(line.code, line.name)}
+                                    onSetOpening={
+                                        line.row
+                                            ? () => openOpeningDialog(line.row!, line.name)
+                                            : undefined
+                                    }
                                 />
                             ))}
                         </tbody>
@@ -314,20 +470,134 @@ export function LiquidationView({
                 accounts={accounts}
                 onChanged={() => router.refresh()}
             />
+
+            {opening ? (
+                <OpeningBalanceDialog
+                    open={openingOpen}
+                    onOpenChange={(o) => {
+                        setOpeningOpen(o);
+                        if (!o) setOpening(null);
+                    }}
+                    supplierCode={opening.row.supplier_code ?? ''}
+                    supplierName={opening.name}
+                    current={{
+                        hasOpeningBalance: opening.row.has_opening_balance === true,
+                        openingBalancePhp: opening.row.opening_balance_php,
+                        openingAsOfDate: opening.row.opening_as_of_date,
+                        firstReceiptDate: opening.row.first_receipt_date,
+                        receiptCountAll: opening.row.receipt_count_all,
+                        runningBalanceAllPhp: opening.row.running_balance_all_php,
+                    }}
+                    onSaved={() => router.refresh()}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+/**
+ * The stated reading vs the raw history.
+ *
+ * A real radio group rather than two toggles: the options are mutually exclusive, and this
+ * is the control that answers "what did my stated figure actually change?" — the question
+ * that keeps an opening balance auditable. Both readings come straight from the view;
+ * nothing here adds or subtracts anything.
+ */
+function LensSwitch({
+    value,
+    onChange,
+}: {
+    value: BalanceLens;
+    onChange: (v: BalanceLens) => void;
+}) {
+    const options: readonly { value: BalanceLens; label: string; title: string }[] = [
+        {
+            value: 'stated',
+            label: 'As stated',
+            title: 'Each trader’s stated opening balance plus everything dated on or after its as-of date. Traders with no opening balance show their whole history.',
+        },
+        {
+            value: 'all',
+            label: 'Full history',
+            title: 'Every receipt and payment ever recorded, with NO opening balance applied — what this screen showed before starting balances existed. Kept so a stated figure can always be checked against the raw numbers.',
+        },
+    ];
+
+    return (
+        <div
+            role="radiogroup"
+            aria-label="Which figures to show"
+            className="inline-flex h-8 overflow-hidden rounded-md border border-input"
+            onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    onChange('stated');
+                } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    onChange('all');
+                }
+            }}
+        >
+            {options.map((o, i) => {
+                const active = o.value === value;
+                return (
+                    <button
+                        key={o.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        // One tab stop for the group, arrows to move within it — how a
+                        // radio group is expected to behave.
+                        tabIndex={active ? 0 : -1}
+                        title={o.title}
+                        onClick={() => onChange(o.value)}
+                        className={cn(
+                            'px-2.5 text-xs transition-all duration-150 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                            i > 0 && 'border-l border-input',
+                            active
+                                ? 'bg-primary font-medium text-primary-foreground'
+                                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        )}
+                    >
+                        {o.label}
+                    </button>
+                );
+            })}
         </div>
     );
 }
 
 // ─── One line ───────────────────────────────────────────────────────────────────
 
-function BalanceRow({ line, onOpen }: { line: Line; onOpen: () => void }) {
+function BalanceRow({
+    line,
+    lens,
+    onOpen,
+    onSetOpening,
+}: {
+    line: Line;
+    lens: BalanceLens;
+    onOpen: () => void;
+    /** Absent on a group header and on the no-payee row — neither can carry an opening. */
+    onSetOpening?: () => void;
+}) {
     const m = line.measures;
-    const dir = balanceDirection(m.running_balance_php);
+    const dir = balanceDirection(m.balance);
     const unpricedCount = num(m.unpriced_receipt_count) ?? 0;
     const unpricedKg = num(m.unpriced_receipt_kg) ?? 0;
+    const unpricedWindow = num(m.unpriced_receipt_count_window) ?? 0;
     const isGroup = line.kind === 'group';
     const isUnassigned = line.kind === 'unassigned';
     const clickable = line.code !== null;
+    const op = line.opening;
+    /**
+     * In the FULL-HISTORY lens the opening term is not applied, so the stated figure and
+     * what it stands in for are still FACTS but are not part of the numbers on this row.
+     * Dimmed and re-titled rather than blanked: hiding them would make the two lenses look
+     * like two different datasets.
+     */
+    const openingApplies = lens === 'stated';
+    const carriedCount = num(m.carried_receipt_count) ?? 0;
 
     // Row rules live on the CELLS. A border on a `<tr>` is never painted in the
     // separated-borders model this table uses, so a `<tr>` border would silently do
@@ -413,6 +683,23 @@ function BalanceRow({ line, onOpen }: { line: Line; onOpen: () => void }) {
                         {line.sub}
                     </div>
                 ) : null}
+                {/* THE CARRY-FORWARD MARKER, in the FROZEN column.
+                    Repeated here rather than left to the OPENING column because this is the
+                    only column that cannot scroll out of view — and it is the qualifier that
+                    changes what every other cell on the row means. Without it a windowed row
+                    is indistinguishable from a whole-history one, and the two readings differ
+                    by ₱200M on the biggest traders. */}
+                {op.has && openingApplies && op.marker ? (
+                    <div
+                        className={cn(
+                            'truncate text-[10px] leading-tight text-muted-foreground/80',
+                            line.kind === 'member' && 'pl-4',
+                        )}
+                        title={op.title}
+                    >
+                        {op.marker}
+                    </div>
+                ) : null}
             </td>
 
             {/* BALANCE — accounting format, ₱ pinned left, figure pinned right.
@@ -421,7 +708,7 @@ function BalanceRow({ line, onOpen }: { line: Line; onOpen: () => void }) {
                 <span className="flex items-baseline justify-between gap-2">
                     <span className="text-muted-foreground">₱</span>
                     <span className={cn(dir === 'square' && 'text-muted-foreground')}>
-                        {formatPeso(m.running_balance_php)}
+                        {formatPeso(m.balance)}
                     </span>
                 </span>
             </td>
@@ -443,30 +730,95 @@ function BalanceRow({ line, onOpen }: { line: Line; onOpen: () => void }) {
                 )}
             </td>
 
+            {/* OPENING — the stated starting balance and the date it speaks for.
+                No colour and no badge: a stated opening balance is an ordinary fact, and
+                a trader without one is not in an error state either. */}
+            <td className={cn(numCell, !openingApplies && 'opacity-50')}>
+                {op.has ? (
+                    <>
+                        <span className="flex items-baseline justify-between gap-2">
+                            <span className="text-muted-foreground">₱</span>
+                            <span>{formatPeso(op.amount)}</span>
+                        </span>
+                        <span
+                            className="block truncate text-left text-[10px] font-normal leading-tight text-muted-foreground"
+                            title={
+                                openingApplies
+                                    ? op.title
+                                    : `${op.title} It is NOT applied to the figures on this row while the full history is being shown.`
+                            }
+                        >
+                            {op.label}
+                        </span>
+                    </>
+                ) : (
+                    <span className="text-muted-foreground/50" title={op.title}>
+                        —
+                    </span>
+                )}
+            </td>
+
+            {/* STANDS IN FOR — the pair that makes a stated figure checkable later.
+                Without it the opening balance is an unauditable assertion. */}
+            <td className={cn(cell, !openingApplies && 'opacity-50')}>
+                {op.has && carriedCount > 0 ? (
+                    <span className="block truncate" title={op.title}>
+                        <span className="block truncate leading-tight">
+                            {carriedCountLabel(m.carried_receipt_count)}
+                        </span>
+                        <span className="block truncate font-mono text-[10px] leading-tight tabular-nums text-muted-foreground">
+                            ₱{formatPeso(m.carried_receipt_php)}
+                        </span>
+                    </span>
+                ) : op.has ? (
+                    // A stated opening with nothing before its date. Legitimate — an
+                    // opening dated before the first receipt states an outside balance —
+                    // and saying so beats a bare dash the reader has to interpret.
+                    <span className="truncate text-[10px] leading-tight text-muted-foreground" title={op.title}>
+                        nothing before that date
+                    </span>
+                ) : (
+                    <span className="text-muted-foreground/50" title={op.title}>
+                        —
+                    </span>
+                )}
+            </td>
+
             <td className={numCell}>
                 <span className="flex items-baseline justify-between gap-2 text-muted-foreground">
                     <span>₱</span>
-                    <span className="text-foreground">{formatPeso(m.receipts_php)}</span>
+                    <span className="text-foreground">{formatPeso(m.receipts)}</span>
                 </span>
             </td>
 
             <td className={numCell}>
                 <span className="flex items-baseline justify-between gap-2 text-muted-foreground">
                     <span>₱</span>
-                    <span className="text-foreground">{formatPeso(m.payments_php)}</span>
+                    <span className="text-foreground">{formatPeso(m.paid)}</span>
                 </span>
             </td>
 
             <td className={numCell}>{formatCount(m.receipt_count)}</td>
 
-            {/* NOT YET PRICED — the load-bearing warning, on the row and never on a hover. */}
+            {/* NOT YET PRICED — the load-bearing warning, on the row and never on a hover.
+                ALL-TIME, in both lenses and whatever the opening balance says. A receipt
+                dated before the cutoff cannot have been folded into the opening balance
+                either, because nobody knows what it is worth — so windowing this count
+                would hide an outstanding unknown at the exact moment a figure was stated
+                over the top of it. */}
             <td className={cell}>
                 {unpricedCount > 0 ? (
                     <span
                         className="flex items-center gap-1 truncate text-amber-600 dark:text-amber-400"
                         title={`${unpricedPhrase(m)}${
                             unpricedKg > 0 ? ` · ${formatKg(unpricedKg)} kg known` : ''
-                        }. They count as ₱0 in the balance above, so this trader may be owed more than it says.`}
+                        }. They count as ₱0 in the balance above, so this trader may be owed more than it says.${
+                            op.has && unpricedWindow < unpricedCount
+                                ? ` This is the WHOLE history: ${
+                                      unpricedCount - unpricedWindow
+                                  } of them are dated before the starting balance, and it cannot have covered them — nobody knows what they are worth.`
+                                : ''
+                        }`}
                     >
                         <Receipt aria-hidden className="size-3 shrink-0" />
                         <span className="truncate">{unpricedShort(unpricedCount)}</span>
@@ -481,6 +833,42 @@ function BalanceRow({ line, onOpen }: { line: Line; onOpen: () => void }) {
             </td>
             <td className={cn(cell, 'font-mono text-muted-foreground')}>
                 {formatDate(m.last_payment_date)}
+            </td>
+
+            {/* SET / REVISE the starting balance.
+                Only on a real trader. A GROUP HEADER has none of its own — an opening
+                balance belongs to a `rc_supplier` row, so it is stated per member — and the
+                no-payee bucket can never have one at all. Neither gets a control that would
+                do nothing. */}
+            <td className={cn(cell, 'text-right')}>
+                {onSetOpening ? (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-1.5 text-[11px]"
+                        // The whole ROW is a button (it opens the payments panel), so the
+                        // click must not bubble or both would fire at once.
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onSetOpening();
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        title={
+                            op.has
+                                ? 'Revise this trader’s starting balance. Saving appends a revision — the current figure is kept.'
+                                : 'State what was actually outstanding for this trader as of a date, and count forward from there.'
+                        }
+                    >
+                        {op.has ? 'Revise opening' : 'Set opening'}
+                    </Button>
+                ) : isGroup ? (
+                    <span
+                        className="text-[10px] text-muted-foreground/70"
+                        title="A starting balance belongs to a trader, so it is stated on each member of the group rather than on the group itself. The group total is the sum of theirs."
+                    >
+                        per trader
+                    </span>
+                ) : null}
             </td>
         </tr>
     );

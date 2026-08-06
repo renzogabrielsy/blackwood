@@ -308,6 +308,36 @@ Gates were all pre-run by the orchestrator with numbers (tsc clean; build green 
 promotion 30's rule. Both gates clean again (`merge-tree` bare OID, merge-base tree diff empty):
 that is now **24 consecutive clean promotions**.
 
+### Promotion 37 (2026-08-05, `2311562` → `c8d8cdd`) — docs-only, EIGHTH consecutive clean `git add .`
+
+The mirror of promotion 36: that one merged already-committed code with nothing to stage, this one
+stages docs *describing* it. Same-day pair — when a feature lands on `main`, expect a follow-up
+docs-only promotion (handoff + TIMELINE entry) minutes-to-hours later. It is a full `--no-ff`
+promotion, not a shortcut to FF.
+
+- **The STOP guard from promotion 35 fired again and is now the standing shape for docs work**:
+  brief named the 2 expected files and said any `app/`/`lib/`/`components/`/`scripts/`/`workers/`/
+  `supabase/`/`types/` path means an unexpected writer. Ran `git status --porcelain=v1
+  --untracked-files=all` BEFORE staging — only the 2 files + the standing `.claude/agent-memory-local/**`.
+  Clean for the eighth straight promotion; concurrent-session mode stays the exception here.
+- **`sk-` in the secret-scan pattern false-positives on `task-chipped`** in TIMELINE.md (a
+  pre-existing line, not in the diff). Scan the STAGED ADDED lines only —
+  `git diff --staged | grep '^+' | grep -nE …` — not the whole file, or you re-triage the same
+  benign prose every session. Tighten to `sk-(ant|proj|live)` to kill this class outright.
+- **A TIMELINE correction to an EXISTING entry is normal and belongs in the commit body.** Here the
+  older Step 1 entry closed with "no history UI", which stopped being true the same day; the diff
+  is `1 insertion, 1 deletion` on that line plus the new entry. Read the `-` line to describe what
+  the correction actually was — the stat alone (`3 +-`) hides that a claim was retracted.
+- Build gate waived without the brief naming numbers: the staged set was verifiably 2 `.md` files,
+  which is the same justification as `52178d9` / `434eb7b` above. Docs-only + verified-markdown
+  staged list is sufficient on its own.
+
+Gates clean again (`merge-tree` bare OID exit 0, merge-base tree diff empty, post-merge
+`git diff --stat main <feat>` empty): **25 consecutive clean promotions.** The pending
+`chore(memory)` commit `a420ce6` rode along for the eighth time — it was already pushed, so
+`git status -sb` showed no ahead-count for it; `git log --oneline main..<branch>` is what
+enumerates the real payload.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
