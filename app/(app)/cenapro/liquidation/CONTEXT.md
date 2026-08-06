@@ -7,20 +7,28 @@
 truck; this is the **money going back out** — every cheque, bank transfer and write-off — plus the
 running difference per trader.
 
-It is **liquidation Steps 2, 3 and 3b's UI half** (`.agents/prompts/liquidation-feature.md` §7a).
-The data layer shipped 2026-08-05/06 in four migrations and nothing consumed it until this route.
-Three screens:
+It is **liquidation Steps 2, 3, 3b, 4 and 5's UI half** (`.agents/prompts/liquidation-feature.md`
+§7a). The data layer shipped 2026-08-05/06 in five migrations and nothing consumed it until this
+route. Five screens:
 
 1. **Supplier balances** (`/cenapro/liquidation`) — one row per trader, both levels (a parent
    renders as a group row with its sub-suppliers nested beneath).
 2. **Record a payment** (a dialog, opened from a trader's payments panel) + **the payments panel**
    itself, so a recorded payment is not write-only.
-3. **Supplier subgroups** (`/cenapro/liquidation/subgroups`) — the maintenance screen for
+3. **Spread a payment across receipts** (`spread-panel.tsx`, opened from a payment's **Assign**
+   button) — Step 4's cheque-first door and §7a screen 3. **The surface that earns the feature:**
+   the median cheque covers four to eight receipts, so this is the working screen, not a detail
+   panel.
+4. **Supplier subgroups** (`/cenapro/liquidation/subgroups`) — the maintenance screen for
    "a cheque to the parent may settle a sub-supplier's deliveries".
-4. **Banks & accounts** (`/cenapro/liquidation/banks`) — CI's own banks and the accounts cheques
+5. **Banks & accounts** (`/cenapro/liquidation/banks`) — CI's own banks and the accounts cheques
    are drawn on. **Not optional polish:** the `rc_payment` shape CHECK requires a cheque to name an
    account, and the migration seeded four banks but **zero accounts** on purpose, so without this
    screen the dominant instrument in the business is unrecordable.
+
+**Step 5 needed no screen at all**, which is the test that Step 4's shape is right: a cash advance
+IS a payment whose allocations sum to less than its amount, so it is the payments panel's
+`is_advance` filter plus a column on the balance table. No table, no flag, no route.
 
 **Starting balances are what make the number TRUE (Step 3b, 2026-08-06).** Renzo: *"Since it's a bit
 impossible to check all of the past history, we should be able to modify the starting balances of the
@@ -30,24 +38,42 @@ ever entered and back-entering seven months of them is not realistic. So a trade
 figure can be **stated as of a date** and the balance counts forward from there. See "The opening
 balance" below.
 
-**It ships a real balance BEFORE allocation exists.** Assigning a cheque to *particular receipts* is
-Step 4 (`rc_payment_allocation`, `view_rc_delivery_settlement`) and is **deliberately not built**:
-no allocation screen, no settlement column on the deliveries ledger, no cheque-gap report, no
-`advance_php`. A payment reduces a supplier's balance without being assigned to specific receipts,
-by design for this step — allocation *refines* the number, it does not enable it.
+**ALLOCATION IS NOW BUILT (Step 4, 2026-08-06) — AND IT HAS TWO DOORS.** Renzo: *"cheque first or
+delivery first should both be available… it differs per suppliers slightly so it's better to be open
+to both options."* And: *"an add cheque button in deliveries page would be nice… right click on a
+delivery and then assign a cheque to it… That would make the liquidations page more of a summary
+page."*
+
+**Both doors create the SAME `cenapro.rc_payment_allocation` rows through the SAME RPC, so the write
+path, the validation and the vocabulary are built ONCE. Only the entry point differs.** That is not a
+tidiness preference — it is what makes the two flows incapable of disagreeing about a peso.
+
+| Door | Where | What it calls |
+|---|---|---|
+| **Cheque-first** | `spread-panel.tsx`, from a payment's **Assign** button | `cenapro_save_rc_payment_allocations` — the whole block, one atomic call |
+| **Delivery-first** | `../deliveries/assign-cheque-dialog.tsx`, from the ledger's row context menu | `cenapro_allocate_delivery_to_payment`, which is implemented **in SQL on top of** the block RPC |
+| **Delivery-first (new cheque)** | the deliveries ledger's **Add cheque** button + *"Record a cheque for this/these…"* | `savePayment` → `allocateOldestFirst` → the block RPC |
+
+Consequently **the deliveries ledger now carries a `PAID?` settlement column**, and this module owns
+the vocabulary it renders (`SETTLEMENT_LABEL`, `NOT_PRICED_TEXT`, `stillOwedText`) — imported, never
+duplicated. See `../deliveries/CONTEXT.md` → "Liquidation from the receipt side".
+
+**Still not built:** the balance close/restart (Step 6, `rc_balance_period`), the skipped-cheque-number
+report (Step 7) and reporting (Step 8).
 
 ## Files
 
 | File | Role |
 |------|------|
-| `types.ts` | **PURE module** (no `'use client'`, no React, no Supabase) — the shared vocabulary for the server page, the actions and every client screen. Owns the row-type aliases (derived from the generated `types/supabase.ts`), `num`/`formatPeso`/`formatKg`/`formatCount`/`formatDate`/**`formatLongDate`**, **`balanceDirection` + `directionLabel` + `directionSentence` + `SIGN_NOTE`** (the sign, in words), **`unpricedPhrase` / `unpricedShort`** (the stage-naming warning), `UNASSIGNED_NOTE` / `UNASSIGNED_TITLE`, the `BALANCE_COLS` column table + `minBalanceTableWidth`, **`buildBalanceTree`** (a JOIN of the two balance views into render order — it never sums), the payment vocabularies (`METHOD_OPTIONS` / `TERM_OPTIONS` / `methodShort` / `isCheque`), the payment form shape + `validatePaymentForm` + `paymentPatchFrom`, the **opening-balance vocabulary** (`OpeningSide`, `OpeningBalanceFormState`, **`openingSignedAmount`** — the ONE place the sign is applied — **`openingSentence`**, `openingFormFrom`, `openingArgsFrom`, `validateOpeningBalanceForm`, `decimalPlaces`, `AS_OF_NOTE`, `APPEND_ONLY_NOTE`, **`carriedTitle`** / `carriedCountLabel`, **`groupAsOf`** / `groupAsOfLabel` / `groupAsOfTitle`, `BalanceLens` + `LENS_NOTE`), and the `LiquidationOutcome` / `LiquidationResult` RPC vocabulary. |
-| `actions.ts` | **`'use server'`** — `fetchSupplierBalances`, `fetchPaymentDimensions`, `fetchSupplierPayments`, `fetchSupplierGroups`, **`fetchOpeningBalanceHistory`**, `savePayment`, `deletePayment`, `restorePayment`, `saveSupplierParent`, **`setOpeningBalance`**. Enforces the ₱ gate on **every** read and write. |
+| `types.ts` | **PURE module** (no `'use client'`, no React, no Supabase) — the shared vocabulary for the server page, the actions, every client screen **and the deliveries ledger**, which imports the settlement vocabulary from here rather than keeping a second copy. Step 4 added: `PaymentStateRow` / `DeliverySettlementRow` / `PaymentAllocationRow`; **`SettlementStatus` + `SETTLEMENT_LABEL` + `SETTLEMENT_NOTE` + `settlementStatus()`**; **`NOT_PRICED_TEXT` + `stillOwedText()`** (the ONE place a NULL `balance_php` becomes words instead of ₱0.00); the spread form (`AllocationDrafts`, `draftedTotal`, `draftedCount`, **`fillOldestFirst`**, `allocationsPayload`, `validateAllocations`); **`outstandingTotal`** and **`resolveSelectionPayee`** (what a multi-receipt selection is worth, and whether one cheque may cover it); `receiptLabel`; and `SPREAD_COLS` + `minSpreadTableWidth` + `spreadFrozenOffsets`. It also owns the row-type aliases (derived from the generated `types/supabase.ts`), `num`/`formatPeso`/`formatKg`/`formatCount`/`formatDate`/**`formatLongDate`**, **`balanceDirection` + `directionLabel` + `directionSentence` + `SIGN_NOTE`** (the sign, in words), **`unpricedPhrase` / `unpricedShort`** (the stage-naming warning), `UNASSIGNED_NOTE` / `UNASSIGNED_TITLE`, the `BALANCE_COLS` column table + `minBalanceTableWidth`, **`buildBalanceTree`** (a JOIN of the two balance views into render order — it never sums), the payment vocabularies (`METHOD_OPTIONS` / `TERM_OPTIONS` / `methodShort` / `isCheque`), the payment form shape + `validatePaymentForm` + `paymentPatchFrom`, the **opening-balance vocabulary** (`OpeningSide`, `OpeningBalanceFormState`, **`openingSignedAmount`** — the ONE place the sign is applied — **`openingSentence`**, `openingFormFrom`, `openingArgsFrom`, `validateOpeningBalanceForm`, `decimalPlaces`, `AS_OF_NOTE`, `APPEND_ONLY_NOTE`, **`carriedTitle`** / `carriedCountLabel`, **`groupAsOf`** / `groupAsOfLabel` / `groupAsOfTitle`, `BalanceLens` + `LENS_NOTE`), and the `LiquidationOutcome` / `LiquidationResult` RPC vocabulary. |
+| `actions.ts` | **`'use server'`** — `fetchSupplierBalances`, `fetchPaymentDimensions`, `fetchSupplierPayments`, `fetchSupplierGroups`, **`fetchOpeningBalanceHistory`**, `savePayment`, `deletePayment`, `restorePayment`, `saveSupplierParent`, **`setOpeningBalance`**; Step 4 adds the reads **`fetchSpread`** / **`fetchAllocationTargets`** / **`fetchSettlementsFor`** / **`fetchDeliveryAllocations`** and the writes **`savePaymentAllocations`** / **`allocateDeliveryToPayment`** / **`allocateOldestFirst`** / **`restorePaymentAllocation`**. Enforces the ₱ gate on **every** read and write. |
 | `page.tsx` | Server — the balances screen. Gate → fetch → hand off. Renders no title (navbar owns titles). |
 | `price-gate-notice.tsx` | Server — what a price-denied role sees instead. A clean statement, not an error. |
 | `liquidation-view.tsx` | Client — the balance table (frozen trader column, group nesting, the sign tag, the OPENING + STANDS IN FOR columns, the carry-forward marker, the unpriced column, the no-payee row, the **`LensSwitch`**) + the payments-panel and opening-balance-dialog hosts. |
 | `opening-balance-dialog.tsx` | Client — state or revise one trader's **starting balance**. Positive amount + a two-way side choice in words, the echo-back sentence, the provenance note, the current revision and the full append-only history. Also owns `SideChoice` (a real `radiogroup`). |
-| `payments-panel.tsx` | Client — a `Sheet` listing one trader's payments (voided rows included, struck through, with Restore), plus the void `AlertDialog`. Also exports **`InlineError`** (message + Copy button), reused by the other two screens. |
-| `payment-dialog.tsx` | Client — the record/edit payment form. Reshapes itself around `method` so the fields the DB forbids are not on screen to be filled. |
+| `payments-panel.tsx` | Client — a `Sheet` listing one trader's payments (voided rows included, struck through, with Restore), plus the void `AlertDialog`. Since Step 4 it reads **`cenapro_rc_payment_state`** (a strict superset of `cenapro_rc_payments`), carries an **ASSIGNED** column, an **Assign** action per row opening the spread screen, and the **`is_advance` filter** that is the whole of Step 5. Also exports **`InlineError`** (message + Copy button), reused by every other screen here. |
+| `payment-dialog.tsx` | Client — the record/edit payment form. Reshapes itself around `method` so the fields the DB forbids are not on screen to be filled. Step 4 added three optional props so the **deliveries ledger can reuse it rather than fork it**: `initialAmountPhp` (pre-fill), `contextNote` (one line saying what the cheque is for) and an `onSaved(result)` that passes the RPC result through so the caller can point the new payment at the receipts it was written for. |
+| `spread-panel.tsx` | Client — **§7a screen 3**, the cheque-first door. The cheque in the header with the **unassigned figure top-right** (it never scrolls away), the payee's group's receipts oldest-first, **two separate money columns** (STILL OWED / ASSIGN), `Fill oldest first`, and a whole-block atomic save. |
 | `subgroups/page.tsx` | Server — the subgroups maintenance screen. Gated (see "Why subgroups is gated"). |
 | `subgroups/subgroups-view.tsx` | Client — one row per trader with a "PAID FOR BY" picker; saves on change. |
 | `banks/page.tsx` | Server — banks & accounts. Gated for the same reason as subgroups: an account is half a cheque's identity and this is the only way to create one. |
@@ -62,8 +88,14 @@ PostgREST** — everything goes through the `public.cenapro_*` accessors.
 
 | Relation / RPC | Used by |
 |---|---|
-| `public.cenapro_rc_supplier_balances` | `fetchSupplierBalances` — one row per trader + the synthetic no-payee row. **53 columns** since opening balances (was 30) |
-| `public.cenapro_rc_supplier_group_balances` | `fetchSupplierBalances` — the SQL rollup that draws the parent rows. **49 columns** (was 27) |
+| `public.cenapro_rc_supplier_balances` | `fetchSupplierBalances` — one row per trader + the synthetic no-payee row. **57 columns** since allocation (30 → 53 → 57) |
+| `public.cenapro_rc_supplier_group_balances` | `fetchSupplierBalances` — the SQL rollup that draws the parent rows. **53 columns** (27 → 49 → 53) |
+| `public.cenapro_rc_payment_state` | `fetchSupplierPayments`, `fetchSpread`, `fetchAllocationTargets`, `allocateOldestFirst` — **every payment + `allocated_php` / `unallocated_php` / `allocation_count` / `is_advance`.** A strict superset of `cenapro_rc_payments`, which this module no longer reads at all |
+| `public.cenapro_rc_delivery_settlement` | `fetchSpread`, `fetchAllocationTargets`, `fetchSettlementsFor`, `allocateOldestFirst` — **and the deliveries ledger's PAID? column**. One row per receipt: `total_price_php`, `allocated_php`, `balance_php` (**NULL, not 0, when unpriceable**), `allocation_count`, `is_priceable`, `is_allocatable`, `settlement_status` |
+| `public.cenapro_rc_payment_allocations` | `fetchSpread`, `fetchDeliveryAllocations`, `allocateOldestFirst` — the edges, both ends folded in, soft-deleted ones INCLUDED |
+| `public.cenapro_save_rc_payment_allocations(p_payment_id, p_expected_row_version, p_allocations)` | `savePaymentAllocations` and, underneath, `allocateOldestFirst` — replaces one payment's WHOLE live block **atomically**. Gated on the PARENT PAYMENT's version |
+| `public.cenapro_allocate_delivery_to_payment(p_payment_id, p_expected_row_version, p_delivery_id, p_amount_php, p_note)` | `allocateDeliveryToPayment` — the delivery-first single edge. `p_amount_php` NULL ⇒ `LEAST(still owed, still unassigned)`, computed in SQL |
+| `public.cenapro_restore_rc_payment_allocation(p_id, p_expected_row_version)` | `restorePaymentAllocation` — gated on the ALLOCATION's own version, not the payment's |
 | `public.cenapro_rc_supplier_opening_balance_history` | `fetchOpeningBalanceHistory` — every revision ever stated, `is_current` marking the one in force |
 | `public.cenapro_set_rc_supplier_opening_balance(p_supplier_code, p_as_of_date, p_opening_balance_php, p_note)` | `setOpeningBalance` — **INSERT-ONLY**; no expected row version, because an append cannot conflict |
 | `public.cenapro_rc_payments` | `fetchSupplierPayments` — includes soft-deleted rows; carries `balance_effect_php` + `is_cash` + `is_deleted` |
@@ -82,12 +114,15 @@ PostgREST** — everything goes through the `public.cenapro_*` accessors.
 `opening_*` columns already carry the same figure, so a second query would only create a second
 source of truth). See "Known gaps".
 
-### ⚠️ The projections are FULL, and "full" goes stale
+### ⚠️ The projections are FULL, and "full" goes stale — TWICE now
 `BALANCE_COLS` / `GROUP_BALANCE_COLS` in `actions.ts` list **every** column so the fetched shape *is*
 the generated `Row` type. Opening balances widened both views (30→53 and 27→49) and the old lists kept
 typechecking **only because `types/supabase.ts` was stale**; the moment it was regenerated both
-assignments failed with "missing 22 properties". **Add a column to either view ⇒ add it here in the
-same changeset.** `npx tsc --noEmit` is the check. Same trap caught `buildBalanceTree`'s defensive
+assignments failed with "missing 22 properties". **It happened again on 2026-08-06:** allocation
+appended `advance_php`, `advance_payment_count`, `unassigned_incoming_php` and `advance_php_window`
+(53→57 and 49→53), and regenerating the types failed both assignments with "missing 4 properties"
+before a line of UI was written. **Add a column to either view ⇒ add it here in the same changeset.**
+`npx tsc --noEmit` is the check, and it is the FIRST thing to run after `supabase gen types`. Same trap caught `buildBalanceTree`'s defensive
 `asGroup()`, which is now `{ ...member, <group-only columns> }` rather than a hand-listed literal — a
 new *shared* column flows through automatically and a new *group-only* one is a compile error there.
 
@@ -124,6 +159,71 @@ dark:text-amber-400`). `unpricedPhrase()` names the *stage* from the view's exha
 ("2 receipts not yet priced — 2 awaiting weight") rather than guessing, and the wording is
 **pending, never broken**: "priced but not yet weighed" is the normal state of a receipt entered
 this morning and is exactly what the in-app INSERT path creates.
+
+### Allocation — the five rules the spread screen exists to enforce (Step 4)
+
+**1. The unassigned figure is TOP-RIGHT and never scrolls away.** §7a says so, and the reason is that
+it is the number being steered to zero. It lives in the sticky `DialogHeader`, and it **tracks the
+operator's typing** rather than the last fetch — the question it answers is *"what happens if I save
+this"*, not *"what did the database say when this opened"*. It is the largest thing on the screen. The
+only place this module colours a figure is when that number goes NEGATIVE, and even then it is not
+"a balance is wrong" — it is "the database will refuse this save".
+
+**2. Two separate money columns: STILL OWED and ASSIGN.** §7a asked for both by name. One column
+doing both jobs would render a FACT and a PROPOSAL identically, on the one screen where telling them
+apart is the entire task.
+
+**3. `balance_php` is NULL, not 0, and it renders as "not priced yet".** `total_price_php` COALESCEs a
+missing weight or price to exactly ₱0, so an unpriced receipt with no payments satisfies
+"allocated >= total" and reads as **settled** under any naive comparison. `stillOwedText()` is the ONE
+place that NULL becomes words, and it returns `{peso}` or `{text}` so a caller *cannot* accidentally
+run the words through `formatPeso`. **Confirmed live 2026-08-06:** SEVILLA's two 2026-07-14 receipts
+show `TTL PRICE ₱0.00` and `PAID? → "not priced yet"`, and so does the ALI UNGA pair from 2026-08-05
+(priced ₱42.00/kg, no weight yet).
+
+**4. Allocating to an unpriced receipt is ALLOWED, but never GUESSED — and the two source documents
+disagreed about this.** §7a says unpriced receipts *cannot be selected*; the Step 4a migration decided
+allocation to one *is* allowed, because a downpayment on a truck being weighed tomorrow is ordinary
+business. **Both are right about different things, and the synthesis is what shipped:** an unpriced
+receipt is never auto-filled, never swept by `Fill oldest first`, and never contributes to a
+pre-filled selection total — but it can be assigned to by hand. `is_allocatable` is the affordance
+flag, `fillOldestFirst()` skips on it, and `outstandingTotal()` reports what it skipped so the
+operator is told rather than silently short-changed. The reason it matters: **an unpriced receipt is
+an unknown, not a ₱0 debt, and any sweep that treats it as ₱0 marks it settled forever.**
+
+**5. Over-allocating a RECEIPT is legal; over-allocating a PAYMENT is refused.** Decision 13, Renzo
+verbatim — *"record it. It will be reflected in the running balance anyway."* So `over_allocated` gets
+a plain word and no red, while the payment invariant is enforced twice (the RPC's friendly refusal
+naming the overshoot in pesos, and a constraint trigger on **both** sides of the arithmetic). **No
+client-side rule may refuse what the DB accepts** — `validateAllocations` deliberately checks neither.
+
+**Saving is ONE atomic call and nothing is half-applied.** The RPC bumps the parent first (row-locking
+it and firing the compare-and-set), soft-deletes the edges the new block no longer mentions, then
+upserts the whole block in a SINGLE statement so the constraint trigger sees the final state exactly
+once. A legal rearrangement — move ₱200k from receipt A to receipt B — would trip the invariant
+halfway through if it were several statements. A receipt left blank is **released**, not destroyed,
+and `cenapro_restore_rc_payment_allocation` puts it back.
+
+**`Fill oldest first` REPLACES rather than tops up.** The helper means "spread it down the list"; a
+version that added to whatever was already typed would mean something different every time it was
+pressed.
+
+**A sub-supplier's receipt appears in the parent's list, labelled `sub`.** The list is scoped by
+**`group_code`** — read off `view_rc_supplier_group`, never re-derived from a name — because that is
+exactly the set the RPC will accept (§5a). Scoping it any other way would either offer receipts the
+database refuses or hide ones it accepts.
+
+### A cash advance needed no feature (Step 5)
+`view_rc_payment_state.is_advance` is `not deleted AND amount − allocated > 0`, so Step 5 reduced to
+two controls: the payments panel's **"N with money left"** toggle, and the balance table's **NOT YET
+ASSIGNED** column, whose figure links straight into that filtered list. No table, no flag, no route,
+no drawdown screen — attaching an advance to a receipt is the ordinary spread screen.
+
+`advance_php` is **ALL-TIME, never windowed** (the same deliberate asymmetry as the unpriced counts):
+an unassigned remainder on a payment from before an opening-balance cutoff is still money nobody has
+pointed at a receipt. And it is **not a balance term** — it is a subset of `payments_php`, so adding
+it to anything double-counts. Stated in the column `title`, because a reader who assumes otherwise
+would be out by the whole figure.
 
 ### The opening balance — four rules and one trap
 
@@ -363,9 +463,24 @@ The echo sentence is `aria-live="polite"`, so it is re-announced as the figure a
 - **`testuser@blackwood.local` cannot sign in.** GoTrue returns `Database error finding user` for
   both `magiclink` and `recovery` on that account (Renzo's own account works). Pre-existing, unrelated
   to this work, and it means that test account is unusable for local verification.
-- **Step 4+ is not built** and must not be added here piecemeal: no allocations, no settlement
-  column on the deliveries ledger, no cash-advance drawdown, no balance close/restart, no
-  skipped-cheque-number report.
+- **Steps 4 and 5 ARE built (2026-08-06).** Steps 6–8 are not, and must not be added piecemeal: no
+  balance close/restart (`rc_balance_period`), no skipped-cheque-number report, no reporting.
+- **THE ALLOCATION SURFACES HAVE NEVER BEEN EXERCISED AGAINST REAL DATA, because there is none.**
+  There are still **zero bank accounts**, therefore **zero payments**, therefore **zero allocations** —
+  the Step 4 migration seeded no allocation on purpose (*"inventing one would put a fabrication in the
+  middle of the money"*). So the spread screen and the assign dialog were verified to **compile, gate
+  and render their empty/complete states**, and the PAID? column was verified against 971 real
+  receipts, but no cheque has been spread end-to-end. **First real run:** add an account at
+  `/cenapro/liquidation/banks`, record a cheque, then press **Assign**.
+- **`public.cenapro_rc_payment_audit` is still unread**, and it now trails allocations too
+  (`entity = 'allocation'`, keyed by `payment_id` AND `delivery_id`). Same ₱ trap as before: `changed`
+  and `snapshot` are free-form jsonb carrying money, and a field-list redactor cannot reach inside a
+  blob — any action exposing it must delete the ₱ keys **out of the jsonb**, exactly as
+  `deliveries/actions.ts::redactAuditJson` does.
+- **A settlement read failure is deliberately NON-fatal to the deliveries ledger** (a samples failure
+  still is). `loadChildren` returns the two errors separately, so 971 receipts still render and each
+  PAID? cell says it could not load. See `../deliveries/CONTEXT.md` → "Liquidation from the receipt
+  side".
 
 ## Dependencies
 

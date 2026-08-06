@@ -11,6 +11,7 @@ import {
 } from 'react-virtuoso';
 import {
     AlertTriangle,
+    Banknote,
     Check,
     Copy,
     CornerDownRight,
@@ -24,6 +25,7 @@ import {
     Plus,
     Save,
     Search,
+    SplitSquareHorizontal,
     Trash2,
     Undo2,
     X,
@@ -52,6 +54,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EditInput, GridContextMenu, type GridMenuItem } from '@/components/shared/grid';
 import { DeliveryHistoryDialog } from './delivery-history-dialog';
+import { AssignChequeDialog } from './assign-cheque-dialog';
 import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
 import { useGridEditSession } from '@/lib/hooks/use-grid-edit-session';
 import {
@@ -68,6 +71,37 @@ import { cn } from '@/lib/utils';
 import { parsePriceInput, parseWeightInput } from '@/lib/cenapro/rc-formula';
 
 import { deleteDelivery, saveDeliveries, type DeliveryAnchor } from './actions';
+// ── LIQUIDATION, FROM THIS SIDE (Step 4) ─────────────────────────────────────────
+// Renzo: *"an add cheque button in deliveries page would be nice… right click on a delivery
+// and then assign a cheque to it or add a cheque from a delivery… That would make the
+// liquidations page more of a summary page."*
+//
+// The payment FORM and the allocation WRITE PATH are imported from the liquidation module
+// rather than re-implemented here. Both doors create the same `rc_payment_allocation` rows
+// through the same RPC, so there is one form, one set of refusals, and one place a block is
+// written; only the entry point differs. Both modules are Cenapro tenant code, so the
+// import crosses no layer.
+import { allocateOldestFirst, fetchSettlementsFor } from '../liquidation/actions';
+import { PaymentDialog } from '../liquidation/payment-dialog';
+import {
+    NOT_PRICED_TEXT,
+    SETTLEMENT_LABEL,
+    SETTLEMENT_NOTE,
+    outstandingTotal,
+    receiptLabel,
+    resolveSelectionPayee,
+    settlementStatus,
+    stillOwedText,
+    // The liquidation formatter, deliberately, and NOT this module's `formatPeso`. That one
+    // is 2 decimals — right for TTL PRICE, wrong for a REMAINDER: 19 receipts price out to
+    // sub-centavo fractions, so a still-owed ₱0.004 would render as `0.00` and read as
+    // SETTLED. A figure that rounds to nothing is the exact class of lie this column exists
+    // to prevent, so the balance keeps its 4 decimals.
+    formatPeso as formatBalancePeso,
+    type BankAccountRow,
+    type DeliverySettlementRow,
+    type SupplierGroupRow,
+} from '../liquidation/types';
 import {
     buildColumns,
     clampDraftAdd,
@@ -400,6 +434,13 @@ export interface DeliveriesLedgerProps {
     dimensions: DeliveryDimensions;
     /** Derived SERVER-SIDE from `canViewPrices()`; the ₱ fields are already nulled. */
     canViewPrices: boolean;
+    /**
+     * The payment form's two pickers (Step 4). Fetched only when prices are visible — a
+     * gated viewer never learns which bank accounts exist, and the "Add cheque" button they
+     * would feed is not rendered for that role either.
+     */
+    paymentSuppliers: SupplierGroupRow[];
+    paymentAccounts: BankAccountRow[];
     loadError: string | null;
 }
 
@@ -416,6 +457,8 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         filters,
         dimensions,
         canViewPrices,
+        paymentSuppliers,
+        paymentAccounts,
         loadError,
     } = props;
 
@@ -520,6 +563,30 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
      * every save error use — one identity line, everywhere.
      */
     const [historyTarget, setHistoryTarget] = React.useState<DeliveryRecord | null>(null);
+
+    // ── LIQUIDATION FROM THIS SIDE (Step 4) ──────────────────────────────────────
+    //
+    // Three pieces of state, one per door onto the shared allocation surface:
+    //
+    //   • `assignTarget` — the receipt whose "assign to an existing cheque" dialog is open.
+    //   • `chequeFor`    — the receipts a NEW cheque is being recorded for. One element for
+    //     the row menu, many for a multi-row selection. The payment form is pre-filled with
+    //     their outstanding total, and on save the new payment is pointed at them.
+    //   • `deleteBlocked` — the money the DB refused to delete over, with the real cheques,
+    //     so the second prompt can warn with NUMBERS rather than a generic scare.
+    const [assignTarget, setAssignTarget] = React.useState<DeliveryRecord | null>(null);
+    const [chequeFor, setChequeFor] = React.useState<{
+        /** In the order they should be covered — oldest receipt first. */
+        settlements: DeliverySettlementRow[];
+        /** The pre-filled amount: the outstanding total over the ALLOCATABLE ones only. */
+        amountPhp: string;
+        supplierCode: string;
+        note: string;
+    } | null>(null);
+    const [deleteBlocked, setDeleteBlocked] = React.useState<{
+        record: DeliveryRecord;
+        result: Awaited<ReturnType<typeof deleteDelivery>>;
+    } | null>(null);
 
     // ── Draft receipts (the blank rows at the bottom) ─────────────────────────────
     //
@@ -1178,6 +1245,35 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     const selectionRange = cellSelection.range;
     const selectionSize = selectionRange ? cellSelection.getSelectionSize() : 0;
     const isRangeSelected = selectionSize > 1;
+
+    /**
+     * The SAVED receipts the current rectangular selection covers, oldest first.
+     *
+     * ── THIS REUSES THE GRID OPERATORS ALREADY HAVE, RATHER THAN BUILDING A SECOND ──
+     * §7a's reuse note: delivery-first is *"that selection plus one action"*. The range
+     * comes from `useCellSelection` — the same instrument that already feeds the floating
+     * pill — so a drag, a Shift+click and a Shift+Arrow all reach this with no new gesture
+     * to learn and no second grid to keep in step.
+     *
+     * A SAMPLE row counts as its parent receipt: dragging over a receipt and its moisture
+     * draws plainly means the receipt. A DRAFT row counts as nothing — it has no id, so
+     * there is no receipt for a cheque to settle yet. Order is the sheet's own, which is
+     * canonical date order, which is what "oldest first" needs.
+     */
+    const selectedDeliveryIds = React.useMemo(() => {
+        if (!selectionRange) return [];
+        const out: string[] = [];
+        const seen = new Set<string>();
+        for (let row = selectionRange.startRow; row <= selectionRange.endRow; row++) {
+            const nav = navRows[row];
+            if (!nav || nav.kind === 'draft') continue;
+            const id = nav.deliveryId;
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            out.push(id);
+        }
+        return out;
+    }, [selectionRange, navRows]);
 
     /**
      * The number the pill adds up. STORED values only — `net_weight_kg`,
@@ -1853,12 +1949,145 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         return () => document.removeEventListener('paste', onDocumentPaste);
     }, []);
 
+    // ═══ LIQUIDATION FROM THIS SIDE — the delivery-first door ═════════════════════
+
+    /**
+     * Re-read the settlement column after an allocation lands.
+     *
+     * A `router.refresh()` re-renders the SERVER page, which re-fetches the window through
+     * the same `loadChildren` the first paint used — so the PAID? column and the balance
+     * screen behind it come from one place. Nothing is patched client-side: settlement is
+     * derived in SQL and a browser-side guess at the new figure would be a second truth
+     * about the same money.
+     */
+    const refreshSettlement = React.useCallback(() => {
+        if (scope === 'endless') void win.refreshWindow();
+        startTransition(() => router.refresh());
+    }, [scope, win, router]);
+
+    /**
+     * Open the payment form pre-filled for a set of receipts.
+     *
+     * ── THE PRE-FILLED TOTAL EXCLUDES UNPRICED RECEIPTS, AND SAYS SO ─────────────
+     * `outstandingTotal` counts `balance_php` over the ALLOCATABLE receipts only and reports
+     * how many it left out. An unpriced receipt contributes ₱0 to `total_price_php` by
+     * construction, so adding it in would make five receipts "come to ₱4.1M" when one of
+     * them is an unknown — and would then mark it settled forever. It is skipped, and the
+     * operator is told.
+     *
+     * ── A MIXED-SUPPLIER SELECTION IS REFUSED, BY NAME ───────────────────────────
+     * A cheque is always to ONE payee (decision 1), so `resolveSelectionPayee` refuses a
+     * selection spanning traders — UNLESS they all resolve to the same `group_code`, which is
+     * exactly what a subgroup is for. The group comes off the view; nothing here guesses it
+     * from a name.
+     */
+    const recordChequeFor = React.useCallback(async (deliveryIds: string[]) => {
+        if (deliveryIds.length === 0) return;
+        const res = await fetchSettlementsFor(deliveryIds);
+        if (res.error) {
+            errorToast('Could not read those receipts’ payment state', { description: res.error });
+            return;
+        }
+        if (!res.canViewPrices) {
+            errorToast('Recording a payment is not available for your role.');
+            return;
+        }
+        if (res.settlements.length === 0) {
+            errorToast('Those receipts have no payment state yet — reload the ledger and try again.');
+            return;
+        }
+
+        const payee = resolveSelectionPayee(res.settlements);
+        if (!payee.ok) {
+            errorToast('These receipts cannot share one cheque', { description: payee.message });
+            return;
+        }
+
+        const total = outstandingTotal(res.settlements);
+        if (total.counted === 0) {
+            errorToast('There is nothing outstanding to pay', {
+                description:
+                    total.skipped > 0
+                        ? `All ${total.skipped} of the selected receipt${
+                              total.skipped === 1 ? ' has' : 's have'
+                          } no weight or no agreed price yet, so nobody knows what is owed on ${
+                              total.skipped === 1 ? 'it' : 'them'
+                          }. Record the cheque from the liquidation screen and assign it by hand if you mean to.`
+                        : 'Every one of the selected receipts is already fully settled.',
+            });
+            return;
+        }
+
+        if (total.skipped > 0) {
+            toast.info(
+                `${total.skipped} receipt${
+                    total.skipped === 1 ? '' : 's'
+                } left out of the total — no price yet, so nobody knows what is owed.`,
+            );
+        }
+
+        setChequeFor({
+            settlements: res.settlements,
+            amountPhp: String(Number(total.php.toFixed(4))),
+            // Every receipt in the selection resolves to one group; the cheque is made out
+            // to the group's own code, which is the payee the RPC will accept for all of
+            // them (a parent may be paid for a sub-supplier's delivery).
+            supplierCode: payee.groupCode,
+            note:
+                res.settlements.length === 1
+                    ? `For the ${receiptLabel(res.settlements[0])} receipt`
+                    : `For ${total.counted} receipt${total.counted === 1 ? '' : 's'} of ${payee.groupName}`,
+        });
+    }, []);
+
+    /**
+     * The new payment exists — now point it at the receipts it was written for.
+     *
+     * ONE atomic call (`allocateOldestFirst`), never one per receipt: N calls are N
+     * transactions, and a failure halfway would leave a half-applied cheque. The
+     * distribution is worked out server-side over the view's own `balance_php` figures, so a
+     * rounded-down cheque covers the oldest receipts in full and part-pays the last —
+     * which is what actually happens in the yard.
+     */
+    const afterChequeRecorded = React.useCallback(
+        async (paymentId: string | null, deliveryIds: string[]) => {
+            setChequeFor(null);
+            if (!paymentId) {
+                // The payment landed but the RPC did not hand back an id, so nothing can be
+                // pointed at anything. Say so rather than silently leaving it unassigned:
+                // the balance already moved, and a quiet half-done act is the worst outcome.
+                errorToast('The payment was recorded but could not be assigned automatically', {
+                    description:
+                        'The database did not return the new payment’s id. Open the trader on the liquidation screen and use Assign to spread it across the receipts.',
+                });
+                refreshSettlement();
+                return;
+            }
+            const result = await allocateOldestFirst({ paymentId, deliveryIds });
+            if (!result.ok) {
+                errorToast('The payment was recorded, but it was not assigned to those receipts', {
+                    description: `${
+                        result.message ?? `The database refused the assignment (${result.outcome}).`
+                    }\n\nThe payment itself is saved and has already moved the trader’s balance. Assign it from the liquidation screen.`,
+                });
+            } else {
+                toast.success(result.message ?? 'Payment recorded and assigned');
+            }
+            refreshSettlement();
+        },
+        [refreshSettlement],
+    );
+
     // ═══ Context menu ════════════════════════════════════════════════════════════
     // `height` is the edge-FLIP estimate, not a layout value — it decides whether the
     // menu opens above or below the pointer near the viewport bottom. It grew with the
-    // "View history" item (7 items + 2 separators on the receipt menu); leaving it at
-    // the old 220 would let the last item fall off screen at the foot of the sheet.
-    const menu = useGridContextMenu<MenuRef>({ width: 232, height: 252 });
+    // "View history" item, and again with liquidation Step 4's two allocation items plus
+    // their separator (9 items + 3 separators on the receipt menu when prices are visible);
+    // leaving it stale lets the last item fall off screen at the foot of the sheet.
+    const menu = useGridContextMenu<MenuRef>({
+        width: 240,
+        height: canViewPrices ? 330 : 252,
+    });
 
     const addSample = React.useCallback(
         (deliveryId: string, afterIndex?: number) => {
@@ -2020,6 +2249,54 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 onSelect: (ref) => fillMoistureFromSamples(ref.deliveryId),
             },
             { kind: 'item', label: 'Copy row as TSV', icon: Copy, onSelect: (ref) => copyRow(ref.deliveryId) },
+
+            // ── LIQUIDATION, FROM THE RECEIPT (Step 4) ───────────────────────────
+            //
+            // Renzo's headline ask, and the reason the liquidation page can become a
+            // summary: *"right click on a delivery and then assign a cheque to it or add a
+            // cheque from a delivery."* Two items because they are two different acts —
+            // spending money that is already in the system, and writing a new cheque — and
+            // both end up creating the SAME allocation rows through the same RPC.
+            //
+            // HIDDEN ENTIRELY for a gated viewer. Not disabled: the ₱ columns are absent
+            // from that viewer's grid, so an item about money would be describing something
+            // they cannot see, and the server actions behind both would refuse anyway.
+            ...(canViewPrices
+                ? ([
+                      { kind: 'separator' },
+                      {
+                          kind: 'item',
+                          label: 'Assign to a cheque…',
+                          icon: SplitSquareHorizontal,
+                          onSelect: (ref) => {
+                              const rec = recordsById.get(ref.deliveryId);
+                              if (rec) setAssignTarget(rec);
+                          },
+                      },
+                      {
+                          kind: 'item',
+                          // The multi-select form of the same act. It reads the CURRENT
+                          // selection, so the label has to say how many it will cover —
+                          // otherwise "for these" is a promise the operator cannot check.
+                          label: () =>
+                              selectedDeliveryIds.length > 1
+                                  ? `Record a cheque for these ${selectedDeliveryIds.length}…`
+                                  : 'Record a cheque for this…',
+                          icon: Banknote,
+                          onSelect: (ref) => {
+                              // The selection wins when it covers more than one receipt;
+                              // otherwise the row that was right-clicked does. A one-cell
+                              // selection somewhere else must never hijack a right-click.
+                              const ids =
+                                  selectedDeliveryIds.length > 1 &&
+                                  selectedDeliveryIds.includes(ref.deliveryId)
+                                      ? selectedDeliveryIds
+                                      : [ref.deliveryId];
+                              void recordChequeFor(ids);
+                          },
+                      },
+                  ] satisfies GridMenuItem<MenuRef>[])
+                : []),
             {
                 // The audit trail (`cenapro.rc_delivery_audit`, 2026-08-05) covers the
                 // receipt AND its moisture draws in one list. A DRAFT row is excluded by
@@ -2055,6 +2332,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     }, [
         menuIsDraft, addSample, removeSample, fillMoistureFromSamples, copyRow, revertRow,
         clearDraftRow, dirtyIds, dirtyDraftIds, recordsById,
+        canViewPrices, selectedDeliveryIds, recordChequeFor,
     ]);
 
     // ═══ Save ════════════════════════════════════════════════════════════════════
@@ -2236,30 +2514,67 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         supplierCodes, destinationCodes, canViewPrices, scope, win, router,
     ]);
 
-    const handleDelete = React.useCallback(async () => {
-        const target = deleteTarget;
-        if (!target) return;
-        setDeleteTarget(null);
-        const id = target.row.id ?? '';
-        const version = target.row.row_version;
-        if (!id || version === null || version === undefined) {
-            errorToast('That receipt is missing its id or version token — reload the ledger.');
-            return;
-        }
-        const result = await deleteDelivery(id, version);
-        if (!result.ok) {
-            errorToast(`Could not delete ${rowLabel(target)} (${result.outcome}).`, {
-                description: result.message ?? 'No detail returned by the database.',
-            });
-            return;
-        }
-        toast.success(
-            `Deleted ${rowLabel(target)}${result.samplesDeleted > 0 ? ` and ${result.samplesDeleted} draw${result.samplesDeleted === 1 ? '' : 's'}` : ''}`,
-        );
-        revertRow(id);
-        if (scope === 'endless') win.dropRecord(id);
-        else startTransition(() => router.refresh());
-    }, [deleteTarget, scope, win, router, revertRow]);
+    /**
+     * Delete one receipt.
+     *
+     * ── THE MONEY BRANCH (liquidation Step 4, §5c) ───────────────────────────────
+     * If the receipt has payments assigned to it the RPC REFUSES with outcome
+     * `has_allocations`, carrying the real allocated total and the real cheques. That is not
+     * an error — it is a question, so it opens a SECOND prompt that states the numbers and
+     * offers to release the money. Renzo: *"what if an entry was a duplicate and it was
+     * already assigned money."* On confirmation the same call is repeated with the release
+     * flag, and the amounts go back to each cheque's unassigned pool — never destroyed,
+     * because the cheque would otherwise still exist carrying money that no longer adds up.
+     *
+     * With no allocations this is byte-for-byte the flow it has always been.
+     */
+    const handleDelete = React.useCallback(
+        async (release = false) => {
+            const target = release ? deleteBlocked?.record : deleteTarget;
+            if (!target) return;
+            setDeleteTarget(null);
+            setDeleteBlocked(null);
+            const id = target.row.id ?? '';
+            const version = target.row.row_version;
+            if (!id || version === null || version === undefined) {
+                errorToast('That receipt is missing its id or version token — reload the ledger.');
+                return;
+            }
+            const result = await deleteDelivery(id, version, release);
+
+            // Money is in the way, and the operator has not yet been told how much. Park the
+            // real figures and ask — a generic "could not delete" would be the one answer
+            // that leaves them with no idea what they are about to move.
+            if (!result.ok && result.outcome === 'has_allocations') {
+                setDeleteBlocked({ record: target, result });
+                return;
+            }
+
+            if (!result.ok) {
+                errorToast(`Could not delete ${rowLabel(target)} (${result.outcome}).`, {
+                    description: result.message ?? 'No detail returned by the database.',
+                });
+                return;
+            }
+            toast.success(
+                `Deleted ${rowLabel(target)}${
+                    result.samplesDeleted > 0
+                        ? ` and ${result.samplesDeleted} draw${result.samplesDeleted === 1 ? '' : 's'}`
+                        : ''
+                }${
+                    result.releasedCount > 0
+                        ? ` · ₱${formatBalancePeso(result.releasedPhp)} released back to ${
+                              result.releasedCount
+                          } payment${result.releasedCount === 1 ? '' : 's'}`
+                        : ''
+                }`,
+            );
+            revertRow(id);
+            if (scope === 'endless') win.dropRecord(id);
+            else startTransition(() => router.refresh());
+        },
+        [deleteTarget, deleteBlocked, scope, win, router, revertRow],
+    );
 
     // ═══ URL axis writers — ONE guarded choke point ══════════════════════════════
     //
@@ -2853,6 +3168,77 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                         },
                     );
 
+                // ── PAID? — the settlement column (liquidation Step 4) ───────────
+                //
+                // What makes the delivery-first door possible at all: you cannot liquidate
+                // what you cannot see. It shows what is STILL OWED plus the state in one
+                // word, and it is derived — nothing here is stored on the receipt, and
+                // nothing is computed in the browser.
+                //
+                // THREE RULES, EACH LOAD-BEARING:
+                //
+                //  1. **"not priced yet", NEVER ₱0.00.** `total_price_php` COALESCEs a
+                //     missing weight or price to exactly zero, so an unpriced receipt with
+                //     no payments satisfies "allocated >= total" and reads as SETTLED under
+                //     any naive comparison. `balance_php` is therefore NULL rather than 0,
+                //     and this cell renders the words. A zero here would be a claim that
+                //     nothing is owed, and it would be indistinguishable from the truth.
+                //  2. **No red anywhere.** A remainder is ordinary business (decision 8),
+                //     and `over_allocated` is recorded on purpose (decision 13). The one
+                //     emphasis is amber on `unpriced`, which is the only state that hides
+                //     an unknown.
+                //  3. **A receipt with no settlement row says so.** That is a real state
+                //     while the settlement fetch is in flight or has failed, and an em dash
+                //     with a title is honest where a "paid" would be a fabrication.
+                case 'settle': {
+                    const settle = rec.settlement;
+                    if (!settle) {
+                        return renderCell(
+                            col, ci, navRow,
+                            <span className="text-muted-foreground/50">{dash}</span>,
+                            { title: 'Payment state has not loaded for this receipt.' },
+                        );
+                    }
+                    const status = settlementStatus(settle.settlement_status);
+                    const owed = stillOwedText(settle);
+                    return renderCell(
+                        col, ci, navRow,
+                        <span className="flex w-full min-w-0 items-center justify-between gap-1">
+                            {'peso' in owed ? (
+                                <span className="flex min-w-0 flex-1 items-baseline justify-between gap-1 font-mono text-xs tabular-nums">
+                                    <span className="text-muted-foreground/70">₱</span>
+                                    <span className={cn(status === 'settled' && 'text-muted-foreground')}>
+                                        {formatBalancePeso(owed.peso)}
+                                    </span>
+                                </span>
+                            ) : (
+                                <span className="truncate text-[10px] leading-tight text-amber-600 dark:text-amber-400">
+                                    {NOT_PRICED_TEXT}
+                                </span>
+                            )}
+                            <span
+                                className={cn(
+                                    'shrink-0 rounded-sm border px-1 text-[9px] leading-tight',
+                                    status === 'unpriced'
+                                        ? 'border-amber-500/40 text-amber-600 dark:text-amber-400'
+                                        : 'border-border/60 text-muted-foreground',
+                                )}
+                            >
+                                {SETTLEMENT_LABEL[status]}
+                            </span>
+                        </span>,
+                        {
+                            title: `${SETTLEMENT_NOTE[status]}${
+                                (num(settle.allocated_php) ?? 0) > 0
+                                    ? `\n\nAssigned so far: ₱${formatBalancePeso(settle.allocated_php)} from ${
+                                          num(settle.allocation_count) ?? 0
+                                      } payment(s).`
+                                    : ''
+                            }\n\nRight-click the row to assign a cheque to it, or to record one for it.`,
+                        },
+                    );
+                }
+
                 default:
                     return renderCell(col, ci, navRow, null);
             }
@@ -3345,6 +3731,44 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                             {dirtyCount} unsaved
                         </span>
                     )}
+
+                    {/* ── ADD CHEQUE — Renzo asked for this button by name ──────────
+                        *"An add cheque button in deliveries page would be nice."* It opens
+                        the liquidation module's OWN payment form, imported rather than
+                        re-implemented, so a cheque recorded from here and one recorded from
+                        the balance screen go through the same validation and the same
+                        refusals. With nothing selected it is a blank form; with receipts
+                        selected it arrives pre-filled with their outstanding total, which
+                        §7a calls the `straight` term — pay the exact amount on delivery.
+                        Absent entirely for a gated viewer. */}
+                    {canViewPrices && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 gap-1 px-2 text-[11px]"
+                            onClick={() => {
+                                if (selectedDeliveryIds.length > 0) {
+                                    void recordChequeFor(selectedDeliveryIds);
+                                    return;
+                                }
+                                // Nothing selected: a plain new payment, payee to be chosen.
+                                setChequeFor({ settlements: [], amountPhp: '', supplierCode: '', note: '' });
+                            }}
+                            title={
+                                selectedDeliveryIds.length > 0
+                                    ? `Record a cheque for the ${selectedDeliveryIds.length} selected receipt${
+                                          selectedDeliveryIds.length === 1 ? '' : 's'
+                                      }, pre-filled with what is still owed on them.`
+                                    : 'Record a cheque, bank transfer or write-off. Select receipts first to have the amount pre-filled and assigned automatically.'
+                            }
+                        >
+                            <Banknote className="size-3" />
+                            {selectedDeliveryIds.length > 0
+                                ? `Cheque for ${selectedDeliveryIds.length}`
+                                : 'Add cheque'}
+                        </Button>
+                    )}
+
                     <Button
                         size="sm"
                         className="h-6 gap-1 px-2 text-[11px]"
@@ -3676,6 +4100,120 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 onOpenChange={(o) => !o && setHistoryTarget(null)}
                 onClosed={focusGrid}
             />
+
+            {/* ── The money is in the way (liquidation Step 4, §5c) ─────────────────
+                A SECOND prompt, not a toast, because it asks a question the first one could
+                not: the receipt has cheques against it, and deleting it will MOVE that money.
+                It warns with the DB's own figures — the real total and the real cheques — and
+                confirming releases them back to each cheque's unassigned pool rather than
+                destroying them, because the cheque would otherwise still exist carrying money
+                that no longer adds up. */}
+            <AlertDialog open={deleteBlocked !== null} onOpenChange={(o) => !o && setDeleteBlocked(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>This receipt has money assigned to it</AlertDialogTitle>
+                        <AlertDialogDescription asChild>
+                            <div className="space-y-2 text-sm">
+                                <p>
+                                    {deleteBlocked ? rowLabel(deleteBlocked.record) : ''} has{' '}
+                                    <span className="font-mono font-medium">
+                                        ₱{formatBalancePeso(deleteBlocked?.result.allocatedPhp)}
+                                    </span>{' '}
+                                    assigned to it from {deleteBlocked?.result.allocationCount ?? 0} payment
+                                    {(deleteBlocked?.result.allocationCount ?? 0) === 1 ? '' : 's'}.
+                                </p>
+                                {(deleteBlocked?.result.blocking.length ?? 0) > 0 && (
+                                    <ul className="space-y-0.5 rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-[11px]">
+                                        {deleteBlocked?.result.blocking.map((p) => (
+                                            <li key={p.paymentId} className="flex justify-between gap-3">
+                                                <span className="truncate">
+                                                    {p.method === 'cheque'
+                                                        ? `#${p.chequeNo ?? '—'}`
+                                                        : (p.method ?? 'payment')}
+                                                    {p.paymentDate ? ` · ${p.paymentDate.slice(0, 10)}` : ''}
+                                                </span>
+                                                <span className="shrink-0 tabular-nums">
+                                                    ₱{formatBalancePeso(p.allocatedPhp)}
+                                                </span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                                <p className="text-xs text-muted-foreground">
+                                    Deleting the receipt{' '}
+                                    <span className="font-medium text-foreground">releases</span> that money
+                                    back to those payments, where it can be assigned to another receipt. It is
+                                    never destroyed, and every release is recorded with a full snapshot. The
+                                    receipt itself, and its{' '}
+                                    {deleteBlocked?.record.samples.length ?? 0} moisture draw
+                                    {(deleteBlocked?.record.samples.length ?? 0) === 1 ? '' : 's'}, cannot be
+                                    undone.
+                                </p>
+                            </div>
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep the receipt</AlertDialogCancel>
+                        <AlertDialogAction
+                            onClick={(e) => {
+                                // The dialog would close on its own; the write has to finish
+                                // first so a refusal is still on screen when the toast lands.
+                                e.preventDefault();
+                                void handleDelete(true);
+                            }}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        >
+                            Release the money and delete
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            {/* ── Door 1: assign this receipt to a cheque that already exists ───── */}
+            <AssignChequeDialog
+                open={assignTarget !== null}
+                onOpenChange={(o) => !o && setAssignTarget(null)}
+                deliveryId={assignTarget?.row.id ?? null}
+                label={assignTarget ? rowLabel(assignTarget) : ''}
+                onAssigned={refreshSettlement}
+                onClosed={focusGrid}
+            />
+
+            {/* ── Door 2: record a NEW cheque for this receipt, or for the selection ──
+                The liquidation module's own form, imported. On save the new payment is
+                pointed at the receipts it was written for in ONE atomic call, so the two
+                halves of what an operator thinks of as a single act stay a single act. */}
+            {canViewPrices && chequeFor !== null && (
+                <PaymentDialog
+                    open
+                    onOpenChange={(o) => {
+                        if (!o) {
+                            setChequeFor(null);
+                            focusGrid();
+                        }
+                    }}
+                    supplierCode={chequeFor.supplierCode}
+                    suppliers={paymentSuppliers}
+                    accounts={paymentAccounts}
+                    editing={null}
+                    initialAmountPhp={chequeFor.amountPhp || undefined}
+                    contextNote={chequeFor.note || undefined}
+                    onSaved={(result) => {
+                        const ids = chequeFor.settlements
+                            .map((s) => s.delivery_id)
+                            .filter((v): v is string => !!v);
+                        if (ids.length === 0) {
+                            // The plain "Add cheque" path with nothing selected: a payment
+                            // with no receipts to point at is a cash advance, which §4.4 says
+                            // needs no special handling at all.
+                            setChequeFor(null);
+                            refreshSettlement();
+                            return;
+                        }
+                        void afterChequeRecorded(result?.id ?? null, ids);
+                    }}
+                />
+            )}
         </div>
     );
 }

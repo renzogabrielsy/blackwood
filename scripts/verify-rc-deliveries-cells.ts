@@ -250,11 +250,19 @@ check('a code is never mistaken for a side (WHSE C is not WHSE + C)', () => {
 
 // ── Column geometry ───────────────────────────────────────────────────────────
 
-check('gating prices REMOVES two columns rather than blanking them', () => {
+// Asserted as a SET, not a count. It used to say `open.length - gated.length === 2`, which
+// was a second, undeclared statement of which columns are money — and it broke the moment
+// liquidation Step 4 added a third (`settle`, which renders `balance_php`). The money group
+// is now derived from the difference itself, so a future ₱ column is absorbed here and only
+// has to be added to the ONE list below.
+const MONEY_COLS = ['php_kg', 'ttl', 'settle']
+
+check('gating prices REMOVES the money columns rather than blanking them', () => {
   const open = buildColumns(true)
   const gated = buildColumns(false)
-  assert.equal(open.length - gated.length, 2)
-  assert.ok(!gated.some((c) => c.key === 'php_kg' || c.key === 'ttl'))
+  const removed = open.filter((c) => !gated.some((g) => g.key === c.key)).map((c) => c.key)
+  assert.deepEqual(removed, MONEY_COLS)
+  assert.ok(!gated.some((c) => MONEY_COLS.includes(c.key)))
   assert.ok(minTableWidth(gated) < minTableWidth(open))
 })
 
@@ -273,7 +281,9 @@ check('a sample sub-row addresses only the label lane and the seven lab lanes', 
   const addressable = cols.filter((c) => sampleFieldFor(c.field) !== null).map((c) => c.key)
   assert.deepEqual(addressable, ['supplier', 'bd', 'moist', 'grit', 'ash', 'dust', 'vm', 'fc'])
   // The cells a draw does NOT have must be unreachable, or nav could rest on one.
-  for (const key of ['date', 'truck', 'sacks', 'wt', 'whse', 'remarks', 'php_kg', 'ttl', 'num']) {
+  // `settle` is in the list for the same reason as `ttl`: a moisture draw is not a receipt
+  // and has no payment state of its own.
+  for (const key of ['date', 'truck', 'sacks', 'wt', 'whse', 'remarks', 'php_kg', 'ttl', 'settle', 'num']) {
     const col = cols.find((c) => c.key === key)!
     assert.equal(sampleFieldFor(col.field), null, key)
   }
@@ -606,7 +616,19 @@ check('each figure lands on its OWN column — net kg on WT, the ₱ total on TT
       assert.equal(s.total, 0)
       assert.equal(noteStart + s.note, cols.length)
     }
-    assert.equal(s.trailing, 0, 'nothing sits right of TTL PRICE today')
+    // THE TRAILING LANE IS NO LONGER EMPTY, and this is the case it was built for.
+    // Liquidation Step 4 appended `settle` (PAID?) past TTL PRICE, so a summary row now
+    // has to cover one column to the right of the ₱ figure — which the derived `trailing`
+    // span does on its own, with no arithmetic anywhere touched. Gated, TTL PRICE is
+    // absent, the note lane runs to the end and there is nothing trailing at all.
+    assert.equal(
+      s.trailing,
+      canViewPrices ? 1 : 0,
+      canViewPrices ? 'PAID? sits right of TTL PRICE' : 'gated: no ₱ column, nothing trailing',
+    )
+    if (canViewPrices) {
+      assert.equal(cols[cols.length - 1].key, 'settle')
+    }
   }
 })
 
@@ -650,10 +672,13 @@ check('adding a column is absorbed by the lane containing it — the old arithme
   assert.equal(mid.label, base.label)
   assert.equal(mid.note, base.note + 1)
 
-  // Past TTL PRICE: covered by the trailing filler rather than left uncovered.
+  // Past TTL PRICE: covered by the trailing filler rather than left uncovered. The live
+  // table already has ONE column there (`settle`, added by liquidation Step 4), so an
+  // insertion at the far end makes it two — stated relative to the base, not as a literal,
+  // which is the whole discipline this check exists to enforce.
   const right = summarySpans(insert(cols.length, 'paid'))
   assert.equal(right.total, 1)
-  assert.equal(right.trailing, 1)
+  assert.equal(right.trailing, base.trailing + 1)
 
   // What the old formulas would have done with the FIRST of those. The literal 5 puts
   // the net-kg figure on the inserted column, and `spanAll - 7` re-tiles around it — a
@@ -958,8 +983,11 @@ check('the spacer covers every column with a CELL of its own, in both gating sta
     // rows pin, so a column moved into or out of it is absorbed with no new arithmetic.
     assert.equal(frozenOffsets(cols).length, s.frozen)
   }
-  // The two shapes really do differ, or the loop above proves nothing.
-  assert.equal(buildColumns(true).length, buildColumns(false).length + 2)
+  // The two shapes really do differ, or the loop above proves nothing. Expressed against
+  // the ONE money-column list rather than a literal — the count went 2 → 3 when liquidation
+  // Step 4 added PAID?, and a literal here is a third undeclared statement of which columns
+  // are money.
+  assert.equal(buildColumns(true).length, buildColumns(false).length + MONEY_COLS.length)
 })
 
 check('typed drafts regroup by date after save — the re-anchor re-reads canonical order', () => {

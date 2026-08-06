@@ -65,6 +65,7 @@ import {
     paymentPatchFrom,
     validatePaymentForm,
     type BankAccountRow,
+    type LiquidationResult,
     type PaymentFormState,
     type PaymentMethod,
     type PaymentRow,
@@ -84,8 +85,29 @@ export interface PaymentDialogProps {
     accounts: BankAccountRow[];
     /** `null` records a new payment; a row edits it. */
     editing: PaymentRow | null;
-    /** Called after a successful write so the caller can re-read. */
-    onSaved: () => void;
+    /**
+     * Pre-fill the amount (Step 4, the delivery-first door).
+     *
+     * The deliveries ledger passes the outstanding total of the receipt(s) the cheque is
+     * being written for — §7a: creating a payment for exactly the selected total **is** the
+     * `straight` term Renzo described. It seeds the field and stays EDITABLE, because a
+     * trader who wants a round figure is the normal case, not an exception (decision 8).
+     * Ignored when `editing` is set: an existing payment's own amount always wins.
+     */
+    initialAmountPhp?: string;
+    /**
+     * One line under the title saying what this payment is being recorded FOR, when it is
+     * being recorded from somewhere that knows — "for the 2026-08-04 receipt (truck 1234)".
+     * Absent from the liquidation module's own flow, which has no such context.
+     */
+    contextNote?: string;
+    /**
+     * Called after a successful write. Step 4 passes the RPC's result through, so the
+     * delivery-first door can take the NEW payment's id and point it at the receipts the
+     * cheque was written for — one continuous act, not two things the operator has to
+     * remember to do. Existing callers that take no argument are unaffected.
+     */
+    onSaved: (result?: LiquidationResult) => void;
 }
 
 function today(): string {
@@ -105,7 +127,15 @@ export function PaymentDialog(props: PaymentDialogProps) {
                     the first one's values — the whole form state is remounted rather than
                     synchronised. Same reasoning as the receipt-history dialog's key.
                 */}
-                <PaymentForm key={props.editing?.id ?? `new:${props.supplierCode}`} {...props} />
+                {/* The pre-filled amount is part of the key: recording a cheque for one
+                    receipt and then for a different one must not reuse the first amount. */}
+                <PaymentForm
+                    key={
+                        props.editing?.id ??
+                        `new:${props.supplierCode}:${props.initialAmountPhp ?? ''}`
+                    }
+                    {...props}
+                />
             </DialogContent>
         </Dialog>
     );
@@ -117,11 +147,18 @@ function PaymentForm({
     suppliers,
     accounts,
     editing,
+    initialAmountPhp,
+    contextNote,
     onSaved,
 }: PaymentDialogProps) {
-    const [form, setForm] = useState<PaymentFormState>(() =>
-        editing ? paymentFormFrom(editing) : emptyPaymentForm(supplierCode, today()),
-    );
+    const [form, setForm] = useState<PaymentFormState>(() => {
+        if (editing) return paymentFormFrom(editing);
+        const blank = emptyPaymentForm(supplierCode, today());
+        // Seeded, not locked. A trader who wants a round figure is the normal case, and the
+        // remainder they carry is ordinary business (decision 8) — so the operator types
+        // over this whenever they mean to.
+        return initialAmountPhp ? { ...blank, amount_php: initialAmountPhp } : blank;
+    });
     const [saving, setSaving] = useState(false);
     /** Only shown once the operator has tried to save — never while they are still typing. */
     const [submitted, setSubmitted] = useState(false);
@@ -199,7 +236,10 @@ function PaymentForm({
             }
 
             toast.success(editing ? 'Payment updated' : 'Payment recorded');
-            onSaved();
+            // The result carries the new payment's id and version, which is what lets the
+            // delivery-first door point it at the receipts it was written for without a
+            // second round trip or a second decision from the operator.
+            onSaved(result);
             onOpenChange(false);
         } finally {
             setSaving(false);
@@ -214,8 +254,20 @@ function PaymentForm({
                     {editing ? 'Edit payment' : 'Record a payment'}
                 </DialogTitle>
                 <DialogDescription className="text-xs">
-                    Money going out to a trader. It reduces that trader&rsquo;s balance without being
-                    assigned to particular receipts — assigning a cheque to receipts comes later.
+                    {contextNote ? (
+                        // Recorded FROM somewhere that knows what it is for — the deliveries
+                        // ledger. Saying so is what makes the two doors feel like one act.
+                        <>
+                            <span className="font-medium text-foreground">{contextNote}</span> — the amount
+                            is pre-filled with what is still owed, and it stays editable.
+                        </>
+                    ) : (
+                        <>
+                            Money going out to a trader. It reduces that trader&rsquo;s balance
+                            immediately; pointing it at particular receipts is a separate step, on the
+                            cheque&rsquo;s own spread screen.
+                        </>
+                    )}
                 </DialogDescription>
             </DialogHeader>
 

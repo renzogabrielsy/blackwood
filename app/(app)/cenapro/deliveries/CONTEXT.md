@@ -21,6 +21,12 @@ receipts). That is why the money columns are decomposed rather than opaque, why 
 unresolvable supplier is refused rather than stored, and why `TTL PRICE` is never
 computed in the browser.
 
+**Since 2026-08-06 that feature reaches INTO this screen.** The ledger now carries a
+**`PAID?` settlement column**, an **Add cheque** button, and two context-menu items that
+assign a cheque to a receipt or record one for it — Renzo's own ask, and the reason the
+liquidation page can become a summary rather than the workplace. See **"Liquidation from
+the receipt side"** below.
+
 **Tenant/Domain layer** — Cebu-specific, zero ICTC coupling.
 
 ---
@@ -33,6 +39,7 @@ computed in the browser.
 | `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; **`PRICE_FIELDS` + `stripPrices()` + `redactAuditJson()`** (the ONE ₱ boundary — one list, two consumers: named fields on a row shape, and keys inside the audit trail's jsonb); **the audit vocabulary** (`RcDeliveryAuditRow`, `DeliveryHistoryEntry`, `AUDIT_TRAIL_START`, `readAuditChanges` / `auditColumnLabel` / `formatAuditValue` / `auditHeadline` / `auditSnapshotColumns`); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, **`getDeliveryHistory`** (one receipt's audit trail, ₱-redacted server-side), `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
+| `assign-cheque-dialog.tsx` | **Client** — liquidation Step 4's **delivery-first door**, opened from the row context menu (*Assign to a cheque…*). Picks any live payment of the receipt's `group_code` with `unallocated_php > 0` (so the picker can never offer a guaranteed refusal, and a parent's cheque reaches a sub-supplier's receipt), defaults the amount to `min(left on the cheque, still owed)`, and writes through `cenapro_allocate_delivery_to_payment`. On an UNPRICED receipt there is no default and cannot be one — assigning is still allowed, just never guessed. |
 | `delivery-history-dialog.tsx` | **Client** — the per-receipt audit trail, opened from the grid's row context menu (*View history*). Renders one entry per `cenapro.rc_delivery_audit` row, newest first, with the receipt AND its moisture draws in one list. See "Audit trail" below. Imports nothing from ICTC's `DeliveryHistoryDialog` — same reading experience, entirely separate wiring. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
@@ -54,8 +61,17 @@ Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its ver
   `.in('delivery_id', ids)` round trip.
 - **Dimensions:** `public.cenapro_rc_suppliers` (12 traders), `public.cenapro_rc_destinations`
   (16 yards).
+- **Settlement (liquidation Step 4):** `public.cenapro_rc_delivery_settlement` — one row per
+  receipt (`allocated_php`, `balance_php`, `settlement_status`, `is_allocatable`), fetched
+  ALONGSIDE a page rather than joined into the read model, and **not fetched at all** for a
+  viewer who may not see prices. Plus `public.cenapro_rc_payment_state` and
+  `public.cenapro_rc_payment_allocations`, read through the liquidation module's actions for
+  the two allocation dialogs.
 - **Write RPCs:** `cenapro_save_rc_delivery`, `cenapro_save_rc_delivery_samples`,
-  `cenapro_delete_rc_delivery` — all compare-and-set on `row_version`.
+  `cenapro_delete_rc_delivery` — all compare-and-set on `row_version`. The delete gained a
+  third argument, `p_release_allocations` (default false); it now refuses with
+  `has_allocations` when money points at the receipt. Allocation itself is written by the
+  liquidation module's RPCs, never by this one.
 
 ---
 
@@ -64,7 +80,10 @@ Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its ver
 ### The columns — the sheet's own order
 
 `# · DATE · TRK# · SUPPLIER · SKS · WT · BD · MOIST · GRIT · ASH · DUST · VM · FC ·
-WAREHOUSE · REMARKS · PHP/KG · TTL PRICE`
+WAREHOUSE · REMARKS · PHP/KG · TTL PRICE · PAID?`
+
+*(`PAID?` was appended 2026-08-06 by liquidation Step 4. It is part of the ₱ group, so a
+gated viewer sees 15 columns, not 18 — see "Liquidation from the receipt side".)*
 
 Explicit pixel widths; their sum is the table's `minWidth` and the wrapper scrolls
 horizontally ("never crush, always scroll" — no `1fr` column anywhere). BD renders to 3
@@ -1184,6 +1203,136 @@ blob (see the DATA LAYER note above). So:
 `cenapro.audit_source`), so the dialog only shows it when it is present and shows nothing
 today. Wiring it is a save-RPC change, not a UI one — see the DATA LAYER note above.
 
+### Liquidation from the receipt side (2026-08-06, Step 4)
+
+Renzo: *"I was expecting some UI enhancements to deliveries to be able to liquidate from
+there. An **add cheque button in deliveries page** would be nice. Being able to **right
+click on a delivery and then assign a cheque to it or add a cheque from a delivery** would
+be nice don't you think? That would make the **liquidations page more of a summary page**.
+But of course, still being able to do the same things just in a different flow."*
+
+**THE ARCHITECTURAL POINT, AND IT IS THE WHOLE DESIGN: both doors create the SAME
+`cenapro.rc_payment_allocation` rows through the SAME RPC.** The write path, the
+validation and the vocabulary are built ONCE, in the liquidation module; only the entry
+point differs. Nothing about allocation is re-implemented here, and a second
+implementation is a bug rather than a variation — two code paths writing money could
+disagree about a peso, and one of them would be wrong.
+
+| Affordance | Where | What it calls |
+|---|---|---|
+| **Add cheque** (toolbar) | `deliveries-ledger.tsx` | the liquidation module's own `PaymentDialog`, **imported not forked** |
+| **Assign to a cheque…** (row menu) | `assign-cheque-dialog.tsx` | `allocateDeliveryToPayment` → `cenapro_allocate_delivery_to_payment`, which is built **in SQL on top of** the block RPC |
+| **Record a cheque for this / these N…** (row menu, and the toolbar button when rows are selected) | `PaymentDialog` + `allocateOldestFirst` | `savePayment`, then ONE atomic `cenapro_save_rc_payment_allocations` |
+| **PAID?** column | `deliveries-ledger.tsx` | reads `DeliveryRecord.settlement`, fetched by `loadChildren` |
+
+#### The PAID? column, and the three rules in it
+
+- **"not priced yet", NEVER ₱0.00.** `total_price_php` COALESCEs a missing weight or price
+  to exactly zero, so an unpriced receipt with no payments satisfies "allocated >= total"
+  and reads as **settled** under any naive comparison. The view returns `balance_php` as
+  **NULL rather than 0** and `stillOwedText()` (liquidation `types.ts`) is the ONE place
+  that becomes words. **Confirmed live:** SEVILLA's two 2026-07-14 receipts render
+  `TTL PRICE ₱0.00` beside `PAID? → "not priced yet"`, and so does the 2026-08-05 ALI UNGA
+  pair (agreed ₱42.00/kg, no weight yet).
+- **It uses the LIQUIDATION peso formatter, not this module's.** `formatPeso` here keeps 2
+  decimals — right for TTL PRICE, **wrong for a remainder**: 19 receipts price out to
+  sub-centavo fractions, so a still-owed ₱0.004 would render `0.00` and read as SETTLED.
+  Imported as `formatBalancePeso` with the reason stated at the import.
+- **No red, anywhere.** A remainder is ordinary business (decision 8) and
+  `over_allocated` is recorded on purpose (decision 13). The only emphasis is amber on
+  `unpriced`, which is the one state that hides an unknown. A receipt with no settlement
+  row renders an em dash saying so — honest, where a "paid" would be a fabrication.
+
+#### Settlement rides ALONGSIDE the receipt, and is gated harder than `stripPrices()`
+
+- **`cenapro.view_rc_delivery` is untouched.** The Step 4 migration deliberately left this
+  module's 60-column read model alone, so settlement arrives from
+  `public.cenapro_rc_delivery_settlement` in its own round trip and hangs off
+  **`DeliveryRecord.settlement`** — exactly the way the moisture sub-samples do. There is
+  no `paid` flag on `cenapro.rc_delivery` and there never will be: it would be a second
+  truth about the same money.
+- **`loadChildren`** fetches the draws and the settlement **in parallel**, and returns
+  their errors SEPARATELY. A samples failure is fatal to the page (a draw is part of the
+  receipt's addressable shape); a settlement failure is **not** — 971 receipts are still
+  worth showing, and each PAID? cell says it could not load.
+- **The settlement fields do NOT join `PRICE_FIELDS`, and cannot.** That list is
+  `satisfies readonly (keyof RcDeliveryRow)[]`, and `balance_php` is not a column of this
+  read model — the compiler would refuse it. So the gate is **earlier and stronger than
+  `stripPrices()`**: `loadSettlements` does not issue the query at all when
+  `canViewPrices()` is false, and `buildColumns(false)` drops the PAID? column with the
+  other two ₱ columns. **The brief that commissioned this said the new fields "join the
+  ones already in `stripPrices()`" — they do not and must not; this is the correction.**
+- **`fetchPaymentDimensions` now gates itself.** It used to rely on its only caller
+  (`/cenapro/liquidation`) being gated. This page is its second caller and serves gated
+  viewers, so a Production role would have been handed CI's bank-account list with the
+  account numbers on it. The check moved inside the fetcher.
+
+#### The multi-receipt door reuses the grid operators already have
+
+§7a's reuse note: delivery-first is *"that selection plus one action"*. `selectedDeliveryIds`
+reads `useCellSelection`'s existing range — the same instrument that feeds the floating
+pill — so a drag, a Shift+click and a Shift+Arrow all reach it with **no new gesture and no
+second grid**. A sample sub-row counts as its parent receipt; a draft row counts as
+nothing (no id, so no receipt for a cheque to settle).
+
+- **A mixed-supplier selection is REFUSED, naming the traders.** A cheque is always to ONE
+  payee (decision 1), so `resolveSelectionPayee` refuses — **unless every trader resolves
+  to the same `group_code`**, which is exactly what a subgroup is for. The group comes off
+  `view_rc_supplier_group`; nothing guesses it from a name.
+- **An unpriced receipt contributes NOTHING to the pre-filled total, and the operator is
+  told.** `outstandingTotal` counts `balance_php` over the ALLOCATABLE receipts only and
+  reports how many it skipped. Folding an unpriced receipt in at its ₱0
+  `total_price_php` would make five receipts "come to ₱4.1M" when one is an unknown — and
+  would then mark it settled forever.
+- **The pre-filled amount stays EDITABLE.** A trader who wants a round figure is the
+  normal case, and the remainder they carry is ordinary business (decision 8). Because the
+  post-save distribution is worked out server-side against the view's own figures, a
+  rounded-down cheque covers the oldest receipts in full and part-pays the last — which is
+  what happens in the yard.
+- **The assignment is ONE atomic call.** `allocateOldestFirst` assembles the block on the
+  server and writes it once. N per-receipt calls would be N transactions, so a failure
+  halfway would leave a **half-applied cheque** — the exact thing the block RPC exists to
+  make impossible.
+- If the payment saves but the assignment is refused, the toast says **both**: the payment
+  is saved and has already moved the balance, and the assignment has to be made from the
+  liquidation screen. A quiet half-done act is the worst outcome available.
+
+#### Deleting a receipt that has money against it — WARN, then RELEASE
+
+`cenapro_delete_rc_delivery` gained a third argument and now **REFUSES** with outcome
+**`has_allocations`**, carrying the real allocated total and the real cheques. §5c, Renzo:
+*"what if an entry was a duplicate and it was already assigned money."*
+
+- The refusal is **a question, not a failure**, so it opens a SECOND `AlertDialog` that
+  states the figures — total, count, and one line per cheque with its number and amount —
+  rather than a generic scare.
+- Confirming re-calls with the release flag. The edges are removed in the same transaction
+  and the money **returns to each cheque's unassigned pool** automatically (because
+  `unallocated_php` is derived), each with a full-snapshot audit row. It is never
+  destroyed: the cheque would otherwise still exist carrying money that no longer adds up.
+- **With no allocations the behaviour and the payload are byte-for-byte unchanged.** The
+  new argument defaults to false in SQL as well as here, and is only sent when releasing.
+- The success toast names what was released, and `revalidatePath('/cenapro/liquidation')`
+  fires only when something actually moved.
+
+#### What the column table and the verify script needed
+
+- `PAID?` is in **`PRICE_COLS`**, so `buildColumns(false)` drops all three money columns
+  together and the keyboard space keeps no unreachable holes.
+- It carries **`field: null`** — settlement is derived state, written by assigning a
+  payment, never by typing in the column.
+- **`summarySpans` absorbed it with no arithmetic change**, which is what it was built for:
+  `PAID?` sits right of TTL PRICE, so the `trailing` lane went 0 → 1 and both summary rows
+  already render it. That lane's whole purpose was *"tiles, full stop"* rather than "tiles
+  for the two shapes that exist" — this is the third shape arriving and being absorbed.
+- **Three assertions in `verify-rc-deliveries-cells.ts` were statements about the OLD
+  table and were corrected, not deleted** — the count stays **116**. Each had hard-coded a
+  second, undeclared definition of which columns are money: `open.length - gated.length
+  === 2` (now derived from the difference against ONE `MONEY_COLS` list),
+  `trailing === 0` ("nothing sits right of TTL PRICE today" — now `canViewPrices ? 1 : 0`),
+  and `buildColumns(true).length === buildColumns(false).length + 2` (now
+  `+ MONEY_COLS.length`). `settle` was also added to the "cells a draw does not have" loop.
+
 ### Per-column filters (`?f_<column>=…`, 2026-08-04)
 
 **Filterable:** DATE · TRK# · SUPPLIER · BD · MOIST · GRIT · ASH · DUST · VM · FC ·
@@ -1422,6 +1571,15 @@ messages use sonner directly.
 - `react-virtuoso` (`TableVirtuoso`, endless scope only), `date-fns`, `sonner`,
   `lucide-react`.
 - Shadcn: `button`, `input`, `popover`, `alert-dialog`, `dialog`, `dropdown-menu`.
+- **`../liquidation/` — a REAL and DELIBERATE dependency since 2026-08-06.** `types.ts` imports
+  the settlement vocabulary (`SETTLEMENT_LABEL`, `NOT_PRICED_TEXT`, `stillOwedText`,
+  `settlementStatus`, `outstandingTotal`, `resolveSelectionPayee`, `receiptLabel`,
+  `DeliverySettlementRow`); `actions.ts` imports the row type; the ledger imports
+  `PaymentDialog`, `allocateOldestFirst` and `fetchSettlementsFor`; `page.tsx` imports
+  `fetchPaymentDimensions`. **Both are Cenapro tenant code, so this crosses no layer**, and
+  `liquidation/types.ts` is a PURE module (no React, no Supabase, no `'use client'`) so nothing
+  is dragged into the bundle. It is one vocabulary and one write path shared by two doors — the
+  alternative is two definitions of what a settled receipt is.
 - **Not a dependency, and must never become one:** `app/(app)/inventory/rc-in/components/`
   (`DeliveryHistoryDialog.tsx`, `audit-shared.tsx`, `lib/field-labels.ts`). ICTC's history
   UI is the model for this module's dialog and is imported by exactly nothing here — it is

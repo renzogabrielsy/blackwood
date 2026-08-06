@@ -35,6 +35,20 @@ Bit me twice in one run (2026-07-30): `VERIFY_EXIT=` and `ESLINT_EXIT=` both cam
 - When you must keep the pipe, `${pipestatus[1]}` IS reliable (confirmed 2026-08-03 and 2026-08-04 on `git push … | tail -5`).
 - The background-task output file only holds the echoed exit code, **not** the command's stdout — always capture builds to your own log file if you need to grep them.
 
+## GIT TRAP — `git rev-parse --short` takes ONE revision, and fails like a broken repo
+
+2026-08-06 (promotion 38): `git rev-parse --short HEAD main origin/main origin/<feat>` — the
+obvious way to prove every ref agrees after a promotion — exits **128** with
+`fatal: Needed a single revision`. Reproduced at 2 refs and 3 refs. **`--short` is
+single-revision only**; every ref was perfectly healthy.
+
+The danger is the wording: "Needed a single revision" reads like a missing/corrupt branch at
+exactly the moment you are verifying a production push, and invites a false alarm in the report.
+
+- **Loop instead:** `for r in HEAD main origin/main origin/<feat>; do printf '%-40s ' "$r"; git rev-parse --short "$r"; done`
+- **Best final proof is the remote itself:** `git ls-remote origin main refs/heads/<feat>` — full
+  SHAs straight from origin, no local ref cache involved. Compare the first 7 chars to your commits.
+
 ## SHELL TRAP — you cannot grep for a NUL byte via an argv pattern
 
 2026-08-05: `grep -qU $'\x00' "$f"` flagged **all 20 staged files** as containing NUL. It is a false positive with no exceptions — NUL terminates a C string, so the pattern reaches grep as the EMPTY string, which matches every line of every file. A scan that flags 100% of its inputs is broken, not alarming.

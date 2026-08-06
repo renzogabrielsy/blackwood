@@ -39,6 +39,27 @@
 // partitions the count exhaustively — and "priced but not yet weighed" is a normal
 // daily stage in a receipt's life, not a fault. The wording says *pending*, never
 // *broken*.
+//
+// ── 4. ALLOCATION (Step 4, 2026-08-06): ONE VOCABULARY, TWO DOORS ────────────────
+// Renzo asked for cheque-first AND delivery-first ("an add cheque button in deliveries
+// page… right click on a delivery and then assign a cheque to it"). Both doors create
+// the SAME `cenapro.rc_payment_allocation` rows through the SAME RPC, so the vocabulary
+// they share is defined ONCE, here, and the deliveries ledger IMPORTS it rather than
+// growing a second copy (see `SETTLEMENT_STATUS` below — that cross-module import is
+// deliberate, and both modules are Cenapro tenant code, so it crosses no layer).
+//
+// Two facts about allocation that this file is the guardian of:
+//
+//   • **`balance_php` is NULL — not 0 — on an unpriceable receipt.** The honest answer
+//     to "how much is still owed on this" is *nobody knows yet*, and a 0 there is a
+//     claim that nothing is owed. `NOT_PRICED_TEXT` is what a screen renders instead,
+//     and `stillOwedText()` is the ONE place that choice is made.
+//   • **`is_allocatable` is an AFFORDANCE, not a refusal.** The database deliberately
+//     still records an allocation to an unpriced receipt — a downpayment on a truck
+//     weighed tomorrow is ordinary business. What this module refuses to do is
+//     AUTO-FILL one: `fillOldestFirst()` skips a non-allocatable row, and
+//     `outstandingTotal()` never counts one. An unpriced receipt is an unknown, not a
+//     ₱0 debt, and a sweep that treats it as ₱0 marks it settled forever.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import type { Database } from '@/types/supabase';
@@ -73,6 +94,32 @@ export type SupplierOpeningBalanceRow =
  */
 export type OpeningBalanceRevisionRow =
     Database['public']['Views']['cenapro_rc_supplier_opening_balance_history']['Row'];
+
+// ─── Allocation row shapes (Step 4) ─────────────────────────────────────────────
+
+/**
+ * A payment PLUS how much of it has been assigned — `allocated_php`,
+ * `unallocated_php`, `allocation_count`, `is_advance`. A strict superset of
+ * `PaymentRow`, which is why `fetchSupplierPayments` reads THIS view: a payments list
+ * that could not say how much of a cheque is still unassigned would send the operator
+ * to a second screen to find out.
+ *
+ * §4.4: a CASH ADVANCE needs no table, no column and no flag — it simply IS a payment
+ * whose allocations sum to less than its amount, so `WHERE is_advance` is Step 5.
+ */
+export type PaymentStateRow = Database['public']['Views']['cenapro_rc_payment_state']['Row'];
+
+/**
+ * One receipt's settlement state: `allocated_php`, `balance_php` and
+ * `settlement_status`. Settlement lives in a VIEW and never on `cenapro.rc_delivery` —
+ * a `paid` flag on the receipt would be a second truth about the same money.
+ */
+export type DeliverySettlementRow =
+    Database['public']['Views']['cenapro_rc_delivery_settlement']['Row'];
+
+/** One payment→receipt edge, with both ends folded in. Soft-deleted edges INCLUDED. */
+export type PaymentAllocationRow =
+    Database['public']['Views']['cenapro_rc_payment_allocations']['Row'];
 
 // ─── Numbers ────────────────────────────────────────────────────────────────────
 
@@ -646,6 +693,12 @@ export const BALANCE_COLS: BalanceCol[] = [
     { key: 'carried', label: 'STANDS IN FOR', width: 164, title: 'How many receipts the opening balance replaces, and what they were worth. This pair is what makes the stated figure checkable later.' },
     { key: 'receipts', label: 'RECEIPTS', width: 156, numeric: true, title: 'What CI owes for this trader’s PRICEABLE receipts dated on or after the opening balance (everything, when there is none).' },
     { key: 'paid', label: 'PAID', width: 148, numeric: true, title: 'Payments out, less money that came back, plus any write-off — over the same window as RECEIPTS.' },
+    // Step 4. ALL-TIME on purpose, like the unpriced counts and for the same reason: an
+    // unassigned remainder on a payment from BEFORE an opening-balance cutoff is still
+    // money nobody has pointed at a receipt, and windowing it away would hide a live
+    // operational fact. It is also NOT a balance term — it is a subset of PAID, so adding
+    // it to anything double-counts.
+    { key: 'advance', label: 'NOT YET ASSIGNED', width: 168, numeric: true, title: 'Money already paid to this trader that has not been pointed at any particular receipt — the outstanding advance. Whole history, never windowed. It is part of PAID already, not on top of it, and a figure here is perfectly normal.' },
     { key: 'count', label: 'RCPTS', width: 62, numeric: true, title: 'Receipts counted in the figures on this row.' },
     { key: 'unpriced', label: 'NOT YET PRICED', width: 172, title: 'Receipts this balance could not price, over the WHOLE history — never windowed. One dated before the opening balance cannot have been folded into it, because nobody knows what it is worth.' },
     { key: 'last_receipt', label: 'LAST RECEIPT', width: 108, title: 'Most recent delivery date, whole history.' },
@@ -1001,6 +1054,339 @@ export function paymentPatchFrom(form: PaymentFormState): PaymentPatch {
     };
 }
 
+// ═══ ALLOCATION — assigning a payment to particular receipts (Step 4) ═══════════
+//
+// ONE surface, two doors. The cheque-first spread screen and the delivery-first context
+// menu both end up calling `public.cenapro_save_rc_payment_allocations`, so everything
+// below is shared by both and duplicated by neither.
+//
+// ── `unpriced` IS NOT `settled`, AND THE DIFFERENCE IS INVISIBLE IN PESOS ────────
+// `total_price_php` COALESCEs a missing weight or price to exactly ₱0, so an unpriced
+// receipt with no allocations satisfies "allocated >= total" and reads as fully settled
+// under any naive ordering. The view therefore tests `unpriced` FIRST and returns
+// `balance_php` as **NULL, not 0**. Nothing in this module may render that NULL as
+// ₱0.00 — `stillOwedText()` is the one place the choice is made, and it says
+// "not priced yet".
+
+/**
+ * A receipt's settlement state, as the read model names it.
+ *
+ * `over_allocated` is a LEGAL, RECORDED state, not an error: decision 13, Renzo
+ * verbatim — *"record it. It will be reflected in the running balance anyway."* The
+ * database refuses to over-allocate a PAYMENT and deliberately allows over-allocating a
+ * RECEIPT, so no client-side rule may refuse what the DB accepts.
+ */
+export type SettlementStatus = 'unpriced' | 'unpaid' | 'partial' | 'settled' | 'over_allocated';
+
+export const SETTLEMENT_STATUSES: readonly SettlementStatus[] = [
+    'unpriced', 'unpaid', 'partial', 'settled', 'over_allocated',
+];
+
+/** A `settlement_status` off the wire, narrowed. Anything unrecognised reads `unpaid`. */
+export function settlementStatus(v: string | null | undefined): SettlementStatus {
+    return (SETTLEMENT_STATUSES as readonly string[]).includes(v ?? '')
+        ? (v as SettlementStatus)
+        : 'unpaid';
+}
+
+/** The short label for a dense cell. Deliberately lower-case — it is a state, not a badge. */
+export const SETTLEMENT_LABEL: Record<SettlementStatus, string> = {
+    unpriced: 'not priced',
+    unpaid: 'unpaid',
+    partial: 'part paid',
+    settled: 'paid',
+    over_allocated: 'over',
+};
+
+/** The sentence for a `title`. Says what the state MEANS, never that it is wrong. */
+export const SETTLEMENT_NOTE: Record<SettlementStatus, string> = {
+    unpriced:
+        'This receipt has no weight or no agreed price yet, so nobody knows what is owed on it. It is an unknown, NOT a ₱0 debt — it is never auto-filled and never counted in a selection total. You can still assign money to it deliberately (a downpayment on a truck weighed tomorrow is ordinary).',
+    unpaid: 'Nothing has been assigned to this receipt yet.',
+    partial: 'Part of this receipt has been paid. The rest is still owed.',
+    settled: 'Fully covered by one or more payments.',
+    over_allocated:
+        'More has been assigned to this receipt than it is worth. That is recorded on purpose, not an error — it shows up in the trader’s running balance either way.',
+};
+
+/**
+ * What a screen shows where the still-owed figure would go on an unpriceable receipt.
+ *
+ * NEVER `₱0.00`. A zero there is a claim that nothing is owed, and the whole §3.4 trap is
+ * that the claim is arithmetically indistinguishable from the truth.
+ */
+export const NOT_PRICED_TEXT = 'not priced yet';
+
+/**
+ * The still-owed figure, or the words that stand in for it — the ONE place `balance_php`
+ * being NULL rather than 0 is turned into something a person reads.
+ *
+ * Returns `{ peso }` when there is a real figure and `{ text }` when there is not, so a
+ * caller cannot accidentally run the words through `formatPeso` or the figure through a
+ * plain span.
+ */
+export function stillOwedText(row: {
+    balance_php?: number | string | null;
+    is_priceable?: boolean | null;
+}): { peso: number | string } | { text: string } {
+    if (row.is_priceable === false) return { text: NOT_PRICED_TEXT };
+    const n = num(row.balance_php);
+    // Defensive: a NULL balance on a row that claims to be priceable is still an unknown,
+    // and an unknown must never render as zero.
+    if (n === null) return { text: NOT_PRICED_TEXT };
+    return { peso: n };
+}
+
+// ─── The spread form — the ONE editable surface, used by both doors ──────────────
+
+/**
+ * What the operator has typed against one receipt, as TEXT.
+ *
+ * Text rather than a number for the same reason the payment form is: a half-typed figure
+ * must never be coerced into a number nobody meant. An EMPTY string means "not assigned"
+ * — the block RPC's own contract (*"leave a receipt OUT of the list instead of assigning
+ * it nothing"*), so a cleared row releases its edge rather than writing a ₱0 one.
+ */
+export type AllocationDrafts = Record<string, string>;
+
+/**
+ * One line of the spread screen: a receipt, its settlement state, and what is typed
+ * against it. Every figure is COPIED off the view — nothing here is derived arithmetic.
+ */
+export interface SpreadLine {
+    deliveryId: string;
+    settlement: DeliverySettlementRow;
+    /** The edge already saved against THIS payment, if any. `null` when there is none. */
+    existing: PaymentAllocationRow | null;
+    /**
+     * TRUE when this receipt's trader is not the cheque's payee — the edge is legal only
+     * through the subgroup. §7a: *"a sub-supplier's delivery appears in the parent's list
+     * with a small trader label."*
+     */
+    isSubgroup: boolean;
+}
+
+/**
+ * Sum of the operator's own UNSAVED inputs.
+ *
+ * This is the one arithmetic this module is allowed to do in TypeScript, and only because
+ * the numbers are not in the database yet: `CLAUDE.md` forbids computing a BALANCE here,
+ * and every stored figure on this screen (`allocated_php`, `unallocated_php`,
+ * `balance_php`, `running_balance_php`) is read from the view instead. The moment the
+ * block is saved, the DB's own totals replace this.
+ */
+export function draftedTotal(drafts: AllocationDrafts): number {
+    let sum = 0;
+    for (const text of Object.values(drafts)) {
+        const n = num(text.trim());
+        if (n !== null) sum += n;
+    }
+    return sum;
+}
+
+/** How many receipts carry a typed amount — the "across N receipts" count. */
+export function draftedCount(drafts: AllocationDrafts): number {
+    let n = 0;
+    for (const text of Object.values(drafts)) {
+        const v = num(text.trim());
+        if (v !== null && v > 0) n += 1;
+    }
+    return n;
+}
+
+/**
+ * `Fill oldest first` — spend what is left of the payment down the list, oldest receipt
+ * first, stopping when the money runs out.
+ *
+ * **It SKIPS a receipt that is not allocatable**, and that is the §3.4 rule as a
+ * behaviour rather than a warning. An unpriced receipt has no known outstanding amount,
+ * so there is nothing to fill; treating its ₱0 `total_price_php` as a debt would assign
+ * it nothing and mark it settled forever. A receipt with no payee is skipped for the same
+ * reason from the other end — there is nobody a cheque could be written to.
+ *
+ * Existing typed amounts are REPLACED, not added to: this is a helper that says "spread
+ * it down the list", and a version that topped up whatever was already there would mean
+ * something different every time it was pressed.
+ */
+export function fillOldestFirst(lines: SpreadLine[], amountPhp: number): AllocationDrafts {
+    const out: AllocationDrafts = {};
+    let left = amountPhp;
+    for (const line of lines) {
+        if (left <= 0) break;
+        if (line.settlement.is_allocatable !== true) continue;
+        const owed = num(line.settlement.balance_php);
+        if (owed === null || owed <= 0) continue;
+        const take = Math.min(owed, left);
+        if (take <= 0) continue;
+        // `trim_scale` in the DB normalises the stored value; here the concern is only
+        // that a float artefact never reaches the input as `1000.0000000000001`.
+        out[line.deliveryId] = String(Number(take.toFixed(4)));
+        left -= take;
+    }
+    return out;
+}
+
+/** One line of the payload the block RPC takes. Keys ARE its allowlist. */
+export interface AllocationInput {
+    delivery_id: string;
+    amount_php: number;
+    note?: string | null;
+}
+
+/**
+ * The drafts, as the block RPC's `p_allocations` array.
+ *
+ * A blank or non-positive entry is DROPPED rather than sent as zero — the RPC refuses a
+ * zero amount by design and tells the caller to leave the receipt out instead, which is
+ * exactly what releases its edge back to the cheque's unassigned pool.
+ */
+export function allocationsPayload(drafts: AllocationDrafts): AllocationInput[] {
+    const out: AllocationInput[] = [];
+    for (const [deliveryId, text] of Object.entries(drafts)) {
+        const n = num(text.trim());
+        if (n === null || n <= 0) continue;
+        out.push({ delivery_id: deliveryId, amount_php: n });
+    }
+    return out;
+}
+
+/**
+ * The client-side pre-flight for one spread block. It exists to make a DB refusal RARE,
+ * never to replace it — every rule here is also enforced by the RPC or a constraint
+ * trigger, and when the database refuses anyway its own message is what the operator sees.
+ *
+ * Note what is deliberately NOT checked: whether a receipt ends up over-allocated
+ * (decision 13 — recorded, not refused), and whether a receipt is unpriced (allowed when
+ * done deliberately). Refusing either here would make this screen stricter than the
+ * ledger it writes to.
+ */
+export function validateAllocations(
+    drafts: AllocationDrafts,
+    paymentAmountPhp: number | string | null | undefined,
+): string | null {
+    for (const [, text] of Object.entries(drafts)) {
+        const raw = text.trim();
+        if (raw === '') continue;
+        const n = num(raw);
+        if (n === null) return 'One of the amounts is not a number.';
+        if (n < 0) {
+            return 'An assigned amount cannot be negative. Clear the cell to release that receipt instead.';
+        }
+    }
+
+    const amount = num(paymentAmountPhp);
+    const total = draftedTotal(drafts);
+    if (amount !== null && total > amount) {
+        return `That assigns ₱${formatPeso(total)} but this payment is only worth ₱${formatPeso(
+            amount,
+        )} — over by ₱${formatPeso(total - amount)}. Lower one of the amounts, or raise the payment first.`;
+    }
+    return null;
+}
+
+/**
+ * The total outstanding across a set of receipts — what a "record a cheque for these"
+ * pre-fill is worth.
+ *
+ * **A non-allocatable receipt contributes NOTHING and is reported separately.** This is
+ * the §3.4 rule at the other door: an unpriced receipt in a selection must not quietly
+ * add ₱0 to the pre-filled amount, because that reads as "these five receipts come to
+ * ₱4.1M" when one of them is an unknown. The caller says so out loud instead.
+ */
+export interface OutstandingTotal {
+    /** Sum of `balance_php` over the ALLOCATABLE receipts only. */
+    php: number;
+    /** How many receipts contributed. */
+    counted: number;
+    /** How many were left out because they have no price yet, or no payee. */
+    skipped: number;
+}
+
+export function outstandingTotal(rows: DeliverySettlementRow[]): OutstandingTotal {
+    let php = 0;
+    let counted = 0;
+    let skipped = 0;
+    for (const r of rows) {
+        const owed = num(r.balance_php);
+        if (r.is_allocatable !== true || owed === null) {
+            skipped += 1;
+            continue;
+        }
+        php += owed;
+        counted += 1;
+    }
+    return { php, counted, skipped };
+}
+
+/**
+ * The one-line refusal when a selection spans traders who cannot be paid with one cheque.
+ *
+ * A cheque is always to a SINGLE payee (decision 1), so a mixed selection has no valid
+ * payee — UNLESS every trader in it resolves to the same `group_code`, which is exactly
+ * what a subgroup is for (§5a: *"if a cheque is labeled Paquibot but is being assigned to
+ * a Llanto delivery, then it should push through"*). `group_code` is read off the view,
+ * never re-derived from names.
+ *
+ * Returns the resolved group when the selection is payable, or a message naming the
+ * traders when it is not.
+ */
+export type SelectionPayee =
+    | { ok: true; groupCode: string; groupName: string; traders: string[] }
+    | { ok: false; message: string };
+
+export function resolveSelectionPayee(rows: DeliverySettlementRow[]): SelectionPayee {
+    if (rows.length === 0) {
+        return { ok: false, message: 'Nothing is selected.' };
+    }
+
+    const noPayee = rows.filter((r) => !r.supplier_code);
+    if (noPayee.length > 0) {
+        return {
+            ok: false,
+            message: `${noPayee.length} of the selected receipt${
+                noPayee.length === 1 ? ' has' : 's have'
+            } no supplier recorded, so there is nobody a cheque could be written to. Set the supplier on ${
+                noPayee.length === 1 ? 'it' : 'them'
+            } first, or leave ${noPayee.length === 1 ? 'it' : 'them'} out of the selection.`,
+        };
+    }
+
+    const groups = new Map<string, string>();
+    const traders = new Map<string, string>();
+    for (const r of rows) {
+        const g = r.group_code ?? r.supplier_code ?? '';
+        groups.set(g, r.group_display_name ?? r.supplier_display_name ?? g);
+        const code = r.supplier_code ?? '';
+        traders.set(code, r.supplier_display_name ?? code);
+    }
+
+    if (groups.size > 1) {
+        return {
+            ok: false,
+            message: `A cheque is always made out to ONE payee, and these receipts belong to ${
+                groups.size
+            } different traders (${[...traders.values()].sort().join(', ')}) who are not in the same group. Select one trader’s receipts, or make them sub-suppliers of the same payee first.`,
+        };
+    }
+
+    const [groupCode] = [...groups.keys()];
+    return {
+        ok: true,
+        groupCode,
+        groupName: groups.get(groupCode) ?? groupCode,
+        traders: [...traders.values()].sort(),
+    };
+}
+
+/** A receipt, named the way every refusal in the DB names one. Keeps the two in step. */
+export function receiptLabel(row: {
+    delivery_date?: string | null;
+    truck_no?: string | null;
+}): string {
+    const date = (row.delivery_date ?? '').slice(0, 10) || 'undated';
+    return `${date} · truck ${row.truck_no ?? '?'}`;
+}
+
 // ═══ Banks and accounts — the cheque book's home ════════════════════════════════
 //
 // A cheque number is unique only per ACCOUNT (two banks will happily issue #001234), so
@@ -1191,6 +1577,8 @@ export function minBankTableWidth(): number {
 export type LiquidationOutcome =
     | 'inserted'
     | 'updated'
+    /** The allocation RPCs' success word — a whole block replaced in one call. */
+    | 'saved'
     | 'deleted'
     | 'restored'
     | 'version_conflict'
@@ -1201,7 +1589,7 @@ export type LiquidationOutcome =
     | 'rpc_error';
 
 export const LIQUIDATION_OUTCOMES: readonly LiquidationOutcome[] = [
-    'inserted', 'updated', 'deleted', 'restored', 'version_conflict',
+    'inserted', 'updated', 'saved', 'deleted', 'restored', 'version_conflict',
     'not_found', 'unsupported_field', 'invalid', 'forbidden', 'rpc_error',
 ];
 
@@ -1222,3 +1610,50 @@ export interface LiquidationResult {
 /** The single sentence shown when a role may not see money at all. */
 export const PRICE_GATE_NOTE =
     'Liquidation is the money side of the receipt ledger, so this screen is not available for your role.';
+
+// ═══ The spread screen's column geometry (§7a screen 3) ═════════════════════════
+//
+// Explicit pixel widths whose SUM is the table's min-width — the wrapper scrolls rather
+// than letting a column crush. No `1fr`, no unset column absorbing slack.
+//
+// TWO SEPARATE MONEY COLUMNS, which §7a asked for by name: **"still owed"** (what the
+// database says) and **"assign"** (what the operator is typing). One column doing both
+// jobs would make the figure that is a FACT and the figure that is a PROPOSAL look
+// identical, on the one screen where the difference is the entire point.
+
+export interface SpreadCol {
+    key: string;
+    label: string;
+    width: number;
+    title?: string;
+    numeric?: boolean;
+    /** Part of the frozen left block (DATE + TRUCK identify the receipt). */
+    frozen?: boolean;
+}
+
+export const SPREAD_COLS: SpreadCol[] = [
+    { key: 'date', label: 'DATE', width: 96, frozen: true, title: 'Delivery date. Oldest first — the order a cheque is normally spread in.' },
+    { key: 'truck', label: 'TRK#', width: 84, frozen: true, title: 'Truck plate / number.' },
+    { key: 'trader', label: 'TRADER', width: 150, title: 'Whose receipt this is. Shown because a sub-supplier’s delivery appears in the parent’s list.' },
+    { key: 'total', label: 'RECEIPT', width: 132, numeric: true, title: 'What this receipt is worth — net weight × ₱/kg, computed by the database.' },
+    { key: 'paid', label: 'ALREADY PAID', width: 128, numeric: true, title: 'Assigned to this receipt from ALL payments, this one included.' },
+    { key: 'owed', label: 'STILL OWED', width: 132, numeric: true, title: 'Receipt value less everything assigned to it. Blank — never ₱0.00 — when the receipt has no price yet, because then nobody knows.' },
+    { key: 'assign', label: 'ASSIGN', width: 148, numeric: true, title: 'How much of THIS payment to put against this receipt. Clear the box to release it back to the unassigned pool.' },
+    { key: 'status', label: 'STATE', width: 104, title: 'unpaid · part paid · paid · over · not priced. None of them is an error.' },
+];
+
+export function minSpreadTableWidth(): number {
+    return SPREAD_COLS.reduce((sum, c) => sum + c.width, 0);
+}
+
+/** Cumulative `left` offsets for the frozen block, in column order. */
+export function spreadFrozenOffsets(): number[] {
+    const out: number[] = [];
+    let x = 0;
+    for (const c of SPREAD_COLS) {
+        if (!c.frozen) break;
+        out.push(x);
+        x += c.width;
+    }
+    return out;
+}
