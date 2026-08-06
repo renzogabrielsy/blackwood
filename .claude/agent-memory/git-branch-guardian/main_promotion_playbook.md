@@ -64,7 +64,7 @@ merge back preserves every one of them (`git merge-base --is-ancestor <old-main-
 prove it in the report).
 
 `feat/cenapro-deliveries-qol` (promotion `c8ffc53`) is the first branch cut this way. Same
-promotion recipe, no `dev`, no PR. Latest promotion off it: `a86643a` (2026-08-05, #36).
+promotion recipe, no `dev`, no PR. Latest promotion off it: `7a8bee6` (2026-08-06, #39).
 
 **A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
 23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
@@ -363,6 +363,35 @@ promotion 37's docs landed first, then this feature. Order isn't fixed; only the
 
 Gates clean again (merge-base tree diff empty, merge exit 0, post-merge `git diff --stat main
 <feat>` empty, `git ls-remote` confirming both refs): **26 consecutive clean promotions.**
+
+### Promotion 39 (2026-08-06, `7ee6bc2` → `7a8bee6`) — TENTH consecutive clean `git add .`
+
+Liquidation Step 4 (cheque↔delivery allocations): 18 files, +6220/−140, one 2,386-line migration
++ two new components. Same-day sibling of promotion 38 — this branch now ships a numbered
+liquidation step every few hours.
+
+- **Ten straight clean sweeps.** `find -newermt '-20 minutes'` empty, `git status --porcelain -uall`
+  exactly the brief's 20 paths (17 tracked + 3 untracked) plus the standing
+  `.claude/agent-memory-local/**`. Concurrent-session mode is firmly the exception on this branch.
+- **A brief's rich rationale IS the commit body — but verify each claim in the SQL first.** Four
+  claims checked in ~4 greps before drafting: `unpriced` really is the FIRST `WHEN` in
+  `view_rc_delivery_settlement`'s CASE (line ~855); `over_allocated` is a recorded state with a
+  COMMENT saying "never an error"; the payment-side refusal is a DEFERRABLE constraint trigger
+  (`tr_cenapro_rc_payment_allocations_fit`) that RAISEs; `advance_php` lands on both balance views.
+  Cheap, and it means the body asserts what the diff does rather than what the brief hoped.
+- **A single `-` line in a regenerated `types/supabase.ts` is usually a REFORMAT, not a loss.** The
+  one deletion here was `Args: { p_expected_row_version; p_id }` collapsing into a multi-line
+  object because `cenapro_delete_rc_delivery` gained `p_release_allocations boolean DEFAULT false`.
+  Read the deletion's `+` neighbours before treating a non-zero count as a dropped schema; the
+  promotion-38 one-liner (`grep -cE '^-[^-]'` → 0) is a green light, not a hard gate.
+- **Cheap gate subset re-run and matched the brief's numbers exactly** (`tsc --noEmit` 0,
+  `verify-rc-deliveries-cells.ts` 116, `verify-rc-formula.ts` 22, ~2 min total). Build taken from
+  the brief per promotion 30's rule. Migration already applied to prod ⇒ deploy is code-only.
+
+Gates clean again (merge-tree bare OID `d156396`, merge-base tree diff empty, merge exit 0,
+`git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>` empty):
+**27 consecutive clean promotions.** The pending `chore(memory)` commit (`26d2fb2`) rode along for
+the ninth time — already pushed, so `-sb` read `ahead 1` while the merge carried 2.
 
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
