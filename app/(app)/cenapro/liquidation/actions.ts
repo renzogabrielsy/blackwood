@@ -39,6 +39,7 @@ import {
     type PaymentPatch,
     type PaymentRow,
     type RpcPatch,
+    type SetOpeningBalanceArgs,
     type SupplierBalanceRow,
     type SupplierGroupBalanceRow,
     type SupplierGroupRow,
@@ -63,20 +64,36 @@ function revalidateLiquidation() {
 const BALANCE_MAX = 500;
 const PAYMENT_MAX = 500;
 
-/** A SINGLE string literal per relation — `+` concatenation defeats type inference. */
+// ── THE PROJECTIONS ARE FULL, AND THAT IS LOAD-BEARING ───────────────────────────
+//
+// Every column of each read model, so the fetched shape IS the generated `Row` type and
+// the aliases exported from `types.ts` stay usable across files. A partial projection
+// types as a structurally different row and forces a `Pick<>` at every consumer for no
+// gain: these are 12-row and 4-row relations.
+//
+// "Full" is a claim that goes STALE, and it did. Opening balances widened
+// `cenapro_rc_supplier_balances` 30 → 53 columns and
+// `cenapro_rc_supplier_group_balances` 27 → 49 (migration `20260805130000`), and the two
+// lists below kept typechecking only because `types/supabase.ts` had not been
+// regenerated. The moment it was, both assignments failed with "missing 22 properties".
+//
+// So: if you add a column to either balance view, add it here in the same changeset.
+// `npx tsc --noEmit` is the check — it fails loudly rather than silently returning a row
+// with holes in it.
+//
+// A SINGLE string literal per relation — `+` concatenation defeats type inference.
 const BALANCE_COLS =
-    'supplier_code, display_name, active, sort_order, is_unassigned, parent_code, group_code, group_display_name, group_sort_order, is_parent, is_child, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php';
+    'supplier_code, display_name, active, sort_order, is_unassigned, parent_code, group_code, group_display_name, group_sort_order, is_parent, is_child, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, opening_as_of_date, has_opening_balance, opening_note, opening_set_at, opening_revision_id, opening_revision_count, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window';
 
 const GROUP_BALANCE_COLS =
-    'group_code, group_display_name, group_sort_order, is_unassigned, supplier_count, child_count, supplier_codes, any_active, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php';
+    'group_code, group_display_name, group_sort_order, is_unassigned, supplier_count, child_count, supplier_codes, any_active, receipt_count, receipts_php, first_receipt_date, last_receipt_date, unpriced_receipt_count, unpriced_receipt_kg, unpriced_awaiting_weight_count, unpriced_awaiting_price_count, unpriced_awaiting_both_count, payment_count, payments_php, cash_out_php, cash_in_php, cash_net_php, adjustment_php, adjustment_count, first_payment_date, last_payment_date, running_balance_php, opening_balance_php, has_opening_balance, opening_supplier_count, opening_as_of_date, opening_as_of_date_min, opening_as_of_date_max, carried_receipt_count, carried_receipt_php, carried_payment_count, carried_payment_php, receipt_count_all, receipts_all_php, payment_count_all, payments_all_php, cash_out_all_php, cash_in_all_php, cash_net_all_php, adjustment_all_php, adjustment_count_all, running_balance_all_php, unpriced_receipt_count_window, unpriced_receipt_kg_window';
 
 const PAYMENT_COLS =
     'id, supplier_code, supplier_name, group_code, group_display_name, payment_date, method, amount_php, direction, stated_term, bank_account_id, bank_code, bank_display_name, account_label, account_no, bank_account_label, cheque_no, cheque_date, reference_no, remarks, balance_effect_php, is_cash, is_deleted, deleted_at, deleted_by, row_version, created_at, created_by, updated_at, updated_by';
 
-// The projections are FULL — every column of each read model, so the fetched shape is
-// exactly the generated `Row` type and the exported aliases stay usable across files. A
-// partial projection would type as a structurally different row and force a `Pick<>` at
-// every consumer for no gain: these are 12-row and 4-row relations.
+const OPENING_HISTORY_COLS =
+    'id, supplier_code, supplier_display_name, as_of_date, opening_balance_php, note, is_current, created_at, created_by';
+
 const SUPPLIER_GROUP_COLS =
     'code, display_name, sort_order, active, notes, parent_code, parent_display_name, group_code, group_display_name, group_sort_order, is_parent, is_child, child_count, child_codes, row_version, created_at, updated_at';
 
@@ -259,6 +276,112 @@ export async function fetchBanks(): Promise<BanksResult> {
         banks: bankRes.data ?? [],
         accounts: accountRes.data ?? [],
         error: error ? `Failed to load banks and accounts: ${error}` : null,
+    };
+}
+
+/** One revision, with `created_by` already resolved to a name the operator will recognise. */
+export interface OpeningBalanceRevision {
+    key: string;
+    asOfDate: string | null;
+    /** SIGNED, exactly as stored: negative = we owe them. */
+    openingBalancePhp: number | string | null;
+    note: string | null;
+    isCurrent: boolean;
+    createdAt: string | null;
+    /** `null` for a service-role / psql write, which the dialog renders as "system". */
+    actorName: string | null;
+}
+
+export interface OpeningBalanceHistoryResult {
+    revisions: OpeningBalanceRevision[];
+    canViewPrices: boolean;
+    error: string | null;
+}
+
+/** A revision whose author's profile is gone. An expected state, not an error. */
+const UNKNOWN_ACTOR = 'Unknown user';
+
+const OPENING_HISTORY_MAX = 200;
+
+/**
+ * One trader's FULL opening-balance history, newest revision first.
+ *
+ * Every revision is shown, not just the current one, because that is the entire reason
+ * the table is append-only: a figure someone will revise as suppliers confirm their
+ * statements is worth nothing if the superseded numbers cannot be read back. `is_current`
+ * comes from the view (the greatest `id` per supplier) — it is never re-derived here.
+ *
+ * ₱-BEARING, so it is behind the same gate as the balance itself and the query is not
+ * issued at all when the gate refuses.
+ */
+export async function fetchOpeningBalanceHistory(
+    supplierCode: string,
+): Promise<OpeningBalanceHistoryResult> {
+    const showPrices = await canViewPrices();
+    if (!showPrices) return { revisions: [], canViewPrices: false, error: null };
+
+    const code = supplierCode.trim();
+    if (!code) return { revisions: [], canViewPrices: true, error: 'No trader was named.' };
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .from('cenapro_rc_supplier_opening_balance_history')
+        .select(OPENING_HISTORY_COLS)
+        .eq('supplier_code', code)
+        // `id` is a monotone identity, so this is both "newest first" and tie-free —
+        // several revisions can share a `created_at` to the microsecond only in theory,
+        // but ordering on the identity means it can never matter.
+        .order('id', { ascending: false })
+        .limit(OPENING_HISTORY_MAX);
+
+    if (error) {
+        return {
+            revisions: [],
+            canViewPrices: true,
+            error: `Failed to load the opening-balance history: ${error.message}`,
+        };
+    }
+
+    const rows = data ?? [];
+
+    // ── Who stated each figure ───────────────────────────────────────────────────
+    //
+    // `created_by` is `auth.uid()` with DELIBERATELY no foreign key to `profiles`: this
+    // row must outlive the account that wrote it, and an `ON DELETE SET NULL` would erase
+    // the author exactly when it matters. So it is a separate lookup over the DISTINCT
+    // uuids, and a miss renders as "Unknown user" rather than throwing. Same idiom as
+    // `deliveries/actions.ts::getDeliveryHistory`.
+    const actorIds = [
+        ...new Set(
+            rows
+                .map((r) => r.created_by)
+                .filter((v): v is string => typeof v === 'string' && v !== ''),
+        ),
+    ];
+    const actors = new Map<string, string>();
+    if (actorIds.length > 0) {
+        const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, display_name, email')
+            .in('id', actorIds);
+        for (const p of profiles ?? []) {
+            if (!p.id) continue;
+            actors.set(p.id, (p.display_name ?? '').trim() || (p.email ?? '').trim() || UNKNOWN_ACTOR);
+        }
+    }
+
+    return {
+        revisions: rows.map((r, i) => ({
+            key: r.id === null || r.id === undefined ? `rev-${i}` : String(r.id),
+            asOfDate: r.as_of_date ?? null,
+            openingBalancePhp: r.opening_balance_php ?? null,
+            note: r.note ?? null,
+            isCurrent: r.is_current === true,
+            createdAt: r.created_at ?? null,
+            actorName: r.created_by ? (actors.get(r.created_by) ?? UNKNOWN_ACTOR) : null,
+        })),
+        canViewPrices: true,
+        error: null,
     };
 }
 
@@ -480,6 +603,56 @@ export async function saveBankAccount(input: SaveBankAccountInput): Promise<Liqu
 
     if (error) return rpcFailure(error.message);
     const result = readResult(data, isInsert ? 'inserted' : 'updated');
+    if (result.ok) revalidateLiquidation();
+    return result;
+}
+
+/**
+ * APPEND a stated opening balance for one trader.
+ *
+ * ── THERE IS NO UPDATE AND NO DELETE, BY DESIGN ───────────────────────────────────
+ * `cenapro.rc_supplier_opening_balance` is APPEND-ONLY, locked twice over: no client role
+ * holds UPDATE or DELETE on it, and RLS carries no UPDATE or DELETE policy. "Modifying" a
+ * starting balance means appending a NEW REVISION, and the newest (greatest `id`) is the
+ * one every balance reads. So there is deliberately no `updateOpeningBalance` and no
+ * `deleteOpeningBalance` beside this — either would fail with a permission error, and a
+ * money history that can be silently rewritten is worth nothing anyway.
+ *
+ * There is likewise NO `expectedRowVersion`: an append cannot conflict with anything, so
+ * there is nothing to compare and set. Two people stating a figure at once produce two
+ * revisions and the later one wins, which is the correct outcome and is visible in the
+ * history rather than lost.
+ *
+ * ── THE SIGN IS ALREADY APPLIED ───────────────────────────────────────────────────
+ * `openingBalancePhp` arrives SIGNED (negative = we owe them). It comes from
+ * `openingSignedAmount` in `types.ts`, which is the one place the operator's positive
+ * figure plus their "we owe them" / "they owe us" choice becomes a signed number. Nothing
+ * here re-derives or re-checks the sign: a second opinion about it is exactly how the two
+ * would drift apart.
+ *
+ * The RPC refuses an unknown supplier, a missing amount or date, a non-finite amount, more
+ * than two decimal places, and a future as-of date (measured in Asia/Manila). It does NOT
+ * refuse a zero amount, a positive amount, a re-statement of the same numbers, or a date
+ * earlier than an existing revision — revising downward or backward is what this is for.
+ */
+export async function setOpeningBalance(input: SetOpeningBalanceArgs): Promise<LiquidationResult> {
+    if (!(await canViewPrices())) return FORBIDDEN();
+
+    const code = input.supplierCode.trim();
+    if (!code) return rpcFailure('No trader was named.', 'invalid');
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('cenapro_set_rc_supplier_opening_balance', {
+        p_supplier_code: code,
+        p_as_of_date: input.asOfDate,
+        p_opening_balance_php: input.openingBalancePhp,
+        // Omitted rather than sent as null when blank — the RPC defaults it, and the stamp
+        // trigger owns blanking, so an empty note normalises identically on every path.
+        ...(input.note === null ? {} : { p_note: input.note }),
+    });
+
+    if (error) return rpcFailure(error.message);
+    const result = readResult(data, 'inserted');
     if (result.ok) revalidateLiquidation();
     return result;
 }

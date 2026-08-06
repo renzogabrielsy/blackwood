@@ -7,9 +7,9 @@
 truck; this is the **money going back out** — every cheque, bank transfer and write-off — plus the
 running difference per trader.
 
-It is **liquidation Steps 2 and 3's UI half** (`.agents/prompts/liquidation-feature.md` §7a). The
-data layer shipped 2026-08-05 in three migrations and nothing consumed it until this route. Three
-screens:
+It is **liquidation Steps 2, 3 and 3b's UI half** (`.agents/prompts/liquidation-feature.md` §7a).
+The data layer shipped 2026-08-05/06 in four migrations and nothing consumed it until this route.
+Three screens:
 
 1. **Supplier balances** (`/cenapro/liquidation`) — one row per trader, both levels (a parent
    renders as a group row with its sub-suppliers nested beneath).
@@ -22,6 +22,14 @@ screens:
    account, and the migration seeded four banks but **zero accounts** on purpose, so without this
    screen the dominant instrument in the business is unrecordable.
 
+**Starting balances are what make the number TRUE (Step 3b, 2026-08-06).** Renzo: *"Since it's a bit
+impossible to check all of the past history, we should be able to modify the starting balances of the
+suppliers we have listed. I think that's imperative."* Step 3's balance summed EVERY receipt since
+January — CI owes BRIX ₱212,669,462.50, the whole year's purchases — because no historic cheque was
+ever entered and back-entering seven months of them is not realistic. So a trader's outstanding
+figure can be **stated as of a date** and the balance counts forward from there. See "The opening
+balance" below.
+
 **It ships a real balance BEFORE allocation exists.** Assigning a cheque to *particular receipts* is
 Step 4 (`rc_payment_allocation`, `view_rc_delivery_settlement`) and is **deliberately not built**:
 no allocation screen, no settlement column on the deliveries ledger, no cheque-gap report, no
@@ -32,11 +40,12 @@ by design for this step — allocation *refines* the number, it does not enable 
 
 | File | Role |
 |------|------|
-| `types.ts` | **PURE module** (no `'use client'`, no React, no Supabase) — the shared vocabulary for the server page, the actions and every client screen. Owns the row-type aliases (derived from the generated `types/supabase.ts`), `num`/`formatPeso`/`formatKg`/`formatCount`/`formatDate`, **`balanceDirection` + `directionLabel` + `directionSentence` + `SIGN_NOTE`** (the sign, in words), **`unpricedPhrase` / `unpricedShort`** (the stage-naming warning), `UNASSIGNED_NOTE` / `UNASSIGNED_TITLE`, the `BALANCE_COLS` column table + `minBalanceTableWidth`, **`buildBalanceTree`** (a JOIN of the two balance views into render order — it never sums), the payment vocabularies (`METHOD_OPTIONS` / `TERM_OPTIONS` / `methodShort` / `isCheque`), the payment form shape + `validatePaymentForm` + `paymentPatchFrom`, and the `LiquidationOutcome` / `LiquidationResult` RPC vocabulary. |
-| `actions.ts` | **`'use server'`** — `fetchSupplierBalances`, `fetchPaymentDimensions`, `fetchSupplierPayments`, `fetchSupplierGroups`, `savePayment`, `deletePayment`, `restorePayment`, `saveSupplierParent`. Enforces the ₱ gate on **every** read and write. |
+| `types.ts` | **PURE module** (no `'use client'`, no React, no Supabase) — the shared vocabulary for the server page, the actions and every client screen. Owns the row-type aliases (derived from the generated `types/supabase.ts`), `num`/`formatPeso`/`formatKg`/`formatCount`/`formatDate`/**`formatLongDate`**, **`balanceDirection` + `directionLabel` + `directionSentence` + `SIGN_NOTE`** (the sign, in words), **`unpricedPhrase` / `unpricedShort`** (the stage-naming warning), `UNASSIGNED_NOTE` / `UNASSIGNED_TITLE`, the `BALANCE_COLS` column table + `minBalanceTableWidth`, **`buildBalanceTree`** (a JOIN of the two balance views into render order — it never sums), the payment vocabularies (`METHOD_OPTIONS` / `TERM_OPTIONS` / `methodShort` / `isCheque`), the payment form shape + `validatePaymentForm` + `paymentPatchFrom`, the **opening-balance vocabulary** (`OpeningSide`, `OpeningBalanceFormState`, **`openingSignedAmount`** — the ONE place the sign is applied — **`openingSentence`**, `openingFormFrom`, `openingArgsFrom`, `validateOpeningBalanceForm`, `decimalPlaces`, `AS_OF_NOTE`, `APPEND_ONLY_NOTE`, **`carriedTitle`** / `carriedCountLabel`, **`groupAsOf`** / `groupAsOfLabel` / `groupAsOfTitle`, `BalanceLens` + `LENS_NOTE`), and the `LiquidationOutcome` / `LiquidationResult` RPC vocabulary. |
+| `actions.ts` | **`'use server'`** — `fetchSupplierBalances`, `fetchPaymentDimensions`, `fetchSupplierPayments`, `fetchSupplierGroups`, **`fetchOpeningBalanceHistory`**, `savePayment`, `deletePayment`, `restorePayment`, `saveSupplierParent`, **`setOpeningBalance`**. Enforces the ₱ gate on **every** read and write. |
 | `page.tsx` | Server — the balances screen. Gate → fetch → hand off. Renders no title (navbar owns titles). |
 | `price-gate-notice.tsx` | Server — what a price-denied role sees instead. A clean statement, not an error. |
-| `liquidation-view.tsx` | Client — the balance table (frozen trader column, group nesting, the sign tag, the unpriced column, the no-payee row) + the payments-panel host. |
+| `liquidation-view.tsx` | Client — the balance table (frozen trader column, group nesting, the sign tag, the OPENING + STANDS IN FOR columns, the carry-forward marker, the unpriced column, the no-payee row, the **`LensSwitch`**) + the payments-panel and opening-balance-dialog hosts. |
+| `opening-balance-dialog.tsx` | Client — state or revise one trader's **starting balance**. Positive amount + a two-way side choice in words, the echo-back sentence, the provenance note, the current revision and the full append-only history. Also owns `SideChoice` (a real `radiogroup`). |
 | `payments-panel.tsx` | Client — a `Sheet` listing one trader's payments (voided rows included, struck through, with Restore), plus the void `AlertDialog`. Also exports **`InlineError`** (message + Copy button), reused by the other two screens. |
 | `payment-dialog.tsx` | Client — the record/edit payment form. Reshapes itself around `method` so the fields the DB forbids are not on screen to be filled. |
 | `subgroups/page.tsx` | Server — the subgroups maintenance screen. Gated (see "Why subgroups is gated"). |
@@ -46,14 +55,17 @@ by design for this step — allocation *refines* the number, it does not enable 
 
 ## Data
 
-All read-only accessors, all written by migration `20260805120000_cenapro_rc_payments.sql` and
-`20260805110000_cenapro_rc_supplier_subgroups.sql`. **The `cenapro` schema is not exposed to
+All read-only accessors, all written by migrations `20260805120000_cenapro_rc_payments.sql`,
+`20260805110000_cenapro_rc_supplier_subgroups.sql` and
+`20260805130000_cenapro_rc_supplier_opening_balance.sql`. **The `cenapro` schema is not exposed to
 PostgREST** — everything goes through the `public.cenapro_*` accessors.
 
 | Relation / RPC | Used by |
 |---|---|
-| `public.cenapro_rc_supplier_balances` | `fetchSupplierBalances` — one row per trader + the synthetic no-payee row |
-| `public.cenapro_rc_supplier_group_balances` | `fetchSupplierBalances` — the SQL rollup that draws the parent rows |
+| `public.cenapro_rc_supplier_balances` | `fetchSupplierBalances` — one row per trader + the synthetic no-payee row. **53 columns** since opening balances (was 30) |
+| `public.cenapro_rc_supplier_group_balances` | `fetchSupplierBalances` — the SQL rollup that draws the parent rows. **49 columns** (was 27) |
+| `public.cenapro_rc_supplier_opening_balance_history` | `fetchOpeningBalanceHistory` — every revision ever stated, `is_current` marking the one in force |
+| `public.cenapro_set_rc_supplier_opening_balance(p_supplier_code, p_as_of_date, p_opening_balance_php, p_note)` | `setOpeningBalance` — **INSERT-ONLY**; no expected row version, because an append cannot conflict |
 | `public.cenapro_rc_payments` | `fetchSupplierPayments` — includes soft-deleted rows; carries `balance_effect_php` + `is_cash` + `is_deleted` |
 | `public.cenapro_rc_supplier_groups` | the payee picker and the subgroups screen (`parent_code`, `is_parent`/`is_child`, `child_codes`, `row_version`) |
 | `public.cenapro_rc_bank_accounts` | the "drawn on" picker (bank name front, `account_no` secondary) **and** the banks screen |
@@ -65,8 +77,19 @@ PostgREST** — everything goes through the `public.cenapro_*` accessors.
 | `public.cenapro_restore_rc_payment(p_id, p_expected_row_version)` | `restorePayment` |
 | `public.cenapro_save_rc_supplier(p_code, p_expected_row_version, p_patch)` | `saveSupplierParent` — patch carries `parent_code` and nothing else |
 
-**Not consumed yet:** `public.cenapro_rc_payment_audit` only — there is no payment-history UI. See
-"Known gaps".
+**Not consumed yet:** `public.cenapro_rc_payment_audit` and
+`public.cenapro_rc_supplier_opening_balances` (the current-revision view — the balance row's own
+`opening_*` columns already carry the same figure, so a second query would only create a second
+source of truth). See "Known gaps".
+
+### ⚠️ The projections are FULL, and "full" goes stale
+`BALANCE_COLS` / `GROUP_BALANCE_COLS` in `actions.ts` list **every** column so the fetched shape *is*
+the generated `Row` type. Opening balances widened both views (30→53 and 27→49) and the old lists kept
+typechecking **only because `types/supabase.ts` was stale**; the moment it was regenerated both
+assignments failed with "missing 22 properties". **Add a column to either view ⇒ add it here in the
+same changeset.** `npx tsc --noEmit` is the check. Same trap caught `buildBalanceTree`'s defensive
+`asGroup()`, which is now `{ ...member, <group-only columns> }` rather than a hand-listed literal — a
+new *shared* column flows through automatically and a new *group-only* one is a compile error there.
 
 ## Key behaviours
 
@@ -101,6 +124,89 @@ dark:text-amber-400`). `unpricedPhrase()` names the *stage* from the view's exha
 ("2 receipts not yet priced — 2 awaiting weight") rather than guessing, and the wording is
 **pending, never broken**: "priced but not yet weighed" is the normal state of a receipt entered
 this morning and is exactly what the in-app INSERT path creates.
+
+### The opening balance — four rules and one trap
+
+**The AS-OF rule.** The stated figure covers everything **strictly before** `as_of_date`; receipts and
+payments dated **on or after** it count **fresh** on top. A receipt dated exactly on the cutoff counts
+fresh — the boundary is `>=`, never `>`. Printed beside the date field as `AS_OF_NOTE`, not in a
+tooltip: a reader who assumes the other boundary has no reason to hover.
+
+**THE TRAP — the sign.** Stored values are signed like `running_balance_php` (negative = we owe them).
+A side chosen wrongly does not produce a visibly silly figure, it **DOUBLES the balance instead of
+settling it**, and ₱425M looks no more obviously wrong than ₱212M. So the operator is **never asked
+for a minus sign**: they type a **positive** amount and pick a side **in words** (`we owe them` /
+`they owe us`), `openingSignedAmount()` is the ONE place the conversion happens, and
+**`openingSentence()` reads the result back as a sentence before it can be saved** — *"Saving: we owe
+BRIX ₱4,200,000.00 as of 3 Aug 2026."* A person catches "we owe BRIX" when they meant the reverse;
+nobody catches a minus sign. A typed negative is **refused with the model explained**, never silently
+flipped — flipping it would teach the operator that the minus carries the direction.
+
+**Zero is a real answer.** "We are square as of this date" is a statement, not a blank, and the DB has
+no CHECK excluding it. Nothing blocks it; the echo sentence just stops claiming a direction, and the
+side control recedes (`muted`) because at zero there is none. `has_opening_balance` — never the amount
+— is what distinguishes a stated ₱0 from "never stated".
+
+**Append-only, said out loud.** The table holds no UPDATE/DELETE grant and no UPDATE/DELETE policy, so
+"modify" means **append a revision**. There is therefore **no edit-in-place and no delete affordance**
+anywhere here — either would fail with a permission error — and `setOpeningBalance` takes **no
+`expectedRowVersion`**, because an append cannot conflict with anything. The dialog *says* the old
+figure is kept (`APPEND_ONLY_NOTE`): without that line a second save looks like data loss. The full
+history is in the same dialog, with `is_current` marked `in force`. The **note is deliberately not
+carried forward** into a revision — a note says where *this* figure came from, so reusing it would
+attribute the new number to a source that never mentioned it.
+
+### A carried-forward row SAYS so, in three places
+Once a trader has an opening balance its BALANCE / RECEIPTS / PAID / RCPTS figures cover only what is
+dated on or after the as-of date — and such a row is otherwise **indistinguishable** from a
+whole-history one, while differing from it by ₱200M on the biggest traders. So:
+
+1. **OPENING** column — the stated figure (accounting ₱) with `as of yyyy-MM-dd` beneath it.
+2. **STANDS IN FOR** column — `carried_receipt_count` over `carried_receipt_php`. **That pair is what
+   makes a stated figure auditable later**; without it nobody can ever check the number. Verified
+   read-only against live data: BRIX at a 2026-08-01 cutoff carries **275 receipts, ₱207,917,771.25**
+   and its balance would read **−8,951,691.25** instead of −212,669,462.50. The `title` adds the
+   payments half and the full-history figure, so the whole gap is explained on both sides.
+3. **The marker in the FROZEN trader cell** — `carried forward from 2026-08-03`. Repeated there
+   because the frozen column is **the only one that cannot scroll out of view**, and this is the
+   qualifier that changes what every other cell on the row means.
+
+A stated opening with nothing before its date renders `nothing before that date` rather than a bare
+dash — legitimate (an opening dated before the first receipt states an outside balance) and better
+than a dash the reader has to interpret.
+
+### Both readings, without cluttering the row: the LENS
+`receipts_all_php` / `payments_all_php` / `running_balance_all_php` are exposed as a **screen-level
+switch** (`LensSwitch`: *As stated* / *Full history*), not as a second figure in every cell. One number
+per cell, always; "what does the raw history say, and what did my stated figure change?" is one click
+away instead of one more column wide. In the `all` lens the OPENING and STANDS IN FOR cells go
+`opacity-50` with a re-worded `title` — they are still **facts**, just not applied — rather than
+blanking, which would make the two lenses look like two different datasets. **Neither branch computes
+anything**: the lens only chooses *which column* to read.
+
+With no opening balance stated anywhere, the two lenses are **identical**, which is exactly the
+migration's regression guarantee (`as_of_date IS NULL` collapses every window). Confirmed live: BRIX
+−212,669,462.50 and SEVILLA 0.00 in both.
+
+### The unpriced count stays ALL-TIME — the deliberate asymmetry
+`unpriced_receipt_count` is **not** windowed, and `unpriced_receipt_count_window` never replaces it.
+An unpriced receipt from *before* the cutoff **cannot** have been folded into the opening balance,
+because nobody knows what it is worth. Had it been windowed, stating an opening balance would have
+made **SEVILLA's two unpriceable receipts vanish** while they were still unpriceable and still covered
+by nothing — the exact silent hole the module spends forty lines refusing to open. The windowed twin is
+used **only** to extend the `title` ("N of them are dated before the starting balance, and it cannot
+have covered them"), never to shrink the number.
+
+### A group never prints a date that is only true for some members
+`opening_as_of_date` on the rollup is NULL unless every member with an opening agrees, and
+`groupAsOf()` reads the honest columns into four cases: `none`, `all` (a plain date), **`partial`**
+(they agree but not all members have one → `as of 2026-08-03 · 2 of 3`) and **`range`** (they disagree
+→ `2026-07-01 → 2026-08-03`, marker `carried forward from various dates`). `partial` exists because
+`min`/`max` **ignore NULLs**, so a one-of-three agreement would otherwise masquerade as a group-wide
+fact. A **group header carries no Set/Revise control** — an opening balance belongs to a
+`cenapro.rc_supplier` row, so it is stated per member; the header says `per trader` instead of
+offering a button that could do nothing. The no-payee row can never carry one at all (the FK is NOT
+NULL), and says so on hover.
 
 ### The receipt that cannot be liquidated
 The balance view emits a synthetic row (`is_unassigned = true`, `supplier_code IS NULL`) for the
@@ -192,7 +298,8 @@ visible rather than silent. The restore refuses if the cheque number was re-used
 so.
 
 ### Table conventions
-`table-fixed` + explicit pixel widths whose **sum is the min-width**, wrapped in `overflow-auto`
+`table-fixed` + explicit pixel widths whose **sum is the min-width** (the balance table is **1680px**
+across 12 columns — measured live as `scrollWidth`), wrapped in `overflow-auto`
 ("never crush, always scroll") — no `1fr`, no unset column absorbing slack. `px-2 py-1`, `text-xs`,
 `h-8` rows, `font-mono tabular-nums` right-aligned numerics, ₱ in **accounting format**
 (`flex justify-between`, symbol left, figure right). The trader column is **frozen**
@@ -224,6 +331,13 @@ out of the tab order rather than presenting a control that does nothing. All aut
 **`focusNoScroll`** from `lib/utils.ts`, never React's `autoFocus` (react-dom's `commitMount` is a
 bare `.focus()`, which scrolls with block *and* inline `"center"` through every scrolling ancestor).
 
+Both two-way choices (`SideChoice`, `LensSwitch`) are real **`role="radiogroup"` + `role="radio"` +
+`aria-checked`** with arrow-key movement and a single tab stop — not `aria-pressed` toggles, because
+the options are mutually exclusive and a screen reader should say "1 of 2", not "not pressed".
+The **Set/Revise opening** button sits inside a row that is itself a button, so its `onClick` and
+`onKeyDown` both **`stopPropagation()`** — otherwise one activation would fire both controls.
+The echo sentence is `aria-live="polite"`, so it is re-announced as the figure and the side change.
+
 ## Known gaps (stated, not hidden)
 
 - **There are still zero bank accounts in the database**, so a cheque cannot be recorded *until
@@ -233,6 +347,22 @@ bare `.focus()`, which scrolls with block *and* inline `"center"` through every 
   and `snapshot` are free-form jsonb carrying `amount_php`, and a field-list redactor cannot reach
   inside a blob — any action exposing it must delete the ₱ keys **out of the jsonb**, exactly as
   `deliveries/actions.ts::redactAuditJson` does.
+- **Not one opening balance has been stated yet.** All 12 traders read `has_opening_balance = false`,
+  so the screen still shows the full-history figures it showed before Step 3b (BRIX
+  −₱212,669,462.50). Nothing is seeded on purpose — every figure is a real fact Renzo has to get from
+  a supplier statement or a confirmation call, and inventing one, even a zero, would be exactly the
+  fabrication the audit discipline exists to prevent. **The write path was therefore verified in the
+  UI up to but not including the save**, plus a read-only SQL simulation of the windowed arithmetic;
+  the append-only table means a test revision could never be removed.
+- **An opening balance is NOT a period boundary.** It is a stated fact with an as-of date; it closes
+  nothing and never stops the full history being read back (that is Step 6,
+  `cenapro.rc_balance_period`, and it is a different thing).
+- **`public.cenapro_rc_supplier_opening_balances`** (the current-revision view) is unread — the
+  balance row's own `opening_*` columns carry the same figure and a second query would only create a
+  second source of truth.
+- **`testuser@blackwood.local` cannot sign in.** GoTrue returns `Database error finding user` for
+  both `magiclink` and `recovery` on that account (Renzo's own account works). Pre-existing, unrelated
+  to this work, and it means that test account is unusable for local verification.
 - **Step 4+ is not built** and must not be added here piecemeal: no allocations, no settlement
   column on the deliveries ledger, no cash-advance drawdown, no balance close/restart, no
   skipped-cheque-number report.
@@ -256,5 +386,9 @@ bare `.focus()`, which scrolls with block *and* inline `"center"` through every 
   this work.**
 - `.agents/prompts/liquidation-feature.md` → §5 (every settled decision), §7 (the eight steps),
   **§7a (the approved UI shape)**.
-- `supabase/migrations/20260805110000_cenapro_rc_supplier_subgroups.sql` and
-  `20260805120000_cenapro_rc_payments.sql` → the contract, headers included.
+- `supabase/migrations/20260805110000_cenapro_rc_supplier_subgroups.sql`,
+  `20260805120000_cenapro_rc_payments.sql` and
+  **`20260805130000_cenapro_rc_supplier_opening_balance.sql`** → the contract, headers included. The
+  last one's header is the authority on the as-of rule, the append-only lock, the four open decisions
+  (preserve the full history / `carried_*` is what makes it defensible / the unpriced counts stay
+  all-time / a dateless receipt counts fresh) and the regression guarantee.

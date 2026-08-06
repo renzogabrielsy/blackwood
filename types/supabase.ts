@@ -2385,10 +2385,19 @@ export type Database = {
       cenapro_rc_supplier_balances: {
         Row: {
           active: boolean | null
+          adjustment_all_php: number | null
           adjustment_count: number | null
+          adjustment_count_all: number | null
           adjustment_php: number | null
+          carried_payment_count: number | null
+          carried_payment_php: number | null
+          carried_receipt_count: number | null
+          carried_receipt_php: number | null
+          cash_in_all_php: number | null
           cash_in_php: number | null
+          cash_net_all_php: number | null
           cash_net_php: number | null
+          cash_out_all_php: number | null
           cash_out_php: number | null
           display_name: string | null
           first_payment_date: string | null
@@ -2396,16 +2405,28 @@ export type Database = {
           group_code: string | null
           group_display_name: string | null
           group_sort_order: number | null
+          has_opening_balance: boolean | null
           is_child: boolean | null
           is_parent: boolean | null
           is_unassigned: boolean | null
           last_payment_date: string | null
           last_receipt_date: string | null
+          opening_as_of_date: string | null
+          opening_balance_php: number | null
+          opening_note: string | null
+          opening_revision_count: number | null
+          opening_revision_id: number | null
+          opening_set_at: string | null
           parent_code: string | null
           payment_count: number | null
+          payment_count_all: number | null
+          payments_all_php: number | null
           payments_php: number | null
           receipt_count: number | null
+          receipt_count_all: number | null
+          receipts_all_php: number | null
           receipts_php: number | null
+          running_balance_all_php: number | null
           running_balance_php: number | null
           sort_order: number | null
           supplier_code: string | null
@@ -2413,17 +2434,28 @@ export type Database = {
           unpriced_awaiting_price_count: number | null
           unpriced_awaiting_weight_count: number | null
           unpriced_receipt_count: number | null
+          unpriced_receipt_count_window: number | null
           unpriced_receipt_kg: number | null
+          unpriced_receipt_kg_window: number | null
         }
         Relationships: []
       }
       cenapro_rc_supplier_group_balances: {
         Row: {
+          adjustment_all_php: number | null
           adjustment_count: number | null
+          adjustment_count_all: number | null
           adjustment_php: number | null
           any_active: boolean | null
+          carried_payment_count: number | null
+          carried_payment_php: number | null
+          carried_receipt_count: number | null
+          carried_receipt_php: number | null
+          cash_in_all_php: number | null
           cash_in_php: number | null
+          cash_net_all_php: number | null
           cash_net_php: number | null
+          cash_out_all_php: number | null
           cash_out_php: number | null
           child_count: number | null
           first_payment_date: string | null
@@ -2431,13 +2463,24 @@ export type Database = {
           group_code: string | null
           group_display_name: string | null
           group_sort_order: number | null
+          has_opening_balance: boolean | null
           is_unassigned: boolean | null
           last_payment_date: string | null
           last_receipt_date: string | null
+          opening_as_of_date: string | null
+          opening_as_of_date_max: string | null
+          opening_as_of_date_min: string | null
+          opening_balance_php: number | null
+          opening_supplier_count: number | null
           payment_count: number | null
+          payment_count_all: number | null
+          payments_all_php: number | null
           payments_php: number | null
           receipt_count: number | null
+          receipt_count_all: number | null
+          receipts_all_php: number | null
           receipts_php: number | null
+          running_balance_all_php: number | null
           running_balance_php: number | null
           supplier_codes: string[] | null
           supplier_count: number | null
@@ -2445,7 +2488,9 @@ export type Database = {
           unpriced_awaiting_price_count: number | null
           unpriced_awaiting_weight_count: number | null
           unpriced_receipt_count: number | null
+          unpriced_receipt_count_window: number | null
           unpriced_receipt_kg: number | null
+          unpriced_receipt_kg_window: number | null
         }
         Relationships: []
       }
@@ -2468,6 +2513,36 @@ export type Database = {
           row_version: number | null
           sort_order: number | null
           updated_at: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_opening_balance_history: {
+        Row: {
+          as_of_date: string | null
+          created_at: string | null
+          created_by: string | null
+          id: number | null
+          is_current: boolean | null
+          note: string | null
+          opening_balance_php: number | null
+          supplier_code: string | null
+          supplier_display_name: string | null
+        }
+        Relationships: []
+      }
+      cenapro_rc_supplier_opening_balances: {
+        Row: {
+          as_of_date: string | null
+          group_code: string | null
+          group_display_name: string | null
+          note: string | null
+          opening_balance_php: number | null
+          revision_count: number | null
+          revision_id: number | null
+          set_at: string | null
+          set_by: string | null
+          supplier_code: string | null
+          supplier_display_name: string | null
         }
         Relationships: []
       }
@@ -3526,6 +3601,15 @@ export type Database = {
           side: string
           warehouse_code: string
         }[]
+      }
+      cenapro_set_rc_supplier_opening_balance: {
+        Args: {
+          p_as_of_date: string
+          p_note?: string
+          p_opening_balance_php: number
+          p_supplier_code: string
+        }
+        Returns: Json
       }
       cenapro_update_event_weight: {
         Args: {

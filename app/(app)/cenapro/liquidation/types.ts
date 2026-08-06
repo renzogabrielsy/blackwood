@@ -59,6 +59,20 @@ export type SupplierGroupRow = Database['public']['Views']['cenapro_rc_supplier_
 export type BankAccountRow = Database['public']['Views']['cenapro_rc_bank_accounts']['Row'];
 /** One of CI's own banks — the dimension a cheque or transfer is drawn on. */
 export type BankRow = Database['public']['Views']['cenapro_rc_banks']['Row'];
+/**
+ * The CURRENT stated opening balance of one trader — the latest revision. A trader that
+ * has never had one is simply ABSENT from this view, so `has_opening_balance` on the
+ * balance row is what tells "stated ₱0" from "never stated", never the amount.
+ */
+export type SupplierOpeningBalanceRow =
+    Database['public']['Views']['cenapro_rc_supplier_opening_balances']['Row'];
+/**
+ * ONE revision out of the append-only history, with `is_current` marking the one in
+ * force. The table holds no UPDATE or DELETE grant and no UPDATE or DELETE policy, so
+ * nothing here can ever be rewritten — a correction is a NEW revision.
+ */
+export type OpeningBalanceRevisionRow =
+    Database['public']['Views']['cenapro_rc_supplier_opening_balance_history']['Row'];
 
 // ─── Numbers ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +119,29 @@ export function formatCount(v: number | string | null | undefined): string {
 export function formatDate(v: string | null | undefined): string {
     const s = (v ?? '').trim();
     return s ? s.slice(0, 10) : '—';
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * `3 Aug 2026` — for PROSE ONLY, never for a table cell.
+ *
+ * Every cell in this module is `yyyy-MM-dd` per CLAUDE.md and stays that way. The one
+ * place that rule is deliberately relaxed is the opening-balance dialog's echo-back
+ * sentence, whose whole job is to be RE-READ before a figure is committed: `2026-08-03`
+ * buried mid-sentence is exactly the token an eye skates over, and the sentence exists to
+ * stop precisely that.
+ *
+ * Built by string arithmetic rather than `new Date(iso)` on purpose — that constructor
+ * parses a bare `yyyy-MM-dd` as UTC midnight, so `format()` west of Greenwich renders the
+ * PREVIOUS day. There is no Date object here and therefore no timezone to get wrong.
+ */
+export function formatLongDate(v: string | null | undefined): string {
+    const s = (v ?? '').trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    if (!m) return s;
+    const month = MONTHS[Number(m[2]) - 1];
+    return month ? `${Number(m[3])} ${month} ${m[1]}` : s;
 }
 
 // ─── The sign, in words ─────────────────────────────────────────────────────────
@@ -215,6 +252,374 @@ export const UNASSIGNED_NOTE = 'No payee — cannot be liquidated';
 export const UNASSIGNED_TITLE =
     'These receipts name no payee, so no cheque can ever be written against them. They cannot be liquidated until a trader is set on the receipt itself.';
 
+// ═══ THE OPENING BALANCE ════════════════════════════════════════════════════════
+//
+// Renzo, 2026-08-06: "Since it's a bit impossible to check all of the past history, we
+// should be able to modify the starting balances of the suppliers we have listed."
+//
+// The balance screen shipped saying CI owes BRIX ₱212,669,462.50 — the ENTIRE year's
+// purchases — because no historic cheque was ever entered and back-entering seven months
+// of them is not realistic. An opening balance is how that number becomes true: state
+// what was actually outstanding as of a date, and count forward from there.
+//
+// ── THE AS-OF RULE. Stated once; nothing in this module may contradict it ────────
+// THE OPENING BALANCE STANDS FOR EVERYTHING STRICTLY BEFORE `as_of_date`. RECEIPTS AND
+// PAYMENTS DATED ON OR AFTER IT COUNT FRESH ON TOP OF IT. So a receipt dated exactly on
+// the cutoff counts FRESH — the boundary is `>=`, never `>`. That is the natural reading
+// of "as of 1 August the balance was X": a figure quoted on the morning of the 1st cannot
+// have paid for the truck that arrived that day.
+//
+// ── THE SIGN IS THE SINGLE EASIEST THING HERE TO GET BACKWARDS ───────────────────
+// Stored values are SIGNED like `running_balance_php`: negative = we owe them. A wrong
+// sign does not produce a visibly silly number — it DOUBLES the balance instead of
+// zeroing it, and ₱425M looks no more obviously wrong than ₱212M to anyone who is not
+// already suspicious.
+//
+// So the operator is NEVER asked to type a minus sign. They type a POSITIVE figure and
+// pick a side in words ("we owe them" / "they owe us"); `openingSignedAmount` is the ONE
+// place the conversion happens, and `openingSentence` reads the result back as a sentence
+// before it is committed. Both live here so no screen can grow its own version.
+//
+// ── APPEND-ONLY: "MODIFY" MEANS APPEND ──────────────────────────────────────────
+// `cenapro.rc_supplier_opening_balance` holds NO update and NO delete grant, and no
+// update/delete policy under RLS. Saving ADDS a revision; the superseded figure stays
+// readable forever. There is therefore no edit-in-place and no delete affordance anywhere
+// in this module — building one would fail with a permission error, and would be the
+// wrong thing to build regardless: a money history that can be silently rewritten is
+// worth nothing.
+
+/**
+ * Which way a STATED opening balance points, in the operator's words.
+ *
+ * There is no `square` member on purpose: zero is entered as an AMOUNT of zero, and at
+ * zero the side is genuinely moot. Making "square" a third radio option would invite the
+ * question "square in which direction?", which has no answer.
+ */
+export type OpeningSide = 'we_owe' | 'they_owe';
+
+export interface OpeningBalanceFormState {
+    as_of_date: string;
+    /**
+     * ALWAYS POSITIVE, exactly as typed. The sign lives in `side` and nowhere else — see
+     * the header. Kept as a string so a half-typed figure is never coerced to a number
+     * the operator did not mean.
+     */
+    amount_php: string;
+    side: OpeningSide;
+    /** Where the figure came from. Not required by the DB; this module asks for it. */
+    note: string;
+}
+
+export function emptyOpeningBalanceForm(today: string): OpeningBalanceFormState {
+    return {
+        as_of_date: today,
+        amount_php: '',
+        // `we_owe` is the overwhelmingly common case — all 12 traders are owed money
+        // today — so it is the default. It is still an explicit, visible choice.
+        side: 'we_owe',
+        note: '',
+    };
+}
+
+/**
+ * Pre-fill from the CURRENT revision, so revising a figure starts from the figure.
+ *
+ * The stored amount is signed; the form is unsigned + a side. `Math.abs` is the whole
+ * conversion, and it is exactly the inverse of `openingSignedAmount`.
+ *
+ * The NOTE is deliberately NOT carried over. A note says where THIS figure came from
+ * ("supplier statement 2026-07-31"), so silently reusing it would attribute the new
+ * number to a source that never mentioned it — the one thing a provenance field must
+ * never do. The old note stays visible in the history right beside the form.
+ */
+export function openingFormFrom(row: {
+    opening_as_of_date?: string | null;
+    opening_balance_php?: number | string | null;
+}, today: string): OpeningBalanceFormState {
+    const signed = num(row.opening_balance_php);
+    const date = (row.opening_as_of_date ?? '').slice(0, 10);
+    return {
+        as_of_date: date || today,
+        amount_php: signed === null || signed === 0 ? '' : String(Math.abs(signed)),
+        side: signed !== null && signed > 0 ? 'they_owe' : 'we_owe',
+        note: '',
+    };
+}
+
+/**
+ * How many decimal places the typed figure really carries, trailing zeros ignored — the
+ * same thing `scale(trim_scale(v))` measures in the database, which refuses more than 2.
+ *
+ * Text-first because that is what the operator typed: `4200000.00` carries ZERO
+ * significant decimals and must not be refused. The parsed fallback only catches
+ * exponent notation, which a `type="number"` input will happily hand back.
+ */
+export function decimalPlaces(text: string): number {
+    const t = text.trim();
+    const m = /^[+-]?\d*(?:\.(\d*))?$/.exec(t);
+    if (m) return (m[1] ?? '').replace(/0+$/, '').length;
+    const n = Number(t);
+    if (!Number.isFinite(n)) return 0;
+    const s = String(n);
+    const dot = s.indexOf('.');
+    return dot < 0 ? 0 : s.length - dot - 1;
+}
+
+/**
+ * THE ONE PLACE THE SIGN IS APPLIED. A positive amount plus a side becomes the signed
+ * figure the database stores. `null` means "not ready to send".
+ *
+ * Zero returns a plain `0`, never `-0`: they are the same number to `numeric` but not to
+ * every renderer, and "−0.00" on a screen would be a small lie about a figure whose whole
+ * point is that it is exact.
+ */
+export function openingSignedAmount(form: OpeningBalanceFormState): number | null {
+    const n = num(form.amount_php.trim());
+    if (n === null || n < 0) return null;
+    if (n === 0) return 0;
+    return form.side === 'we_owe' ? -n : n;
+}
+
+/**
+ * The result, read back IN WORDS before it is committed.
+ *
+ * This is the guard on the one mistake that cannot be seen in the number afterwards: a
+ * side chosen wrongly doubles the balance instead of zeroing it. A person will catch "we
+ * owe BRIX" when they meant the opposite; nobody catches a minus sign.
+ *
+ * Empty string when the form is not yet sayable — the caller renders nothing rather than
+ * a half-formed sentence.
+ */
+export function openingSentence(form: OpeningBalanceFormState, name: string): string {
+    const n = num(form.amount_php.trim());
+    if (n === null || n < 0 || !isIsoDate(form.as_of_date.trim())) return '';
+    const trader = name.trim() || 'this trader';
+    const when = formatLongDate(form.as_of_date);
+    if (n === 0) {
+        return `Saving: ${trader} is square as of ${when} — nothing outstanding either way.`;
+    }
+    const money = `₱${formatPeso(n)}`;
+    return form.side === 'we_owe'
+        ? `Saving: we owe ${trader} ${money} as of ${when}.`
+        : `Saving: ${trader} owes us ${money} as of ${when}.`;
+}
+
+/** The as-of rule, in one plain line, printed ON the form beside the date. */
+export const AS_OF_NOTE =
+    'Everything before this date is assumed settled at the amount below. Receipts and payments on or after it count fresh.';
+
+/** Said out loud on the form, because append-only is reassuring only if you know about it. */
+export const APPEND_ONLY_NOTE =
+    'Saving adds a revision — the figure below is kept, not replaced. Nothing in this history can be edited or deleted.';
+
+export function validateOpeningBalanceForm(
+    form: OpeningBalanceFormState,
+    today: string,
+): Partial<Record<keyof OpeningBalanceFormState, string>> {
+    const errors: Partial<Record<keyof OpeningBalanceFormState, string>> = {};
+
+    const date = form.as_of_date.trim();
+    if (!isIsoDate(date)) {
+        errors.as_of_date = 'The date this figure is stated as of, as yyyy-mm-dd.';
+    } else if (isIsoDate(today) && date > today) {
+        // String comparison is exact for `yyyy-MM-dd`. The DB refuses this too, measured
+        // in Asia/Manila; this only makes the refusal rare.
+        errors.as_of_date = `An opening balance is a statement about what was already outstanding, so it cannot be dated after today (${today}).`;
+    }
+
+    const raw = form.amount_php.trim();
+    const amount = num(raw);
+    if (raw === '') {
+        errors.amount_php = 'How much was outstanding? Enter 0 if this trader is square as of that date — zero is a real answer, not a blank.';
+    } else if (amount === null) {
+        errors.amount_php = 'That is not a number.';
+    } else if (amount < 0) {
+        // THE trap. Silently flipping the sign here would be worse than refusing: it
+        // would teach the operator that the minus is what carries the direction, and the
+        // next figure they type without one would land on the wrong side.
+        errors.amount_php =
+            'Enter the amount as a positive figure and choose which way it points below. A minus sign here would double the balance instead of settling it.';
+    } else if (decimalPlaces(raw) > 2) {
+        errors.amount_php =
+            'At most two decimal places — this is the one figure a person states by hand, so round it to centavos. (Individual receipts do price out to fractions of a centavo, and there is nothing wrong with those.)';
+    }
+
+    return errors;
+}
+
+/** The patch-free RPC argument set, built in one place so no caller re-derives the sign. */
+export interface SetOpeningBalanceArgs {
+    supplierCode: string;
+    asOfDate: string;
+    /** SIGNED. Negative = we owe them. Produced only by `openingSignedAmount`. */
+    openingBalancePhp: number;
+    note: string | null;
+}
+
+export function openingArgsFrom(
+    supplierCode: string,
+    form: OpeningBalanceFormState,
+): SetOpeningBalanceArgs | null {
+    const signed = openingSignedAmount(form);
+    if (signed === null) return null;
+    return {
+        supplierCode,
+        asOfDate: form.as_of_date.trim(),
+        openingBalancePhp: signed,
+        note: form.note.trim() || null,
+    };
+}
+
+// ─── What an opening balance STANDS IN FOR ──────────────────────────────────────
+
+/**
+ * The defensibility pair, in words.
+ *
+ * `carried_receipt_count` / `carried_receipt_php` are what make a stated figure checkable
+ * six months later: "this ₱4.2M stands in for 275 receipts worth ₱207,917,771.25." Without
+ * them the opening balance is an unauditable assertion, and the row would look derived
+ * from all 971 receipts while differing from that reading by ₱200M.
+ *
+ * The payments half is included because it is the symmetric term — without it the gap
+ * between the full history and the windowed figure is explained on one side only. The
+ * full-history balance closes the loop: it is exactly what this row read before any
+ * opening balance existed.
+ */
+export function carriedTitle(
+    row: {
+        opening_as_of_date?: string | null;
+        carried_receipt_count?: number | string | null;
+        carried_receipt_php?: number | string | null;
+        carried_payment_count?: number | string | null;
+        carried_payment_php?: number | string | null;
+        running_balance_all_php?: number | string | null;
+    },
+    name: string,
+): string {
+    const date = formatDate(row.opening_as_of_date);
+    const rc = num(row.carried_receipt_count) ?? 0;
+    const rp = num(row.carried_receipt_php) ?? 0;
+    const pc = num(row.carried_payment_count) ?? 0;
+    const pp = num(row.carried_payment_php) ?? 0;
+
+    const receipts = `${rc} ${rc === 1 ? 'receipt' : 'receipts'} worth ₱${formatPeso(rp)}`;
+    const payments = `${pc} ${pc === 1 ? 'payment' : 'payments'} worth ₱${formatPeso(pp)}`;
+
+    return (
+        `The stated opening balance stands in for ${receipts} and ${payments}, all dated before ${date}. ` +
+        `Read back without it, the raw history for ${name.trim() || 'this trader'} is ₱${formatPeso(
+            row.running_balance_all_php,
+        )}.`
+    );
+}
+
+/** The short cell form: the count. The pesos go on the line beneath it. */
+export function carriedCountLabel(count: number | string | null | undefined): string {
+    const n = num(count) ?? 0;
+    return `${n} ${n === 1 ? 'receipt' : 'receipts'}`;
+}
+
+// ─── A GROUP's as-of date: never a date that is only true for some members ───────
+
+/**
+ * A group's members may legitimately be stated as of DIFFERENT dates, so there is often
+ * no single group as-of date at all — and printing one anyway would be a plain falsehood
+ * about the members it does not cover.
+ *
+ * The SQL rollup exposes the honest three (`opening_as_of_date`, which is NULL unless the
+ * members agree, plus `_min` / `_max`), and this reads them into the four cases a screen
+ * can actually render. Note that `opening_as_of_date` being non-null means "every member
+ * THAT HAS ONE agrees" — `min`/`max` ignore NULLs — so `partial` exists to keep a
+ * one-of-three agreement from masquerading as a group-wide fact.
+ */
+export type GroupAsOf =
+    | { kind: 'none' }
+    | { kind: 'all'; date: string }
+    | { kind: 'partial'; date: string; stated: number; total: number }
+    | { kind: 'range'; min: string; max: string; stated: number; total: number };
+
+export function groupAsOf(row: {
+    opening_as_of_date?: string | null;
+    opening_as_of_date_min?: string | null;
+    opening_as_of_date_max?: string | null;
+    opening_supplier_count?: number | string | null;
+    supplier_count?: number | string | null;
+}): GroupAsOf {
+    const stated = num(row.opening_supplier_count) ?? 0;
+    const total = num(row.supplier_count) ?? 0;
+    if (stated <= 0) return { kind: 'none' };
+
+    const agreed = (row.opening_as_of_date ?? '').slice(0, 10);
+    if (agreed) {
+        return stated >= total
+            ? { kind: 'all', date: agreed }
+            : { kind: 'partial', date: agreed, stated, total };
+    }
+
+    return {
+        kind: 'range',
+        min: (row.opening_as_of_date_min ?? '').slice(0, 10),
+        max: (row.opening_as_of_date_max ?? '').slice(0, 10),
+        stated,
+        total,
+    };
+}
+
+/** The compact cell text for each case. Never a bare date unless it covers every member. */
+export function groupAsOfLabel(a: GroupAsOf): string {
+    switch (a.kind) {
+        case 'none':
+            return '';
+        case 'all':
+            return `as of ${a.date}`;
+        case 'partial':
+            return `as of ${a.date} · ${a.stated} of ${a.total}`;
+        case 'range':
+            return `${a.min} → ${a.max}`;
+    }
+}
+
+/** The long form, for the cell's `title`. Says WHY there is no single date when there isn't. */
+export function groupAsOfTitle(a: GroupAsOf): string {
+    switch (a.kind) {
+        case 'none':
+            return 'No trader in this group has a stated opening balance, so every figure on this row covers the whole history.';
+        case 'all':
+            return `Every trader in this group is stated as of ${a.date}, so the group total covers everything from that date onward.`;
+        case 'partial':
+            return `${a.stated} of the ${a.total} traders in this group have a stated opening balance, all of them as of ${a.date}. The other ${
+                a.total - a.stated
+            } still count their whole history, so this date is not true of the group as a whole.`;
+        case 'range':
+            return `The ${a.stated} traders in this group with a stated opening balance do NOT share one as-of date — they run from ${a.min} to ${a.max}. There is deliberately no single group date to print, because it would be untrue of some members.`;
+    }
+}
+
+// ─── The lens: the stated balance, or the raw history ───────────────────────────
+
+/**
+ * Which set of figures the money columns read.
+ *
+ * `stated` (the default) is the windowed reading — the stated opening balance plus
+ * everything dated on or after its as-of date. `all` is `*_all_php`: the full history
+ * with NO opening term, i.e. exactly what this screen showed before opening balances
+ * existed.
+ *
+ * BOTH are kept because an opening balance is otherwise UNAUDITABLE — you could never ask
+ * "what does the raw history say, and what did my stated figure change?" Shown as a
+ * SCREEN-LEVEL SWITCH rather than a second number in every cell: one figure per cell,
+ * always, and the question is one click away instead of one more column wide.
+ *
+ * Neither branch computes anything. Every field named below is a column of the view.
+ */
+export type BalanceLens = 'stated' | 'all';
+
+export const LENS_NOTE: Record<BalanceLens, string> = {
+    stated:
+        'Showing each trader’s stated opening balance plus everything dated on or after it. Traders with no opening balance show their whole history.',
+    all: 'Showing the RAW HISTORY — every receipt and payment ever recorded, with no opening balance applied. This is what the screen said before starting balances existed.',
+};
+
 // ═══ The balance table's column geometry ════════════════════════════════════════
 //
 // Explicit pixel widths, and their SUM is the table's min-width: the wrapper scrolls
@@ -235,14 +640,17 @@ export interface BalanceCol {
 
 export const BALANCE_COLS: BalanceCol[] = [
     { key: 'trader', label: 'TRADER', width: 224, frozen: true, title: 'Cheque payee. A parent trader lists its sub-suppliers underneath.' },
-    { key: 'balance', label: 'BALANCE', width: 168, numeric: true, title: 'payments − priceable receipts. Minus = we owe them; plus = they owe us.' },
+    { key: 'balance', label: 'BALANCE', width: 168, numeric: true, title: 'Opening balance + payments − priceable receipts. Minus = we owe them; plus = they owe us.' },
     { key: 'direction', label: '', width: 84, title: 'Which way the balance points, in words.' },
-    { key: 'receipts', label: 'RECEIPTS', width: 156, numeric: true, title: 'What CI owes for this trader’s PRICEABLE receipts, all time.' },
-    { key: 'paid', label: 'PAID', width: 148, numeric: true, title: 'Payments out, less money that came back, plus any write-off.' },
-    { key: 'count', label: 'RCPTS', width: 62, numeric: true, title: 'Receipt count, all time.' },
-    { key: 'unpriced', label: 'NOT YET PRICED', width: 172, title: 'Receipts this balance could not price. The balance is silent about them — this column is not.' },
-    { key: 'last_receipt', label: 'LAST RECEIPT', width: 108, title: 'Most recent delivery date.' },
-    { key: 'last_payment', label: 'LAST PAYMENT', width: 110, title: 'Most recent payment date.' },
+    { key: 'opening', label: 'OPENING', width: 164, numeric: true, title: 'The stated starting balance, and the date it is stated as of. Everything strictly before that date is assumed settled at this figure.' },
+    { key: 'carried', label: 'STANDS IN FOR', width: 164, title: 'How many receipts the opening balance replaces, and what they were worth. This pair is what makes the stated figure checkable later.' },
+    { key: 'receipts', label: 'RECEIPTS', width: 156, numeric: true, title: 'What CI owes for this trader’s PRICEABLE receipts dated on or after the opening balance (everything, when there is none).' },
+    { key: 'paid', label: 'PAID', width: 148, numeric: true, title: 'Payments out, less money that came back, plus any write-off — over the same window as RECEIPTS.' },
+    { key: 'count', label: 'RCPTS', width: 62, numeric: true, title: 'Receipts counted in the figures on this row.' },
+    { key: 'unpriced', label: 'NOT YET PRICED', width: 172, title: 'Receipts this balance could not price, over the WHOLE history — never windowed. One dated before the opening balance cannot have been folded into it, because nobody knows what it is worth.' },
+    { key: 'last_receipt', label: 'LAST RECEIPT', width: 108, title: 'Most recent delivery date, whole history.' },
+    { key: 'last_payment', label: 'LAST PAYMENT', width: 110, title: 'Most recent payment date, whole history.' },
+    { key: 'actions', label: '', width: 120, title: 'State or revise this trader’s starting balance.' },
 ];
 
 export function minBalanceTableWidth(): number {
@@ -334,36 +742,37 @@ function compareGroup(a: BalanceGroup, b: BalanceGroup): number {
     return (a.group.group_display_name ?? '').localeCompare(b.group.group_display_name ?? '');
 }
 
-/** Present an orphaned member row in the group view's shape. Defensive only. */
+/**
+ * Present an orphaned member row in the group view's shape. DEFENSIVE ONLY — the group
+ * view is a `GROUP BY` over the member view, so a member with no group row cannot happen.
+ *
+ * Written as "spread the member row, then supply the group-only columns" rather than as a
+ * 49-key literal on purpose. The group rollup is `SELECT ... FROM view_rc_supplier_balance`
+ * and the two shapes therefore share 42 of their columns by construction; listing them all
+ * by hand meant that widening the views (as opening balances just did, 30→53 and 27→49)
+ * silently left this path building a row with 22 missing measures. Under the spread, a new
+ * shared column flows through automatically and a new group-ONLY column is a compile error
+ * right here — which is the correct place to be told.
+ *
+ * The member-only columns ride along unused rather than being destructured away. TypeScript
+ * applies no excess-property check to spread-in keys, so this still typechecks, and it
+ * costs 11 harmless extra keys on ONE defensive object instead of 11 throwaway `_name`
+ * bindings that this project's ESLint (no `ignoreRestSiblings`) reports as unused.
+ */
 function asGroup(m: SupplierBalanceRow): SupplierGroupBalanceRow {
     return {
-        adjustment_count: m.adjustment_count,
-        adjustment_php: m.adjustment_php,
-        any_active: m.active,
-        cash_in_php: m.cash_in_php,
-        cash_net_php: m.cash_net_php,
-        cash_out_php: m.cash_out_php,
-        child_count: 0,
-        first_payment_date: m.first_payment_date,
-        first_receipt_date: m.first_receipt_date,
-        group_code: m.group_code,
+        ...m,
         group_display_name: m.group_display_name ?? m.display_name,
         group_sort_order: m.group_sort_order,
-        is_unassigned: m.is_unassigned,
-        last_payment_date: m.last_payment_date,
-        last_receipt_date: m.last_receipt_date,
-        payment_count: m.payment_count,
-        payments_php: m.payments_php,
-        receipt_count: m.receipt_count,
-        receipts_php: m.receipts_php,
-        running_balance_php: m.running_balance_php,
-        supplier_codes: m.supplier_code ? [m.supplier_code] : null,
         supplier_count: 1,
-        unpriced_awaiting_both_count: m.unpriced_awaiting_both_count,
-        unpriced_awaiting_price_count: m.unpriced_awaiting_price_count,
-        unpriced_awaiting_weight_count: m.unpriced_awaiting_weight_count,
-        unpriced_receipt_count: m.unpriced_receipt_count,
-        unpriced_receipt_kg: m.unpriced_receipt_kg,
+        child_count: 0,
+        supplier_codes: m.supplier_code ? [m.supplier_code] : null,
+        any_active: m.active,
+        // A group of one: it has a stated opening exactly when its single member does, and
+        // that member's date is trivially the one every member agrees on.
+        opening_supplier_count: m.has_opening_balance ? 1 : 0,
+        opening_as_of_date_min: m.opening_as_of_date,
+        opening_as_of_date_max: m.opening_as_of_date,
     };
 }
 
