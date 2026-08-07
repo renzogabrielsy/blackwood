@@ -14,7 +14,7 @@ Run the gates BEFORE merging to `main`, and never trust a gate whose exit code y
 ## The gates
 
 - **`npm run build` from the repo root** — always. **Exit code 0 is the gate.**
-- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → 674 → **708 passing / 47 files, ~9s** (2026-08-07). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out.
+- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → 674 → 708 → **720 passing / 48 files, ~10s** (2026-08-07, promotion 42). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out. **This session's Bash cwd can already BE `workers/sync`** (the env's working directory), so a bare `npm test` may run the worker suite without a `cd` — read vitest's `RUN … /workers/sync` header to confirm which suite you actually ran. The worker also type-checks separately: `npx tsc --noEmit -p workers/sync/tsconfig.json` (root `tsc` does NOT cover it).
 - **When `workers/sync/**` IS touched, `npm test` + `npm run parity` are the RIGHT cheap subset** — ~2 min for both, and they exercise exactly the code that changed. Prefer them over a fresh 8-min root `npm run build` when the brief already reports the build green (promotion 40: both matched the brief's numbers exactly, alongside `tsc --noEmit` 0).
 - **`cd workers/sync && npm run parity`** when the sync worker is touched — expect "parity clean", 12 cases (deliveries 2 / flecon 3 / gsheet 2 / production 2 / rc_movement_audit 1 / rc_out 2).
 - **Scoped lint:** `npx eslint <touched files>` exits **0 on warnings-only, 1 on any error**, so the plain exit code IS the "0 errors" gate — no `--max-warnings` needed. Still read the log to report the warning count (2026-08-03: 9 cenapro ledger files, exit 0, 7 warnings all pre-existing in `production-ledger-grid.tsx`).
@@ -78,6 +78,18 @@ as the empty `$PIPESTATUS` and the NUL grep: the failure mode is a silent green.
 - The cross-check that actually decided promotion 41: `git status --porcelain -uall` matched the
   brief's path list exactly (4 paths + the standing exclusion), and every mtime sat inside the
   session window. Two independent signals, neither of them `-newermt`.
+
+## GREP TRAP — `^[+-][^+-]` on a diff drops REMOVED MARKDOWN BULLETS
+
+2026-08-07 (promotion 42): the usual "show me only real changed lines" filter
+`git diff --staged | grep -nE '^[+-][^+-]'` reported **zero removals** in `CLAUDE.md` while
+`--numstat` said `16 1`. A deleted markdown bullet is `-- **foo**` in diff form — the second
+char is `-`, so the pattern excludes it. Same shape for any removed line beginning with `-`
+or `+` (list items, `--flag` docs, front-matter rules).
+
+**When `--numstat` and your changed-line grep disagree, the grep is wrong.** Corroborate with
+`git diff --staged -U1 <file> | grep -nE '^(@@|-)'`, then diff the old/new form of the specific
+line with an anchored pattern (`grep -E '^[-+]- \*\*\`batch_code\`'`) to prove what actually moved.
 
 ## Route-table gate for route-group moves
 

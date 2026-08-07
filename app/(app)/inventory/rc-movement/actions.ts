@@ -47,6 +47,81 @@ export type RcMovementMatrixColumn = {
    *  (campaign-independent — a batch's lifetime weighted-avg delivery cost).
    *  NULL when the batch is zero-fed / has no delivery-cost basis. */
   avgFedPrice: number | null;
+  // ── ACTUAL FED ₱/kg (view_rc_movement_block_actual_price, 2026-08-07) ──
+  // The cost of a kilogram that ACTUALLY reached the plant: the block's whole
+  // delivered VALUE divided by the kg ever fed out of it. Higher than
+  // avgFedPrice because the block loses weight while the money spent does not.
+  /** actual_fed_php_kg — NULL (never 0) when the block is OPEN or has any unpriced
+   *  delivery. Render NULL as BLANK; never `?? 0`, never a dash that reads as a value. */
+  actualFedPrice: number | null;
+  /** batches.status = 'CLOSED' per the view (why a blank actual price is blank). */
+  isClosed: boolean;
+  /** Any delivery on this batch still carries the L-008 `cost_basis = 0` placeholder —
+   *  the OTHER reason actualFedPrice can be blank on a closed block. */
+  hasUnpricedDelivery: boolean;
+  /** uplift_php_kg — actual − delivered (₱/kg). Legitimately 0 or NEGATIVE on ~27% of
+   *  closed blocks (fed exactly / more than delivered). NOT an error state — no red. */
+  upliftPhpKg: number | null;
+  /** delivered_kg − total_fed_kg. Only means "lost" once the block is closed. */
+  weightLostKg: number | null;
+  /** loss_pct — a FRACTION (×100 at render), same convention as campaignYieldPct. */
+  lossPct: number | null;
+};
+
+/**
+ * Campaign rollup of ACTUAL FED ₱/kg, straight off
+ * view_rc_movement_campaign_actual_price. Every figure is SQL-aggregated —
+ * NEVER average the per-block prices in TS (JULY 2026: correct ₱47.2747 vs
+ * naive mean ₱45.8374).
+ */
+export type RcMovementActualFedPrice = {
+  /** PRIMARY headline — whole-block value ÷ whole-block all-time fed kg (Renzo's
+   *  literal definition). NULL when no block of the campaign qualifies. */
+  actualFedPhpKg: number | null;
+  /** The apples-to-apples partner of campaignAvgFedPrice: each block attributed to
+   *  THIS campaign's own fed kg, shaped like view_rc_movement_campaign_price. */
+  campaignWeightedActualFedPhpKg: number | null;
+  /** Delivered ₱/kg over the SAME price set (the reference line, restricted). */
+  deliveredPhpKg: number | null;
+  /** actual − delivered (₱/kg) over the price set. */
+  upliftPhpKg: number | null;
+  // Coverage — supplied so the UI prints "18 of 19 blocks closed" without counting.
+  blocksFed: number;
+  blocksClosed: number;
+  blocksOpen: number;
+  blocksInPrice: number;
+  blocksClosedUnpriced: number;
+  /** FRACTION of the campaign's fed kg the statistic covers (×100 at render). */
+  campaignFedKgIncludedPct: number | null;
+  /** TRUE when every block the campaign fed is closed AND priced. */
+  isFullyCovered: boolean;
+};
+
+/** One still-open block a campaign fed — view_rc_movement_campaign_open_blocks.
+ *  These are EXACTLY the blocks excluded from the campaign actual price. */
+export type RcMovementOpenBlock = {
+  batchId: string;
+  batchCode: string;
+  blockLoc: string | null;
+  status: string;
+  /** kg this campaign drew from the block, and that as a FRACTION of the campaign. */
+  campaignFedKg: number;
+  campaignFedShare: number | null;
+  campaignFeedDays: number;
+  campaignFirstFedDate: string | null;
+  campaignLastFedDate: string | null;
+  /** The block itself (all-time). */
+  deliveredKg: number | null;
+  deliveredPhpKg: number | null;
+  pricedDeliveredPhpKg: number | null;
+  hasUnpricedDelivery: boolean;
+  unpricedDeliveryCount: number;
+  fedKgToDate: number | null;
+  /** delivered − fed: charcoal still sitting in the block. */
+  balanceKg: number | null;
+  firstFedDate: string | null;
+  lastFedDate: string | null;
+  feedCount: number;
 };
 
 /** One calendar day within the campaign — a matrix row. */
@@ -115,10 +190,21 @@ export type RcMovementMatrix = {
   /** Campaign's loss in kg (fed − produced), from view_rc_movement_campaign_yield.
    *  NULL when the yield row is absent. */
   campaignLossKg: number | null;
+  /** Campaign ACTUAL FED ₱/kg + its coverage, from view_rc_movement_campaign_actual_price.
+   *  NULL when the campaign has no row (or the caller can't view prices — the view is
+   *  NOT QUERIED AT ALL when !canViewPrices, since every figure on it is ₱-derived). */
+  campaignActualFedPrice: RcMovementActualFedPrice | null;
+  /** The campaign's still-open blocks — exactly the blocks the actual price excludes.
+   *  Backs the "N of M blocks closed" badge's modal. EMPTY (not fetched) when
+   *  !canViewPrices, for the same reason. */
+  openBlocks: RcMovementOpenBlock[];
   /** Canonical price-gate flag (from lib/auth.canViewPrices). FALSE for Production
    *  (incl. impersonated). When false, ALL ₱ fields above — avgFedPriceDay (rows),
    *  avgFedPrice (columns), campaignAvgFedPrice — are forced to null BEFORE this
    *  payload leaves the server, so no ₱ value ever reaches a Production browser.
+   *  The three ACTUAL FED ₱/kg views are stronger still: they are NOT QUERIED AT ALL
+   *  when false (campaignActualFedPrice = null, openBlocks = [], every column's
+   *  actualFedPrice = null), because every figure they carry is derived from ₱.
    *  The client uses this flag to conditionally render price cells. */
   canViewPrices: boolean;
 };
@@ -169,6 +255,7 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     campaign: '', productionBatch: '', campaignYear: 0, campaignLabel: '',
     columns: [], rows: [], campaignOptions: [], grandTotalFed: 0, campaignAvgFedPrice: null,
     producedGrades: [], campaignTotalProduced: null, campaignYieldPct: null, campaignLossKg: null,
+    campaignActualFedPrice: null, openBlocks: [],
     canViewPrices: false,
   };
 
@@ -303,6 +390,14 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
           ash: 0,
           blockLoss: null,
           avgFedPrice: null, // filled from view_rc_movement_batch_price below
+          // Filled from view_rc_movement_block_actual_price below (price-gated:
+          // the view isn't queried at all when !showPrices, so these stay null/false).
+          actualFedPrice: null,
+          isClosed: false,
+          hasUnpricedDelivery: false,
+          upliftPhpKg: null,
+          weightLostKg: null,
+          lossPct: null,
         });
       } else if (r.date < existing.firstFedDate) {
         existing.firstFedDate = r.date;
@@ -359,6 +454,117 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     // EXACT — do NOT round in the data layer (display formats to 2 dp downstream).
     // Price-gated: null for Production (incl. impersonated).
     const campaignAvgFedPrice: number | null = showPrices ? (campaignPriceRow?.wtd_fed_price ?? null) : null;
+
+    // --- ACTUAL FED ₱/kg — campaign rollup + the still-open blocks it excludes ----
+    // Both views are ENTIRELY ₱-derived (even the coverage counts only exist to
+    // qualify a ₱ figure), so under the price gate they are NOT QUERIED AT ALL —
+    // the payload can't leak what was never fetched. Every number is mapped straight
+    // through; NEVER re-derive a price, a share or a balance here.
+    let campaignActualFedPrice: RcMovementActualFedPrice | null = null;
+    let openBlocks: RcMovementOpenBlock[] = [];
+
+    if (showPrices) {
+      type CampaignActualRow = {
+        actual_fed_php_kg: number | null;
+        campaign_weighted_actual_fed_php_kg: number | null;
+        delivered_php_kg: number | null;
+        uplift_php_kg: number | null;
+        blocks_fed: number | null;
+        blocks_closed: number | null;
+        blocks_open: number | null;
+        blocks_in_price: number | null;
+        blocks_closed_unpriced: number | null;
+        campaign_fed_kg_included_pct: number | null;
+        is_fully_covered: boolean | null;
+      };
+      type OpenBlockRow = {
+        batch_id: string | null;
+        batch_code: string | null;
+        block_loc: string | null;
+        status: string | null;
+        campaign_fed_kg: number | null;
+        campaign_fed_share: number | null;
+        campaign_feed_days: number | null;
+        campaign_first_fed_date: string | null;
+        campaign_last_fed_date: string | null;
+        delivered_kg: number | null;
+        delivered_php_kg: number | null;
+        priced_delivered_php_kg: number | null;
+        has_unpriced_delivery: boolean | null;
+        unpriced_delivery_count: number | null;
+        fed_kg_to_date: number | null;
+        balance_kg: number | null;
+        first_fed_date: string | null;
+        last_fed_date: string | null;
+        feed_count: number | null;
+      };
+
+      const [campaignActualResult, openBlockRows] = await Promise.all([
+        supabase
+          .from('view_rc_movement_campaign_actual_price')
+          .select(
+            'actual_fed_php_kg, campaign_weighted_actual_fed_php_kg, delivered_php_kg, uplift_php_kg, blocks_fed, blocks_closed, blocks_open, blocks_in_price, blocks_closed_unpriced, campaign_fed_kg_included_pct, is_fully_covered',
+          )
+          .eq('production_batch', pb)
+          .eq('campaign_year', yr)
+          .maybeSingle(),
+        fetchAll<OpenBlockRow>((from, to) =>
+          supabase
+            .from('view_rc_movement_campaign_open_blocks')
+            .select(
+              'batch_id, batch_code, block_loc, status, campaign_fed_kg, campaign_fed_share, campaign_feed_days, campaign_first_fed_date, campaign_last_fed_date, delivered_kg, delivered_php_kg, priced_delivered_php_kg, has_unpriced_delivery, unpriced_delivery_count, fed_kg_to_date, balance_kg, first_fed_date, last_fed_date, feed_count',
+            )
+            .eq('production_batch', pb)
+            .eq('campaign_year', yr)
+            .order('campaign_fed_kg', { ascending: false })
+            .range(from, to),
+        ),
+      ]);
+
+      const ca = campaignActualResult.data as CampaignActualRow | null;
+      if (ca) {
+        campaignActualFedPrice = {
+          // EXACT — never rounded here; display formats to 2 dp. NULL stays NULL:
+          // no block of this campaign is both closed and fully priced.
+          actualFedPhpKg: ca.actual_fed_php_kg ?? null,
+          campaignWeightedActualFedPhpKg: ca.campaign_weighted_actual_fed_php_kg ?? null,
+          deliveredPhpKg: ca.delivered_php_kg ?? null,
+          upliftPhpKg: ca.uplift_php_kg ?? null,
+          blocksFed: Number(ca.blocks_fed ?? 0),
+          blocksClosed: Number(ca.blocks_closed ?? 0),
+          blocksOpen: Number(ca.blocks_open ?? 0),
+          blocksInPrice: Number(ca.blocks_in_price ?? 0),
+          blocksClosedUnpriced: Number(ca.blocks_closed_unpriced ?? 0),
+          // FRACTION — kept as-is (×100 downstream), same convention as yield_pct.
+          campaignFedKgIncludedPct: ca.campaign_fed_kg_included_pct ?? null,
+          isFullyCovered: ca.is_fully_covered === true,
+        };
+      }
+
+      openBlocks = openBlockRows
+        .filter((r) => r.batch_id)
+        .map((r) => ({
+          batchId: r.batch_id as string,
+          batchCode: r.batch_code ?? (r.batch_id as string),
+          blockLoc: r.block_loc && r.block_loc.trim() !== '' ? r.block_loc : null,
+          status: r.status ?? '—',
+          campaignFedKg: Number(r.campaign_fed_kg ?? 0),
+          campaignFedShare: r.campaign_fed_share ?? null,
+          campaignFeedDays: Number(r.campaign_feed_days ?? 0),
+          campaignFirstFedDate: r.campaign_first_fed_date ?? null,
+          campaignLastFedDate: r.campaign_last_fed_date ?? null,
+          deliveredKg: r.delivered_kg ?? null,
+          deliveredPhpKg: r.delivered_php_kg ?? null,
+          pricedDeliveredPhpKg: r.priced_delivered_php_kg ?? null,
+          hasUnpricedDelivery: r.has_unpriced_delivery === true,
+          unpricedDeliveryCount: Number(r.unpriced_delivery_count ?? 0),
+          fedKgToDate: r.fed_kg_to_date ?? null,
+          balanceKg: r.balance_kg ?? null,
+          firstFedDate: r.first_fed_date ?? null,
+          lastFedDate: r.last_fed_date ?? null,
+          feedCount: Number(r.feed_count ?? 0),
+        }));
+    }
 
     // --- Production output + campaign yield/loss views (kg; SQL-aggregated) ----
     // Continuous-tank production is NOT attributable to an input batch, so it's keyed
@@ -495,8 +701,20 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     type RcOutSumRow = { batch_id: string | null; weight_kg: number | null };
     // (C) per-batch fed price (weighted-avg ₱/kg) — NUMERIC, NULL when zero-fed.
     type BatchPriceRow = { batch_id: string | null; batch_price: number | null };
+    // (D) per-block ACTUAL FED ₱/kg — view_rc_movement_block_actual_price. Same
+    //     all-time / campaign-independent grain as (C). actual_fed_php_kg is NULL
+    //     (never 0) when the block is open or has an unpriced delivery.
+    type BlockActualRow = {
+      batch_id: string | null;
+      is_closed: boolean | null;
+      has_unpriced_delivery: boolean | null;
+      actual_fed_php_kg: number | null;
+      uplift_php_kg: number | null;
+      weight_lost_kg: number | null;
+      loss_pct: number | null;
+    };
 
-    const [batchRows, deliveryRows, rcOutSumRows, batchPriceRows] = await Promise.all([
+    const [batchRows, deliveryRows, rcOutSumRows, batchPriceRows, blockActualRows] = await Promise.all([
       batchIds.length
         ? fetchAll<BatchRow>((from, to) => supabase.from('batches').select('id, status').in('id', batchIds).range(from, to))
         : Promise.resolve([] as BatchRow[]),
@@ -523,6 +741,17 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
               .range(from, to),
           )
         : Promise.resolve([] as BatchPriceRow[]),
+      // PRICE-GATED: not queried at all for Production — every column on this view is
+      // ₱-derived, so the payload can't leak what was never fetched.
+      showPrices && batchIds.length
+        ? fetchAll<BlockActualRow>((from, to) =>
+            supabase
+              .from('view_rc_movement_block_actual_price')
+              .select('batch_id, is_closed, has_unpriced_delivery, actual_fed_php_kg, uplift_php_kg, weight_lost_kg, loss_pct')
+              .in('batch_id', batchIds)
+              .range(from, to),
+          )
+        : Promise.resolve([] as BlockActualRow[]),
     ]);
 
     // batch_price by batch_id (NULL passes straight through — zero-fed batch).
@@ -530,6 +759,14 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
     const priceById = new Map<string, number | null>();
     for (const r of batchPriceRows) {
       if (r.batch_id) priceById.set(r.batch_id, showPrices ? r.batch_price : null);
+    }
+
+    // ACTUAL FED ₱/kg by batch_id. NULL passes straight through — it means "open or
+    // unpriced", which the UI renders as BLANK. NEVER coalesce to 0 here (`cost_basis = 0`
+    // is the L-008 unpriced placeholder; a ₱0.00 price is the avg_cost ₱11.01-vs-₱39.99 bug).
+    const blockActualById = new Map<string, BlockActualRow>();
+    for (const r of blockActualRows) {
+      if (r.batch_id) blockActualById.set(r.batch_id, r);
     }
 
     // status by batch_id
@@ -585,6 +822,15 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       col.blockLoss = totalIn > 0 ? (totalOut - totalIn) / totalIn : null;
       // SQL-provided weighted-avg fed price; null when the batch is zero-fed.
       col.avgFedPrice = priceById.get(col.batchId) ?? null;
+      // SQL-provided ACTUAL FED ₱/kg + the two reasons it can be blank. Absent row
+      // (or the price gate) leaves the initialized null/false — a blank, never a 0.
+      const actual = blockActualById.get(col.batchId);
+      col.actualFedPrice = actual?.actual_fed_php_kg ?? null;
+      col.isClosed = actual?.is_closed === true;
+      col.hasUnpricedDelivery = actual?.has_unpriced_delivery === true;
+      col.upliftPhpKg = actual?.uplift_php_kg ?? null;
+      col.weightLostKg = actual?.weight_lost_kg ?? null;
+      col.lossPct = actual?.loss_pct ?? null;
     }
 
     const grandTotalFed = out.reduce((s, r) => s + r.totalFed, 0);
@@ -603,6 +849,8 @@ export async function fetchRcMovementMatrix(campaign?: string): Promise<RcMoveme
       campaignTotalProduced,
       campaignYieldPct,
       campaignLossKg,
+      campaignActualFedPrice,
+      openBlocks,
       canViewPrices: showPrices,
     };
   } catch (err) {
