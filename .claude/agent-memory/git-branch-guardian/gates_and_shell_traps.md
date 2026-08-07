@@ -14,7 +14,8 @@ Run the gates BEFORE merging to `main`, and never trust a gate whose exit code y
 ## The gates
 
 - **`npm run build` from the repo root** — always. **Exit code 0 is the gate.**
-- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → **674 passing / 46 files, ~8.8s** (2026-08-04). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out.
+- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → 674 → **708 passing / 47 files, ~9s** (2026-08-07). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out.
+- **When `workers/sync/**` IS touched, `npm test` + `npm run parity` are the RIGHT cheap subset** — ~2 min for both, and they exercise exactly the code that changed. Prefer them over a fresh 8-min root `npm run build` when the brief already reports the build green (promotion 40: both matched the brief's numbers exactly, alongside `tsc --noEmit` 0).
 - **`cd workers/sync && npm run parity`** when the sync worker is touched — expect "parity clean", 12 cases (deliveries 2 / flecon 3 / gsheet 2 / production 2 / rc_movement_audit 1 / rc_out 2).
 - **Scoped lint:** `npx eslint <touched files>` exits **0 on warnings-only, 1 on any error**, so the plain exit code IS the "0 errors" gate — no `--max-warnings` needed. Still read the log to report the warning count (2026-08-03: 9 cenapro ledger files, exit 0, 7 warnings all pre-existing in `production-ledger-grid.tsx`).
 

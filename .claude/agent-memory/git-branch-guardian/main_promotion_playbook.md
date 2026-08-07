@@ -393,6 +393,43 @@ Gates clean again (merge-tree bare OID `d156396`, merge-base tree diff empty, me
 **27 consecutive clean promotions.** The pending `chore(memory)` commit (`26d2fb2`) rode along for
 the ninth time — already pushed, so `-sb` read `ahead 1` while the merge carried 2.
 
+### Promotion 40 (2026-08-07, `2fadbf9` → `baa269c`) — ELEVENTH consecutive clean `git add .`
+
+First promotion on this branch that is **not** cenapro: an ICTC sync fix (Czarina price
+enrichment silently dead since August). 22 files, +3867/−112, one migration + 4 new files.
+Branch name has drifted from its contents again — that is fine mid-flight, per the
+"branching off a mis-named branch" note above; cut a new one only when a *fresh* work line starts.
+
+- **A brief may under-describe its own migration — read the DDL before drafting the body.**
+  The brief said the migration "narrows `batches.avg_cost`". It also added
+  `view_digest_unpriced_deliveries` (+ rewired `view_digest_unpriced_recent`) and a
+  `delivery_source_aliases` table + `fn_record_delivery_source_alias` RPC with full RLS/grants.
+  One `grep -nE '^(CREATE|ALTER|DROP|COMMENT ON|GRANT|REVOKE|INSERT)' <migration>` catches the
+  whole object list in seconds. Not scope creep — the brief described outcomes, not objects.
+- **Verify brief claims by grepping for the named identifier, not by trusting the prose.** Four
+  claims confirmed in ~4 greps: `resolveCzarinaTab` really returns an `ambiguous` variant carrying
+  `candidates` + the full `available` tab list; the migration's `avg_cost` gained `AND cost_basis > 0`
+  with a COMMENT preserving the BUG-018 definition; `MAX_DATE_DRIFT_DAYS = 7` exists and is enforced;
+  `db.ts::applyOneFilter` now honours `is.true`/`is.false` instead of hardcoding `is(col, null)`.
+- **`workers/sync/**` in the diff ⇒ run the WORKER gates, they are cheap and they are the point.**
+  `npm test` (708 passed / 47 files, ~9s) and `npm run parity` (12 cases, exit 0) both matched the
+  brief's stated numbers exactly, as did `npx tsc --noEmit` (0). ~2 min total for three independent
+  confirmations that the brief describes THIS tree — took the 8-min build from the brief per
+  promotion 30's rule. New worker-test baseline: **708 / 47 files** (was 674).
+- **A machine-local absolute path in a TEST fixture constant is a FLAG, not a block.**
+  `workers/sync/test/reports/deliveries-price-enrichment.test.ts:57` hardcodes
+  `/Users/renzosy/blackwood/.sync-flags/2026-08-07/…xlsx`. It is `existsSync`-guarded and the file's
+  own header documents skip-on-absence — but unlike the FIXED form in [[staging-exclusions]] there is
+  **no in-repo fallback fixture**, so the workbook-dependent blocks silently skip everywhere else.
+  Editing source is not the operator's call; commit and flag. Tightening the scan to
+  `sk-(ant|proj|live)` (promotion 37) kept this the ONLY hit in a 238KB diff.
+
+Gates clean again (merge-tree bare OID `b78b121` exit 0, merge-base tree diff empty, merge exit 0,
+`git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>` empty, `git ls-remote`
+confirming both refs): **28 consecutive clean promotions.** The pending `chore(memory)` commit
+(`882b62d`) rode along for the tenth time — already pushed, so `-sb` read no ahead-count while
+`git log --oneline main..<branch>` correctly enumerated 2.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
