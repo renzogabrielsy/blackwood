@@ -58,6 +58,27 @@ exactly the moment you are verifying a production push, and invites a false alar
 - **Direct check when you need per-file certainty:** `perl -0777 -ne 'exit(1) if /\x00/' "$f"` — slurps the whole file, exit 1 = NUL found.
 - General rule: **any scan whose hit-rate is ~100% is a bug in the scan.** Re-derive before reporting it as a finding.
 
+## SHELL TRAP — `find -newermt` returns EMPTY on this macOS find (breaks the concurrent-session check)
+
+2026-08-07 (promotion 41): the one-command mtime check the playbook leans on to decide staging
+strategy — `find . -prune-junk -newermt '-25 minutes' -type f -print` — returned **nothing**, which
+reads exactly like "no concurrent session, plain `git add .` is safe." It is a **false negative**:
+the same command with `-newermt '-7 days'` ALSO returned nothing in a tree with five files edited
+minutes earlier. BSD/macOS `find` does not accept a relative `-N units` string here; it parses
+without erroring and matches nothing.
+
+**A `find -newermt` that returns empty proves NOTHING — corroborate before concluding.** Same family
+as the empty `$PIPESTATUS` and the NUL grep: the failure mode is a silent green.
+
+- **Working replacement — `stat` the dirty files directly** and compare to `date`:
+  `for f in <paths>; do printf '%-70s ' "$f"; stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S' "$f"; done; date '+%Y-%m-%d %H:%M:%S'`
+  Cheap, exact, and it answers the real question (were these touched by MY session's work).
+- **Always run the `-7 days` sanity control** before believing any `-newermt` result. Non-empty for
+  7 days + empty for 25 minutes = a real answer; empty for BOTH = a broken predicate.
+- The cross-check that actually decided promotion 41: `git status --porcelain -uall` matched the
+  brief's path list exactly (4 paths + the standing exclusion), and every mtime sat inside the
+  session window. Two independent signals, neither of them `-newermt`.
+
 ## Route-table gate for route-group moves
 
 A move like `app/(app)/x/` → `app/(app)/x/(group)/` is supposed to leave URLs unchanged, and a silently-swallowed route still compiles. Grep the build log's emitted route manifest for the specific entries (2026-07-30 confirmed `ƒ /production` + `ƒ /production/schedule`; 2026-08-04 confirmed `ƒ /cenapro/qc` + `ƒ /cenapro/qc/breakdown`). A green build alone is not the gate.
