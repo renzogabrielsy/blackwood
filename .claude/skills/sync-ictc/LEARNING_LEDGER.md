@@ -442,6 +442,69 @@ instead of day seven, because it does not care *why* a row is unpriced.
   Regression suite: `workers/sync/test/reports/deliveries-price-enrichment.test.ts` (34 tests,
   run against the real workbook).
 
+
+---
+
+## L-040 — `batch_code` is IN the natural key, so two names for one batch make two deliveries; and a real duplicate is proved by the LAB PANEL, compared as numbers (2026-08-07)
+
+Nine deliveries existed **twice** in `deliveries` — the same physical truckloads, 161,926 kg of
+phantom stock, some of it sitting in batches that had never been fed from at all. Renzo confirmed
+all nine and they were archived and removed. Four separate lessons, and the fourth is the one that
+stops this becoming a witch-hunt.
+
+- **Symptom → the mechanism.** The sync's natural key is
+  `(transaction_date, batch_code, block_loc, weight_kg)`. **`batch_code` is IN that key and
+  `truck_plate` is NOT.** So when two sources name the same batch differently the key differs and
+  the row is classified NEW, not DUPLICATE_NOOP. The Google Sheet writes the convention-correct
+  code (`JULY-26-FEED1`, `AUG-26-FEED1`, `JAN-25-FEED1`); MC's operator email writes the yard's
+  shorthand (`FEEDING # 1`, `FEEDING AREA # 3`). Both are honest; neither is wrong; the key cannot
+  tell they mean the same thing. `deliveries` has **no unique index other than the primary key**, so
+  nothing at the DB level refuses the second copy either.
+  **What made it start biting is datable:** the 2026-07-11 batch auto-create policy. Before it, a
+  Sheet row naming an unknown `batch_code` was HELD as `unmapped_batch_code` and a human looked at
+  it. After it, a pattern-valid unknown code auto-creates its batch and the row writes straight
+  through — which is right for a genuinely new block, and is exactly how a second copy of an
+  existing delivery got waved past the one human check that would have caught it. The policy is not
+  the bug; the key is. **Rule:** any classification key that contains a field two sources spell
+  differently will manufacture duplicates. Before trusting one, ask which of its fields is a
+  *label* and which is a *fact* — `weight_kg` is a fact, `batch_code` is a label.
+- **The survivor picks itself: keep the copy the RC OUT consumption points at.** Consumption is
+  recorded against `batch_id`, so only one copy of a split pair is ever connected to what was
+  actually burned. In all seven feed-batch pairs the shorthand batches
+  (`FEEDING # 1/2`, `FEEDING AREA # 1–4`) had **zero** `rc_out` rows — they were orphans holding
+  stock the plant had already consumed under the other name. **Rule:** verify that shape per pair
+  before deleting, and if a pair does not have it, stop — you are not looking at what you think.
+- **Compare lab panels as NUMBERS, not as JSON text.** `lab_results` is jsonb, and jsonb
+  **preserves numeric scale**: `{"mc": 12.0}` and `{"mc": 12}` are the *same number* and *different
+  strings*. One real pair (2025-01-11 / KCA 378 / 17,995 kg) differed in exactly that way and a
+  text comparison had been calling it a non-match. **Rule:** a real duplicate's signature is an
+  **identical full lab panel + identical sacks + identical weight, differing only in `batch_code`**
+  — and that panel must be compared with numeric equality (`jsonb = jsonb`, or field-by-field
+  casts), never `::text = ::text`. The text form is fine for *displaying* a diff and useless for
+  *deciding* one.
+- **A wet-sack deduction split is NOT a duplicate. Never flag it.** When moisture exceeds the
+  agreed threshold the yard pulls those sacks off the load and books them as a separate row: same
+  date, same truck, same supplier — but **different sacks and different MC/ash**, because they are
+  physically different charcoal. `2026-04-03 / KCA 378 / MARCH-25-BLK9` (the 471-sack and 36-sack
+  rows) is the reference case and both rows are correct. **Rule:** same date+truck+supplier is a
+  reason to LOOK, never a reason to act. Differing sacks or a differing lab panel means it is a
+  deliberate split and must be left alone; only an identical panel + sacks + weight is a duplicate.
+
+**Removals are reversible by construction.** `public.deliveries_archive` +
+`fn_archive_and_delete_delivery` / `fn_restore_archive_batch` (migration
+`20260807053911_deliveries_archive_and_restore`) — a full row snapshot goes to the archive before
+any delete, and one call puts the whole operation back with the original `id` and `created_at`
+intact. **Use `fn_archive_and_delete_delivery`, never a bare `DELETE` on `deliveries`.** And when a
+cleanup empties a batch, **leave the empty `batches` row alone**: `deliveries.batch_code` is a FK to
+it, so deleting it would quietly make the archive un-restorable.
+
+- **Provenance:** 2026-08-07, authorised by Renzo ("yes, i can confirm those are delete-able. but
+  keep some kind of backup for easy reverting"). `archive_batch_id`
+  `5105b855-53d5-4a23-9a22-153e71e38672`; 9 rows / 161,926 kg archived and deleted; 3 survivors
+  re-priced (₱36.00 ×2 carried across from the deleted copy, ₱39.00 from Czarina's `Aug. 2026`
+  row 9). Every removal carries a `provenance=duplicate-cleanup-2026-08-07` comment on its own
+  `audit_logs` DELETE row, including the revert command.
+
 ---
 
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

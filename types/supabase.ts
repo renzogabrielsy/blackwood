@@ -270,6 +270,84 @@ export type Database = {
           },
         ]
       }
+      deliveries_archive: {
+        Row: {
+          archive_batch_id: string
+          archive_id: string
+          archive_reason: string
+          archived_at: string
+          archived_by: string | null
+          batch_code: string | null
+          block_loc: string | null
+          context: Json | null
+          cost_basis: number | null
+          delivery_id: string
+          restored_at: string | null
+          restored_by: string | null
+          row_snapshot: Json
+          sacks: number | null
+          supplier: string
+          transaction_date: string
+          truck_plate: string | null
+          weight_kg: number
+        }
+        Insert: {
+          archive_batch_id: string
+          archive_id?: string
+          archive_reason: string
+          archived_at?: string
+          archived_by?: string | null
+          batch_code?: string | null
+          block_loc?: string | null
+          context?: Json | null
+          cost_basis?: number | null
+          delivery_id: string
+          restored_at?: string | null
+          restored_by?: string | null
+          row_snapshot: Json
+          sacks?: number | null
+          supplier: string
+          transaction_date: string
+          truck_plate?: string | null
+          weight_kg: number
+        }
+        Update: {
+          archive_batch_id?: string
+          archive_id?: string
+          archive_reason?: string
+          archived_at?: string
+          archived_by?: string | null
+          batch_code?: string | null
+          block_loc?: string | null
+          context?: Json | null
+          cost_basis?: number | null
+          delivery_id?: string
+          restored_at?: string | null
+          restored_by?: string | null
+          row_snapshot?: Json
+          sacks?: number | null
+          supplier?: string
+          transaction_date?: string
+          truck_plate?: string | null
+          weight_kg?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deliveries_archive_archived_by_fkey"
+            columns: ["archived_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "deliveries_archive_restored_by_fkey"
+            columns: ["restored_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       delivery_source_aliases: {
         Row: {
           active: boolean
@@ -3868,6 +3946,22 @@ export type Database = {
       }
       fn_apply_production_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_apply_schedule_upstream: { Args: { p_ops?: Json }; Returns: Json }
+      fn_archive_and_delete_delivery: {
+        Args: {
+          p_archive_batch_id?: string
+          p_delivery_id: string
+          p_reason: string
+        }
+        Returns: string
+      }
+      fn_archive_delivery: {
+        Args: {
+          p_archive_batch_id?: string
+          p_delivery_id: string
+          p_reason: string
+        }
+        Returns: string
+      }
       fn_blend_proposal: {
         Args: { p_block_locs: string[] }
         Returns: {
@@ -3913,6 +4007,14 @@ export type Database = {
       }
       fn_release_schedule_day: {
         Args: { p_expected_row_version: number; p_plan_date: string }
+        Returns: Json
+      }
+      fn_restore_archive_batch: {
+        Args: { p_archive_batch_id: string }
+        Returns: Json
+      }
+      fn_restore_archived_delivery: {
+        Args: { p_archive_id: string }
         Returns: Json
       }
       fn_save_schedule_day: {
