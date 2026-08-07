@@ -1615,6 +1615,68 @@ export type Database = {
           },
         ]
       }
+      sync_run_reports: {
+        Row: {
+          bytes: number | null
+          contains_prices: boolean
+          error: string | null
+          error_count: number
+          filename: string | null
+          finding_count: number
+          generated_at: string
+          generator_version: string | null
+          id: string
+          ok: boolean
+          run_id: string
+          sheet_counts: Json
+          storage_bucket: string
+          storage_path: string | null
+          warn_count: number
+        }
+        Insert: {
+          bytes?: number | null
+          contains_prices?: boolean
+          error?: string | null
+          error_count?: number
+          filename?: string | null
+          finding_count?: number
+          generated_at?: string
+          generator_version?: string | null
+          id?: string
+          ok?: boolean
+          run_id: string
+          sheet_counts?: Json
+          storage_bucket?: string
+          storage_path?: string | null
+          warn_count?: number
+        }
+        Update: {
+          bytes?: number | null
+          contains_prices?: boolean
+          error?: string | null
+          error_count?: number
+          filename?: string | null
+          finding_count?: number
+          generated_at?: string
+          generator_version?: string | null
+          id?: string
+          ok?: boolean
+          run_id?: string
+          sheet_counts?: Json
+          storage_bucket?: string
+          storage_path?: string | null
+          warn_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_run_reports_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sync_runs: {
         Row: {
           created_at: string
@@ -3716,6 +3778,41 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_code"]
+          },
+        ]
+      }
+      view_sync_run_reports: {
+        Row: {
+          bytes: number | null
+          contains_prices: boolean | null
+          dry_run: boolean | null
+          duration_seconds: number | null
+          error: string | null
+          error_count: number | null
+          filename: string | null
+          finding_count: number | null
+          finished_at: string | null
+          generated_at: string | null
+          generator_version: string | null
+          is_latest: boolean | null
+          ok: boolean | null
+          report_id: string | null
+          requested_by: string | null
+          run_id: string | null
+          run_status: Database["public"]["Enums"]["sync_run_status"] | null
+          sheet_counts: Json | null
+          started_at: string | null
+          storage_bucket: string | null
+          storage_path: string | null
+          warn_count: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_run_reports_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "sync_runs"
+            referencedColumns: ["id"]
           },
         ]
       }

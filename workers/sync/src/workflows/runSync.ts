@@ -82,6 +82,8 @@ import {
 } from "../reports/prodSchedule/refresh.js";
 import { planGsheetCloses, toChannelBatchCloses, type BatchClose, type BatchDirEntry } from "../lib/gsheetCloseScan.js";
 import { findStaleStreams, describeStaleStream, type StaleStream } from "../lib/streamStaleness.js";
+import { generateRunReport } from "../reports/excel/generate.js";
+import type { AppSyncRunResult } from "../reports/excel/findingsBridge.js";
 
 /** True if a per-report envelope carries any failure (either phase ok:false). */
 function reportFailed(r: ReportEnvelope): boolean {
@@ -338,7 +340,7 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   const anyFailed = Object.values(reports).some(reportFailed);
   const status: "succeeded" | "partial" = anyFailed ? "partial" : "succeeded";
 
-  const result: RunSyncResult = {
+  const baseResult: RunSyncResult = {
     runId,
     dryRun,
     manifest: manifestResolved,
@@ -346,6 +348,33 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
     reports,
     ...(reconciliation ? { reconciliation } : {}),
     status,
+  };
+
+  // ── Stage 4: the Excel sync report — the LAST thing the run does, and the only stage
+  // whose failure is guaranteed to be harmless. It renders `baseResult` (the exact object
+  // about to be persisted) into a workbook, stores it in the private `sync-reports` bucket
+  // and records it in `sync_run_reports`.
+  //
+  // It runs BEFORE finishRun for one specific reason: a generation FAILURE has to reach the
+  // operator, and the only durable channel to the panel is `sync_runs.result`. So the
+  // artifact pointer is folded into the result that finishRun then writes. The workbook
+  // itself is built from `baseResult`, which does not contain the pointer — a report cannot
+  // hold the record of its own failure, and would be stale the moment it tried.
+  //
+  // `generateRunReport` never throws (see its doc). The pointer is attached on success too:
+  // it is provenance, it lets the panel offer the download without a second query, and only
+  // `ok:false` becomes a finding.
+  const reportArtifact = await DBOS.runStep(
+    () => generateRunReport(runId, { result: baseResult as unknown as AppSyncRunResult, status }),
+    { name: "report:excel" },
+  );
+
+  const result: RunSyncResult = {
+    ...baseResult,
+    reconciliation: {
+      ...(reconciliation ?? {}),
+      report_artifact: reportArtifact,
+    },
   };
 
   await DBOS.runStep(() => finishRun(runId, status, result), { name: "finishRun" });
@@ -1078,6 +1107,10 @@ async function failRun(runId: string, message: string): Promise<void> {
   await db.finishSyncRun(runId, "failed", null, message);
   const emit = makeEmitter(db, runId, "_run");
   await emit("finalize", "The run could not complete.", 100, message, "warn");
+  // A crashed run gets a report TOO — with no findings, but with the full Run Log, which is
+  // exactly what someone wants when a run died. Best-effort and last: the terminal status is
+  // already written, so nothing here can make the failure worse.
+  await generateReportQuietly(runId, { result: null, status: "failed", runError: message });
 }
 
 /**
@@ -1092,6 +1125,27 @@ async function cancelRun(runId: string): Promise<void> {
   await db.cancelSyncRunIfActive(runId);
   const emit = makeEmitter(db, runId, "_run");
   await emit("finalize", "Stopped. Anything already written was kept.", 100, undefined, "warn");
+  // A stopped run kept every row it had already written, so its log is worth reading.
+  await generateReportQuietly(runId, { result: null, status: "cancelled" });
+}
+
+/**
+ * Report generation on the TERMINAL-FAILURE paths (`failRun` / `cancelRun`).
+ *
+ * `generateRunReport` already never throws, so this wrapper exists for one reason: those two
+ * paths run inside a `catch` that is about to re-throw the original error, and nothing there
+ * may introduce a new one. Belt and braces — the original failure is the one that must
+ * survive, not a reporting hiccup on top of it.
+ */
+async function generateReportQuietly(
+  runId: string,
+  opts: { result: null; status: string; runError?: string },
+): Promise<void> {
+  try {
+    await generateRunReport(runId, opts);
+  } catch {
+    /* the crash we are already reporting is the one that matters */
+  }
 }
 
 export const runSyncWorkflow = DBOS.registerWorkflow(runSyncGuarded, { name: "runSyncWorkflow" });

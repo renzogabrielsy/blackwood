@@ -30,6 +30,7 @@ import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
 import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
 import type { StaleStream } from "../lib/streamStaleness.js";
+import type { ReportArtifact } from "../reports/excel/artifact.js";
 import {
   LAG_DAYS,
   type Agreement,
@@ -118,6 +119,15 @@ export interface ReconciliationChannel {
   batch_closes?: BatchClose[];
   schedule_conflicts?: ScheduleConflict[];
   stale_streams?: StaleStream[];
+  /**
+   * The Excel sync report generated for this run (`../reports/excel/generate.ts`),
+   * 2026-08-07. Unlike every other member this is not something the sync OBSERVED — it is
+   * a pointer to the workbook the run produced, written on EVERY terminal run so the panel
+   * can offer the download without a second query. It becomes a FINDING only when
+   * `ok:false`; a reporting tool that can break the thing it reports on is worse than no
+   * tool, so generation never fails a run — it just says so.
+   */
+  report_artifact?: ReportArtifact;
 }
 
 const MAIN = "MAIN";

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getUserRole } from '@/lib/auth'
 import { PRIVILEGED_ROLES } from '@/types/auth'
 import { listOpenCases } from '../cases'
+import { getRunsWithReports } from '../reports'
 import { CasesClient, type WireCase } from '@/components/sync/cases/CasesClient'
 
 export const metadata = {
@@ -59,12 +60,26 @@ export default async function SyncCasesPage({
     initialError = err instanceof Error ? err.message : 'Failed to load review cases'
   }
 
+  // Which of the runs on screen have a downloadable Excel report? Resolved here, once, in a
+  // single `IN (...)` query rather than probed per run header. Guarded: a report is a
+  // convenience, so a failure here must not cost anyone the review page.
+  let initialRunsWithReports: string[] = []
+  try {
+    const runIds = initialCases
+      .map((c) => c.last_run_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    if (runIds.length > 0) initialRunsWithReports = await getRunsWithReports(runIds)
+  } catch {
+    initialRunsWithReports = []
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-muted/10">
       <CasesClient
         initialCases={initialCases}
         initialError={initialError}
         initialRunId={initialRunId}
+        initialRunsWithReports={initialRunsWithReports}
       />
     </div>
   )

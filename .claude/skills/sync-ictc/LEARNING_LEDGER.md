@@ -485,7 +485,7 @@ stops this becoming a witch-hunt.
 - **A wet-sack deduction split is NOT a duplicate. Never flag it.** When moisture exceeds the
   agreed threshold the yard pulls those sacks off the load and books them as a separate row: same
   date, same truck, same supplier — but **different sacks and different MC/ash**, because they are
-  physically different charcoal. `2026-04-03 / KCA 378 / MARCH-25-BLK9` (the 471-sack and 36-sack
+  physically different charcoal. `2025-04-03 / KCA 378 / MARCH-25-BLK9` (the 471-sack and 36-sack
   rows) is the reference case and both rows are correct. **Rule:** same date+truck+supplier is a
   reason to LOOK, never a reason to act. Differing sacks or a differing lab panel means it is a
   deliberate split and must be left alone; only an identical panel + sacks + weight is a duplicate.

@@ -6,8 +6,10 @@ import { FlaskConical, Play, RefreshCw, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SYNC_REPORTS } from '@/app/(app)/sync/types'
 import { flattenRunFindings } from '@/lib/sync/findings'
+import { collectReportArtifact } from '@/lib/sync/cases-fold'
 import { SyncEmployeeCard } from './SyncEmployeeCard'
 import { HeldRows } from './HeldRows'
+import { SyncReportButton } from './SyncReportButton'
 import type { SyncRunState } from './useSyncRun'
 
 interface SyncPanelBodyProps {
@@ -42,6 +44,17 @@ export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
     () => (state.result ? flattenRunFindings(state.result) : []),
     [state.result],
   )
+
+  // The Excel report the worker generated for this run. Read straight off the result the
+  // panel already has — no extra query — which is exactly why the worker attaches the
+  // pointer on success as well as failure. A run that predates the report generator (or
+  // whose generation failed) has no artifact, so no button is offered rather than a button
+  // that can only produce an error.
+  const reportArtifact = React.useMemo(
+    () => (state.result ? collectReportArtifact(state.result) : null),
+    [state.result],
+  )
+  const reportReady = Boolean(reportArtifact?.ok && reportArtifact?.path)
 
   return (
     <div className="flex flex-col gap-0">
@@ -157,6 +170,17 @@ export function SyncPanelBody({ state, run, stop }: SyncPanelBodyProps) {
 
       {/* Summary footer */}
       <div className="flex-none border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-1 pt-2.5">
+        {/* This run's Excel report — generated + stored automatically; this only fetches a
+            one-minute signed link to it. */}
+        {reportReady && !state.running && (
+          <div className="mb-2.5">
+            <SyncReportButton runId={state.runId} variant="panel" />
+            <p className="mt-1 px-0.5 text-[10px] leading-snug text-muted-foreground">
+              Every warning, disagreement and held row from this run — one sheet per section,
+              with a Summary you can read on its own.
+            </p>
+          </div>
+        )}
         {state.summarizing ? (
           <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
             <RefreshCw className="h-3 w-3 animate-spin" />

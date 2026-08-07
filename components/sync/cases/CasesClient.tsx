@@ -55,6 +55,12 @@ interface CasesClientProps {
   initialError: string | null
   /** The `?run=<runId>` deep-link target (preselect that run's triage / first case). */
   initialRunId: string | null
+  /**
+   * Run ids that have a downloadable Excel sync report, resolved server-side on the page.
+   * Threaded straight through to the run headers so a download button only appears where
+   * there is a file behind it.
+   */
+  initialRunsWithReports?: string[]
 }
 
 /** Normalize a raw sync_held_cases Realtime row into our WireCase shape. */
@@ -90,7 +96,16 @@ function toThreadMessage(raw: Record<string, unknown>): ThreadMessage {
   }
 }
 
-export function CasesClient({ initialCases, initialError, initialRunId }: CasesClientProps) {
+export function CasesClient({
+  initialCases,
+  initialError,
+  initialRunId,
+  initialRunsWithReports,
+}: CasesClientProps) {
+  const runsWithReports = React.useMemo(
+    () => new Set(initialRunsWithReports ?? []),
+    [initialRunsWithReports],
+  )
   const [cases, setCases] = React.useState<WireCase[]>(initialCases)
   const [selectedId, setSelectedId] = React.useState<string | null>(initialCases[0]?.id ?? null)
   const [messages, setMessages] = React.useState<ThreadMessage[]>([])
@@ -778,6 +793,7 @@ export function CasesClient({ initialCases, initialError, initialRunId }: CasesC
             selectedForBulk={selectedForBulk}
             onToggleBulk={onToggleBulk}
             scrollToRunId={scrollToRunId}
+            runsWithReports={runsWithReports}
           />
 
           {/* Selection bar (bulk dismiss). */}
