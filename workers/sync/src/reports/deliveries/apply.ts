@@ -24,7 +24,28 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
+import type { PriceNote } from "./enrich.js";
 import { type HeldRow, type HeldKind, deliveriesKey } from "../held.js";
+
+/**
+ * One delivery still carrying the L-008 unpriced placeholder more than a day after it
+ * happened. Projected straight off `public.view_digest_unpriced_deliveries`, which owns
+ * the ONE definition of "unpriced" and "overdue" — nothing here re-derives it.
+ *
+ * NEVER a ₱ field: every row in this list has cost_basis = 0 by construction, so there
+ * is no price to carry, and the run-findings channel is not price-gated.
+ */
+export interface UnpricedOverdue {
+  id: string;
+  transaction_date: string;
+  supplier: string | null;
+  batch_code: string | null;
+  truck_plate: string | null;
+  weight_kg: number | null;
+  sacks: number | null;
+  /** operational_date − transaction_date, in days. Always ≥ 2 for an overdue row. */
+  days_pending: number;
+}
 
 /** The compact hand-off from classify → apply. */
 export interface DeliveriesCompact {
@@ -65,6 +86,19 @@ export interface ApplyResult {
   labeled: boolean;
   watermark_updated: boolean;
   errors: string[];
+  /**
+   * Everything the PRICE step wants a human to see: a tab it could not resolve, a
+   * fuzzy match it accepted (with both spellings), a match that landed outside the
+   * supplier's usual range. ALWAYS present (default []). Filled by `runReport`, not by
+   * `applyDeliveries` — enrichment happens before apply — and folded into the run
+   * findings by `lib/sync/findings.ts`, so it outlives the progress feed.
+   */
+  price_notes: PriceNote[];
+  /**
+   * Deliveries still unpriced more than a day after they happened. ALWAYS present
+   * (default []). Also filled by `runReport`.
+   */
+  unpriced_overdue: UnpricedOverdue[];
 }
 
 const REPORT_TYPE = "deliveries";
@@ -323,6 +357,10 @@ export async function applyDeliveries(
     labeled,
     watermark_updated: watermarkUpdated,
     errors,
+    // Filled by runReport (enrichment runs before apply); defaults keep every other
+    // caller and every hand-built test fixture valid.
+    price_notes: [],
+    unpriced_overdue: [],
   };
 }
 

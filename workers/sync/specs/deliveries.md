@@ -215,7 +215,7 @@ Trigger-UPDATE via `stamp_ingestion_audit` RPC (table has an audit trigger) — 
 ## 7. Fixture shopping list
 
 - Real (redacted) `RC DELIVERIES 2026.xlsx` sample sheet with: a normal row, a `B<N>` operator label row, a `FEEDING AREA N` row, a `PILED IN <MONTH> # <N>` remarks row, a deduction remark (`net kilos of ... = ...`), a wet-recovery sub-row directly under a mother, an orphan recovery sub-row (no mother above it), an "Average" trailing row, a row missing weight, a row with an off-format `block_loc`.
-- Synthetic Czarina price file with: an exact truck-plate match, a plate-typo scenario (see L-010 in LEARNING_LEDGER — NOTE this specific recovery-by-supplier+sacks+weight fallback is documented in the ledger but is NOT implemented in `enrich_prices.py`'s code — `match_price` only ever keys on `(supplier, truck, weight)`; the ledger's L-010 recovery was a MANUAL agent action, not automated Python. Flag this gap for the TS port — do not assume the fallback exists in code).
+- Czarina price-file fixtures: **no longer synthetic.** `workers/sync/test/reports/deliveries-price-enrichment.test.ts` runs against the REAL workbook (`~/blackwood/.sync-flags/2026-08-07/124885_RAW CHARCOAL PURCHASES -Daily.xlsx`, 24 tabs / 1,347 rows) with the ten real deliveries Renzo confirmed on 2026-08-07. A synthetic price file cannot prove the tab resolver copes with 24 tabs a human named by hand over two years — which is precisely the fault that un-priced a whole month (L-039). The suite SKIPS the workbook-dependent blocks if the file is absent, so a fresh clone still passes.
 - A month-boundary truckload fixture reproducing the exact L-033 scenario: July-dated delivery, remark `"PILED IN JUNE BLOCK 9"`, DB already holding `JUNE-26-BLK9` with a matching `(date,truck,weight)` row at the same `block_loc`.
 - A `location_occupied` fixture: a NEW row whose `batch_code` doesn't exist yet AND whose `block_loc` already holds a different active batch.
 - Confidence-boundary fixture: a row with exactly `confidence == 0.7` (must NOT be flagged, since the check is `< 0.7` not `<=`) and one at `0.699...` (must be flagged).
@@ -226,5 +226,132 @@ Trigger-UPDATE via `stamp_ingestion_audit` RPC (table has an audit trigger) — 
 
 - `sync_deliveries.py` never passes `--sheet`/`--all-sheets` to the extractor — it silently trusts `wb.active.title`. A TS port must replicate "whatever sheet openpyxl reports as active", which depends on which sheet tab was selected when the xlsx was LAST SAVED in Excel/Sheets — this is workbook metadata, not derivable from sheet names or dates. Verify the chosen xlsx library exposes `activeTab`/equivalent.
 - `translate_batch_code`'s actual check order (FEEDING AREA → PILED IN → B-number → fallthrough) diverges from its own docstring's stated priority (PILED IN listed first). Port the code path, not the docstring.
-- The L-010 (deliveries/enrich) plate-typo price recovery documented in LEARNING_LEDGER is a **manual, one-off agent action** — it is NOT implemented in `enrich_prices.py`. Do not port a fallback-by-supplier+sacks+weight matcher unless explicitly asked to add the capability; the current code only does exact `(supplier, truck, weight)` matching with a closest-date tiebreak among multiple hits.
+- ~~The L-010 (deliveries/enrich) plate-typo price recovery documented in LEARNING_LEDGER is a **manual, one-off agent action** — it is NOT implemented in `enrich_prices.py`. Do not port a fallback-by-supplier+sacks+weight matcher unless explicitly asked to add the capability~~ — **SUPERSEDED 2026-08-07 (L-039): the capability WAS explicitly asked for and is now implemented in the TS port.** The Python remains exact-key-only; the TS enricher is deliberately AHEAD of it. See §9 below. The Python is still the oracle for extract/classify — but **not** for enrich, which `build_oracle.py` never runs.
+- **`max_date_drift_days=7` was dropped in the first TS port, and that was a real (unnoticed) regression.** `enrich_prices.py::match_price(..., max_date_drift_days=7)` bounds how far a Czarina row may sit from the delivery date; the TS port kept the closest-date tiebreak but discarded the bound. Because the exact key carries **no date**, unbounded it prices a December delivery from an August row. Restored 2026-08-07 at the spec's own 7 days. **When porting, diff the parameter list — a dropped safety bound is invisible until it is expensive.**
 - `enrich_prices.py` outputs its enriched JSON to `--output` but prints HUMAN-readable summary lines to stdout, not JSON — `sync_deliveries.py` deliberately does NOT parse enrich's stdout (subprocess.run + check the output FILE, not stdout). A TS port's equivalent enrich step should keep this same file-based handoff if replicating the orchestration shape, or explicitly redesign it — flag which approach is intended.
+
+---
+
+## 9. Price enrichment — the TS behaviour (2026-08-07, L-039)
+
+> **The TS enricher is deliberately AHEAD of the Python.** `enrich` is NOT part of the classify
+> oracle — `build_oracle.py` never runs it, and `cost_basis` is skipped in `field_differences`
+> whenever the extracted side is null, so **no parity fixture exercises any of this.** That is
+> what makes hardening it safe. Everything below is TS-only unless it says otherwise.
+>
+> Code: `src/reports/deliveries/enrich.ts` (matcher), `czarinaSheet.ts` (tab resolution),
+> `supplierCanon.ts` (the `canonical_supplier` mirror). Tests:
+> `test/reports/deliveries-price-enrichment.test.ts`. DB: migration `20260807040107`.
+
+### 9.1 Why it was rewritten
+
+The sync had priced **zero August 2026 deliveries** for a week; `AUGUST-26-BLK1`'s `avg_cost` read
+**₱11.01 against a real ₱39.99**. Full post-mortem in LEARNING_LEDGER **L-039**. Four faults: a
+generated tab name matched exactly against hand-typed tabs; a bare `catch` that reported the wrong
+cause; a whole-file load done once outside the row loop; and supplier variants that never keyed equal.
+
+### 9.2 Tab resolution — semantic, never exact
+
+`czarinaSheet.ts::resolveCzarinaTab(sheetNames, year, month)`. Both sides normalize to
+`(month, year)`: trim → uppercase → drop every non-alphanumeric → split the leading letter run from
+the trailing digit run; 2-digit years read as `20YY`. Month tokens come from
+`lib/months.ts::monthNumberFromToken` — the SEPT/SEP asymmetry lives **there**, and this module must
+never grow a private month table.
+
+Proven against all 24 real tabs: `Aug. 2026`, `Feb. 2026`, `Jan. 2026.` (trailing period),
+`Nov 25. ` (trailing **space**), `March25` (no separator), `July.2024`, `Sept. 25`.
+
+**Ambiguity is REFUSED, never guessed** (`reason: "ambiguous"` + both candidate names). Two tabs
+meaning the same month is a working copy; picking one would price a month from a scratch sheet.
+
+### 9.3 Every month the window spans
+
+`monthsSpanned(dates)` returns **every** distinct `(year, month)`, not just the newest. The window
+is `watermark − 3 days`, so it straddles a month boundary on the **1st, 2nd and 3rd of every
+month** — the old one-month load left the earlier month unpriced with no complaint.
+
+### 9.4 The match ladder — each rung stricter about evidence
+
+| # | Rung | Key | Accepted when |
+|---|---|---|---|
+| 1 | **EXACT** | `(canonical_supplier, plate[alnum-upper], weight[whole kg])` | key hits **and** date drift ≤ `MAX_DATE_DRIFT_DAYS` (7) |
+| 2 | **ALIAS** | same key, our plate swapped for the spelling Czarina is KNOWN to use (`public.delivery_source_aliases`) | same |
+| 3 | **FALLBACK** | `(date ± ≤2d, net weight, sacks)` | unique on **BOTH** sides **and** one independent field corroborates |
+
+**Rung 1/2 — the date bound.** The key carries **no date** (the files don't share one: she records
+"Date of Del.paid"). `max_date_drift_days=7` is the **Python spec's own value**. Measured on the real
+workbook: 34 exact keys have >1 row, **all 34 are >7 days apart, none within 7**, prices differing by
+up to ₱6.75/kg — and all ten confirmed deliveries matched at drift **0**. Over the bound → refused
+with `price_date_drift`. Unlike the Python (which warned on stdout and applied anyway), the worker
+**refuses**: nothing watches stdout, and applying would contradict the `price_tab_unresolved` note
+the same run just raised.
+
+**Rung 3 — the uniqueness gate.** Renzo's measurement: across 1,327 deliveries since Jan 2025 the
+triple is unique for **1,309**, and **all 9 colliding triples ARE known duplicate pairs**. So
+uniqueness is simultaneously the safety property and a duplicate detector. A collision on either
+side → refused (`price_fuzzy_ambiguous`) with the twin named. Corroboration (iii) is a TS addition:
+a lone unique hit whose plate **and** supplier both disagree is a coincidence, not the same truckload.
+
+**Plate shape is a TIE-BREAKER, NEVER A MATCHER.** `platesCorroborate` returns only `exact`,
+`affix` (prefix/suffix, shorter side ≥ 4 chars — `T138003`/`138003`) or `substitution` (same length,
+exactly one char — `ALA3958`/`ALA9958`). No edit distance, no transposition, no insertion: every
+extra rule is another way to accept a truck that does not exist. It never builds a lookup key.
+
+**Suppliers go through `canonical_supplier()` on BOTH sides** — that alone fixes the
+`Paquibot/Compra` vs `PAQUIBOT` class, with no new machinery. Mirrored in TS for speed/purity;
+`scripts/verify-supplier-canon.ts` asserts the copies agree **against the live DB function** (a
+mirror without a drift check is worse than no mirror). Note the ILIKE trap it must reproduce:
+`%mercado%ornales%` is ORDERED and NON-OVERLAPPING, so `MERCADORNALES` matches **neither** order.
+
+### 9.5 Nothing fails quietly — the note channel
+
+`CzarinaMatch.notes: PriceNote[]` → `apply.price_notes` → `lib/sync/findings.ts` → the Sync panel.
+Durable, so it outlives the progress feed. **No note ever carries a ₱ value** (the findings channel
+is not price-gated): a note identifies the ROW and describes the problem in words.
+
+| kind | priced? | severity | meaning |
+|---|---|---|---|
+| `price_tab_unresolved` | no | **high** | no tab for that month — names the month AND all tabs found |
+| `price_tab_ambiguous` | no | **high** | two tabs mean the same month — refused |
+| `price_file_unreadable` | no | **high** | the buffer isn't a workbook |
+| `price_fuzzy_match` | **yes** | attention | matched, but the sheets spell plate/supplier differently — both values shown |
+| `price_fuzzy_ambiguous` | no | attention | fallback key not unique, or the sole hit agrees on nothing else |
+| `price_date_drift` | no | attention | her file HAS the key, but months away |
+| `price_out_of_band` | **yes** | attention | the rate is unlike this supplier's recent range |
+
+`ok: false` means **no month resolved at all**. A PARTIAL failure stays `ok: true` — the months that
+resolved were priced correctly, and the miss is still reported. `ProgressLevel` gained `error`
+(`sync_run_events.level` is free text, no migration needed).
+
+### 9.6 Learned aliases — earned, never guessed
+
+`public.delivery_source_aliases` (+ service-role-only `fn_record_delivery_source_alias`, idempotent:
+a repeat bumps `times_seen`, never rewrites `evidence`). A pair is written **only** after a match was
+corroborated independently — a uniqueness-gated fallback, or a human. `evidence` is `NOT NULL`
+precisely so a row cannot exist without saying how it was earned. An EXACT match teaches nothing and
+records nothing. Seeded with exactly the three pairs Renzo confirmed. `ours`/`theirs` are stored
+**already normalized** the way the matcher normalizes, so lookup is plain equality; supplier pairs
+are keyed on `UPPER(TRIM())`, **not** canonical output (that would store a degenerate
+`PAQUIBOT → PAQUIBOT` row saying nothing).
+
+### 9.7 Sanity-check the RESULT, not just the key
+
+Per-supplier ₱/kg band from priced history (trailing 90 days, grouped by `canonical_supplier`,
+`cost_basis > 0` only — including the L-008 zero would drag every floor to 0 and make the check
+vacuous). Bands with `n < 3` are dropped as non-evidence. Outside ±10% → `price_out_of_band`, which
+**still enriches**: an out-of-band match is a question, not a veto. This is the only check that can
+catch a match that passed every key test and is still wrong.
+
+### 9.8 The unpriced warning, and the avg_cost narrowing
+
+`view_digest_unpriced_deliveries` owns the ONE definition of "unpriced" (`cost_basis = 0`) and
+"overdue" (`> 1` day past `transaction_date`, measured against
+`view_digest_operational_days.operational_date` so it never fires on a day the plant hasn't
+reported). `view_digest_unpriced_recent` was **rewritten as a thin count projection of it** —
+same column, same type, same value (measured 7 → 7). The worker reads it on the view's own
+`is_overdue`, never re-deriving the rule, so the sync and the Home digest cannot disagree.
+
+`fn_recompute_batch_state` now averages `avg_cost` over **priced rows only**. **This is not a second
+definition** — the BUG-018 formula is byte-identical, delivery-weighted; only the input set narrows,
+because `cost_basis = 0` is the L-008 placeholder, not a ₱0 delivery. `current_weight` is untouched:
+an unpriced delivery is still physically there.

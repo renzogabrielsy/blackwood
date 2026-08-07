@@ -270,6 +270,62 @@ export type Database = {
           },
         ]
       }
+      delivery_source_aliases: {
+        Row: {
+          active: boolean
+          confirmed_by: string | null
+          created_at: string
+          evidence: string
+          first_seen_on: string | null
+          id: string
+          kind: string
+          last_seen_at: string
+          ours: string
+          ours_raw: string | null
+          theirs: string
+          theirs_raw: string | null
+          times_seen: number
+        }
+        Insert: {
+          active?: boolean
+          confirmed_by?: string | null
+          created_at?: string
+          evidence: string
+          first_seen_on?: string | null
+          id?: string
+          kind: string
+          last_seen_at?: string
+          ours: string
+          ours_raw?: string | null
+          theirs: string
+          theirs_raw?: string | null
+          times_seen?: number
+        }
+        Update: {
+          active?: boolean
+          confirmed_by?: string | null
+          created_at?: string
+          evidence?: string
+          first_seen_on?: string | null
+          id?: string
+          kind?: string
+          last_seen_at?: string
+          ours?: string
+          ours_raw?: string | null
+          theirs?: string
+          theirs_raw?: string | null
+          times_seen?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delivery_source_aliases_confirmed_by_fkey"
+            columns: ["confirmed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       electricity_readings: {
         Row: {
           consumption_kwh: number | null
@@ -2965,6 +3021,59 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_unpriced_deliveries: {
+        Row: {
+          batch_code: string | null
+          block_loc: string | null
+          days_pending: number | null
+          id: string | null
+          is_overdue: boolean | null
+          is_recent: boolean | null
+          operational_date: string | null
+          sacks: number | null
+          supplier: string | null
+          transaction_date: string | null
+          truck_plate: string | null
+          weight_kg: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_code"]
+          },
+        ]
+      }
       view_digest_unpriced_recent: {
         Row: {
           cnt: number | null
@@ -3785,6 +3894,18 @@ export type Database = {
       fn_recompute_batch_state: {
         Args: { p_batch_code: string }
         Returns: undefined
+      }
+      fn_record_delivery_source_alias: {
+        Args: {
+          p_evidence: string
+          p_kind: string
+          p_ours: string
+          p_ours_raw?: string
+          p_seen_on?: string
+          p_theirs: string
+          p_theirs_raw?: string
+        }
+        Returns: string
       }
       fn_release_production_rows: {
         Args: { p_ids: string[]; p_table: string }

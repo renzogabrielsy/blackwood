@@ -67,3 +67,24 @@ export function canonicalMonthName<T extends string | null | undefined>(raw: T):
   if (raw === null || raw === undefined) return raw;
   return MONTH_TOKEN_TO_NAME[raw.trim().toUpperCase()] ?? raw;
 }
+
+/**
+ * 1-indexed calendar month for a recognized month TOKEN (abbreviation or full name),
+ * or `null` if the token is not a month at all.
+ *
+ * This is the inverse of `monthName()` and reads the SAME `MONTH_TOKEN_TO_NAME` table
+ * `canonicalMonthName()` uses — so the SEPT/SEP asymmetry (and every other spelling
+ * this project has met) is handled in exactly one place. Added 2026-08-07 for the
+ * Czarina price-file tab resolver, which has to recognize a month written four
+ * different ways across 24 worksheet tabs; do NOT give it a private month table.
+ *
+ * Case- and whitespace-insensitive. Punctuation is NOT stripped here (a caller that
+ * needs "Aug." → AUG normalizes first) so this stays a pure token lookup.
+ */
+export function monthNumberFromToken(token: string | null | undefined): number | null {
+  if (token === null || token === undefined) return null;
+  const name = MONTH_TOKEN_TO_NAME[token.trim().toUpperCase()];
+  if (!name) return null;
+  const idx = MONTH_NAMES.indexOf(name);
+  return idx < 0 ? null : idx + 1;
+}

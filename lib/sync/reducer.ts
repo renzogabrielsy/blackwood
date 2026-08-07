@@ -69,7 +69,12 @@ export function projectEvent(row: SyncRunEventRow): SyncProgressEvent | null {
   const pctNum = typeof row.pct === 'number' ? row.pct : Number(row.pct)
   const pct = Number.isFinite(pctNum) ? Math.max(0, Math.min(100, Math.round(pctNum))) : 0
   const detail = typeof row.detail === 'string' && row.detail.trim() ? row.detail : undefined
-  const level = row.level === 'warn' ? 'warn' : 'info'
+  // `error` was introduced 2026-08-07 (the price-file beat that used to lie at `warn`
+  // level). Widened here rather than left to the `=== 'warn' ? … : 'info'` ternary,
+  // which would have silently DOWNGRADED an error beat to info — re-creating the exact
+  // "loud thing rendered quiet" bug it was added to fix.
+  const level: SyncProgressEvent['level'] =
+    row.level === 'error' ? 'error' : row.level === 'warn' ? 'warn' : 'info'
   return { stage: stage as SyncProgressStage, pct, label, detail, level }
 }
 
@@ -109,7 +114,9 @@ export function applyEventToCard(card: SyncCardState, ev: SyncProgressEvent): Sy
     stage: ev.stage,
     pct: Math.max(card.pct, ev.pct),
     statusLine,
-    warn: ev.level === 'warn',
+    // An `error` beat must render AT LEAST as loudly as a warn. The card exposes a
+    // single boolean, so both non-info levels set it.
+    warn: ev.level === 'warn' || ev.level === 'error',
   }
 }
 

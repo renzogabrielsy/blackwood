@@ -27,9 +27,11 @@ import {
 } from '../lib/sync/findings'
 import type {
   BlockDiff,
+  PriceNote,
   SingleSourceOverdue,
   SourceDiff,
   SyncRunResult,
+  UnpricedOverdue,
   UnresolvedBatch,
 } from '../app/(app)/sync/types'
 
@@ -191,6 +193,202 @@ check('source_diff flattens too (5th channel)', () => {
   assert.equal(findings[0].severity, 'attention')
   assert.equal((findings[0].data.sources as unknown[]).length, 2)
   assert.ok(findings[0].data.recommended)
+})
+
+// ── 3.5 Delivery PRICE channels (2026-08-07, L-039). ───────────────────────
+//
+// THE REGRESSION THESE PIN: the price step's only voice used to be a progress beat
+// reading "Price file unavailable — proceeding without prices" — which was FALSE (the
+// file was there, only the tab name was unrecognized) and which died with the run. A
+// whole month of deliveries went unpriced for a week and nothing durable said so.
+// These assert the notes now reach the panel, and that a REFUSAL never reads as a
+// success.
+function priceNote(over: Partial<PriceNote> & { kind: string }): PriceNote {
+  return {
+    kind: over.kind,
+    detail: over.detail ?? 'detail',
+    transaction_date: over.transaction_date ?? null,
+    supplier: over.supplier ?? null,
+    batch_code: over.batch_code ?? null,
+    truck_plate: over.truck_plate ?? null,
+    weight_kg: over.weight_kg ?? null,
+    sacks: over.sacks ?? null,
+    source_row: over.source_row ?? null,
+    via: over.via ?? null,
+    matched_sheet: over.matched_sheet ?? null,
+    matched_row: over.matched_row ?? null,
+    date_tolerance_days: over.date_tolerance_days ?? null,
+    looked_for: over.looked_for ?? null,
+    tabs_found: over.tabs_found ?? [],
+    candidates: over.candidates ?? [],
+    collided_on: over.collided_on ?? null,
+    differences: over.differences ?? [],
+    collisions: over.collisions ?? [],
+  }
+}
+
+function priceRun(notes: PriceNote[], overdue: UnpricedOverdue[] = []): SyncRunResult {
+  return {
+    reports: {
+      deliveries: {
+        apply: {
+          report_type: 'deliveries',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          price_notes: notes,
+          unpriced_overdue: overdue,
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+check('a tab miss is HIGH severity and carries BOTH halves (sought + found)', () => {
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({
+        kind: 'price_tab_unresolved',
+        looked_for: 'August 2026',
+        tabs_found: ['Feb. 2026', 'Aug. 2026', 'July 2026'],
+        detail: 'Czarina’s price file has NO tab for August 2026...',
+      }),
+    ]),
+  )
+  assert.equal(findings.length, 1)
+  const f = findings[0]
+  assert.equal(f.kind, 'price_tab_unresolved')
+  // HIGH, because it does not un-price a row — it un-prices a whole MONTH.
+  assert.equal(f.severity, 'high')
+  assert.equal(f.source, 'Delivery prices (Czarina)')
+  assert.equal(f.location, 'August 2026')
+  assert.equal(f.data.looked_for, 'August 2026')
+  assert.deepEqual(f.data.tabs_found, ['Feb. 2026', 'Aug. 2026', 'July 2026'])
+  assert.ok(f.title.includes('August 2026'))
+  // The message must never revive the old lie.
+  assert.ok(!/unavailable/i.test(f.reason), 'must not say "unavailable"')
+})
+
+check('an ambiguous tab is HIGH and lists the candidates it refused to choose between', () => {
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({ kind: 'price_tab_ambiguous', looked_for: 'August 2026', candidates: ['Aug. 2026', 'Aug 2026'] }),
+    ]),
+  )
+  assert.equal(findings[0].severity, 'high')
+  assert.deepEqual(findings[0].data.candidates, ['Aug. 2026', 'Aug 2026'])
+  assert.ok(findings[0].title.includes('refused'))
+})
+
+check('a fuzzy match surfaces BOTH spellings side by side, and says it WAS priced', () => {
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({
+        kind: 'price_fuzzy_match',
+        via: 'fallback',
+        transaction_date: '2026-07-23',
+        supplier: 'Ornales',
+        batch_code: 'JULY-26-BLK9',
+        truck_plate: 'T138003',
+        weight_kg: 19_010,
+        matched_sheet: 'July 2026',
+        matched_row: 45,
+        differences: [{ field: 'truck_plate', ours: 'T138003', theirs: '138003' }],
+        detail: 'Priced from Czarina’s "July 2026" row 45 ... The price WAS applied.',
+      }),
+    ]),
+  )
+  const f = findings[0]
+  assert.equal(f.severity, 'attention')
+  assert.equal(f.location, '2026-07-23 · T138003')
+  assert.equal(f.data.matched_sheet, 'July 2026')
+  assert.equal(f.data.matched_row, 45)
+  // Both values must survive into the panel payload.
+  assert.deepEqual(f.data.differences, [{ field: 'truck_plate', ours: 'T138003', theirs: '138003' }])
+  assert.ok(/priced/i.test(f.title), 'a successful fuzzy match should read as priced')
+})
+
+check('the two REFUSED kinds never read as "priced"', () => {
+  // The wording matters: a refusal leaves the row at 0, and a title claiming otherwise
+  // would be exactly the same class of lie as "Price file unavailable".
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({ kind: 'price_fuzzy_ambiguous', supplier: 'Tag-at', truck_plate: 'ZZZ 0001', collided_on: 'ours' }),
+      priceNote({ kind: 'price_date_drift', supplier: 'Ornales', truck_plate: 'MAV 9202', date_tolerance_days: 122, matched_sheet: 'Aug. 2026' }),
+    ]),
+  )
+  assert.equal(findings.length, 2)
+  for (const f of findings) {
+    assert.equal(f.severity, 'attention')
+    assert.ok(/could not be priced/.test(f.title), `refusal must not read as priced: ${f.title}`)
+  }
+  // The drift refusal states HOW FAR away the only candidate was.
+  assert.ok(findings[1].title.includes('122 days'), findings[1].title)
+  assert.equal(findings[1].data.date_tolerance_days, 122)
+})
+
+check('an unpriced-overdue delivery is named, and escalates at 4 days', () => {
+  const mk = (days: number, id: string): UnpricedOverdue => ({
+    id,
+    transaction_date: '2026-08-01',
+    supplier: 'Ornales',
+    batch_code: 'JULY-26-BLK13',
+    truck_plate: 'MAV 9202',
+    weight_kg: 22_375,
+    sacks: 589,
+    days_pending: days,
+  })
+  const findings = flattenRunFindings(priceRun([], [mk(2, 'id-a'), mk(7, 'id-b')]))
+  assert.equal(findings.length, 2)
+  assert.equal(findings[0].kind, 'unpriced_overdue')
+  assert.equal(findings[0].severity, 'attention') // 2 days — late
+  assert.equal(findings[1].severity, 'high') // 7 days — a broken pipe
+  assert.equal(findings[0].data.delivery_id, 'id-a')
+  assert.ok(findings[1].title.includes('22,375 kg'), findings[1].title)
+  assert.ok(findings[1].title.includes('7 days'))
+})
+
+check('NO price finding ever leaks a ₱ value into the panel or the Claude block', () => {
+  const findings = flattenRunFindings(
+    priceRun(
+      [priceNote({ kind: 'price_out_of_band', supplier: 'Ornales', truck_plate: 'KCA 378', matched_sheet: 'Aug. 2026', matched_row: 10 })],
+      [{ id: 'x', transaction_date: '2026-08-01', supplier: 'Ornales', batch_code: 'B', truck_plate: 'P', weight_kg: 1, sacks: 1, days_pending: 3 }],
+    ),
+  )
+  for (const f of findings) {
+    for (const k of Object.keys(f.data)) {
+      assert.ok(!/cost|price|php|peso/i.test(k), `finding data must not carry a cost key: ${k}`)
+    }
+  }
+  // …and the serializer strips any cost-ish key as a belt-and-braces.
+  const block = serializeFindingsForClaude(findings, { runId: 'r1', runDate: '2026-08-07', status: 'ok' })
+  assert.ok(!/cost_basis|php_per_kg/i.test(block), 'serialized block leaked a cost field')
+})
+
+check('price channels coexist with every other channel (exhaustive fold)', () => {
+  // The fold must not stop at the first channel it finds. Combine the real-run
+  // reconciliation fixture with both price channels.
+  const combined: SyncRunResult = {
+    ...(realRun as object),
+    reports: {
+      ...((realRun as { reports?: object }).reports ?? {}),
+      ...((priceRun(
+        [priceNote({ kind: 'price_tab_unresolved', looked_for: 'August 2026', tabs_found: ['Aug. 2026'] })],
+        [{ id: 'z', transaction_date: '2026-08-01', supplier: 'S', batch_code: 'B', truck_plate: 'P', weight_kg: 100, sacks: 3, days_pending: 5 }],
+      ) as { reports: object }).reports),
+    },
+  } as unknown as SyncRunResult
+
+  const summary = summarizeFindings(flattenRunFindings(combined))
+  // The original 9 are still all there…
+  assert.equal(summary.byKind.single_source_overdue, 3)
+  assert.equal(summary.byKind.block_diff, 4)
+  assert.equal(summary.byKind.unresolved_batch, 1)
+  // …plus the two new price channels.
+  assert.equal(summary.byKind.price_tab_unresolved, 1)
+  assert.equal(summary.byKind.unpriced_overdue, 1)
 })
 
 // ── 4. Empty / manifest-only result → []. ───────────────────────────────────

@@ -23,6 +23,7 @@ import type {
   BatchClose,
   BlockDiff,
   HeldRow,
+  PriceNote,
   ProductionBatchStart,
   ProductionHumanEdit,
   RcOutSource,
@@ -32,6 +33,7 @@ import type {
   StaleStream,
   SyncReportType,
   SyncRunResult,
+  UnpricedOverdue,
   UnresolvedBatch,
 } from '../../app/(app)/sync/types'
 import {
@@ -40,12 +42,14 @@ import {
   collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
+  collectPriceNotes,
   collectProductionBatchStarts,
   collectProductionHumanEdits,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
   collectStaleStreams,
+  collectUnpricedOverdue,
   collectUnresolvedBatches,
 } from './cases-fold'
 
@@ -712,6 +716,169 @@ function fromProductionHumanEdit(e: ProductionHumanEdit): RunFinding {
 }
 
 // ============================================================================
+// Delivery price findings (2026-08-07).
+//
+// THE FAILURE THESE EXIST TO END: for a week the sync's entire vocabulary for a
+// price problem was one progress beat reading "Price file unavailable — proceeding
+// without prices." The file was available; only the worksheet TAB NAME was
+// unrecognized ("Aug. 2026" vs the generated "August 2026"). Because the price file
+// is loaded ONCE before the row loop, that single miss un-priced every August
+// delivery, and because a progress beat does not outlive the run, nothing survived
+// to say so. Nine truckloads sat at cost_basis = 0 and dragged AUGUST-26-BLK1's
+// average cost to ₱11.01 against a real ₱39.99.
+//
+// So: a whole-file/whole-month failure is `high` — it is not a row problem, it is
+// every row in a month at once, and it is the loudest thing a deliveries run can
+// say. NO ₱ ever reaches `data`; `formatData` would strip it anyway, but these
+// builders never put one there in the first place.
+// ============================================================================
+
+/** Plain phrase per price-note kind. */
+const PRICE_KIND_LABEL: Record<string, string> = {
+  price_tab_unresolved: 'Price file has no tab for this month',
+  price_tab_ambiguous: 'Price file has two tabs for the same month',
+  price_file_unreadable: 'Price file could not be read',
+  price_fuzzy_match: 'Priced, but the two sheets spell it differently',
+  price_fuzzy_ambiguous: 'Could not price — more than one possible match',
+  price_date_drift: 'Could not price — the only match is months away',
+  price_out_of_band: 'Priced, but the rate is unlike this supplier',
+}
+
+/** A whole-file/whole-month failure is `high`; everything else needs a look. */
+function priceSeverity(kind: string): FindingSeverity {
+  switch (kind) {
+    case 'price_tab_unresolved':
+    case 'price_tab_ambiguous':
+    case 'price_file_unreadable':
+      return 'high'
+    default:
+      return 'attention'
+  }
+}
+
+// NOTE: there is deliberately no `priceDifferences()` formatter here. The worker's
+// `detail` string ALREADY names both spellings side by side (it is written as
+// operator-facing prose in enrich.ts), and `data.differences` carries the structured
+// pair. Reformatting it here would give the same fact two wordings that could drift.
+
+function fromPriceNote(n: PriceNote): RunFinding {
+  const kind = n.kind || 'price_fuzzy_ambiguous'
+  const label = PRICE_KIND_LABEL[kind] ?? titleCase(kind)
+  const isFileLevel =
+    kind === 'price_tab_unresolved' || kind === 'price_tab_ambiguous' || kind === 'price_file_unreadable'
+
+  // Location: the month for a file-level failure, else the delivery's date + plate.
+  const rowLoc = [str(n.transaction_date), str(n.truck_plate)].filter(Boolean) as string[]
+  const location = isFileLevel ? (str(n.looked_for) ?? 'price file') : rowLoc.length ? rowLoc.join(` ${DOT} `) : '—'
+
+  // Title: a file-level failure names the MONTH (every row in it is affected); a row
+  // note names the truck, because that is what the operator will go and check.
+  let title: string
+  if (kind === 'price_tab_unresolved') {
+    title = `No price tab for ${str(n.looked_for) ?? 'that month'} — every delivery in it is unpriced`
+  } else if (kind === 'price_tab_ambiguous') {
+    title = `Two price tabs both mean ${str(n.looked_for) ?? 'that month'} — refused to guess`
+  } else if (kind === 'price_file_unreadable') {
+    title = 'The price file could not be opened — nothing was priced'
+  } else {
+    const who = [str(n.supplier), str(n.truck_plate)].filter(Boolean).join(' ') || 'a delivery'
+    // Never say "priced" for a kind that refused — `price_fuzzy_ambiguous` and
+    // `price_date_drift` both leave the row at ₱0, and a title claiming otherwise
+    // would be the same lie as "Price file unavailable".
+    if (kind === 'price_fuzzy_ambiguous') {
+      title = `${who}: could not be priced — the match was not unique`
+    } else if (kind === 'price_date_drift') {
+      const away = num(n.date_tolerance_days)
+      title = `${who}: could not be priced — the only matching row is ${away == null ? 'months' : `${away} days`} away`
+    } else if (kind === 'price_out_of_band') {
+      title = `${who}: priced at an unusual rate for this supplier`
+    } else {
+      title = `${who}: priced from a row that is spelled differently`
+    }
+  }
+
+  const data: Record<string, unknown> = {}
+  if (str(n.transaction_date)) data.transaction_date = n.transaction_date
+  if (str(n.supplier)) data.supplier = n.supplier
+  if (str(n.batch_code)) data.batch_code = n.batch_code
+  if (str(n.truck_plate)) data.truck_plate = n.truck_plate
+  if (n.weight_kg != null) data.weight_kg = num(n.weight_kg)
+  if (n.sacks != null) data.sacks = num(n.sacks)
+  if (str(n.source_row)) data.source_row = n.source_row
+  if (str(n.via)) data.matched_via = n.via
+  if (str(n.matched_sheet)) data.matched_sheet = n.matched_sheet
+  if (n.matched_row != null) data.matched_row = num(n.matched_row)
+  if (n.date_tolerance_days != null) data.date_tolerance_days = num(n.date_tolerance_days)
+  if (str(n.looked_for)) data.looked_for = n.looked_for
+  // The two halves of the tab-miss message: what it wanted AND what is actually there.
+  if (n.tabs_found.length) data.tabs_found = n.tabs_found
+  if (n.candidates.length) data.candidates = n.candidates
+  if (str(n.collided_on)) data.collided_on = n.collided_on
+  if (n.differences.length) data.differences = n.differences
+  if (n.collisions.length) data.collisions = n.collisions
+
+  // A stable run-local key. File-level notes key on the month (one per month); row
+  // notes key on the delivery identity + kind, so a row with two distinct problems
+  // yields two rows and a repeat of the same problem does not.
+  const key = isFileLevel
+    ? `price:${kind}:${n.looked_for ?? ''}`
+    : `price:${kind}:${n.transaction_date ?? ''}:${n.truck_plate ?? ''}:${n.batch_code ?? ''}:${n.weight_kg ?? ''}`
+
+  return {
+    key,
+    kind,
+    kindLabel: label,
+    source: 'Delivery prices (Czarina)',
+    title,
+    location,
+    data,
+    // `detail` from the worker is already written as operator-facing prose (it names
+    // the tab it wanted and the tabs it found, or both spellings), so it IS the reason.
+    reason: n.detail || label,
+    severity: priceSeverity(kind),
+  }
+}
+
+/**
+ * A delivery still unpriced more than a day after it happened. Renzo: "prices are not
+ * supposed to lag, and they liquidate daily."
+ *
+ * This is the finding that would have caught the August outage on day two instead of
+ * day seven — it does not care WHY a row is unpriced, only that it still is. Escalates
+ * to `high` at four days pending, the same "at this point it is not late, it is broken"
+ * threshold `fromStaleStream` uses (the overdue floor is 2, so 4 means three days late).
+ */
+function fromUnpricedOverdue(o: UnpricedOverdue): RunFinding {
+  const who = [str(o.supplier), str(o.truck_plate)].filter(Boolean).join(' ') || 'A delivery'
+  const days = o.days_pending === 1 ? '1 day' : `${o.days_pending} days`
+
+  return {
+    key: `unpriced_overdue:${o.id}`,
+    kind: 'unpriced_overdue',
+    kindLabel: 'Delivery still has no price',
+    source: 'Delivery prices (Czarina)',
+    title: `${who}: ${fmtKg(o.weight_kg)} delivered ${days} ago and still unpriced`,
+    location: [str(o.transaction_date), str(o.batch_code)].filter(Boolean).join(` ${DOT} `) || '—',
+    data: {
+      delivery_id: o.id,
+      transaction_date: o.transaction_date,
+      supplier: o.supplier,
+      batch_code: o.batch_code,
+      truck_plate: o.truck_plate,
+      weight_kg: num(o.weight_kg),
+      sacks: num(o.sacks),
+      days_pending: o.days_pending,
+    },
+    reason:
+      `This delivery has been in the database for ${days} with no price. Prices are not ` +
+      `supposed to lag — either it is missing from Czarina's file, or the sync could not ` +
+      `match it. Until a price lands, the batch's average cost is calculated from its ` +
+      `priced deliveries only, so this row is not dragging that figure down.`,
+    severity: o.days_pending >= 4 ? 'high' : 'attention',
+  }
+}
+
+// ============================================================================
 // The public API.
 // ============================================================================
 
@@ -763,7 +930,16 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 10. Production rows the sync refused to overwrite (the human-edit latch).
   for (const e of collectProductionHumanEdits(result)) out.push(fromProductionHumanEdit(e))
 
-  // 11. Streams that have gone quiet (Stage 3e) — the one finding about what did NOT
+  // 11. Delivery-price problems (2026-08-07): a tab that could not be resolved, a fuzzy
+  //     match that was accepted, a match refused as non-unique, a rate unlike the
+  //     supplier's. The file-level ones are `high` — they un-price a whole month at once.
+  for (const n of collectPriceNotes(result)) out.push(fromPriceNote(n))
+
+  // 12. Deliveries still unpriced more than a day on. Independent of WHY, so it catches
+  //     a price outage the price step itself did not notice.
+  for (const o of collectUnpricedOverdue(result)) out.push(fromUnpricedOverdue(o))
+
+  // 13. Streams that have gone quiet (Stage 3e) — the one finding about what did NOT
   //     arrive. Last, because it describes the state the whole run leaves behind.
   for (const s of collectStaleStreams(result)) out.push(fromStaleStream(s))
 
@@ -825,6 +1001,14 @@ const SHORT_KIND: Record<string, string> = {
   production_batch_started: 'new production batch',
   production_human_edited: 'your edit kept',
   stale_stream: 'report overdue',
+  price_tab_unresolved: 'no price tab',
+  price_tab_ambiguous: 'duplicate price tab',
+  price_file_unreadable: 'price file unreadable',
+  price_fuzzy_match: 'price spelling differs',
+  price_fuzzy_ambiguous: 'price match not unique',
+  price_date_drift: 'price match too old',
+  price_out_of_band: 'unusual rate',
+  unpriced_overdue: 'no price yet',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -840,6 +1024,16 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   production_batch_started: 'New production batch opened',
   production_human_edited: 'Row you edited — the report disagrees',
   stale_stream: 'Report stream has gone quiet',
+  // Delivery price kinds (2026-08-07). Kept in sync with PRICE_KIND_LABEL above — that
+  // table drives the live findings, this one covers a durable case row read back later.
+  price_tab_unresolved: 'Price file has no tab for this month',
+  price_tab_ambiguous: 'Price file has two tabs for the same month',
+  price_file_unreadable: 'Price file could not be read',
+  price_fuzzy_match: 'Priced, but the two sheets spell it differently',
+  price_fuzzy_ambiguous: 'Could not price — more than one possible match',
+  price_date_drift: 'Could not price — the only match is months away',
+  price_out_of_band: 'Priced, but the rate is unlike this supplier',
+  unpriced_overdue: 'Delivery still has no price',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

@@ -266,6 +266,86 @@ export interface ProductionHumanEdit {
   outcome: string
 }
 
+/**
+ * One thing the DELIVERY PRICE step wants a human to see (2026-08-07).
+ *
+ * WHY THIS EXISTS: the price step used to have exactly one way of speaking — a bare
+ * `catch` that emitted "Price file unavailable — proceeding without prices." On
+ * 2026-08-07 that beat was found to have un-priced EVERY August delivery for a week
+ * (the worker generated Czarina's tab name as "August 2026"; her tab is "Aug. 2026",
+ * the exact-match lookup threw, and the whole-file load is done ONCE before the row
+ * loop). Nine truckloads carried cost_basis = 0 and dragged AUGUST-26-BLK1's average
+ * cost to ₱11.01 against a real ₱39.99. Silence is what cost those nine truckloads,
+ * so every price outcome now has a durable, distinguishable voice here.
+ *
+ * NEVER CARRIES A ₱/COST VALUE, deliberately — the run-findings channel is not
+ * price-gated, so a note identifies the ROW and describes the problem in words while
+ * the number stays in RC IN behind `canViewPrices()`. If a future note gains a price
+ * field it must be dropped in `normalizeApply`, not passed through.
+ */
+export interface PriceNote {
+  /**
+   * `price_tab_unresolved` / `price_tab_ambiguous` / `price_file_unreadable` — the file
+   * or one month could not be used at all (the class that silently un-priced August).
+   * `price_fuzzy_match` — priced, but the two sources spell the plate/supplier
+   * differently. `price_fuzzy_ambiguous` — REFUSED: the fallback key hit more than one
+   * row, or the one row it hit disagrees about both plate and supplier.
+   * `price_date_drift` — REFUSED: her file has this exact supplier+plate+weight, but
+   * months away, so it is a different trip by the same truck (the exact key carries no
+   * date because she records the payment date; the bound is the Python's 7 days).
+   * `price_out_of_band` — priced, but the number is unlike this supplier's recent range.
+   *
+   * The two REFUSED kinds leave the row at ₱0 — never word them as "priced".
+   */
+  kind: string
+  /** Plain-English specifics, already operator-facing. */
+  detail: string
+  transaction_date: string | null
+  supplier: string | null
+  batch_code: string | null
+  truck_plate: string | null
+  weight_kg: number | null
+  sacks: number | null
+  source_row: string | null
+  /** `exact` | `alias` | `fallback` — which rung of the match ladder produced the price. */
+  via: string | null
+  matched_sheet: string | null
+  matched_row: number | null
+  date_tolerance_days: number | null
+  /** The month the resolver wanted, e.g. "August 2026". */
+  looked_for: string | null
+  /** Every worksheet tab the price file actually has — the other half of the message. */
+  tabs_found: string[]
+  /** Tabs that all normalize to the same month (the ambiguous case). */
+  candidates: string[]
+  /** `czarina` | `ours` — whose side the fallback key collided on. */
+  collided_on: string | null
+  /** A spelling disagreement with BOTH values, so the operator can confirm at a glance. */
+  differences: Array<{ field: string; ours: string; theirs: string }>
+  collisions: Array<{ sheet: string | null; row: string; date: string | null }>
+}
+
+/**
+ * One delivery still carrying the L-008 unpriced placeholder more than a day after it
+ * happened (2026-08-07). Renzo: "prices are not supposed to lag, and they liquidate
+ * daily" — so an unpriced row is named every run until someone fixes it.
+ *
+ * Projected straight off `public.view_digest_unpriced_deliveries`, which owns the ONE
+ * definition of "unpriced" and "overdue"; nothing re-derives it. No ₱ field: every row
+ * here has cost_basis = 0 by construction.
+ */
+export interface UnpricedOverdue {
+  id: string
+  transaction_date: string
+  supplier: string | null
+  batch_code: string | null
+  truck_plate: string | null
+  weight_kg: number | null
+  sacks: number | null
+  /** operational_date − transaction_date, in days. Always ≥ 2 for an overdue row. */
+  days_pending: number
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -289,6 +369,15 @@ export interface ApplyResult {
    *  optionality contract as `auto_created_batches` — read it as
    *  `apply?.production_human_edits ?? []` (see `collectProductionHumanEdits`). */
   production_human_edits?: ProductionHumanEdit[]
+  /** Delivery-price problems this run saw — a tab it could not resolve, a fuzzy match it
+   *  accepted, a price outside the supplier's usual range. Same optionality contract as
+   *  `auto_created_batches` — read it as `apply?.price_notes ?? []` (see
+   *  `collectPriceNotes`). Only the `deliveries` report ever fills it. */
+  price_notes?: PriceNote[]
+  /** Deliveries still unpriced more than a day after they happened. Same optionality
+   *  contract — read it as `apply?.unpriced_overdue ?? []` (see
+   *  `collectUnpricedOverdue`). Only the `deliveries` report ever fills it. */
+  unpriced_overdue?: UnpricedOverdue[]
 }
 
 // ============================================================
@@ -324,7 +413,14 @@ export interface SyncProgressEvent {
   label: string
   /** Optional specifics appended muted after the label. */
   detail?: string
-  level: 'info' | 'warn'
+  /**
+   * `error` added 2026-08-07 — the worker had no level louder than `warn`, so a beat
+   * that had silently un-priced a whole month of deliveries looked identical to a
+   * routine retry. `sync_run_events.level` is free text (no CHECK), so this needed no
+   * migration; `projectEvent` maps it through and the card's `warn` boolean is set by
+   * BOTH non-info levels, so an error can never render quieter than a warn.
+   */
+  level: 'info' | 'warn' | 'error'
 }
 
 /**

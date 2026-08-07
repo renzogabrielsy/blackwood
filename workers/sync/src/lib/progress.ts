@@ -55,7 +55,16 @@ export type ProgressStage =
   | "apply"
   | "reconcile"
   | "finalize";
-export type ProgressLevel = "info" | "warn";
+/**
+ * `error` was added 2026-08-07. Until then the loudest thing a run could say was
+ * `warn`, which is why "Price file unavailable — proceeding without prices" (a beat
+ * that was actively wrong AND had un-priced an entire month) looked exactly like a
+ * routine retry. `sync_run_events.level` is free text with no CHECK constraint, so no
+ * migration is needed; the frontend projection (`lib/sync/reducer.ts::projectEvent`)
+ * was widened in the same changeset so an `error` beat still tints the card at least
+ * as loudly as a `warn` and is never silently downgraded to `info`.
+ */
+export type ProgressLevel = "info" | "warn" | "error";
 
 const STAGES: ReadonlySet<string> = new Set<ProgressStage>([
   "fetch",
@@ -127,7 +136,8 @@ export function makeEmitter(
   return async (stage, label, pct, detail, level = "info") => {
     try {
       const st: ProgressStage = STAGES.has(stage) ? stage : "classify";
-      const lvl: ProgressLevel = level === "warn" ? "warn" : "info";
+      const lvl: ProgressLevel =
+        level === "error" ? "error" : level === "warn" ? "warn" : "info";
       const p = clampMonotonic(runId, reportType, pct);
       await db.insertProgressEvent({
         run_id: runId,
