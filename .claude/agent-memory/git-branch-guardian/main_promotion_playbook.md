@@ -474,6 +474,47 @@ Gates clean again (merge-tree bare OID `df7ffe8` exit 0, merge-base tree diff em
 `baa269c` still an ancestor, `git ls-remote` confirming both refs): **29 consecutive clean
 promotions.** The pending `chore(memory)` commit (`83e53cf`) rode along for the eleventh time.
 
+### Promotion 42 (2026-08-07, `fd101ae` → `0656e69`) — THIRTEENTH consecutive clean `git add .`
+
+An **observability** promotion, the biggest single-commit changeset on this branch: 23 files /
++3506/−5 adding an Excel report generated after every sync run (11 sheets, private `sync-reports`
+Storage bucket, download by short-lived signed URL). Third same-day promotion (40, 41, 42).
+
+- **A brief that names 2 untracked dirs may have 2 more untracked SIBLINGS that clearly belong.**
+  Beyond the enumerated `src/reports/excel/{4 files}`, status showed `?? workers/sync/scripts/gen-run-report.ts`
+  and `?? workers/sync/test/reports/excel/workbook.test.ts`. Both are the SAME work line (the brief's
+  own "720 tests pass" and "workbook confirmed to contain all 11 sheets" claims are literally produced
+  by them), so they fold into the one commit — unlike the [[staging-exclusions]] case where the strays
+  were a *different* work line and earned their own commit. The test is "does this file produce the
+  brief's evidence", not "was it listed".
+- **A "small hand correction" in the brief can be worth verifying line-by-line.** The wet-sack date
+  fix was a single character (`2026-04-03` → `2025-04-03`) in one CLAUDE.md bullet + one ledger line —
+  and it **resolves the exact discrepancy promotion 41 flagged and refused to guess at**. `git diff -U0`
+  + `grep -E '^[-+]- \*\*`<anchor>`'` on the replaced bullet proved nothing else moved inside it. Not
+  splittable: CLAUDE.md carries both concerns, so the file stays whole per the multi-concern rule and
+  the body names the correction.
+- **`grep -nE '^[+-][^+-]'` on a staged diff SILENTLY DROPS removed markdown bullets** — a deleted
+  `- **foo**` line starts with `--` and is excluded by that pattern. Cost a false "no removals in
+  CLAUDE.md" reading against a numstat that said `16 1`. When numstat and your changed-line grep
+  disagree, the grep is wrong: fall back to `git diff --staged -U1 | grep -nE '^(@@|-)'`.
+- Gate subset (worker touched ⇒ worker gates are the point): root `tsc --noEmit` 0 / empty log,
+  worker `tsc -p workers/sync/tsconfig.json` 0, `npm test` **720 passed / 48 files** (new baseline,
+  was 708/47), `npm run parity` clean 12 cases. All four matched the brief's numbers; 8-min root
+  build taken from the brief per promotion 30's rule.
+- **cwd quirk confirmed:** this session's Bash cwd was already `workers/sync`, so a bare `npm test`
+  ran the WORKER suite. Read the vitest header (`RUN v2.1.9 /Users/renzosy/blackwood/workers/sync`)
+  to confirm which suite ran instead of assuming the repo root.
+- Secret scan: 2 hits in a 3.5k-line diff, both the literal role name in `grant … to service_role`
+  lines of the migration. Zero machine-local paths — the promotion-41 flag
+  (`test/reports/deliveries-price-enrichment.test.ts` hardcoding `/Users/renzosy/…`) did NOT recur in
+  the new test file.
+
+Gates clean again (merge-tree bare OID `b1ee329` exit 0 re-run AFTER committing, merge-base tree diff
+empty, merge exit 0, `git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>` empty,
+old main tip `a549afd` still an ancestor, `git ls-remote` confirming both refs): **30 consecutive
+clean promotions.** The pending `chore(memory)` commit (`7927b16`) rode along for the twelfth time.
+**Re-run `merge-tree` after the commit, not just before** — the pre-commit run gates the wrong tip.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
