@@ -758,6 +758,36 @@ export interface StaleStream {
 }
 
 /**
+ * The Excel sync report the worker generates at the end of every run (app-side MIRROR of
+ * the worker's `reports/excel/generate.ts::ReportArtifact`), 2026-08-07.
+ *
+ * Present on EVERY terminal run, successful or not — the pointer is useful provenance and
+ * lets the panel link to the download without a second query. It is a FINDING only when
+ * `ok === false`: a reporting tool that can break the thing it reports on is worse than no
+ * tool, so a generation failure never fails the run, it just says so out loud.
+ *
+ * Never a ₱/cost field. `contains_prices` is a claim ABOUT the workbook (see the
+ * `sync_run_reports.contains_prices` column comment), not a price.
+ */
+export interface ReportArtifact {
+  ok: boolean
+  /** Storage bucket + object path, absent exactly when ok is false. */
+  bucket?: string | null
+  path?: string | null
+  filename?: string | null
+  bytes?: number | null
+  /** Sheet name -> data row count, so the panel can say what is inside. */
+  sheet_counts?: Record<string, number>
+  finding_count?: number
+  warn_count?: number
+  error_count?: number
+  /** TRUE = the workbook carries ₱ data and the download is price-gated. */
+  contains_prices?: boolean
+  /** Why generation failed, in plain words. Only set when ok is false. */
+  error?: string | null
+}
+
+/**
  * The top-level `result.reconciliation` channel. All members are OPTIONAL: a run may carry
  * the rc_out same-fact reconciliation, the RB blocking cross-check, the gsheet batch
  * close-scan, the production-plan conflicts, the freshness watch, any combination, or (on a
@@ -776,6 +806,11 @@ export interface ReconciliationChannel {
    * identical to a quiet day, which is how RC OUT went 5 days stale in July 2026.
    */
   stale_streams?: StaleStream[]
+  /**
+   * The Excel report generated for this run (2026-08-07). A pointer, always written; a
+   * FINDING only when `ok` is false.
+   */
+  report_artifact?: ReportArtifact
 }
 
 // ============================================================

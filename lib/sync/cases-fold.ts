@@ -17,6 +17,7 @@ import type {
   PriceNote,
   ProductionBatchStart,
   ProductionHumanEdit,
+  ReportArtifact,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
@@ -227,6 +228,21 @@ export function collectScheduleConflicts(result: SyncRunResult): ScheduleConflic
  */
 export function collectStaleStreams(result: SyncRunResult): StaleStream[] {
   return result.reconciliation?.stale_streams ?? []
+}
+
+/**
+ * Read the Excel-report artifact pointer for this run
+ * (`result.reconciliation.report_artifact`, 2026-08-07). Absent on every run that predates
+ * the report generator, and on a run whose result was never assembled (a crash before
+ * finalize). Guarded + pure.
+ *
+ * NOTE this returns the pointer whether generation SUCCEEDED or FAILED — the caller decides
+ * what to do with it. `flattenRunFindings` raises a finding only for a failure; the
+ * successful pointer exists so the panel can link to the download without a second query.
+ */
+export function collectReportArtifact(result: SyncRunResult): ReportArtifact | null {
+  const a = result.reconciliation?.report_artifact
+  return a && typeof a === 'object' ? a : null
 }
 
 /**

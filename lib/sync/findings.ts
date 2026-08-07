@@ -27,6 +27,7 @@ import type {
   ProductionBatchStart,
   ProductionHumanEdit,
   RcOutSource,
+  ReportArtifact,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
@@ -45,6 +46,7 @@ import {
   collectPriceNotes,
   collectProductionBatchStarts,
   collectProductionHumanEdits,
+  collectReportArtifact,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
@@ -55,6 +57,29 @@ import {
 
 /** How loud a finding is — drives the panel's ordering + tint. */
 export type FindingSeverity = 'info' | 'attention' | 'high'
+
+/**
+ * Which SECTION of the sync a finding belongs to — the Excel report's sheet key
+ * (2026-08-07) and, in future, a panel grouping key.
+ *
+ * Deliberately the EXISTING `report_type` vocabulary plus the two things that are not a
+ * report: `blocking` (the RB cross-check is derived from RC IN − RC OUT and has no report
+ * of its own) and `run` (the orchestration itself). No new taxonomy — a section is just
+ * "which of the sync's known lanes raised this".
+ *
+ * Set by the builders below (which each already know their lane) rather than derived by a
+ * consumer parsing `key` or matching on the prose in `source` — the stale-stream `source`
+ * is a dynamic stream label, so prose matching would silently mis-file it.
+ */
+export type FindingSection =
+  | 'gsheet'
+  | 'deliveries'
+  | 'rc_out'
+  | 'production'
+  | 'flecon'
+  | 'rc_movement'
+  | 'blocking'
+  | 'run'
 
 /**
  * ONE flagged thing from a run, in plain, operator-facing language. Everything the
@@ -79,6 +104,8 @@ export interface RunFinding {
   reason: string
   /** How much attention it needs. */
   severity: FindingSeverity
+  /** Which lane of the sync raised it — the Excel report's sheet key. */
+  section: FindingSection
 }
 
 // ============================================================================
@@ -230,6 +257,7 @@ function fromHeld(reportType: SyncReportType, held: HeldRow): RunFinding {
     data,
     reason: held.reason || held.detail || heldKindLabel(kind),
     severity: heldSeverity(kind),
+    section: reportType,
   }
 }
 
@@ -269,6 +297,7 @@ function fromSourceDiff(diff: SourceDiff): RunFinding {
     },
     reason: `${srcs} — ${rec}.`,
     severity: 'attention',
+    section: 'rc_out',
   }
 }
 
@@ -298,6 +327,7 @@ function fromOverdue(o: SingleSourceOverdue): RunFinding {
     },
     reason: `${srcLabel} states ${value}; no second source after ${o.ageDays} day(s).`,
     severity: 'info',
+    section: 'rc_out',
   }
 }
 
@@ -327,6 +357,7 @@ function fromAttributionDiff(a: AttributionDiff): RunFinding {
     },
     reason: `Both sources report ${kg} on ${a.transaction_date}, but disagree on which batch/block it came from — proposed says ${proposedName} @ ${a.proposed.block_loc ?? '(feed)'}, the sheet says ${gsheetName} @ ${a.gsheet.block_loc ?? '(feed)'}.`,
     severity: 'attention',
+    section: 'rc_out',
   }
 }
 
@@ -355,6 +386,7 @@ function fromUnresolvedBatch(u: UnresolvedBatch): RunFinding {
     },
     reason: `${fmtKg(u.weight_kg)} on ${u.transaction_date} (from ${srcs}) — ${kindOfMiss}. Map or create the batch.`,
     severity: 'attention',
+    section: 'rc_out',
   }
 }
 
@@ -388,6 +420,7 @@ function fromAutoCreatedBatch(reportType: SyncReportType, note: AutoCreatedBatch
       `The batch code was pattern-valid (a real month + year + block/feed number) but new to ` +
       `the database, so the sync created it and wrote the row automatically — nothing to do here.`,
     severity: 'info',
+    section: reportType,
   }
 }
 
@@ -426,6 +459,7 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
     },
     reason: d.detail,
     severity: isGrand ? 'high' : 'attention',
+    section: 'blocking',
   }
 }
 
@@ -456,6 +490,7 @@ function fromBatchClose(bc: BatchClose): RunFinding {
         `The Google Sheet's RC OUT tab marked this batch closed, so the sync flipped its status ` +
         `to CLOSED — a status-only change, nothing to do here.`,
       severity: 'info',
+      section: 'gsheet',
     }
   }
 
@@ -476,6 +511,7 @@ function fromBatchClose(bc: BatchClose): RunFinding {
       `The Sheet asked to close this batch, but its code doesn't match any batch in the ` +
       `database — nothing was closed. Check the batch code on that row.`,
     severity: 'attention',
+    section: 'gsheet',
   }
 }
 
@@ -535,6 +571,7 @@ function fromScheduleConflict(c: ScheduleConflict): RunFinding {
       `You edited this day in the app, so the sync did NOT overwrite it. Joseph's latest ` +
       `schedule proposes ${fieldDeltas(c)}. Nothing changed — pick which one stands.`,
     severity: 'attention',
+    section: 'production',
   }
 }
 
@@ -552,6 +589,29 @@ function fromScheduleConflict(c: ScheduleConflict): RunFinding {
  * inbox. `attention` at one day, escalating to `high` once a stream has missed three,
  * by which point it is not a late report, it is a broken pipe.
  */
+/**
+ * Which section a quiet STREAM belongs to. The freshness watch's stream keys
+ * (`view_digest_stream_registry`) are not report types: `electricity` and `trucks` are
+ * both filed by the production report, so they belong on the Production sheet. An
+ * unrecognized stream lands on `run` rather than being silently dropped.
+ */
+function staleStreamSection(stream: string): FindingSection {
+  switch (stream) {
+    case 'deliveries':
+      return 'deliveries'
+    case 'rc_out':
+      return 'rc_out'
+    case 'production':
+    case 'electricity':
+    case 'trucks':
+      return 'production'
+    case 'flecon':
+      return 'flecon'
+    default:
+      return 'run'
+  }
+}
+
 function fromStaleStream(s: StaleStream): RunFinding {
   const days = s.missed_working_days === 1 ? '1 working day' : `${s.missed_working_days} working days`
   const last = s.through_date
@@ -576,6 +636,7 @@ function fromStaleStream(s: StaleStream): RunFinding {
       `Rest days and reports that aren't due yet are already excluded, so this is a real gap. ` +
       `Nothing is wrong with the sync — the report has not arrived. Chase the sender.`,
     severity: s.missed_working_days >= 3 ? 'high' : 'attention',
+    section: staleStreamSection(s.stream),
   }
 }
 
@@ -612,6 +673,7 @@ function fromProductionBatchStart(s: ProductionBatchStart): RunFinding {
       `written anywhere in the report — the sync named it "${s.new_batch}" because that is ` +
       `${derivedHow}. Confirm the name is right.`,
     severity: 'attention',
+    section: 'production',
   }
 }
 
@@ -712,6 +774,7 @@ function fromProductionHumanEdit(e: ProductionHumanEdit): RunFinding {
       `says ${productionDeltas(e)}. Nothing changed — either correct the report, or hand ` +
       `this row back to the sync if the report is right.`,
     severity: 'attention',
+    section: 'production',
   }
 }
 
@@ -836,6 +899,7 @@ function fromPriceNote(n: PriceNote): RunFinding {
     // the tab it wanted and the tabs it found, or both spellings), so it IS the reason.
     reason: n.detail || label,
     severity: priceSeverity(kind),
+    section: 'deliveries',
   }
 }
 
@@ -875,6 +939,41 @@ function fromUnpricedOverdue(o: UnpricedOverdue): RunFinding {
       `match it. Until a price lands, the batch's average cost is calculated from its ` +
       `priced deliveries only, so this row is not dragging that figure down.`,
     severity: o.days_pending >= 4 ? 'high' : 'attention',
+    section: 'deliveries',
+  }
+}
+
+/**
+ * The Excel sync report could not be generated (2026-08-07).
+ *
+ * The report is pure observability — a reporting tool that can break the thing it reports
+ * on is worse than no tool — so a generation failure never fails the run and never blocks a
+ * write. But it must not be silent either, because the whole point of the workbook is that
+ * a warning outlives the run: a report that quietly stopped being written is exactly the
+ * failure mode the price channel was built to end.
+ *
+ * `attention`, not `high`: nothing operational is wrong. The data is in the database and
+ * every finding is still on this list — only the downloadable copy of it is missing.
+ */
+function fromReportArtifactFailure(a: ReportArtifact): RunFinding {
+  return {
+    key: 'report_generation_failed',
+    kind: 'report_generation_failed',
+    kindLabel: 'Excel report could not be generated',
+    source: 'Sync report',
+    title: 'This run finished, but its Excel report could not be written',
+    location: 'end of run',
+    data: {
+      error: a.error ?? null,
+      bucket: a.bucket ?? null,
+      path: a.path ?? null,
+    },
+    reason:
+      `The sync itself completed normally and everything above is exactly what it found — ` +
+      `only the downloadable workbook failed to generate, so there is nothing to download ` +
+      `for this run. ${a.error ? `The failure was: ${a.error}` : 'No detail was captured.'}`,
+    severity: 'attention',
+    section: 'run',
   }
 }
 
@@ -943,6 +1042,12 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //     arrive. Last, because it describes the state the whole run leaves behind.
   for (const s of collectStaleStreams(result)) out.push(fromStaleStream(s))
 
+  // 14. The Excel report failed to generate. ABSOLUTELY LAST and ONLY on failure — the
+  //     successful pointer is provenance, not a flag, and a note on every clean run would
+  //     be exactly the noise that trains an operator to stop reading this list.
+  const artifact = collectReportArtifact(result)
+  if (artifact && artifact.ok === false) out.push(fromReportArtifactFailure(artifact))
+
   return out
 }
 
@@ -1009,6 +1114,7 @@ const SHORT_KIND: Record<string, string> = {
   price_date_drift: 'price match too old',
   price_out_of_band: 'unusual rate',
   unpriced_overdue: 'no price yet',
+  report_generation_failed: 'no excel report',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -1034,6 +1140,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   price_date_drift: 'Could not price — the only match is months away',
   price_out_of_band: 'Priced, but the rate is unlike this supplier',
   unpriced_overdue: 'Delivery still has no price',
+  report_generation_failed: 'Excel report could not be generated',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */
@@ -1045,9 +1152,26 @@ function findingKindLabel(kind: string): string {
 const COST_KEY_RE = /cost|price|php|peso/i
 
 /**
+ * Is this object key a ₱/cost field? The ONE definition, exported so every downstream
+ * emitter (the Excel report's cell writer, 2026-08-07) enforces the same rule instead of
+ * writing a second regex that can drift from this one.
+ *
+ * Deliberately broad and name-based: it will refuse a harmless key that merely *sounds*
+ * like money, which is the correct direction to be wrong in.
+ */
+export function isCostKey(key: string): boolean {
+  return COST_KEY_RE.test(key)
+}
+
+/**
  * Flatten a `data` / raw-row object into compact `key=value; key=value` text. Skips
  * empty values and any cost-ish key; nested values are compact-JSON'd so both sides of a
  * diff / the candidate list survive intact.
+ *
+ * Exported as `formatFindingData` (below) — the Excel report's "Details" column and its
+ * held-case "Row data" column both need exactly this flatten-and-strip, and a raw
+ * `sync_held_cases.row` for a delivery genuinely does carry `cost_basis`, so the strip
+ * here is load-bearing rather than decorative.
  */
 function formatData(data: Record<string, unknown>): string {
   const parts: string[] = []
@@ -1059,6 +1183,9 @@ function formatData(data: Record<string, unknown>): string {
   }
   return parts.join('; ')
 }
+
+/** Public alias for the cost-stripping flattener — see `formatData`'s doc above. */
+export const formatFindingData = formatData
 
 /** "4 block · 3 overdue · 1 unknown batch" — loudest kind first, then kind name. */
 function breakdownText(

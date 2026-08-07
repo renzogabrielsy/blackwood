@@ -419,6 +419,38 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
       `workers/sync/test/workflows/normalizeReport.test.ts`; app side
       `scripts/verify-sync-reducer.ts` (drives `lib/sync/reducer.ts` with the emitted shape).
 
+- `reports.ts` — the **DOWNLOAD side of the Excel sync report** (2026-08-07). Read-only; it
+  generates nothing (the worker does that at the end of every run). All three actions call
+  `requirePrivileged()` first, then use `createAdminClient()`:
+  - **`getSyncRunReportUrl(runId)`** → `{ url, filename, bytes, expiresInSeconds }`. Looks up
+    the run's artifacts newest-first and picks the newest **SUCCESSFUL** one (a failed
+    regeneration must not take away a file that is still sitting in Storage and still valid),
+    then mints a **60-second signed URL** with `?download=<filename>` so the browser saves it
+    under a human name. Refuses, with a message written to be shown verbatim, when: no
+    artifact exists (every run before 2026-08-07), generation had failed, or
+    `contains_prices !== false` and `canViewPrices()` is false. **THE PESO GATE** — see below.
+  - **`getRunsWithReports(runIds[])`** → the subset that has a downloadable report. One
+    `IN (...)` query, called once by `cases/page.tsx` so a run header only shows a download
+    button when there is a file behind it.
+  - **`listSyncRunReports(limit)`** → the last N artifacts from `view_sync_run_reports`
+    (`is_latest` only), newest first. The history list; nothing renders it yet.
+
+  **THE PESO GATE, stated once.** A stored file cannot be nulled at read time the way a
+  server-action payload can, so the gate is enforced against a MEASURED fact:
+  `sync_run_reports.contains_prices`, which **DEFAULTS TRUE (fail-closed)** and which the
+  generator sets to `false` only after `auditPriceFree()` re-read every string it wrote and
+  found neither a ₱ glyph nor a cost-ish `key=value` token. Today every report is price-free
+  by construction — the finding vocabulary carries no ₱ anywhere on purpose, and the one raw
+  input that can (`sync_held_cases.row`, which for a delivery holds `cost_basis`) is emitted
+  only through `formatFindingData`, which strips it. So **the answer to "peso-free
+  regenerated file, or no download at all?" is: no download at all, and that branch is
+  unreachable today** — nobody is gated out of a file with no ₱ in it, and there is no second
+  generating code path to keep in sync. Measured on the real served file: `cost_basis` 0
+  occurrences, `₱` 0 occurrences (the only hits for "cost"/"peso" are the Summary legend
+  saying the report has none). Also note `requirePrivileged()` (Owner/Admin/Dev) refuses
+  Production before the ₱ question is asked, so the ₱ branch is defence-in-depth for the day
+  `PRIVILEGED_ROLES` widens.
+
 ### Client (`components/sync/`)
 - `SyncLauncher.tsx` — the live entry point. Compact zinc "Run Sync" button in the
   digest header band, privileged-only (the trigger is `h-11` ≥44px on phones,
@@ -616,6 +648,22 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   verdicts are waiting on the review page (P4). Mount-time attach (with the staleness guard) + poll
   fallback as above. Returns `{ state, run, stop, adjudicate }`.
 
+### Excel report download button (`components/sync/SyncReportButton.tsx`)
+One client component, two mounts, zero duplicated logic:
+- **`variant="panel"`** — a full-width outline button in `SyncPanelBody`'s footer, shown only
+  when the finished run's own result carries a successful artifact pointer
+  (`collectReportArtifact(state.result)`). **No extra query** — that pointer is exactly why
+  the worker attaches it on success as well as failure.
+- **`variant="inline"`** — a small "Excel" chip in each run header of
+  `components/sync/cases/RunGroupedList.tsx`, rendered only for runs in `runsWithReports`
+  (resolved once by `cases/page.tsx` via `getRunsWithReports`, threaded through
+  `CasesClient`). The `NO_RUN_BUCKET` header never gets one — it is not a run.
+
+On click it calls `getSyncRunReportUrl`, then clicks a synthetic `<a href download>`; because
+the signed URL sets `Content-Disposition: attachment`, the file saves without navigating away
+(no popup for a blocker to swallow). **Failures go through `errorToast()`** — persistent, with
+a Copy button — never sonner's `toast.error`.
+
 ### Pure reducer (`lib/sync/reducer.ts`)
 The load-bearing, framework-free transformations that turn raw Realtime rows into
 card state — factored OUT of the hook so they can be unit-driven without a browser:
@@ -806,6 +854,108 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   duplicate branch now rules `needs-human` (delete a row), never `skip`; skip stays for the
   no-duplicate case. Full detail in `lib/investigator/CONTEXT.md` → "P6".
 
+## Excel sync report
+
+Renzo's ask, verbatim: *"After a sync happens we should have the ability to have it generate a
+report for us in excel form. All the loud things you said (warnings but proceeding to enrich
+etc) should be reported in the excel sheet for an easier way for me to digest and track."*
+Storage: *"automatic and stored. Just let me click a button to download when i choose to."*
+
+**Where the code lives (all in the worker — `exceljs` is a worker dependency, not a root one):**
+
+| File | Role |
+|---|---|
+| `workers/sync/src/reports/excel/findingsBridge.ts` | THE ONE worker→app import. Re-exports `flattenRunFindings` / `formatFindingData` / `isCostKey` from `lib/sync/findings.ts`. |
+| `workers/sync/src/reports/excel/workbook.ts` | PURE builder: `(input) → { buffer, sheetCounts, findingCount, warnCount, errorCount, containsPrices }`. No DB, no network, no fs. |
+| `workers/sync/src/reports/excel/generate.ts` | IMPURE: 3 scoped reads → build → Storage upload → `sync_run_reports` insert. **Never throws.** |
+| `workers/sync/src/reports/excel/artifact.ts` | The `ReportArtifact` pointer type, alone so `reconcile/rcOutStage.ts` can reference it without pulling exceljs in. |
+| `workers/sync/scripts/gen-run-report.ts` | Generate for any historical run: `--list`, `--out <path>`, `--persist`, `--fail`. |
+| `workers/sync/test/reports/excel/workbook.test.ts` | 12 tests: clean-run completeness, the ₱ strip, section filing, both-values columns. |
+
+**Why the worker imports app code.** The finding list has ONE definition and the project rule
+forbids a second (`reuse the existing finding vocabulary; do not introduce a parallel
+taxonomy`). A worker-local re-implementation would agree on the day it was written and drift
+the first time a channel was added to only one of them. `lib/sync/findings.ts`,
+`lib/sync/cases-fold.ts` and `app/(app)/sync/types.ts` are provably portable — no React, no
+`@/` alias, no `next/*`, no `node:crypto`, and `types.ts` has **zero imports**. The forbidden
+direction is app→worker (which is why `types.ts` hand-mirrors the worker's shapes); this is the
+other way and it goes through one file, so reversing it is one import to move.
+`workers/sync/tsconfig.json` therefore drops `rootDir` (unused — `npm run build` is esbuild and
+`npm run typecheck` is `tsc --noEmit`). Verified: the app modules bundle into `dist/index.js`.
+
+**`RunFinding.section`** (new field, `lib/sync/findings.ts`): the existing `report_type`
+vocabulary plus `blocking` and `run`. Set by each builder — which already knows its lane — so
+no consumer parses `key` or matches on the prose in `source` (the stale-stream `source` is a
+dynamic stream label and prose matching would silently mis-file it). `staleStreamSection()`
+maps `electricity`/`trucks` onto `production`, because that is the report that files them.
+
+**The 11 sheets, always all present:**
+
+1. **`Summary`** — the whole run on one screen: identity + timing + duration + outcome + mode;
+   a **Verdict** line ("YES — 3 thing(s) are loud" / "clean run. Nothing was flagged
+   anywhere."); HIGH / ATTENTION / info counts; warn + error beat counts; cases awaiting a
+   decision; a **By section** table (Inserted / Updated / Dates replaced / Held-refused /
+   Warnings / Errors / Flagged / Status); **Headline problems** (every HIGH + ATTENTION, capped
+   at 25 with a "+ N more" line); a **How to read this** legend; and the generator version.
+2–9. **One per section** — `Deliveries`, `RC OUT`, `Google Sheet`, `Blocking`, `RC Movement`,
+   `Production`, `FLECON`, `Run`. Uniform 13 columns: `Severity` · `What` · `Source` · `Date` ·
+   `Where` · `Batch` · `Weight (kg)` · `Days` · **`Side A`** · **`Side B`** · `Headline` ·
+   `Why` · `Details`.
+10. **`Awaiting Review`** — the `sync_held_cases` this run raised or re-raised
+   (`last_run_id = runId`), with status, occurrence count, first/last seen, whether a known
+   ruling exists, and the cost-stripped row data. Read from the TABLE, not the result, because
+   a case's whole point is that it outlives the run that raised it.
+11. **`Run Log`** — **every** progress beat, `Level` filterable. This is where a warning that
+   never became a finding lives, and it is exactly where the August price outage hid: one
+   `warn` beat reading "Price file unavailable — proceeding without prices" that died with the
+   run while the file was in fact sitting there with an unrecognized tab name.
+
+**`Side A` / `Side B` — both values, side by side.** The column pair Renzo asked for
+("every fuzzy match, with BOTH values side by side"), generalized to every two-sided finding.
+Each cell is `"<who>: <what>"`, so nobody has to remember which column is which:
+
+| Finding | Side A | Side B |
+|---|---|---|
+| `price_fuzzy_match` | `ours: truck_plate T138003; supplier PAQUIBOT/COMPRA` | `Czarina: truck_plate 138003; supplier PAQUIBOT` |
+| `price_tab_unresolved` | `looked for: August 2026` | `file has: Aug. 2026, Jul. 2026, March25` |
+| `source_diff` | `proposed: weight_kg 6,497` | `gsheet: weight_kg 6,000` |
+| `block_diff` | `sheet: 10,372,909 kg` | `app: 10,305,642 kg` |
+| `attribution_diff` | `proposed: JULY-26-BLK6 @ F1` | `sheet: JULY-26-BLK5 @ F2` |
+| `production_human_edited` | `yours: ttl_kg 13,685` | `report: ttl_kg 13,680` |
+| `schedule_conflict` | `yours: shifts 2` | `Joseph: shifts 0` |
+
+**Excel conventions.** Header row frozen on every sheet, autofilter over the full used range of
+every table sheet, explicit column widths, wrap on the prose columns. **Severity is a TEXT
+column** (`HIGH` / `ATTENTION` / `info`) with fill as a bonus — never colour alone. Plain
+calendar dates are real date cells at **UTC noon** with `numFmt yyyy-mm-dd` (noon so no
+viewer's offset can shift the day); full timestamps are TEXT rendered in **Asia/Manila** and
+labelled `When (Manila)`, because an instant genuinely has a timezone and ISO-ordered text
+still sorts chronologically. Numbers right-aligned, `#,##0`. **There is no accounting-format
+currency column because there is no currency column** — see the ₱ gate under `reports.ts`.
+
+**Generation, and why it can never hurt a run.**
+- Wired as **Stage 4** of `runSync.ts`, after the result is assembled and **before**
+  `finishRun`: the workbook renders `baseResult` (the exact object about to be persisted),
+  then the artifact pointer is folded into the result `finishRun` writes. That ordering exists
+  because a generation FAILURE has to reach the operator and `sync_runs.result` is the only
+  durable channel to the panel. The workbook itself never contains its own pointer — a report
+  cannot hold the record of its own failure.
+- `generateRunReport` **never throws**; even the failure-row insert is best-effort. On
+  `ok:false` `flattenRunFindings` raises a **`report_generation_failed`** finding
+  (`section:'run'`, severity `attention` — nothing operational is wrong, the data is all in
+  the DB and every finding is still on the list; only the downloadable copy is missing). On
+  success the pointer is attached too, as provenance and so the panel needs no second query.
+- **`failRun` / `cancelRun` generate one too**, with a NULL result, via
+  `generateReportQuietly` (an extra try/catch because those paths are inside a `catch` that is
+  about to re-throw the original error). A crashed run is precisely when the Run Log is worth
+  reading.
+- **Deterministic path** `<Asia/Manila date of started_at>/<run_id>.xlsx`, `upsert:true`. The
+  date comes from the RUN, never `now()`, so regenerating an old report still lands in that
+  run's folder; determinism also makes the upload idempotent under DBOS replay.
+- **A clean run still produces a full workbook** (measured: 22,829 bytes, every sheet present,
+  every section saying "Nothing flagged", 43 log beats). An empty report is a meaningful
+  answer; a missing one is indistinguishable from a generator that quietly broke.
+
 ## Data
 
 ### Durable run ledger (migration `20260704000000_sync_runs_and_events.sql`)
@@ -828,6 +978,28 @@ regenerated so `sync_runs`/`sync_run_events` are typed:
 - **`sync_run_events`** — the live progress feed. `id`, `run_id`, `report_type`
   (the card key; `'_run'` = the top-level track), `stage`, `pct`, `label`, `detail`,
   `level`, `at`.
+
+### Excel sync-report artifacts (migration `20260807060558_sync_run_reports.sql`)
+
+- **`sync_run_reports`** — one row per generated (or attempted) workbook. `id`, `run_id`
+  (→`sync_runs`, ON DELETE CASCADE), `storage_bucket` (default `sync-reports`),
+  `storage_path` (**NULL exactly when `ok=false`**), `filename`, `bytes`,
+  `finding_count`/`warn_count`/`error_count`, `sheet_counts` (jsonb: sheet name -> data row
+  count), `contains_prices` (**NOT NULL DEFAULT TRUE — fail-closed**), `generator_version`,
+  `ok`, `error`, `generated_at`. Indexes on `(run_id, generated_at desc)` and
+  `(generated_at desc)`. RLS on; authenticated = **SELECT only** (base grant + `using(true)`
+  select policy), no write policy or grant, `anon` revoked — same posture as `sync_runs`.
+- **`view_sync_run_reports`** — `security_invoker` join of the artifact to its run: adds
+  `run_status`, `started_at`, `finished_at`, `duration_seconds`, `dry_run` (read out of
+  `result->'dryRun'`), `requested_by`, and `is_latest` (newest artifact per run). This is THE
+  query behind "list the last N reports with a download link" — do not re-write the join.
+- **Storage: the PRIVATE `sync-reports` bucket**, created in the same migration with the exact
+  `sync-inbox` pattern (`public=false`, idempotent insert, **zero storage policies**). A
+  separate bucket on purpose: `sync-inbox` holds raw source workbooks (Czarina's price file,
+  MC's report) that no browser may ever fetch, while this holds a derived artifact the app
+  deliberately hands to a privileged user. Verified on remote — the `/object/public/` route
+  returns 400 "Bucket not found", a direct object read with the anon key returns 400, and an
+  anon bucket list returns `[]`.
 
 ### Smart-Adjudicator case files (migration `20260706120000_smart_adjudicator_cases.sql`)
 Three DB tables applied to remote (2026-07-06); `sync_held_cases` + `sync_case_messages` in the
@@ -894,6 +1066,10 @@ Documented in the root `.env.example`. The worker's own env is in `workers/sync/
 - **Role gate.** `enqueueSyncRun` calls `requirePrivileged()` (effective role via
   `getUserRole()`, respects impersonation, fails closed). The launcher + body are also
   hidden client-side for non-privileged roles.
+- **Every run leaves an Excel report behind.** Generated + stored automatically at the end
+  of every run — clean, partial, failed or stopped — and downloaded on demand through a
+  60-second server-minted signed URL. Generation is the one stage that **cannot** fail a
+  run: it never throws, and its own failure becomes a finding. See "Excel sync report".
 
 ## Stubbed / pending
 

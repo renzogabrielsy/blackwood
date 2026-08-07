@@ -27,6 +27,7 @@ import {
   type GroupingCase,
 } from './grouping'
 import { TriageSummaryCard } from './TriageSummaryCard'
+import { SyncReportButton } from '../SyncReportButton'
 
 /** A case row as shown in the run-grouped list (superset of the grouping input). */
 export interface RunListCase extends GroupingCase {
@@ -53,6 +54,12 @@ interface RunGroupedListProps {
   onToggleBulk: (id: string, on: boolean) => void
   /** Scroll target: the section to bring into view (a deep-link run). */
   scrollToRunId: string | null
+  /**
+   * Run ids that HAVE a downloadable Excel report. Resolved once by the page rather
+   * than probed per row, and used to decide whether a run header shows a download
+   * button at all — a button that can only fail is worse than no button.
+   */
+  runsWithReports?: ReadonlySet<string>
 }
 
 const ALL_FILTERS: { key: CaseFilter; label: string }[] = [
@@ -130,6 +137,7 @@ export function RunGroupedList({
   selectedForBulk,
   onToggleBulk,
   scrollToRunId,
+  runsWithReports,
 }: RunGroupedListProps) {
   // Apply the global status/resolved filters, THEN group into run sections.
   // NB: triage cases are never dropped by the status filter (they carry status
@@ -209,6 +217,16 @@ export function RunGroupedList({
                     <span className="font-mono text-[10px] text-muted-foreground/70">
                       ({section.rows.length})
                     </span>
+                    {/* This run's Excel report. Rendered only for runs that actually have
+                        one (`runsWithReports`) — the ungrouped bucket is not a run at all,
+                        and every run from before the generator shipped has no artifact. */}
+                    {section.runId !== NO_RUN_BUCKET && runsWithReports?.has(section.runId) && (
+                      <SyncReportButton
+                        runId={section.runId}
+                        variant="inline"
+                        className="ml-auto"
+                      />
+                    )}
                   </div>
 
                   {/* Triage card */}

@@ -430,6 +430,50 @@ confirming both refs): **28 consecutive clean promotions.** The pending `chore(m
 (`882b62d`) rode along for the tenth time — already pushed, so `-sb` read no ahead-count while
 `git log --oneline main..<branch>` correctly enumerated 2.
 
+### Promotion 41 (2026-08-07, `5910877` → `a549afd`) — TWELFTH consecutive clean `git add .`
+
+A **DATA-REMOVAL** promotion, the first of its kind here: 9 duplicate ICTC deliveries (161,926 kg
+of phantom intake) archived + deleted in prod, shipped as 4 files / +525/−0 (one 352-line migration,
+CLAUDE.md, the sync-ictc L-040 ledger entry, regenerated types). Same-day sibling of promotion 40,
+same ICTC-sync work line on a cenapro-named branch.
+
+- **The mtime check that decides staging strategy was silently BROKEN — see the new `-newermt`
+  trap in [[gates-and-shell-traps]].** It returned empty (reads as "no concurrent session") and
+  also returned empty for `-7 days` in a tree edited minutes earlier. Fell back to `stat` on each
+  dirty file + `git status --porcelain -uall` vs the brief's path list. **Never let a single
+  empty-output check decide the staging mode.**
+- **A data-removal commit body is the RECORD, so it earns its length.** Nine paragraphs answering
+  what a future reader will actually ask: why one truck became two rows, why the survivor was the
+  right copy (`rc_out` consumption hangs off `batch_id`, so only one copy of a pair is connected to
+  what was burned — zero `rc_out` rows on all seven shorthand batches), that the price moved onto
+  the survivor BEFORE the delete so none was lost, and that one call reverts everything. Don't trim
+  this to a one-liner because the stat is small; +525/−0 hides that 161,926 kg left the books.
+- **A revealed pre-existing deficit is NOT new damage — say so explicitly.** `FEB-26-BLK5` went to
+  −9,017 kg because the duplicate had been masking a real shortfall; 76 batches are already negative
+  for the same history-boundary reason (51 with no deliveries at all). A brief that pre-frames this
+  is handing you the exact sentence that stops it being read as breakage.
+- **Verify the brief's reversibility claim in the DDL, don't take it on faith** — it is the whole
+  safety story. Four greps: `row_snapshot` is `to_jsonb(deliveries.*)` with a CHECK tying
+  `row_snapshot->>'id'` to `delivery_id`; the restore does
+  `INSERT … SELECT * FROM jsonb_populate_record(NULL::public.deliveries, row_snapshot)` so the
+  **original id and `created_at`** come back; an already-live id returns `already_present` instead of
+  double-inserting; all four functions are `REVOKE … FROM PUBLIC`+`anon` / `GRANT … service_role`.
+- **A BRIEF/DOCS date discrepancy is worth flagging, not silently resolving.** The brief said the
+  untouched wet-sack split rows were `2025-04-03`; the committed CLAUDE.md and L-040 both say
+  `2026-04-03` (batch `MARCH-25-BLK9`). Unverifiable from the sandbox (no Postgres reachable), so the
+  commit body cites the rows **without a date** and the report flagged the conflict. Don't pick a
+  side you cannot check, and don't bake an unverified figure into permanent history.
+- Gate subset: `npx tsc --noEmit` exit 0, empty log (matched the brief). Worker gates correctly
+  SKIPPED — nothing under `workers/sync/**` in the diff. `types/supabase.ts` additive one-liner held
+  (`grep -cE '^-[^-]'` → 0, sentinel 2) and named all 5 new objects. Secret scan 0 hits.
+- **Migration already applied to prod ⇒ deploy is code-only** (third promotion running with this
+  shape). Nothing about pushing `main` runs SQL; the DB change already happened.
+
+Gates clean again (merge-tree bare OID `df7ffe8` exit 0, merge-base tree diff empty, merge exit 0,
+`git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>` empty, old main tip
+`baa269c` still an ancestor, `git ls-remote` confirming both refs): **29 consecutive clean
+promotions.** The pending `chore(memory)` commit (`83e53cf`) rode along for the eleventh time.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
