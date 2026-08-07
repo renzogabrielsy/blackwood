@@ -515,6 +515,48 @@ old main tip `a549afd` still an ancestor, `git ls-remote` confirming both refs):
 clean promotions.** The pending `chore(memory)` commit (`7927b16`) rode along for the twelfth time.
 **Re-run `merge-tree` after the commit, not just before** — the pre-commit run gates the wrong tip.
 
+### Promotion 43 (2026-08-07, `c984fbf` → `9f877c7`) — FOURTEENTH consecutive clean `git add .`
+
+ACTUAL FED ₱/kg in RC Movement (a closed block cost more per kg than it arrived at, because it
+dried out while the money stayed spent): 5 files / +1125/−6, one 362-line migration + 3 new
+`security_invoker` views. FOURTH same-day promotion (40, 41, 42, 43) — this branch is shipping
+one work line every couple of hours and the branch name has drifted from its contents for four
+promotions running. Still fine per the "mis-named branch" note; ICTC work continues on it.
+
+- **Fourteen straight clean sweeps.** `git status --porcelain -uall` was exactly the brief's 4
+  tracked paths + 1 untracked migration + the standing `.claude/agent-memory-local/**`. Skipped
+  `find -newermt` entirely (broken here, see [[gates-and-shell-traps]]) — the status-vs-brief
+  path comparison alone decided it, which is the signal that actually works.
+- **A "strictly additive migration" claim is verifiable in ONE grep and worth it.**
+  `grep -nE '^(CREATE|ALTER|DROP|COMMENT ON|GRANT|REVOKE|INSERT)' <migration>` showed three
+  `CREATE OR REPLACE VIEW` on NEW names only, zero `ALTER`/`DROP`, grants to
+  `authenticated, service_role`, `REVOKE ALL … FROM anon`. That list IS the additive proof —
+  no existing view appears in it.
+- **"Not queried at all when `!canViewPrices()`" needs the GUARD checked, not the call site.**
+  `grep -n showPrices actions.ts` then reading the enclosing block: two views sit inside a real
+  `if (showPrices) { … }` and the third is a `showPrices && batchIds.length ? fetchAll(…) :
+  Promise.resolve([])` ternary. A `canViewPrices` import plus a nulling map would NOT have been
+  the same claim; the point is the query never issues.
+- **The brief's headline figures were all corroborated in the committed docs** (CONTEXT.md L61/64/69,
+  CLAUDE.md L187/190) — ₱50.6110, ₱46.9580, ₱47.2747, and the 101-exact / 23-over split behind the
+  "~27% zero-or-negative uplift" line. When a brief hands you measured numbers, grep the staged docs
+  for them before putting them in permanent history; here they matched, so the body states them.
+- Gate subset: `npx tsc --noEmit` exit 0, empty log (matched the brief). No `workers/sync/**` in the
+  diff ⇒ worker gates correctly skipped. Build + lint baseline taken from the brief per promotion 30's
+  rule. Secret scan on added lines only: **0 hits** in a 1,376-line diff; all 5 files text (numstat
+  all-numeric). 6 removed lines, all benign (CONTEXT.md row rewrites, one destructure + one import
+  expansion) — enumerated with `awk '/^-/ && !/^---/'` rather than the bullet-dropping `^[+-][^+-]`
+  grep from promotion 42.
+- **Migration already applied to prod ⇒ deploy is code-only** (fourth promotion running with this
+  shape; it is now the norm on this branch, not the exception). Nothing about pushing `main` runs SQL.
+
+Gates clean again (merge-tree bare OID `89e76d9` exit 0 run AFTER committing per promotion 42,
+merge-base tree diff empty, merge exit 0, `git ls-files --unmerged` empty, post-merge
+`git diff --stat main <feat>` empty, old main tip `0656e69` still an ancestor, `git ls-remote`
+confirming both refs): **31 consecutive clean promotions.** The pending `chore(memory)` commit
+(`606c3d5`) rode along for the thirteenth time — already pushed, so `-sb` showed no ahead-count
+while `git log --oneline main..<branch>` correctly enumerated 2.
+
 ## `dev` → `main` promotion: LOCAL merge commit, no PR
 
 Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git merge --no-ff dev -m "..."` then `git push origin main`. Never a GitHub PR. `main` has diverged history from `dev`, so `git merge --ff-only` always fails with "Diverging branches" — go straight to `--no-ff`. Trigger is an explicit request to sync the Vercel *production* target (a build/config or perf fix), not routine feature landing.
