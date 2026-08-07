@@ -177,7 +177,9 @@ export function useSyncRun() {
             stage: ev.stage,
             pct: Math.max(prev.overall.pct, ev.pct),
             label: ev.detail ? `${ev.label} · ${ev.detail}` : ev.label,
-            warn: ev.level === 'warn',
+            // Both non-info levels tint: an `error` beat must never read quieter
+            // than a `warn` (see SyncProgressEvent.level).
+            warn: ev.level === 'warn' || ev.level === 'error',
           },
         }))
         return

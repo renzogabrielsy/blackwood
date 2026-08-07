@@ -14,6 +14,7 @@ import type {
   BatchClose,
   BlockDiff,
   HeldRow,
+  PriceNote,
   ProductionBatchStart,
   ProductionHumanEdit,
   ScheduleConflict,
@@ -22,6 +23,7 @@ import type {
   StaleStream,
   SyncReportType,
   SyncRunResult,
+  UnpricedOverdue,
   UnresolvedBatch,
 } from '../../app/(app)/sync/types'
 
@@ -90,6 +92,52 @@ export function collectProductionHumanEdits(result: SyncRunResult): ProductionHu
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.production_human_edits ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every DELIVERY-PRICE note a run raised
+ * (`result.reports.deliveries.apply.price_notes`, 2026-08-07).
+ *
+ * This fold is the reason the price step can no longer fail quietly. Before it, the only
+ * evidence that a price file had failed was a single progress beat that said the file was
+ * "unavailable" when it was in fact sitting right there with an unrecognized tab name —
+ * and progress beats do not outlive the run. Now every price outcome lands in the durable
+ * result and reaches the panel through `flattenRunFindings`.
+ *
+ * Only the `deliveries` report ever fills it, but the fold is generic + guarded so a
+ * hand-built or pre-feature result simply yields []. Pure — panel-visibility only; these
+ * are NOT folded into durable cases (same treatment as `production_human_edits`).
+ */
+export function collectPriceNotes(result: SyncRunResult): PriceNote[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: PriceNote[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.price_notes ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every delivery a run found still unpriced more than a day on
+ * (`result.reports.deliveries.apply.unpriced_overdue`, 2026-08-07). The overdue rule
+ * lives in `view_digest_unpriced_deliveries`; this only carries the rows the worker read
+ * from it. Guarded and generic, same contract as `collectPriceNotes`.
+ */
+export function collectUnpricedOverdue(result: SyncRunResult): UnpricedOverdue[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: UnpricedOverdue[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.unpriced_overdue ?? []) out.push(note)
   }
   return out
 }

@@ -666,6 +666,45 @@ export class DbClient {
   }
 
   /**
+   * Remember a source-spelling pair in `public.delivery_source_aliases` via the
+   * service-role-only RPC `fn_record_delivery_source_alias` (2026-08-07).
+   *
+   * Czarina's price file writes some plates and supplier names differently from the
+   * operator's RC DELIVERIES sheet ("T138003" vs "138003", "ALA 3958" vs "ALA9958").
+   * Persisting a pair the sync has already corroborated turns a fuzzy match into a
+   * clean exact match on every future run, so the same typo never needs a human twice.
+   *
+   * The RPC is idempotent: a repeat sighting bumps `times_seen` and re-activates a
+   * retired pair, but never rewrites the original `evidence`. It REFUSES a blank
+   * evidence string and refuses `ours = theirs` — an alias is earned, never guessed.
+   */
+  async recordSourceAlias(args: {
+    kind: "truck_plate" | "supplier";
+    ours: string;
+    theirs: string;
+    evidence: string;
+    ours_raw?: string | null;
+    theirs_raw?: string | null;
+    seen_on?: string | null;
+  }): Promise<string | null> {
+    const { data, error } = await this.sb.rpc("fn_record_delivery_source_alias", {
+      p_kind: args.kind,
+      p_ours: args.ours,
+      p_theirs: args.theirs,
+      p_evidence: args.evidence,
+      p_ours_raw: args.ours_raw ?? null,
+      p_theirs_raw: args.theirs_raw ?? null,
+      p_seen_on: args.seen_on ?? null,
+    });
+    if (error) {
+      throw new Error(
+        `fn_record_delivery_source_alias RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`
+      );
+    }
+    return data ? String(data) : null;
+  }
+
+  /**
    * For tables whose INSERT fires an audit trigger (deliveries): UPDATE the
    * trigger-written audit row's comment for provenance (L-001 — never INSERT a 2nd)
    * via the SECURITY DEFINER RPC stamp_ingestion_audit. Mirrors
@@ -971,7 +1010,8 @@ type AnyBuilder = {
   order: (col: string, opts: { ascending: boolean }) => AnyBuilder;
   limit: (n: number) => AnyBuilder;
   eq: (col: string, val: unknown) => AnyBuilder;
-  is: (col: string, val: null) => AnyBuilder;
+  /** PostgREST `is.` accepts null / true / false (see applyOneFilter). */
+  is: (col: string, val: null | boolean) => AnyBuilder;
   gte: (col: string, val: unknown) => AnyBuilder;
   lte: (col: string, val: unknown) => AnyBuilder;
 };
@@ -1008,6 +1048,13 @@ function applyOneFilter(b: AnyBuilder, col: string, spec: string): AnyBuilder {
   const val = dot >= 0 ? spec.slice(dot + 1) : spec;
   switch (op) {
     case "is":
+      // PostgREST `is.` takes null / true / false / unknown. This used to hardcode
+      // `is(col, null)` and DISCARD the value, so `is.true` silently became
+      // `IS NULL` — a filter that quietly returns the wrong rows. Every existing
+      // caller passed `is.null`, so honouring the value changes nothing for them
+      // and makes `is.true`/`is.false` mean what they say (2026-08-07).
+      if (val === "true") return b.is(col, true);
+      if (val === "false") return b.is(col, false);
       return b.is(col, null);
     case "gte":
       return b.gte(col, val);

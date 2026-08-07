@@ -361,4 +361,87 @@ was opening **7+ IMAP sessions** against Gmail's ~15-per-account cap. Full post-
 
 ---
 
+## L-039 — A hand-named worksheet tab is not a computable string; and a `catch` that reports the WRONG cause is worse than a crash (2026-08-07)
+
+The sync had priced **ZERO August 2026 deliveries**. Nine truckloads carried `cost_basis = 0`
+for a week, and because `batches.avg_cost` averaged over ₱0 rows, **AUGUST-26-BLK1 read ₱11.01
+against a real ₱39.99** — a wrong number nobody could see, that moved every time an unrelated
+price landed. Renzo confirmed ten prices by hand against Czarina's file and they were
+backfilled. Four faults, and each one is a general lesson:
+
+- **A tab name typed by a human over two years is not a string you can generate.** The worker
+  built `` `${FULL_MONTHS[m-1]} ${y}` `` → `"August 2026"` and passed it to `getWorksheet()`,
+  which is an **exact** match. Her real tabs carry at least four conventions across 24 sheets:
+  `"Aug. 2026"`, `"Feb. 2026"`, `"Jan. 2026."` (trailing period), `"Nov 25. "` (trailing
+  **space**), `"March25"` (no separator, 2-digit year), `"July.2024"`. March–July 2026 happen
+  to be spelled the full way, **which is exactly why this worked all spring and broke in
+  August** — the bug shipped the day she created a tab she abbreviated. **Rule:** never
+  address a human-named sheet by a generated name. Normalize BOTH sides to the semantic key
+  (here `(month, year)`: strip non-alphanumerics, then split letters from digits) and compare
+  that. If two tabs normalize to the same key, **REFUSE and report** — picking one would price
+  a whole month from somebody's scratch copy.
+- **The `catch` did not just hide the error, it asserted a false cause.** One bad tab name threw,
+  and a bare `catch` emitted *"Price file unavailable — proceeding without prices."* **The file
+  was right there.** Anyone reading that beat would go chase Czarina for an attachment she had
+  already sent. **Rule:** an error message must name what it actually observed — here, the tab
+  it looked for AND the tabs it found. A failure that can un-price a month must be the loudest
+  thing the run says (`sync_run_events` had no `error` level at all until this fix), and it must
+  land in the **durable** result, not only the progress feed, which dies with the run.
+- **A whole-file resource loaded ONCE outside the row loop turns one miss into total failure.**
+  The price file is opened before the loop, so a single unresolved tab un-priced *every* row —
+  and it loaded only the newest month in the window, so a run crossing a month boundary silently
+  left the earlier month unpriced (the window is `watermark − 3 days`, so that is the **1st, 2nd
+  and 3rd of every month**). **Rule:** load every month the window spans; scope a failure to the
+  narrowest thing it actually invalidates. A partial failure now still prices the months that
+  resolved and still reports the one that didn't.
+- **L-010 covers a PLATE typo. The supplier-variant class was uncovered.** Our `"Paquibot/Compra"`
+  never keyed equal to Czarina's `"PAQUIBOT"`. The fix needed no new machinery: `public.canonical_supplier()`
+  **already** maps both to `PAQUIBOT` — it simply was not being applied to both sides of the
+  comparison. **Rule:** before building a matcher, check whether the collapsing rule already
+  exists in the DB. (It is mirrored in TS for speed and purity, with `scripts/verify-supplier-canon.ts`
+  asserting the two copies agree **against the live function** — a mirror without a drift check is
+  worse than no mirror.)
+
+**L-010's escalation is now implemented** ("Proper fix, escalate: have `enrich_prices.py` fall back
+to supplier+sacks+weight when the plate doesn't hit"). The fallback is `(date ± ≤2d, net weight,
+sacks)` and is **gated on UNIQUENESS on both sides** plus one independent corroborating field.
+Renzo measured why that gate is safe: across 1,327 deliveries since Jan 2025 the triple is unique
+for **1,309**, and **all 9 colliding triples ARE known duplicate pairs** — so uniqueness is
+simultaneously the safety property and a duplicate detector. A collision is refused and reported,
+never picked. Plate shape (prefix/suffix, or one substitution) is a **TIE-BREAKER ONLY** and never
+builds a key. Every fuzzy match still enriches **and** is reported with both spellings
+("bring it up in the sync but still proceed to enrich" — Renzo). Confirmed pairs are persisted in
+`public.delivery_source_aliases`, **earned, never guessed** (`evidence` is NOT NULL), so a typo
+seen once is a clean exact match forever after.
+
+- **A key with no date will reach across months, and the spec knew it.** Found while writing the
+  regression tests, not from the report: the exact key is `(supplier, plate, weight)` and carries
+  **no date** — correct, because the two files genuinely don't share one (she records the payment
+  date). But **unbounded** it prices a December delivery from an August row, because a regular
+  hauler running the same full load reproduces the same triple every month. The Python spec had
+  `max_date_drift_days=7`; **the TS port silently dropped it.** Measured on the real workbook: 34
+  exact keys have more than one row, **all 34 are >7 days apart, none within 7**, and prices differ
+  by up to ₱6.75/kg — while all ten confirmed deliveries matched at drift **0**. The bound is
+  restored at the spec's own 7 days and **refuses** rather than warning: the Python printed to a
+  stdout a human was watching, and the worker has no such human. **Rule:** when porting, diff the
+  parameter list — a dropped safety bound is invisible until it is expensive.
+
+**Also fixed (the silent-corruption half):** `batches.avg_cost` now averages over **priced rows
+only** (`cost_basis > 0`). This is **not** a second definition — the BUG-018 formula is unchanged,
+delivery-weighted; only the input set narrows, because `cost_basis = 0` is the **L-008 unpriced
+placeholder, not a ₱0 delivery**. And any delivery still unpriced **more than one day** after its
+`transaction_date` now raises a run finding naming the rows ("prices are not supposed to lag, and
+they liquidate daily" — Renzo). That warning is the one that would have caught this on day two
+instead of day seven, because it does not care *why* a row is unpriced.
+
+- **Provenance:** 2026-08-07. Migration `20260807040107_delivery_price_enrichment`. Source file
+  `~/blackwood/.sync-flags/2026-08-07/124885_RAW CHARCOAL PURCHASES -Daily.xlsx`. Ten prices
+  backfilled (audit comments tagged `provenance=manual-price-backfill`); the two confirmed
+  duplicate copies (`FEB-26-BLK5 / CBQ 5957 / 21,333` and `FEEDING # 1 / AAV 6111 / 19,185`) were
+  deliberately **left unpriced** — pricing them would put cost on a truck that does not exist.
+  Regression suite: `workers/sync/test/reports/deliveries-price-enrichment.test.ts` (34 tests,
+  run against the real workbook).
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

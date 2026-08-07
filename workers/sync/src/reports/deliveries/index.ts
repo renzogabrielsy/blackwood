@@ -32,14 +32,28 @@ import type { ProgressEmitter } from "../../lib/progress.js";
 
 import { loadDeliveriesWorkbook } from "./sheet.js";
 import { extractDeliveries, type ExtractResult } from "./extract.js";
-import { enrichPrices, type CzarinaMatch } from "./enrich.js";
+import {
+  enrichPrices,
+  MIN_BAND_SAMPLES,
+  type CzarinaMatch,
+  type EarnedAlias,
+  type PriceBand,
+  type PriceNote,
+  type SourceAlias,
+} from "./enrich.js";
+import { canonicalSupplier } from "./supplierCanon.js";
 import {
   classifyDeliveries,
   applyDeliveriesGuard,
   type DeliveriesDbRow,
   type GuardedResult,
 } from "./classify.js";
-import { applyDeliveries, type DeliveriesCompact, type ApplyResult } from "./apply.js";
+import {
+  applyDeliveries,
+  type DeliveriesCompact,
+  type ApplyResult,
+  type UnpricedOverdue,
+} from "./apply.js";
 
 export const REPORT_TYPE = "deliveries";
 
@@ -204,6 +218,8 @@ export async function runReport(
       labeled: false,
       watermark_updated: false,
       errors: [],
+      price_notes: [],
+      unpriced_overdue: [],
     };
     return {
       classify: {
@@ -230,19 +246,99 @@ export async function runReport(
     (r) => String(r.transaction_date).slice(0, 10) >= since,
   );
 
-  // OPTIONAL price enrichment (sync_deliveries.py:118-140). File-based handoff in the
-  // Python; here it's a direct call. Failure → proceed un-enriched (cost_basis stays
-  // null → L-008 placeholder at apply). Enrichment mutates cost_basis on `windowRows`.
-  if (czarinaAtt && windowRows.length) {
+  // ---------------------------------------------------------------------------
+  // PRICE ENRICHMENT (sync_deliveries.py:118-140). Mutates cost_basis on windowRows.
+  //
+  // THE OLD CODE HAD A BARE `catch` THAT SWALLOWED EVERYTHING as "Price file
+  // unavailable — proceeding without prices." On 2026-08-07 that one silent catch was
+  // found to have un-priced EVERY August delivery: the tab-name generator produced
+  // "August 2026", Czarina's tab is "Aug. 2026", the exact-match lookup threw, and the
+  // run carried on cheerfully. Nine truckloads sat at cost_basis = 0 for a week.
+  //
+  // Now there are THREE distinguishable outcomes, and none of them is quiet:
+  //   1. no Czarina attachment at all      → info: there is genuinely no price file.
+  //   2. the file is there but UNUSABLE    → a `price_*` note + a WARN/ERROR beat.
+  //   3. the file worked, with caveats     → notes for every fuzzy/out-of-band match.
+  // Every note becomes a run finding via `apply.price_notes`, so it survives past the
+  // progress feed and shows up in Sync Review.
+  // ---------------------------------------------------------------------------
+  const priceNotes: PriceNote[] = [];
+  let priceSummary: CzarinaMatch | null = null;
+
+  if (!czarinaAtt) {
+    // Outcome 1 — an honest, materially different message from "the file broke".
+    if (windowRows.length) {
+      await emit?.(
+        "extract",
+        "No price file came with today's report — new deliveries will be recorded unpriced.",
+        40,
+        undefined,
+        "warn",
+      );
+    }
+  } else if (windowRows.length) {
+    await emit?.("extract", "Matching delivery prices from Czarina's file…", 40);
     try {
-      await emit?.("extract", "Matching delivery prices from Czarina's file…", 40);
       const czarinaPath = await deps.fetchToLocalPath(czarinaAtt.storagePath);
       const czBuf = await readFile(czarinaPath);
-      const sheet = czarinaMonthSheet(maxDate(windowRows));
-      const matches: CzarinaMatch = await enrichPrices(czBuf, sheet, windowRows);
-      void matches;
-    } catch {
-      await emit?.("extract", "Price file unavailable — proceeding without prices.", 40, undefined, "warn");
+
+      // Rung 2 of the match ladder + the result sanity check both read the DB, so they
+      // are gathered HERE and passed in as data — enrich itself stays pure/offline.
+      const [aliases, priceBands] = await Promise.all([
+        readSourceAliases(db),
+        readSupplierPriceBands(db, since),
+      ]);
+
+      priceSummary = await enrichPrices(czBuf, windowRows, { aliases, priceBands });
+      priceNotes.push(...priceSummary.notes);
+
+      // Persist every alias this run EARNED (each one already corroborated by a
+      // uniqueness-gated fallback match), so the same source typo is a clean exact
+      // match on every future run. Best-effort: a failure to remember must never
+      // fail a run that priced correctly.
+      await recordEarnedAliases(db, priceSummary.learned);
+
+      if (!priceSummary.ok) {
+        // Outcome 2 — the file was READ but could not be used. This is the beat that
+        // used to lie. `error` level: louder than `warn`, and materially different
+        // from "no price file arrived".
+        const looked = priceSummary.months_requested.join(", ");
+        await emit?.(
+          "extract",
+          `Could not read prices from Czarina's file — nothing was priced (needed ${looked}).`,
+          40,
+          priceNotes.map((n) => n.detail).join(" | ") || undefined,
+          "error",
+        );
+      } else {
+        const loud = priceNotes.length;
+        await emit?.(
+          "extract",
+          `Priced ${priceSummary.matched_count} of ${windowRows.length} deliveries from ` +
+            `${priceSummary.tabs_loaded.join(" + ") || "no tab"}` +
+            (loud ? ` — ${loud} need${loud === 1 ? "s" : ""} a look` : ""),
+          45,
+          undefined,
+          loud ? "warn" : "info",
+        );
+      }
+    } catch (err) {
+      // A genuinely unexpected failure (Storage fetch, corrupt buffer). Still NOT
+      // reported as "unavailable" — say what actually happened and keep it as a note.
+      const msg = err instanceof Error ? err.message : String(err);
+      priceNotes.push({
+        kind: "price_file_unreadable",
+        detail:
+          `The price file was attached but could not be processed: ${msg}. No delivery was ` +
+          `priced in this run; new rows carry the unpriced placeholder until this is fixed.`,
+      });
+      await emit?.(
+        "extract",
+        "The price file was attached but could not be processed — nothing was priced.",
+        40,
+        msg,
+        "error",
+      );
     }
   }
 
@@ -298,6 +394,33 @@ export async function runReport(
     runTs: deps.runTs,
   });
 
+  // ---------------------------------------------------------------------------
+  // THE UNPRICED WARNING (Renzo, 2026-08-07): "prices are not supposed to lag, and
+  // they liquidate daily." So any delivery still unpriced MORE THAN ONE DAY after its
+  // transaction_date is named here, every run, until someone fixes it.
+  //
+  // Read AFTER apply, so a row this very run inserted unpriced is included the moment
+  // it goes overdue rather than a day late. The overdue rule itself is NOT re-derived
+  // here — `view_digest_unpriced_deliveries` owns the ONE definition (and the existing
+  // `view_digest_unpriced_recent` count is now a thin projection of that same view),
+  // so the sync and the Home digest can never disagree about what "unpriced" means.
+  // ---------------------------------------------------------------------------
+  const overdue: UnpricedOverdue[] = await readUnpricedOverdue(db);
+  // Attach both price channels to the apply envelope, so they become durable run
+  // findings (lib/sync/findings.ts) rather than dying with the progress feed.
+  apply.price_notes = priceNotes;
+  apply.unpriced_overdue = overdue;
+  if (overdue.length) {
+    await emit?.(
+      "finalize",
+      `${overdue.length} deliver${overdue.length === 1 ? "y" : "ies"} still have no price — ` +
+        `oldest is ${overdue[0].days_pending} days old.`,
+      99,
+      undefined,
+      "warn",
+    );
+  }
+
   return {
     classify: {
       report_type: REPORT_TYPE,
@@ -333,22 +456,143 @@ function minusDaysISO(iso: string, days: number): string {
   return `${p(dt.getUTCFullYear(), 4)}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
 }
 
-function maxDate(rows: Array<{ transaction_date: string }>): string {
-  let mx = "";
-  for (const r of rows) {
-    const d = String(r.transaction_date).slice(0, 10);
-    if (d > mx) mx = d;
+// NOTE: `czarinaMonthSheet()` and `maxDate()` used to live here. Both are DELETED.
+//
+//   czarinaMonthSheet(iso) returned `"<FullMonth> <YYYY>"` — "August 2026" — and the
+//   result was handed to an EXACT worksheet lookup. Czarina's tab is "Aug. 2026", so
+//   from the day she created that tab the sync could not price a single August
+//   delivery, and the failure was swallowed. Tab resolution now normalizes both sides
+//   to (month, year) in `czarinaSheet.ts::resolveCzarinaTab`.
+//
+//   maxDate(rows) picked ONE month — the newest in the window — so a run spanning a
+//   month boundary silently left the older month unpriced. Replaced by
+//   `czarinaSheet.ts::monthsSpanned`, which returns EVERY month the window touches.
+//
+// Do not reintroduce either one.
+
+/**
+ * Learned source-spelling pairs (rung 2 of the match ladder). Read from
+ * `public.delivery_source_aliases`; `active = false` rows are excluded so a retired
+ * alias stops firing without losing its history.
+ *
+ * Best-effort: if the table cannot be read the run still prices everything the exact
+ * key and the fallback can reach. A missing memory must never block a working sync.
+ */
+async function readSourceAliases(db: DbClient): Promise<SourceAlias[]> {
+  try {
+    const rows = await db.readRows("delivery_source_aliases", {
+      sinceColumn: null,
+      columns: ["kind", "ours", "theirs"],
+      extraFilters: { active: "is.true" },
+    });
+    const out: SourceAlias[] = [];
+    for (const r of rows) {
+      const kind = String(r.kind);
+      if (kind !== "truck_plate" && kind !== "supplier") continue;
+      const ours = String(r.ours ?? "");
+      const theirs = String(r.theirs ?? "");
+      if (!ours || !theirs) continue;
+      out.push({ kind, ours, theirs });
+    }
+    return out;
+  } catch {
+    return [];
   }
-  return mx;
 }
 
-/** _month_sheet: "<Month> <YYYY>" (sync_deliveries.py:73-75, date(y,m,1).strftime("%B")). */
-const FULL_MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-function czarinaMonthSheet(iso: string): string {
-  const y = parseInt(iso.slice(0, 4), 10);
-  const m = parseInt(iso.slice(5, 7), 10);
-  return `${FULL_MONTHS[m - 1]} ${y}`;
+/**
+ * Per-supplier observed ₱/kg band from PRICED history, for the result sanity check
+ * (fault (h)): a match can pass every key test and still be wrong, and the only thing
+ * that catches it is the number looking nothing like what this supplier normally
+ * charges. Ornales in August is ₱39.50–₱40.50, so a ₱11 or ₱45 match stands out.
+ *
+ * Scoped to the trailing window (`since` − 90 days) so a genuine price move a few
+ * months ago does not permanently widen the band into uselessness. Grouped by
+ * `canonical_supplier`, the same key the matcher uses, so the band and the match agree
+ * about who the supplier is. Best-effort — no band means no check, never a blocked run.
+ */
+async function readSupplierPriceBands(
+  db: DbClient,
+  since: string,
+): Promise<Map<string, PriceBand>> {
+  const bands = new Map<string, PriceBand>();
+  try {
+    const rows = await db.readRows("deliveries", {
+      sinceDate: minusDaysISO(since, 90),
+      columns: ["supplier", "cost_basis"],
+    });
+    for (const r of rows) {
+      const php = typeof r.cost_basis === "number" ? r.cost_basis : Number(r.cost_basis);
+      // cost_basis = 0 is the L-008 UNPRICED PLACEHOLDER, not a ₱0 delivery — including
+      // it would drag every band's floor to 0 and make the check vacuous.
+      if (!Number.isFinite(php) || php <= 0) continue;
+      const key = canonicalSupplier(r.supplier == null ? null : String(r.supplier));
+      const cur = bands.get(key);
+      if (!cur) bands.set(key, { min: php, max: php, n: 1 });
+      else {
+        cur.min = Math.min(cur.min, php);
+        cur.max = Math.max(cur.max, php);
+        cur.n += 1;
+      }
+    }
+    // Drop bands too thin to be evidence, so `enrich` never has to second-guess them.
+    for (const [k, b] of bands) if (b.n < MIN_BAND_SAMPLES) bands.delete(k);
+  } catch {
+    return new Map();
+  }
+  return bands;
+}
+
+/**
+ * Persist the aliases this run EARNED, via the service-role-only RPC
+ * `fn_record_delivery_source_alias` (idempotent: a repeat sighting bumps `times_seen`
+ * and never rewrites the original evidence).
+ *
+ * Best-effort and individually guarded: forgetting to remember a spelling must never
+ * fail a run that priced every row correctly.
+ */
+async function recordEarnedAliases(db: DbClient, learned: readonly EarnedAlias[]): Promise<void> {
+  for (const a of learned) {
+    try {
+      await db.recordSourceAlias(a);
+    } catch (err) {
+      console.error(
+        `[deliveries] could not remember alias ${a.kind} ${a.ours}->${a.theirs} (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+}
+
+/**
+ * Deliveries still unpriced more than a day after they happened, oldest first.
+ *
+ * Reads `public.view_digest_unpriced_deliveries` and filters on the view's own
+ * `is_overdue` — the overdue rule is NOT re-derived here. That view is also what
+ * `view_digest_unpriced_recent` (the Home digest's count) projects from, so the sync
+ * warning and the digest flag can never drift apart.
+ */
+async function readUnpricedOverdue(db: DbClient): Promise<UnpricedOverdue[]> {
+  try {
+    const rows = await db.readRows("view_digest_unpriced_deliveries", {
+      sinceColumn: null,
+      columns: [
+        "id", "transaction_date", "supplier", "batch_code",
+        "truck_plate", "sacks", "weight_kg", "days_pending",
+      ],
+      extraFilters: { is_overdue: "is.true", order: "transaction_date.asc" },
+    });
+    return rows.map((r) => ({
+      id: String(r.id),
+      transaction_date: String(r.transaction_date).slice(0, 10),
+      supplier: r.supplier == null ? null : String(r.supplier),
+      batch_code: r.batch_code == null ? null : String(r.batch_code),
+      truck_plate: r.truck_plate == null ? null : String(r.truck_plate),
+      weight_kg: r.weight_kg == null ? null : Number(r.weight_kg),
+      sacks: r.sacks == null ? null : Number(r.sacks),
+      days_pending: Number(r.days_pending ?? 0),
+    }));
+  } catch {
+    return [];
+  }
 }

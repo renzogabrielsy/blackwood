@@ -149,6 +149,67 @@ export interface ProductionHumanEditNote {
 }
 
 /**
+ * One thing the DELIVERY PRICE step wants a human to see (2026-08-07 — see
+ * reports/deliveries/enrich.ts). Mirror of the frontend `PriceNote`.
+ *
+ * Kinds: `price_tab_unresolved` / `price_tab_ambiguous` / `price_file_unreadable`
+ * (the whole file or one month could not be used — the class of failure that silently
+ * un-priced every August delivery), `price_fuzzy_match` (priced, but the two sources
+ * spell the plate or supplier differently), `price_fuzzy_ambiguous` (refused: the
+ * fallback key matched more than one row, or the one row it matched disagrees about
+ * both plate and supplier), `price_date_drift` (refused: her file HAS this exact
+ * supplier+plate+weight, but months away — the exact key carries no date because she
+ * records the payment date, so unbounded it prices a December delivery from an August
+ * row; the 7-day bound is the Python spec's own `max_date_drift_days`),
+ * `price_out_of_band` (priced, but the number is unlike this
+ * supplier's recent range).
+ *
+ * CARRIES NO ₱/COST FIELD, deliberately — see `toPriceNote`.
+ */
+export interface PriceNoteEntry {
+  kind: string;
+  detail: string;
+  transaction_date: string | null;
+  supplier: string | null;
+  batch_code: string | null;
+  truck_plate: string | null;
+  weight_kg: number | null;
+  sacks: number | null;
+  source_row: string | null;
+  /** exact | alias | fallback — which rung of the match ladder produced the price. */
+  via: string | null;
+  matched_sheet: string | null;
+  matched_row: number | null;
+  date_tolerance_days: number | null;
+  /** The month the resolver wanted, e.g. "August 2026". */
+  looked_for: string | null;
+  /** Every worksheet tab the price file actually has — the other half of the message. */
+  tabs_found: string[];
+  /** Tabs that all normalize to the same month (the ambiguous case). */
+  candidates: string[];
+  /** `czarina` | `ours` — whose side the fallback key collided on. */
+  collided_on: string | null;
+  differences: Array<{ field: string; ours: string; theirs: string }>;
+  collisions: Array<{ sheet: string | null; row: string; date: string | null }>;
+}
+
+/**
+ * One delivery still unpriced more than a day after it happened (2026-08-07). Mirror of
+ * the frontend `UnpricedOverdue`. Projected off `view_digest_unpriced_deliveries`, which
+ * owns the overdue definition. No ₱ field: every row here has cost_basis = 0.
+ */
+export interface UnpricedOverdueNote {
+  id: string;
+  transaction_date: string;
+  supplier: string | null;
+  batch_code: string | null;
+  truck_plate: string | null;
+  weight_kg: number | null;
+  sacks: number | null;
+  days_pending: number;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
@@ -168,6 +229,10 @@ export interface ApplyResult {
   production_batch_starts: ProductionBatchStartNote[];
   /** Production rows the sync refused to overwrite. ALWAYS present (default []). */
   production_human_edits: ProductionHumanEditNote[];
+  /** Delivery-price problems this run saw. ALWAYS present (default []). */
+  price_notes: PriceNoteEntry[];
+  /** Deliveries still unpriced >1 day on. ALWAYS present (default []). */
+  unpriced_overdue: UnpricedOverdueNote[];
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -235,6 +300,10 @@ interface RawApply {
   production_batch_starts?: unknown;
   /** production only — rows the sync refused to overwrite (human-edit latch). */
   production_human_edits?: unknown;
+  /** deliveries only — price-step problems (tab miss, fuzzy match, out-of-band). */
+  price_notes?: unknown;
+  /** deliveries only — deliveries still unpriced more than a day after the fact. */
+  unpriced_overdue?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -346,6 +415,84 @@ function toProductionHumanEdits(v: unknown): ProductionHumanEditNote[] {
   return Array.isArray(v) ? v.map(toProductionHumanEdit) : [];
 }
 
+/**
+ * Coerce one raw price note → contract PriceNoteEntry (2026-08-07).
+ *
+ * NEVER carries a ₱/cost value — the run-findings channel is not price-gated. The note
+ * identifies the ROW and describes the problem in words; the number stays in RC IN
+ * behind `canViewPrices()`. If a future note gains a price field, it must be dropped
+ * here rather than passed through.
+ */
+function toPriceNote(v: unknown): PriceNoteEntry {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  const nnum = (x: unknown): number | null => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  const diffs = Array.isArray(o.differences) ? o.differences : [];
+  const colls = Array.isArray(o.collisions) ? o.collisions : [];
+  return {
+    kind: str(o.kind),
+    detail: str(o.detail),
+    transaction_date: nullable(o.transaction_date),
+    supplier: nullable(o.supplier),
+    batch_code: nullable(o.batch_code),
+    truck_plate: nullable(o.truck_plate),
+    weight_kg: nnum(o.weight_kg),
+    sacks: nnum(o.sacks),
+    source_row: nullable(o.source_row),
+    via: nullable(o.via),
+    matched_sheet: nullable(o.matched_sheet),
+    matched_row: nnum(o.matched_row),
+    date_tolerance_days: nnum(o.date_tolerance_days),
+    looked_for: nullable(o.looked_for),
+    tabs_found: strArray(o.tabs_found),
+    candidates: strArray(o.candidates),
+    collided_on: nullable(o.collided_on),
+    differences: diffs.map((d) => {
+      const e = (d ?? {}) as Record<string, unknown>;
+      return { field: str(e.field), ours: str(e.ours), theirs: str(e.theirs) };
+    }),
+    collisions: colls.map((c) => {
+      const e = (c ?? {}) as Record<string, unknown>;
+      return { sheet: nullable(e.sheet), row: str(e.row), date: nullable(e.date) };
+    }),
+  };
+}
+
+/** Coerce a raw price-notes array → PriceNoteEntry[]. */
+function toPriceNotes(v: unknown): PriceNoteEntry[] {
+  return Array.isArray(v) ? v.map(toPriceNote) : [];
+}
+
+/** Coerce one raw overdue-unpriced entry → UnpricedOverdueNote. No ₱ by construction. */
+function toUnpricedOverdue(v: unknown): UnpricedOverdueNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  const nnum = (x: unknown): number | null => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    id: str(o.id),
+    transaction_date: str(o.transaction_date),
+    supplier: nullable(o.supplier),
+    batch_code: nullable(o.batch_code),
+    truck_plate: nullable(o.truck_plate),
+    weight_kg: nnum(o.weight_kg),
+    sacks: nnum(o.sacks),
+    days_pending: num(o.days_pending),
+  };
+}
+
+/** Coerce a raw overdue-unpriced array → UnpricedOverdueNote[]. */
+function toUnpricedOverdues(v: unknown): UnpricedOverdueNote[] {
+  return Array.isArray(v) ? v.map(toUnpricedOverdue) : [];
+}
+
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
 function toGateFailures(v: unknown): GateFailure[] {
   if (!Array.isArray(v)) return [];
@@ -415,6 +562,8 @@ export function normalizeApply(
     auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
     production_batch_starts: toProductionBatchStarts(raw.production_batch_starts),
     production_human_edits: toProductionHumanEdits(raw.production_human_edits),
+    price_notes: toPriceNotes(raw.price_notes),
+    unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
   };
 }
 
@@ -479,6 +628,8 @@ export function failedReportResult(
       auto_created_batches: [],
       production_batch_starts: [],
       production_human_edits: [],
+      price_notes: [],
+      unpriced_overdue: [],
     },
     status: "error",
     error: message,
