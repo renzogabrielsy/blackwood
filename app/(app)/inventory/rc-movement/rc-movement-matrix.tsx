@@ -15,7 +15,18 @@ import {
     TooltipProvider,
     TooltipTrigger,
 } from '@/components/ui/tooltip';
-import type { RcMovementMatrix as RcMovementMatrixData, RcMovementMatrixColumn } from './actions';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import type {
+    RcMovementMatrix as RcMovementMatrixData,
+    RcMovementMatrixColumn,
+    RcMovementOpenBlock,
+} from './actions';
 import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
 import { fetchBlockDataForBatch } from '../blocking/actions';
 import type { BlockData } from '../blocking/types';
@@ -86,6 +97,13 @@ function fmtYieldPct(fraction: number | null): string {
     return `${(fraction * 100).toFixed(1)}%`;
 }
 
+/** Fraction → 2-dp percent (×100). Em-dash when null. Used for loss_pct /
+ *  campaign_fed_share / campaign_fed_kg_included_pct, which are all FRACTIONS in SQL. */
+function fmtFractionPct2(fraction: number | null | undefined): string {
+    if (fraction === null || fraction === undefined) return '—';
+    return `${(fraction * 100).toFixed(2)}%`;
+}
+
 /** Signed 2-decimal percent for block loss; em-dash when the ratio is null (in = 0). */
 function fmtSignedPct(ratio: number | null): string {
     if (ratio === null || ratio === undefined) return '—';
@@ -141,6 +159,7 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
     const {
         campaign, campaignLabel, columns, rows, campaignOptions, grandTotalFed, campaignAvgFedPrice,
         producedGrades, campaignTotalProduced, campaignYieldPct, canViewPrices,
+        campaignActualFedPrice, openBlocks,
     } = data;
 
     // PRICE GATE — drop the frozen "Fed ₱/kg" column (header/body/footer), its per-column
@@ -155,6 +174,15 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
     const LEFT_TOTAL = showFedPrice
         ? LEFT_FEDPRICE + W_FEDPRICE // # · Date · Day · Fed ₱/kg · [Total]
         : LEFT_FEDPRICE;             // # · Date · Day · [Total] (Fed ₱/kg column removed)
+
+    // ACTUAL FED ₱/kg — the same gate. The server does not even QUERY the three
+    // actual-price views for a role that can't view prices, so `campaignActualFedPrice`
+    // is null and `openBlocks` empty for Production; this flag keeps the coverage badge
+    // and the footer's actual line from rendering an empty shell.
+    const actual = showFedPrice ? campaignActualFedPrice : null;
+
+    // Open-blocks slide-in list ("N of M blocks closed" badge → modal).
+    const [openBlocksOpen, setOpenBlocksOpen] = React.useState(false);
 
     const handleCampaignChange = (value: string) => {
         onCampaignChange?.(value);
@@ -236,6 +264,46 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                         {' · '}
                         <span className="font-medium text-foreground">{rows.length}</span> days
                     </div>
+                )}
+
+                {/* ── ACTUAL FED ₱/kg coverage badge ──
+                    The actual price only exists for a CLOSED, fully-priced block, so a
+                    campaign figure is usually PARTIAL. This states the coverage in words
+                    ("18 of 19 blocks closed") so a partial number is never mistaken for
+                    the whole campaign. Clicking it lists the still-open blocks — exactly
+                    the blocks the statistic excludes. Counts come from SQL
+                    (blocks_closed / blocks_fed); nothing is counted client-side.
+                    Price-gated: absent entirely for Production. */}
+                {hasData && actual && actual.blocksFed > 0 && (
+                    openBlocks.length > 0 ? (
+                        <button
+                            type="button"
+                            onClick={() => setOpenBlocksOpen(true)}
+                            aria-haspopup="dialog"
+                            className={cn(
+                                'inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5',
+                                'text-xs font-medium text-foreground cursor-pointer',
+                                'transition-colors duration-150 hover:bg-accent',
+                                'focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                            )}
+                            title={`${openBlocks.length} block${openBlocks.length === 1 ? '' : 's'} still open — click for details`}
+                        >
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                            <span className="tabular-nums">
+                                {actual.blocksClosed} of {actual.blocksFed} blocks closed
+                            </span>
+                            <span className="text-muted-foreground">
+                                · {openBlocks.length} open
+                            </span>
+                        </button>
+                    ) : (
+                        <span className="inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+                            <span className="tabular-nums">
+                                {actual.blocksClosed} of {actual.blocksFed} blocks closed
+                            </span>
+                        </span>
+                    )
                 )}
             </div>
 
@@ -551,6 +619,40 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                                                         <span>{fmtPrice(campaignAvgFedPrice)}</span>
                                                     </span>
                                                 )}
+                                                {/* ── CAMPAIGN ACTUAL FED ₱/kg (the new statistic) ──
+                                                    Sits directly beneath the delivered reference line
+                                                    above, which is deliberately UNCHANGED. The primary
+                                                    form (actual_fed_php_kg — whole-block value ÷
+                                                    whole-block all-time fed kg, Renzo's definition) is
+                                                    what shows; the coverage line states how much of the
+                                                    campaign it covers so a partial figure is never read
+                                                    as the whole. Blank (not ₱0.00) when no block of the
+                                                    campaign is both closed and priced. */}
+                                                {actual && (
+                                                    <div
+                                                        className="mt-0.5 flex flex-col gap-0 border-t border-border/60 pt-0.5 leading-tight"
+                                                        title={`Actual fed ₱/kg over the ${actual.blocksInPrice} of ${actual.blocksFed} blocks that are closed AND fully priced${actual.campaignFedKgIncludedPct !== null ? ` — ${fmtFractionPct2(actual.campaignFedKgIncludedPct)} of this campaign's fed kg` : ''}. ${actual.blocksOpen} still open, ${actual.blocksClosedUnpriced} closed but awaiting a price.`}
+                                                    >
+                                                        <span className="text-[9px] uppercase tracking-wide text-muted-foreground">
+                                                            actual fed
+                                                        </span>
+                                                        {actual.actualFedPhpKg !== null && (
+                                                            <span className="flex items-baseline justify-between gap-1 font-mono text-[13px] font-bold tabular-nums">
+                                                                <span className="text-muted-foreground">₱</span>
+                                                                <span>{fmtPrice(actual.actualFedPhpKg)}</span>
+                                                            </span>
+                                                        )}
+                                                        {/* Coverage of THE NUMBER DIRECTLY ABOVE — `blocksInPrice`,
+                                                            not `blocksClosed`. A closed-but-unpriced block is closed
+                                                            and still excluded, so printing the closure count here
+                                                            would overstate what the ₱ figure covers (JULY 2026: 18
+                                                            closed, but only 16 in the price). The closure story lives
+                                                            on the toolbar badge, where it belongs. */}
+                                                        <span className="text-[9px] tabular-nums text-muted-foreground">
+                                                            {actual.blocksInPrice}/{actual.blocksFed} priced
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </FrozenFooterCell>
                                     )}
@@ -683,6 +785,29 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                                                                 )}
                                                             </div>
                                                         )}
+                                                        {/* Line 4 — ACTUAL FED ₱/kg: what a kilogram that
+                                                            actually reached the plant cost. Sits directly
+                                                            below Line 3 (the delivered reference, kept
+                                                            unchanged) and reads as the MORE important
+                                                            number — bolder, one step larger, separated by
+                                                            a hairline.
+                                                            BLANK when null — an OPEN block, or a closed
+                                                            block with an unpriced delivery, has no actual
+                                                            price. Never ₱0.00, never a dash that looks like
+                                                            a value (that is the avg_cost ₱11.01-vs-₱39.99
+                                                            bug class). The label slot is kept even when
+                                                            blank so every per-column footer stays the SAME
+                                                            height. Price-gated with Line 3. */}
+                                                        {showFedPrice && (
+                                                            <div className="mt-0.5 flex items-baseline justify-between gap-1 border-t border-border/60 pt-0.5 tabular-nums">
+                                                                <span className="text-[10px] uppercase tracking-wide opacity-70">actual</span>
+                                                                {c.actualFedPrice !== null && (
+                                                                    <span className="font-mono text-[11px] font-bold">
+                                                                        {fmtPrice(c.actualFedPrice)}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </TooltipTrigger>
                                                 <TooltipContent
@@ -759,6 +884,60 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                                                                     </dd>
                                                                 </div>
                                                             )}
+                                                            {/* ACTUAL FED ₱/kg + why it's blank when it is.
+                                                                The blank has exactly two causes and the view
+                                                                hands us both, so the tooltip SAYS which one
+                                                                rather than leaving a mystery gap. */}
+                                                            {showFedPrice && (
+                                                                <div className="flex items-baseline justify-between gap-3">
+                                                                    <dt className="text-muted-foreground">Actual fed</dt>
+                                                                    <dd className="font-mono font-semibold tabular-nums">
+                                                                        {c.actualFedPrice !== null ? (
+                                                                            `₱${fmtPrice(c.actualFedPrice)}/kg`
+                                                                        ) : (
+                                                                            <span className="font-sans text-[10px] font-normal text-muted-foreground">
+                                                                                {!c.isClosed
+                                                                                    ? 'block still open'
+                                                                                    : c.hasUnpricedDelivery
+                                                                                      ? 'awaiting price'
+                                                                                      : '—'}
+                                                                            </span>
+                                                                        )}
+                                                                    </dd>
+                                                                </div>
+                                                            )}
+                                                            {/* Uplift over the delivered price. Legitimately
+                                                                ₱0.00 or NEGATIVE on ~27% of closed blocks (fed
+                                                                exactly / more than delivered) — that is real
+                                                                data, so it is rendered NEUTRALLY: no red, no
+                                                                warning, no badge. */}
+                                                            {showFedPrice && c.upliftPhpKg !== null && (
+                                                                <div className="flex items-baseline justify-between gap-3">
+                                                                    <dt className="text-muted-foreground">Uplift</dt>
+                                                                    <dd className="font-mono tabular-nums">
+                                                                        {c.upliftPhpKg < 0 ? '−' : '+'}₱
+                                                                        {fmtPrice(Math.abs(c.upliftPhpKg))}/kg
+                                                                    </dd>
+                                                                </div>
+                                                            )}
+                                                            {/* delivered − fed only MEANS "lost" once closed;
+                                                                on an open block the difference is still sitting
+                                                                in the block, so the row is omitted there. */}
+                                                            {c.isClosed && c.weightLostKg !== null && (
+                                                                <div className="flex items-baseline justify-between gap-3">
+                                                                    <dt className="text-muted-foreground">
+                                                                        {c.weightLostKg < 0 ? 'Over-fed' : 'Lost'}
+                                                                    </dt>
+                                                                    <dd className="font-mono tabular-nums">
+                                                                        {fmtKg(Math.abs(c.weightLostKg)) || '0'} kg
+                                                                        {c.lossPct !== null && (
+                                                                            <span className="text-muted-foreground">
+                                                                                {' '}({fmtFractionPct2(Math.abs(c.lossPct))})
+                                                                            </span>
+                                                                        )}
+                                                                    </dd>
+                                                                </div>
+                                                            )}
                                                             <div className="flex items-baseline justify-between gap-3">
                                                                 <dt className="text-muted-foreground">Loss</dt>
                                                                 <dd
@@ -832,7 +1011,244 @@ export function RcMovementMatrix({ data, onCampaignChange, onNavigateToBatch }: 
                 canViewPrices={panelCanViewPrices}
                 onNavigateToBatch={onNavigateToBatch}
             />
+
+            {/* ── Still-open blocks (the coverage badge's payload) ──
+                Only mounted for a price-viewing role — `actual` is null otherwise, and the
+                server never fetched the rows in the first place. */}
+            {actual && (
+                <OpenBlocksDialog
+                    open={openBlocksOpen}
+                    onOpenChange={setOpenBlocksOpen}
+                    campaignLabel={campaignLabel}
+                    actual={actual}
+                    openBlocks={openBlocks}
+                    onBlockClick={(batchId) => {
+                        const col = columns.find((c) => c.batchId === batchId);
+                        if (!col) return;
+                        setOpenBlocksOpen(false);
+                        handleHeaderClick(col);
+                    }}
+                />
+            )}
         </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Open-blocks modal — what the "N of M blocks closed" badge opens.
+//
+// These are EXACTLY the blocks excluded from the campaign's ACTUAL FED ₱/kg,
+// because an open block's fed total isn't final yet. Enough detail to answer
+// "why is this still open and does it matter": what the campaign took from the
+// block, how much of the campaign that was, and what is still sitting in it.
+// Every figure comes from view_rc_movement_campaign_open_blocks — nothing is
+// summed, shared or priced here.
+// ---------------------------------------------------------------------------
+
+// Explicit pixel widths + a min-width equal to their sum ("never crush, always
+// scroll" — the wrapper scrolls horizontally instead of squeezing a column).
+const OB_W_BLOCK = 150;
+const OB_W_STATUS = 78;
+const OB_W_FED = 96;
+const OB_W_SHARE = 66;
+const OB_W_BALANCE = 96;
+const OB_W_FEEDS = 52;
+const OB_W_LASTFED = 96;
+const OB_W_PRICE = 92;
+const OB_MIN_WIDTH =
+    OB_W_BLOCK + OB_W_STATUS + OB_W_FED + OB_W_SHARE + OB_W_BALANCE + OB_W_FEEDS + OB_W_LASTFED + OB_W_PRICE;
+
+function OpenBlocksDialog({
+    open,
+    onOpenChange,
+    campaignLabel,
+    actual,
+    openBlocks,
+    onBlockClick,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    campaignLabel: string;
+    actual: NonNullable<RcMovementMatrixData['campaignActualFedPrice']>;
+    openBlocks: RcMovementOpenBlock[];
+    onBlockClick: (batchId: string) => void;
+}) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="max-h-[85dvh] gap-3 overflow-hidden p-0 sm:max-w-3xl">
+                <DialogHeader className="bg-background/90 border-b border-border px-4 pt-4 pb-3 backdrop-blur-sm">
+                    <DialogTitle className="text-sm font-semibold">
+                        Blocks still open — {campaignLabel || '—'}
+                    </DialogTitle>
+                    <DialogDescription className="text-xs">
+                        Actual fed ₱/kg covers{' '}
+                        <span className="font-medium text-foreground tabular-nums">
+                            {actual.blocksInPrice} of {actual.blocksFed}
+                        </span>{' '}
+                        blocks
+                        {actual.campaignFedKgIncludedPct !== null && (
+                            <>
+                                {' · '}
+                                <span className="font-medium text-foreground tabular-nums">
+                                    {fmtFractionPct2(actual.campaignFedKgIncludedPct)}
+                                </span>{' '}
+                                of the campaign&apos;s fed kg
+                            </>
+                        )}
+                        . A block only gets an actual price once it closes — its fed total
+                        isn&apos;t final until then.
+                        {actual.blocksClosedUnpriced > 0 && (
+                            <>
+                                {' '}
+                                <span className="tabular-nums">{actual.blocksClosedUnpriced}</span>{' '}
+                                closed block
+                                {actual.blocksClosedUnpriced === 1 ? ' is' : 's are'} also excluded
+                                while awaiting a delivery price.
+                            </>
+                        )}
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div className="min-h-0 overflow-auto px-4 pb-4">
+                    {openBlocks.length === 0 ? (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                            Every block this campaign fed is closed.
+                        </div>
+                    ) : (
+                        <table
+                            className="table-fixed text-xs"
+                            style={{ minWidth: OB_MIN_WIDTH, width: '100%' }}
+                        >
+                            <colgroup>
+                                <col style={{ width: OB_W_BLOCK }} />
+                                <col style={{ width: OB_W_STATUS }} />
+                                <col style={{ width: OB_W_FED }} />
+                                <col style={{ width: OB_W_SHARE }} />
+                                <col style={{ width: OB_W_BALANCE }} />
+                                <col style={{ width: OB_W_FEEDS }} />
+                                <col style={{ width: OB_W_LASTFED }} />
+                                <col style={{ width: OB_W_PRICE }} />
+                            </colgroup>
+                            {/* Sticky header: the OPAQUE `bg-muted` + `sticky` live on each
+                                `th`, not just the `thead` — under the default collapsed-border
+                                model a sticky row's own background can render transparent and
+                                the scrolling rows bleed through (the same trap the matrix
+                                solves with border-separate). */}
+                            <thead>
+                                <tr className="h-8">
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-left font-medium">
+                                        Block
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-left font-medium">
+                                        Status
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-right font-medium">
+                                        Fed here
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-right font-medium">
+                                        Share
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-right font-medium">
+                                        Balance
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-right font-medium">
+                                        Feeds
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-left font-medium">
+                                        Last fed
+                                    </th>
+                                    <th className="sticky top-0 z-10 bg-muted border-b border-border px-2 py-1 text-right font-medium">
+                                        ₱/kg in
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {openBlocks.map((b) => (
+                                    <tr key={b.batchId} className="h-8 hover:bg-accent">
+                                        <td className="border-b border-border/50 px-2 py-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => onBlockClick(b.batchId)}
+                                                title={`Open details for ${b.batchCode}`}
+                                                className={cn(
+                                                    'flex w-full flex-col items-start gap-0 text-left leading-tight cursor-pointer',
+                                                    'rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                                                )}
+                                            >
+                                                <span className="truncate font-mono text-[11px] font-semibold">
+                                                    {b.batchCode}
+                                                </span>
+                                                <span className="truncate text-[10px] text-muted-foreground">
+                                                    {b.blockLoc ?? '—'}
+                                                </span>
+                                            </button>
+                                        </td>
+                                        <td className="border-b border-border/50 px-2 py-1">
+                                            <StatusPill status={b.status} />
+                                        </td>
+                                        <td className="border-b border-border/50 px-2 py-1 text-right font-mono tabular-nums">
+                                            {fmtKg(b.campaignFedKg) || '0'}
+                                        </td>
+                                        <td className="border-b border-border/50 px-2 py-1 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
+                                            {fmtFractionPct2(b.campaignFedShare)}
+                                        </td>
+                                        <td className="border-b border-border/50 px-2 py-1 text-right font-mono tabular-nums">
+                                            {b.balanceKg !== null ? fmtKg(b.balanceKg) || '0' : '—'}
+                                        </td>
+                                        <td className="border-b border-border/50 px-2 py-1 text-right font-mono tabular-nums">
+                                            {b.feedCount}
+                                        </td>
+                                        {/* The BLOCK's own last feed, not the campaign's — "why is
+                                            this still open" is answered by whether it is still being
+                                            fed at all (JAN-26-BLK18: last fed 2026-08-06, after this
+                                            campaign's window closed on 2026-07-29). The campaign
+                                            window is on the hover title. */}
+                                        <td
+                                            className="border-b border-border/50 px-2 py-1 font-mono text-[11px] tabular-nums"
+                                            title={
+                                                b.campaignFirstFedDate && b.campaignLastFedDate
+                                                    ? `Fed into this campaign ${b.campaignFirstFedDate} → ${b.campaignLastFedDate} (${b.campaignFeedDays} day${b.campaignFeedDays === 1 ? '' : 's'})`
+                                                    : undefined
+                                            }
+                                        >
+                                            {b.lastFedDate ?? '—'}
+                                        </td>
+                                        {/* Delivered ₱/kg — the price the block ARRIVED at.
+                                            NULL when a delivery is still unpriced, in which case
+                                            priced_delivered_php_kg is the honest partial (flagged,
+                                            never silently substituted). Never ₱0.00. */}
+                                        <td className="border-b border-border/50 px-2 py-1">
+                                            {b.deliveredPhpKg !== null ? (
+                                                <span className="flex items-baseline justify-between gap-1 font-mono tabular-nums">
+                                                    <span className="text-muted-foreground">₱</span>
+                                                    <span>{fmtPrice(b.deliveredPhpKg)}</span>
+                                                </span>
+                                            ) : b.pricedDeliveredPhpKg !== null ? (
+                                                <span
+                                                    className="flex items-baseline justify-between gap-1 font-mono tabular-nums text-muted-foreground"
+                                                    title={`${b.unpricedDeliveryCount} delivery${b.unpricedDeliveryCount === 1 ? '' : 'ies'} still unpriced — this is the average over the PRICED weight only`}
+                                                >
+                                                    <span>₱</span>
+                                                    <span>{fmtPrice(b.pricedDeliveredPhpKg)}*</span>
+                                                </span>
+                                            ) : (
+                                                <span className="block text-right text-muted-foreground">—</span>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                    {openBlocks.some((b) => b.hasUnpricedDelivery) && (
+                        <p className="pt-2 text-[10px] text-muted-foreground">
+                            * averaged over priced weight only — the block still has an unpriced
+                            delivery.
+                        </p>
+                    )}
+                </div>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -921,11 +1337,14 @@ function KpiTile({
     value,
     tone,
     className,
+    sub,
 }: {
     label: string;
     value: string;
     tone?: 'amber' | 'emerald' | 'red';
     className?: string;
+    /** Optional caption under the value (e.g. the actual-price coverage). */
+    sub?: string;
 }) {
     const toneClass =
         tone === 'amber'
@@ -943,6 +1362,9 @@ function KpiTile({
             <div className={cn('font-mono text-sm font-semibold tabular-nums', toneClass)}>
                 {value}
             </div>
+            {sub && (
+                <div className="text-[10px] tabular-nums text-muted-foreground">{sub}</div>
+            )}
         </div>
     );
 }
@@ -977,7 +1399,7 @@ function RcMovementSummaryMobile({
 }) {
     const {
         columns, rows, grandTotalFed, campaignTotalProduced, campaignYieldPct,
-        campaignAvgFedPrice, canViewPrices,
+        campaignAvgFedPrice, canViewPrices, campaignActualFedPrice,
     } = data;
     // Same price gate as the desktop `showFedPrice` flag — never render ₱ for Production.
     const showFedPrice = canViewPrices;
@@ -1001,6 +1423,23 @@ function RcMovementSummaryMobile({
                         label="Camp. ₱/kg"
                         value={campaignAvgFedPrice !== null ? `₱${fmtPrice(campaignAvgFedPrice)}` : '—'}
                         className="col-span-2"
+                    />
+                )}
+                {/* The phone twin of the footer's Line 4 / campaign actual line. Sits
+                    directly beneath the delivered reference tile above (unchanged), with
+                    the SQL-supplied coverage as its caption so a partial figure is never
+                    read as the whole campaign. Blank ("—") when no block qualifies —
+                    never ₱0.00. Price-gated with its sibling. */}
+                {showFedPrice && campaignActualFedPrice && campaignActualFedPrice.blocksFed > 0 && (
+                    <KpiTile
+                        label="Actual fed ₱/kg"
+                        value={
+                            campaignActualFedPrice.actualFedPhpKg !== null
+                                ? `₱${fmtPrice(campaignActualFedPrice.actualFedPhpKg)}`
+                                : '—'
+                        }
+                        sub={`over ${campaignActualFedPrice.blocksInPrice} of ${campaignActualFedPrice.blocksFed} blocks · ${campaignActualFedPrice.blocksClosed} closed`}
+                        className="col-span-2 border-foreground/20"
                     />
                 )}
             </div>
