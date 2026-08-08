@@ -1,13 +1,114 @@
 {
   "changed": [],
-  "dup_noops": [
+  "dup_noops": [],
+  "flagged": [
     {
+      "decision": "skip",
       "index": " num:6",
-      "natural_key": "2026-07-04|MAV 9202|20640.0",
-      "note": "L-033: same truckload already recorded as JUNE-26-BLK9 — extractor-derived name JULY-26-BLK9 is a month-boundary phantom."
+      "kind": "L040_identity_diff",
+      "reason": "L-040: this is the SAME delivery as an existing row (matched on same truck + sack count (MAV 9202, 580 sacks) on 2026-07-04), but the two sources disagree on batch_code: report says JULY-26-BLK9, app has JUNE-26-BLK9. One side is a human correction the other has not caught up with — never auto-applied; a person picks the winner.",
+      "row": {
+        "_source_row": " num:6",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JULY-26-BLK9",
+        "block_loc": "A-19C",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": null,
+        "lab_results": {
+          "ash": " num:3",
+          "bd_astm": " num:0.58",
+          "bd_jis": " num:0.6",
+          "fc": " num:82",
+          "grit": " num:3",
+          "mc": " num:11",
+          "vm": " num:13"
+        },
+        "operator_batch_label": "B09",
+        "remarks": "PILED IN JUNE BLOCK 9",
+        "sacks": " num:580",
+        "supplier": "Ornales",
+        "transaction_date": "2026-07-04",
+        "truck_plate": "MAV 9202",
+        "true_weight_kg": null,
+        "warnings": [
+          "Batch code translated heuristically: 'B09' -> 'JULY-26-BLK9' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:20640"
+      }
     }
   ],
-  "flagged": [],
+  "identity_diff": [
+    {
+      "db_row": {
+        "batch_code": "JUNE-26-BLK9",
+        "block_loc": "A-19C",
+        "cost_basis": " num:38",
+        "lab_results": {
+          "ash": " num:3",
+          "bd_astm": " num:0.58",
+          "bd_jis": " num:0.6",
+          "fc": " num:82",
+          "grit": " num:3",
+          "mc": " num:11",
+          "vm": " num:13"
+        },
+        "remarks": null,
+        "sacks": " num:580",
+        "supplier": "Ornales",
+        "transaction_date": "2026-07-04",
+        "truck_plate": "MAV 9202",
+        "weight_kg": " num:20640"
+      },
+      "diff": [
+        {
+          "dbValue": "JUNE-26-BLK9",
+          "emailValue": "JULY-26-BLK9",
+          "field": "batch_code"
+        },
+        {
+          "dbValue": null,
+          "emailValue": "PILED IN JUNE BLOCK 9",
+          "field": "remarks"
+        }
+      ],
+      "identity_fields": [
+        "batch_code"
+      ],
+      "index": " num:6",
+      "matched_tier": " num:1",
+      "peer_count": " num:1",
+      "row": {
+        "_source_row": " num:6",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JULY-26-BLK9",
+        "block_loc": "A-19C",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": null,
+        "lab_results": {
+          "ash": " num:3",
+          "bd_astm": " num:0.58",
+          "bd_jis": " num:0.6",
+          "fc": " num:82",
+          "grit": " num:3",
+          "mc": " num:11",
+          "vm": " num:13"
+        },
+        "operator_batch_label": "B09",
+        "remarks": "PILED IN JUNE BLOCK 9",
+        "sacks": " num:580",
+        "supplier": "Ornales",
+        "transaction_date": "2026-07-04",
+        "truck_plate": "MAV 9202",
+        "true_weight_kg": null,
+        "warnings": [
+          "Batch code translated heuristically: 'B09' -> 'JULY-26-BLK9' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:20640"
+      }
+    }
+  ],
   "malformed": [],
   "new": [
     {
@@ -83,8 +184,9 @@
     "changed_count": " num:0",
     "db_rows_in_window": " num:1",
     "extracted_total": " num:3",
+    "identity_diff_count": " num:1",
     "malformed_count": " num:0",
-    "new_count": " num:3",
+    "new_count": " num:2",
     "noop_count": " num:0"
   }
 }

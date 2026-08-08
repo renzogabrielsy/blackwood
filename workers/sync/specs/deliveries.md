@@ -23,7 +23,15 @@ Read SHARED.md first — this spec does not repeat the Gmail/db.py/orchestrator_
 ### Apply phase (`phase_apply`, sync_deliveries.py:296-415)
 
 1. For each `new` item: defensive batch upsert (INSERT INTO batches with `current_weight=0` `ON CONFLICT DO NOTHING`-equivalent via existence check first) — catches `is_location_collision` and routes to `held` (`reason: "location_occupied"`) rather than crashing.
-2. Builds the delivery payload (see §5 Apply spec) and calls `db.insert_if_absent(...)` with natural key `(transaction_date, batch_code, truck_plate, weight_kg, sacks)`. Zero inserted → `held` (`reason: "already_exists"`).
+2. Builds the delivery payload (see §5 Apply spec) and calls `db.insert_if_absent(...)` with the
+   **shared two-tier guard columns** — `lib/deliveryIdentity.ts::deliveriesInsertGuardColumns(row)`
+   (L-040b): `(transaction_date, truck_plate, sacks)` for a plated row with a sack count, else the
+   legacy `(transaction_date, batch_code, block_loc, weight_kg)`. `reports/gsheet/apply.ts` calls the
+   SAME function, so the race guard cannot disagree with the classifier. Zero inserted → `held`
+   (`reason: "already_exists"`). NOTE the guard compares the plate with PostgREST `eq.`, i.e. its RAW
+   spelling — slightly weaker than the classifier's normalized match, which is fine: this is only the
+   within-run TOCTOU backstop (BUG-016), and the column set is strictly narrower than the old
+   five-column key, so it can only suppress more duplicates.
 3. On successful insert: `db.update_trigger_audit_provenance("deliveries", new_id, comment, snapshot=payload)` — L-001 (never a second INSERT; the trigger already wrote one).
 4. For each `changed` item: builds a `patch` dict from `diff` entries (reads `emailValue` or `sheetValue` — this key name is Sheet-vs-email agnostic, a leftover from code sharing with gsheet), `db.update(...)`, then either stamps the trigger-audit row or falls back to `insert_manual_audit` if stamping returns `False` (no trigger row found).
 5. FLAGGED and MALFORMED rows are NEVER auto-written under `--only-clean` — always routed to `held`.
@@ -112,14 +120,48 @@ The extractor itself only SKIPS unrecoverable rows (no date, no weight) — it n
 
 ## 3. Classification spec
 
-### Natural key (`classify_deliveries.py::make_natural_key`, lines 77-83)
+### Identity — TWO-TIER (L-040b, 2026-08-08)
 
-`(transaction_date, batch_code, norm_block_loc(block_loc), norm_num(weight_kg, places=3))`
+**One definition, shared by both writers of `deliveries`:** `workers/sync/src/lib/deliveryIdentity.ts`,
+mirrored in `classify_deliveries.py` (`tier1_key` / `legacy_key` / `build_identity_index` /
+`match_delivery`) and imported — never re-derived — by `classify_gsheet.py`. If the email path and
+the Sheet path disagree about what "the same row" is, they duplicate each other's rows.
+
+| Tier | Key | Applies to |
+|---|---|---|
+| **1** (preferred) | `("T1", transaction_date[:10], norm_plate(truck_plate), norm_int(sacks))` | any row with a non-blank normalized plate **and** a sack count |
+| **2** (fallback = the LEGACY key, unchanged) | `("T2", transaction_date[:10], batch_code, norm_block_loc(block_loc), norm_num(weight_kg, 3))` | everything else |
+
+`norm_plate` keeps alphanumerics only and upper-cases (`MAV 9202` ≡ `MAV9202` — both spellings are
+live, 57 and 35 rows). The tier tag is the FIRST key segment, so a tier-1 key can never equal a
+tier-2 key.
+
+**Lookup order is tier 1, then tier 2.** Every DB row is indexed under its legacy key AND, when
+eligible, under its tier-1 key. Because tier 2 IS the old key and is still tried, the set of rows
+that MATCH is a strict **superset** of what the old single key matched: the change can only turn an
+insert into a match, never the reverse. `peer_count` reports how many DB rows shared the matched key
+— `> 1` on a tier-1 match means the database already holds more than one row for one truckload (a
+duplicate predating the run), and the refusal text says so.
+
+**Why the old key manufactured duplicates.** It was tier 2 alone: no truck plate, and three
+human-correctable facts (`batch_code` is a *label* two sources spell differently; `block_loc` is a
+yard decision that gets corrected; `weight_kg` is revised after ASH/wet deductions). Correct any one
+and the row stopped being recognised → NEW → a second copy. Sacks are counted at the gate and are
+not revised, which is why they are in the identity and weight is not. See LEARNING_LEDGER L-040b.
+
+**Measured (live table, 2026-08-08):** 1,688 deliveries · 1,545 tier-1 eligible with **zero** tier-1
+collisions · 143 with no plate, **zero** collisions on the legacy key among them · and exactly ONE
+legacy-key collision in the whole table — the `2025-04-03 / KCA 378 / MARCH-25-BLK9 / D-8D` wet-sack
+split (471 and 36 sacks, both 18,827 kg), which the old key conflated into one row and tier 1
+separates correctly.
 
 ### NOOP demotion / equality rules (`field_differences`, lines 99-156)
 
 | Field | Comparison | Notes |
 |---|---|---|
+| `batch_code` | `norm_str` equal | **L-040b — left the key, so it is COMPARED.** Equal by construction on a tier-2 match |
+| `block_loc` | `norm_block_loc` equal | same |
+| `weight_kg` | `norm_num(…,3)` equal | same |
 | `supplier` | `norm_str` equal | case-insens, trim, `''`≡`null` |
 | `truck_plate` | `norm_str` equal | same |
 | `sacks` | `norm_int` equal | truncates fractional (Porting Trap #3 in SHARED.md) |
@@ -129,9 +171,26 @@ The extractor itself only SKIPS unrecoverable rows (no date, no weight) — it n
 
 `true_weight_kg`/`deduction_note` are **explicitly excluded** from `field_differences` (comment at lines 102-108) — never diffed, additive/write-only per L-021.
 
+### IDENTITY_DIFF — a formerly-key field disagrees (L-040b)
+
+A match whose `diffs` touch **any of `batch_code` / `block_loc` / `weight_kg`** does NOT become
+`changed` (which auto-applies). It goes to the classifier's `identity_diff` bucket, and
+`apply_deliveries_guard` folds every entry into `flagged` (`kind: "L040_identity_diff"`,
+`decision: "skip"`, `db_id` set) so `apply.ts` HOLDS it — `HeldKind` `cross_batch_reassignment`, no
+new kind invented. The refusal names BOTH sides of every disagreeing field and carries no ₱ value.
+
+Those three are exactly the fields a human corrects, so a mismatch means one source is stale; per
+CLAUDE.md → Sync Integrity, a human arbitrates it in Sync Review. **A field removed from an identity
+must be added to the diff in the same change** — otherwise a corrected batch code matches and then
+reads as a silent NOOP, which is worse than a duplicate because nobody can see it.
+
+Consequence for **L-033a**: it is now a narrower BACKSTOP. A plated row whose sacks match an existing
+row is resolved as an identity diff by the classifier and never reaches the guard's `new` loop, which
+is strictly better — L-033a's `dup_noop` outcome was a SILENT skip.
+
 ### VALUE_CHANGED vs NOOP
 
-Any non-empty `diffs` list → VALUE_CHANGED (no materiality gate here — unlike gsheet, EVERY diff in `classify_deliveries.py` is treated as material; there is no rounding/null↔0 demotion beyond what `norm_*` already collapses into equality).
+Any non-empty `diffs` list that contains **no** identity field → VALUE_CHANGED (no materiality gate here — unlike gsheet, EVERY diff in `classify_deliveries.py` is treated as material; there is no rounding/null↔0 demotion beyond what `norm_*` already collapses into equality).
 
 ### FLAGGED kinds (orchestrator-level, sync_deliveries.py — NOT in classify_deliveries.py itself)
 
@@ -182,11 +241,11 @@ Trigger-UPDATE via `stamp_ingestion_audit` RPC (table has an audit trigger) — 
 
 ### Idempotency mechanism
 
-`insert_if_absent` re-checks the natural key immediately before each insert (SHARED.md §2.3). ALSO: gsheet-sourced rows tagged `provenance=gsheet` with `cost_basis=0` are meant to be picked up LATER by this same deliveries pipeline for price enrichment (L-008 cross-reference) — but this orchestrator does not special-case `provenance=gsheet` rows differently; any row with `cost_basis IS NULL` (extract-side) simply gets `cost_basis=0` on insert if truly unenriched.
+`insert_if_absent` re-checks the **two-tier guard key** (L-040b, see §5 write order) immediately before each insert (SHARED.md §2.3). ALSO: gsheet-sourced rows tagged `provenance=gsheet` with `cost_basis=0` are meant to be picked up LATER by this same deliveries pipeline for price enrichment (L-008 cross-reference) — but this orchestrator does not special-case `provenance=gsheet` rows differently; any row with `cost_basis IS NULL` (extract-side) simply gets `cost_basis=0` on insert if truly unenriched.
 
 ### Held-row reasons
 
-`location_occupied`, `already_exists` (idempotent skip), plus whatever `f.get("kind")` was set to for flagged rows (`L033_cross_batch_loc_mismatch`, `L004_block_loc_correction`, `low_confidence`), and `malformed`.
+`location_occupied`, `already_exists` (idempotent skip), plus whatever `f.get("kind")` was set to for flagged rows (`L033_cross_batch_loc_mismatch`, `L004_block_loc_correction`, **`L040_identity_diff`**, `low_confidence`), and `malformed`. `L040_identity_diff` maps to `HeldKind` `cross_batch_reassignment`.
 
 ### Label + watermark conditions
 

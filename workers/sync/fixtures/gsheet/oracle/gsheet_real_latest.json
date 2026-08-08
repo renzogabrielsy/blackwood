@@ -1,7 +1,336 @@
 {
   "rc_in": {
     "changed": [],
-    "flagged": [],
+    "flagged": [
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "JAN-25-FEED1",
+            "block_loc": null,
+            "cost_basis": " num:25",
+            "lab_results": {
+              "ash": " num:2.24",
+              "bd_astm": " num:0.575",
+              "bd_jis": " num:0.595",
+              "fc": " num:85.37",
+              "grit": " num:2.86",
+              "mc": " num:11.8",
+              "vm": " num:12.39"
+            },
+            "remarks": "KCA 378  net kilos of 17,605  - 32 kilos(MC of mix 106 sacks umog) = 17,573",
+            "sacks": " num:443",
+            "supplier": "Paquibot",
+            "transaction_date": "2025-01-07",
+            "truck_plate": "KCA 378",
+            "weight_kg": " num:17573"
+          }
+        ],
+        "index": " num:152",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2025-01-07) is the SAME delivery as an existing app row — matched on the same truck and sack count (KCA 378, 443 sacks) — but they disagree on batch_code: Sheet says FEEDING AREA # 1, app has JAN-25-FEED1. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:152",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [],
+          "batch_code_primary": "FEEDING AREA # 1",
+          "block_loc": null,
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": "−32 kg MC",
+          "lab_results": {
+            "ash": " num:2.24",
+            "bd_astm": " num:0.575",
+            "bd_jis": " num:0.595",
+            "fc": " num:85.37",
+            "grit": " num:2.86",
+            "mc": " num:11.8",
+            "vm": " num:12.39"
+          },
+          "remarks": "KCA 378  net kilos of 17,605  - 32 kilos(MC of mix 106 sacks umog) = 17,573",
+          "sacks": " num:443",
+          "supplier": "Paquibot",
+          "transaction_date": "2025-01-07",
+          "truck_plate": "KCA 378",
+          "true_weight_kg": " num:17605",
+          "warnings": [],
+          "weight_kg": " num:17573"
+        }
+      },
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "JAN-25-FEED1",
+            "block_loc": null,
+            "cost_basis": " num:25",
+            "lab_results": {
+              "ash": " num:3.47",
+              "bd_astm": " num:0.575",
+              "bd_jis": " num:0.595",
+              "fc": " num:84.46",
+              "grit": " num:2.47",
+              "mc": " num:12",
+              "vm": " num:12.07"
+            },
+            "remarks": "DONE FEEDING",
+            "sacks": " num:415",
+            "supplier": "Paquibot",
+            "transaction_date": "2025-01-11",
+            "truck_plate": "KCA 378",
+            "weight_kg": " num:17995"
+          }
+        ],
+        "index": " num:153",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2025-01-11) is the SAME delivery as an existing app row — matched on the same truck and sack count (KCA 378, 415 sacks) — but they disagree on batch_code: Sheet says FEEDING AREA # 2, app has JAN-25-FEED1. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:153",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [],
+          "batch_code_primary": "FEEDING AREA # 2",
+          "block_loc": null,
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": " num:3.47",
+            "bd_astm": " num:0.575",
+            "bd_jis": " num:0.595",
+            "fc": " num:84.46",
+            "grit": " num:2.47",
+            "mc": " num:12",
+            "vm": " num:12.07"
+          },
+          "remarks": "DONE FEEDING",
+          "sacks": " num:415",
+          "supplier": "Paquibot",
+          "transaction_date": "2025-01-11",
+          "truck_plate": "KCA 378",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:17995"
+        }
+      },
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "JAN-25-FEED1",
+            "block_loc": null,
+            "cost_basis": " num:25",
+            "lab_results": {
+              "ash": " num:3.76",
+              "bd_astm": " num:0.575",
+              "bd_jis": " num:0.595",
+              "fc": " num:84.1",
+              "grit": " num:2.68",
+              "mc": " num:11.94",
+              "vm": " num:12.14"
+            },
+            "remarks": "DONE FEEDING",
+            "sacks": " num:413",
+            "supplier": "Paquibot",
+            "transaction_date": "2025-01-16",
+            "truck_plate": "AAV 6111",
+            "weight_kg": " num:18440"
+          }
+        ],
+        "index": " num:154",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2025-01-16) is the SAME delivery as an existing app row — matched on the same truck and sack count (AAV 6111, 413 sacks) — but they disagree on batch_code: Sheet says FEEDING AREA # 3, app has JAN-25-FEED1. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:154",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [],
+          "batch_code_primary": "FEEDING AREA # 3",
+          "block_loc": null,
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": " num:3.76",
+            "bd_astm": " num:0.575",
+            "bd_jis": " num:0.595",
+            "fc": " num:84.1",
+            "grit": " num:2.68",
+            "mc": " num:11.94",
+            "vm": " num:12.14"
+          },
+          "remarks": "DONE FEEDING",
+          "sacks": " num:413",
+          "supplier": "Paquibot",
+          "transaction_date": "2025-01-16",
+          "truck_plate": "AAV 6111",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:18440"
+        }
+      },
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "JAN-25-FEED1",
+            "block_loc": null,
+            "cost_basis": " num:25.5",
+            "lab_results": {
+              "ash": " num:4.02",
+              "bd_astm": " num:0.568",
+              "bd_jis": " num:0.588",
+              "fc": " num:84.14",
+              "grit": " num:2.54",
+              "mc": " num:11.74",
+              "vm": " num:11.84"
+            },
+            "remarks": "DONE FEEDING",
+            "sacks": " num:482",
+            "supplier": "Paquibot",
+            "transaction_date": "2025-01-23",
+            "truck_plate": "AAV 6111",
+            "weight_kg": " num:17375"
+          }
+        ],
+        "index": " num:155",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2025-01-23) is the SAME delivery as an existing app row — matched on the same truck and sack count (AAV 6111, 482 sacks) — but they disagree on batch_code: Sheet says FEEDING AREA # 4, app has JAN-25-FEED1. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:155",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [],
+          "batch_code_primary": "FEEDING AREA # 4",
+          "block_loc": null,
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": " num:4.02",
+            "bd_astm": " num:0.568",
+            "bd_jis": " num:0.588",
+            "fc": " num:84.14",
+            "grit": " num:2.54",
+            "mc": " num:11.74",
+            "vm": " num:11.84"
+          },
+          "remarks": "DONE FEEDING",
+          "sacks": " num:482",
+          "supplier": "Paquibot",
+          "transaction_date": "2025-01-23",
+          "truck_plate": "AAV 6111",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:17375"
+        }
+      },
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "FEB-26-BLK4",
+            "block_loc": "A-7C",
+            "cost_basis": " num:49",
+            "lab_results": {
+              "ash": " num:6.42",
+              "bd_astm": " num:0.565",
+              "bd_jis": " num:0.585",
+              "fc": " num:82.87",
+              "grit": " num:3.12",
+              "mc": " num:9.74",
+              "vm": " num:10.71"
+            },
+            "remarks": "CBQ 5957 net kilos of 21,640 - 1.42%(ASH) = 21,333",
+            "sacks": " num:540",
+            "supplier": "Ornales",
+            "transaction_date": "2026-02-04",
+            "truck_plate": "CBQ 5957",
+            "weight_kg": " num:21333"
+          }
+        ],
+        "index": " num:679",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2026-02-04) is the SAME delivery as an existing app row — matched on the same truck and sack count (CBQ 5957, 540 sacks) — but they disagree on batch_code: Sheet says FEB-26-BLK5, app has FEB-26-BLK4; block_loc: Sheet says C-10B, app has A-7C. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:679",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [
+            "FEBRUARY-26-BLK5"
+          ],
+          "batch_code_primary": "FEB-26-BLK5",
+          "block_loc": "C-10B",
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": "−1.42% ASH",
+          "lab_results": {
+            "ash": " num:6.42",
+            "bd_astm": " num:0.565",
+            "bd_jis": " num:0.585",
+            "fc": " num:82.87",
+            "grit": " num:3.12",
+            "mc": " num:9.74",
+            "vm": " num:10.71"
+          },
+          "remarks": "CBQ 5957 net kilos of 21,640 - 1.42%(ASH) = 21,333",
+          "sacks": " num:540",
+          "supplier": "Ornales",
+          "transaction_date": "2026-02-04",
+          "truck_plate": "CBQ 5957",
+          "true_weight_kg": " num:21640",
+          "warnings": [],
+          "weight_kg": " num:21333"
+        }
+      },
+      {
+        "db_conflicts": [
+          {
+            "batch_code": "FEB-26-BLK5",
+            "block_loc": "C-10B",
+            "cost_basis": " num:49",
+            "lab_results": {
+              "ash": " num:3.57",
+              "bd_astm": " num:0.578",
+              "bd_jis": " num:0.598",
+              "fc": " num:82.78",
+              "grit": " num:3.17",
+              "mc": " num:9.94",
+              "vm": " num:13.65"
+            },
+            "remarks": "",
+            "sacks": " num:334",
+            "supplier": "Ornales",
+            "transaction_date": "2026-02-04",
+            "truck_plate": "LFF 835",
+            "weight_kg": " num:11495"
+          }
+        ],
+        "index": " num:680",
+        "kind": "identity_diff",
+        "reason": "L-040: the Sheet row (2026-02-04) is the SAME delivery as an existing app row — matched on the same truck and sack count (LFF 835, 334 sacks) — but they disagree on batch_code: Sheet says FEB-26-BLK4, app has FEB-26-BLK5; block_loc: Sheet says A-7C, app has C-10B. One side is a human correction the other has not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE and never a second insert. NOTE: the app already holds 2 rows for this one truckload — a duplicate that predates this run.",
+        "row": {
+          "_source_row": " num:680",
+          "_source_tab": "RC IN",
+          "batch_code_fallbacks": [
+            "FEBRUARY-26-BLK4"
+          ],
+          "batch_code_primary": "FEB-26-BLK4",
+          "block_loc": "A-7C",
+          "confidence": " num:1",
+          "cost_basis": null,
+          "deduction_note": null,
+          "lab_results": {
+            "ash": " num:3.57",
+            "bd_astm": " num:0.578",
+            "bd_jis": " num:0.598",
+            "fc": " num:82.78",
+            "grit": " num:3.17",
+            "mc": " num:9.94",
+            "vm": " num:13.65"
+          },
+          "remarks": null,
+          "sacks": " num:334",
+          "supplier": "Ornales",
+          "transaction_date": "2026-02-04",
+          "truck_plate": "LFF 835",
+          "true_weight_kg": null,
+          "warnings": [],
+          "weight_kg": " num:11495"
+        }
+      }
+    ],
     "malformed": [],
     "mode": "rc_in",
     "new": [
@@ -106,42 +435,6 @@
       }
     ],
     "noop": [
-      {
-        "index": " num:152",
-        "natural_key": [
-          "2025-01-07",
-          "FEEDING AREA # 1",
-          null,
-          " num:17573"
-        ]
-      },
-      {
-        "index": " num:153",
-        "natural_key": [
-          "2025-01-11",
-          "FEEDING AREA # 2",
-          null,
-          " num:17995"
-        ]
-      },
-      {
-        "index": " num:154",
-        "natural_key": [
-          "2025-01-16",
-          "FEEDING AREA # 3",
-          null,
-          " num:18440"
-        ]
-      },
-      {
-        "index": " num:155",
-        "natural_key": [
-          "2025-01-23",
-          "FEEDING AREA # 4",
-          null,
-          " num:17375"
-        ]
-      },
       {
         "index": " num:156",
         "natural_key": [
@@ -4141,24 +4434,6 @@
           "FEB-26-BLK3",
           "A-1A",
           " num:18910"
-        ]
-      },
-      {
-        "index": " num:680",
-        "natural_key": [
-          "2026-02-04",
-          "FEB-26-BLK4",
-          "A-7C",
-          " num:11495"
-        ]
-      },
-      {
-        "index": " num:679",
-        "natural_key": [
-          "2026-02-04",
-          "FEB-26-BLK5",
-          "C-10B",
-          " num:21333"
         ]
       },
       {
@@ -8442,11 +8717,11 @@
       "changed_count": " num:0",
       "db_rows_in_window": " num:1267",
       "extracted_total": " num:1015",
-      "flagged_count": " num:0",
+      "flagged_count": " num:6",
       "in_scope_total": " num:871",
       "malformed_count": " num:0",
       "new_count": " num:3",
-      "noop_count": " num:868",
+      "noop_count": " num:862",
       "out_of_scope_count": " num:144",
       "unmapped_count": " num:0"
     },

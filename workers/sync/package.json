@@ -22,6 +22,7 @@
     "gmail:mint": "tsx scripts/gmail-oauth-mint.ts",
     "gmail:check": "tsx scripts/gmail-auth-check.ts",
     "parity": "tsx test/parity/runner.ts",
+    "dryrun:identity": "tsx scripts/delivery-identity-dryrun.ts",
     "build:oracle": "python3 scripts/build_oracle.py",
     "fixtures:build": "python3 scripts/build_fixtures.py",
     "fixtures:snapshot": "python3 scripts/snapshot_db.py"

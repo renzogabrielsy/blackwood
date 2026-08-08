@@ -507,4 +507,69 @@ it, so deleting it would quietly make the archive un-restorable.
 
 ---
 
+## L-040b — A natural key may only be built from facts that DO NOT GET CORRECTED (2026-08-08)
+
+**The identity was the bug, and a human-edit latch would not have touched it.** L-040 (above)
+removed nine duplicate deliveries. This entry removes the mechanism that made them. The sync
+identified a delivery by `(transaction_date, batch_code, block_loc, weight_kg)`. **The truck plate
+— the one fact that actually names the physical truckload — was NOT in it, and three
+human-correctable facts were.** So the moment anyone corrected a batch code, a block or a weight,
+the classifier stopped recognising the row and reported it NEW, and the pipeline inserted a second
+copy. Both confirmed incidents were INSERTS, not overwrites, which is why the production human-edit
+latch (L-036 / `fn_apply_production_upstream`) would have prevented neither: there was nothing to
+refuse to overwrite.
+
+- **The rule.** *Ask of every field in a key: is this a FACT or a LABEL?* A fact is stamped by the
+  world (a plate on a truck, a count at the gate). A label is what a person or a template calls
+  something, and two sources will eventually spell it differently or a human will fix it. **Weight
+  looks like a fact and is not** — it is revised after ASH and wet-sack deductions land, hours or
+  days later. `batch_code` is a pure label: the Sheet writes `JULY-26-FEED1`, MC's email writes
+  `FEEDING # 1`. `block_loc` is a yard decision that gets corrected. All three had to leave.
+- **The identity is now TWO-TIER**, with ONE definition shared by both writers of `deliveries`
+  (`workers/sync/src/lib/deliveryIdentity.ts`, mirrored in `classify_deliveries.py`):
+  **TIER 1** `(transaction_date, normalized truck_plate, sacks)` — measured UNIQUE across all 1,545
+  live deliveries that carry both, zero collisions; **TIER 2** the legacy key, for the 143 rows with
+  no plate. Lookup is tier 1 then tier 2, so the set of rows that MATCH is a strict **superset** of
+  what the old key matched — the change can only turn an insert into a match, never the reverse.
+  Plates normalize to alphanumerics-upper because `MAV 9202` (57 rows) and `MAV9202` (35 rows) are
+  one truck.
+- **A field that leaves a key must ENTER the comparison, or the bug just changes shape.** Dropping
+  `batch_code` from the key without adding it to `field_differences` would have made a corrected
+  batch code match and then read as a silent NOOP — invisible instead of duplicated, which is
+  worse. **Rule:** every field removed from an identity is added to the diff in the same change.
+- **And a disagreement on one of those fields is NEVER auto-applied.** They are exactly the fields a
+  human corrects, so a mismatch means one source is stale. It becomes a held row
+  (`L040_identity_diff` → `cross_batch_reassignment`), named on both sides, for a person to
+  arbitrate — never a Sheet-wins UPDATE and never an insert. This is the Sync Integrity rule
+  applied to identity rather than to values.
+- **Check the ORDER of your guards, not just their content.** gsheet decided UNMAPPED *before*
+  matching, so a known truckload under an unrecognised code was held with a vague "code not in DB"
+  forever — and, had the code been pattern-valid, the 2026-07-11 auto-create policy would have
+  created a batch and inserted a **second copy of a delivery already in the database**. The identity
+  check now runs first: an unrecognised code on a truckload we already have is a *naming
+  disagreement*, not an unknown batch. Measured in the dry run: 4 perpetual holds became 4 named
+  arbitration cases.
+- **The old key had one live collision, and it was a legitimate pair.** `2025-04-03 / KCA 378 /
+  MARCH-25-BLK9 / D-8D`, 471 sacks and 36 sacks, both 18,827 kg — the wet-sack split from L-040. The
+  legacy key called them ONE row, so the second Sheet row would have UPDATEd the first's sacks and
+  MC. Tier 1 gives them two keys. **Rule:** before replacing a key, count how many rows the OLD one
+  already conflates; that number is not always zero.
+- **Parity: change BOTH engines, never log a deviation.** This is a business-rule change, not a port
+  bug, so `classify_deliveries.py`, `classify_gsheet.py` and `parity_guards.py` changed in lockstep
+  with the TS, the oracle was rebuilt, and `npm run parity` stayed 12/12 green with **no
+  `expected-deviations.json` entry** — the same discipline L-034 / L-037 / BUG-005 used. A deviation
+  is for an oracle *bug*; a rule change belongs on both sides.
+- **PARITY TRAP that will bite again:** the refusal text is a STRING, and the canonicalizer does not
+  normalize numbers inside strings. Python `str(18827.0)` is `'18827.0'`; JS `String(18827)` is
+  `'18827'`. Interpolating a weight or a sack count into a `reason` needs a JS-style renderer on the
+  Python side (`_js()`), the same trap as the `dup_noop` natural_key.
+- **Provenance:** 2026-08-08, authorised by Renzo. Dry run against the live DB and the real current
+  sources (Sheet pulled live; MC's workbook read from the private `sync-inbox` Storage bucket, no
+  Gmail session spent) reclassified **exactly 5 rows, all in the safe direction**: 1 silent
+  `dup_noop` → a named held diff, and 4 vague `unmapped` → named held diffs. Zero rows changed on
+  the RC OUT side. `npx tsx workers/sync/scripts/delivery-identity-dryrun.ts` reproduces it and
+  writes nothing.
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

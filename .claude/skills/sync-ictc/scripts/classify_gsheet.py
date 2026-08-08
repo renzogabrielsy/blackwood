@@ -272,12 +272,85 @@ def rc_out_diffs(ex: dict, db: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # RC IN classification (with aggregation-tolerant fallback)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# L-040b — the SHARED two-tier delivery identity. Imported, never re-derived: this file
+# and classify_deliveries.py are the two writers of `deliveries`, and if they disagree
+# about what "the same row" is they duplicate each other's rows.
+# ---------------------------------------------------------------------------
+def _identity_helpers():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from classify_deliveries import (  # type: ignore
+        MUTABLE_IDENTITY_FIELDS,
+        build_identity_index,
+        match_delivery,
+    )
+    return MUTABLE_IDENTITY_FIELDS, build_identity_index, match_delivery
+
+
+def _identity_diffs(ex: dict, db: dict, resolved_code) -> list[dict]:
+    """The three fields that LEFT the identity and therefore have to be compared.
+    `resolved_code` is the Sheet code AS RESOLVED against the DB's code set, so a mere
+    month-prefix alias never reads as a diff."""
+    diffs = []
+    if norm_str(resolved_code) != norm_str(db.get("batch_code")):
+        diffs.append({"field": "batch_code", "sheetValue": resolved_code, "dbValue": db.get("batch_code")})
+    if norm_block_loc(ex.get("block_loc")) != norm_block_loc(db.get("block_loc")):
+        diffs.append({"field": "block_loc", "sheetValue": ex.get("block_loc"), "dbValue": db.get("block_loc")})
+    if norm_num(ex.get("weight_kg"), 3) != norm_num(db.get("weight_kg"), 3):
+        diffs.append({"field": "weight_kg", "sheetValue": ex.get("weight_kg"), "dbValue": db.get("weight_kg")})
+    return diffs
+
+
+def _js(v):
+    """Render a value the way a JS template literal does (see parity_guards._js)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else repr(v)
+    return str(v)
+
+
+def _id_fmt_side(v) -> str:
+    return "(blank)" if v is None or v == "" else _js(v)
+
+
+def _identity_diff_reason(ex: dict, id_diffs: list[dict], matched_tier: int, peer_count: int) -> str:
+    mutable = ("batch_code", "block_loc", "weight_kg")
+    if matched_tier == 1:
+        how = "the same truck and sack count (%s, %s sacks)" % (
+            _js(ex.get("truck_plate")) if ex.get("truck_plate") is not None else "?",
+            _js(ex.get("sacks")) if ex.get("sacks") is not None else "?",
+        )
+    else:
+        how = "the same date/batch/block/weight"
+    parts = [
+        "%s: Sheet says %s, app has %s" % (d["field"], _id_fmt_side(d.get("sheetValue")), _id_fmt_side(d.get("dbValue")))
+        for d in id_diffs
+        if d.get("field") in mutable
+    ]
+    peer = ""
+    if peer_count > 1:
+        peer = (" NOTE: the app already holds %d rows for this one truckload — a "
+                "duplicate that predates this run." % peer_count)
+    return (
+        "L-040: the Sheet row (%s) is the SAME delivery as an existing app row — matched "
+        "on %s — but they disagree on %s. One side is a human correction the other has "
+        "not caught up with. Held for a person to arbitrate; never a Sheet-wins UPDATE "
+        "and never a second insert."
+        % (str(ex.get("transaction_date")) if ex.get("transaction_date") is not None else "", how, "; ".join(parts))
+    ) + peer
+
+
 def classify_rc_in(extracted: list[dict], db_rows: list[dict], since: str) -> dict:
+    MUTABLE_IDENTITY_FIELDS, build_identity_index, match_delivery = _identity_helpers()
+
     # Existing batch_codes in the DB window (for resolution).
     code_set = {r.get("batch_code") for r in db_rows if r.get("batch_code")}
 
-    # Exact index: (date, batch_code, block_loc, weight) -> [db rows]
-    exact: dict[tuple, list[dict]] = {}
+    # NOTE: the former `exact` index — (date, batch_code, block_loc, weight) — is gone.
+    # It is byte-for-byte the TIER-2 half of the shared identity index below (L-040b).
     # Loose index: (date, batch_code, block_loc) -> [db rows]  (for tolerance match)
     loose: dict[tuple, list[dict]] = {}
     # Collision index for the conflict guardrail: (date, block_loc, weight) -> [db rows]
@@ -289,9 +362,9 @@ def classify_rc_in(extracted: list[dict], db_rows: list[dict], since: str) -> di
         d = r.get("transaction_date")
         bl = norm_block_loc(r.get("block_loc"))
         w = norm_num(r.get("weight_kg"), 3)
-        exact.setdefault((d, bc, bl, w), []).append(r)
         loose.setdefault((d, bc, bl), []).append(r)
         by_date_block_wt.setdefault((d, bl, w), []).append(r)
+    identity_index = build_identity_index(db_rows)
 
     new, changed, noop, unmapped, malformed, flagged = [], [], [], [], [], []
     out_of_scope = 0
@@ -311,7 +384,28 @@ def classify_rc_in(extracted: list[dict], db_rows: list[dict], since: str) -> di
         resolved_code, db_matched_code = resolve_against_set(ex, code_set)
         bl = norm_block_loc(ex.get("block_loc"))
 
-        if db_matched_code is None:
+        # 1) IDENTITY hit — tier 1 (date + normalized plate + sacks) first, then the
+        #    LEGACY (date, batch_code, block_loc, weight) key. L-040b: tier 1 is what
+        #    recognises a row whose batch_code / block_loc / weight a human has since
+        #    corrected, instead of inserting a second copy of the same truckload.
+        key = (d, db_matched_code, bl, w)
+        id_row = {
+            "transaction_date": d,
+            "batch_code": db_matched_code,
+            "block_loc": ex.get("block_loc"),
+            "weight_kg": ex.get("weight_kg"),
+            "truck_plate": ex.get("truck_plate"),
+            "sacks": ex.get("sacks"),
+        }
+        id_match = match_delivery(identity_index, id_row)
+
+        # NOTE THE ORDER: the identity check runs BEFORE the UNMAPPED verdict. A tier-1
+        # hit means we already HAVE this truckload, whatever the Sheet calls its batch,
+        # so an unrecognized batch_code on a known truckload is a NAMING DISAGREEMENT,
+        # not an unknown batch. Deciding UNMAPPED first would hold the row with a vague
+        # "code not in DB" forever, and would let a PATTERN-VALID unknown code
+        # auto-create a batch and insert a SECOND copy of a delivery we already have.
+        if id_match is None and db_matched_code is None:
             # batch_code not found in DB at all -> UNMAPPED (never auto-create).
             unmapped.append({
                 "index": ex.get("_source_row"),
@@ -321,13 +415,35 @@ def classify_rc_in(extracted: list[dict], db_rows: list[dict], since: str) -> di
             })
             continue
 
-        # 1) exact natural-key hit
-        key = (d, db_matched_code, bl, w)
-        matches = exact.get(key, [])
-        if matches:
-            db_row = matches[0]
+        if id_match is not None:
+            id_rows, matched_tier, _mk, peer_count = id_match
+            db_row = id_rows[0]
+            # When the code is UNMAPPED there is no resolved DB code — report what the
+            # Sheet literally says, which is the whole content of the disagreement.
+            id_diffs = _identity_diffs(ex, db_row, db_matched_code if db_matched_code is not None else resolved_code)
+            only_weight_within_tol = False
+            if len(id_diffs) == 1 and id_diffs[0]["field"] == "weight_kg":
+                a = norm_num(ex.get("weight_kg"), 3)
+                b = norm_num(db_row.get("weight_kg"), 3)
+                only_weight_within_tol = a is not None and b is not None and abs(a - b) <= AGG_TOL_KG
+            if id_diffs and not only_weight_within_tol:
+                # A formerly-key field genuinely disagrees. NEVER a Sheet-wins UPDATE.
+                flagged.append({
+                    "index": ex.get("_source_row"),
+                    "kind": "identity_diff",
+                    "row": ex,
+                    "db_conflicts": [db_row],
+                    "reason": _identity_diff_reason(ex, id_diffs, matched_tier, peer_count),
+                })
+                continue
             diffs = rc_in_diffs(ex, db_row)
-            _route_changed(ex, db_row, diffs, key, noop, changed, _pack_rc_in)
+            extra = None
+            if only_weight_within_tol:
+                delta = abs(norm_num(ex.get("weight_kg"), 3) - norm_num(db_row.get("weight_kg"), 3))
+                extra = {"aggregation_note": (
+                    f"weight matched within tolerance (sheet={w}, db={norm_num(db_row.get('weight_kg'),3)}, "
+                    f"Δ={round(delta,3)}kg) — likely per-block vs per-truck aggregation")}
+            _route_changed(ex, db_row, diffs, key, noop, changed, _pack_rc_in, extra=extra)
             continue
 
         # 2) tolerance / aggregation fallback: same date+batch+block, weight within AGG_TOL

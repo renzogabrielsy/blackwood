@@ -132,8 +132,68 @@ def apply_deliveries_guard(classified: dict, db_rows: list[dict], batch_codes: s
         else:
             inserts.append(item)
 
+    # L-040b — fold the identity diffs into `flagged` so apply HOLDS them (a corrected
+    # batch_code / block_loc / weight_kg is a disagreement between two sources, and
+    # CLAUDE.md is explicit that a human arbitrates those). Appended AFTER the new-loop
+    # flags so the guard's own ordering is untouched. Mirrors
+    # src/reports/deliveries/classify.ts::applyDeliveriesGuard.
+    for item in classified.get("identity_diff", []):
+        flagged.append({
+            "kind": "L040_identity_diff",
+            "index": item.get("index"),
+            "row": item.get("row"),
+            "db_id": (item.get("db_row") or {}).get("id"),
+            "reason": _identity_diff_reason(item),
+            "decision": "skip",
+        })
+
     out = dict(classified)
     out["new"] = inserts
     out["flagged"] = flagged
     out["dup_noops"] = dup_noops
     return out
+
+
+def _js(v: Any) -> str:
+    """Render a value the way a JS template literal does. PARITY TRAP: Python
+    str(18827.0) == '18827.0' but JS String(18827) == '18827', and these strings live
+    INSIDE a `reason` string, which the canonicalizer does not normalize (the same trap
+    that bit the dup_noop natural_key)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, float):
+        return str(int(v)) if v.is_integer() else repr(v)
+    return str(v)
+
+
+def _fmt_side(v: Any) -> str:
+    return "(blank)" if v is None or v == "" else _js(v)
+
+
+def _identity_diff_reason(item: dict) -> str:
+    """Names BOTH sides of every disagreeing field — a person has to pick the winner.
+    Carries NO peso value (cost_basis is never an identity field)."""
+    mutable = ("batch_code", "block_loc", "weight_kg")
+    row = item.get("row") or {}
+    if item.get("matched_tier") == 1:
+        who = "same truck + sack count (%s, %s sacks) on %s" % (
+            _js(row.get("truck_plate")) if row.get("truck_plate") is not None else "?",
+            _js(row.get("sacks")) if row.get("sacks") is not None else "?",
+            str(row.get("transaction_date"))[:10],
+        )
+    else:
+        who = "same date/batch/block/weight"
+    parts = [
+        "%s: report says %s, app has %s" % (d["field"], _fmt_side(d.get("emailValue")), _fmt_side(d.get("dbValue")))
+        for d in item.get("diff", [])
+        if d.get("field") in mutable
+    ]
+    peer = ""
+    if (item.get("peer_count") or 0) > 1:
+        peer = (" NOTE: the app already holds %d rows for this one truckload — a "
+                "duplicate that predates this run." % item["peer_count"])
+    return (
+        "L-040: this is the SAME delivery as an existing row (matched on %s), but the "
+        "two sources disagree on %s. One side is a human correction the other has not "
+        "caught up with — never auto-applied; a person picks the winner." % (who, "; ".join(parts))
+    ) + peer

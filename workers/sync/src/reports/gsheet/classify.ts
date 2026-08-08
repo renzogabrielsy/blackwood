@@ -15,6 +15,12 @@
  * lib/norm (banker's); Math.round is banned.
  */
 import { normStr, normBlockLoc, normNum, normIntRound } from "../../lib/norm.js";
+import {
+  buildDeliveryIdentityIndex,
+  isMutableIdentityField,
+  matchDelivery,
+  type DeliveryIdentityRow,
+} from "../../lib/deliveryIdentity.js";
 import type { RowDict } from "./deductions.js";
 
 // classify_gsheet.py:70-74
@@ -135,6 +141,26 @@ function resolveBatchId(row: RowDict, lookup: BatchLookup): [string | null, stri
 // ---------------------------------------------------------------------------
 // Diff functions (classify_gsheet.py:221-269)
 // ---------------------------------------------------------------------------
+/**
+ * L-040b — the three fields that LEFT the identity and therefore have to be compared.
+ * `resolvedCode` is the Sheet's code AS RESOLVED against the DB's code set (the same
+ * value the legacy key used), so a mere month-prefix alias never reads as a diff.
+ * On a tier-2 (legacy-key) match all three are equal by construction.
+ */
+function identityDiffs(ex: RowDict, db: DeliveryDbRow, resolvedCode: string | null): DiffEntry[] {
+  const diffs: DiffEntry[] = [];
+  if (normStr(resolvedCode) !== normStr(db.batch_code)) {
+    diffs.push({ field: "batch_code", sheetValue: resolvedCode, dbValue: db.batch_code });
+  }
+  if (normBlockLoc(ex.block_loc) !== normBlockLoc(db.block_loc)) {
+    diffs.push({ field: "block_loc", sheetValue: ex.block_loc, dbValue: db.block_loc });
+  }
+  if (normNum(ex.weight_kg, 3) !== normNum(db.weight_kg, 3)) {
+    diffs.push({ field: "weight_kg", sheetValue: ex.weight_kg, dbValue: db.weight_kg });
+  }
+  return diffs;
+}
+
 function rcInDiffs(ex: RowDict, db: DeliveryDbRow): DiffEntry[] {
   const diffs: DiffEntry[] = [];
 
@@ -271,18 +297,22 @@ function classifyRcIn(extracted: RowDict[], dbRows: DeliveryDbRow[], since: stri
     if (bc) codeSet.add(bc as string);
   }
 
-  const exact = new Map<string, DeliveryDbRow[]>();
+  // NOTE: the former `exact` map — keyStr([date, batch_code, block_loc, weight]) — is
+  // gone. It is byte-for-byte the TIER-2 half of the shared identity index below, so
+  // keeping it would have been a second definition of the same key (L-040b).
   const loose = new Map<string, DeliveryDbRow[]>();
   const byDateBlockWt = new Map<string, DeliveryDbRow[]>();
   for (const r of dbRows) {
-    const bc = (r.batch_code as string | null | undefined) ?? null;
     const d = (r.transaction_date as string | null | undefined) ?? null;
+    const bc = (r.batch_code as string | null | undefined) ?? null;
     const bl = normBlockLoc(r.block_loc);
     const w = normNum(r.weight_kg, 3);
-    push(exact, keyStr([d, bc, bl, w]), r);
     push(loose, keyStr([d, bc, bl]), r);
     push(byDateBlockWt, keyStr([d, bl, w]), r);
   }
+  // L-040b — the SHARED two-tier identity index (lib/deliveryIdentity.ts). Its tier-2
+  // key is the legacy `exact` key above, so this only ADDS the plate+sacks lookup.
+  const identityIndex = buildDeliveryIdentityIndex(dbRows);
 
   const newRows: RowDict[] = [];
   const changed: RowDict[] = [];
@@ -308,7 +338,31 @@ function classifyRcIn(extracted: RowDict[], dbRows: DeliveryDbRow[], since: stri
     const [resolvedCode, dbMatchedCode] = resolveAgainstSet(ex, codeSet);
     const bl = normBlockLoc(ex.block_loc);
 
-    if (dbMatchedCode === null) {
+    // 1) IDENTITY hit — tier 1 (date + normalized plate + sacks) first, then the legacy
+    //    (date, batch_code, block_loc, weight) key. L-040b: tier 1 is what recognises a
+    //    row whose batch_code / block_loc / weight a human has since corrected, instead
+    //    of inserting a second copy of the same truckload.
+    //
+    //    NOTE THE ORDER: this runs BEFORE the UNMAPPED verdict. A tier-1 hit means we
+    //    already HAVE this truckload, whatever the Sheet calls its batch — so an
+    //    unrecognized batch_code on a known truckload is a NAMING DISAGREEMENT, not an
+    //    unknown batch. Deciding UNMAPPED first would (a) hold the row with a vague
+    //    "code not in DB" forever even though the answer is knowable, and (b) let a
+    //    PATTERN-VALID unknown code auto-create a batch and insert a SECOND copy of a
+    //    delivery we already have — which is precisely the `JULY-26-FEED1` duplicate
+    //    class this change exists to stop. Rows with no identity match still fall
+    //    through to UNMAPPED exactly as before.
+    const idRow: DeliveryIdentityRow = {
+      transaction_date: d,
+      batch_code: dbMatchedCode,
+      block_loc: ex.block_loc,
+      weight_kg: ex.weight_kg,
+      truck_plate: ex.truck_plate,
+      sacks: ex.sacks,
+    };
+    const idMatch = matchDelivery(identityIndex, idRow);
+
+    if (idMatch === null && dbMatchedCode === null) {
       unmapped.push({
         index: ex._source_row ?? null,
         row: ex,
@@ -319,12 +373,42 @@ function classifyRcIn(extracted: RowDict[], dbRows: DeliveryDbRow[], since: stri
       continue;
     }
 
-    // 1) exact natural-key hit
-    const exactMatches = exact.get(keyStr([d, dbMatchedCode, bl, w])) ?? [];
-    if (exactMatches.length) {
-      const dbRow = exactMatches[0];
+    if (idMatch) {
+      const dbRow = idMatch.rows[0];
+      // When the code is UNMAPPED there is no resolved DB code — report what the Sheet
+      // literally says, which is the whole content of the disagreement.
+      const idDiffs = identityDiffs(ex, dbRow, dbMatchedCode ?? resolvedCode);
+      const onlyWeightWithinTol =
+        idDiffs.length === 1 &&
+        idDiffs[0].field === "weight_kg" &&
+        (() => {
+          const a = normNum(ex.weight_kg, 3);
+          const b = normNum(dbRow.weight_kg, 3);
+          return a !== null && b !== null && Math.abs(a - b) <= AGG_TOL_KG;
+        })();
+      if (idDiffs.length && !onlyWeightWithinTol) {
+        // A formerly-key field genuinely disagrees. NEVER a Sheet-wins UPDATE — this is
+        // exactly the class of disagreement CLAUDE.md sends to a human.
+        flagged.push({
+          index: ex._source_row ?? null,
+          kind: "identity_diff",
+          row: ex,
+          db_conflicts: [dbRow],
+          reason: identityDiffReason(ex, idDiffs, idMatch.matchedTier, idMatch.peerCount),
+        });
+        continue;
+      }
+      // Same row, and nothing identity-shaped disagrees (or only a weight inside the
+      // existing ±50 kg aggregation tolerance) → the ordinary field-diff route.
       const diffs = rcInDiffs(ex, dbRow);
-      routeChanged(ex, dbRow, diffs, [d, dbMatchedCode, bl, w], noop, changed);
+      const extra = onlyWeightWithinTol
+        ? {
+            aggregation_note:
+              `weight matched within tolerance (sheet=${pyNum(w)}, db=${pyNum(normNum(dbRow.weight_kg, 3))}, ` +
+              `Δ=${pyNum(normNum(Math.abs((w as number) - (normNum(dbRow.weight_kg, 3) as number)), 3))}kg) — likely per-block vs per-truck aggregation`,
+          }
+        : undefined;
+      routeChanged(ex, dbRow, diffs, [d, dbMatchedCode, bl, w], noop, changed, extra);
       continue;
     }
 
@@ -583,6 +667,45 @@ function pyListRepr(arr: unknown[] | null | undefined): string {
     return String(x);
   });
   return "[" + parts.join(", ") + "]";
+}
+
+/**
+ * L-040b — the human-readable refusal for a gsheet identity diff. Names BOTH spellings
+ * of every disagreeing field, because a person has to pick the winner. NO ₱ value:
+ * `cost_basis` is out of scope for gsheet and is never an identity field.
+ */
+function identityDiffReason(
+  ex: RowDict,
+  idDiffs: DiffEntry[],
+  matchedTier: 1 | 2,
+  peerCount: number,
+): string {
+  const how =
+    matchedTier === 1
+      ? `the same truck and sack count (${String(ex.truck_plate ?? "?")}, ${String(ex.sacks ?? "?")} sacks)`
+      : `the same date/batch/block/weight`;
+  const parts = idDiffs
+    .filter((dd) => isMutableIdentityField(dd.field))
+    .map(
+      (dd) =>
+        `${dd.field}: Sheet says ${fmtSide(dd.sheetValue)}, app has ${fmtSide(dd.dbValue)}`,
+    );
+  const peer =
+    peerCount > 1
+      ? ` NOTE: the app already holds ${peerCount} rows for this one truckload — a ` +
+        `duplicate that predates this run.`
+      : "";
+  return (
+    `L-040: the Sheet row (${String(ex.transaction_date ?? "")}) is the SAME delivery as ` +
+    `an existing app row — matched on ${how} — but they disagree on ${parts.join("; ")}. ` +
+    `One side is a human correction the other has not caught up with. Held for a person ` +
+    `to arbitrate; never a Sheet-wins UPDATE and never a second insert.` +
+    peer
+  );
+}
+
+function fmtSide(v: unknown): string {
+  return v === null || v === undefined || v === "" ? "(blank)" : String(v);
 }
 
 /** Python str() of a number/None for interpolation into notes (str(None)="None",

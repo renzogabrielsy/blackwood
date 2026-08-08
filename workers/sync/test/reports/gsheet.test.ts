@@ -197,7 +197,18 @@ describe("2025-scope floor", () => {
 describe("UNMAPPED reason string (Python repr parity)", () => {
   it("names the primary and the fallback list in Python-repr form", () => {
     const res = classifyRcInOnly(
-      [mkRcIn({ batch_code_primary: "JUNE-26-BLK7", batch_code_fallbacks: ["JUN-26-BLK7"] })],
+      // L-040b: the row must also be an UNKNOWN TRUCKLOAD, not just an unknown code.
+      // A different truck + sack count means no tier-1 identity match, so UNMAPPED is
+      // still the verdict. (A known truckload under an unrecognized code is now a
+      // naming DIFF instead — see test/reports/delivery-identity.test.ts.)
+      [
+        mkRcIn({
+          batch_code_primary: "JUNE-26-BLK7",
+          batch_code_fallbacks: ["JUN-26-BLK7"],
+          truck_plate: "ZZZ 999",
+          sacks: 999,
+        }),
+      ],
       [mkDbDeliv({})],
     );
     expect(res.unmapped).toHaveLength(1);

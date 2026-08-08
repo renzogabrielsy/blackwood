@@ -1,59 +1,140 @@
 {
   "changed": [],
-  "dup_noops": [
+  "dup_noops": [],
+  "flagged": [
     {
+      "decision": "skip",
       "index": " num:9",
-      "natural_key": "2026-07-02|MAN 3625|21789.0",
-      "note": "L-033: same truckload already recorded as JUNE-26-BLK9 — extractor-derived name JULY-26-BLK9 is a month-boundary phantom."
+      "kind": "L040_identity_diff",
+      "reason": "L-040: this is the SAME delivery as an existing row (matched on same truck + sack count (MAN 3625, 583 sacks) on 2026-07-02), but the two sources disagree on batch_code: report says JULY-26-BLK9, app has JUNE-26-BLK9. One side is a human correction the other has not caught up with — never auto-applied; a person picks the winner.",
+      "row": {
+        "_source_row": " num:9",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JULY-26-BLK9",
+        "block_loc": "A-19C",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": "−.87%",
+        "lab_results": {
+          "ash": " num:2.38",
+          "bd_astm": " num:0.575",
+          "bd_jis": " num:0.595",
+          "fc": " num:85.75",
+          "grit": " num:2.46",
+          "mc": " num:12.87",
+          "vm": " num:11.87"
+        },
+        "operator_batch_label": "B09",
+        "remarks": "MAN 3625 net kilos of 21,980 - .87% = 21,789 / PILED IN JUNE BLOCK 9",
+        "sacks": " num:583",
+        "supplier": "Paquibot",
+        "transaction_date": "2026-07-02",
+        "truck_plate": "MAN 3625",
+        "true_weight_kg": " num:21980",
+        "warnings": [
+          "Batch code translated heuristically: 'B09' -> 'JULY-26-BLK9' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:21789"
+      }
     }
   ],
-  "flagged": [],
+  "identity_diff": [
+    {
+      "db_row": {
+        "batch_code": "JUNE-26-BLK9",
+        "block_loc": "A-19C",
+        "cost_basis": " num:0",
+        "lab_results": {
+          "ash": " num:2.38",
+          "bd_astm": " num:0.575",
+          "bd_jis": " num:0.595",
+          "fc": " num:85.75",
+          "grit": " num:2.46",
+          "mc": " num:12.87",
+          "vm": " num:11.87"
+        },
+        "remarks": "MAN 3625 net kilos of 21,980 - .87% = 21,789 / PILED IN JUNE BLOCK 9",
+        "sacks": " num:583",
+        "supplier": "Paquibot",
+        "transaction_date": "2026-07-02",
+        "truck_plate": "MAN 3625",
+        "weight_kg": " num:21789"
+      },
+      "diff": [
+        {
+          "dbValue": "JUNE-26-BLK9",
+          "emailValue": "JULY-26-BLK9",
+          "field": "batch_code"
+        }
+      ],
+      "identity_fields": [
+        "batch_code"
+      ],
+      "index": " num:9",
+      "matched_tier": " num:1",
+      "peer_count": " num:1",
+      "row": {
+        "_source_row": " num:9",
+        "_source_sheet": "JULY 26",
+        "batch_code": "JULY-26-BLK9",
+        "block_loc": "A-19C",
+        "confidence": " num:0.9",
+        "cost_basis": null,
+        "deduction_note": "−.87%",
+        "lab_results": {
+          "ash": " num:2.38",
+          "bd_astm": " num:0.575",
+          "bd_jis": " num:0.595",
+          "fc": " num:85.75",
+          "grit": " num:2.46",
+          "mc": " num:12.87",
+          "vm": " num:11.87"
+        },
+        "operator_batch_label": "B09",
+        "remarks": "MAN 3625 net kilos of 21,980 - .87% = 21,789 / PILED IN JUNE BLOCK 9",
+        "sacks": " num:583",
+        "supplier": "Paquibot",
+        "transaction_date": "2026-07-02",
+        "truck_plate": "MAN 3625",
+        "true_weight_kg": " num:21980",
+        "warnings": [
+          "Batch code translated heuristically: 'B09' -> 'JULY-26-BLK9' (no remarks hint, used delivery month JULY)"
+        ],
+        "weight_kg": " num:21789"
+      }
+    }
+  ],
   "malformed": [],
   "new": [],
   "noop": [
     {
       "index": " num:7",
-      "natural_key": [
-        "2026-07-01",
-        "JUNE-26-BLK10",
-        "D-19C",
-        " num:10870"
-      ]
+      "matched_tier": " num:1",
+      "natural_key": "T1|2026-07-01|CBN2192|270"
     },
     {
       "index": " num:6",
-      "natural_key": [
-        "2026-07-01",
-        "JUNE-26-BLK10",
-        "D-19C",
-        " num:20640"
-      ]
-    },
-    {
-      "index": " num:8",
-      "natural_key": [
-        "2026-07-02",
-        "JULY-26-BLK1",
-        "D-19B",
-        " num:12725"
-      ]
+      "matched_tier": " num:1",
+      "natural_key": "T1|2026-07-01|MAV9202|580"
     },
     {
       "index": " num:10",
-      "natural_key": [
-        "2026-07-02",
-        "JULY-26-BLK2",
-        "D-13D",
-        " num:23930"
-      ]
+      "matched_tier": " num:1",
+      "natural_key": "T1|2026-07-02|ALA3958|625"
+    },
+    {
+      "index": " num:8",
+      "matched_tier": " num:1",
+      "natural_key": "T1|2026-07-02|LFF835|286"
     }
   ],
   "summary": {
     "changed_count": " num:0",
     "db_rows_in_window": " num:6",
     "extracted_total": " num:5",
+    "identity_diff_count": " num:1",
     "malformed_count": " num:0",
-    "new_count": " num:1",
+    "new_count": " num:0",
     "noop_count": " num:4"
   }
 }

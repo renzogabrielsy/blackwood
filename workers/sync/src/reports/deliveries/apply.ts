@@ -21,6 +21,7 @@
  * apply NEVER imports gmail (scope fence). Progress via lib/progress.
  */
 import type { DbClient } from "../../lib/db.js";
+import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
@@ -119,6 +120,9 @@ function deliveriesHeldRow(r: DeliveryRow): Record<string, unknown> {
 function deliveriesFlaggedKind(kind: string): HeldKind {
   if (kind === "L033_cross_batch_loc_mismatch") return "cross_batch_reassignment";
   if (kind === "L004_block_loc_correction") return "cross_batch_reassignment";
+  // L-040b — the same truckload under a corrected batch_code / block_loc / weight_kg.
+  // Reuses the existing kind (HeldKind is frontend-locked; no new value invented).
+  if (kind === "L040_identity_diff") return "cross_batch_reassignment";
   if (kind === "low_confidence") return "low_confidence";
   return "flagged";
 }
@@ -215,13 +219,14 @@ export async function applyDeliveries(
         true_weight_kg: r.true_weight_kg ?? null, // L-021
         deduction_note: r.deduction_note ?? null, // L-021
       };
-      const res = await db.insertIfAbsent("deliveries", [payload], [
-        "transaction_date",
-        "batch_code",
-        "truck_plate",
-        "weight_kg",
-        "sacks",
-      ]);
+      // L-040b — the race guard now mirrors the classifier's tier decision
+      // (lib/deliveryIdentity.ts). Shared with reports/gsheet/apply.ts so the two
+      // writers of `deliveries` cannot disagree about what "the same row" is.
+      const res = await db.insertIfAbsent(
+        "deliveries",
+        [payload],
+        deliveriesInsertGuardColumns(payload),
+      );
       if (res.insertedCount === 0) {
         held.push({
           reason: "already_exists",

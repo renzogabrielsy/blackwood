@@ -2,12 +2,31 @@
 """
 Classify RC DELIVERIES extracted rows against existing DB rows.
 
-Natural key: (transaction_date, batch_code, block_loc, weight_kg)
+IDENTITY (L-040b, 2026-08-08) — TWO-TIER. This MUST stay byte-identical to the TS
+port's `workers/sync/src/lib/deliveryIdentity.ts`; the parity harness compares them.
+
+  TIER 1 (preferred) : (transaction_date, NORMALIZED truck_plate, sacks)
+  TIER 2 (fallback)  : (transaction_date, batch_code, block_loc, weight_kg)  [LEGACY]
+
+  Lookup order is tier 1, then tier 2, so the set of rows that MATCH is a strict
+  superset of what the old single key matched — the change can only turn an insert into
+  a match, never the reverse.
+
+WHY: the old key was tier 2 alone. The truck plate — the one fact that actually names
+the physical truckload — was NOT in it, and three human-correctable facts were. Correct
+a batch code, a block or a weight and this classifier stopped recognising the row and
+reported it NEW, which is how duplicate deliveries were created (2026-02-04 block swap;
+`FEEDING # 1` vs `JULY-26-FEED1` on 2026-07-08 / 07-20 / 08-05 — 7 rows archived and
+deleted 2026-08-07). Sacks are counted at the gate and are not revised; weight IS revised
+after ASH/wet deductions, which is why sacks are in the identity and weight is not.
 
 Outcomes per row:
-  - NEW              : natural key not in DB -> queue for INSERT
-  - DUPLICATE_NOOP   : natural key in DB, all non-key fields match -> silently skip
-  - VALUE_CHANGED    : natural key in DB, >=1 field differs -> queue with diff for human decision
+  - NEW              : identity not in DB -> queue for INSERT
+  - DUPLICATE_NOOP   : identity in DB, all compared fields match -> silently skip
+  - VALUE_CHANGED    : identity in DB, >=1 NON-identity field differs -> queue with diff
+  - IDENTITY_DIFF    : identity in DB but batch_code / block_loc / weight_kg disagree ->
+                       a human correction one source has not caught up with. NEVER
+                       auto-applied; the guard layer folds these into `flagged`.
   - MALFORMED        : missing required field (date / batch_code / weight) -> skip with reason
 
 Equality rules:
@@ -74,13 +93,83 @@ def norm_int(v: Any) -> int | None:
         return None
 
 
-def make_natural_key(row: dict) -> tuple:
-    return (
-        row.get("transaction_date"),
-        row.get("batch_code"),
-        norm_block_loc(row.get("block_loc")),
-        norm_num(row.get("weight_kg"), places=3),
+# ---------------------------------------------------------------------------
+# Two-tier identity (L-040b). Mirror of workers/sync/src/lib/deliveryIdentity.ts.
+# ---------------------------------------------------------------------------
+MUTABLE_IDENTITY_FIELDS = ("batch_code", "block_loc", "weight_kg")
+
+
+def norm_plate(v: Any) -> str:
+    """Keep alphanumerics only, uppercase. 'MAV 9202' and 'MAV9202' are one truck
+    (both spellings exist in the live data: 57 rows and 35 rows)."""
+    s = "" if v is None else str(v)
+    return "".join(ch for ch in s.upper() if ch.isascii() and ch.isalnum())
+
+
+def _date10(v: Any) -> str:
+    return "" if v is None else str(v)[:10]
+
+
+def is_tier1_eligible(row: dict) -> bool:
+    return norm_plate(row.get("truck_plate")) != "" and norm_int(row.get("sacks")) is not None
+
+
+def tier1_key(row: dict) -> str | None:
+    if not is_tier1_eligible(row):
+        return None
+    return "T1|%s|%s|%s" % (
+        _date10(row.get("transaction_date")),
+        norm_plate(row.get("truck_plate")),
+        norm_int(row.get("sacks")),
     )
+
+
+def legacy_key(row: dict) -> str:
+    """TIER 2 — the OLD natural key verbatim, same fields, same normalizers."""
+    bc = "" if row.get("batch_code") is None else str(row.get("batch_code"))
+    bl = norm_block_loc(row.get("block_loc"))
+    w = norm_num(row.get("weight_kg"), places=3)
+    return "T2|%s|%s|%s|%s" % (
+        _date10(row.get("transaction_date")),
+        bc,
+        "" if bl is None else bl,
+        "" if w is None else _num_str(w),
+    )
+
+
+def _num_str(v: float) -> str:
+    """Render a float the way JS String() does, so the two engines produce the SAME key
+    string: an integer-valued float loses its '.0' (Python str(20640.0) == '20640.0',
+    JS String(20640) == '20640')."""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return repr(v) if isinstance(v, float) else str(v)
+
+
+def build_identity_index(rows: list[dict]) -> tuple[dict, dict]:
+    """Every row is registered under its LEGACY key AND, when eligible, its tier-1 key."""
+    t1: dict[str, list[dict]] = {}
+    t2: dict[str, list[dict]] = {}
+    for r in rows:
+        k1 = tier1_key(r)
+        if k1 is not None:
+            t1.setdefault(k1, []).append(r)
+        t2.setdefault(legacy_key(r), []).append(r)
+    return t1, t2
+
+
+def match_delivery(index: tuple[dict, dict], row: dict):
+    """TIER 1 first, then the LEGACY key.
+    Returns (rows, matched_tier, key, peer_count) or None. `peer_count > 1` on a tier-1
+    match means the DB already holds more than one row for this one truckload."""
+    t1, t2 = index
+    k1 = tier1_key(row)
+    if k1 is not None and t1.get(k1):
+        return (t1[k1], 1, k1, len(t1[k1]))
+    k2 = legacy_key(row)
+    if t2.get(k2):
+        return (t2[k2], 2, k2, len(t2[k2]))
+    return None
 
 
 def deep_lab_equal(a: dict | None, b: dict | None) -> bool:
@@ -103,11 +192,38 @@ def field_differences(extracted: dict, db_row: dict) -> list[dict]:
     here. They are additive, write-only display fields (see DEDUCTIONS_DESIGN.md):
     they are derived from the remark at ingestion and written on insert/update, but
     a Sheet-vs-DB diff must never FIRE on them (a deducted row must not become a
-    perpetual VALUE_CHANGED just because the DB hasn't backfilled them yet). The
-    natural key (date, batch_code, block_loc, weight_kg) is likewise unchanged —
-    weight_kg stays the Sheet's deducted NET.
+    perpetual VALUE_CHANGED just because the DB hasn't backfilled them yet).
+
+    L-040b: `batch_code` / `block_loc` / `weight_kg` ARE compared here now, because they
+    left the identity (see the module docstring). Without that, a corrected batch code
+    would match on tier 1 and then read as a silent NOOP. `weight_kg` stays the source's
+    deducted NET — only its ROLE changed (compared, not keyed).
     """
     diffs = []
+
+    # L-040b — the three formerly-key fields. On a tier-2 match they are equal by
+    # construction; on a tier-1 match a difference here IS the human correction the
+    # old key could not see.
+    if norm_str(extracted.get("batch_code")) != norm_str(db_row.get("batch_code")):
+        diffs.append({
+            "field": "batch_code",
+            "emailValue": extracted.get("batch_code"),
+            "dbValue": db_row.get("batch_code"),
+        })
+
+    if norm_block_loc(extracted.get("block_loc")) != norm_block_loc(db_row.get("block_loc")):
+        diffs.append({
+            "field": "block_loc",
+            "emailValue": extracted.get("block_loc"),
+            "dbValue": db_row.get("block_loc"),
+        })
+
+    if norm_num(extracted.get("weight_kg"), 3) != norm_num(db_row.get("weight_kg"), 3):
+        diffs.append({
+            "field": "weight_kg",
+            "emailValue": extracted.get("weight_kg"),
+            "dbValue": db_row.get("weight_kg"),
+        })
 
     if norm_str(extracted.get("supplier")) != norm_str(db_row.get("supplier")):
         diffs.append({
@@ -191,14 +307,12 @@ def main() -> int:
 
     extracted_rows = extracted_data.get("rows", [])
 
-    # Index DB rows by natural key
-    db_index: dict[tuple, list[dict]] = {}
-    for db_row in db_rows:
-        key = make_natural_key(db_row)
-        db_index.setdefault(key, []).append(db_row)
+    # L-040b — index DB rows under BOTH tiers.
+    db_index = build_identity_index(db_rows)
 
     classified_new = []
     classified_changed = []
+    classified_identity_diff = []
     classified_noop = []
     classified_malformed = []
 
@@ -210,39 +324,57 @@ def main() -> int:
             })
             continue
 
-        key = make_natural_key(ex_row)
-        matches = db_index.get(key, [])
+        match = match_delivery(db_index, ex_row)
 
-        if not matches:
+        if match is None:
             classified_new.append({"index": ex_row.get("_source_row"), "row": ex_row})
         else:
+            matches, matched_tier, matched_key, peer_count = match
             db_row = matches[0]
             diffs = field_differences(ex_row, db_row)
             if not diffs:
                 classified_noop.append({
                     "index": ex_row.get("_source_row"),
-                    "natural_key": list(key),
+                    "natural_key": matched_key,
+                    "matched_tier": matched_tier,
                     "db_id": db_row.get("id"),
                 })
             else:
-                classified_changed.append({
-                    "index": ex_row.get("_source_row"),
-                    "row": ex_row,
-                    "db_row": db_row,
-                    "diff": diffs,
-                })
+                identity_fields = [
+                    d["field"] for d in diffs if d["field"] in MUTABLE_IDENTITY_FIELDS
+                ]
+                if identity_fields:
+                    classified_identity_diff.append({
+                        "index": ex_row.get("_source_row"),
+                        "row": ex_row,
+                        "db_row": db_row,
+                        "diff": diffs,
+                        "matched_tier": matched_tier,
+                        "identity_fields": identity_fields,
+                        "peer_count": peer_count,
+                    })
+                else:
+                    classified_changed.append({
+                        "index": ex_row.get("_source_row"),
+                        "row": ex_row,
+                        "db_row": db_row,
+                        "diff": diffs,
+                        "matched_tier": matched_tier,
+                    })
 
     result = {
         "summary": {
             "extracted_total": len(extracted_rows),
             "new_count": len(classified_new),
             "changed_count": len(classified_changed),
+            "identity_diff_count": len(classified_identity_diff),
             "noop_count": len(classified_noop),
             "malformed_count": len(classified_malformed),
             "db_rows_in_window": len(db_rows),
         },
         "new": classified_new,
         "changed": classified_changed,
+        "identity_diff": classified_identity_diff,
         "noop": classified_noop,
         "malformed": classified_malformed,
     }
@@ -255,6 +387,7 @@ def main() -> int:
         print(f"Extracted total:    {s['extracted_total']}", file=sys.stderr)
         print(f"  NEW             : {s['new_count']}", file=sys.stderr)
         print(f"  VALUE_CHANGED   : {s['changed_count']}", file=sys.stderr)
+        print(f"  IDENTITY_DIFF   : {s['identity_diff_count']}", file=sys.stderr)
         print(f"  DUPLICATE_NOOP  : {s['noop_count']}", file=sys.stderr)
         print(f"  MALFORMED       : {s['malformed_count']}", file=sys.stderr)
         print(f"DB rows in window:  {s['db_rows_in_window']}", file=sys.stderr)
