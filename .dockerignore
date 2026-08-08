@@ -1,0 +1,72 @@
+# .dockerignore — repo root.
+#
+# The ONLY Docker build in this repo is the Fly sync worker (`workers/sync/Dockerfile`),
+# and since 2026-08-08 its build context is this directory rather than `workers/sync/`.
+# Reason: `workers/sync/src/reports/excel/findingsBridge.ts` imports the app's finding
+# flattener across the package boundary with a real relative path, so the container has
+# to contain `lib/sync/findings.ts`, `lib/sync/cases-fold.ts` and
+# `app/(app)/sync/types.ts`. With the old worker-scoped context they were absent and
+# `fly deploy` died at `npm run build`. See the header of workers/sync/Dockerfile.
+#
+# A repo-root context would otherwise upload the whole monorepo (node_modules, .next,
+# .git, supabase/, fixtures — hundreds of MB) to Fly's remote builder on every deploy.
+# So this file is DENY-ALL-THEN-ALLOW: `*` excludes everything, and each block below
+# re-admits exactly one path. Docker applies patterns in order and the LAST match wins,
+# which is why every intermediate directory is re-included and then re-emptied
+# (`!lib` then `lib/*` then `!lib/sync/findings.ts`) — un-ignoring a directory without
+# re-emptying it would silently ship all of its siblings.
+#
+# KEEP IN STEP WITH THE DOCKERFILE. Anything a COPY needs must be allowed here, or the
+# file is missing in the image and the build fails only on Fly. `npm run
+# verify:container-build` (in workers/sync) parses this file AND the Dockerfile, rebuilds
+# the exact resulting file set in a temp dir and runs esbuild against it — that is the
+# gate that turns "forgot to un-ignore it" into a red local build.
+#
+# NOTE: this file affects Docker builds only. Vercel (which builds the Next.js app from
+# `main`) does not read it, and neither does git.
+
+# Deny everything.
+*
+
+# ---- the worker package -------------------------------------------------------
+!workers
+workers/*
+!workers/sync
+workers/sync/*
+!workers/sync/package.json
+!workers/sync/package-lock.json
+!workers/sync/tsconfig.json
+!workers/sync/esbuild.config.mjs
+!workers/sync/src
+!workers/sync/src/**
+
+# ---- the ONE worker->app crossing --------------------------------------------
+# Transitive closure of workers/sync/src/reports/excel/findingsBridge.ts. Three files,
+# and three only: findings.ts imports cases-fold + the contract types, cases-fold
+# imports the contract types, and the contract types import nothing at all.
+!lib
+lib/*
+!lib/sync
+lib/sync/*
+!lib/sync/findings.ts
+!lib/sync/cases-fold.ts
+
+!app
+app/*
+!app/(app)
+app/(app)/*
+!app/(app)/sync
+app/(app)/sync/*
+!app/(app)/sync/types.ts
+
+# ---- belt and braces ----------------------------------------------------------
+# Already covered by the deny-all above; spelled out so that a future `!`-block written
+# one level too broad cannot quietly re-admit them.
+**/node_modules
+**/.next
+**/dist
+**/.git
+**/.env
+**/.env.*
+**/*.log
+**/.DS_Store

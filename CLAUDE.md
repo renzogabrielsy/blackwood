@@ -581,3 +581,16 @@ Read .agents/prompts/<filename>.md and follow the instructions.
 - Use **conventional commits**: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`
 
 **Deploying to the live site (READ THIS before "push to live" / "make it live"):** pushing a `feat/*` branch only produces a Vercel **preview** deployment — it does NOT touch the live URL. To ship live you must land the work on **`main`** (merge `feat/* → main`, or `feat/* → dev → main`), then push `main`; Vercel auto-deploys production on that push. Merging to `main` is protected + hard-to-reverse — confirm scope with the user first, do it via the `git-branch-guardian` subagent, never force-push, and stop + report if the merge isn't clean.
+
+### There are TWO deploy targets, and `main` only covers one of them
+
+**Merging to `main` does NOT deploy the sync worker.** Vercel builds the Next.js app in this repo and nothing else; `workers/sync/` is a separate artifact running on **Fly.io** (app `blackwood-sync`, region `nrt`) that ships **only** on an explicit deploy. Anything under `workers/sync/**` — extractors, classifiers, reconcilers, the Excel report generator, price enrichment — is inert in production until someone runs it.
+
+| Change touches | How it reaches production |
+|---|---|
+| `app/**`, `lib/**`, `components/**`, migrations | merge to `main` → Vercel auto-deploys |
+| `workers/sync/**` | merge to `main` **and then** `cd workers/sync && npm run deploy` |
+
+This gap is not theoretical: on **2026-08-08** a full day of sync fixes (the delivery-identity two-tier key, the human-edit latch, Czarina's tab resolved by month) was merged, green and live on the website while the Fly machine still ran a five-day-old bundle — and the deploy that would have shipped them had been failing the whole time on a broken container build. When a task says "ship the sync fix", the deploy is part of the task.
+
+**`npm run deploy` (from `workers/sync`) is the only sanctioned command** — never a bare `flyctl deploy`. It runs the required `verify:container-build` gate first, sets the build context to the **repo root** (the worker's Excel report imports `lib/sync/findings.ts` across the package boundary, so the image must contain it), and passes the commit sha in as a build arg. A bare `fly deploy` gets the context wrong and fails on the first `COPY`. Full reasoning: `workers/sync/DEPLOY.md`.

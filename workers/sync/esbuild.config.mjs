@@ -9,11 +9,19 @@ import { build } from "esbuild";
 // Build identity, inlined as string literals so a startup banner can prove
 // "this process is running the code I think it's running" — guards against a
 // stale compiled dist/ silently serving old code after a source-only edit.
-let buildSha = "unknown";
-try {
-  buildSha = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
-} catch {
-  // Not a git checkout (e.g. some CI/image contexts) — fall back to "unknown".
+// BUILD_SHA wins when set. The Docker build context does NOT include .git (see
+// .dockerignore), so inside the image `git rev-parse` cannot work — the deploy wrapper
+// passes the sha in as a build arg instead. Without this the banner on a deployed
+// machine would read `build unknown`, which is exactly the question the banner exists
+// to answer ("is the commit I just pushed the one that is running?").
+let buildSha = (process.env.BUILD_SHA ?? "").trim();
+if (!buildSha || buildSha === "unknown") {
+  try {
+    buildSha = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    // Not a git checkout (e.g. some CI/image contexts) — fall back to "unknown".
+    buildSha = "unknown";
+  }
 }
 const buildTime = new Date().toISOString();
 

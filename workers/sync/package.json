@@ -9,6 +9,9 @@
   },
   "scripts": {
     "build": "node esbuild.config.mjs",
+    "verify:container-build": "node scripts/verify-container-build.mjs",
+    "predeploy": "npm run verify:container-build",
+    "deploy": "cd ../.. && flyctl deploy . --config workers/sync/fly.toml --build-arg BUILD_SHA=\"$(git rev-parse --short HEAD)\"",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",

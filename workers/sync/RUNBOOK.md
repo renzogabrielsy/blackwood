@@ -285,8 +285,36 @@ flyctl secrets set \
 Deploy:
 
 ```bash
-flyctl deploy
+cd workers/sync && npm run deploy     # NOT a bare `flyctl deploy` — see below
 ```
+
+**MERGING TO `main` DOES NOT DEPLOY THIS WORKER.** Vercel deploys the Next.js app from
+`main` and never touches Fly. Worker code ships only on an explicit deploy, so landing a
+fix and shipping it are two separate steps. On 2026-08-08 the Fly machine was found five
+days and several fixes stale for exactly this reason.
+
+**Pre-deploy gate (required):**
+
+```bash
+cd workers/sync && npm run verify:container-build
+```
+
+The container's file set is not your disk's. `src/reports/excel/findingsBridge.ts`
+intentionally imports the app's finding flattener across the package boundary
+(`../../../../../lib/sync/findings` — ONE definition shared with the Sync panel), and
+`tsc`, `npm test`, `npm run parity`, `npm run lint` and even `npm run build` all resolve
+that off the dev machine where it plainly exists. On 2026-08-08 `flyctl deploy` was the
+first thing in the pipeline to resolve it against the *image*, and failed:
+`ERROR: Could not resolve "../../../../../lib/sync/findings"`. This gate parses the
+Dockerfile's builder-stage `COPY`s plus the repo-root `.dockerignore`, rebuilds that exact
+file set in a temp dir and runs the worker's own esbuild over it (~2 s, no Docker daemon
+needed). It is wired as npm `predeploy`, so `npm run deploy` refuses to ship on red.
+
+`npm run deploy` also handles the two things a bare `flyctl deploy` gets wrong: the build
+context must be the **repo root** (so the shared files exist in the image) and the commit
+sha must be passed as `--build-arg BUILD_SHA=…` (`.git` is not in the context, so the
+startup banner would otherwise read `build unknown`). Full reasoning: `DEPLOY.md` →
+"The build context is the REPO ROOT".
 
 Verify it's alive:
 
