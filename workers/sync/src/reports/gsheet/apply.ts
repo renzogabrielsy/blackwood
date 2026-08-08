@@ -19,8 +19,12 @@
  * spec's own §5 note flagged this as "a possible improvement opportunity"). gsheet now
  * uses insertIfAbsent for BOTH `deliveries` and `rc_out` NEW rows, with the SAME natural
  * keys the email writers use, so the two paths agree on what "the same row" means:
- *     deliveries → (transaction_date, batch_code, truck_plate, weight_kg, sacks)
- *                  — identical to reports/deliveries/apply.ts
+ *     deliveries → `lib/deliveryIdentity.ts::deliveriesInsertGuardColumns(row)`
+ *                  — the SHARED two-tier decision (L-040b, 2026-08-08): a plated row
+ *                    with a sack count guards on (transaction_date, truck_plate, sacks),
+ *                    everything else on the legacy (transaction_date, batch_code,
+ *                    block_loc, weight_kg). Literally the same function
+ *                    reports/deliveries/apply.ts calls — not a mirrored copy.
  *     rc_out     → (transaction_date, batch_id, destination)
  *                  — identical to reports/rc_out/apply.ts
  *
@@ -47,6 +51,7 @@
 import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { rcOutReconcileCutover } from "../../lib/env.js";
+import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
 import {
   ensureBatch,
@@ -250,14 +255,13 @@ const REPORT_TYPE = "gsheet" as const;
  * The last-instant idempotency natural keys (BUG-016). These MUST stay byte-identical to
  * the email writers' keys — reports/deliveries/apply.ts and reports/rc_out/apply.ts — or
  * the two writers would disagree about what "the same row" is and the guard would leak.
+ *
+ * L-040b: `deliveries` no longer has a fixed column list — the guard is per-row and
+ * two-tier, so it comes from the SHARED `deliveriesInsertGuardColumns(row)`. Re-exported
+ * here under the old name so "what key does gsheet guard deliveries on?" still has one
+ * answer in this file.
  */
-export const GSHEET_DELIVERIES_NATURAL_KEY = [
-  "transaction_date",
-  "batch_code",
-  "truck_plate",
-  "weight_kg",
-  "sacks",
-] as const;
+export const gsheetDeliveriesGuardColumns = deliveriesInsertGuardColumns;
 
 export const GSHEET_RC_OUT_NATURAL_KEY = [
   "transaction_date",
@@ -367,9 +371,11 @@ async function writeRcInDelivery(
   };
   try {
     // BUG-016: last-instant guard, same natural key as the email deliveries writer.
-    const res = await db.insertIfAbsent("deliveries", [payload], [
-      ...GSHEET_DELIVERIES_NATURAL_KEY,
-    ]);
+    const res = await db.insertIfAbsent(
+      "deliveries",
+      [payload],
+      gsheetDeliveriesGuardColumns(payload),
+    );
     if (res.insertedCount === 0) return { ok: false, reason: "already_exists" };
     const newId = res.inserted[0].id as string;
     await db.stampIngestionAudit({
@@ -540,9 +546,11 @@ export async function applyFromCompact(
       // BUG-016: last-instant idempotency guard (was a blind db.insert). The classifier's
       // start-of-run DB snapshot cannot see the email writer's later insert; only this
       // re-check can. A hit is HELD (already_exists), never a silent skip.
-      const res = await db.insertIfAbsent("deliveries", [payload], [
-        ...GSHEET_DELIVERIES_NATURAL_KEY,
-      ]);
+      const res = await db.insertIfAbsent(
+        "deliveries",
+        [payload],
+        gsheetDeliveriesGuardColumns(payload),
+      );
       if (res.insertedCount === 0) {
         skipped.push({
           index: nr.index,

@@ -11,6 +11,25 @@
  *     leaving summary/changed/noop/malformed UNTOUCHED (the guard does `dict(classified)`
  *     then only overrides new/flagged/dup_noops — summary keeps the RAW pre-guard counts).
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * L-040b (2026-08-08) — THE IDENTITY IS NOW TWO-TIER
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The natural key used to be `(transaction_date, batch_code, block_loc, weight_kg)`:
+ * no truck plate, and three facts a human corrects. Correct any one of them and this
+ * classifier stopped recognising the row and reported it NEW — which is how the sync
+ * inserted duplicate copies of the 2026-02-04 block swap and of every `FEEDING # 1` /
+ * `JULY-26-FEED1` spelling mismatch. Identity now comes from ONE shared module,
+ * `lib/deliveryIdentity.ts` (see its header for the measurements and the two safety
+ * properties); `reports/gsheet/classify.ts` uses the same module, so the two writers
+ * of `deliveries` cannot disagree about what "the same row" is.
+ *
+ * Two consequences live in THIS file:
+ *   - `batch_code` / `block_loc` / `weight_kg` are now COMPARED (they left the key, so
+ *     without this a corrected batch code would match and then read as a silent NOOP).
+ *   - A match whose diff touches any of those three is NOT a `changed` row (which
+ *     auto-applies). It goes to the new `identity_diff` bucket, which the guard folds
+ *     into `flagged` → held → Sync Review, for a human to arbitrate.
+ *
  * PARITY-CRITICAL:
  *   - norm_int here TRUNCATES (normIntTrunc), matching classify_deliveries.norm_int
  *     (SHARED.md porting trap #3 — do NOT use the gsheet round variant).
@@ -21,6 +40,12 @@
  *   - Guard indices/keys/notes are byte-exact to parity_guards.py.
  */
 import { normStr, normNum, normIntTrunc, normBlockLoc } from "../../lib/norm.js";
+import {
+  buildDeliveryIdentityIndex,
+  isMutableIdentityField,
+  matchDelivery,
+  type DeliveryIdentityTier,
+} from "../../lib/deliveryIdentity.js";
 import type { DeliveryRow, ExtractResult } from "./extract.js";
 
 // ---------------------------------------------------------------------------
@@ -44,10 +69,24 @@ interface ChangedItem {
   row: DeliveryRow;
   db_row: DeliveriesDbRow;
   diff: FieldDiff[];
+  /** Which tier the row matched on (1 = plate+sacks, 2 = legacy key). L-040b. */
+  matched_tier: DeliveryIdentityTier;
+}
+/**
+ * A match whose diff touches `batch_code` / `block_loc` / `weight_kg` — the three facts
+ * a human corrects. NEVER auto-applied: the guard folds these into `flagged` so they
+ * become held rows a human arbitrates in Sync Review (L-040b).
+ */
+interface IdentityDiffItem extends ChangedItem {
+  /** The subset of `diff` that is a formerly-key field. Always non-empty. */
+  identity_fields: string[];
+  /** DB rows sharing the matched key. >1 = a duplicate already in the DB. */
+  peer_count: number;
 }
 interface NoopItem {
   index: unknown;
-  natural_key: NaturalKey;
+  natural_key: string;
+  matched_tier: DeliveryIdentityTier;
   db_id: unknown;
 }
 interface MalformedItem {
@@ -73,12 +112,15 @@ export interface ClassifyResult {
     extracted_total: number;
     new_count: number;
     changed_count: number;
+    identity_diff_count: number;
     noop_count: number;
     malformed_count: number;
     db_rows_in_window: number;
   };
   new: NewItem[];
   changed: ChangedItem[];
+  /** L-040b — matches disagreeing on a formerly-key field. Human-arbitrated. */
+  identity_diff: IdentityDiffItem[];
   noop: NoopItem[];
   malformed: MalformedItem[];
 }
@@ -92,22 +134,6 @@ export interface GuardedResult extends ClassifyResult {
 // ---------------------------------------------------------------------------
 // Raw classifier (classify_deliveries.py)
 // ---------------------------------------------------------------------------
-type NaturalKey = [unknown, unknown, string | null, number | null];
-
-function makeNaturalKey(row: Record<string, unknown>): NaturalKey {
-  return [
-    row.transaction_date ?? null,
-    row.batch_code ?? null,
-    normBlockLoc(row.block_loc),
-    normNum(row.weight_kg, 3),
-  ];
-}
-
-/** Serialize a natural key tuple to a stable index-string (Python dict-key parity). */
-function keyStr(k: NaturalKey): string {
-  return JSON.stringify(k);
-}
-
 /** Lab comparison at 2-decimal precision (deep_lab_equal). */
 function deepLabEqual(a: unknown, b: unknown): boolean {
   const ao = (a && typeof a === "object" ? a : {}) as Record<string, unknown>;
@@ -123,6 +149,20 @@ function deepLabEqual(a: unknown, b: unknown): boolean {
 
 function fieldDifferences(extracted: Record<string, unknown>, dbRow: Record<string, unknown>): FieldDiff[] {
   const diffs: FieldDiff[] = [];
+
+  // L-040b — the three formerly-key fields. Compared FIRST so the diff list reads
+  // identity-first. On a tier-2 (legacy-key) match these are equal by construction, so
+  // they cost nothing; on a tier-1 match a difference here IS the human correction the
+  // old key could not see.
+  if (normStr(extracted.batch_code) !== normStr(dbRow.batch_code)) {
+    diffs.push({ field: "batch_code", emailValue: extracted.batch_code ?? null, dbValue: dbRow.batch_code ?? null });
+  }
+  if (normBlockLoc(extracted.block_loc) !== normBlockLoc(dbRow.block_loc)) {
+    diffs.push({ field: "block_loc", emailValue: extracted.block_loc ?? null, dbValue: dbRow.block_loc ?? null });
+  }
+  if (normNum(extracted.weight_kg, 3) !== normNum(dbRow.weight_kg, 3)) {
+    diffs.push({ field: "weight_kg", emailValue: extracted.weight_kg ?? null, dbValue: dbRow.weight_kg ?? null });
+  }
 
   if (normStr(extracted.supplier) !== normStr(dbRow.supplier)) {
     diffs.push({ field: "supplier", emailValue: extracted.supplier ?? null, dbValue: dbRow.supplier ?? null });
@@ -161,17 +201,12 @@ function fieldDifferences(extracted: Record<string, unknown>, dbRow: Record<stri
 export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbRow[]): ClassifyResult {
   const extractedRows = extract.rows;
 
-  // Index DB rows by natural key.
-  const dbIndex = new Map<string, DeliveriesDbRow[]>();
-  for (const dbRow of dbRows) {
-    const key = keyStr(makeNaturalKey(dbRow));
-    const arr = dbIndex.get(key);
-    if (arr) arr.push(dbRow);
-    else dbIndex.set(key, [dbRow]);
-  }
+  // L-040b — index DB rows under BOTH tiers (see lib/deliveryIdentity.ts).
+  const dbIndex = buildDeliveryIdentityIndex(dbRows);
 
   const classifiedNew: NewItem[] = [];
   const classifiedChanged: ChangedItem[] = [];
+  const classifiedIdentityDiff: IdentityDiffItem[] = [];
   const classifiedNoop: NoopItem[] = [];
   const classifiedMalformed: MalformedItem[] = [];
 
@@ -187,27 +222,43 @@ export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbR
       continue;
     }
 
-    const key = makeNaturalKey(exRow as unknown as Record<string, unknown>);
-    const matches = dbIndex.get(keyStr(key)) ?? [];
+    const match = matchDelivery(dbIndex, exRow as unknown as Record<string, unknown>);
 
-    if (matches.length === 0) {
+    if (match === null) {
       classifiedNew.push({ index: exRow._source_row, row: exRow });
     } else {
-      const dbRow = matches[0];
+      const dbRow = match.rows[0];
       const diffs = fieldDifferences(exRow as unknown as Record<string, unknown>, dbRow);
       if (diffs.length === 0) {
         classifiedNoop.push({
           index: exRow._source_row,
-          natural_key: key,
+          natural_key: match.key,
+          matched_tier: match.matchedTier,
           db_id: dbRow.id,
         });
       } else {
-        classifiedChanged.push({
-          index: exRow._source_row,
-          row: exRow,
-          db_row: dbRow,
-          diff: diffs,
-        });
+        const identityFields = diffs.map((d) => d.field).filter(isMutableIdentityField);
+        if (identityFields.length) {
+          // A formerly-key field disagrees → a human correction one source has not
+          // caught up with. NEVER auto-applied (CLAUDE.md → Sync Integrity).
+          classifiedIdentityDiff.push({
+            index: exRow._source_row,
+            row: exRow,
+            db_row: dbRow,
+            diff: diffs,
+            matched_tier: match.matchedTier,
+            identity_fields: identityFields,
+            peer_count: match.peerCount,
+          });
+        } else {
+          classifiedChanged.push({
+            index: exRow._source_row,
+            row: exRow,
+            db_row: dbRow,
+            diff: diffs,
+            matched_tier: match.matchedTier,
+          });
+        }
       }
     }
   }
@@ -217,12 +268,14 @@ export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbR
       extracted_total: extractedRows.length,
       new_count: classifiedNew.length,
       changed_count: classifiedChanged.length,
+      identity_diff_count: classifiedIdentityDiff.length,
       noop_count: classifiedNoop.length,
       malformed_count: classifiedMalformed.length,
       db_rows_in_window: dbRows.length,
     },
     new: classifiedNew,
     changed: classifiedChanged,
+    identity_diff: classifiedIdentityDiff,
     noop: classifiedNoop,
     malformed: classifiedMalformed,
   };
@@ -275,6 +328,14 @@ function pyFloatStr(v: unknown): string {
  * apply_deliveries_guard — returns a NEW guarded result with L-033a/b + L-004 +
  * low-confidence re-routing applied. `changed`/`noop`/`malformed`/`summary` pass
  * through untouched; `new` is trimmed to genuine inserts; adds `flagged` + `dup_noops`.
+ *
+ * L-040b: every `identity_diff` row is ALSO appended to `flagged` (kind
+ * `L040_identity_diff`, decision `skip`) so `apply.ts` holds it with no change to the
+ * apply layer. The `identity_diff` bucket itself is preserved for visibility.
+ * Note this makes L-033a a narrower BACKSTOP than it was: a plated row whose sacks match
+ * an existing row is now resolved as an identity diff by the classifier and never
+ * reaches the guard's `new` loop at all — which is strictly better, because L-033a's
+ * `dup_noop` outcome was a SILENT skip and this one asks a human.
  */
 export function applyDeliveriesGuard(
   classified: ClassifyResult,
@@ -417,6 +478,19 @@ export function applyDeliveriesGuard(
     }
   }
 
+  // L-040b — fold the identity diffs into `flagged` so apply holds them. Appended
+  // AFTER the `new`-loop flags so the guard's own ordering is untouched.
+  for (const item of classified.identity_diff) {
+    flagged.push({
+      kind: "L040_identity_diff",
+      index: item.index,
+      row: item.row,
+      db_id: item.db_row.id,
+      reason: identityDiffReason(item),
+      decision: "skip",
+    });
+  }
+
   // out = dict(classified); out["new"]=inserts; out["flagged"]=flagged; out["dup_noops"]=dup_noops.
   // summary / changed / noop / malformed pass through UNTOUCHED (raw pre-guard counts).
   return {
@@ -425,4 +499,35 @@ export function applyDeliveriesGuard(
     flagged,
     dup_noops: dupNoops,
   };
+}
+
+/**
+ * The human-readable refusal for an identity diff. Names BOTH sides of every disagreeing
+ * field, because the whole point is that a person decides which source is right.
+ * Carries NO ₱ value (`cost_basis` is never an identity field, and this string is shown
+ * to every privileged role).
+ */
+function identityDiffReason(item: IdentityDiffItem): string {
+  const who =
+    item.matched_tier === 1
+      ? `same truck + sack count (${item.row.truck_plate ?? "?"}, ${item.row.sacks ?? "?"} sacks) on ${String(item.row.transaction_date).slice(0, 10)}`
+      : `same date/batch/block/weight`;
+  const parts = item.diff
+    .filter((d) => isMutableIdentityField(d.field))
+    .map((d) => `${d.field}: report says ${fmtSide(d.emailValue)}, app has ${fmtSide(d.dbValue)}`);
+  const peer =
+    item.peer_count > 1
+      ? ` NOTE: the app already holds ${item.peer_count} rows for this one truckload — a ` +
+        `duplicate that predates this run.`
+      : "";
+  return (
+    `L-040: this is the SAME delivery as an existing row (matched on ${who}), but the ` +
+    `two sources disagree on ${parts.join("; ")}. One side is a human correction the ` +
+    `other has not caught up with — never auto-applied; a person picks the winner.` +
+    peer
+  );
+}
+
+function fmtSide(v: unknown): string {
+  return v === null || v === undefined || v === "" ? "(blank)" : String(v);
 }

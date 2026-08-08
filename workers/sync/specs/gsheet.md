@@ -136,16 +136,42 @@ Any Sheet row with `transaction_date < since` is dropped ENTIRELY into `out_of_s
 
 ### Natural keys
 
-- **RC IN**: `(transaction_date, resolved_batch_code, norm_block_loc(block_loc), weight_kg)` — with a THREE-TIER fallback matching strategy (exact → aggregation-tolerant → conflict-guardrail), NOT a single flat key lookup. See below.
+- **RC IN**: the **SHARED two-tier delivery identity** (L-040b, 2026-08-08) — TIER 1
+  `(transaction_date, norm_plate(truck_plate), sacks)`, TIER 2 the legacy
+  `(transaction_date, resolved_batch_code, norm_block_loc(block_loc), weight_kg)` — followed by the
+  existing aggregation-tolerant and conflict-guardrail fallbacks. The definition is IMPORTED from
+  `classify_deliveries.py` (TS: `src/lib/deliveryIdentity.ts`), never re-derived here: this file and
+  the email classifier are the two writers of `deliveries`, and if they disagree about what "the same
+  row" is, they duplicate each other's rows. Full rationale in `specs/deliveries.md` §3 and
+  LEARNING_LEDGER L-040b.
 - **RC OUT**: `(transaction_date, batch_id, destination)` — resolved via `resolve_batch_id` (primary→fallbacks against the batches lookup), same style as `classify_rc_out.py`, PLUS its own conflict-guardrail (weight-based, since RC OUT's block_loc is often empty).
 
 ### RC IN — three-tier matching (`classify_rc_in`, lines 275-373)
 
-1. **Exact hit**: `(date, db_matched_code, norm_block_loc, norm_num(weight,3))` found in the `exact` index → route through `_route_changed` (applies the materiality gate, see below).
+0. **IDENTITY hit — and it runs FIRST, before the UNMAPPED verdict (L-040b).** `match_delivery`
+   tries the TIER-1 key `(date, norm_plate, sacks)` then the LEGACY key
+   `(date, db_matched_code, block_loc, weight)`. On a hit:
+   - if `batch_code` / `block_loc` / `weight_kg` disagree → **FLAGGED `identity_diff`**, held for a
+     human, NEVER a Sheet-wins UPDATE and never an insert. The refusal names both spellings.
+   - **exception:** when the ONLY identity disagreement is `weight_kg` and the delta is within the
+     existing `AGG_TOL_KG = 50.0` kg, it is NOT flagged — it keeps the established per-block vs
+     per-truck aggregation semantics and routes through `_route_changed` with the usual
+     `aggregation_note`. A brand-new gate was deliberately not invented for a case the spec already
+     had a rule for.
+   - otherwise → `_route_changed` as before.
+
+   **Why before UNMAPPED:** a tier-1 hit means we already HAVE this truckload, whatever the Sheet
+   calls its batch. Deciding UNMAPPED first held such a row with a vague "code not in DB" forever
+   even though the answer was knowable — and, for a PATTERN-VALID unknown code, the 2026-07-11
+   auto-create policy would have created a batch and inserted a **second copy of a delivery already
+   in the database** (the `JULY-26-FEED1` duplicate class). Measured in the L-040b dry run: 4
+   perpetual `unmapped` holds became 4 named arbitration cases; nothing else moved.
+1. **Legacy exact hit** — now the TIER-2 half of step 0's identity lookup (the standalone `exact`
+   index was removed; it was byte-for-byte the same key, and one key deserves one definition).
 2. **Aggregation-tolerant fallback**: if no exact hit, look in the `loose` index (`(date, db_matched_code, block_loc)` WITHOUT weight) for candidates within `AGG_TOL_KG = 50.0` kg of the Sheet's weight — picks the CLOSEST-weight candidate. This handles the case where the Sheet logs ONE aggregated per-block row while the DB/email logged SEVERAL per-truck rows (or vice versa) — a legitimate real-world reporting-granularity mismatch, not an error. An `aggregation_note` is attached for transparency but does NOT change the NOOP/CHANGED outcome logic itself (still routed through `_route_changed`, just with an extra note field).
 3. **Conflict guardrail** (only reached if 1 and 2 both miss, AND `block_loc is not None`): checks `by_date_block_wt[(date, block_loc, weight)]` for ANY db row with a DIFFERENT `batch_code` at the exact same date+block+weight → this is very likely a batch REASSIGNMENT, not a genuinely new delivery. FLAGGED (`kind: "reassignment_suspected"`), NEVER auto-inserted, NEVER deletes anything.
 4. **Genuinely new**: only if all three above miss → `new`, with `batch_code_resolved` set (may differ from `batch_code_primary` if a fallback matched).
-5. **Batch never resolves at all** (neither primary nor any fallback exists as an ACTUAL batch_code in the current DB window): → `UNMAPPED`, checked BEFORE any of the 4 steps above (this is really step 0 in code order — `resolve_against_set` is called first, and only if `db_matched_code is not None` does the exact/loose/collision logic even run).
+5. **Batch never resolves at all** (neither primary nor any fallback exists as an ACTUAL batch_code in the current DB window) **AND no identity match**: → `UNMAPPED`. As of L-040b this is checked AFTER the identity lookup (step 0), not before it — `resolve_against_set` still runs first to produce `db_matched_code`, but a tier-1 identity hit now pre-empts the UNMAPPED verdict. A row with no identity match still holds as `UNMAPPED` exactly as before.
 
 `resolve_against_set(row, code_set)` (lines 194-204): `code_set` = every `batch_code` actually present in the CURRENT DB QUERY WINDOW's rows (not a separate `batches` table lookup — RC IN resolves against `deliveries.batch_code` values seen in-window, whereas RC OUT resolves against a `batches` id lookup fetched separately). Tries primary first, then EACH fallback in list order; first hit wins. Returns `(intended_code, matched_code_or_None)` — the FIRST element is ALWAYS the primary (used as the "intended" code for NEW rows even if unresolved), the second signals whether resolution succeeded.
 
@@ -245,18 +271,20 @@ Same dual-RPC pattern as every other pipeline (SHARED.md §2.4) — trigger-stam
 
 | Table | Natural key | Shared with |
 |---|---|---|
-| `deliveries` | `(transaction_date, batch_code, truck_plate, weight_kg, sacks)` | `reports/deliveries/apply.ts` |
+| `deliveries` | `deliveriesInsertGuardColumns(row)` — the SHARED two-tier decision (L-040b): `(transaction_date, truck_plate, sacks)` for a plated row with a sack count, else `(transaction_date, batch_code, block_loc, weight_kg)` | `reports/deliveries/apply.ts` — literally the same function, not a mirrored copy |
 | `rc_out` | `(transaction_date, batch_id, destination)` | `reports/rc_out/apply.ts` |
 
 **Why the upstream-only guard was insufficient:** it holds only while gsheet is the SOLE writer of the table — it is not. The email pipelines write `deliveries` too, so the classifier's start-of-run DB snapshot is a time-of-check/time-of-use window, not an authority. A snapshot cannot see a writer that arrives after it was taken. Confirmed incident (BUG-016): 2026-07-15, the email path inserted a C-11B delivery at 01:36:01Z; gsheet, still on its pre-01:36 snapshot, inserted a second identical copy at 03:43:56Z (+24,024 kg phantom inventory on C-11B; app 84,753 vs Sheet 60,729).
 
 **A guard hit is surfaced, never silent:** the row becomes a held row with the email path's existing vocabulary — `reason` and `kind` both `already_exists`, detail `"idempotent skip (natural key already in DB)"`. No new `HeldKind` was invented (that enum is frontend-locked). This is why `ModeApplyResult.skipped[]` carries an optional `reason`.
 
-**Inherited trade-off (deliberate):** the natural key cannot distinguish two genuinely-identical truckloads (`lib/db.ts:13`), so a real second truckload matching all five fields is suppressed — but HELD and re-appliable, not dropped. The email path has always accepted this; the two paths now fail identically, which is the point.
+**Inherited trade-off (deliberate):** the natural key cannot distinguish two genuinely-identical truckloads (`lib/db.ts:13`), so a real second truckload matching every guard column is suppressed — but HELD and re-appliable, not dropped. The email path has always accepted this; the two paths now fail identically, which is the point.
 
 **rc_out is guarded but currently inert:** under the default `SYNC_RCOUT_RECONCILE_CUTOVER=on`, `applyGsheet` skips the rc_out mode WHOLE (R4b), so gsheet never writes `rc_out` today. The guard exists because that flag is a documented one-line revert; with it OFF, gsheet and the PROPOSED writer both target `rc_out` — the identical two-writer race.
 
 ### Held-row reasons (contract-CLI mapping, `phase_apply_contract`)
+
+RC IN `identity_diff` flags land in `skipped` via the existing `flagged` loop, whose `enrichedFlagged` already tags `HeldKind` `cross_batch_reassignment` — no new kind and no apply-layer change was needed (L-040b).
 
 `skipped` (from `_apply_from_compact`'s `skipped` list — covers: location_occupied, agent-set-skip on changed, flagged-left-as-skip, flagged decision=insert/reassign not auto-handled, unmapped left-as-skip or requiring re-classify), `flagged_needs_manual_apply` (from `flagged_resolved` — a `reassign:<id>` decision that was ACKNOWLEDGED but not executed).
 
