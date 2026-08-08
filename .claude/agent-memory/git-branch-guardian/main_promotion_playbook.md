@@ -623,3 +623,32 @@ clean promotions.** The pending `chore(memory)` commit (`acac35c`) rode along fo
 — which is why the merge stat said 25 files / +2640 against the commit's own 24 / +2598. Reconcile
 that gap out loud; an unexplained extra file in a `main` merge stat is exactly what a mistake looks
 like.
+
+### Promotion 45 (2026-08-08, `5c5fb80` → `7a127b3`) — SIXTEENTH consecutive clean `git add .`
+
+The human-edit latch for `public.deliveries` (the same protection the six production fact tables got
+2026-08-03). 17 files / +2058/−50, one 566-line migration **already applied to production**, so the
+`main` push is a **code-only deploy** (sixth promotion of that shape — say so explicitly, it changes
+the risk story). Touches both `app/`+`lib/` AND `workers/sync/`, so unlike promotion 44 the root
+`tsc` gate was meaningful and was run alongside the worker one.
+
+- **A grep hit is not a caller.** The brief claimed "no in-app release door yet — nothing in `app/`
+  calls `fn_release_delivery_rows`". `grep -rn` over `app/ lib/ components/` returned 2 hits in
+  `app/(app)/sync/types.ts` — **both inside doc comments**. Reading them confirmed the brief instead
+  of contradicting it. When a brief states a deliberate gap and you verify it, verify by reading the
+  matches; a bare hit count would have produced a false "the brief is wrong" flag in a `main` report.
+- **Gate subset used, and why:** worker `npm test` **764 passed / 50 files** (new baseline, was
+  745/49 at promotion 44) + `npm run parity` clean 12 cases + `tsc --noEmit` root AND
+  `-p workers/sync/tsconfig.json` (both exit 0, both logs 0 lines) + scoped `npx eslint` on the 3
+  touched app-side files (exit 0). Root `npm run build` waived per the playbook — the brief pre-ran
+  it and the four cheaper gates cover exactly what changed. All figures matched the brief exactly.
+- Secret scan on the staged diff: **zero hits** for the full pattern in 2,058 added lines, and
+  `--numstat` all-numeric (no binary side this time — promotion 44's stray-NUL file diffs as text
+  again from `534d879` forward, exactly as predicted).
+- The pending `chore(memory)` commit (`ddc329c`) rode along for the fifteenth time, so the merge stat
+  read 19 files / +2126 against the commit's own 17 / +2058 (the 2 extra = this file +
+  `gates_and_shell_traps.md`). Reconcile the gap out loud.
+
+Gates clean again (merge-base tree diff empty, `git pull --ff-only` "Already up to date", merge exit 0
+via the `ort` strategy with no conflict lines, post-push `git ls-remote` confirming
+`main=7a127b3` / `feat=5c5fb80`): **33 consecutive clean promotions.**
