@@ -17,6 +17,7 @@ import type {
   PriceNote,
   ProductionBatchStart,
   ProductionHumanEdit,
+  DeliveryHumanEdit,
   ReportArtifact,
   ScheduleConflict,
   SingleSourceOverdue,
@@ -93,6 +94,30 @@ export function collectProductionHumanEdits(result: SyncRunResult): ProductionHu
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.production_human_edits ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every DELIVERY a run REFUSED to overwrite because a human edited it
+ * (`result.reports.<deliveries|gsheet>.apply.delivery_human_edits`, 2026-08-08 deliveries
+ * human-edit latch).
+ *
+ * TWO reports fill this, not one — the emailed RC DELIVERIES report and the Google Sheet's
+ * Sheet-wins pass both write `deliveries` — which is exactly why the fold is a loop over
+ * every report rather than a lookup of one. Guarded, so a hand-built or pre-feature result
+ * simply yields []. Pure — panel-visibility only; these are NOT folded into durable cases
+ * (there is nothing to retry: the row is already correct).
+ */
+export function collectDeliveryHumanEdits(result: SyncRunResult): DeliveryHumanEdit[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: DeliveryHumanEdit[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.delivery_human_edits ?? []) out.push(note)
   }
   return out
 }

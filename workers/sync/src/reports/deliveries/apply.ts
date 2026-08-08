@@ -22,6 +22,7 @@
  */
 import type { DbClient } from "../../lib/db.js";
 import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
+import { type DeliveryHumanEdit, deliveryHumanEditNote } from "../deliveryHumanEdit.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
@@ -100,6 +101,13 @@ export interface ApplyResult {
    * (default []). Also filled by `runReport`.
    */
   unpriced_overdue: UnpricedOverdue[];
+  /**
+   * Deliveries the DB refused to let this run overwrite because a human owns them (the
+   * human-edit latch). ALWAYS present (default []). Rebuilt from the source every run —
+   * nothing is parked — so it re-fires until the operator fixes the report or releases
+   * the row. Carries no ₱ value (see `reports/deliveryHumanEdit.ts`).
+   */
+  delivery_human_edits: DeliveryHumanEdit[];
 }
 
 const REPORT_TYPE = "deliveries";
@@ -155,6 +163,7 @@ export async function applyDeliveries(
   const onlyClean = deps.onlyClean ?? true;
   const held: ApplyResult["held"] = [];
   const errors: string[] = [];
+  const humanEdits: DeliveryHumanEdit[] = [];
 
   let inserts = 0;
   let updates = 0;
@@ -263,41 +272,105 @@ export async function applyDeliveries(
     }
   }
 
-  // VALUE_CHANGED → UPDATE differing fields, trigger-audit stamp (fallback manual).
+  // VALUE_CHANGED → CONDITIONAL update via fn_apply_delivery_upstream, then the
+  // trigger-audit stamp (fallback manual).
+  //
+  // THE LATCH (2026-08-08). This used to be a bare `db.update("deliveries", {id}, patch)`,
+  // so an emailed report could revert a correction an operator had made in the app. The
+  // RPC carries `human_edited_at IS NULL` inside its OWN UPDATE, so a save that landed
+  // between the classify read above and this call still wins and comes back
+  // `human_edited`. There is no read-then-write on this path, and no advisory pre-check:
+  // unlike production's (dormant) writer this one is live, so the RPC is always called for
+  // a real diff and a refusal is therefore always visible.
+  //
+  // ONE op per delivery — ops are keyed off distinct `db_row.id`s from a per-row loop.
+  const ops: Array<Record<string, unknown>> = [];
+  const opMeta = new Map<
+    string,
+    { index: unknown; diff: FieldDiff[]; dbRow: Record<string, unknown> }
+  >();
   for (const c of chgRows) {
+    const patch: Record<string, unknown> = {};
+    for (const d of c.diff ?? []) patch[d.field] = d.emailValue;
+    if (!Object.keys(patch).length) continue;
+    const id = String(c.db_row.id);
+    ops.push({ id, patch });
+    opMeta.set(id, { index: c.index, diff: c.diff ?? [], dbRow: c.db_row });
+  }
+
+  if (ops.length) {
+    let outcomes: Array<{ id: string; outcome: string }> = [];
     try {
-      const patch: Record<string, unknown> = {};
-      for (const d of c.diff ?? []) patch[d.field] = d.emailValue;
-      if (!Object.keys(patch).length) continue;
-      await db.update("deliveries", { id: `eq.${c.db_row.id}` }, patch);
-      updates += 1;
-      done += 1;
-      if (done % writeBatch === 0 || done === totalWrites) {
-        await emit?.(
-          "apply",
-          `Writing ${done} of ${totalWrites} — updating a delivery`,
-          10 + Math.trunc((70 * done) / totalWrites),
-        );
-      }
-      const diffJson: Record<string, { old: unknown; new: unknown }> = {};
-      for (const d of c.diff) diffJson[d.field] = { old: d.dbValue, new: d.emailValue };
-      const stamped = await db.stampIngestionAudit({
-        tableName: "deliveries",
-        recordId: c.db_row.id as string,
-        comment: prov(runTs, c.index, `UPDATE diff=${JSON.stringify(diffJson)}`),
-      });
-      if (!stamped) {
-        await db.writeIngestionAudit({
-          tableName: "deliveries",
-          recordId: c.db_row.id as string,
-          operation: "UPDATE",
-          comment: prov(runTs, c.index, "UPDATE"),
-          diff: diffJson,
-        });
-      }
+      outcomes = await db.applyDeliveryUpstream(ops);
     } catch (exc) {
-      errors.push(`update ${c.index}: ${errMsg(exc)}`);
+      errors.push(`deliveries conditional update failed: ${errMsg(exc)}`);
     }
+    for (const res of outcomes) {
+      const meta = opMeta.get(res.id);
+      if (!meta) continue;
+      if (res.outcome === "human_edited") {
+        // Identity from the DB row (what the app actually holds and the operator sees),
+        // values from the classifier's own diff: `dbValue` is theirs, `emailValue` is the
+        // report's.
+        humanEdits.push(
+          deliveryHumanEditNote(
+            "deliveries",
+            res.id,
+            meta.dbRow,
+            meta.diff.map((d) => ({ field: d.field, yours: d.dbValue, sheet: d.emailValue })),
+          ),
+        );
+        continue;
+      }
+      if (res.outcome !== "applied") {
+        // missing / empty_patch / unsupported_field / not_applied — nothing was written and
+        // it is NOT a human-arbitration case, so it must surface as a real problem
+        // (errors[] also blocks the watermark bump + the Gmail label).
+        errors.push(`update ${meta.index}: not applied (${res.outcome})`);
+        continue;
+      }
+      try {
+        updates += 1;
+        done += 1;
+        if (done % writeBatch === 0 || done === totalWrites) {
+          await emit?.(
+            "apply",
+            `Writing ${done} of ${totalWrites} — updating a delivery`,
+            10 + Math.trunc((70 * done) / totalWrites),
+          );
+        }
+        const diffJson: Record<string, { old: unknown; new: unknown }> = {};
+        for (const d of meta.diff) diffJson[d.field] = { old: d.dbValue, new: d.emailValue };
+        const stamped = await db.stampIngestionAudit({
+          tableName: "deliveries",
+          recordId: res.id,
+          comment: prov(runTs, meta.index, `UPDATE diff=${JSON.stringify(diffJson)}`),
+        });
+        if (!stamped) {
+          await db.writeIngestionAudit({
+            tableName: "deliveries",
+            recordId: res.id,
+            operation: "UPDATE",
+            comment: prov(runTs, meta.index, "UPDATE"),
+            diff: diffJson,
+          });
+        }
+      } catch (exc) {
+        errors.push(`update ${meta.index}: ${errMsg(exc)}`);
+      }
+    }
+  }
+
+  for (const h of humanEdits) {
+    await emit?.(
+      "apply",
+      `${h.transaction_date ?? "A delivery"}${h.truck_plate ? ` (${h.truck_plate})` : ""}: you ` +
+        `edited this in the app, so the report's different value was NOT written — please ` +
+        `confirm which is right.`,
+      80,
+      undefined,
+      "warn",
+    );
   }
 
   // FLAGGED (decision skip under --only-clean) + MALFORMED → held. dup_noops are
@@ -366,6 +439,7 @@ export async function applyDeliveries(
     // caller and every hand-built test fixture valid.
     price_notes: [],
     unpriced_overdue: [],
+    delivery_human_edits: humanEdits,
   };
 }
 

@@ -220,6 +220,7 @@ export async function runReport(
       errors: [],
       price_notes: [],
       unpriced_overdue: [],
+      delivery_human_edits: [],
     };
     return {
       classify: {

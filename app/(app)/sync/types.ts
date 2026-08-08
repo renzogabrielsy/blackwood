@@ -267,6 +267,57 @@ export interface ProductionHumanEdit {
 }
 
 /**
+ * One DELIVERY the sync REFUSED to overwrite because a human edited it in the app
+ * (the deliveries human-edit latch, 2026-08-08 — migration
+ * `20260808015712_deliveries_human_edit_latch.sql`).
+ *
+ * The sibling of `ProductionHumanEdit`, and the same rule: `human_edited_at` on
+ * `public.deliveries` is set by the `fn_stamp_human_edit` trigger on every in-app write,
+ * and `fn_apply_delivery_upstream` re-checks it inside its own UPDATE, so neither the
+ * Google Sheet nor an emailed report can revert a hand-corrected delivery. Nothing is
+ * parked in the DB: both sources are CUMULATIVE, so the disagreement re-surfaces every
+ * run until the operator either fixes the source or hands the row back with
+ * `fn_release_delivery_rows`.
+ *
+ * The difference from production is WHY it was needed. Production's overwriting writer was
+ * DORMANT (its patch shape never matched). This one is LIVE: 40 `audit_logs` UPDATE rows
+ * on `deliveries` carry `provenance=gsheet`, four of them on rows Renzo had already edited
+ * by hand. The 2026-06-25 comment asking the sync not to do that was prose in a table
+ * nothing reads at write time.
+ *
+ * NOT a held row (there is nothing to retry) and never a `HeldKind` (frontend-locked).
+ *
+ * ₱ SAFETY — `cost_basis` IS one of the nine fields the latch can refuse, and the
+ * run-findings channel is NOT price-gated. So a refused `cost_basis` appears in
+ * `changed_fields` by NAME ONLY, with `yours`/`sheet` forced to null and `redacted: true`.
+ * The worker does that stripping where the note is built (`deliveryHumanEditNote`), before
+ * anything leaves the process — `formatFindingData`'s cost-key strip cannot help here,
+ * because the values would be nested inside a `changed_fields` value whose own key is not
+ * cost-ish.
+ */
+export interface DeliveryHumanEdit {
+  /** Which source was refused — `deliveries` (the emailed RC DELIVERIES report) or
+   *  `gsheet` (the Google Sheet's Sheet-wins update). Becomes the finding's `section`. */
+  section: 'deliveries' | 'gsheet'
+  /** Always `'deliveries'`. Present so this shape mirrors `ProductionHumanEdit`. */
+  table: string
+  /** The delivery id — what `fn_release_delivery_rows` needs. */
+  record_id: string
+  transaction_date: string | null
+  supplier: string | null
+  batch_code: string | null
+  block_loc: string | null
+  truck_plate: string | null
+  /** `yours` = the value stored in the app, `sheet` = what the source says. Both are
+   *  null when `redacted` — see the ₱ note above. */
+  changed_fields: Array<{ field: string; yours: unknown; sheet: unknown; redacted?: boolean }>
+  /** `refused_by_db` — the DB's own guard declined the write. The only outcome the
+   *  deliveries latch reports: unlike production there is no advisory pre-check, because
+   *  here the writer is live so the RPC is always called and the refusal always visible. */
+  outcome: string
+}
+
+/**
  * One thing the DELIVERY PRICE step wants a human to see (2026-08-07).
  *
  * WHY THIS EXISTS: the price step used to have exactly one way of speaking — a bare
@@ -369,6 +420,11 @@ export interface ApplyResult {
    *  optionality contract as `auto_created_batches` — read it as
    *  `apply?.production_human_edits ?? []` (see `collectProductionHumanEdits`). */
   production_human_edits?: ProductionHumanEdit[]
+  /** Deliveries the sync refused to overwrite because a human owns them. Same
+   *  optionality contract as `auto_created_batches` — read it as
+   *  `apply?.delivery_human_edits ?? []` (see `collectDeliveryHumanEdits`). Filled by the
+   *  `deliveries` and `gsheet` reports. */
+  delivery_human_edits?: DeliveryHumanEdit[]
   /** Delivery-price problems this run saw — a tab it could not resolve, a fuzzy match it
    *  accepted, a price outside the supplier's usual range. Same optionality contract as
    *  `auto_created_batches` — read it as `apply?.price_notes ?? []` (see

@@ -922,7 +922,19 @@ Each cell is `"<who>: <what>"`, so nobody has to remember which column is which:
 | `block_diff` | `sheet: 10,372,909 kg` | `app: 10,305,642 kg` |
 | `attribution_diff` | `proposed: JULY-26-BLK6 @ F1` | `sheet: JULY-26-BLK5 @ F2` |
 | `production_human_edited` | `yours: ttl_kg 13,685` | `report: ttl_kg 13,680` |
+| `delivery_human_edited` | `yours: block_loc A-7C; sacks 540` | `source: block_loc C-10B; sacks 334` |
 | `schedule_conflict` | `yours: shifts 2` | `Joseph: shifts 0` |
+
+**`delivery_human_edited` has one rule the others do not: a `redacted` field prints its NAME
+and nothing else** — both cells read `cost_basis (not shown)`. `cost_basis` is one of the nine
+fields the 2026-08-08 deliveries human-edit latch can refuse, and the workbook is a **FILE**:
+`sync_run_reports.contains_prices` gates its download on a MEASURED fact, so a single ₱ printed
+here would flip that flag and lock the report away from the very people who need it. Both sides
+arrive already null from the worker (`reports/deliveryHumanEdit.ts`, re-stripped in
+`normalizeReport.ts`), so this branch cannot print a value it was not given — the explicit
+branch exists to keep the cell readable rather than blank. Two writers raise this kind, the
+emailed RC DELIVERIES report (`section: deliveries`) and the Google Sheet (`section: gsheet`),
+so `collectDeliveryHumanEdits` loops every report rather than looking one up.
 
 **Excel conventions.** Header row frozen on every sheet, autofilter over the full used range of
 every table sheet, explicit column widths, wrap on the prose columns. **Severity is a TEXT
