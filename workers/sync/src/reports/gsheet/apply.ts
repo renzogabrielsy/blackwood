@@ -52,6 +52,7 @@ import type { DbClient } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { rcOutReconcileCutover } from "../../lib/env.js";
 import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
+import { type DeliveryHumanEdit, deliveryHumanEditNote } from "../deliveryHumanEdit.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
 import {
   ensureBatch,
@@ -213,6 +214,12 @@ export interface ModeApplyResult {
    * nothing applied, no held rows, ok stays true. Never set for rc_in.
    */
   cutover_skipped?: boolean;
+  /**
+   * Deliveries the DB refused to let this mode overwrite because a human owns them (the
+   * human-edit latch, 2026-08-08). rc_in only — rc_out has no latch. ALWAYS present
+   * (default []). Carries no PHP value (see reports/deliveryHumanEdit.ts).
+   */
+  delivery_human_edits: DeliveryHumanEdit[];
 }
 
 /** The enrichment attached to a gsheet skipped/flagged entry so `applyGsheet` can
@@ -247,6 +254,9 @@ export interface GsheetApplyResult {
   /** Batches auto-created across BOTH modes this run (2026-07-11 policy — see
    *  lib/batchAutoCreate.ts). Empty when none. */
   auto_created_batches: AutoCreatedBatchNote[];
+  /** Deliveries the DB refused to let the Sheet overwrite because a human owns them (the
+   *  human-edit latch, 2026-08-08). rc_in only. Empty when none. */
+  delivery_human_edits: DeliveryHumanEdit[];
 }
 
 const REPORT_TYPE = "gsheet" as const;
@@ -457,6 +467,7 @@ export async function applyFromCompact(
   // place — see ApplyDeps.batchLookup) + the notes for every batch this call created.
   const batchLookup: Record<string, string> = deps.batchLookup ?? {};
   const autoCreatedBatches: AutoCreatedBatchNote[] = [];
+  const humanEdits: DeliveryHumanEdit[] = [];
 
   const base = (): ModeApplyResult => ({
     ok: true,
@@ -469,6 +480,7 @@ export async function applyFromCompact(
     flagged_resolved: [],
     skipped,
     auto_created_batches: autoCreatedBatches,
+    delivery_human_edits: humanEdits,
   });
 
   // --- Safety gates (PORTING_DECISIONS #2 — proper envelope, no bare-int crash). ---
@@ -619,6 +631,20 @@ export async function applyFromCompact(
   }
 
   // --- material VALUE_CHANGED (Sheet-wins) ---
+  //
+  // THE LATCH, rc_in only (2026-08-08). "Sheet-wins" is exactly the policy the 2026-06-25
+  // comment on the Feb-4 Ornales row asked the sync not to apply to a hand-corrected
+  // delivery — and this is the writer that has actually fired: 40 `audit_logs` UPDATE rows
+  // on `deliveries` carry `provenance=gsheet`, four of them on rows Renzo had already
+  // edited. So for rc_in the write now goes through `fn_apply_delivery_upstream`, whose
+  // UPDATE carries `human_edited_at IS NULL` in its OWN WHERE; a refusal becomes a
+  // `DeliveryHumanEdit` note carrying BOTH values instead of a silent overwrite.
+  //
+  // rc_out is UNCHANGED and still uses the raw writer — it has no latch (and under the R4b
+  // cutover gsheet no longer writes rc_out at all).
+  //
+  // Ops are collected first so the RPC is ONE round trip with ONE op per delivery.
+  const pendingRcIn: Array<{ op: Record<string, unknown>; r: CompactChanged }> = [];
   for (const r of actionable.changed) {
     // PORTING_DECISIONS #3 (L-018): honor `decision:"skip"` on CHANGED, not just `skip`.
     if (r.skip || (r.decision ?? "").trim() === "skip") {
@@ -632,15 +658,54 @@ export async function applyFromCompact(
       patch[d.field] = d.sheet;
     }
     if (!Object.keys(patch).length) continue;
-    const table = mode === "rc_in" ? "deliveries" : "rc_out";
-    await db.update(table, { id: `eq.${dbId}` }, patch);
+    if (mode === "rc_in") {
+      pendingRcIn.push({ op: { id: dbId, patch }, r });
+      continue;
+    }
+    await db.update("rc_out", { id: `eq.${dbId}` }, patch);
     updatedIds.push(dbId);
     const diffJson: Record<string, { old: unknown; new: unknown }> = {};
     for (const d of r.diff) diffJson[d.field] = { old: d.db, new: d.sheet };
-    if (mode === "rc_in") {
+    await db.writeIngestionAudit({
+      tableName: "rc_out",
+      recordId: dbId,
+      operation: "UPDATE",
+      comment: provenanceComment(mode, r.index, runTs, "Sheet-wins UPDATE"),
+      diff: diffJson,
+    });
+  }
+
+  if (pendingRcIn.length) {
+    const byId = new Map(pendingRcIn.map((p) => [String(p.op.id), p.r]));
+    for (const res of await db.applyDeliveryUpstream(pendingRcIn.map((p) => p.op))) {
+      const r = byId.get(res.id);
+      if (!r) continue;
+      if (res.outcome === "human_edited") {
+        humanEdits.push(
+          deliveryHumanEditNote(
+            "gsheet",
+            res.id,
+            { transaction_date: r.date, batch_code: r.batch_code, block_loc: r.block_loc ?? null },
+            r.diff.map((d) => ({ field: d.field, yours: d.db, sheet: d.sheet })),
+          ),
+        );
+        continue;
+      }
+      if (res.outcome !== "applied") {
+        // Nothing was written and it is NOT a human-arbitration case. `skipped` is the
+        // gsheet vocabulary for "considered, not applied" and is already surfaced.
+        skipped.push({
+          index: r.index,
+          why: `Sheet-wins UPDATE not applied (${res.outcome})`,
+        });
+        continue;
+      }
+      updatedIds.push(res.id);
+      const diffJson: Record<string, { old: unknown; new: unknown }> = {};
+      for (const d of r.diff) diffJson[d.field] = { old: d.db, new: d.sheet };
       const ok = await db.stampIngestionAudit({
         tableName: "deliveries",
-        recordId: dbId,
+        recordId: res.id,
         comment: provenanceComment(
           mode,
           r.index,
@@ -651,20 +716,12 @@ export async function applyFromCompact(
       if (!ok) {
         await db.writeIngestionAudit({
           tableName: "deliveries",
-          recordId: dbId,
+          recordId: res.id,
           operation: "UPDATE",
           comment: provenanceComment(mode, r.index, runTs, "Sheet-wins UPDATE"),
           diff: diffJson,
         });
       }
-    } else {
-      await db.writeIngestionAudit({
-        tableName: "rc_out",
-        recordId: dbId,
-        operation: "UPDATE",
-        comment: provenanceComment(mode, r.index, runTs, "Sheet-wins UPDATE"),
-        diff: diffJson,
-      });
     }
   }
 
@@ -840,6 +897,7 @@ export async function applyGsheet(
   const errors: string[] = [];
   const perMode: Record<string, ModeApplyResult> = {};
   const autoCreatedBatches: AutoCreatedBatchNote[] = [];
+  const deliveryHumanEdits: DeliveryHumanEdit[] = [];
   // 2026-07-11 auto-create policy: ONE shared lookup object threaded to BOTH modes'
   // applyFromCompact calls (rc_in runs before rc_out below), so a batch auto-created
   // while applying rc_in is immediately visible to rc_out in the SAME run.
@@ -868,6 +926,7 @@ export async function applyGsheet(
         skipped: [],
         cutover_skipped: true,
         auto_created_batches: [],
+        delivery_human_edits: [],
       };
       await emit?.(
         "apply",
@@ -882,6 +941,7 @@ export async function applyGsheet(
       const res = await applyFromCompact(compact, sharedDeps);
       perMode[mode] = res;
       autoCreatedBatches.push(...res.auto_created_batches);
+      deliveryHumanEdits.push(...res.delivery_human_edits);
       if (res.gate_failure) {
         // PD-2: nothing applied for this mode; record the gate, do NOT crash.
         errors.push(`${mode} apply gate: ${res.gate_failure.gate} — ${res.gate_failure.detail}`);
@@ -947,6 +1007,7 @@ export async function applyGsheet(
     errors,
     per_mode: perMode,
     auto_created_batches: autoCreatedBatches,
+    delivery_human_edits: deliveryHumanEdits,
   };
 }
 

@@ -462,6 +462,29 @@ export function sidesForFinding(f: RunFinding): Sides {
     return { a: `yours: ${yours.join("; ")}`, b: `report: ${sheet.join("; ")}` };
   }
 
+  // A DELIVERY a human owns (2026-08-08 latch). Same shape as the production case, with one
+  // extra rule: a `redacted` field (today only `cost_basis`) prints its NAME and nothing
+  // else. The workbook is a FILE — `sync_run_reports.contains_prices` gates the download on
+  // a MEASURED fact, so a ₱ printed here would flip that flag and lock the report away from
+  // the very people who need it. Both sides arrive as null, so this cannot print a value it
+  // was not given; the explicit branch is what keeps the cell readable.
+  if (f.kind === "delivery_human_edited" && Array.isArray(d.changed_fields)) {
+    const yours: string[] = [];
+    const sheet: string[] = [];
+    for (const raw of d.changed_fields) {
+      const e = (raw ?? {}) as Record<string, unknown>;
+      const field = str(e.field) ?? "value";
+      if (e.redacted === true) {
+        yours.push(`${field} (not shown)`);
+        sheet.push(`${field} (not shown)`);
+        continue;
+      }
+      yours.push(`${field} ${sideValue(e.yours)}`);
+      sheet.push(`${field} ${sideValue(e.sheet)}`);
+    }
+    return { a: `yours: ${yours.join("; ")}`, b: `source: ${sheet.join("; ")}` };
+  }
+
   // A plan day a human owns: `changed_fields` is a name list, values live in current/proposed.
   if (f.kind === "schedule_conflict" && Array.isArray(d.changed_fields)) {
     const cur = (d.current ?? {}) as Record<string, unknown>;

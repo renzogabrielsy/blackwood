@@ -414,3 +414,153 @@ same column, same type, same value (measured 7 → 7). The worker reads it on th
 definition** — the BUG-018 formula is byte-identical, delivery-weighted; only the input set narrows,
 because `cost_basis = 0` is the L-008 placeholder, not a ₱0 delivery. `current_weight` is untouched:
 an unpriced delivery is still physically there.
+
+---
+
+## 10. The human-edit latch (2026-08-08) — a warning written as a comment is not a control
+
+Migration: `supabase/migrations/20260808015712_deliveries_human_edit_latch.sql`.
+This is the port of production's §7 latch (`specs/production.md`) onto `public.deliveries`.
+Read that section first; only the differences are spelled out here.
+
+### 10.1 The evidence, stated plainly
+
+On **2026-02-04** the Google Sheet had a truck's `FEB-26-BLK4` / `FEB-26-BLK5` assignment
+swapped. Renzo corrected it in Blackwood and never corrected the Sheet. On **2026-06-25**
+someone recorded that fact as an `audit_logs` **comment**, verbatim:
+
+> DO NOT auto-revert to the Sheet value: any Sheet-vs-DB conflict on this row must be
+> FLAGGED for human review, never applied Sheet-wins.
+
+The sync overrode the row anyway, on **07-03** and again on **08-07**. The comment was
+prose in a table nothing reads at write time. **An operational rule is only enforced when
+it is a predicate in the statement that does the writing.** Never write a rule into a
+remark, a note or a docstring and treat it as a control.
+
+The exposure the latch actually closes is measured, not hypothetical. `deliveries` had TWO
+unguarded sync UPDATE paths, and unlike production's — which was DORMANT, its patch shape
+never matching — **both are live and one has fired**: 40 `audit_logs` UPDATE rows on
+`deliveries` carry `provenance=gsheet`, and four of them landed on a row Renzo had already
+edited by hand (three of those four also carry a same-day adjudication comment, so no
+*silent* loss is provable in the trail — the exposure is structural).
+
+**The latch is not the fix for the Feb-4 incident.** Nothing was overwritten there; the
+sync INSERTED a second row. `lib/deliveryIdentity.ts` (the two-tier identity, shipped the
+same day) is what prevents that. Identity stops a correction being **duplicated**; the
+latch stops a correction being **overwritten**. Complementary, and neither substitutes for
+the other.
+
+### 10.2 The five rules, as they land here
+
+| # | Rule | Where |
+|---|---|---|
+| 1 | A delivery a human edited in the app is never updated by the sync | `fn_stamp_human_edit` BEFORE INSERT/UPDATE on `deliveries` — the production function **reused verbatim, never cloned**, so "how a row gets claimed" keeps exactly one definition |
+| 2 | The guard is `human_edited_at IS NULL` inside the UPDATE's own WHERE | `fn_apply_delivery_upstream(p_ops)`, reached from `DbClient.applyDeliveryUpstream`. **No read-then-write and no worker-side pre-check** — see §10.4 |
+| 3 | The disagreement is surfaced, naming the row and BOTH values | `reports/deliveryHumanEdit.ts::deliveryHumanEditNote` → `apply.delivery_human_edits` → `lib/sync/findings.ts` kind `delivery_human_edited` (`attention`) |
+| 4 | Release is the explicit way back | `fn_release_delivery_rows(p_ids)`. **No server action yet** — see §10.6 |
+| 5 | Inserts are unconstrained | The RPC has no INSERT branch at all; NEW rows keep going through `insert_if_absent` |
+
+### 10.3 Both writers, one note
+
+`deliveries` is written by **two** pipelines, so the latch had to be applied twice and the
+refusal described once:
+
+| Writer | Was | Now |
+|---|---|---|
+| `reports/deliveries/apply.ts` (emailed RC DELIVERIES report) | `db.update("deliveries", {id}, patch)` | ops collected per row → ONE `applyDeliveryUpstream` call |
+| `reports/gsheet/apply.ts` (Sheet-wins pass, rc_in only) | `db.update("deliveries", {id}, patch)` | same, and **rc_out is untouched** — it has no latch |
+
+Both build the note through the single constructor in `reports/deliveryHumanEdit.ts`. If
+they described the same refusal differently, a Sheet refusal and an email refusal would
+read as two unrelated problems — the same reason `lib/deliveryIdentity.ts` is shared.
+
+### 10.4 Why the op is SENT rather than pre-filtered
+
+Production's apply carries `human_edited_ids` in its compact and drops the op before the
+writer. Deliveries does **not**, on purpose: the compact is built from a classify read that
+may be seconds or minutes old, and a pre-check would be exactly the read-then-write this
+section forbids. The op goes to the RPC, the RPC's own WHERE refuses it, and the refusal
+comes back as the string `human_edited`. A save that lands between classify and apply
+therefore wins, and it is always visible.
+
+### 10.5 Outcomes, and which ones are errors
+
+`fn_apply_delivery_upstream` returns `[{id, outcome}]`:
+
+| Outcome | Worker behaviour |
+|---|---|
+| `applied` | counted as an update; the trigger-audit stamp runs as before |
+| `human_edited` | **not** an error — a `delivery_human_edits` note + a `warn` progress beat |
+| `missing`, `empty_patch`, `unsupported_field`, `not_applied` | pushed to `errors[]`, which blocks the watermark bump AND the Gmail label |
+
+The allowlist is exactly the **nine** fields the two classifiers can diff: `supplier`,
+`batch_code`, `block_loc`, `truck_plate`, `sacks`, `weight_kg`, `cost_basis`, `remarks`,
+`lab_results`. Absent deliberately: `transaction_date` (it is in BOTH identity tiers, so a
+VALUE_CHANGED diff can never legitimately contain it), `true_weight_kg` / `deduction_note`
+(additive, never diffed — L-021), `id` / `created_at`. A patch key outside the list refuses
+the **whole op** rather than smuggling a column in.
+
+### 10.6 What is NOT built
+
+- **No in-app release door.** `fn_release_delivery_rows` exists and is granted to
+  `authenticated`, but nothing calls it — there is no `releaseDeliveryRows` server action
+  and no UI, so today a release is a service-role call. Production's equivalent
+  (`releaseProductionRows` in `app/(app)/production/actions.ts`) is the pattern to copy.
+- **No `pending_upstream` and no `row_version`.** Same reasoning as production: the latch
+  is monotone, so there is no ABA race for a version token to catch, and both sources are
+  cumulative so a parked proposal would only duplicate what the next run rebuilds.
+- **Nothing in the Python oracle.** The parity harness compares `classifyCase` only
+  (extract → classify); no `phase_apply` exists in the repo any more, so the latch has no
+  oracle counterpart to keep in lockstep.
+
+### 10.7 The two interactions that needed care
+
+1. **`log_delivery_changes` had to be patched in the same migration.** It builds its diff
+   by iterating every key of `to_jsonb(NEW)`, and the stamp changes on every authenticated
+   write — so without an exclusion, an app UPDATE that moved nothing else would start
+   writing a fabricated `human_edited_at: {old, new}` "delivery edited" event into the
+   activity feed and `view_digest_audit_enriched`. The two latch columns are excluded from
+   the **diff**, never from the **snapshot**. Restores the previous behaviour exactly.
+2. **BUG-017 is not reintroduced.** All four existing `deliveries` triggers are AFTER;
+   the stamp is the only BEFORE trigger, and Postgres orders BEFORE ahead of AFTER
+   unconditionally. `fn_update_blackwood_state` recomputes from the BASE TABLES via
+   `fn_recompute_batch_state`, not from `NEW`, so a stamp cannot move `current_weight` or
+   `avg_cost` — verified as **zero drift across all 697 batches** after the migration.
+
+### 10.8 ₱ safety — the one thing production did not need
+
+`cost_basis` is one of the nine refusable fields, and the run-findings channel is **not**
+price-gated (Sync panel, Excel workbook, digest — no `canViewPrices()` anywhere in it). So
+a refused price is reported **by NAME ONLY**: `{field: 'cost_basis', yours: null, sheet:
+null, redacted: true}`.
+
+`formatFindingData`'s cost-key strip cannot cover this — it skips a top-level key whose
+*name* looks cost-ish, and these values sit nested inside a `changed_fields` value. The
+redaction therefore happens where the note is built (`REDACTED_FIELDS` in
+`reports/deliveryHumanEdit.ts`, the only constructor) and is **re-applied** in
+`workflows/normalizeReport.ts`, which is the door every replayed or hand-built envelope
+comes through. Two independent defences: a ₱ can only reach the channel if both are removed
+in one edit. The Excel workbook branch in `reports/excel/workbook.ts` prints
+`cost_basis (not shown)` on both sides — the workbook is a FILE, and
+`sync_run_reports.contains_prices` gates its download on a measured fact, so one ₱ printed
+there would lock the report away from the people who need it.
+
+`view_deliveries_human_edited` likewise carries **no ₱ column**: the refusal names the ROW,
+and the number stays in RC IN behind `canViewPrices()`.
+
+### 10.9 Tests and proof
+
+- `test/reports/deliveries-human-edit.test.ts` — 19 tests: an unlatched row still updates
+  (and only through the guarded path, for BOTH writers); a latched row is refused with both
+  values reported; a mixed batch refuses only the latched row; a non-human outcome is an
+  error that blocks the watermark; inserts stay unconstrained; a refused ₱ is name-only at
+  the constructor, in the apply result, through `normalizeApply`, in the finding and in the
+  workbook; the finding names the row, both values, `attention`, and the right section.
+- `test/reports/gsheet.test.ts` — the L-018 decision-honoring tests now assert the rc_in
+  write is the conditional RPC and that `db.update` is never reached.
+- **The DB half was proven against production in a transaction forced to roll back** (a
+  terminal `RAISE`, verified afterwards to have left zero residue): insert unconstrained →
+  latched refused with the value unchanged → unlatched applied → release returns
+  `released=1 skipped=1` and clears the stamp → the released row applies → an
+  off-allowlist patch returns `unsupported_field` and writes nothing → an unknown id
+  returns `missing` → an empty patch returns `empty_patch`.

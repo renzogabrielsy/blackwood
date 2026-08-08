@@ -572,4 +572,76 @@ refuse to overwrite.
 
 ---
 
+## L-041 — A WARNING WRITTEN AS A COMMENT IS NOT A CONTROL (2026-08-08)
+
+**The evidence, in three dates.** On **2026-02-04** the Google Sheet had a truck's
+`FEB-26-BLK4` / `FEB-26-BLK5` assignment swapped. Renzo corrected it in Blackwood and never
+corrected the Sheet. On **2026-06-25** someone wrote that fact into an `audit_logs` **comment** on
+that delivery, verbatim:
+
+> DO NOT auto-revert to the Sheet value: any Sheet-vs-DB conflict on this row must be FLAGGED for
+> human review, never applied Sheet-wins.
+
+The sync overrode the row anyway — on **2026-07-03**, and again on **2026-08-07**. Four months of a
+clearly-worded, correctly-reasoned, permanently-stored instruction, obeyed zero times.
+
+**Why it failed is not "nobody read it".** It is that there was nothing in the system capable of
+reading it. `audit_logs.comment` is free text in a table the writer never queries. The instruction
+named the right row, stated the right rule and used the right vocabulary, and it sat one table away
+from a `db.update("deliveries", {id}, patch)` that had no idea it existed. **A rule is enforced only
+when it is a predicate in the statement that performs the write.** Everything else — a remark, a
+note, a docstring, a `# TODO: don't do X`, a paragraph in a spec — is documentation of an intention.
+
+**The rule, generalised.** When you find yourself writing down that something must not happen:
+- If it must not happen **to data**, put it in a CHECK, a partial unique index, or a predicate in
+  the UPDATE's own WHERE. `fn_apply_delivery_upstream` carries `AND t.human_edited_at IS NULL` — the
+  June comment, compiled.
+- If it must not happen **in code**, put it in a test or a verify script that fails the build.
+- Only then write the prose, and write it as an *explanation of the control*, never as the control.
+- **A comment that asks a future process to behave is a bug report against the absence of a guard.**
+  Treat it as a ticket, not as a fix.
+
+**The corollary that nearly got skipped: a silent refusal is the same bug, quieter.** Once the DB
+refuses the overwrite, the Sheet still says the old thing — so the sync would decline the identical
+write on every run, forever, and the operator would never learn the two disagree. The refusal
+therefore becomes a `delivery_human_edited` run finding naming the row and BOTH values, rebuilt from
+the source every run (nothing is parked, both sources are cumulative) until a human fixes the source
+or releases the row. **A guard without a telling replaces a wrong answer with no answer.**
+
+**Three things measured while building it, worth keeping:**
+- **"Dormant" and "live" are different risks and deserve different urgency.** Production's
+  equivalent unguarded writer (L-036) had never actually fired — its patch shape never matched. This
+  one had: **40** `audit_logs` UPDATE rows on `deliveries` carry `provenance=gsheet`, **four** of
+  them on rows Renzo had already edited by hand. Check whether the path you are guarding has run
+  before you decide how alarmed to be.
+- **A latch and an identity are complementary, and neither substitutes for the other.** The Feb-4
+  incident was an **INSERT** (L-040b) — the latch would not have stopped it. Identity stops a
+  correction being *duplicated*; the latch stops a correction being *overwritten*. Both shipped
+  2026-08-08 for the same underlying reason and neither made the other redundant.
+- **Adding a stamped column to a table with a diff-everything audit trigger fabricates events.**
+  `log_delivery_changes` iterates every key of `to_jsonb(NEW)`, and the stamp changes on every
+  authenticated write — so without excluding the two latch columns from the **diff** (never from the
+  **snapshot**), every no-op app save would have written a `human_edited_at: {old, new}` "delivery
+  edited" row into the activity feed and `view_digest_audit_enriched`. Patch the audit function in
+  the SAME migration that adds the column. `cenapro.rc_delivery_audit` excludes `updated_at` /
+  `row_version` for exactly this reason.
+
+**And one ₱ rule production did not need.** `cost_basis` is one of the nine fields the latch can
+refuse, and the run-findings channel is **not** price-gated. A refused price is reported **by NAME
+ONLY** (`{field: 'cost_basis', yours: null, sheet: null, redacted: true}`), stripped where the note
+is built and re-stripped in `normalizeReport.ts` — two independent defences, because
+`formatFindingData`'s cost-key strip only inspects top-level key *names* and these values are nested
+inside `changed_fields`. `view_deliveries_human_edited` carries no ₱ column either: the refusal names
+the ROW, the number stays behind `canViewPrices()`.
+
+**Provenance:** 2026-08-08. Migration `20260808015712_deliveries_human_edit_latch.sql`; 34 rows
+latched from their own `audit_logs` history (33 with an actor; 1 without, because the June annotation
+genuinely has `performed_by = NULL` — an honest unknown, not a fabricated one). Zero
+`current_weight` / `avg_cost` drift across all 697 batches. The DB half was proven against
+production in a transaction forced to roll back, leaving zero residue. Full spec:
+`workers/sync/specs/deliveries.md` §10. No Python change — the parity harness compares
+`classifyCase` only and no `phase_apply` remains in the repo.
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

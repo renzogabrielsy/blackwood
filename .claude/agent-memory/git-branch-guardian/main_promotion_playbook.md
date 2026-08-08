@@ -580,3 +580,46 @@ Precedents `d323257`, `bacbe12`, `0e4ae9c` — all `git checkout main && git mer
 
 - **Merged `feat/*` branches are KEPT, not deleted** — every historical feature branch (local + origin) survives. Default to keeping unless told otherwise.
 - Branch naming shifted from `feat/<UI|backend>/<name>` (early) to flat `feat/<kebab-name>` (recent).
+
+### Promotion 44 (2026-08-08, `534d879` → `50eced1`) — FIFTEENTH consecutive clean `git add .`
+
+The root-cause fix for duplicate ICTC deliveries: the sync's natural key omitted the truck plate and
+contained three human-correctable facts, so any correction filed a second row. 24 files / +2598/−211,
+one new shared `workers/sync/src/lib/deliveryIdentity.ts` + a 538-line test file, Python oracle moved
+in lockstep. **No migration, no schema change** — classification logic only, so nothing about pushing
+`main` runs SQL (fifth promotion running with a code-only deploy shape).
+
+- **First promotion on this branch that is worker-only** — zero files under `app/`, `lib/`,
+  `components/`. So root `npm run build` / root `tsc --noEmit` gate NOTHING here: root `tsc` does not
+  cover `workers/sync/tsconfig.json`. The honest gate subset was worker `tsc -p` (exit 0, empty log),
+  `npm test` **745 passed / 49 files** (new baseline, was 720/48), `npm run parity` clean 12 cases
+  (deliveries 2 / flecon 3 / gsheet 2 / production 2 / rc_movement_audit 1 / rc_out 2, +2 expected
+  deviations on `production_downtime_ge60`). All three matched the brief. Say in the report WHY the
+  root build was skipped — "no app-layer file in the diff" is the reason, not "the brief said so".
+- **A TRACKED source file can already be BINARY to git, and its diff then reads `Bin N -> M bytes`.**
+  `workers/sync/test/reports/gsheet-idempotency.test.ts` showed `Bin 14618 -> 15014` and `- -` in
+  `--numstat`. Not a real binary and not an alarm: the **HEAD blob** carries exactly one stray NUL
+  byte (inside a `String(row[c] ?? "…")` placeholder literal), and git marks the diff binary if
+  EITHER side is. The new worktree copy has **no** NUL (replaced with a space), so from this commit
+  forward the file diffs as text again. Diagnose with `git show HEAD:<path> | perl -0777 -ne 'exit(1)
+  if /\x00/'` — check BOTH sides before concluding, and read the diff via `git diff -a -- <path> |
+  tr -d '\000'`. Remember `tr -d` shifts columns, so do not read a one-character delta off that
+  output; grep the worktree file for the real bytes.
+- The `-  -` numstat row means the binary file contributes 0 to the insertion/deletion totals — the
+  `24 files / +2598/−211` figures exclude it. State that rather than implying the file was unchanged.
+- Secret scan: 3 hits in a 2.8k-line diff, all in the new dry-run script and all `process.env` reads
+  (`SUPABASE_SERVICE_ROLE_KEY`, `Bearer ${key}`). **Zero hardcoded credentials, zero machine-local
+  paths** — the promotion-41 `/Users/renzosy/…` flag did not recur in either new script. A new
+  `.gitignore` line (`workers/sync/.dryrun-identity/`) kept the dry-run's scratch output untracked, so
+  `git add .` swept nothing extra.
+- The brief's measured figures were all corroborated in the committed docs before going into permanent
+  history (`grep -oE '1,545|1,688|224|183|18,827'` on the staged diff): 1,545 plated+sacked rows,
+  1,688 total, 224 raw plate spellings → 183 trucks, the 18,827 kg wet-sack split. They matched.
+
+Gates clean again (merge-tree bare OID `aa7228a` exit 0 run AFTER committing, merge-base tree diff
+empty, merge exit 0, `git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>` empty,
+old main tip `9f877c7` still an ancestor, `git ls-remote` confirming both refs): **32 consecutive
+clean promotions.** The pending `chore(memory)` commit (`acac35c`) rode along for the fourteenth time
+— which is why the merge stat said 25 files / +2640 against the commit's own 24 / +2598. Reconcile
+that gap out loud; an unexplained extra file in a `main` merge stat is exactly what a mistake looks
+like.

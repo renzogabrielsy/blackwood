@@ -634,6 +634,51 @@ export class DbClient {
     return out;
   }
 
+  // -- deliveries (the human-edit latch, 2026-08-08) ------------------------
+  /**
+   * CONDITIONAL update of `public.deliveries` via the atomic RPC
+   * `fn_apply_delivery_upstream`.
+   *
+   * This is the ONLY way the sync may UPDATE a delivery. A plain
+   * `db.update("deliveries", {id}, patch)` would silently revert a correction an operator
+   * made in the app — which is exactly what the 2026-06-25 `audit_logs` comment on the
+   * Feb-4 Ornales row asked nobody to do, and exactly what nothing in the database
+   * prevented, because a comment is not a control. The RPC re-checks
+   * `human_edited_at IS NULL` IN THE SAME STATEMENT as each write, so a save that landed
+   * between classify and apply wins and the op comes back labelled `human_edited`.
+   *
+   * Ops are `{ id, patch }` — ONE op per delivery per call. The writer is a single
+   * `UPDATE … FROM`, which touches a target row at most once per statement, so two ops
+   * for one id would apply an arbitrary one of the two patches. Both callers build their
+   * ops from a per-row loop over distinct ids, so this costs nothing; `chunk()` below
+   * never splits an id across chunks because each id appears once to begin with.
+   *
+   * Chunked at 200 ops. Throws on a hard PostgREST error (the caller records it in
+   * `errors[]`, which already blocks the watermark bump + the Gmail label).
+   */
+  async applyDeliveryUpstream(
+    ops: Row[],
+  ): Promise<Array<{ id: string; outcome: string }>> {
+    if (!ops.length) return [];
+    const CHUNK = 200;
+    const out: Array<{ id: string; outcome: string }> = [];
+    for (let i = 0; i < ops.length; i += CHUNK) {
+      const slice = ops.slice(i, i + CHUNK);
+      const { data, error } = await this.sb.rpc("fn_apply_delivery_upstream", {
+        p_ops: slice,
+      });
+      if (error) {
+        throw new Error(
+          `fn_apply_delivery_upstream RPC failed ${error.code ?? ""}: ${sliceMsg(error.message)}`,
+        );
+      }
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+        out.push({ id: String(r.id ?? ""), outcome: String(r.outcome ?? "") });
+      }
+    }
+    return out;
+  }
+
   // -- audit helpers (L-009 SECURITY DEFINER RPCs) -------------------------
   /**
    * For tables with NO audit trigger: write the audit_logs row via the SECURITY

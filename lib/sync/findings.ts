@@ -26,6 +26,7 @@ import type {
   PriceNote,
   ProductionBatchStart,
   ProductionHumanEdit,
+  DeliveryHumanEdit,
   RcOutSource,
   ReportArtifact,
   ScheduleConflict,
@@ -46,6 +47,7 @@ import {
   collectPriceNotes,
   collectProductionBatchStarts,
   collectProductionHumanEdits,
+  collectDeliveryHumanEdits,
   collectReportArtifact,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
@@ -779,6 +781,108 @@ function fromProductionHumanEdit(e: ProductionHumanEdit): RunFinding {
 }
 
 // ============================================================================
+// Delivery human-edit findings (2026-08-08) — the deliveries latch.
+//
+// THE FAILURE THESE EXIST TO END: on 2026-06-25 the instruction "DO NOT auto-revert to the
+// Sheet value" was written into an `audit_logs` COMMENT on the Feb-4 Ornales delivery. A
+// comment is prose in a table nothing reads at write time, so it protected nothing. The DB
+// now refuses the overwrite outright — but a refusal nobody is told about is just a quieter
+// version of the same problem: the Sheet still says the old thing, so the sync would
+// silently decline the same write forever and the operator would never learn the two
+// disagree. This is the telling.
+// ============================================================================
+
+/** Plain phrase per delivery field (no column names in the operator's face). */
+const DELIVERY_FIELD_LABEL: Record<string, string> = {
+  supplier: 'supplier',
+  batch_code: 'batch code',
+  block_loc: 'block',
+  truck_plate: 'truck plate',
+  sacks: 'sacks',
+  weight_kg: 'weight',
+  cost_basis: 'price',
+  remarks: 'notes',
+  lab_results: 'lab results',
+}
+
+/** Which source was refused — used for both the `source` label and the prose. */
+const DELIVERY_EDIT_SOURCE: Record<string, string> = {
+  deliveries: 'RC DELIVERIES report',
+  gsheet: 'Google Sheet',
+}
+
+/**
+ * "block A-7C → C-10B; sacks 540 → 334".
+ *
+ * A `redacted` field (today only `cost_basis`) prints its NAME and says the values are
+ * withheld — never the numbers. The redaction itself happens upstream, twice
+ * (`reports/deliveryHumanEdit.ts` and `normalizeReport.ts`); this function is the third
+ * place that must not print what it was not given, and since both sides arrive as null it
+ * physically cannot.
+ */
+function deliveryDeltas(e: DeliveryHumanEdit): string {
+  return e.changed_fields
+    .map((f) => {
+      const label = DELIVERY_FIELD_LABEL[f.field] ?? f.field
+      if (f.redacted) return `${label} (differs - value not shown here)`
+      const show = (v: unknown) => {
+        if (v == null || v === '') return 'none'
+        if (typeof v === 'number') return v.toLocaleString('en-US')
+        if (typeof v === 'object') return JSON.stringify(v)
+        return String(v)
+      }
+      return `${label} ${show(f.yours)} ${ARROW} ${show(f.sheet)}`
+    })
+    .join('; ')
+}
+
+/**
+ * A delivery the sync refused to overwrite because a human edited it in the app.
+ * `attention`, never auto-resolved — deliveries' instance of the project-wide
+ * "disagreements are arbitrated by a human" rule. Re-fires every run until the operator
+ * fixes the source or hands the row back, because both sources are cumulative and nothing
+ * is parked in the DB.
+ */
+function fromDeliveryHumanEdit(e: DeliveryHumanEdit): RunFinding {
+  const sourceLabel = DELIVERY_EDIT_SOURCE[e.section] ?? e.section
+  const where = [e.transaction_date, e.supplier, e.batch_code, e.block_loc, e.truck_plate]
+    .filter(Boolean)
+    .join(` ${DOT} `)
+  const fields = e.changed_fields.map((f) => DELIVERY_FIELD_LABEL[f.field] ?? f.field)
+  const fieldPhrase =
+    fields.length <= 1
+      ? (fields[0] ?? 'this delivery')
+      : `${fields.slice(0, -1).join(', ')} and ${fields[fields.length - 1]}`
+
+  return {
+    key: `delivery_human_edited:${e.section}:${e.record_id}`,
+    kind: 'delivery_human_edited',
+    kindLabel: 'Delivery you edited — the source disagrees',
+    source: sourceLabel,
+    title: `${e.transaction_date ?? 'This'} delivery: your edit was kept — the ${sourceLabel} has a different ${fieldPhrase}`,
+    location: where || e.record_id,
+    data: {
+      table: e.table,
+      record_id: e.record_id,
+      section: e.section,
+      transaction_date: e.transaction_date,
+      supplier: e.supplier,
+      batch_code: e.batch_code,
+      block_loc: e.block_loc,
+      truck_plate: e.truck_plate,
+      changed_fields: e.changed_fields,
+      outcome: e.outcome,
+    },
+    reason:
+      `You edited this delivery in the app, so the sync did NOT overwrite it. The ` +
+      `${sourceLabel} says ${deliveryDeltas(e)}. Nothing changed — either correct the ` +
+      `${sourceLabel}, or hand this delivery back to the sync if the source is right.`,
+    severity: 'attention',
+    section: e.section,
+  }
+}
+
+// ============================================================================
 // Delivery price findings (2026-08-07).
 //
 // THE FAILURE THESE EXIST TO END: for a week the sync's entire vocabulary for a
@@ -1029,6 +1133,10 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   // 10. Production rows the sync refused to overwrite (the human-edit latch).
   for (const e of collectProductionHumanEdits(result)) out.push(fromProductionHumanEdit(e))
 
+  // 10b. Deliveries the sync refused to overwrite (the 2026-08-08 deliveries latch).
+  //      TWO reports can raise these — the emailed report and the Google Sheet.
+  for (const e of collectDeliveryHumanEdits(result)) out.push(fromDeliveryHumanEdit(e))
+
   // 11. Delivery-price problems (2026-08-07): a tab that could not be resolved, a fuzzy
   //     match that was accepted, a match refused as non-unique, a rate unlike the
   //     supplier's. The file-level ones are `high` — they un-price a whole month at once.
@@ -1105,6 +1213,7 @@ const SHORT_KIND: Record<string, string> = {
   schedule_conflict: 'schedule day held',
   production_batch_started: 'new production batch',
   production_human_edited: 'your edit kept',
+  delivery_human_edited: 'your edit kept',
   stale_stream: 'report overdue',
   price_tab_unresolved: 'no price tab',
   price_tab_ambiguous: 'duplicate price tab',
@@ -1129,6 +1238,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   schedule_conflict: 'Schedule day you edited — the plan email disagrees',
   production_batch_started: 'New production batch opened',
   production_human_edited: 'Row you edited — the report disagrees',
+  delivery_human_edited: 'Delivery you edited — the source disagrees',
   stale_stream: 'Report stream has gone quiet',
   // Delivery price kinds (2026-08-07). Kept in sync with PRICE_KIND_LABEL above — that
   // table drives the live findings, this one covers a durable case row read back later.

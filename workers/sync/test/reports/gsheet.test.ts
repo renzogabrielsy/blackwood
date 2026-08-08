@@ -223,13 +223,26 @@ describe("UNMAPPED reason string (Python repr parity)", () => {
 // ---------------------------------------------------------------------------
 describe("apply — L-018 decision honoring on CHANGED rows (PD #3)", () => {
   // A DbClient stub that records update() calls and never hits a network.
+  //
+  // 2026-08-08 (the deliveries human-edit latch): rc_in Sheet-wins UPDATEs no longer go
+  // through `db.update` — they go through the conditional RPC wrapper
+  // `applyDeliveryUpstream`, whose UPDATE carries `human_edited_at IS NULL` in its own
+  // WHERE. `upstreamOps` is therefore the rc_in write ledger these tests assert on;
+  // `updates` still records the raw writer (rc_out, and any path that regresses back to
+  // it). The stub answers `applied` for every op — the latch's own refusal behaviour is
+  // covered in test/reports/deliveries-human-edit.test.ts.
   function stubDb() {
     const updates: Array<{ table: string; filters: unknown; patch: unknown }> = [];
+    const upstreamOps: Array<{ id: string; patch: unknown }> = [];
     const inserts: Array<{ table: string; rows: unknown }> = [];
     const db = {
       async update(table: string, filters: unknown, patch: unknown) {
         updates.push({ table, filters, patch });
         return [{ id: "x" }];
+      },
+      async applyDeliveryUpstream(ops: Array<{ id: string; patch: unknown }>) {
+        upstreamOps.push(...ops);
+        return ops.map((o) => ({ id: String(o.id), outcome: "applied" }));
       },
       async insert(table: string, rows: unknown[]) {
         inserts.push({ table, rows });
@@ -260,7 +273,7 @@ describe("apply — L-018 decision honoring on CHANGED rows (PD #3)", () => {
         return true;
       },
     };
-    return { db: db as never, updates, inserts };
+    return { db: db as never, updates, upstreamOps, inserts };
   }
 
   const changed = (over: Partial<CompactChanged>): CompactChanged => ({
@@ -280,26 +293,32 @@ describe("apply — L-018 decision honoring on CHANGED rows (PD #3)", () => {
   });
 
   it("a CHANGED row with decision:'skip' is SKIPPED (never updated)", async () => {
-    const { db, updates } = stubDb();
+    const { db, updates, upstreamOps } = stubDb();
     const res = await applyFromCompact(compact([changed({ decision: "skip" })]), { db });
     expect(res.updated).toBe(0);
     expect(updates).toHaveLength(0);
+    expect(upstreamOps).toHaveLength(0);
     expect(res.skipped.some((s) => s.index === 8)).toBe(true);
   });
 
   it("a CHANGED row with no skip/decision IS applied (baseline)", async () => {
-    const { db, updates } = stubDb();
+    const { db, updates, upstreamOps } = stubDb();
     const res = await applyFromCompact(compact([changed({})]), { db });
     expect(res.updated).toBe(1);
-    expect(updates).toHaveLength(1);
-    expect(updates[0].patch).toEqual({ remarks: "CORRECTED" });
+    // The latch (2026-08-08): the rc_in write is the conditional RPC, NOT a bare UPDATE.
+    expect(updates).toHaveLength(0);
+    expect(upstreamOps).toHaveLength(1);
+    expect(upstreamOps[0]).toEqual({ id: "d1", patch: { remarks: "CORRECTED" } });
+    // Nothing was refused, so the run says nothing about human edits.
+    expect(res.delivery_human_edits).toEqual([]);
   });
 
   it("a CHANGED row with top-level skip:true is SKIPPED (Python parity)", async () => {
-    const { db, updates } = stubDb();
+    const { db, updates, upstreamOps } = stubDb();
     const res = await applyFromCompact(compact([changed({ skip: true })]), { db });
     expect(res.updated).toBe(0);
     expect(updates).toHaveLength(0);
+    expect(upstreamOps).toHaveLength(0);
   });
 });
 

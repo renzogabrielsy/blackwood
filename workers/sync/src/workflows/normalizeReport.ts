@@ -149,6 +149,37 @@ export interface ProductionHumanEditNote {
 }
 
 /**
+ * One DELIVERY the sync REFUSED to overwrite because a human edited it in the app (the
+ * deliveries human-edit latch, 2026-08-08 — see reports/deliveryHumanEdit.ts). Mirror of
+ * the frontend `DeliveryHumanEdit`.
+ *
+ * UNLIKE production, `deliveries` DOES carry a ₱ column that the latch can refuse
+ * (`cost_basis`), so `changed_fields` may contain a `redacted` entry naming the field with
+ * both values withheld. See `toDeliveryHumanEdit`.
+ */
+export interface DeliveryHumanEditNote {
+  section: "deliveries" | "gsheet";
+  table: string;
+  record_id: string;
+  transaction_date: string | null;
+  supplier: string | null;
+  batch_code: string | null;
+  block_loc: string | null;
+  truck_plate: string | null;
+  changed_fields: Array<{ field: string; yours: unknown; sheet: unknown; redacted?: boolean }>;
+  outcome: string;
+}
+
+/**
+ * Delivery fields whose VALUES may never ride the findings channel. Mirrors
+ * `reports/deliveryHumanEdit.ts::REDACTED_FIELDS` — kept as a local copy on purpose: this
+ * module is the normalization boundary and must not depend on a report module. A
+ * `scripts/verify-*` style drift check is unnecessary because both are one-element sets
+ * over a column name that cannot change without a migration.
+ */
+const REDACTED_DELIVERY_FIELDS: ReadonlySet<string> = new Set(["cost_basis"]);
+
+/**
  * One thing the DELIVERY PRICE step wants a human to see (2026-08-07 — see
  * reports/deliveries/enrich.ts). Mirror of the frontend `PriceNote`.
  *
@@ -229,6 +260,11 @@ export interface ApplyResult {
   production_batch_starts: ProductionBatchStartNote[];
   /** Production rows the sync refused to overwrite. ALWAYS present (default []). */
   production_human_edits: ProductionHumanEditNote[];
+  /** Deliveries the DB refused to let the sync overwrite (the human-edit latch,
+   *  2026-08-08). ALWAYS present (default []). Carries no PHP value: a refused
+   *  `cost_basis` arrives already redacted by the worker and is re-stripped here, so a
+   *  hand-built or replayed envelope cannot smuggle a price through. */
+  delivery_human_edits: DeliveryHumanEditNote[];
   /** Delivery-price problems this run saw. ALWAYS present (default []). */
   price_notes: PriceNoteEntry[];
   /** Deliveries still unpriced >1 day on. ALWAYS present (default []). */
@@ -300,6 +336,7 @@ interface RawApply {
   production_batch_starts?: unknown;
   /** production only — rows the sync refused to overwrite (human-edit latch). */
   production_human_edits?: unknown;
+  delivery_human_edits?: unknown;
   /** deliveries only — price-step problems (tab miss, fuzzy match, out-of-band). */
   price_notes?: unknown;
   /** deliveries only — deliveries still unpriced more than a day after the fact. */
@@ -413,6 +450,47 @@ function toProductionHumanEdit(v: unknown): ProductionHumanEditNote {
 /** Coerce a raw refused-overwrite array → ProductionHumanEditNote[]. */
 function toProductionHumanEdits(v: unknown): ProductionHumanEditNote[] {
   return Array.isArray(v) ? v.map(toProductionHumanEdit) : [];
+}
+
+/**
+ * Coerce one raw refused-delivery entry → contract DeliveryHumanEditNote (2026-08-08).
+ *
+ * The `redacted` re-strip is deliberate BELT AND BRACES. The worker already withholds a
+ * refused `cost_basis` at the point the note is built, but this function is also the door
+ * every REPLAYED and hand-built envelope comes through, and the findings channel it feeds
+ * is not price-gated. Re-applying the strip here means the ONLY way a price could reach
+ * the channel is if both defences were removed in the same edit.
+ */
+function toDeliveryHumanEdit(v: unknown): DeliveryHumanEditNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  const fields = Array.isArray(o.changed_fields) ? o.changed_fields : [];
+  const section = str(o.section) === "gsheet" ? "gsheet" : "deliveries";
+  return {
+    section,
+    table: str(o.table) || "deliveries",
+    record_id: str(o.record_id),
+    transaction_date: nullable(o.transaction_date),
+    supplier: nullable(o.supplier),
+    batch_code: nullable(o.batch_code),
+    block_loc: nullable(o.block_loc),
+    truck_plate: nullable(o.truck_plate),
+    changed_fields: fields.map((f) => {
+      const e = (f ?? {}) as Record<string, unknown>;
+      const field = str(e.field);
+      if (REDACTED_DELIVERY_FIELDS.has(field) || e.redacted === true) {
+        return { field, yours: null, sheet: null, redacted: true };
+      }
+      return { field, yours: e.yours ?? null, sheet: e.sheet ?? null };
+    }),
+    outcome: str(o.outcome),
+  };
+}
+
+/** Coerce a raw refused-delivery array → DeliveryHumanEditNote[]. */
+function toDeliveryHumanEdits(v: unknown): DeliveryHumanEditNote[] {
+  return Array.isArray(v) ? v.map(toDeliveryHumanEdit) : [];
 }
 
 /**
@@ -562,6 +640,7 @@ export function normalizeApply(
     auto_created_batches: toAutoCreatedBatches(raw.auto_created_batches),
     production_batch_starts: toProductionBatchStarts(raw.production_batch_starts),
     production_human_edits: toProductionHumanEdits(raw.production_human_edits),
+    delivery_human_edits: toDeliveryHumanEdits(raw.delivery_human_edits),
     price_notes: toPriceNotes(raw.price_notes),
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
   };
@@ -628,6 +707,7 @@ export function failedReportResult(
       auto_created_batches: [],
       production_batch_starts: [],
       production_human_edits: [],
+      delivery_human_edits: [],
       price_notes: [],
       unpriced_overdue: [],
     },

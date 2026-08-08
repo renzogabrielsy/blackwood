@@ -102,3 +102,28 @@ Git does not store renames — never promise "git recorded it as a rename" witho
 ## "Files were deleted" often means UNTRACKED scratch that never entered git
 
 2026-08-01 a brief said five files were "deleted" and asked me to confirm they staged as deletions; they had only ever existed as `??` untracked files in the same session, so `git diff --staged --diff-filter=D --name-only` was correctly empty. Nothing was wrong — but "no deletions staged" looks like a `git add` failure if you don't check. Two cheap proofs: `git log --all --oneline -- <path>` (empty = never tracked) and `git ls-tree -r HEAD --name-only | grep <path>`. Report it as "never tracked, nothing removed from history," not as a staging miss.
+
+## `Bin N -> M bytes` on a `.ts` file — check WHICH SIDE is binary
+
+2026-08-08 (promotion 44): `workers/sync/test/reports/gsheet-idempotency.test.ts` diffed as
+`Bin 14618 -> 15014 bytes` with `-` `-` in `--numstat`. `file` called it UTF-8 text and the
+worktree copy had no NUL. **The HEAD blob was the binary one** — one stray NUL inside a
+`String(row[c] ?? "…")` placeholder literal — and git marks a diff binary if EITHER side is.
+
+- Test both sides: `git show HEAD:<path> | perl -0777 -ne 'exit(1) if /\x00/'` vs the same on the
+  worktree file. Exit 1 = NUL present.
+- Read the diff with `git diff -a -- <path> | tr -d '\000'`. **`tr -d` shifts columns**, so never
+  read a one-character delta off that output — grep the worktree file for the real bytes
+  (`grep -a -o '?? .\{0,12\}' <path> | od -c`).
+- A binary-flagged file contributes **0** to the `--shortstat` insertion/deletion totals. Say so in
+  the report instead of letting the numbers imply it was untouched.
+- Related but distinct from the argv-NUL-grep trap above: there the SCAN was broken; here git's
+  classification was correct and the old blob really did contain a NUL.
+
+## Root `tsc`/`build` gate NOTHING for a worker-only changeset
+
+2026-08-08: zero files under `app/`, `lib/`, `components/` ⇒ root `npm run build` and root
+`npx tsc --noEmit` prove nothing about the diff, because root `tsc` does **not** cover
+`workers/sync/tsconfig.json`. The real subset is worker `npx tsc --noEmit -p workers/sync/tsconfig.json`
++ `npm test` + `npm run parity`. Report the REASON the root build was skipped ("no app-layer file in
+the diff"), never "the brief said it was green".
