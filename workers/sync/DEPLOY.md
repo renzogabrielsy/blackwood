@@ -12,9 +12,85 @@ machine, ~$2–3/mo) until a kick arrives. To add a daily automatic run later, a
 scheduled trigger (Fly cron machine or Supabase pg_cron) that hits `POST /kick`.
 
 This folder is already deploy-ready: `fly.toml` (app `blackwood-sync`, region `nrt`)
-and `Dockerfile` are committed. `npm run build` (the Docker build step) passes.
+and `Dockerfile` are committed.
 
 ---
+
+## Merging to `main` does NOT deploy this worker
+
+**Vercel deploys the Next.js app from `main`. It does not touch Fly.** The sync worker is
+a separate artifact and ships only when somebody runs an explicit `fly deploy`. A day of
+sync fixes can be merged, green, and live on the website while the worker on Fly is still
+running last week's bundle — that is exactly what happened on 2026-08-08 (the machine was
+five days and several fixes stale). **Shipping worker code is two steps: land it, then
+deploy it.**
+
+---
+
+## Pre-deploy gate (REQUIRED — run this every time)
+
+```bash
+cd workers/sync
+npm run verify:container-build
+```
+
+**Why this exists.** The container build has a *different file set* from your dev machine,
+and `workers/sync/src/reports/excel/findingsBridge.ts` deliberately imports the app's
+finding flattener across the package boundary
+(`../../../../../lib/sync/findings`). Every ordinary gate — `tsc --noEmit`, `npm test`,
+`npm run parity`, `npm run lint`, even a bare `npm run build` — resolves that path off
+your disk, where the file obviously exists. On 2026-08-08 the image did not contain it,
+so `flyctl deploy` was the FIRST thing in the whole pipeline that tried to resolve the
+import against the image's real files, and it died there:
+
+```
+src/reports/excel/findingsBridge.ts:39:7: ERROR: Could not resolve "../../../../../lib/sync/findings"
+process "/bin/sh -c npm run build" did not complete successfully: exit code: 1
+```
+
+`verify:container-build` closes that hole. It **parses** `Dockerfile` (builder-stage
+`WORKDIR` + `COPY`) and the repo-root `.dockerignore`, rebuilds that exact file set in a
+temp dir, and runs the worker's own esbuild against it — reproducing container module
+resolution in ~2 seconds without a Docker daemon (there isn't one locally; Fly builds
+remotely). It fails if a `COPY` source is missing, if `.dockerignore` withholds a file a
+`COPY` asks for, or if anything fails to resolve. It is wired as npm `predeploy`, so
+`npm run deploy` runs it automatically and refuses to deploy on red.
+
+The full pre-deploy set:
+
+| Gate | Command | Expected |
+|---|---|---|
+| Types (worker) | `cd workers/sync && npm run typecheck` | clean |
+| Types (app) | `npx tsc --noEmit` (repo root) | clean |
+| Unit suite | `cd workers/sync && npm test` | 764 passing |
+| Python parity | `cd workers/sync && npm run parity` | green (12/12) |
+| Lint | `npm run lint` (repo root) | 166 problems / 28 errors baseline |
+| **Container build** | `cd workers/sync && npm run verify:container-build` | **OK** |
+
+---
+
+## The build context is the REPO ROOT
+
+Because of that one cross-package import, `workers/sync/Dockerfile` is built with the
+**repo root** as its context and the image **mirrors the repo layout**
+(`WORKDIR /repo/workers/sync`, shared files at `/repo/lib/...` and
+`/repo/app/(app)/...`). Flattening the worker to `/app` would push
+`../../../../../lib` above the filesystem root, so the layout is part of the contract.
+
+Only four things ride along from outside the worker — `lib/sync/findings.ts`,
+`lib/sync/cases-fold.ts`, `app/(app)/sync/types.ts`, and nothing else (that is the
+complete transitive closure). The repo-root **`.dockerignore` is deny-all-then-allow**, so
+the context stays at **89 files / ~1.4 MB** instead of the whole monorepo — it never ships
+`node_modules`, `.next`, `.git`, `supabase/` or the worker's `fixtures/`.
+
+**Never run a bare `fly deploy` from this folder.** Use:
+
+```bash
+cd workers/sync && npm run deploy
+```
+
+which expands to the repo-root invocation and passes the commit sha in as a build arg
+(`.git` is not in the context, so the startup banner cannot read it otherwise).
 
 ## One-time runbook
 

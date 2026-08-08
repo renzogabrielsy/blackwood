@@ -19,6 +19,28 @@ app = "blackwood-sync"
 primary_region = "nrt"   # Tokyo — closest to the Supabase ap-northeast-1 project
 
 [build]
+  # THE BUILD CONTEXT IS THE REPO ROOT, not this folder — the worker's Excel report
+  # imports the app's finding flattener across the package boundary, so the image has to
+  # contain `lib/sync/*` and `app/(app)/sync/types.ts` (full reasoning in the Dockerfile
+  # header). Deploy with:
+  #
+  #     cd workers/sync && npm run deploy
+  #
+  # which expands to `flyctl deploy .` from the repo root with `--config
+  # workers/sync/fly.toml --dockerfile workers/sync/Dockerfile --build-arg BUILD_SHA=…`
+  # and runs the `verify:container-build` gate first.
+  #
+  # MEASURED flyctl behaviour (v0.4.71, 2026-08-08): this path — and the `--dockerfile`
+  # flag equally — is resolved relative to the DIRECTORY HOLDING THIS fly.toml, *not*
+  # relative to the build context. So it stays `"Dockerfile"` (i.e. workers/sync/Dockerfile)
+  # and the context is set by the positional argument to `flyctl deploy` instead. Writing
+  # `"workers/sync/Dockerfile"` here looks more correct and is not: flyctl then hunts for
+  # workers/sync/workers/sync/Dockerfile and errors.
+  #
+  # A bare `fly deploy` from inside workers/sync is therefore still wrong — but it fails
+  # LOUDLY and immediately on the very first COPY (`"/workers/sync/package.json": not
+  # found`, because the context is one level too deep), long before esbuild. Use
+  # `npm run deploy`.
   dockerfile = "Dockerfile"
 
 [env]
