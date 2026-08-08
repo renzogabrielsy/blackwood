@@ -652,3 +652,42 @@ the risk story). Touches both `app/`+`lib/` AND `workers/sync/`, so unlike promo
 Gates clean again (merge-base tree diff empty, `git pull --ff-only` "Already up to date", merge exit 0
 via the `ort` strategy with no conflict lines, post-push `git ls-remote` confirming
 `main=7a127b3` / `feat=5c5fb80`): **33 consecutive clean promotions.**
+
+### Promotion 46 (2026-08-08, `e9aa32e` → `e58c7d2`) — SEVENTEENTH consecutive clean `git add .`
+
+The sync worker's **container build** was broken, so `fly deploy` had been failing and none of
+the day's sync fixes were actually running. 9 files / +634/−15 — Dockerfile, a NEW root
+`.dockerignore`, `fly.toml`, `package.json`, `esbuild.config.mjs`, a NEW 350-line
+`verify-container-build.mjs`, plus `DEPLOY.md` / `RUNBOOK.md` / root `CLAUDE.md`.
+
+- **The headline fact is now its own memory: [[deploy-targets]] — pushing `main` deploys Vercel
+  ONLY.** This promotion's whole subject is that gap. A worker-only changeset landing on `main`
+  changes nothing in production until `cd workers/sync && npm run deploy`. Never let a report
+  imply otherwise.
+- **Gate subset, and why:** the diff contains **zero** app-layer files — root `CLAUDE.md` is a doc
+  and root `.dockerignore` is read by Docker only (not by Vercel, not by git), so root
+  `npm run build`/`tsc` gate literally nothing and were skipped on that basis. What was run:
+  worker `npx tsc --noEmit -p tsconfig.json` (exit 0, log 0 lines), `npm test` **764 passed /
+  50 files** (baseline held from promotion 45), `npm run parity` clean 12 cases (+2 expected
+  deviations on `production_downtime_ge60`), and the changeset's **own new gate**
+  `npm run verify:container-build` → OK, reproducing **89 files / 1450 KB / 568 KB bundle**,
+  which matched the brief's measured figures.
+- **The Bash cwd was already `workers/sync`**, so a bare `npx tsc -p tsconfig.json` and
+  `npm run verify:container-build` ran the WORKER ones with no `cd`. Confirmed by vitest's
+  `RUN … /workers/sync` header and by `pwd`. Same trap [[gates-and-shell-traps]] flags — verify
+  which package you actually gated.
+- **The deployed image predates the commit, and that is fine.** Renzo's brief reported the Fly
+  machine already on version 14 with startup banner `build 71a01b8` — the PARENT commit — because
+  the deploy was built from the then-uncommitted working tree. Report it as expected, and say why
+  the bytes are still provably the committed ones (tree unchanged between deploy and commit).
+- Secret scan: **zero hits** across 634 added lines for the full pattern; `--numstat` all-numeric
+  (no binary side). No machine-local path leaked into the new `.mjs` script.
+- Merge stat read **10 files / +663** against the commit's own 9 / +634. The extra is
+  `.claude/agent-memory/git-branch-guardian/main_promotion_playbook.md` (+29) from the pre-existing
+  `71a01b8` `chore(memory)` commit riding along for the **sixteenth** time. Reconcile that gap out
+  loud, every time.
+
+Gates clean again (merge-base tree diff empty, `git merge-tree --write-tree` exit 0 with a bare OID
+`039bff5`, `git pull --ff-only` "Already up to date", merge exit 0, `git ls-files --unmerged` empty,
+post-merge `git diff --stat main <feat>` empty, old main tip `7a127b3` still an ancestor,
+`git ls-remote` confirming `main=e58c7d2` / `feat=e9aa32e`): **34 consecutive clean promotions.**

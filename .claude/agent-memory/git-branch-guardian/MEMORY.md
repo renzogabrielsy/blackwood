@@ -7,6 +7,7 @@
 - [Staging exclusions](staging_exclusions.md) — what to unstage after the mandatory `git add .`; triaging untracked source files; content-level secret scan.
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — split one staged changeset into several commits via `git commit -- <pathspec>`, no per-file staging.
 - [Concurrent-session promotions](concurrent_session_promotions.md) — when ANOTHER session shares the tree: the exact-path staging override, and the worktree build gate untracked files defeat.
+- [Two deploy targets](deploy_targets.md) — pushing `main` deploys Vercel ONLY; `workers/sync/**` is inert until an explicit Fly `npm run deploy`.
 
 ## Role
 
@@ -24,4 +25,5 @@
 ## Repo facts
 
 - Next.js App Router, route groups under `app/(app)/`. Supabase + Postgres. Sync worker at `workers/sync/`.
+- **`main` is NOT one deploy — it is Vercel only.** The Fly sync worker ships separately; see [Two deploy targets](deploy_targets.md) before reporting a worker changeset as "live".
 - Working tree is otherwise clean — good hygiene; unexpected dirt is worth a second look, not a shrug.
