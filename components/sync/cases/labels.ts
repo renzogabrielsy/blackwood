@@ -9,6 +9,21 @@
  * No server imports here — this file is imported by client components.
  */
 import type { HeldKind } from '@/app/(app)/sync/types'
+import type { FindingBadge } from '@/lib/sync/findings'
+
+/**
+ * Classes per `FindingBadge.tone` — the qualifying chip a finding can carry (2026-08-12).
+ *
+ * `caution` is deliberately an OUTLINED amber tint, not the flat `bg-muted` the severity chip
+ * beside it uses, so the two never read as one long label. Neither tone may be red (severity
+ * owns alarm) or green (a badge qualifies a finding that is still open — nothing here is
+ * verified fine). Semantic-adjacent utility colours only, both legs stated for light + dark.
+ */
+export const FINDING_BADGE_CLASS: Record<FindingBadge['tone'], string> = {
+  caution:
+    'border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-300',
+  neutral: 'border border-border bg-muted text-muted-foreground',
+}
 
 /** Short plant-floor phrase per held kind. Kept in sync with HeldRows.tsx. */
 export const KIND_LABEL: Record<HeldKind, string> = {

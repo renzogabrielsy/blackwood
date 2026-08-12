@@ -233,9 +233,83 @@ check('grand_total, residual ZERO → attention (run dc944b54 numbers)', () => {
   assert.equal(g!.data.fully_accounted, true)
   assert.equal(g!.kindLabel, 'Total inventory mismatch — fully accounted for')
   assert.ok(g!.title.includes('matches the blocks already flagged'))
-  // Wording discipline: consistent-with, never a claim about the cause.
-  assert.ok(g!.reason.includes('consistent with'), 'must say consistent with')
-  assert.ok(!/is a lag issue|due to lag|because the sheet lags/i.test(g!.reason))
+})
+
+// ── 2c. The reassurance is a BADGE, not the last sentence of a paragraph. ─────
+// Renzo, 2026-08-12: "it shouldnt be in the description. It should be flagged or badged as
+// 'POSSIBLE MISMATCH DUE TO LAG' or something like that". So: the chip carries the reading,
+// the prose states the disagreement and points at the blocks, and the nuance the label had to
+// drop lives in the badge's hint.
+check('grand_total, residual ZERO → carries the LAG badge, verbatim wording', () => {
+  const findings = flattenRunFindings(
+    runWithGrandTotal({
+      kind: 'grand_total',
+      block_loc: null,
+      sheet_kg: 10_322_875,
+      computed_kg: 10_286_727,
+      delta: 36_148,
+      accounted_block_kg: 36_148,
+      accounted_block_count: 4,
+      residual_kg: 0,
+      fully_accounted: true,
+      detail:
+        'Total inventory disagrees: Sheet 10,322,875 kg vs app 10,286,727 kg (Δ 36,148 kg). ' +
+        'All of it is accounted for by the 4 block(s) flagged above (Σ 36,148 kg, nothing ' +
+        "unexplained) — consistent with the Sheet's Blocking tab not yet reflecting recent " +
+        'feeding, so likely not urgent. Check those blocks to confirm.',
+    }),
+  )
+  const g = findings.find((f) => f.kind === 'block_diff')!
+  assert.equal(g.badges?.length, 1, 'a fully-accounted total must carry exactly one badge')
+  assert.equal(g.badges![0].label, 'POSSIBLE MISMATCH DUE TO LAG', "Renzo's wording, verbatim")
+  // Never red, never green — a badge qualifies a finding that is still open.
+  assert.equal(g.badges![0].tone, 'caution')
+  // The nuance moved to the hint, it was not thrown away.
+  assert.ok(g.badges![0].hint.includes('consistent with'), 'hint must say consistent with')
+  assert.ok(g.badges![0].hint.includes('Likely, not certain'))
+  assert.ok(!/is a lag issue|due to lag\b|because the sheet lags/i.test(g.badges![0].hint))
+
+  // The PROSE now states the disagreement + a pointer, and nothing more.
+  assert.ok(g.reason.includes('Total inventory disagrees'), 'must still state the disagreement')
+  assert.ok(g.reason.includes('36,148 kg'), 'must still carry the numbers')
+  assert.ok(g.reason.endsWith('Check the 4 blocks flagged above.'), `got: ${g.reason}`)
+  assert.ok(
+    !g.reason.includes('consistent with'),
+    'the badge carries that reading now — it must not also sit in the paragraph',
+  )
+  assert.ok(!g.reason.includes('nothing unexplained'))
+})
+
+check('grand_total with residual NON-zero → NO badge (the alarming shape stays bare)', () => {
+  const findings = flattenRunFindings(
+    runWithGrandTotal({
+      kind: 'grand_total',
+      block_loc: null,
+      sheet_kg: 10_322_875,
+      computed_kg: 10_286_727,
+      delta: 36_148,
+      accounted_block_kg: 21_148,
+      accounted_block_count: 3,
+      residual_kg: 15_000,
+      fully_accounted: false,
+      detail:
+        'Total inventory disagrees: Sheet 10,322,875 kg vs app 10,286,727 kg (Δ 36,148 kg). ' +
+        'The 3 block(s) flagged above account for 21,148 kg, leaving 15,000 kg NOT explained ' +
+        'by any flagged block.',
+    }),
+  )
+  const g = findings.find((f) => f.kind === 'block_diff')!
+  assert.equal(g.badges, undefined, 'no badge, and the key must be ABSENT rather than []')
+  // And the alarming prose is kept WHOLE — the trim applies only to the reassuring shape.
+  assert.ok(g.reason.includes('15,000 kg NOT explained'), 'the unexplained kg must survive')
+})
+
+// A legacy grand_total (no residual fields) is UNKNOWN, not reassuring: no badge either.
+check('legacy grand_total (no residual fields) → no badge, still high', () => {
+  const findings = flattenRunFindings(realRun)
+  const g = findings.find((f) => f.kind === 'block_diff' && f.data.subkind === 'grand_total')!
+  assert.equal(g.severity, 'high')
+  assert.equal(g.badges, undefined, 'absent data must never be badged as accounted for')
 })
 
 check('grand_total, residual NON-ZERO → stays high and names the unexplained kg', () => {

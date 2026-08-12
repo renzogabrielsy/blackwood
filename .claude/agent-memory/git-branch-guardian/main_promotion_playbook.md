@@ -691,3 +691,48 @@ Gates clean again (merge-base tree diff empty, `git merge-tree --write-tree` exi
 `039bff5`, `git pull --ff-only` "Already up to date", merge exit 0, `git ls-files --unmerged` empty,
 post-merge `git diff --stat main <feat>` empty, old main tip `7a127b3` still an ancestor,
 `git ls-remote` confirming `main=e58c7d2` / `feat=e9aa32e`): **34 consecutive clean promotions.**
+
+### Promotion 47 (2026-08-12, `a116127` → `26a75e1`) — EIGHTEENTH consecutive clean `git add .`
+
+The blocking cross-check's grand-total finding stopped crying wolf: it now states a RESIDUAL
+(`delta − Σ signed per-block gaps`) and drops from `high` to `attention` when the flagged blocks
+fully account for the gap. 9 files / +511/−16, no migration, no new files — pure logic + docs, so
+the `main` push is a **code-only deploy** (seventh promotion of that shape).
+
+- **Touches BOTH `workers/sync/**` and `app/`+`lib/`, so both type-checks were meaningful** and
+  both were run: root `npx tsc --noEmit` (exit 0, log 0 lines) and worker
+  `npx tsc --noEmit -p tsconfig.json` (exit 0, 0 lines). Worker `npm test` **772 passed / 50 files**
+  (new baseline, was 764/50 at promotions 45–46), `npm run parity` clean 12 cases (+2 expected
+  deviations on `production_downtime_ge60`). All matched the brief's numbers exactly. Root
+  `npm run build` waived per promotion 30's rule (brief pre-ran it and stated the lint baseline).
+- **A brief that says "+N test cases" is checkable in ONE grep and worth it.** The brief claimed
+  +3 severity checks in `scripts/verify-findings.ts`; `git show HEAD:<path> | grep -cE '^\s*check\('`
+  vs the same on the worktree gave **19 → 22**, and running the script printed
+  "All 22 findings checks passed." Two independent confirmations that the brief describes THIS tree,
+  in ~20 seconds. Do this whenever a brief quantifies its own test delta.
+- **The brief's headline BUG claim was verified in the diff, not taken on faith** — and it is the
+  most valuable line in the message. Summing the diffs' `delta` would have been wrong because
+  presence-shaped diffs carry `delta: null`; the committed helper is
+  `(sheet_kg ?? 0) − (computed_kg ?? 0)` with a JSDoc naming the measured wrong answer
+  (Σ`delta` = 9,909 ⇒ "26,239 kg unexplained" on a run where nothing is unexplained). Read the
+  helper before drafting; a body that states the trap must state the *committed* form of the fix.
+- **Fail-closed severity reads are worth naming explicitly in the body.** `fully_accounted` is read
+  as `=== true`, so a grand_total stored before this change (no such field) stays `high`. That is
+  the difference between "we quieted an alarm" and "we quieted an alarm we can prove is redundant" —
+  the distinction a reader of `main`'s history will care about.
+- Secret scan on added lines only: **zero hits** across 511 added lines; `--numstat` all-numeric
+  (no binary side). No machine-local paths.
+- **The brief explicitly reserved the Fly deploy for Renzo** ("do the merge and push only, I am
+  handling the deploy") and asked for the outstanding deploy to be stated on the record. Honour
+  that literally — do NOT run `npm run deploy` — and put the outstanding worker deploy in the
+  report anyway, per [[deploy-targets]]. A worker changeset on `main` is inert until it ships.
+- Merge stat read **13 files / +622** against the commit's own 9 / +511. The 4 extra files
+  (+111 = 2 + 45 + 25 + 39) are all `.claude/agent-memory/git-branch-guardian/**` from the
+  pre-existing `4481b69` `chore(memory)` commit riding along for the **seventeenth** time.
+  Reconcile that gap out loud, every time — it adds up exactly or something is wrong.
+
+Gates clean again (merge-base tree diff empty, `git merge-tree --write-tree` bare OID `0d4cd6e`
+exit 0 **re-run after committing** per promotion 42, `git pull --ff-only` "Already up to date",
+merge exit 0 via `ort`, `git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>`
+empty, old main tip `e58c7d2` still an ancestor, `git ls-remote` confirming `main=26a75e1` /
+`feat=a116127`): **35 consecutive clean promotions.**

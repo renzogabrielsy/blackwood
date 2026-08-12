@@ -13,6 +13,7 @@ import {
   type FindingSeverity,
   type RunFinding,
 } from '@/lib/sync/findings'
+import { FINDING_BADGE_CLASS } from './cases/labels'
 
 /**
  * The panel's honest "needs review" list. It renders `flattenRunFindings(state.result)` —
@@ -133,6 +134,10 @@ function dataChips(f: RunFinding): DataChip[] {
     push('sheet', 'sheet_kg', true)
     push('app', 'computed_kg', true)
     push('Δ', 'delta', true)
+    // The RESIDUAL — the part of a grand-total gap that NO flagged block explains, and the
+    // only number here that is genuinely alarming. Present only on a grand_total that carries
+    // it; `0` is a real value and must still render (hence the `!= null` test in `push`).
+    push('unexplained', 'residual_kg', true)
     push('sheet batch', 'sheet_batch')
     push('app batch', 'computed_batch')
     return chips
@@ -194,6 +199,25 @@ function FindingCard({ f }: { f: RunFinding }) {
             >
               {f.kindLabel}
             </span>
+
+            {/* Qualifying badges — the at-a-glance reading (e.g. "POSSIBLE MISMATCH DUE TO
+                LAG"), which used to be the last sentence of the paragraph below. Sits
+                immediately after the severity chip and is deliberately outlined, not flat,
+                so the two never read as one run-on label. No animation: it must be legible
+                the instant the panel paints, not a moment later. */}
+            {f.badges?.map((b) => (
+              <span
+                key={b.label}
+                title={b.hint}
+                className={cn(
+                  'rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+                  FINDING_BADGE_CLASS[b.tone],
+                )}
+              >
+                {b.label}
+              </span>
+            ))}
+
             <span className="font-mono text-[9px] text-muted-foreground">{f.location}</span>
           </div>
 
