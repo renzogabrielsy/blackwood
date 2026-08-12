@@ -736,3 +736,37 @@ exit 0 **re-run after committing** per promotion 42, `git pull --ff-only` "Alrea
 merge exit 0 via `ort`, `git ls-files --unmerged` empty, post-merge `git diff --stat main <feat>`
 empty, old main tip `e58c7d2` still an ancestor, `git ls-remote` confirming `main=26a75e1` /
 `feat=a116127`): **35 consecutive clean promotions.**
+
+### Promotion 48 (2026-08-12, `730166f` → `43a66f8`) — NINETEENTH consecutive clean `git add .`
+
+Promotion 47's follow-up the same day: the blocking grand-total finding's reassurance became a
+**BADGE** (`POSSIBLE MISMATCH DUE TO LAG`, Renzo's wording verbatim) instead of the closing clause of
+a paragraph, plus a real fix to `FindingDetailCards.tsx`, which styled from `kind` and ignored
+severity. 6 files / +346/−33, **zero files under `workers/sync/**`** — so unlike 47 this is a
+Vercel-only deploy and no Fly deploy is outstanding. Confirm that with
+`git diff --name-only <old-main> <new-main> -- workers/sync/ | wc -l` = 0 and say so in the report;
+the brief asked for the confirmation explicitly.
+
+- **THE LESSON OF THIS PROMOTION IS A SHELL TRAP THAT NEARLY MERGED A STALE `main`** — the piped
+  `git pull --ff-only` inside an `&&` chain, its 75-second connection timeout swallowed by `tail`.
+  Full write-up + the `merge-base --is-ancestor` recovery in [[gates-and-shell-traps]]. Outcome here
+  was clean (`origin/main` 26a75e1 WAS already an ancestor, from the earlier successful fetch, and a
+  fresh re-fetch showed the remote unmoved), but that was luck, not the gate working. Network to
+  github was flaky mid-session: the branch push succeeded, the pull 30 seconds later timed out, the
+  next fetch and the `main` push both succeeded.
+- Gates: root `npx tsc --noEmit` exit 0 (checked with `${PIPESTATUS[1]}`), `npx tsx
+  scripts/verify-findings.ts` printing **"All 25 findings checks passed"** — the brief's claimed
+  22 → 25 delta, confirmed by running it, per promotion 47's grep rule. No worker type-check or
+  `npm test` needed *because* nothing under `workers/sync/` changed; state that reasoning rather
+  than silently skipping them. Root `npm run build` waived per promotion 30 (brief pre-ran it and
+  stated the 166/28 lint baseline).
+- Secret scan on the staged diff: zero hits across 346 added lines. Note this changeset is
+  Tailwind-class-heavy (`dark:bg-amber-400/10` etc.), which produces no scan noise at all.
+- Merge stat read **8 files / +392** against the commit's own 6 / +346: the 2 extra
+  (+47 = 2 + 45) are `.claude/agent-memory/git-branch-guardian/**` from the pre-existing `66eb894`
+  `chore(memory)` commit riding along for the **eighteenth** time. Reconciled exactly.
+- `git status -sb` on `main` prints a bare `## main` with **no `...origin/main`** — local `main` has
+  no upstream configured in this repo, which is why the playbook's recipe says `git pull --ff-only
+  origin main` and `git push origin main` with explicit remote+branch. A missing tracking line on
+  `main` is normal here, not evidence of a failed push; prove the push from its own
+  `26a75e1..43a66f8` output.
