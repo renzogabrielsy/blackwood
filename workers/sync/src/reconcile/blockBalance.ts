@@ -25,6 +25,16 @@
  *       dropped. "Every block matches AND the total matches" = genuinely balanced. The two
  *       are complementary: B1 catches what B2 hides (offsetting per-block errors), B2 is
  *       the safety net over B1's threshold.
+ *       **B2 also states its RESIDUAL (2026-08-12, Renzo's ask).** The total gap on its own
+ *       says almost nothing — in every run inspected it was simply the flagged blocks added
+ *       up (dc944b54: 6,240 + 23,264 + 3,669 + 2,975 = 36,148 exactly), so firing loudly on
+ *       it re-reported what B1 had already said. The INFORMATIVE quantity is the inverse:
+ *       `residual = delta − Σ(signed per-block gaps)`. Zero ⇒ every kilogram of the gap is
+ *       accounted for by the blocks listed, which is CONSISTENT WITH the Sheet lagging behind
+ *       recent feeding (never asserted as the cause — LIKELY, not definitely). Non-zero ⇒
+ *       kilograms are missing from the total that no flagged block explains, which is the
+ *       genuinely alarming state and the one that stays `high`. The severity split lives in
+ *       `lib/sync/findings.ts::fromBlockDiff`; this engine supplies the numbers.
  *   B3 (one-active-batch): a block with 2+ non-CLOSED batches in the DB (from the computed
  *       side's `activeBatchCount`).
  *   B4 (batch identity): the Sheet's batch for a block vs the computed batch_code
@@ -78,6 +88,23 @@ export interface BlockDiff {
   computed_batch?: string | null;
   /** For multi_batch: how many active batches the DB has at this block. */
   active_batch_count?: number;
+  /**
+   * ── grand_total ONLY — the residual decomposition (2026-08-12) ──────────────
+   * Σ of the SIGNED kg gaps the per-block `balance` diffs in the SAME result already
+   * account for. See `signedBlockGapKg` for why this is not simply Σ`delta`.
+   */
+  accounted_block_kg?: number;
+  /** grand_total ONLY — how many flagged blocks that sum is over (0 = none flagged). */
+  accounted_block_count?: number;
+  /**
+   * grand_total ONLY — `delta − accounted_block_kg`: the part of the total gap that NO
+   * flagged block explains. **This, not the delta, is the alarming number.** Zero means the
+   * total gap IS the flagged blocks, summed; non-zero means kilograms are missing from the
+   * total that nothing above points at.
+   */
+  residual_kg?: number;
+  /** grand_total ONLY — `|residual_kg| <= grandTotalTolKg`, i.e. nothing unexplained. */
+  fully_accounted?: boolean;
   /** Plain-language explanation (used verbatim as the case detail). */
   detail: string;
 }
@@ -319,19 +346,79 @@ export function reconcileBlockBalance(
         ? ` (note: our Sheet sum ${fmt(round1(sheetSumKg))} kg differs from the Sheet's stated ` +
           `total ${fmt(statedTotal)} kg — extraction may be incomplete)`
         : "";
+
+    // ── The RESIDUAL (2026-08-12, Renzo's ask) ───────────────────────────────
+    // How much of this total gap do the blocks we just flagged already account for, and how
+    // much does NOTHING above explain? Only `balance` diffs enter the sum: they are the only
+    // kind that asserts a kg gap, and the engine emits AT MOST ONE per block (B1 and the two
+    // presence branches are mutually exclusive). Including `batch_mismatch`/`multi_batch`
+    // would DOUBLE-COUNT — a block with both a wrong batch and a wrong balance already
+    // contributes through its own `balance` diff.
+    const accountedDiffs = diffs.filter((d) => d.kind === "balance");
+    const accountedKg = accountedDiffs.reduce((sum, d) => sum + signedBlockGapKg(d), 0);
+    const residualKg = delta - accountedKg;
+    // SAME threshold as the check itself — deliberately not a second invented number. The
+    // grand total FIRES above `grandTol`, so "the residual is zero" is "at or below it".
+    // (Caveat: up to `blockBalanceTolKg` per unflagged block of sub-tolerance noise can also
+    // land here. At 1 kg × ~165 blocks that is well inside 100 kg in practice, and the real
+    // grids carry integer kg — measured residual exactly 0 on runs dc944b54 and da4b7b4f.)
+    const fullyAccounted = Math.abs(residualKg) <= grandTol;
+
+    // NEVER assert the cause — "LIKELY (not definitely)", per Renzo. Say what is arithmetically
+    // true (every kilogram is accounted for by the blocks listed) and name lag only as
+    // something that is CONSISTENT with it.
+    const residualNote = fullyAccounted
+      ? ` All of it is accounted for by the ${accountedDiffs.length} block(s) flagged above ` +
+        `(Σ ${fmt(round1(accountedKg))} kg, nothing unexplained) — consistent with the Sheet's ` +
+        `Blocking tab not yet reflecting recent feeding, so likely not urgent. Check those blocks ` +
+        `to confirm.`
+      : accountedDiffs.length === 0
+        ? ` NO individual block was flagged, so the whole ${fmt(Math.abs(round1(residualKg)))} kg ` +
+          `is unexplained — the total is off but nothing above says where.`
+        : ` The ${accountedDiffs.length} block(s) flagged above account for ` +
+          `${fmt(round1(accountedKg))} kg, leaving ${fmt(round1(residualKg))} kg NOT explained by ` +
+          `any flagged block.`;
+
     diffs.push({
       kind: "grand_total",
       block_loc: null,
       sheet_kg: round1(sheetSumKg),
       computed_kg: round1(computedSumKg),
       delta: round1(delta),
+      accounted_block_kg: round1(accountedKg),
+      accounted_block_count: accountedDiffs.length,
+      residual_kg: round1(residualKg),
+      fully_accounted: fullyAccounted,
       detail:
         `Total inventory disagrees: Sheet ${fmt(round1(sheetSumKg))} kg vs app ` +
-        `${fmt(round1(computedSumKg))} kg (Δ ${fmt(round1(delta))} kg)${statedNote}.`,
+        `${fmt(round1(computedSumKg))} kg (Δ ${fmt(round1(delta))} kg)${statedNote}.` +
+        residualNote,
     });
   }
 
   return { blockDiffs: diffs, totals };
+}
+
+/**
+ * The SIGNED kg one per-block diff contributes to the grand-total gap.
+ *
+ * Deliberately `(sheet_kg ?? 0) − (computed_kg ?? 0)` and **NOT** `d.delta`. A PRESENCE diff
+ * — the block is on the Sheet but the app has no active batch there, or vice-versa — carries
+ * `delta: null`, yet its entire balance IS real gap, because that is exactly how the grand
+ * total counts it: `sumBalances` skips the absent side, i.e. treats it as 0. Summing `delta`
+ * would silently drop those rows and manufacture a residual out of nothing.
+ *
+ * MEASURED on run dc944b54 (2026-08-12): two of its four flagged blocks are that shape
+ * (D-13D +23,264 kg and D-20B +2,975 kg, both `delta: null`), and only with them counted do
+ * the blocks sum to the grand total's 36,148 kg exactly.
+ *
+ * Signs are preserved, never absolute — two blocks off in OPPOSITE directions must CANCEL
+ * here, exactly as they cancel in the grand total.
+ */
+function signedBlockGapKg(d: BlockDiff): number {
+  const s = typeof d.sheet_kg === "number" && Number.isFinite(d.sheet_kg) ? d.sheet_kg : 0;
+  const c = typeof d.computed_kg === "number" && Number.isFinite(d.computed_kg) ? d.computed_kg : 0;
+  return s - c;
 }
 
 /** Sum only the numeric balances (nulls skipped). */

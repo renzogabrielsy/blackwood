@@ -736,6 +736,21 @@ export interface BlockDiff {
   sheet_batch?: string | null
   computed_batch?: string | null
   active_batch_count?: number
+  /**
+   * ── grand_total ONLY — the residual decomposition (2026-08-12) ──────────────
+   * `accounted_block_kg` = Σ of the SIGNED kg gaps the per-block `balance` diffs of the same
+   * run already account for; `residual_kg` = `delta − accounted_block_kg`, the part NO flagged
+   * block explains — **that, not the delta, is the alarming number**; `fully_accounted` =
+   * `|residual_kg|` within the grand-total tolerance.
+   *
+   * All four are OPTIONAL because a run stored before 2026-08-12 has none of them. A consumer
+   * must treat "absent" as "unknown", never as "accounted for" — see `fromBlockDiff`, which
+   * keeps such a diff at `high`.
+   */
+  accounted_block_kg?: number
+  accounted_block_count?: number
+  residual_kg?: number
+  fully_accounted?: boolean
   /** Plain-language explanation (rendered as the case detail). */
   detail: string
 }

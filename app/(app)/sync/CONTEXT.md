@@ -693,7 +693,9 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   **RB:** **`blockDiffFingerprint(d)`** → sha256 of `{kind:'block_diff', table:'blocking', subkind,
   block_loc, rounded sheet/computed kg (+ competing batches for `batch_mismatch` / count for
   `multi_batch`)}` (a changed balance/batch re-alarms; sub-kg jitter does not; a grand_total diff
-  has no block_loc → one case per run); **`blockDiffNaturalKey(d)`** → the human label.
+  has no block_loc → one case per run); **`blockDiffNaturalKey(d)`** → the human label. The
+  fingerprint picks its keys EXPLICITLY, so the grand-total residual fields added 2026-08-12
+  (below) do **not** change any case identity.
 - `lib/sync/cases-fold.ts` — **`collectHeldRows(result)`** → flattens
   `result.reports[type].apply.held` across all reports into `{reportType, held}[]`, guarding
   absent `reports` / `apply:null` / missing `held`. **R2:** **`collectSourceDiffs(result)`** →
@@ -717,6 +719,23 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   reason, severity: 'info'|'attention'|'high'}`. **`summarizeFindings(findings)`** → `{total, byKind}`.
   Fixes the panel keyhole: a run that flagged 10 things but showed 1 (the other 9 lived in
   `reconciliation`). Pure/exhaustive/never-throws → `scripts/verify-findings.ts`.
+  **THE BLOCKING GRAND TOTAL IS SEVERITY-SPLIT ON ITS RESIDUAL (2026-08-12, Renzo's ask).**
+  `fromBlockDiff` used to hard-code `severity: 'high'` for every `grand_total` diff — and measured
+  across **all 11 stored runs** that ever produced a block diff, the per-block gaps summed to the
+  grand-total delta **exactly every time** (run `dc944b54`: 6,240 + 23,264 + 3,669 + 2,975 =
+  36,148), so it fired as an emergency on essentially every run while re-stating what the block
+  rows already said. The worker engine now supplies `residual_kg` = `delta − accounted_block_kg`
+  (see `workers/sync/src/reconcile/CONTEXT.md` § B2's RESIDUAL for the arithmetic and the
+  `delta`-vs-`(sheet − computed)` sign trap): **residual zero → `attention`** (the gap IS the
+  flagged blocks summed; the reason line says so and calls it **consistent with** the Sheet
+  lagging recent feeding, never asserting the cause) and **residual non-zero → stays `high`**,
+  naming the unexplained kilograms — including the `accounted_block_count === 0` extreme where
+  nothing above accounts for any of it. `fully_accounted` is read strictly as `=== true`, so a
+  grand_total stored before 2026-08-12 (no such field) is UNKNOWN and stays `high` — fail-closed.
+  All four numbers ride in `data` (`accounted_block_kg` / `accounted_block_count` / `residual_kg` /
+  `fully_accounted`) so the Excel report's Details cell and the panel can filter and total them
+  rather than parse a sentence; none matches `isCostKey`, so none is stripped. Per-block findings,
+  tolerances, and what gets flagged are **unchanged**.
   **COPY-FOR-CLAUDE (2026-07-11):** two pure serializers turn a run's flags into ONE dense,
   self-contained diagnosis block to paste into a Claude Code session — a self-describing lead line,
   the **LOAD-BEARING run id** (`Run: <runId> · <date> · <status>` — lets the assistant query
