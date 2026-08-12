@@ -21,7 +21,8 @@ import type {
   SingleSourceOverdue,
   UnresolvedBatch,
 } from '@/app/(app)/sync/types'
-import { kindLabel } from './labels'
+import { blockDiffPresentation, type FindingBadge } from '@/lib/sync/findings'
+import { FINDING_BADGE_CLASS, kindLabel } from './labels'
 
 /**
  * FindingDetailCards — first-class detail rendering for the reconciliation case kinds that
@@ -74,6 +75,7 @@ function DetailShell({
   icon,
   badge,
   badgeClass,
+  badges,
   hint,
   title,
   children,
@@ -81,6 +83,8 @@ function DetailShell({
   icon: React.ReactNode
   badge: string
   badgeClass: string
+  /** Qualifying chips (`RunFinding.badges`) — the at-a-glance reading, never prose. */
+  badges?: FindingBadge[]
   hint: string
   title: string
   children: React.ReactNode
@@ -97,6 +101,19 @@ function DetailShell({
           {icon}
           {badge}
         </span>
+        {/* Same chip, same wording as the Sync panel's card — one badge vocabulary. */}
+        {badges?.map((b) => (
+          <span
+            key={b.label}
+            title={b.hint}
+            className={cn(
+              'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+              FINDING_BADGE_CLASS[b.tone],
+            )}
+          >
+            {b.label}
+          </span>
+        ))}
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{hint}</span>
       </div>
       <h3 className="mt-2 font-mono text-sm font-semibold text-foreground">{title}</h3>
@@ -147,26 +164,28 @@ function asBlockDiff(row: unknown): BlockDiff | null {
 
 function BlockDiffDetail({ d }: { d: BlockDiff }) {
   const isGrand = d.kind === 'grand_total'
-  const badge =
-    d.kind === 'grand_total'
-      ? 'Total inventory mismatch'
-      : d.kind === 'batch_mismatch'
-        ? 'Block holds a different batch'
-        : d.kind === 'multi_batch'
-          ? 'Block has multiple active batches'
-          : 'Block balance mismatch'
 
+  /**
+   * THE BUG THIS FIXES (2026-08-12): this card derived its badge text AND its RED tint from
+   * `d.kind` alone — so a grand total whose gap the flagged blocks fully account for rendered
+   * exactly as alarmingly as one with kilograms nothing explains, no matter what severity the
+   * finding carried. Colour and wording now come from `blockDiffPresentation`, the same single
+   * definition the panel's finding list uses, and red is reserved for a gap that is genuinely
+   * unexplained.
+   */
+  const p = blockDiffPresentation(d)
   const where = isGrand ? 'Grand total (all blocks)' : `Block ${d.block_loc ?? '?'}`
 
   return (
     <DetailShell
       icon={<Boxes className="h-3 w-3" />}
-      badge={badge}
+      badge={p.label}
       badgeClass={
-        isGrand
+        isGrand && !p.fullyAccounted
           ? 'bg-red-500/15 text-red-600 dark:text-red-400'
           : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
       }
+      badges={p.badges}
       hint="Blocking cross-check"
       title={where}
     >
@@ -197,7 +216,11 @@ function BlockDiffDetail({ d }: { d: BlockDiff }) {
                   'px-2 py-1 text-right font-mono tabular-nums font-semibold',
                   num(d.delta) === 0
                     ? 'text-muted-foreground'
-                    : 'text-red-600 dark:text-red-400',
+                    : // A gap the flagged blocks fully account for is not the alarming number
+                      // — the RESIDUAL below is. Amber, so red still means "unexplained".
+                      p.fullyAccounted
+                      ? 'text-amber-600 dark:text-amber-400'
+                      : 'text-red-600 dark:text-red-400',
                 )}
               >
                 {fmtSignedKg(d.delta)}
@@ -207,7 +230,8 @@ function BlockDiffDetail({ d }: { d: BlockDiff }) {
         </table>
       </div>
 
-      {/* Batch-identity fields for batch_mismatch / multi_batch. */}
+      {/* Batch-identity fields for batch_mismatch / multi_batch, plus (grand total only) the
+          residual decomposition — the numbers behind the badge, as figures rather than prose. */}
       <FieldGrid
         rows={[
           { label: 'Sheet batch', value: str(d.sheet_batch), mono: true },
@@ -217,10 +241,29 @@ function BlockDiffDetail({ d }: { d: BlockDiff }) {
             value: d.active_batch_count != null ? String(d.active_batch_count) : null,
             mono: true,
           },
+          {
+            label: 'Blocks flagged',
+            value:
+              typeof d.accounted_block_count === 'number' ? String(d.accounted_block_count) : null,
+            mono: true,
+          },
+          {
+            label: 'They account for',
+            value:
+              typeof d.accounted_block_kg === 'number' ? `${fmtKg(d.accounted_block_kg)} kg` : null,
+            mono: true,
+          },
+          {
+            // 0 is a REAL answer here ("nothing unexplained"), so it must render — hence the
+            // typeof test rather than a truthiness check, and the explicit `0 kg` string.
+            label: 'Unexplained',
+            value: typeof d.residual_kg === 'number' ? `${fmtKg(d.residual_kg)} kg` : null,
+            mono: true,
+          },
         ]}
       />
 
-      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{d.detail}</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{p.reason}</p>
     </DetailShell>
   )
 }

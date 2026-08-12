@@ -736,6 +736,42 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `fully_accounted`) so the Excel report's Details cell and the panel can filter and total them
   rather than parse a sentence; none matches `isCostKey`, so none is stripped. Per-block findings,
   tolerances, and what gets flagged are **unchanged**.
+  **AND THE REASSURANCE IS A BADGE, NOT THE LAST SENTENCE OF A PARAGRAPH (2026-08-12, same day,
+  Renzo: *"it shouldnt be in the description. It should be flagged or badged as 'POSSIBLE MISMATCH
+  DUE TO LAG' or something like that"*).** The severity split above was correct and still invisible:
+  the signal was the closing clause of a 3-line paragraph, which is exactly where nobody reads it.
+  `RunFinding` therefore gained **`badges?: FindingBadge[]`** — `{label (SHORT, UPPER-CASE), tone:
+  'caution' | 'neutral', hint}` — and a fully-accounted grand total carries exactly one,
+  **`GRAND_TOTAL_LAG_BADGE`** = Renzo's wording verbatim. Three rules: **(1) the tone vocabulary is
+  deliberately NOT the severity vocabulary** — there is no `danger` (severity already carries alarm;
+  a red chip beside a red dot says nothing new) and no `success`, because a badge qualifies a
+  finding that is still OPEN and nothing here is ever *verified* fine ("LIKELY, not definitely").
+  **(2) The badge REPLACES the clause rather than duplicating it:** `blockDiffPresentation` trims the
+  engine's `detail` down to the disagreement plus `Check the N blocks flagged above.` — cut at the
+  first `).`, which ends the first sentence in BOTH shapes the engine emits, falling back to the full
+  string when neither is found. The trim happens **app-side on purpose**: the prose is built in
+  `workers/sync/src/reconcile/blockBalance.ts`, and a wording change must not cost a **Fly** deploy.
+  The nuance the chip cannot hold (that the cause is only *consistent with* lag) moved into `hint`,
+  rendered as a `title` tooltip — it was not thrown away. **(3) An UNEXPLAINED residual gets NO
+  badge and keeps every word the engine wrote**, because that sentence names the kilograms nothing
+  accounts for and is the whole point of the alarm. **`blockDiffPresentation(d)` is the ONE
+  definition** of a block diff's label / title / badges / prose, exported for both renderers.
+  **The Excel report needs no change and got the signal for free** — `workbook.ts` already writes
+  `severity`, `What` = `kindLabel` and `Details` = `formatFindingData(data)`, so a fully-accounted
+  total now reads `Attention` / *"Total inventory mismatch — fully accounted for"* /
+  `fully_accounted=true; residual_kg=0`, and the `badges` array itself needs no column.
+- **`components/sync/HeldRows.tsx` (the panel card) styles from SEVERITY; `FindingDetailCards.tsx`
+  used to style from KIND — that was a real bug (fixed 2026-08-12).** `BlockDiffDetail` derived both
+  its badge text and its **red** tint from `d.kind === 'grand_total'` alone, so a grand total whose
+  gap the flagged blocks fully account for rendered exactly as alarmingly as one with kilograms
+  nothing explains — no matter what severity the finding carried, and it would have gone on doing so
+  right beside the new badge. It now reads `blockDiffPresentation`, red is reserved for
+  `!fullyAccounted`, and the residual decomposition shows as three `FieldGrid` rows (**Blocks
+  flagged / They account for / Unexplained**) where `0 kg` is a real value that must render. The
+  panel card additionally chips **`UNEXPLAINED <n> kg`** from `data.residual_kg`. Badge classes per
+  tone live once, in `components/sync/cases/labels.ts::FINDING_BADGE_CLASS` (outlined amber, both
+  light and dark legs stated) — never red, never green, and **no animation**: a chip must be legible
+  the instant the panel paints.
   **COPY-FOR-CLAUDE (2026-07-11):** two pure serializers turn a run's flags into ONE dense,
   self-contained diagnosis block to paste into a Claude Code session — a self-describing lead line,
   the **LOAD-BEARING run id** (`Run: <runId> · <date> · <status>` — lets the assistant query

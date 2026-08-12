@@ -84,6 +84,30 @@ export type FindingSection =
   | 'run'
 
 /**
+ * A QUALIFYING CHIP on a finding — a signal an operator must be able to read WITHOUT
+ * reading (2026-08-12, Renzo: *"it shouldnt be in the description. It should be flagged or
+ * badged as 'POSSIBLE MISMATCH DUE TO LAG' or something like that"*).
+ *
+ * A badge answers "how should I feel about this", the `title` answers "what happened", and
+ * `severity` answers "how loud is it". A fact that changes the reading of a finding belongs
+ * here, never in the last sentence of a paragraph — that is exactly where the blocking
+ * grand total's "all of it is accounted for" hid while the card rendered red.
+ *
+ * Tone is DELIBERATELY NOT the severity vocabulary: `caution` and `neutral` only. There is
+ * no `danger` (severity already carries alarm and a red chip beside a red dot says nothing
+ * new) and no `success` — a badge qualifies a finding that is still open, and nothing here
+ * is ever VERIFIED fine ("LIKELY, not definitely" — Renzo).
+ */
+export interface FindingBadge {
+  /** SHORT + UPPER-CASE — this is the thing read at a glance, so it must fit one chip. */
+  label: string
+  /** Amber-ish `caution` or a quiet `neutral`. Never red, never green. */
+  tone: 'caution' | 'neutral'
+  /** The long form, for a `title` tooltip — the nuance the label had to drop. */
+  hint: string
+}
+
+/**
  * ONE flagged thing from a run, in plain, operator-facing language. Everything the
  * panel needs to render a row without re-deriving anything from the raw result.
  */
@@ -108,6 +132,11 @@ export interface RunFinding {
   severity: FindingSeverity
   /** Which lane of the sync raised it — the Excel report's sheet key. */
   section: FindingSection
+  /**
+   * Zero or more at-a-glance qualifiers. OMITTED (not `[]`) when there are none, so every
+   * finding that had no badge keeps byte-identical shape.
+   */
+  badges?: FindingBadge[]
 }
 
 // ============================================================================
@@ -426,19 +455,92 @@ function fromAutoCreatedBatch(reportType: SyncReportType, note: AutoCreatedBatch
   }
 }
 
-function fromBlockDiff(d: BlockDiff): RunFinding {
-  const isGrand = d.kind === 'grand_total'
+/**
+ * THE badge for a blocking grand total whose whole gap the flagged blocks already explain.
+ *
+ * Renzo's own words, kept verbatim: they are shorter than the sentence they replace, they say
+ * POSSIBLE (never "is"), and "LAG" is the word he reaches for. The nuance the label drops —
+ * *what* is arithmetically true, and that the cause is only CONSISTENT with lag rather than
+ * asserted — lives in `hint`, which is where a tooltip can carry it without a paragraph.
+ *
+ * Exported so the panel card and the Sync Review detail card show the SAME chip. Two chips
+ * with two wordings would be two vocabularies that drift.
+ */
+export const GRAND_TOTAL_LAG_BADGE: FindingBadge = {
+  label: 'POSSIBLE MISMATCH DUE TO LAG',
+  tone: 'caution',
+  hint:
+    'Every kilogram of this gap is already accounted for by the block(s) flagged above — ' +
+    "nothing is unexplained. That is consistent with the Sheet's Blocking tab not yet " +
+    'reflecting recent feeding, so it is likely not urgent. Likely, not certain: check those ' +
+    'blocks to confirm.',
+}
 
-  /**
-   * Is the whole total gap already explained by the blocks flagged in the same run?
-   *
-   * `fully_accounted` is computed by the engine (`reconcile/blockBalance.ts`) as
-   * `|delta − Σ(signed per-block gaps)| <= grandTotalTolKg`. It is read STRICTLY as `=== true`
-   * so a diff that predates the field — every grand_total stored before 2026-08-12 — is treated
-   * as UNKNOWN and stays `high`. Fail-closed: never quiet an alarm on the strength of a number
-   * we were not given.
-   */
-  const fullyAccounted = isGrand && d.fully_accounted === true
+/**
+ * Is the whole total gap already explained by the blocks flagged in the same run?
+ *
+ * `fully_accounted` is computed by the engine (`reconcile/blockBalance.ts`) as
+ * `|delta − Σ(signed per-block gaps)| <= grandTotalTolKg`. It is read STRICTLY as `=== true`
+ * so a diff that predates the field — every grand_total stored before 2026-08-12 — is treated
+ * as UNKNOWN and stays `high`. Fail-closed: never quiet an alarm on the strength of a number
+ * we were not given.
+ */
+export function isFullyAccountedGrandTotal(d: BlockDiff): boolean {
+  return d.kind === 'grand_total' && d.fully_accounted === true
+}
+
+/**
+ * How a `BlockDiff` PRESENTS — the ONE definition of its label, headline, badges and prose,
+ * shared by the panel's finding list (`fromBlockDiff` → `HeldRows`) and Sync Review's detail
+ * card (`FindingDetailCards.tsx`). Presentation only: it decides no severity, reads no
+ * tolerance, and changes nothing about which diffs exist.
+ *
+ * `FindingDetailCards` used to derive its own badge text AND its red tint from `d.kind`
+ * alone — so a fully-accounted grand total rendered exactly as alarmingly as an unexplained
+ * one, and would have gone on doing so beside the new badge. Anything that styles a block
+ * diff reads this.
+ */
+export interface BlockDiffPresentation {
+  /** Strictly `=== true` (see `isFullyAccountedGrandTotal`) — the ONE reassurance test. */
+  fullyAccounted: boolean
+  /** The plain category phrase (the chip in the panel, the `What` column in Excel). */
+  label: string
+  /** The one-line headline. */
+  title: string
+  /** At-a-glance qualifiers; empty for every shape that has nothing reassuring to say. */
+  badges: FindingBadge[]
+  /** The prose. States the disagreement; the BADGE carries the "likely lag" reading. */
+  reason: string
+}
+
+/**
+ * Trim the engine's grand-total prose down to the disagreement itself plus a short pointer.
+ *
+ * The worker composes `detail` as `<the disagreement>.<residual clause>`, and the residual
+ * clause is what the badge now says — leaving it in the paragraph is what buried the signal
+ * in the first place. The engine's prose is NOT edited (that file is worker code and a
+ * wording change must not cost a Fly deploy), so the cut happens here, on the app side.
+ *
+ * The cut is at the first `).`, which is where the first sentence ends in BOTH shapes the
+ * engine emits — `…(Δ 36,148 kg).` and the extraction-completeness variant
+ * `…(note: … may be incomplete).`. If neither is found the FULL detail is kept: an
+ * unrecognised sentence is left saying too much rather than truncated into nonsense.
+ */
+function trimAccountedReason(d: BlockDiff): string {
+  const detail = d.detail ?? ''
+  const cut = detail.indexOf(').')
+  const head = cut === -1 ? detail : detail.slice(0, cut + 2)
+  const n = d.accounted_block_count
+  const pointer =
+    typeof n === 'number' && n > 0
+      ? ` Check the ${n} block${n === 1 ? '' : 's'} flagged above.`
+      : ''
+  return `${head}${pointer}`
+}
+
+export function blockDiffPresentation(d: BlockDiff): BlockDiffPresentation {
+  const isGrand = d.kind === 'grand_total'
+  const fullyAccounted = isFullyAccountedGrandTotal(d)
 
   const label =
     d.kind === 'grand_total'
@@ -451,12 +553,28 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
           ? 'Block has multiple active batches'
           : 'Block balance mismatch'
 
-  const where = isGrand ? 'grand total' : d.block_loc ?? '(no block)'
   const title = isGrand
     ? fullyAccounted
       ? 'Total inventory: the gap matches the blocks already flagged'
       : 'Total inventory: the Sheet and the app disagree'
     : `Block ${d.block_loc ?? '?'}: ${label.toLowerCase()}`
+
+  return {
+    fullyAccounted,
+    label,
+    title,
+    badges: fullyAccounted ? [GRAND_TOTAL_LAG_BADGE] : [],
+    // An UNEXPLAINED residual keeps every word the engine wrote — it names the kilograms
+    // nothing accounts for, and that sentence is the whole point of the alarm.
+    reason: fullyAccounted ? trimAccountedReason(d) : d.detail,
+  }
+}
+
+function fromBlockDiff(d: BlockDiff): RunFinding {
+  const isGrand = d.kind === 'grand_total'
+  const p = blockDiffPresentation(d)
+  const fullyAccounted = p.fullyAccounted
+  const where = isGrand ? 'grand total' : d.block_loc ?? '(no block)'
 
   const data: Record<string, unknown> = {
     subkind: d.kind,
@@ -482,18 +600,21 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
   return {
     key: isGrand ? 'block_diff:grand_total' : `block_diff:${d.block_loc}:${d.kind}`,
     kind: 'block_diff',
-    kindLabel: label,
+    kindLabel: p.label,
     source: 'Blocking cross-check',
-    title,
+    title: p.title,
     location: where,
     data,
-    reason: d.detail,
+    reason: p.reason,
     // A grand-total gap the flagged blocks FULLY account for is not a second problem — it is
     // the SAME problem those blocks already report, summed, so it drops to `attention` and
     // reads level with them instead of as an emergency. An UNEXPLAINED residual (or an
     // unknown one) is exactly the case worth waking up for and stays `high`.
     severity: isGrand && !fullyAccounted ? 'high' : 'attention',
     section: 'blocking',
+    // The reassurance as a CHIP, not a clause. Omitted entirely when there is nothing to
+    // qualify, so a per-block diff and a legacy grand total keep their previous shape.
+    ...(p.badges.length ? { badges: p.badges } : {}),
   }
 }
 
