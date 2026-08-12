@@ -127,3 +127,28 @@ worktree copy had no NUL. **The HEAD blob was the binary one** — one stray NUL
 `workers/sync/tsconfig.json`. The real subset is worker `npx tsc --noEmit -p workers/sync/tsconfig.json`
 + `npm test` + `npm run parity`. Report the REASON the root build was skipped ("no app-layer file in
 the diff"), never "the brief said it was green".
+
+## `verify:container-build` — the gate for a worker Dockerfile / `.dockerignore` change
+
+2026-08-08 (promotion 46). Added by the changeset it gates. **Run
+`npm run verify:container-build` (cwd `workers/sync`) on any promotion touching
+`workers/sync/Dockerfile`, the root `.dockerignore`, or `workers/sync/esbuild.config.mjs`.**
+~2s, no Docker daemon: it parses the Dockerfile's builder-stage `COPY`/`WORKDIR` and the
+root `.dockerignore`, materialises exactly that file set in a temp dir, and runs the
+worker's own esbuild over it. Expect `OK` plus the measured file set (89 files / 1450 KB /
+568 KB bundle as of `e9aa32e`) — compare those numbers to the brief.
+
+**The failure class it exists for: every other gate reads shared files off the dev disk.**
+`workers/sync/src/reports/excel/findingsBridge.ts` imports `lib/sync/findings` and
+`app/(app)/sync/types` from the repo root, so `tsc`, `npm test`, `parity` and `eslint` all
+resolve them locally and stay green — while the container, built from a `workers/sync/`
+context, did not contain them and `fly deploy` died at `npm run build`. **A green local
+gate says nothing about the image.** See [[deploy-targets]].
+
+## A doc-and-config changeset can legitimately gate NOTHING at the root
+
+Promotion 46's diff had zero `app/`/`lib/`/`components/` files: root `CLAUDE.md` is a doc and
+root `.dockerignore` is read by **Docker only** — not by Vercel, not by git. So root
+`npm run build` and root `npx tsc --noEmit` were skipped, and the honest reason is "no file in
+the diff is compiled by Next.js", not "the brief said it was green". Same discipline as the
+worker-only case above; state the reason in the report.

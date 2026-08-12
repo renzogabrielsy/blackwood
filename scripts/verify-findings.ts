@@ -161,7 +161,9 @@ check('overdue → info, names the lone source + value', () => {
   assert.ok(o[0].reason.toLowerCase().includes('movement'))
 })
 
-check('grand_total block diff → high severity, "grand total" location', () => {
+// The main fixture's grand_total carries NO residual fields — the shape of every run stored
+// before 2026-08-12. Absent ⇒ UNKNOWN ⇒ stays `high` (fail-closed).
+check('grand_total block diff with NO residual fields → stays high (legacy, fail-closed)', () => {
   const findings = flattenRunFindings(realRun)
   const grand = findings.find((f) => f.kind === 'block_diff' && f.data.subkind === 'grand_total')
   assert.ok(grand)
@@ -169,9 +171,122 @@ check('grand_total block diff → high severity, "grand total" location', () => 
   assert.equal(grand!.location, 'grand total')
   assert.equal(grand!.source, 'Blocking cross-check')
   assert.equal(grand!.data.delta, 12_500)
+  // No fabricated reassurance: the keys are absent, not defaulted to "accounted for".
+  assert.equal(grand!.data.residual_kg, undefined)
+  assert.equal(grand!.data.fully_accounted, undefined)
   const balances = findings.filter((f) => f.kind === 'block_diff' && f.data.subkind === 'balance')
   assert.equal(balances.length, 3)
   assert.equal(balances[0].severity, 'attention')
+})
+
+// ── 2b. The grand-total RESIDUAL severity split (2026-08-12, Renzo's ask). ────
+// `residual = delta − Σ(signed per-block gaps)`, computed by the worker engine
+// (workers/sync/src/reconcile/blockBalance.ts). Zero ⇒ the total gap IS the flagged blocks
+// summed ⇒ `attention`, level with those block rows. Non-zero ⇒ kilograms nothing explains
+// ⇒ stays `high`.
+function runWithGrandTotal(d: BlockDiff): SyncRunResult {
+  return {
+    reports: {},
+    reconciliation: {
+      blocking: {
+        blockDiffs: [d],
+        totals: {
+          sheetSumKg: 10_322_875,
+          computedSumKg: 10_286_727,
+          sheetStatedTotalKg: 10_322_875,
+          delta: 36_148,
+          sheetBlocks: 166,
+          computedBlocks: 164,
+          comparedBlocks: 164,
+          negativeComputedBlocks: [],
+        },
+      },
+    },
+  } as SyncRunResult
+}
+
+check('grand_total, residual ZERO → attention (run dc944b54 numbers)', () => {
+  const findings = flattenRunFindings(
+    runWithGrandTotal({
+      kind: 'grand_total',
+      block_loc: null,
+      sheet_kg: 10_322_875,
+      computed_kg: 10_286_727,
+      delta: 36_148,
+      accounted_block_kg: 36_148,
+      accounted_block_count: 4,
+      residual_kg: 0,
+      fully_accounted: true,
+      detail:
+        'Total inventory disagrees: Sheet 10,322,875 kg vs app 10,286,727 kg (Δ 36,148 kg). ' +
+        'All of it is accounted for by the 4 block(s) flagged above (Σ 36,148 kg, nothing ' +
+        "unexplained) — consistent with the Sheet's Blocking tab not yet reflecting recent " +
+        'feeding, so likely not urgent. Check those blocks to confirm.',
+    }),
+  )
+  const g = findings.find((f) => f.kind === 'block_diff')
+  assert.ok(g)
+  assert.equal(g!.severity, 'attention', 'a fully-accounted total must stop reading as high')
+  assert.equal(g!.data.residual_kg, 0)
+  assert.equal(g!.data.accounted_block_kg, 36_148)
+  assert.equal(g!.data.accounted_block_count, 4)
+  assert.equal(g!.data.fully_accounted, true)
+  assert.equal(g!.kindLabel, 'Total inventory mismatch — fully accounted for')
+  assert.ok(g!.title.includes('matches the blocks already flagged'))
+  // Wording discipline: consistent-with, never a claim about the cause.
+  assert.ok(g!.reason.includes('consistent with'), 'must say consistent with')
+  assert.ok(!/is a lag issue|due to lag|because the sheet lags/i.test(g!.reason))
+})
+
+check('grand_total, residual NON-ZERO → stays high and names the unexplained kg', () => {
+  const findings = flattenRunFindings(
+    runWithGrandTotal({
+      kind: 'grand_total',
+      block_loc: null,
+      sheet_kg: 10_322_875,
+      computed_kg: 10_286_727,
+      delta: 36_148,
+      accounted_block_kg: 21_148,
+      accounted_block_count: 3,
+      residual_kg: 15_000,
+      fully_accounted: false,
+      detail:
+        'Total inventory disagrees … The 3 block(s) flagged above account for 21,148 kg, ' +
+        'leaving 15,000 kg NOT explained by any flagged block.',
+    }),
+  )
+  const g = findings.find((f) => f.kind === 'block_diff')
+  assert.ok(g)
+  assert.equal(g!.severity, 'high')
+  assert.equal(g!.data.residual_kg, 15_000)
+  assert.equal(g!.data.fully_accounted, false)
+  assert.equal(g!.kindLabel, 'Total inventory mismatch')
+  assert.ok(g!.reason.includes('15,000 kg NOT explained'))
+})
+
+check('grand_total, ZERO blocks flagged → whole gap unexplained, stays high', () => {
+  const findings = flattenRunFindings(
+    runWithGrandTotal({
+      kind: 'grand_total',
+      block_loc: null,
+      sheet_kg: 10_322_875,
+      computed_kg: 10_286_727,
+      delta: 36_148,
+      accounted_block_kg: 0,
+      accounted_block_count: 0,
+      residual_kg: 36_148,
+      fully_accounted: false,
+      detail:
+        'Total inventory disagrees … NO individual block was flagged, so the whole 36,148 kg ' +
+        'is unexplained — the total is off but nothing above says where.',
+    }),
+  )
+  const g = findings.find((f) => f.kind === 'block_diff')
+  assert.ok(g)
+  assert.equal(g!.severity, 'high', 'the most alarming shape must never be quieted')
+  assert.equal(g!.data.accounted_block_count, 0)
+  assert.equal(g!.data.residual_kg, 36_148)
+  assert.ok(g!.reason.includes('NO individual block was flagged'))
 })
 
 // ── 3. A source_diff also flattens (exhaustive over all five channels). ──────

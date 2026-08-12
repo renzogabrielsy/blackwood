@@ -261,6 +261,44 @@ NOT a flat table:
   NOT a diff** (Ruleset O7 — usually a late delivery); but a *disagreement* with the Sheet on
   that block still is. A block present on only one side → a presence `balance` diff.
 
+**B2's RESIDUAL — the grand total stops crying wolf (2026-08-12, Renzo's ask).** The
+grand-total delta on its own turned out to carry no information: measured across **all 11
+stored runs** that ever produced a block diff, `Σ(signed per-block gaps)` equalled the
+grand-total delta **exactly** — run `dc944b54` 6,240 + 23,264 + 3,669 + 2,975 = 36,148; run
+`da4b7b4f` 4,494 + 18,076 + 5,535 = 28,105. So B2 fired `high` on essentially every run while
+re-stating what B1 had already said. The grand_total diff now also carries
+**`residual_kg = delta − accounted_block_kg`** plus `accounted_block_kg` /
+`accounted_block_count` / `fully_accounted`:
+
+- **Residual zero** (the SAME `grandTotalTolKg` — not a second invented threshold) → the total
+  gap IS the flagged blocks, summed. The detail says so and names the block count; the finding
+  drops to **`attention`**, level with the block rows. Reported as **consistent with** the
+  Sheet's Blocking tab lagging recent feeding — the engine **never asserts the cause**
+  ("LIKELY, not definitely" — Renzo).
+- **Residual non-zero** → kilograms nothing above accounts for; the detail names the amount and
+  the finding **stays `high`**. `accounted_block_count === 0` while B2 fires is the extreme:
+  the whole gap is unexplained, and that path is asserted in its own test.
+
+**Two traps this had to get right.** (1) **The contribution is `(sheet_kg ?? 0) − (computed_kg
+?? 0)`, NOT `d.delta`** (`signedBlockGapKg`). A presence diff carries `delta: null` yet its
+whole balance is real gap — exactly how `sumBalances` counts it in the total. Two of
+`dc944b54`'s four blocks are that shape; Σ`delta` would be 9,909 and would fabricate a
+26,239 kg residual. A regression test pins both numbers. Signs are preserved, so opposite
+directions **cancel** rather than add. (2) **Only `kind === "balance"` diffs enter the sum** —
+they are the only kind asserting a kg gap and the engine emits at most one per block (B1 and
+the two presence branches are mutually exclusive), so a `batch_mismatch`/`multi_batch` on the
+same block cannot double-count.
+
+**Strictly presentation + severity.** No tolerance changed, no per-block finding changed, and
+nothing that was reported before stopped being reported. The `blockDiffFingerprint` picks its
+keys explicitly, so the durable case identity is untouched (`scripts/verify-block-diff-fold.ts`
+still green) — a fully-accounted run maps to the same case it always did. The four fields are
+OPTIONAL, and `lib/sync/findings.ts::fromBlockDiff` reads `fully_accounted === true` strictly:
+a diff stored before 2026-08-12 has none of them, is treated as UNKNOWN, and stays `high` —
+**fail-closed, never quiet an alarm on the strength of a number you were not given.** Tests:
+`../../test/reconcile/blockBalance.test.ts` § "grand-total residual" (8 cases) and
+`scripts/verify-findings.ts` (the four severity shapes).
+
 **Shadow wiring** (`../workflows/runSync.ts::reconcileBlockBalanceShadow`, a DBOS step after the
 rc_out shadow): re-downloads the Sheet, extracts the Blocking tab, reads `view_blocking_grid`
 (balance + batch_code) and `batches` (per-loc non-CLOSED count for B3) over REST, runs the

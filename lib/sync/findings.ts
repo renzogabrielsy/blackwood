@@ -428,9 +428,23 @@ function fromAutoCreatedBatch(reportType: SyncReportType, note: AutoCreatedBatch
 
 function fromBlockDiff(d: BlockDiff): RunFinding {
   const isGrand = d.kind === 'grand_total'
+
+  /**
+   * Is the whole total gap already explained by the blocks flagged in the same run?
+   *
+   * `fully_accounted` is computed by the engine (`reconcile/blockBalance.ts`) as
+   * `|delta − Σ(signed per-block gaps)| <= grandTotalTolKg`. It is read STRICTLY as `=== true`
+   * so a diff that predates the field — every grand_total stored before 2026-08-12 — is treated
+   * as UNKNOWN and stays `high`. Fail-closed: never quiet an alarm on the strength of a number
+   * we were not given.
+   */
+  const fullyAccounted = isGrand && d.fully_accounted === true
+
   const label =
     d.kind === 'grand_total'
-      ? 'Total inventory mismatch'
+      ? fullyAccounted
+        ? 'Total inventory mismatch — fully accounted for'
+        : 'Total inventory mismatch'
       : d.kind === 'batch_mismatch'
         ? 'Block holds a different batch'
         : d.kind === 'multi_batch'
@@ -439,8 +453,31 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
 
   const where = isGrand ? 'grand total' : d.block_loc ?? '(no block)'
   const title = isGrand
-    ? 'Total inventory: the Sheet and the app disagree'
+    ? fullyAccounted
+      ? 'Total inventory: the gap matches the blocks already flagged'
+      : 'Total inventory: the Sheet and the app disagree'
     : `Block ${d.block_loc ?? '?'}: ${label.toLowerCase()}`
+
+  const data: Record<string, unknown> = {
+    subkind: d.kind,
+    block_loc: d.block_loc,
+    sheet_kg: d.sheet_kg,
+    computed_kg: d.computed_kg,
+    delta: d.delta,
+    sheet_batch: d.sheet_batch ?? null,
+    computed_batch: d.computed_batch ?? null,
+    active_batch_count: d.active_batch_count ?? null,
+  }
+  // The residual decomposition, as STRUCTURED DATA and not only in the prose — the Excel
+  // report and the panel both read `data`, and a figure buried in a sentence can be neither
+  // filtered nor totalled. Added only on a grand_total that actually carries it, so a legacy
+  // diff (and every per-block diff) keeps its exact previous shape.
+  if (isGrand && typeof d.residual_kg === 'number') {
+    data.accounted_block_kg = d.accounted_block_kg ?? null
+    data.accounted_block_count = d.accounted_block_count ?? null
+    data.residual_kg = d.residual_kg
+    data.fully_accounted = fullyAccounted
+  }
 
   return {
     key: isGrand ? 'block_diff:grand_total' : `block_diff:${d.block_loc}:${d.kind}`,
@@ -449,18 +486,13 @@ function fromBlockDiff(d: BlockDiff): RunFinding {
     source: 'Blocking cross-check',
     title,
     location: where,
-    data: {
-      subkind: d.kind,
-      block_loc: d.block_loc,
-      sheet_kg: d.sheet_kg,
-      computed_kg: d.computed_kg,
-      delta: d.delta,
-      sheet_batch: d.sheet_batch ?? null,
-      computed_batch: d.computed_batch ?? null,
-      active_batch_count: d.active_batch_count ?? null,
-    },
+    data,
     reason: d.detail,
-    severity: isGrand ? 'high' : 'attention',
+    // A grand-total gap the flagged blocks FULLY account for is not a second problem — it is
+    // the SAME problem those blocks already report, summed, so it drops to `attention` and
+    // reads level with them instead of as an emergency. An UNEXPLAINED residual (or an
+    // unknown one) is exactly the case worth waking up for and stays `high`.
+    severity: isGrand && !fullyAccounted ? 'high' : 'attention',
     section: 'blocking',
   }
 }
