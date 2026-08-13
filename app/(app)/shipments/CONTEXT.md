@@ -25,7 +25,18 @@ against Trello (never writes back).
   `<a>` to the ZIP route). Each attachment row ALSO carries its own **per-file
   download** control — a small download icon-button (`<a href download>` to the
   per-file route below) in a trailing column; link-type attachments (no `bytes`) show
-  a `—` instead. Both download paths coexist. Not-found → tasteful empty state.
+  a `—` instead. THREE download paths coexist (set / all / one file). Not-found →
+  tasteful empty state.
+  It calls `planSendOutSet()` server-side (same predicate the readiness chips render
+  from, so the button's count and the ZIP's contents cannot disagree) to drive:
+  **"Download send-out set · N docs"** in the send-out card's header — primary weight,
+  matching "Download all as ZIP", because the set is the *more* common action; a
+  **`SET` pill** in the Doc-type column of every attachment the set will take, so
+  "which 7 of the 14" is answerable without downloading; an amber inline note when the
+  set is partial; and a non-interactive "Nothing in the set yet" stand-in when no
+  required doc is attached as a file. When `hasRequirementSet` is FALSE the button is
+  **not rendered at all** — the no-set panel states the set download is unavailable
+  and points at "Download all as ZIP" instead. Never a button that yields an empty ZIP.
 - `[cardId]/download/[attachmentId]/route.ts` — **GET route handler**
   (`runtime = "nodejs"`). The PER-FILE counterpart to the ZIP route. Calls
   `getAttachmentForDownload(cardId, attachmentId)` (the adapter picks the attachment
@@ -44,6 +55,26 @@ against Trello (never writes back).
   attachment; filename="<card title>.zip"`. Link-type attachments (no `bytes`) are
   skipped. Errors return a plain-text body with the right status (user-initiated
   download, so a clear message is fine).
+  **`?set=sendout` narrows the SAME route to the customer send-out set** — the docs
+  that go to the buyer, not the internal/process ones. A search param and NOT a second
+  route: the OAuth header, canonical renaming, sanitising, collision dedup and zipping
+  are subtle and must have exactly one implementation, because two ZIP builders drift.
+  Absent param = every attachment, byte-identical to before. An **unrecognized** value
+  is a **400**, never a silent fallback to "everything". Set-mode specifics:
+  - Filename `<prefix|card title> <CUSTOMER> SEND-OUT SET[ (PARTIAL n of m)].zip` from
+    `sendOutZipBaseName()` — names the shipment and the customer so it can never be
+    mistaken for the all-attachments ZIP.
+  - **A partial set is signalled twice**: in the filename, AND by an
+    `_INCOMPLETE - MISSING DOCUMENTS.txt` manifest written INTO the archive (the
+    filename can be renamed or lost when the ZIP is forwarded; a file inside travels
+    with it). Nothing is added when the set is complete. ASCII-only entry name on
+    purpose — a non-ASCII ZIP entry needs the UTF-8 general-purpose flag to survive
+    some Windows unzip tools.
+  - Response headers `X-Sendout-Set` / `-Present` / `-Total` / `-Complete` (+
+    `-Missing` when incomplete) make the partial state machine-detectable too.
+  - **409** when the card has no requirement set (`hasRequirementSet: false`) and
+    **404** when not one required doc is attached as a file — never an empty ZIP.
+    Both messages name the shortfall and redirect the user to "Download all as ZIP".
 - `actions.ts` — `"use server"` thin read-only pass-throughs (`listShipments`,
   `getShipment`) to the adapter. No DB, no mutations. Present as a stable server
   entry point; the page/detail server components import the adapter directly.
@@ -82,7 +113,23 @@ against Trello (never writes back).
     `python3 scripts/trello-shipments/report.py --board <id>`.
   - `lib/shipments/requirements.ts` — the per-customer send-out doc sets (mirrors
     `scripts/trello-shipments/customer-requirements.json`) + `readiness()` returning
-    `{ customer, required, present, missing, complete, … }`.
+    `{ customer, required, present, missing, complete, … }`, plus **`planSendOutSet()`**
+    and **`sendOutZipBaseName()`** — the ONE definition of "which attachments are the
+    customer set", shared by the detail page and the ZIP route. Pure + client-safe.
+- **The send-out selection rule (`planSendOutSet`)** — an attachment is IN when
+  `docType(name)` is one of the resolved customer's required labels. Three properties
+  worth not re-deciding:
+  - **Two files classifying to the SAME doc type are BOTH included.** A revision and
+    its original are indistinguishable from the filename alone, so picking one would
+    silently withhold the copy the buyer needed. The route's existing ` (2)` dedup
+    keeps their names distinct. Real case: the `260212` card carries `Non-Nego BL.pdf`
+    and `Original BL.pdf` **duplicated** — all 4 ship.
+  - **`absent` is strictly broader than `readiness.missing`.** A required doc attached
+    to the card as a Trello LINK counts as present for readiness but has no file to
+    ship, so it lands in `absent` and the ZIP is reported PARTIAL. The card's chip and
+    the ZIP's count are allowed to differ; that difference IS the signal.
+  - **Readiness is scored over ALL attachment names; selection only over files.** So
+    the plan's numbers stay comparable with the card's own N/M.
   - **Preserved Python quirk:** `docType()` uses the full name, so van/seal docs
     (`"CAAU 789243 8 FX45493895.pdf"`) return `null` there (the `.pdf` breaks the
     `[A-Z0-9-]+$` anchor) — harmless, van/seal isn't a customer send-out doc — while
@@ -98,7 +145,17 @@ against Trello (never writes back).
 - **ZIP filename = the sanitized card title** (`260715 SHIPMENT KURARAY 3X50.zip`).
   The workflow's ideal folder name (`260715 - KC 3x50 5VANS (JULY)`) needs the PO
   ETD month + van count, which aren't reliably on the card — so the truthful card
-  title is used and noted.
+  title is used and noted. The **send-out** ZIP instead leads with the YYMMDD prefix
+  and names the customer (`260804 MAEHATA SEND-OUT SET.zip`); a legacy title with no
+  derivable date leads with the card title rather than a synthesized one, the same
+  honesty rule the canonical renamer follows.
+- **Measured send-out split** (board read 2026-08-13, `260804 MH 4X8 2 VANS`, 14
+  attachments → 7 in / 7 out). IN: Packing List, Commercial Invoice, CoA, Fumigation,
+  BL/Non-Nego (`MEDUPH667453_C.PDF`), Certificate of Origin, Record of Weight. OUT:
+  Letter of Commitment, Export Declaration, Authority To Load, Mate's Receipt, PCA
+  clearance, and the 2 van/seal photos — every one an internal/process doc.
+  `scripts/verify-sendout-set.ts` pins this split (and the duplicate-BL, partial-set,
+  link-only and no-customer cases) to the real filenames.
 - **Non-blocking digest:** the home band (`components/digest/shipments-band.tsx`) is
   its OWN async server component wrapped in `<Suspense>` in `app/(app)/page.tsx` — it
   streams in independently so a slow/down Trello never blocks the Supabase-only digest.
@@ -112,6 +169,12 @@ against Trello (never writes back).
   (`components/navbar.tsx`).
 
 ## See Also
+- `scripts/verify-sendout-set.ts` — framework-free assertions over `planSendOutSet()` +
+  `sendOutZipBaseName()`, fixtured on the REAL attachment-name lists pulled from the
+  board on 2026-08-13. Run: `npx tsx scripts/verify-sendout-set.ts`. The guard cannot be
+  "`docType()` is correct" (it is a deliberate Python port, not to be "fixed"), so it is
+  "the split is what we measured" — a classify.ts change that moves a customer doc out
+  of the send-out set, or an internal doc into it, fails this script.
 - `.agents/prompts/trello-shipment-docs-workflow.md` — the full workflow (Track A CLI
   + Track B design intent, folder-naming convention, doc taxonomy).
 - `scripts/trello-shipments/` — the Track A CLI (`report.py`, `sync.py`,
