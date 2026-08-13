@@ -241,6 +241,22 @@ export interface UnpricedOverdueNote {
 }
 
 /**
+ * One delivery the operator has not assigned a pile to yet (L-042, 2026-08-13). Mirror of
+ * the frontend `AwaitingBatchAssignment`. Never held and never a durable case — a quiet
+ * visibility channel whose severity rises with `days_pending`. No PHP field: the operator
+ * file has no price column and an unassigned row has no batch to cost against.
+ */
+export interface AwaitingBatchAssignmentNote {
+  transaction_date: string;
+  supplier: string | null;
+  truck_plate: string | null;
+  weight_kg: number | null;
+  sacks: number | null;
+  source_row: string | null;
+  days_pending: number;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
@@ -269,6 +285,8 @@ export interface ApplyResult {
   price_notes: PriceNoteEntry[];
   /** Deliveries still unpriced >1 day on. ALWAYS present (default []). */
   unpriced_overdue: UnpricedOverdueNote[];
+  /** Deliveries with no pile assigned yet (L-042). ALWAYS present (default []). */
+  awaiting_batch_assignment: AwaitingBatchAssignmentNote[];
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -341,6 +359,8 @@ interface RawApply {
   price_notes?: unknown;
   /** deliveries only — deliveries still unpriced more than a day after the fact. */
   unpriced_overdue?: unknown;
+  /** deliveries only — rows weighed in with no pile assigned yet (L-042). */
+  awaiting_batch_assignment?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -571,6 +591,31 @@ function toUnpricedOverdues(v: unknown): UnpricedOverdueNote[] {
   return Array.isArray(v) ? v.map(toUnpricedOverdue) : [];
 }
 
+/** Coerce one raw awaiting-assignment entry → AwaitingBatchAssignmentNote (L-042). */
+function toAwaitingBatchAssignment(v: unknown): AwaitingBatchAssignmentNote {
+  const o = (v ?? {}) as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  const nnum = (x: unknown): number | null => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    transaction_date: str(o.transaction_date),
+    supplier: nullable(o.supplier),
+    truck_plate: nullable(o.truck_plate),
+    weight_kg: nnum(o.weight_kg),
+    sacks: nnum(o.sacks),
+    source_row: nullable(o.source_row),
+    days_pending: num(o.days_pending),
+  };
+}
+
+/** Coerce a raw awaiting-assignment array → AwaitingBatchAssignmentNote[]. */
+function toAwaitingBatchAssignments(v: unknown): AwaitingBatchAssignmentNote[] {
+  return Array.isArray(v) ? v.map(toAwaitingBatchAssignment) : [];
+}
+
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
 function toGateFailures(v: unknown): GateFailure[] {
   if (!Array.isArray(v)) return [];
@@ -643,6 +688,7 @@ export function normalizeApply(
     delivery_human_edits: toDeliveryHumanEdits(raw.delivery_human_edits),
     price_notes: toPriceNotes(raw.price_notes),
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
+    awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
   };
 }
 
@@ -710,6 +756,7 @@ export function failedReportResult(
       delivery_human_edits: [],
       price_notes: [],
       unpriced_overdue: [],
+      awaiting_batch_assignment: [],
     },
     status: "error",
     error: message,

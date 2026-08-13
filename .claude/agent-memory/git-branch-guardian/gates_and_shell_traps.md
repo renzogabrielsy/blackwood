@@ -34,6 +34,8 @@ Bit me twice in one run (2026-07-30): `VERIFY_EXIT=` and `ESLINT_EXIT=` both cam
 - **Preferred fix — don't pipe a gate at all.** Redirect, capture plain `$?`, then read the log:
   `cmd > /path/log 2>&1; echo "EXIT=$?"` then read the log separately.
 - When you must keep the pipe, `${pipestatus[1]}` IS reliable (confirmed 2026-08-03 and 2026-08-04 on `git push … | tail -5`).
+- **NEVER pipe `git pull` / `git push` inside an `&&` chain.** 2026-08-12 (promotion 48): `git checkout main && git pull --ff-only origin main 2>&1 | tail -3 && git merge --no-ff …` — the pull died on a 75-second `Failed to connect to github.com port 443`, but the pipeline's status is `tail`'s, so `&&` saw success and **the merge ran anyway on a main that had never been pulled.** The chain designed to prevent a stale-main merge is exactly what hid the failure. Run the pull as its own unpiped call and read `$?`.
+- **The recovery test when a pre-merge pull failed: `git merge-base --is-ancestor origin/main HEAD`.** If the last successful `git fetch` is recent, this proves the merge commit already contains the remote tip — i.e. local main was NOT stale — without redoing anything. Then re-`fetch` (unpiped, `FETCH_EXIT=$?`) to confirm the remote has not moved since, and only then push. Do NOT reach for `reset --hard` or a re-merge; the ancestor test either clears the merge or condemns it.
 - The background-task output file only holds the echoed exit code, **not** the command's stdout — always capture builds to your own log file if you need to grep them.
 
 ## GIT TRAP — `git rev-parse --short` takes ONE revision, and fails like a broken repo

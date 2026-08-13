@@ -27,7 +27,14 @@ Outcomes per row:
   - IDENTITY_DIFF    : identity in DB but batch_code / block_loc / weight_kg disagree ->
                        a human correction one source has not caught up with. NEVER
                        auto-applied; the guard layer folds these into `flagged`.
-  - MALFORMED        : missing required field (date / batch_code / weight) -> skip with reason
+  - AWAITING_ASSIGN  : the Block cell is empty, so no pile is assigned YET (L-042). MC books
+                       overnight weights early with plate/weight/moisture and fills the pile
+                       in later, so this is a normal, SELF-CLEARING stage of the operator's
+                       day -- NOT malformed. Never held, never blocks the watermark.
+  - MALFORMED        : missing required field (date / batch_code / weight) -> skip with reason.
+                       STILL the destination for an ORPHAN wet-recovery sub-row (a
+                       continuation row with no mother to inherit from): genuinely bad data,
+                       and it stays loud.
 
 Equality rules:
   - strings (supplier, truck_plate, remarks): case-insensitive, trim whitespace, null == empty
@@ -91,6 +98,81 @@ def norm_int(v: Any) -> int | None:
         return int(float(v))  # tolerate "123.0" strings
     except (TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Month-prefix ALIASES (L-042, 2026-08-13). Mirror of
+# workers/sync/src/lib/batchCodeAlias.ts, whose table is itself a mirror of
+# extract_gsheet.py::MONTH_PREFIX_ALIASES / batch_code_fallbacks.
+#
+# DUPLICATED rather than imported on purpose: extract_gsheet imports openpyxl at module
+# level, and this classifier must keep running with no third-party dependency at all.
+# parity_guards.py duplicates _MONTHS / _CODE_VARIANTS for the same reason.
+#
+# `AUGUST-26-FEED1` and `AUG-26-FEED1` are ONE batch spelled two ways: the deliveries
+# extractor derives a FEED code from the delivery month using the FULL month name, while
+# the live convention for August feed batches is `AUG-`. Comparing raw strings turned MC's
+# `FEEDING # 1` shorthand into a held `cross_batch_reassignment` case asking a human to
+# arbitrate between two spellings of the same thing.
+#
+# NOT a fuzzy matcher: different MONTHS still differ (`JULY-26-BLK9` vs `JUNE-26-BLK9`,
+# the L-033 month-boundary phantom, is untouched), and nothing collapses unless the year
+# and the whole suffix are byte-identical.
+# ---------------------------------------------------------------------------
+import re as _re
+
+MONTH_PREFIX_ALIASES = {
+    "JAN": "JANUARY", "JANUARY": "JAN",
+    "FEB": "FEBRUARY", "FEBRUARY": "FEB",
+    "MARCH": "MAR", "MAR": "MARCH",
+    "APRIL": "APR", "APR": "APRIL",
+    # MAY has no alias
+    "JUNE": "JUN", "JUN": "JUNE",
+    "JULY": "JUL", "JUL": "JULY",
+    "AUG": "AUGUST", "AUGUST": "AUG",
+    "SEPT": "SEPTEMBER", "SEP": "SEPTEMBER", "SEPTEMBER": "SEPT",
+    "OCT": "OCTOBER", "OCTOBER": "OCT",
+    "NOV": "NOVEMBER", "NOVEMBER": "NOV",
+    "DEC": "DECEMBER", "DECEMBER": "DEC",
+}
+BATCH_CODE_RE = _re.compile(r"^([A-Z]+)-(\d{2})-(.+)$", _re.IGNORECASE)
+
+
+def _norm_code(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s.upper() if s else None
+
+
+def batch_code_spellings(code: Any) -> list[str]:
+    """Every recognised spelling of `code`, INCLUDING itself, upper-cased, order-preserved.
+    A code with no recognised month prefix yields just itself."""
+    primary = _norm_code(code)
+    if primary is None:
+        return []
+    out = [primary]
+    m = BATCH_CODE_RE.match(primary)
+    if m:
+        prefix, yy, suffix = m.group(1).upper(), m.group(2), m.group(3)
+        alias = MONTH_PREFIX_ALIASES.get(prefix)
+        if alias:
+            cand = f"{alias}-{yy}-{suffix}"
+            if cand not in out:
+                out.append(cand)
+    return out
+
+
+def batch_code_alias_equal(a: Any, b: Any) -> bool:
+    """Same batch code, allowing ONLY a month-prefix alias. The table is not symmetric for
+    every month (SEPT/SEP both -> SEPTEMBER), so both directions are tried; nothing new is
+    invented, so SEP and SEPT do NOT collapse into each other."""
+    na, nb = _norm_code(a), _norm_code(b)
+    if na is None or nb is None:
+        return na == nb
+    if na == nb:
+        return True
+    return nb in batch_code_spellings(na) or na in batch_code_spellings(nb)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +286,8 @@ def field_differences(extracted: dict, db_row: dict) -> list[dict]:
     # L-040b — the three formerly-key fields. On a tier-2 match they are equal by
     # construction; on a tier-1 match a difference here IS the human correction the
     # old key could not see.
-    if norm_str(extracted.get("batch_code")) != norm_str(db_row.get("batch_code")):
+    # L-042: a month-prefix ALIAS is not a disagreement (see batch_code_alias_equal).
+    if not batch_code_alias_equal(extracted.get("batch_code"), db_row.get("batch_code")):
         diffs.append({
             "field": "batch_code",
             "emailValue": extracted.get("batch_code"),
@@ -272,6 +355,36 @@ def field_differences(extracted: dict, db_row: dict) -> list[dict]:
     return diffs
 
 
+def is_awaiting_batch_assignment(row: dict) -> bool:
+    """Is this row merely AWAITING THE OPERATOR'S PILE ASSIGNMENT rather than malformed?
+    (L-042, 2026-08-13.) Mirror of
+    workers/sync/src/reports/deliveries/classify.ts::isAwaitingBatchAssignment.
+
+    The whole point of this predicate is where it says NO. All four clauses must hold:
+      1. it has a transaction_date (forward-filled counts; a row with no date and no prior
+         date is dropped by the extractor and never reaches here);
+      2. it has a real weight_kg -- a 0 weight is a data problem, not a pending assignment;
+      3. its batch_code is missing BECAUSE THE BLOCK CELL WAS EMPTY (operator_batch_label is
+         None). A label that EXISTS but did not translate comes back as the raw label
+         (truthy batch_code), so it never reaches the malformed guard at all;
+      4. it carries a TRUCK PLATE. This is the clause that keeps MALFORMED loud: an ORPHAN
+         wet-recovery sub-row is DEFINED by having no plate, no batch code and no block
+         (lib/deductions.py::is_recovery_row_dict), so it fails here and stays malformed.
+         When the two cannot be told apart -- no plate AND no label -- the LOUD answer wins.
+    """
+    if not row.get("transaction_date"):
+        return False
+    if not row.get("weight_kg"):
+        return False
+    if row.get("batch_code"):
+        return False
+    if row.get("operator_batch_label") is not None:
+        return False
+    if norm_plate(row.get("truck_plate")) == "":
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -315,9 +428,20 @@ def main() -> int:
     classified_identity_diff = []
     classified_noop = []
     classified_malformed = []
+    classified_awaiting = []
 
     for ex_row in extracted_rows:
         if not ex_row.get("transaction_date") or not ex_row.get("batch_code") or not ex_row.get("weight_kg"):
+            # L-042 -- "not filled in yet" is not "malformed". Split out FIRST, but only for
+            # the one narrowly-defined shape; everything else, including an orphan
+            # wet-recovery sub-row, falls through to MALFORMED exactly as before.
+            if is_awaiting_batch_assignment(ex_row):
+                classified_awaiting.append({
+                    "index": ex_row.get("_source_row"),
+                    "row": ex_row,
+                    "reason": "No pile assigned yet (the Block cell is empty)",
+                })
+                continue
             classified_malformed.append({
                 "row": ex_row,
                 "reason": "Missing required field (transaction_date / batch_code / weight_kg)",
@@ -370,6 +494,7 @@ def main() -> int:
             "identity_diff_count": len(classified_identity_diff),
             "noop_count": len(classified_noop),
             "malformed_count": len(classified_malformed),
+            "awaiting_assignment_count": len(classified_awaiting),
             "db_rows_in_window": len(db_rows),
         },
         "new": classified_new,
@@ -377,6 +502,7 @@ def main() -> int:
         "identity_diff": classified_identity_diff,
         "noop": classified_noop,
         "malformed": classified_malformed,
+        "awaiting_assignment": classified_awaiting,
     }
 
     output_path.write_text(json.dumps(result, indent=2, default=str))
@@ -390,6 +516,7 @@ def main() -> int:
         print(f"  IDENTITY_DIFF   : {s['identity_diff_count']}", file=sys.stderr)
         print(f"  DUPLICATE_NOOP  : {s['noop_count']}", file=sys.stderr)
         print(f"  MALFORMED       : {s['malformed_count']}", file=sys.stderr)
+        print(f"  AWAITING_ASSIGN : {s['awaiting_assignment_count']}", file=sys.stderr)
         print(f"DB rows in window:  {s['db_rows_in_window']}", file=sys.stderr)
 
     # Also print compact summary to stdout for the calling agent

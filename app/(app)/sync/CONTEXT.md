@@ -719,6 +719,24 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   reason, severity: 'info'|'attention'|'high'}`. **`summarizeFindings(findings)`** → `{total, byKind}`.
   Fixes the panel keyhole: a run that flagged 10 things but showed 1 (the other 9 lived in
   `reconciliation`). Pure/exhaustive/never-throws → `scripts/verify-findings.ts`.
+  **AWAITING A PILE ASSIGNMENT — the quietest finding on the list (2026-08-13, L-042).**
+  `collectAwaitingBatchAssignments(result)` → `result.reports[type].apply.awaiting_batch_assignment
+  ?? []` (only `deliveries` fills it; optional additive field, absent on pre-feature runs) →
+  **`fromAwaitingBatchAssignment`**, `kind: 'awaiting_batch_assignment'`, `section: 'deliveries'`.
+  MC books overnight weights in early with only the truck plate, the weight and the moisture and
+  assigns the pile later in the day; the deliveries classifier used to send those rows to MALFORMED,
+  whose label reads **"Row could not be read"** — two on 2026-08-12, both self-fixed by morning.
+  It is deliberately **NOT a held row**, so `ensureCasesForRun` never persists it and nothing has to
+  be closed by hand, and it never touches `apply.errors` (no blocked watermark, no withheld Gmail
+  label). But it is not silent either: **severity escalates with `days_pending`** — `info` at 0–1
+  days (the ordinary same-day case) → `attention` at 2–3 (it did not self-clear overnight) → `high`
+  at 4+ (the `fromUnpricedOverdue` threshold), measured against the run's **Asia/Manila** date. The
+  escalation matters more here than for `unpriced_overdue`, because the row is **not in the
+  database**: no unpriced check, no stale-stream check and no balance check can ever see it. Nothing
+  in the Excel generator changed — `section: 'deliveries'` files it on the Deliveries sheet. Proof:
+  `scripts/verify-awaiting-batch-assignment-fold.ts`. MALFORMED still reports separately and louder
+  (an **orphan wet-recovery sub-row** stays there on purpose — see
+  `workers/sync/specs/deliveries.md` §11.3).
   **THE BLOCKING GRAND TOTAL IS SEVERITY-SPLIT ON ITS RESIDUAL (2026-08-12, Renzo's ask).**
   `fromBlockDiff` used to hard-code `severity: 'high'` for every `grand_total` diff — and measured
   across **all 11 stored runs** that ever produced a block diff, the per-block gaps summed to the

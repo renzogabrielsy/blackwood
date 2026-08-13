@@ -40,6 +40,8 @@
  *   - Guard indices/keys/notes are byte-exact to parity_guards.py.
  */
 import { normStr, normNum, normIntTrunc, normBlockLoc } from "../../lib/norm.js";
+import { batchCodeAliasEqual, resolveKnownBatchCodeAlias } from "../../lib/batchCodeAlias.js";
+import { normPlate } from "../../lib/deliveryIdentity.js";
 import {
   buildDeliveryIdentityIndex,
   isMutableIdentityField,
@@ -93,6 +95,26 @@ interface MalformedItem {
   row: DeliveryRow;
   reason: string;
 }
+/**
+ * A row that is not BROKEN, only NOT FILLED IN YET (L-042, 2026-08-13).
+ *
+ * MC books overnight weights in early with the truck plate, the weight and the moisture,
+ * and assigns the pile later in the day. Such a row has an EMPTY Block cell, so it carries
+ * no `operator_batch_label` and therefore no `batch_code` — and the old malformed guard
+ * called that "malformed", i.e. reported an ordinary, self-clearing stage of the operator's
+ * day as bad data. Two rows were reported malformed on 2026-08-12 and had filled themselves
+ * in by morning.
+ *
+ * This is a SEPARATE, quieter class. It is never held, never blocks the watermark, and it
+ * is NOT a widening of `malformed`: an ORPHAN wet-recovery sub-row (a continuation row with
+ * no mother delivery to inherit from) has the same missing batch code and stays MALFORMED
+ * and loud — see `isAwaitingBatchAssignment`.
+ */
+interface AwaitingAssignmentItem {
+  index: unknown;
+  row: DeliveryRow;
+  reason: string;
+}
 interface FlaggedItem {
   kind: string;
   index: unknown;
@@ -115,6 +137,8 @@ export interface ClassifyResult {
     identity_diff_count: number;
     noop_count: number;
     malformed_count: number;
+    /** L-042 — rows waiting on the operator to assign a pile. Never held. */
+    awaiting_assignment_count: number;
     db_rows_in_window: number;
   };
   new: NewItem[];
@@ -123,6 +147,8 @@ export interface ClassifyResult {
   identity_diff: IdentityDiffItem[];
   noop: NoopItem[];
   malformed: MalformedItem[];
+  /** L-042 — "not filled in yet", split out of `malformed`. Self-clearing. */
+  awaiting_assignment: AwaitingAssignmentItem[];
 }
 
 /** The guard layer's output — the CLASSIFY oracle unit. */
@@ -154,7 +180,14 @@ function fieldDifferences(extracted: Record<string, unknown>, dbRow: Record<stri
   // identity-first. On a tier-2 (legacy-key) match these are equal by construction, so
   // they cost nothing; on a tier-1 match a difference here IS the human correction the
   // old key could not see.
-  if (normStr(extracted.batch_code) !== normStr(dbRow.batch_code)) {
+  // L-042 — a MONTH-PREFIX ALIAS IS NOT A DISAGREEMENT. `AUGUST-26-FEED1` and
+  // `AUG-26-FEED1` are one batch spelled two ways (`lib/batchCodeAlias.ts`), and the
+  // project has always known the table. Comparing raw strings here is what turned MC's
+  // `FEEDING # 1` shorthand into a `cross_batch_reassignment` held case asking a human to
+  // arbitrate between two spellings of the same thing. Different MONTHS still differ:
+  // `JULY-26-BLK9` vs `JUNE-26-BLK9` (the L-033 month-boundary phantom, and both
+  // deliveries parity fixtures) is untouched.
+  if (!batchCodeAliasEqual(extracted.batch_code, dbRow.batch_code)) {
     diffs.push({ field: "batch_code", emailValue: extracted.batch_code ?? null, dbValue: dbRow.batch_code ?? null });
   }
   if (normBlockLoc(extracted.block_loc) !== normBlockLoc(dbRow.block_loc)) {
@@ -195,6 +228,32 @@ function fieldDifferences(extracted: Record<string, unknown>, dbRow: Record<stri
 }
 
 /**
+ * Is this row merely AWAITING THE OPERATOR'S PILE ASSIGNMENT rather than malformed?
+ * (L-042, 2026-08-13.) The whole point of this predicate is where it says NO.
+ *
+ * All four clauses must hold:
+ *   1. It has a `transaction_date` (forward-filled counts — a row with no date and no
+ *      prior date is dropped by the extractor and never reaches here).
+ *   2. It has a real `weight_kg`. A 0 weight is a data problem, not a pending assignment.
+ *   3. Its `batch_code` is missing BECAUSE THE BLOCK CELL WAS EMPTY — `operator_batch_label`
+ *      is null. A label that EXISTS but did not translate comes back as the raw label
+ *      (truthy `batch_code`), so it never reaches the malformed guard at all; and a label
+ *      that is present must never be silenced by this class.
+ *   4. It carries a TRUCK PLATE. This is the clause that keeps MALFORMED loud: an ORPHAN
+ *      wet-recovery sub-row is defined by having NO plate, no batch code and no block
+ *      (`deductions.ts::isRecoveryRowDict`), so it fails here and stays malformed. When we
+ *      cannot tell the two apart — no plate AND no label — the LOUD answer wins.
+ */
+export function isAwaitingBatchAssignment(row: DeliveryRow): boolean {
+  if (!row.transaction_date) return false;
+  if (!row.weight_kg) return false;
+  if (row.batch_code) return false;
+  if (row.operator_batch_label !== null && row.operator_batch_label !== undefined) return false;
+  if (normPlate(row.truck_plate) === "") return false;
+  return true;
+}
+
+/**
  * Raw classifier. Mirrors classify_deliveries.py main() loop. `extract.rows` is the
  * tail-filtered extract; `dbRows` is dbWindow.deliveries.
  */
@@ -209,12 +268,24 @@ export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbR
   const classifiedIdentityDiff: IdentityDiffItem[] = [];
   const classifiedNoop: NoopItem[] = [];
   const classifiedMalformed: MalformedItem[] = [];
+  const classifiedAwaiting: AwaitingAssignmentItem[] = [];
 
   for (const exRow of extractedRows) {
     // MALFORMED: falsy transaction_date / batch_code / weight_kg. (Python truthiness:
     // 0 / "" / null all falsy. weight_kg is always a positive float here, but a
     // batch_code "" or null is falsy.)
     if (!exRow.transaction_date || !exRow.batch_code || !exRow.weight_kg) {
+      // L-042 — "not filled in yet" is not "malformed". Split out FIRST, but only for the
+      // one narrowly-defined shape; everything else, including an orphan wet-recovery
+      // sub-row, falls through to MALFORMED exactly as before.
+      if (isAwaitingBatchAssignment(exRow)) {
+        classifiedAwaiting.push({
+          index: exRow._source_row,
+          row: exRow,
+          reason: "No pile assigned yet (the Block cell is empty)",
+        });
+        continue;
+      }
       classifiedMalformed.push({
         row: exRow,
         reason: "Missing required field (transaction_date / batch_code / weight_kg)",
@@ -271,6 +342,7 @@ export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbR
       identity_diff_count: classifiedIdentityDiff.length,
       noop_count: classifiedNoop.length,
       malformed_count: classifiedMalformed.length,
+      awaiting_assignment_count: classifiedAwaiting.length,
       db_rows_in_window: dbRows.length,
     },
     new: classifiedNew,
@@ -278,6 +350,7 @@ export function classifyDeliveries(extract: ExtractResult, dbRows: DeliveriesDbR
     identity_diff: classifiedIdentityDiff,
     noop: classifiedNoop,
     malformed: classifiedMalformed,
+    awaiting_assignment: classifiedAwaiting,
   };
 }
 
@@ -446,6 +519,31 @@ export function applyDeliveriesGuard(
       r.batch_code = hint;
     }
 
+    // L-042 — PREFER THE SPELLING THE DATABASE ACTUALLY USES. Runs AFTER the L-033b hint
+    // (a remark naming the pile is stronger evidence than a spelling convention) and BEFORE
+    // the L-004 collision check, exactly like the hint itself.
+    //
+    // Why this is part of the same change: the extractor derives a FEED code from the
+    // delivery month using the FULL month name (`AUGUST-26-FEED3`), while the live
+    // convention for August feed batches is `AUG-26-FEED3`. Without this, widening the
+    // FEEDING label would stop the sync creating an obviously-junk batch named
+    // `FEEDING # 3` (it created `FEEDING # 1` and `FEEDING # 2` for real, and they still
+    // sit in `batches` holding phantom weight) and start it creating a
+    // plausible-looking-but-duplicate `AUGUST-26-FEED3` instead — trading a loud wrong for
+    // a quiet one, which this ledger keeps recording as the worse outcome.
+    //
+    // It can ONLY ever point at a batch that ALREADY EXISTS, and never overrides a code
+    // that already resolves — the same safety property as the L-033b hint.
+    const aliased = resolveKnownBatchCodeAlias(r.batch_code, batchCodes);
+    if (aliased) {
+      if (!item.notes) item.notes = [];
+      item.notes.push(
+        `L-042: batch re-spelled ${r.batch_code} → ${aliased} (the same batch under the ` +
+          `month-prefix convention the database uses)`,
+      );
+      r.batch_code = aliased;
+    }
+
     const k = tupleKey([
       String(r.transaction_date ?? "").slice(0, 10),
       r.batch_code ?? null,
@@ -492,7 +590,9 @@ export function applyDeliveriesGuard(
   }
 
   // out = dict(classified); out["new"]=inserts; out["flagged"]=flagged; out["dup_noops"]=dup_noops.
-  // summary / changed / noop / malformed pass through UNTOUCHED (raw pre-guard counts).
+  // summary / changed / noop / malformed / awaiting_assignment pass through UNTOUCHED (raw
+  // pre-guard counts). `awaiting_assignment` deliberately gets NO guard treatment: there is
+  // nothing to write and nothing to hold — it is a visibility channel only (L-042).
   return {
     ...classified,
     new: inserts,

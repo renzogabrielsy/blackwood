@@ -20,6 +20,7 @@
 import type {
   AttributionDiff,
   AutoCreatedBatch,
+  AwaitingBatchAssignment,
   BatchClose,
   BlockDiff,
   HeldRow,
@@ -41,6 +42,7 @@ import type {
 import {
   collectAttributionDiffs,
   collectAutoCreatedBatches,
+  collectAwaitingBatchAssignments,
   collectBatchCloses,
   collectBlockDiffs,
   collectHeldRows,
@@ -1201,6 +1203,64 @@ function fromUnpricedOverdue(o: UnpricedOverdue): RunFinding {
 }
 
 /**
+ * A delivery weighed in with NO PILE ASSIGNED YET (2026-08-13, L-042).
+ *
+ * This finding exists because the alternative was calling it MALFORMED — "Row could not be
+ * read" — which is what the operator saw for two rows on 2026-08-12 that had filled
+ * themselves in by morning. MC books overnight weights early with the plate, the weight and
+ * the moisture and assigns the pile later in the day; that is a stage of her day, not bad
+ * data, and a sync that cries wolf about it teaches everyone to stop reading the list.
+ *
+ * So it is the quietest thing on the list while it is normal, and it gets louder the longer
+ * the cell stays empty — because a row that NEVER gets filled in is a real problem and
+ * nothing else in the system will notice it (the row is not in the database, so no unpriced
+ * or stale-stream check can see it):
+ *   - `info`      — 0-1 days. The ordinary same-day case. Reported, not alarming.
+ *   - `attention` — 2-3 days. It did not self-clear overnight, which is the point at which
+ *                   it stops being normal.
+ *   - `high`      — 4+ days. At this point it is not late, it is forgotten — the same
+ *                   threshold `fromUnpricedOverdue` uses, for the same reason.
+ * Nothing is held and no durable case is created, so this never has to be closed by hand.
+ */
+function fromAwaitingBatchAssignment(a: AwaitingBatchAssignment): RunFinding {
+  const who = [str(a.supplier), str(a.truck_plate)].filter(Boolean).join(' ') || 'A delivery'
+  const days =
+    a.days_pending <= 0 ? 'today' : a.days_pending === 1 ? 'yesterday' : `${a.days_pending} days ago`
+  const stale = a.days_pending >= 2
+
+  return {
+    key: `awaiting_batch_assignment:${a.transaction_date}:${a.truck_plate ?? ''}:${a.weight_kg ?? ''}:${a.sacks ?? ''}`,
+    kind: 'awaiting_batch_assignment',
+    kindLabel: 'Waiting on a pile assignment',
+    source: REPORT_SOURCE_LABEL.deliveries,
+    title: `${who}: ${fmtKg(a.weight_kg)} weighed in ${days}, no pile assigned yet`,
+    location:
+      [str(a.transaction_date), a.source_row ? `row ${a.source_row}` : null]
+        .filter(Boolean)
+        .join(` ${DOT} `) || '—',
+    data: {
+      transaction_date: a.transaction_date,
+      supplier: a.supplier,
+      truck_plate: a.truck_plate,
+      weight_kg: num(a.weight_kg),
+      sacks: num(a.sacks),
+      source_row: a.source_row,
+      days_pending: a.days_pending,
+    },
+    reason: stale
+      ? `The Block column is still empty for this truckload from ${days}, so there is no pile to ` +
+        `record it against and nothing has been saved for it. This normally fills itself in the ` +
+        `same day — it has not, so the report needs the pile written in (or the row removed if it ` +
+        `was a mistake).`
+      : `The Block column has not been filled in for this truckload yet, so there is no pile ` +
+        `to record it against and nothing was saved for it. This is normal early in the day ` +
+        `and usually fills itself in — nothing to do unless it is still here tomorrow.`,
+    severity: a.days_pending >= 4 ? 'high' : stale ? 'attention' : 'info',
+    section: 'deliveries',
+  }
+}
+
+/**
  * The Excel sync report could not be generated (2026-08-07).
  *
  * The report is pure observability — a reporting tool that can break the thing it reports
@@ -1299,6 +1359,11 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //     a price outage the price step itself did not notice.
   for (const o of collectUnpricedOverdue(result)) out.push(fromUnpricedOverdue(o))
 
+  // 12b. Deliveries weighed in with no pile assigned yet (L-042). The quietest entry on the
+  //      list while it is normal — it used to be reported as MALFORMED — and it gets louder
+  //      the longer the cell stays empty.
+  for (const a of collectAwaitingBatchAssignments(result)) out.push(fromAwaitingBatchAssignment(a))
+
   // 13. Streams that have gone quiet (Stage 3e) — the one finding about what did NOT
   //     arrive. Last, because it describes the state the whole run leaves behind.
   for (const s of collectStaleStreams(result)) out.push(fromStaleStream(s))
@@ -1376,6 +1441,7 @@ const SHORT_KIND: Record<string, string> = {
   price_date_drift: 'price match too old',
   price_out_of_band: 'unusual rate',
   unpriced_overdue: 'no price yet',
+  awaiting_batch_assignment: 'no pile yet',
   report_generation_failed: 'no excel report',
 }
 
@@ -1403,6 +1469,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   price_date_drift: 'Could not price — the only match is months away',
   price_out_of_band: 'Priced, but the rate is unlike this supplier',
   unpriced_overdue: 'Delivery still has no price',
+  awaiting_batch_assignment: 'Waiting on a pile assignment',
   report_generation_failed: 'Excel report could not be generated',
 }
 

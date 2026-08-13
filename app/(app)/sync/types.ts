@@ -397,6 +397,30 @@ export interface UnpricedOverdue {
   days_pending: number
 }
 
+/**
+ * One delivery weighed in with NO PILE ASSIGNED YET (2026-08-13, L-042).
+ *
+ * MC books overnight weights early with the truck plate, the weight and the moisture, and
+ * fills the pile in later in the day. Those rows used to be reported MALFORMED — "row could
+ * not be read" — for a normal, self-clearing stage of her day.
+ *
+ * This channel is deliberately quiet: nothing is written, nothing is HELD (so no durable
+ * review case), and the watermark is never blocked. Visibility is the whole job, which is
+ * why `days_pending` drives the severity — a row that NEVER gets filled in is a real
+ * problem. No ₱ field: the operator file has no price column.
+ */
+export interface AwaitingBatchAssignment {
+  transaction_date: string
+  supplier: string | null
+  truck_plate: string | null
+  weight_kg: number | null
+  sacks: number | null
+  /** The sheet row, so the operator can go straight to the cell that is empty. */
+  source_row: string | null
+  /** Whole days between `transaction_date` and the run's Asia/Manila date. 0 = today. */
+  days_pending: number
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -434,6 +458,10 @@ export interface ApplyResult {
    *  contract — read it as `apply?.unpriced_overdue ?? []` (see
    *  `collectUnpricedOverdue`). Only the `deliveries` report ever fills it. */
   unpriced_overdue?: UnpricedOverdue[]
+  /** Deliveries weighed in with no pile assigned yet (L-042). Same optionality contract —
+   *  read it as `apply?.awaiting_batch_assignment ?? []` (see
+   *  `collectAwaitingBatchAssignments`). Only the `deliveries` report ever fills it. */
+  awaiting_batch_assignment?: AwaitingBatchAssignment[]
 }
 
 // ============================================================
