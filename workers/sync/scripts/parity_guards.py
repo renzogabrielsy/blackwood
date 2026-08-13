@@ -31,14 +31,17 @@ def _norm_truck(v: Any) -> str:
 
 
 def _import_norms():
-    """norm_num / norm_block_loc from the real classifier (byte-parity)."""
+    """norm_num / norm_block_loc / the L-042 alias helper from the real classifier
+    (byte-parity — one definition, imported, never re-implemented here)."""
     import sys
     from pathlib import Path
     scripts = (Path(__file__).resolve().parent.parent.parent.parent
                / ".claude/skills/sync-ictc/scripts")
     sys.path.insert(0, str(scripts))
-    from classify_deliveries import norm_num, norm_block_loc  # type: ignore
-    return norm_num, norm_block_loc
+    from classify_deliveries import (  # type: ignore
+        norm_num, norm_block_loc, batch_code_spellings,
+    )
+    return norm_num, norm_block_loc, batch_code_spellings
 
 
 def apply_deliveries_guard(classified: dict, db_rows: list[dict], batch_codes: set[str]) -> dict:
@@ -47,7 +50,7 @@ def apply_deliveries_guard(classified: dict, db_rows: list[dict], batch_codes: s
     `flagged` buckets; trims `new` to genuine inserts. `changed`/`noop`/`malformed`
     pass through untouched.
     """
-    norm_num, norm_block_loc = _import_norms()
+    norm_num, norm_block_loc, batch_code_spellings = _import_norms()
 
     db_by_dbw: dict[tuple, list[dict]] = {}
     for r in db_rows:
@@ -113,6 +116,18 @@ def apply_deliveries_guard(classified: dict, db_rows: list[dict], batch_codes: s
                 f"L-033: batch re-mapped {r.get('batch_code')} → {hint} per remark 'PILED IN … BLOCK …'")
             r["batch_code"] = hint
 
+        # L-042 — PREFER THE SPELLING THE DATABASE ACTUALLY USES. After the L-033b hint (a
+        # remark naming the pile is stronger evidence than a spelling convention) and before
+        # the L-004 collision check, exactly like the hint. Can ONLY point at a batch that
+        # ALREADY EXISTS, and never overrides a code that already resolves.
+        # Mirrors src/reports/deliveries/classify.ts (resolveKnownBatchCodeAlias).
+        aliased = _alias_of(r.get("batch_code"), batch_codes, batch_code_spellings)
+        if aliased:
+            item.setdefault("notes", []).append(
+                f"L-042: batch re-spelled {r.get('batch_code')} → {aliased} (the same batch "
+                f"under the month-prefix convention the database uses)")
+            r["batch_code"] = aliased
+
         k = (str(r.get("transaction_date"))[:10], r.get("batch_code"), norm_num(r.get("weight_kg"), 3))
         collision = [d for d in db_by_dbw.get(k, [])
                      if norm_block_loc(d.get("block_loc")) != norm_block_loc(r.get("block_loc"))]
@@ -152,6 +167,30 @@ def apply_deliveries_guard(classified: dict, db_rows: list[dict], batch_codes: s
     out["flagged"] = flagged
     out["dup_noops"] = dup_noops
     return out
+
+
+def _alias_of(code: Any, batch_codes: set[str], batch_code_spellings) -> str | None:
+    """An existing batch_code that is `code` under the OTHER month-prefix spelling, or None.
+
+    Returns the DB's own spelling (so a write lands on the existing row rather than beside
+    it), and returns None when `code` already resolves — there is nothing to prefer then.
+    """
+    primary = None if code is None else str(code).strip().upper()
+    if not primary:
+        return None
+    by_upper: dict[str, str] = {}
+    for k in batch_codes:
+        n = None if k is None else str(k).strip().upper()
+        if n and n not in by_upper:
+            by_upper[n] = k
+    if primary in by_upper:
+        return None
+    for cand in batch_code_spellings(primary):
+        if cand == primary:
+            continue
+        if cand in by_upper:
+            return by_upper[cand]
+    return None
 
 
 def _js(v: Any) -> str:

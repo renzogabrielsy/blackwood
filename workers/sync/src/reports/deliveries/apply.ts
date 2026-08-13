@@ -49,6 +49,34 @@ export interface UnpricedOverdue {
   days_pending: number;
 }
 
+/**
+ * One delivery the operator has not assigned a pile to YET (L-042, 2026-08-13).
+ *
+ * MC books overnight weights in early with the truck plate, the weight and the moisture, and
+ * fills the pile in later in the day. Those rows used to be reported MALFORMED — "row could
+ * not be read" — for a normal, self-clearing stage of her day; two were reported on
+ * 2026-08-12 and had fixed themselves by morning.
+ *
+ * So this channel is deliberately QUIET and NOT a held row: nothing is written, nothing is
+ * held, the watermark is not blocked and no durable review case is created. It is pure
+ * visibility — because a row that NEVER gets filled in is a real problem, which is why
+ * `days_pending` escalates the severity (see `lib/sync/findings.ts`).
+ *
+ * NEVER a ₱ field: the operator file has no price column, and an unassigned row has no
+ * batch to cost against.
+ */
+export interface AwaitingBatchAssignment {
+  transaction_date: string;
+  supplier: string | null;
+  truck_plate: string | null;
+  weight_kg: number | null;
+  sacks: number | null;
+  /** The sheet row, so the operator can go straight to the cell that is empty. */
+  source_row: string | null;
+  /** Whole days between `transaction_date` and the run's Asia/Manila date. 0 = today. */
+  days_pending: number;
+}
+
 /** The compact hand-off from classify → apply. */
 export interface DeliveriesCompact {
   report_type: string;
@@ -65,6 +93,9 @@ export interface DeliveriesCompact {
     flagged: Array<{ kind: string; index: unknown; reason?: string; decision?: string; row?: DeliveryRow }>;
     dup_noops: Array<{ index: unknown; note?: string }>;
     malformed: Array<{ reason?: string; row?: DeliveryRow }>;
+    /** L-042 — rows waiting on the operator to assign a pile. Optional so every existing
+     *  hand-built fixture and caller stays valid; read as `?? []`. */
+    awaiting_assignment?: Array<{ index?: unknown; reason?: string; row?: DeliveryRow }>;
   };
   batch_codes?: string[];
 }
@@ -108,9 +139,32 @@ export interface ApplyResult {
    * the row. Carries no ₱ value (see `reports/deliveryHumanEdit.ts`).
    */
   delivery_human_edits: DeliveryHumanEdit[];
+  /**
+   * Deliveries the operator has not assigned a pile to yet (L-042). ALWAYS present
+   * (default []). Filled by `applyDeliveries` itself — the rows come straight off the
+   * classifier, so there is nothing to look up.
+   */
+  awaiting_batch_assignment: AwaitingBatchAssignment[];
 }
 
 const REPORT_TYPE = "deliveries";
+
+/**
+ * Whole days between an ISO date and the run's ASIA/MANILA date (never negative).
+ *
+ * Manila, not UTC: `runTs` is UTC, and a run started after 16:00 UTC is already the next day
+ * at the plant, so a UTC date would under-count the age by one for those runs. The sync
+ * normally runs ~00:00-03:00 UTC (morning in Manila) where the two agree, but the escalation
+ * threshold must not depend on that.
+ */
+function daysPendingManila(transactionDate: string, runTs: string): number {
+  const txn = Date.parse(`${String(transactionDate).slice(0, 10)}T00:00:00Z`);
+  const run = Date.parse(runTs);
+  if (!Number.isFinite(txn) || !Number.isFinite(run)) return 0;
+  const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000;
+  const manilaMidnight = Math.floor((run + MANILA_OFFSET_MS) / 86_400_000) * 86_400_000;
+  return Math.max(0, Math.round((manilaMidnight - txn) / 86_400_000));
+}
 
 /** The deliveries structured held-row payload. NEVER includes cost_basis (₱ gate). */
 function deliveriesHeldRow(r: DeliveryRow): Record<string, unknown> {
@@ -388,6 +442,40 @@ export async function applyDeliveries(
       });
     }
   }
+  // L-042 — AWAITING ASSIGNMENT: reported, never held.
+  //
+  // Deliberately NOT pushed into `held`: a held row becomes a durable `sync_held_cases`
+  // entry a human has to close, and this shape closes itself when MC types the pile in. It
+  // does not touch `errors`, so it cannot block the watermark or the Gmail label either.
+  // Visibility comes from the run-findings channel (`lib/sync/findings.ts`), whose severity
+  // rises with `days_pending` — because a row that never gets filled in IS a real problem.
+  const awaitingBatch: AwaitingBatchAssignment[] = [];
+  for (const a of compact.actionable.awaiting_assignment ?? []) {
+    const row = a.row;
+    if (!row) continue;
+    const txn = String(row.transaction_date ?? "").slice(0, 10);
+    awaitingBatch.push({
+      transaction_date: txn,
+      supplier: row.supplier ?? null,
+      truck_plate: row.truck_plate ?? null,
+      weight_kg: row.weight_kg ?? null,
+      sacks: row.sacks ?? null,
+      source_row: row._source_row == null ? null : String(row._source_row),
+      days_pending: daysPendingManila(txn, runTs),
+    });
+  }
+  for (const a of awaitingBatch) {
+    await emit?.(
+      "apply",
+      `${a.transaction_date}${a.truck_plate ? ` (${a.truck_plate})` : ""}: weighed in but no ` +
+        `pile assigned yet — nothing was saved for it. This normally fills itself in later ` +
+        `the same day.`,
+      82,
+      undefined,
+      a.days_pending >= 2 ? "warn" : "info",
+    );
+  }
+
   for (const m of compact.actionable.malformed ?? []) {
     const row = m.row;
     held.push({
@@ -440,6 +528,7 @@ export async function applyDeliveries(
     price_notes: [],
     unpriced_overdue: [],
     delivery_human_edits: humanEdits,
+    awaiting_batch_assignment: awaitingBatch,
   };
 }
 

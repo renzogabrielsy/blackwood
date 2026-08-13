@@ -11,6 +11,7 @@
 import type {
   AttributionDiff,
   AutoCreatedBatch,
+  AwaitingBatchAssignment,
   BatchClose,
   BlockDiff,
   HeldRow,
@@ -164,6 +165,30 @@ export function collectUnpricedOverdue(result: SyncRunResult): UnpricedOverdue[]
     const report = reports[key]
     if (!report) continue
     for (const note of report.apply?.unpriced_overdue ?? []) out.push(note)
+  }
+  return out
+}
+
+/**
+ * Flatten every delivery a run saw weighed in with NO PILE ASSIGNED YET
+ * (`result.reports.deliveries.apply.awaiting_batch_assignment`, 2026-08-13, L-042).
+ *
+ * These used to be reported MALFORMED, which is what "row could not be read" means to an
+ * operator — for a row that is merely not filled in yet and normally fills itself in later
+ * the same day. Like `collectPriceNotes` and `collectUnpricedOverdue` these are NOT folded
+ * into durable cases: panel/report visibility only, so nothing has to be closed by hand.
+ */
+export function collectAwaitingBatchAssignments(
+  result: SyncRunResult,
+): AwaitingBatchAssignment[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: AwaitingBatchAssignment[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const report = reports[key]
+    if (!report) continue
+    for (const note of report.apply?.awaiting_batch_assignment ?? []) out.push(note)
   }
   return out
 }

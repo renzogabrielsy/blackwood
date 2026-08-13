@@ -87,7 +87,7 @@ Column 2's raw value is coerced via `coerce_date` (tries `datetime`/`date` objec
 Priority order, first match wins:
 
 1. **Remarks match** `PILED\s+IN\s+(MONTH)\s*#\s*(\d+)` (case-insensitive) → `"{MMM}-{YY}-BLK{N}"`. `MMM` = the FULL month name (all 12 months map to their full name in `MONTH_ABBR`, extract_rc_deliveries.py:115-120 — despite the variable name "ABBR", every value is the full English month name). `YY` = 2-digit year from `delivery_date` if available, else hardcoded `"26"`.
-2. **`FEEDING AREA` label** (`^FEEDING\s+AREA\s*(\d*)$`) with a captured number AND a known delivery date → `"{MMM}-{YY}-FEED{N}"` where `MMM` is derived from the delivery month via `list(MONTH_ABBR.values())[dt.month-1]` (same full-name list). If the label has no number or there's no delivery date, returns the RAW label with a warning ("needs manual mapping").
+2. **A `FEEDING` label** (`^FEEDING(?:\s*(?:AREA|NO))?\s*[#.:-]?\s*(\d*)\s*\.?$`, **WIDENED 2026-08-13, L-042** — it used to be `^FEEDING\s+AREA\s*(\d*)$`) with a captured number AND a known delivery date → `"{MMM}-{YY}-FEED{N}"` where `MMM` is derived from the delivery month via `list(MONTH_ABBR.values())[dt.month-1]` (same full-name list). If the label has no number or there's no delivery date, returns the RAW label with a warning ("needs manual mapping").
 3. **`B<N>` label** (`^B0?(\d{1,3})$`) with a known delivery date → `"{MMM}-{YY}-BLK{N}"`, month derived from `delivery_date`, WITH a warning noting the heuristic translation (this warning fires even on a SUCCESSFUL translation, unlike other rules).
 4. **Fallthrough**: raw `operator_label` returned verbatim, with a warning "Could not map ... emitting raw value."
 
@@ -114,7 +114,10 @@ If a candidate is found (`extract_sheet`, extract_rc_deliveries.py:461-506):
 
 ### MALFORMED conditions (deferred to classifier, NOT the extractor)
 
-The extractor itself only SKIPS unrecoverable rows (no date, no weight) — it never emits a `"MALFORMED"` bucket. `classify_deliveries.py` is where MALFORMED is decided: `transaction_date`, `batch_code`, or `weight_kg` falsy → MALFORMED (classify_deliveries.py:206-210). Note this means a recovery row with NO batch_code (orphan recovery, no mother) reaches classification and is caught here.
+The extractor itself only SKIPS unrecoverable rows (no date, no weight) — it never emits a `"MALFORMED"` bucket. `classify_deliveries.py` is where MALFORMED is decided: `transaction_date`, `batch_code`, or `weight_kg` falsy → MALFORMED. Note this means a recovery row with NO batch_code (orphan recovery, no mother) reaches classification and is caught here.
+
+**Since 2026-08-13 (L-042) that bucket is SPLIT** — one narrowly-defined shape leaves it for the
+gentler `awaiting_assignment` bucket, and the ORPHAN RECOVERY ROW DELIBERATELY DOES NOT. See §11.
 
 ---
 
@@ -159,7 +162,7 @@ separates correctly.
 
 | Field | Comparison | Notes |
 |---|---|---|
-| `batch_code` | `norm_str` equal | **L-040b — left the key, so it is COMPARED.** Equal by construction on a tier-2 match |
+| `batch_code` | **`batch_code_alias_equal`** (L-042) | **L-040b — left the key, so it is COMPARED.** Equal by construction on a tier-2 match. **A MONTH-PREFIX ALIAS IS NOT A DIFFERENCE** (`AUGUST-26-FEED1` ≡ `AUG-26-FEED1`); a different MONTH still is (`JULY-26-BLK9` ≠ `JUNE-26-BLK9`) — see §11 |
 | `block_loc` | `norm_block_loc` equal | same |
 | `weight_kg` | `norm_num(…,3)` equal | same |
 | `supplier` | `norm_str` equal | case-insens, trim, `''`≡`null` |
@@ -199,6 +202,7 @@ Applied as a post-pass over the classifier's `new` bucket (sync_deliveries.py:20
 1. **L-033a — cross-batch duplicate → demoted to NOOP** (not flagged, a THIRD bucket `dup_noops`): a `new` row whose `(date, normalized truck_plate, weight_kg)` matches an existing DB row via `db_by_dtw` index AND that DB row's `block_loc` (normalized) matches the candidate's `block_loc`, but the DB row's `batch_code` DIFFERS from the candidate's. → demoted with note `"L-033: same truckload already recorded as {db_bc} — extractor-derived name {candidate_bc} is a month-boundary phantom."` Trigger requires `_norm_truck(r.truck_plate)` to be non-empty (an empty/blank truck plate never matches via this index — `dups = db_by_dtw.get(kd, []) if _norm_truck(...) else []`).
 2. **`L033_cross_batch_loc_mismatch`** (FLAGGED, `decision: "skip"`): same `(date, truck, weight)` match exists in the DB but at a DIFFERENT `block_loc` (not just different batch_code) — i.e. `same_loc` is empty but `dups` (the broader date/truck/weight match) is non-empty. Requires a human call.
 3. **L-033b — remark hint re-map** (sync_deliveries.py:179-199, 227-231): if the row's `remarks` matches `PILED\s+IN\s+([A-Z]+)\.?\s+BLOCK\s*(\d+)` (case-insensitive), resolve the month word to a month number via prefix-matching against `_MONTHS` (`{"JAN":1,...,"DEC":12}` — matches if the word STARTS WITH the 3-letter prefix, e.g. `"JUNE"` matches `"JUN"` prefix), compute `year = txn_year - 1 if month_num > txn_month else txn_year` (a December pile receiving a January truck crosses the year boundary), then tries EACH of `_CODE_VARIANTS[month_num]` (e.g. month 3 → `["MARCH", "MAR"]`) as `f"{variant}-{yy}-BLK{blk}"` and checks if that batch_code EXISTS in `batches` via `db.select_one`. First existing match wins; **never invents a batch** — if none of the variants exist in the DB, the hint is silently ignored (returns `None`) and the original extractor-derived batch_code is kept. If a hint resolves to a DIFFERENT code than the extractor's, the row's `batch_code` is REWRITTEN in place and a note is appended — this happens BEFORE the L-004 collision check below, so a successful L-033b remap can also change whether L-004 fires.
+3b. **L-042 — month-prefix alias re-spell** (2026-08-13): after the L-033b hint and BEFORE the L-004 check, if the row's `batch_code` does NOT exist in `batches` but its month-prefix ALIAS does, the code is rewritten to the DB's own spelling and a note is appended. Same safety property as L-033b — **it can only ever point at a batch that ALREADY EXISTS, and never overrides a code that already resolves.** See §11.
 4. **`L004_block_loc_correction`** (FLAGGED, `decision: "skip"`): after any L-033b remap, re-derive the `(date, batch_code, weight)` key and check `db_by_dbw` for a row with the SAME key but a DIFFERENT `block_loc` — that's a block_loc correction, not a new delivery.
 5. **`low_confidence`** (FLAGGED, `decision: "skip"`): `(row.confidence or 1.0) < CONF_FLOOR` where `CONF_FLOOR = 0.7` (sync_deliveries.py:70). Checked LAST, only if neither L-033a/L033_cross_batch_loc_mismatch nor L-004 fired.
 
@@ -207,6 +211,13 @@ Order of checks per `new` item (sync_deliveries.py:202-246): L-033a/L033_cross_b
 ### UNMAPPED handling
 
 `classify_deliveries.py` has NO separate UNMAPPED bucket — an unresolved batch code simply flows through as whatever `translate_batch_code` produced (possibly the raw operator label), and if it happens to collide with nothing in the DB it becomes a genuine NEW row with a non-standard `batch_code` (still subject to the defensive batch-upsert at apply time, which will create a batch row with that literal string as its code — this is a real risk: a garbage-shaped batch_code CAN get auto-created as a new batch unless caught by low-confidence or another gate first).
+
+**This risk is REAL and MEASURED, not hypothetical.** `batches` contains `FEEDING # 1` (created
+2026-07-09), `FEEDING # 2` (2026-07-21, holding **18,650 kg** of phantom weight) and
+`FEEDING AREA # 1`…`# 4` — every one of them a raw operator label that became a batch this way.
+L-042 narrows it on both ends: the FEEDING family now translates instead of falling through, and the
+guard's alias re-spell keeps a translated code from landing beside an existing batch. It does NOT
+close the general case — a genuinely unrecognised label still creates a batch named after itself.
 
 ---
 
@@ -564,3 +575,117 @@ and the number stays in RC IN behind `canViewPrices()`.
   `released=1 skipped=1` and clears the stamp → the released row applies → an
   off-allowlist patch returns `unsupported_field` and writes nothing → an unknown id
   returns `missing` → an empty patch returns `empty_patch`.
+
+---
+
+## 11. An operator's shorthand is a NAMING CONVENTION, not malformed input (2026-08-13, L-042)
+
+Two changes, one lesson. Both are about the same failure: the pipeline treated *the way a human
+writes things down* as *bad data*, and then asked a human to arbitrate a question the system already
+knew the answer to.
+
+### 11.1 `FEEDING # N` is accepted (the valuable half)
+
+`FEEDING_AREA_RE` was `^FEEDING\s+AREA\s*(\d*)$` — the spelling the **Sheet** uses. MC types
+`FEEDING # 1` in column D. That label therefore fell through to the raw-value branch, where it was:
+**truthy** (so it passed the malformed guard), **not pattern-valid** (so `batchAutoCreate` would
+never touch it), and consequently **held on every single run, forever**. Two real truckloads were
+stuck: `2026-08-05 / AAV 6111 / 19,185 kg` for a week, and `2026-08-12 / KCA 378 / 18,650 kg`.
+
+The regex is now `^FEEDING(?:\s*(?:AREA|NO))?\s*[#.:-]?\s*(\d*)\s*\.?$` and **there is no new output
+format** — every accepted spelling goes down the identical `"{MMM}-{YY}-FEED{N}"` branch.
+
+| Accepted | Rejected, on purpose |
+|---|---|
+| `FEEDING AREA 2` · `FEEDING # 2` · `FEEDING #2` · `FEEDING NO. 2` · `FEEDING NO 2` · `FEEDING 2` · `FEEDING AREA #2` · `FEEDING AREA 2.` (any case, trimmed) | `FEEDING AREA A` — a letter is not an area number |
+| bare `FEEDING` / `FEEDING AREA` — numberless, so the pre-existing raw-label + "needs manual mapping" warning is UNCHANGED | `FEEDING AREA 1 AND 2` — two areas is not one batch |
+| | `RE-FEEDING 1` — `REFEED` is its own batch family (`MARCH-26-REFEED1`) |
+| | `FEEDINGS 2`, `SUNDRY FEEDING 1`, and bare `FEED` (a batch is literally NAMED `FEED`) |
+
+The anchor is a leading `FEEDING`, and after the optional `AREA`/`NO`/`#` designator only **digits**
+may follow — that is what keeps the widening from becoming a catch-all.
+
+### 11.2 The trap this would have walked into: a month-prefix alias is not a disagreement
+
+Translating the label is not enough. The extractor derives the FEED code from the delivery month
+using the **FULL** month name (`MONTH_ABBR`, all twelve values are full names), so `FEEDING # 1` on
+2026-08-05 becomes `AUGUST-26-FEED1`. **The database spells that batch `AUG-26-FEED1.`** Measured on
+`batches`, 2026-08-13: August *feed* batches read `AUG-26-FEED1/2`, while August *blocks* read
+`AUGUST-26-BLK1/2/5`. Both conventions are live, and always have been.
+
+Under the two-tier identity (L-040b) the email row MATCHES the DB row on tier 1 — same date, same
+plate, same sack count — and then "disagrees" on `batch_code`. So a pure naming-convention
+difference would have become a `cross_batch_reassignment` held case asking a human to pick between
+two spellings of one batch: the shorthand bug, moved one layer down rather than fixed.
+
+`workers/sync/src/lib/batchCodeAlias.ts` is now THE one definition of "same code, spelled
+differently", built on the alias table that already existed (`batchCodeFallbacks`, a port of
+`extract_gsheet.py::batch_code_fallbacks`). It is used in **two** places, and the distinction
+matters:
+
+- **`batchCodeAliasEqual` in `field_differences`** — decides whether the two sources actually
+  disagree. This is what makes the 2026-08-05 row a clean **NOOP**.
+- **`resolveKnownBatchCodeAlias` in the guard** (rule 3b above) — decides what a genuinely NEW row
+  gets WRITTEN as. Without it, widening the label would have replaced an obviously-junk
+  `FEEDING # 3` batch with a plausible-looking duplicate `AUGUST-26-FEED3` sitting beside the real
+  `AUG-26-FEED3` — trading a loud wrong for a quiet one.
+
+**It is not a fuzzy matcher and it invents nothing.** Only the prefix pairs in the existing table
+collapse, and only when the year and the whole suffix are byte-identical. `JULY-26-BLK9` vs
+`JUNE-26-BLK9` — the L-033 month-boundary phantom, and the pair BOTH deliveries parity fixtures turn
+on — is untouched, as is `SEP` vs `SEPT` (the table says each maps to `SEPTEMBER`, not to each
+other, so nothing is asserted that the table does not already say).
+
+### 11.3 "Not filled in yet" is not MALFORMED
+
+The malformed guard sent every row missing `transaction_date` / `batch_code` / `weight_kg` to
+MALFORMED, whose operator-facing label is **"Row could not be read"**. MC books overnight weights in
+early with only the truck plate, the weight and the moisture, and assigns the pile later in the day.
+Two such rows were reported malformed on 2026-08-12 and had filled themselves in by morning.
+
+There is now a separate `awaiting_assignment` bucket + `summary.awaiting_assignment_count`.
+`isAwaitingBatchAssignment` (mirrored as `is_awaiting_batch_assignment`) requires **all four**:
+
+1. a `transaction_date` (forward-filled counts);
+2. a real `weight_kg` — a 0 weight is a data problem, not a pending assignment;
+3. `batch_code` missing **because the Block cell was empty** (`operator_batch_label is None`) — a
+   label that EXISTS but did not translate comes back as the raw label and never reaches this guard;
+4. **a truck plate.**
+
+**Clause 4 is the whole point of the predicate.** An ORPHAN wet-recovery sub-row — a continuation row
+with no mother delivery to inherit from — has the same missing batch code, and it is genuinely bad
+data. It is DEFINED by having no plate, no batch and no block (`is_recovery_row_dict`), so it fails
+clause 4 and **stays MALFORMED and stays loud**. When the two cannot be told apart (no plate AND no
+label), the loud answer wins. `malformed` was NOT widened; one shape was carved out of it.
+
+### 11.4 How the new class behaves — quiet, but not silent
+
+- **Never held.** It is not pushed into `apply.held`, so no durable `sync_held_cases` row is created
+  and nothing has to be closed by hand. It does not touch `errors`, so the watermark and the Gmail
+  label are unaffected. It self-clears when MC types the pile in.
+- **Reported through the existing finding vocabulary**, not a parallel taxonomy:
+  `apply.awaiting_batch_assignment` → `collectAwaitingBatchAssignments` →
+  `lib/sync/findings.ts::fromAwaitingBatchAssignment`, `kind: 'awaiting_batch_assignment'`,
+  `section: 'deliveries'`. It therefore lands on the Deliveries sheet of the Excel report with no
+  generator change.
+- **Severity escalates with age**, the `unpriced_overdue` pattern — because a row that NEVER gets
+  filled in is a real problem, and nothing else in the system can see it (the row is not in the
+  database, so no unpriced or stale-stream check will ever notice):
+  **`info` at 0–1 days** (the ordinary same-day case) → **`attention` at 2–3** (it did not
+  self-clear overnight) → **`high` at 4+** (not late any more, forgotten). `days_pending` is measured
+  against the run's **Asia/Manila** date, not UTC, so the threshold does not depend on what hour the
+  sync happens to run.
+
+### 11.5 Parity
+
+Both halves changed the extractor AND the classifier, so `extract_rc_deliveries.py`,
+`classify_deliveries.py` and `parity_guards.py` moved in the SAME changeset and the oracle was
+rebuilt. `npm run parity` is green with **no new `expected-deviations.json` entry** — a deviation is
+for an oracle *bug*, never for a change we chose (the L-034 / L-037 / L-040b precedent). The only
+oracle delta is the two new empty keys (`awaiting_assignment`, `awaiting_assignment_count`); both
+fixtures' existing `JULY-26-BLK9` vs `JUNE-26-BLK9` identity diffs survive unchanged, which is the
+proof that the alias equality does not over-collapse.
+
+Tests: `workers/sync/test/reports/deliveries-feeding-label.test.ts` (17 cases, every row read out of
+the live DB) and `scripts/verify-awaiting-batch-assignment-fold.ts` (8 checks, the pure app-side
+fold).

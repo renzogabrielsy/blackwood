@@ -1,4 +1,5 @@
 {
+  "awaiting_assignment": [],
   "changed": [],
   "dup_noops": [],
   "flagged": [
@@ -181,6 +182,7 @@
   ],
   "noop": [],
   "summary": {
+    "awaiting_assignment_count": " num:0",
     "changed_count": " num:0",
     "db_rows_in_window": " num:1",
     "extracted_total": " num:3",

@@ -572,6 +572,101 @@ refuse to overwrite.
 
 ---
 
+## L-042 — An operator's SHORTHAND is a naming convention to be learned, not malformed input (2026-08-13)
+
+**Three places, one mistake.** This is the third time this month that the same confusion has cost us
+real rows, and it is worth naming precisely because each time it wore a different costume:
+
+| | The two things that were confused | What it cost |
+|---|---|---|
+| **L-039** | `"August 2026"` (a name we generate) vs `"Aug. 2026"` (a name Czarina typed) | every August delivery unpriced for a week |
+| **L-040 / L-040b** | `JULY-26-FEED1` (the Sheet's convention) vs `FEEDING # 1` (MC's) — inside a natural key | 7 duplicate deliveries, archived and deleted |
+| **L-042** | `FEEDING # 1` vs `FEEDING AREA 1`; and `AUGUST-26-FEED1` vs `AUG-26-FEED1` | 2 truckloads held for a week; 2 normal rows called "malformed" |
+
+**The generalisation.** A source has a *vocabulary*, and it is not ours. Every time we match a
+human-written token against a machine-written one we are making a claim about how a person writes,
+and that claim is nearly always narrower than reality. Two consequences:
+
+1. **A recognizer for a human-written label must accept the family, not the one spelling we happened
+   to see.** `^FEEDING\s+AREA\s*(\d*)$` matched the SHEET's spelling. MC writes `FEEDING # 1`.
+   Because the fallthrough emits the raw label, that row was **truthy** (so it passed the malformed
+   guard), **not pattern-valid** (so it never auto-created), and therefore **held on every run
+   forever** — the quietest possible failure: a permanent, self-renewing to-do nobody could resolve.
+   Widen the recognizer, keep the anchor strict (`FEEDING` at the start, digits after the
+   designator), and enumerate the rejections in the test so widening cannot drift into a catch-all.
+2. **An alias table you already own must be CONSULTED, not just documented.** `batch_code` has had
+   two month-prefix conventions since forever (`MARCH-` / `MAR-`), and
+   `extract_gsheet.py::batch_code_fallbacks` has encoded the table for months. What did not exist was
+   a predicate answering *"is this pair merely a spelling difference?"* — so every consumer compared
+   RAW STRINGS. **The knowledge existed and the code could not reach it.** That is L-041's lesson
+   ("a rule is enforced only where the write happens") pointed the other way: a *fact* is only usable
+   where the comparison happens.
+
+**The trap that would have hidden the fix (measured, 2026-08-13).** The extractor derives a FEED code
+from the delivery month using the FULL month name, so `FEEDING # 1` on 2026-08-05 becomes
+`AUGUST-26-FEED1`. **The database spells that batch `AUG-26-FEED1`** — and the same table spells
+August BLOCKS `AUGUST-26-BLK1`. Both conventions are live simultaneously. Under the two-tier identity
+the email row matches on tier 1 (same date, plate, sacks) and then "disagrees" on `batch_code`, so
+accepting the shorthand *without* the alias would have converted a held `unmapped` row into a held
+`cross_batch_reassignment` row — the same operator, the same week, a different label on the same
+non-problem. **Fixing a recognizer without fixing the comparison just moves the stall one layer
+down.**
+
+**And the corollary, which is where the real risk was.** The alias has to be used in **two** places
+that answer different questions:
+- in `field_differences`, to decide whether two sources actually disagree (this is what makes the
+  2026-08-05 row a clean NOOP);
+- in the guard, to decide what a genuinely NEW row is WRITTEN as.
+
+Skip the second and the change gets *worse*: today an unrecognised label creates an obviously-junk
+batch (`batches` really does contain `FEEDING # 1`, `FEEDING # 2` — holding **18,650 kg** of phantom
+weight — and `FEEDING AREA # 1`…`# 4`); after the widening it would have created a
+plausible-looking-but-duplicate `AUGUST-26-FEED3` beside the real `AUG-26-FEED3`. **Trading a loud
+wrong for a quiet wrong is a regression**, and this ledger keeps saying so (L-040b rule 2, the
+`delta`-summing fabrication of 2026-08-12). The guard's re-spell is safe because it borrows L-033b's
+property verbatim: *it can only ever point at a batch that ALREADY EXISTS, and never overrides a code
+that already resolves.*
+
+**The second change, and the reason it is in the same entry: "not filled in yet" is not "malformed".**
+MC books overnight weights in early with only the truck plate, the weight and the moisture, and
+assigns the pile later in the day. The malformed guard reported those rows as **"Row could not be
+read"** — two on 2026-08-12, both of which had fixed themselves by morning. Same root confusion: a
+stage of someone's WORKFLOW read as a defect in their DATA. **A classifier that cries wolf about a
+self-clearing state is how a findings list stops being read at all** — which is exactly the muscle
+the August price outage needed and did not have.
+
+Three rules from splitting it:
+- **Split by a POSITIVE signal, never by widening the bucket.** The new class requires a **truck
+  plate**. That single clause is what keeps MALFORMED loud, because an **orphan wet-recovery sub-row**
+  has the same missing batch code and IS genuinely bad data — and it is *defined* by having no plate,
+  no batch and no block. When the two cannot be told apart, the loud answer wins. `malformed` was not
+  softened; one shape was carved out of it.
+- **A quiet channel must still escalate, or it becomes a silence.** `info` at 0–1 days →
+  `attention` at 2–3 → `high` at 4+, the `unpriced_overdue` ladder. It matters more here than there:
+  the row is **not in the database**, so no unpriced check, no stale-stream check and no balance
+  check can ever notice it. This finding is the only thing that can.
+- **Age must be measured in the plant's timezone.** `days_pending` uses the run's **Asia/Manila**
+  date; a UTC date under-counts by one for any run after 16:00 UTC, and a threshold that depends on
+  what hour the sync happened to fire is not a threshold.
+
+**Do NOT hold it.** A held row becomes a durable `sync_held_cases` entry a human has to close. This
+shape closes itself. It is a run finding (`kind: 'awaiting_batch_assignment'`, `section:
+'deliveries'`) — existing vocabulary, no parallel taxonomy, and therefore on the Excel report's
+Deliveries sheet with no generator change.
+
+**Provenance:** 2026-08-13, authorised by Renzo. Every row in the tests is real: the 2026-08-05 /
+AAV 6111 / 517 sacks / 19,185 kg row the DB holds as `AUG-26-FEED1` (id `1a6dec84-…`), and the
+2026-08-12 / KCA 378 / 516 sacks / 18,650 kg row the DB holds as `batch_code = 'FEEDING # 2'`
+verbatim. Note that second one was **not** held — it was INSERTED with the raw label as its batch
+code, which is how the junk batch got created; after this change it becomes a **named held identity
+diff**, which is correct, because a real disagreement (`AUGUST-26-FEED2` vs `FEEDING # 2`) is what it
+is. **No DB write was made** — the junk batches and the phantom 18,650 kg are still there and need a
+separate, approved cleanup. Extractor + classifier + guard moved in lockstep with the Python oracle;
+`npm run parity` green with **no new `expected-deviations.json` entry**. Full spec:
+`workers/sync/specs/deliveries.md` §11.
+
+---
+
 ## L-041 — A WARNING WRITTEN AS A COMMENT IS NOT A CONTROL (2026-08-08)
 
 **The evidence, in three dates.** On **2026-02-04** the Google Sheet had a truck's

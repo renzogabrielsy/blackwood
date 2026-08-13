@@ -221,6 +221,7 @@ export async function runReport(
       price_notes: [],
       unpriced_overdue: [],
       delivery_human_edits: [],
+      awaiting_batch_assignment: [],
     };
     return {
       classify: {
@@ -364,7 +365,10 @@ export async function runReport(
   const s = guarded.summary;
   await emit?.(
     "classify",
-    `${s.noop_count} already recorded · ${guarded.new.length} new · ${s.changed_count} changed`,
+    `${s.noop_count} already recorded · ${guarded.new.length} new · ${s.changed_count} changed` +
+      (s.awaiting_assignment_count
+        ? ` · ${s.awaiting_assignment_count} waiting on a pile assignment`
+        : ""),
     90,
   );
 
@@ -383,6 +387,12 @@ export async function runReport(
       flagged: guarded.flagged,
       dup_noops: guarded.dup_noops,
       malformed: guarded.malformed.map((m) => ({ reason: m.reason, row: m.row })),
+      // L-042 — carried through so apply can report it; it is never written or held.
+      awaiting_assignment: guarded.awaiting_assignment.map((a) => ({
+        index: a.index,
+        reason: a.reason,
+        row: a.row,
+      })),
     },
     batch_codes: [...batchCodes],
   };

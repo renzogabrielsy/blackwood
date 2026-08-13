@@ -64,8 +64,29 @@ const PILED_REMARK_RE =
   /PILED\s+IN\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s*#\s*(\d+)/i;
 // Operator "B<N>" label. re.IGNORECASE.
 const OPERATOR_B_LABEL_RE = /^B0?(\d{1,3})$/i;
-// "FEEDING AREA <N?>" label. re.IGNORECASE.
-const FEEDING_AREA_RE = /^FEEDING\s+AREA\s*(\d*)$/i;
+/**
+ * A FEEDING-area label in the operator's Block column (column D). re.IGNORECASE.
+ *
+ * WIDENED 2026-08-13 (L-042). It used to be `^FEEDING\s+AREA\s*(\d*)$`, which matched the
+ * spelling the SHEET uses and NOT the one MC actually types. She writes `FEEDING # 1`, so
+ * the label fell through to the raw-value branch: truthy (so it passed the malformed
+ * guard), not pattern-valid (so it never auto-created), and therefore held on EVERY run
+ * forever. Two real truckloads were stuck this way — 2026-08-05 / AAV 6111 / 19,185 kg for
+ * a week, and 2026-08-12 / KCA 378 / 18,650 kg.
+ *
+ * ACCEPTED (all produce EXACTLY what `FEEDING AREA <N>` produces today):
+ *   `FEEDING AREA 2` · `FEEDING # 2` · `FEEDING #2` · `FEEDING NO. 2` · `FEEDING NO 2`
+ *   `FEEDING 2` · `FEEDING AREA #2` · `FEEDING AREA 2.` · `FEEDING` / `FEEDING AREA`
+ * A numberless label keeps the pre-existing behaviour: raw label + "needs manual mapping".
+ *
+ * DELIBERATELY STILL REJECTED — the anchor is a leading `FEEDING`, and after the optional
+ * `AREA`/`NO`/`#` designator only DIGITS may follow:
+ *   `FEEDING AREA A` (a letter is not an area number — stays an unmapped label a human
+ *   reads), `FEEDING AREA 1 AND 2` (two areas is not one batch), `RE-FEEDING 1` (does not
+ *   start with FEEDING — `REFEED` is its own batch family, e.g. `MARCH-26-REFEED1`),
+ *   `FEEDINGS 2`, and anything else that merely contains the word.
+ */
+const FEEDING_AREA_RE = /^FEEDING(?:\s*(?:AREA|NO))?\s*[#.:-]?\s*(\d*)\s*\.?$/i;
 
 // ---------------------------------------------------------------------------
 // Row type
@@ -169,7 +190,8 @@ export function translateBatchCode(
 
   const label = operatorLabel.trim();
 
-  // Rule (source-first): FEEDING AREA N → "<MMM>-<YY>-FEED<N>".
+  // Rule (source-first): a FEEDING label (`FEEDING AREA N` / `FEEDING # N` / …)
+  // → "<MMM>-<YY>-FEED<N>". ONE output shape for every accepted spelling.
   const mFeed = FEEDING_AREA_RE.exec(label);
   if (mFeed) {
     const feedNum = mFeed[1];
@@ -184,7 +206,7 @@ export function translateBatchCode(
     return [
       label,
       [
-        `FEEDING AREA label '${label}' could not be auto-numbered ` +
+        `FEEDING label '${label}' could not be auto-numbered ` +
           `(missing area number or delivery date). Needs manual mapping.`,
       ],
     ];

@@ -127,7 +127,20 @@ PILED_REMARK_RE = re.compile(
 
 # Operator label patterns
 OPERATOR_B_LABEL_RE = re.compile(r"^B0?(\d{1,3})$", re.IGNORECASE)
-FEEDING_AREA_RE = re.compile(r"^FEEDING\s+AREA\s*(\d*)$", re.IGNORECASE)
+# A FEEDING-area label in the operator's Block column (column D).
+#
+# WIDENED 2026-08-13 (L-042). It used to be r"^FEEDING\s+AREA\s*(\d*)$", which matched the
+# spelling the SHEET uses and NOT the one MC actually types. She writes "FEEDING # 1", so the
+# label fell through to the raw-value branch: truthy (so it passed the malformed guard), not
+# pattern-valid (so it never auto-created), and therefore held on EVERY run forever.
+#
+# ACCEPTED (all produce EXACTLY what "FEEDING AREA <N>" produces today):
+#   FEEDING AREA 2 / FEEDING # 2 / FEEDING #2 / FEEDING NO. 2 / FEEDING NO 2 / FEEDING 2 /
+#   FEEDING AREA #2 / FEEDING AREA 2. / bare FEEDING (numberless -> raw label + warning).
+# STILL REJECTED: FEEDING AREA A, FEEDING AREA 1 AND 2, RE-FEEDING 1, FEEDINGS 2.
+#
+# MUST stay byte-equivalent to workers/sync/src/reports/deliveries/extract.ts.
+FEEDING_AREA_RE = re.compile(r"^FEEDING(?:\s*(?:AREA|NO))?\s*[#.:-]?\s*(\d*)\s*\.?$", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +258,8 @@ def translate_batch_code(
 
     label = operator_label.strip()
 
-    # Rule 3: FEEDING AREA N -> "<MMM>-<YY>-FEED<N>" (month from delivery_date)
+    # Rule 3: a FEEDING label (FEEDING AREA N / FEEDING # N / ...) ->
+    # "<MMM>-<YY>-FEED<N>" (month from delivery_date). ONE output shape for every spelling.
     m_feed = FEEDING_AREA_RE.match(label)
     if m_feed:
         feed_num = m_feed.group(1)
@@ -259,7 +273,7 @@ def translate_batch_code(
                 pass
         # No number or no date — return raw with warning so user can review
         return label, [
-            f"FEEDING AREA label '{label}' could not be auto-numbered "
+            f"FEEDING label '{label}' could not be auto-numbered "
             f"(missing area number or delivery date). Needs manual mapping."
         ]
 
