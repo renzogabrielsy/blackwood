@@ -14,8 +14,9 @@ import {
   ListChecks,
   FileText,
 } from "lucide-react";
+import { planSendOutSet } from "@/lib/shipments/requirements";
 import { getShipment } from "@/lib/shipments/trello";
-import type { ShipmentDetail } from "@/lib/shipments/types";
+import type { ClassifiedAttachment, ShipmentDetail } from "@/lib/shipments/types";
 import { cn } from "@/lib/utils";
 import { ReadinessChip } from "../readiness-chip";
 import { ShipmentsError } from "../shipments-error";
@@ -66,6 +67,16 @@ export default async function ShipmentDetailPage({
 function ShipmentDetailBody({ detail }: { detail: ShipmentDetail }) {
   const { readiness } = detail;
 
+  // The send-out set, planned server-side from the SAME predicate the chips below
+  // render from — so the button's count and the ZIP's contents cannot disagree.
+  const plan = planSendOutSet<ClassifiedAttachment>(
+    detail.title,
+    detail.attachments,
+    (a) => a.originalName,
+    (a) => a.bytes != null
+  );
+  const inSetIds = new Set(plan.selected.map((s) => s.item.id));
+
   return (
     <>
       {/* Header — title + download */}
@@ -111,14 +122,52 @@ function ShipmentDetailBody({ detail }: { detail: ShipmentDetail }) {
       {/* Customer send-out set — present / missing */}
       {readiness.hasRequirementSet ? (
         <section className="rounded-lg border border-border bg-card/95 p-4 backdrop-blur">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {readiness.customer} send-out set
-            </h2>
-            <span className="text-[11px] font-mono tabular-nums text-muted-foreground">
-              {readiness.required.length - readiness.missing.length}/{readiness.required.length} present
-            </span>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {readiness.customer} send-out set
+              </h2>
+              <span className="text-[11px] font-mono tabular-nums text-muted-foreground">
+                {readiness.required.length - readiness.missing.length}/{readiness.required.length} present
+              </span>
+            </div>
+
+            {/* The set download — the common action, so it sits on the card he was
+                looking at, at the same weight as the header's "Download all as ZIP". */}
+            {plan.selected.length > 0 ? (
+              <a
+                href={`/shipments/${detail.cardId}/download?set=sendout`}
+                title={
+                  plan.complete
+                    ? `Download the ${plan.totalCount} ${readiness.customer} send-out documents as a ZIP`
+                    : `Download the ${plan.presentCount} of ${plan.totalCount} send-out documents present — missing: ${plan.absent.join(", ")}`
+                }
+                className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3.5 text-xs font-semibold text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
+              >
+                <Download className="h-4 w-4" />
+                Download send-out set
+                <span className="font-mono tabular-nums opacity-80">
+                  {plan.complete ? `· ${plan.totalCount} docs` : `· ${plan.presentCount} of ${plan.totalCount}`}
+                </span>
+              </a>
+            ) : (
+              <span
+                aria-disabled="true"
+                title={`None of the ${plan.totalCount} required documents are attached as files yet.`}
+                className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-md border border-dashed border-border px-3.5 text-xs font-medium text-muted-foreground/60"
+              >
+                <Download className="h-4 w-4" />
+                Nothing in the set yet
+              </span>
+            )}
           </div>
+
+          {!plan.complete && plan.selected.length > 0 && (
+            <p className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+              The set download is a <span className="font-semibold">partial {plan.presentCount} of {plan.totalCount}</span> —
+              its filename says so and it carries a note listing what is missing.
+            </p>
+          )}
           <ul className="grid gap-1.5 sm:grid-cols-2">
             {readiness.required.map((doc) => {
               const present = !readiness.missing.includes(doc);
@@ -150,6 +199,12 @@ function ShipmentDetailBody({ detail }: { detail: ShipmentDetail }) {
         <section className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
           Customer{readiness.customer ? ` "${readiness.customer}"` : ""} has no configured send-out doc set —
           readiness cannot be scored. Attachments are still listed below.
+          {/* No set means no way to know which docs the customer gets, so the set
+              download is stated as unavailable rather than offered as an empty ZIP. */}
+          <span className="mt-1 block text-muted-foreground/70">
+            The send-out set download is unavailable for this shipment. Use{" "}
+            <span className="font-medium">Download all as ZIP</span> above and pick the files by hand.
+          </span>
         </section>
       )}
 
@@ -186,11 +241,22 @@ function ShipmentDetailBody({ detail }: { detail: ShipmentDetail }) {
                       </span>
                     </td>
                     <td className="px-3 py-1.5">
-                      {a.docType ? (
-                        <span className="text-muted-foreground">{a.docType}</span>
-                      ) : (
-                        <span className="text-muted-foreground/50">{a.kind}</span>
-                      )}
+                      <span className="flex items-center gap-1.5">
+                        {a.docType ? (
+                          <span className="truncate text-muted-foreground">{a.docType}</span>
+                        ) : (
+                          <span className="truncate text-muted-foreground/50">{a.kind}</span>
+                        )}
+                        {/* Which rows the set download will actually take. */}
+                        {inSetIds.has(a.id) && (
+                          <span
+                            title={`Included in the ${readiness.customer} send-out set`}
+                            className="shrink-0 rounded-sm border border-emerald-500/30 bg-emerald-500/10 px-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400"
+                          >
+                            set
+                          </span>
+                        )}
+                      </span>
                     </td>
                     <td className="px-3 py-1.5">
                       <span className="block truncate text-muted-foreground/70" title={a.originalName}>
