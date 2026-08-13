@@ -770,3 +770,34 @@ the brief asked for the confirmation explicitly.
   origin main` and `git push origin main` with explicit remote+branch. A missing tracking line on
   `main` is normal here, not evidence of a failed push; prove the push from its own
   `26a75e1..43a66f8` output.
+
+### Promotion 49 (2026-08-13, `5369fa6` → `d6c69da`) — TWENTIETH consecutive clean `git add .`
+
+`fix(sync): understand the operator's FEEDING # N shorthand` — the `FEEDING_AREA_RE` widening,
+a new `lib/batchCodeAlias.ts` so the widening did not trade a held case for a spurious one, and a
+new soft `awaiting_batch_assignment` class. 21 files / +1633/−19, **12 of them under
+`workers/sync/**`** ⇒ Fly deploy outstanding (see [[deploy-targets]]).
+
+- **The piped-pull trap from 48 was avoided by construction:** every network call ran as its own
+  UNPIPED Bash invocation with `> log 2>&1; echo "EXIT=$?"` — `fetch` (twice), `checkout`, `pull
+  --ff-only`, `merge`, both pushes. Six separate calls instead of one `&&` chain is the cost of the
+  gate actually working; pay it. First fetch and the pre-merge `pull --ff-only` both exit 0,
+  `origin/main` read `43a66f8` before AND after, so nothing was stale.
+- Gates all re-run firsthand, none taken on faith: root `npx tsc --noEmit` **0**, worker `npx tsc
+  --noEmit -p workers/sync/tsconfig.json` **0**, `npm test` **789 passed / 51 files** (the brief's
+  772 → 789 delta, confirmed), `npm run parity` **clean / 12 cases**, `npm run verify:container-build`
+  **OK** (bundle 579 KB — note it drifts run to run, 568 KB at promotion 46; the OK line is the gate,
+  not the byte count), `npx tsx scripts/verify-awaiting-batch-assignment-fold.ts` **"All 8 … passed"**.
+  Root `npm run build` waived per promotion 30.
+- **A brief claiming a file is "byte-unchanged" is checkable in one command** — here
+  `workers/sync/test/parity/expected-deviations.json`. `git status --porcelain -- <path>` printing
+  nothing IS the proof, but only once you have found the REAL path (`find … -name` first; my two
+  guessed paths also printed nothing, which proves nothing). Same family as the empty-`$PIPESTATUS`
+  silent green.
+- Merge stat read **23 files / +1669** against the commit's own 21 / +1633: the 2 extra
+  (+36 = 2 + 34) are `.claude/agent-memory/git-branch-guardian/**` from the pre-existing `f08f16a`
+  `chore(memory)` commit riding along for the **nineteenth** time. 1633 + 36 = 1669 exactly.
+- Gates clean (merge-base tree diff empty, `merge-tree --write-tree` bare OID `89ec1a7` exit 0 run
+  after committing, merge exit 0 via `ort`, `git ls-files --unmerged` empty, post-merge `git diff
+  --stat main <feat>` empty, old main tip `43a66f8` still an ancestor, `git ls-remote` confirming
+  `main=d6c69da` / `feat=5369fa6`): **36 consecutive clean promotions.**
