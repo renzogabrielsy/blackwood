@@ -169,7 +169,50 @@ export interface TableChromeRowApi<Row, Ctx> {
     colCount: number;
 }
 
+/**
+ * The three things a surface OUTSIDE the grid has to be able to DO to it, as opposed to
+ * merely react to (`onStateChange` / `onSelectionChange` cover that half).
+ *
+ * Both of the gestures behind it are ones a consumer cannot express any other way:
+ *
+ *   • **"Go to row N"** — a link from a popover, a duplicate-peer jump, a search result.
+ *     It has to move the caret AND scroll AND take focus, and every one of those lives
+ *     inside this component.
+ *   • **Giving the caret back after a dialog closes.** Radix restores focus to the
+ *     TRIGGER, and a context-menu item has already unmounted by then — so focus lands on
+ *     `<body>` and the next keystroke goes nowhere. `onCloseAutoFocus={e => {
+ *     e.preventDefault(); api.current?.focus(); }}` is the fix, and it needs the grid's
+ *     own sink, which no consumer holds a ref to.
+ *
+ * **Addressed by ROW ID, never by a nav-row index.** The consumer builds `items` but does
+ * NOT own `navRows` — that axis is resolved inside `useTableRows`, and a consumer
+ * computing an index from `items` would be a second definition of the row axis, which is
+ * precisely the drift this module exists to prevent. `placeById` already answers it.
+ */
+export interface BlackwoodTableApi {
+    /** Put focus where the grid hears BOTH a keydown and a paste. Always `preventScroll`. */
+    focus(): void;
+    /**
+     * Move the caret onto a row, scroll it into view, and take focus — the whole of
+     * "go to row N". `colKey` picks the lane; omitted, the caret keeps the column it is
+     * on when that row has one, else the first column the row occupies.
+     *
+     * Returns false when the row is not in the loaded window, so a caller can say so
+     * rather than appearing to do nothing.
+     */
+    goToRow(rowId: string, colKey?: string): boolean;
+    /** Scroll a row into view WITHOUT moving the caret. False ⇒ not in the window. */
+    scrollToRow(rowId: string): boolean;
+    /** The caret, imperatively. Null clears it. */
+    setActiveCell(cell: CellAddress | null): void;
+}
+
 export interface BlackwoodTableProps<Row, Ctx> {
+    /**
+     * The imperative half of the surface — see `BlackwoodTableApi`. Purely additive: a
+     * consumer that omits it behaves exactly as before.
+     */
+    apiRef?: React.Ref<BlackwoodTableApi>;
     /** Already FLAT — records, their children, drafts and chrome rows, in render order. */
     items: readonly GridRow<Row>[];
     kinds: ReadonlyMap<string, RowKind<Row>>;
@@ -400,6 +443,7 @@ function DefaultCellEditor({
 
 export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     const {
+        apiRef,
         items, kinds, specs, ctx, settings, onSettingsChange, edits, storedText, scope,
         rowKey, renderEditor: renderEditorProp, renderChromeRow, summaryRows, drafts,
         onAddDrafts, onRemoveDrafts, onRestoreDrafts, draftKind = 'draft', childKinds,
@@ -519,12 +563,56 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     // `use-table-interaction.ts`.
     const {
         activeCell, isEditing, rowHandlers, editorInitialText, setEditorText, commitEdit,
+        setActiveCell, scrollTo, scrollToCol, focus: focusGrid,
     } = interaction;
     const { bandFor, selectColumn, range: selectionRange } = interaction.selection;
 
     React.useEffect(() => {
         onStateChange?.({ activeCell, isEditing, selection: selectionRange });
     }, [onStateChange, activeCell, isEditing, selectionRange]);
+
+    // ── The imperative surface ───────────────────────────────────────────────────
+    //
+    // Everything here is expressed over `rows.placeById` and `rows.cellExists`, i.e. the
+    // ONE resolved row axis — never over an index the caller computed from `items`, which
+    // would be a second definition of that axis.
+    const activeCol = activeCell?.col ?? 0;
+
+    React.useImperativeHandle(
+        apiRef,
+        (): BlackwoodTableApi => ({
+            focus: focusGrid,
+            setActiveCell,
+            scrollToRow(rowId) {
+                const place = rows.placeById.get(rowId);
+                if (!place) return false;
+                scrollTo(place.navRow);
+                return true;
+            },
+            goToRow(rowId, colKey) {
+                const place = rows.placeById.get(rowId);
+                if (!place) return false;
+                // The lane, in preference order: the one asked for, the one the caret is
+                // already in, then the first this row actually occupies. A row family that
+                // has no cell in the requested column must not leave the caret nowhere.
+                const asked = colKey === undefined ? -1 : cols.findIndex((c) => c.key === colKey);
+                const candidates = [asked, activeCol];
+                let col = candidates.find((c) => c >= 0 && rows.cellExists(place.navRow, c)) ?? -1;
+                if (col < 0) {
+                    for (let c = 0; c < cols.length; c++) {
+                        if (rows.cellExists(place.navRow, c)) { col = c; break; }
+                    }
+                }
+                if (col < 0) return false;
+                setActiveCell({ row: place.navRow, col });
+                scrollTo(place.navRow);
+                scrollToCol(col);
+                focusGrid();
+                return true;
+            },
+        }),
+        [rows, cols, activeCol, focusGrid, setActiveCell, scrollTo, scrollToCol],
+    );
 
     // ── The editor ───────────────────────────────────────────────────────────────
     const renderEditor = React.useCallback(

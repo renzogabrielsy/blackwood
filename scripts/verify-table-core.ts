@@ -931,6 +931,68 @@ check('lib/table is PURE: no React, no Next, no Supabase, no app/ or tenant impo
   }
 })
 
+// ── The imperative seam — "go to row N", and giving the caret back ────────────
+//
+// The third seam a real consumer needs, found the same way the first two were: by a
+// migration that could not express something without it. `onStateChange` /
+// `onSelectionChange` let a surface outside the grid REACT to it; nothing let one ACT on
+// it, and two behaviours the Cenapro ledger must keep are exactly that —
+//
+//   • a duplicate-peer popover's "Go to row N" (move the caret + scroll + take focus),
+//   • `onCloseAutoFocus={() => api.focus()}` on every dialog the grid opens, because Radix
+//     restores focus to a context-menu item that has already unmounted, dropping the caret
+//     on `<body>` where the next keystroke goes nowhere.
+//
+// Both live entirely inside `BlackwoodTable`. Scanned rather than modelled, because what
+// is being asserted is which index space the API speaks — the same class of bug as the
+// `firstItemIndex` rebase, and it cannot be caught by a pure function test.
+
+check('the imperative API is addressed by ROW ID, never by a nav-row index', () => {
+  const src = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('useImperativeHandle'), 'comment-stripping ate the source; this scan would be vacuous')
+
+  // ADDITIVE: a consumer that omits `apiRef` behaves exactly as it did before the seam.
+  assert.match(code, /apiRef\?:\s*React\.Ref<BlackwoodTableApi>/, 'the prop must be optional')
+
+  // Both row-addressed methods take a ROW ID. The consumer builds `items` but does NOT
+  // own `navRows` — that axis is resolved in `useTableRows`, and a consumer computing an
+  // index from `items` would be a second definition of it.
+  assert.match(code, /goToRow\(rowId: string, colKey\?: string\): boolean/)
+  assert.match(code, /scrollToRow\(rowId: string\): boolean/)
+  const handle = code.slice(code.indexOf('React.useImperativeHandle'), code.indexOf('// ── The editor'))
+  assert.ok(handle.length > 300, 'expected the imperative handle body')
+  assert.equal(
+    (handle.match(/rows\.placeById\.get\(rowId\)/g) ?? []).length,
+    2,
+    'both row-addressed methods must resolve through the ONE row axis',
+  )
+  // …and a row outside the loaded window is REPORTED, never a silent no-op.
+  assert.equal((handle.match(/return false;/g) ?? []).length, 3, 'every refusal returns false')
+})
+
+check('goToRow can never park the caret on a cell the row does not occupy', () => {
+  const src = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  const handle = code.slice(code.indexOf('React.useImperativeHandle'), code.indexOf('// ── The editor'))
+  assert.ok(handle.includes('goToRow'), 'this scan would be vacuous')
+
+  // Every candidate lane is tested with `cellExists` — the row family's own answer. A
+  // child row is narrower than its parent, so the column a caller asks for (or the one
+  // the caret happens to be in) may simply not be there.
+  assert.ok(
+    (handle.match(/rows\.cellExists\(place\.navRow,/g) ?? []).length >= 2,
+    'the asked-for lane AND the fallback sweep must both go through cellExists',
+  )
+  // The caret is only moved once a lane has been found.
+  const set = handle.indexOf('setActiveCell({ row: place.navRow, col })')
+  const guard = handle.indexOf('if (col < 0) return false;')
+  assert.ok(guard > 0 && guard < set, 'the "no lane" refusal must come BEFORE the caret moves')
+  // And the whole gesture is what "go to row N" means — not merely a scroll.
+  assert.ok(set < handle.indexOf('scrollTo(place.navRow);\n                scrollToCol(col);'))
+  assert.match(handle, /focusGrid\(\);\s*\n\s*return true;/, 'it must take focus, or the next keystroke goes nowhere')
+})
+
 check('the REACT half is tenant-neutral too: no app/ imports, no domain vocabulary', () => {
   // The pure core's scan above also refuses React. This one cannot — these files ARE
   // React — so it enforces the half of the layer rule that still applies: **platform code

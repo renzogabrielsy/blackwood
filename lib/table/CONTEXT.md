@@ -32,7 +32,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `grouping.ts` | `needsGroupSpacer`. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **32 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver, the chrome row, the pager's index base — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **34 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver, the chrome row, the pager's index base — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -156,6 +156,37 @@ with the data was inexpressible. `renderChromeRow(item, api)` fills that seam:
   column stays OPAQUE** — a solid token, never glass, or the scrolling rows bleed through.
 - Must be referentially stable (`useCallback`): it is a dependency of every row's content.
 
+### `apiRef` — the seam for ACTING on the grid, not merely reacting to it
+
+`onStateChange` and `onSelectionChange` let a surface outside the grid **react**; nothing
+let one **act**. Two behaviours a real consumer cannot express without that, and both live
+entirely inside `BlackwoodTable`:
+
+- **"Go to row N"** — a duplicate-peer popover, a search hit, a link from a summary. It is
+  three things at once (move the caret · scroll the row into view · take focus), and every
+  one of them is internal.
+- **Giving the caret back when a dialog closes.** Radix restores focus to the TRIGGER, and
+  a context-menu item has already unmounted by then — so focus lands on `<body>` and the
+  next keystroke goes nowhere. The fix is
+  `onCloseAutoFocus={e => { e.preventDefault(); api.current?.focus(); }}`, which needs the
+  grid's own paste sink, and no consumer holds a ref to it.
+
+`BlackwoodTableApi` is `focus` · `goToRow(rowId, colKey?)` · `scrollToRow(rowId)` ·
+`setActiveCell`. Three rules, each asserted:
+
+- **Addressed by ROW ID, never by a nav-row index.** The consumer builds `items` but does
+  NOT own `navRows` — that axis is resolved inside `useTableRows`, and a consumer deriving
+  an index from `items` would be a second definition of it. `placeById` already answers it.
+  (Same class of bug as the `firstItemIndex` rebase: the wrong index space, silently.)
+- **`goToRow` can never park the caret on a cell the row does not occupy.** The lane is the
+  one asked for, else the one the caret is already in, else the first this row occupies —
+  every candidate tested through `rows.cellExists`, because a child row is narrower than
+  its parent. No lane ⇒ it refuses rather than moving the caret nowhere.
+- **A row outside the loaded window returns `false`,** so a caller can say so instead of
+  appearing to do nothing.
+
+Purely additive: a consumer that omits `apiRef` behaves exactly as it did before it existed.
+
 ### The jump keys read two probes, never the DOM
 
 `edgeJump` implements Sheets' actual rule (run to the end of a block · skip a gap from a
@@ -179,14 +210,17 @@ was behaviour-preserving.
 mounts it on an in-memory data source, and **33 Playwright specs drive the real component**
 with no login and no database. See the two sections at the end of this file.
 
-**Two additive seams were added afterwards** (2026-08-17), both found by a migration attempt
-that correctly refused to proceed without them: **`firstItemIndex`** (a bidirectional keyset
-pager needs the virtualiser's public index base) and **`renderChromeRow`** (a group heading
-or per-group rule-off inside the BODY, which `summaryRows` reaches only in the footer).
-Purely additive — a consumer that passes neither behaves exactly as before.
+**Three additive seams were added afterwards** (2026-08-17), each found by a migration
+attempt that correctly refused to proceed without it: **`firstItemIndex`** (a bidirectional
+keyset pager needs the virtualiser's public index base), **`renderChromeRow`** (a group
+heading or per-group rule-off inside the BODY, which `summaryRows` reaches only in the
+footer), and **`apiRef` / `BlackwoodTableApi`** (the imperative half — "go to row N", and
+handing the caret back after a dialog closes; see the section above). Purely additive — a
+consumer that passes none of them behaves exactly as before.
 
 **Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — has NOT started.**
-Nothing under `app/(app)/**` was touched.
+Nothing under `app/(app)/**` was touched. The seam inventory above is the state of what a
+migration can now express; the migration itself is still to be done.
 
 **The alias layer in the Cenapro module is temporary.** `frozenOffsets` / `frozenBlockWidth`
 / its `DragScrollInput` / its `UnsavedWork` exist so the extraction changed nothing; they

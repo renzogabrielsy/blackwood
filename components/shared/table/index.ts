@@ -8,6 +8,7 @@
 
 export { BlackwoodTable } from './BlackwoodTable';
 export type {
+    BlackwoodTableApi,
     BlackwoodTableProps,
     TableEditorArgs,
     TableSummaryRow,
