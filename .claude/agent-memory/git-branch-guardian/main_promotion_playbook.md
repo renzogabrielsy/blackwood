@@ -878,3 +878,24 @@ at once; do NOT cherry-pick the stranded commit across.
 - No `chore(memory)` commit rode along this time (the branch's memory commit `c8b4b93` was already
   in the promoted range), so the merge stat matched the branch diff exactly — 23 files both ways.
   **38 consecutive clean promotions.**
+
+### A DEV-ONLY ROUTE on a feature branch is a promotion-time question, not a commit-time one
+
+2026-08-17, `9f5bb71` on `feat/universal-table` (commit-only brief, no merge). Stage 1C added
+**`app/dev/table-playground/`** — a public, unauthenticated page so Playwright can drive the shared
+grid with no login and no Supabase — plus the first `middleware.ts` change this branch has carried.
+Committing it is safe; **promoting it is the moment to re-check it**, because merging this branch to
+`main` ships that route to the live Vercel app.
+
+- **Its safety is two INDEPENDENT locks, and either alone suffices.** The page calls `notFound()`
+  when `NODE_ENV === 'production' && !process.env.TABLE_PLAYGROUND`; middleware only pushes
+  `/dev/table-playground` onto `PUBLIC_PATHS` under the negation of the same condition. So the env
+  var `TABLE_PLAYGROUND` must be **absent from Vercel production** for the route to stay dark —
+  that is the one external fact a promotion of this branch should state, since it lives in the Vercel
+  dashboard and nothing in the repo can prove it.
+- **How to verify an auth-boundary diff is additive, in one command:** `git diff --numstat -- middleware.ts`
+  → `15 0 middleware.ts`. A zero in the deletions column is the proof that no existing guard was
+  removed; reading the hunk alone can miss a guard silently relocated. Do this on ANY changeset
+  touching `middleware.ts`, `lib/auth.ts`, or an RLS migration, and quote the numstat in the report.
+- The brief asked for exactly this check. Treat "confirm the diff only ADDS X and removes no guard"
+  as a standing instruction for auth-boundary files even when a brief does not spell it out.

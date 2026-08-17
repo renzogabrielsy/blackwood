@@ -50,3 +50,25 @@ Scan pattern: `grep -nE '/Users/|/home/|/private/tmp/|sk-|eyJ|API_KEY|SERVICE_RO
 - **The other session's pending edits to the SHARED guardian memory** (`main_promotion_playbook.md`, `concurrent_session_promotions.md`) are the one exception to "`.claude/agent-memory/` stays staged". They record ITS promotions and it commits them itself as `chore(memory): record Nth promotion …`; it may append another before it's done. Unstage, leave on disk, say so.
 - **Record your own learning in a file the other session is NOT holding** (here: this file) so it can ship in your own `chore(memory)` commit instead of getting entangled in theirs. Check mtimes + `git status` before choosing which memory file to write.
 - **A shared docs file mixing both sessions' prose** (`app/(app)/cenapro/CONTEXT.md`) is safe to commit WHOLE on a feature branch — the QC hunks documented already-shipped code (`f121671`), so committing them catches the doc up rather than shipping unfinished work. That's the opposite call from a `main` promotion, where the blast radius is production. Note the bleed in the commit body.
+
+## A recurring BENIGN secret-scan hit: the table playground's `secret` column
+
+`app/dev/table-playground/playground-grid.tsx` (2026-08-17, `9f5bb71`) defines a fixture column
+literally named **`secret`** — a template-literal value `s0`/`s1`/…, label `'SECRET'`, a `data-testid="toggle-secret"`
+checkbox — because it exists to exercise the column-visibility predicate `visible: (ctx) => ctx.showSecret`.
+So the standard scan pattern lands 4+ hits on `secret` in that one file, forever, on every commit that
+touches the playground. Values are `s0`, `s1`, `s2`… Read the match; do not flag it.
+
+Same lesson as the `token` false positive above: **the scan matches NAMES, and a grid demo needs a
+column named after the thing it demonstrates.** Judge a hit by what the value IS, never by the identifier.
+
+## Playwright: `e2e/` and `playwright.config.ts` ARE source; `test-results/` is not
+
+Since 2026-08-17 `.gitignore` carries `/test-results/`, `/playwright-report/`, `/blob-report/`,
+`/playwright/.cache/`. `test-results/` will therefore sit on disk after any local run and `git add .`
+correctly skips it — but a bare `git status --short` does not show it at all, so "I didn't see it"
+is not proof. **Prove it positively:** `git status --short --ignored=matching --untracked-files=all | grep -iE 'test-results|playwright-report'`
+→ a `!!` prefix means ignored (good); then re-confirm post-staging with
+`git diff --staged --name-only | grep -iE 'test-results|playwright-report'` returning nothing.
+`package-lock.json` moving by ~65 lines with only `@playwright/test`, `playwright`, `playwright-core`
+and `fsevents` added is the expected shape of adding that devDependency.
