@@ -391,7 +391,7 @@ check('a column hidden UNDER the frozen block clears it — not merely reaches l
   // The generalised claim: whatever the target, it ends up clear of the pinned columns.
   for (let c = 0; c < cols.length; c++) {
     const n = columnScrollLeft({ col: c, cols, scrollLeft: total - VIEW, clientWidth: VIEW, scrollWidth: total })
-    if (n === null || cols[c].frozen) continue
+    if (n === null || cols[c].pin) continue
     assert.ok(off[c] >= n + frozen, `${cols[c].key} would sit under the frozen block`)
   }
 })
@@ -423,7 +423,7 @@ check('a left-to-right Tab run scrolls forwards only, and never overshoots a vis
       scrollLeft = n
       moves++
     }
-    if (cols[col].frozen) continue
+    if (cols[col].pin) continue
     // Whatever happened, the column the caret is on is now fully visible and clear of
     // the pinned block — which is the only claim the operator can actually see.
     assert.ok(off[col] >= scrollLeft + frozen, `${cols[col].key} left edge`)
@@ -643,8 +643,8 @@ check('the frozen corner spans EXACTLY the pinned block, never a column further'
     // never disagree about where the pinned block ends.
     assert.equal(s.frozen, frozenOffsets(cols).length)
     assert.deepEqual(cols.slice(0, s.frozen).map((c) => c.key), ['num', 'date', 'truck', 'supplier'])
-    assert.ok(cols.slice(0, s.frozen).every((c) => c.frozen))
-    assert.ok(!cols[s.frozen].frozen, 'the corner must stop at the first scrolling column')
+    assert.ok(cols.slice(0, s.frozen).every((c) => c.pin === 'start'))
+    assert.ok(!cols[s.frozen].pin, 'the corner must stop at the first scrolling column')
     // …and its WIDTH is the same 424px the horizontal caret-follow subtracts. One number,
     // two uses — an overhanging corner would sit over scrolling cells.
     assert.equal(cols.slice(0, s.frozen).reduce((w, c) => w + c.width, 0), frozenBlockWidth(cols))
