@@ -35,7 +35,8 @@ the receipt side"** below.
 
 | File | Role |
 |---|---|
-| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
+| `deliveries-grid-v2.tsx` | **Client — the Stage 1D rewire, built BESIDE the live ledger.** The same screen rendered through the platform's **`BlackwoodTable`** (`components/shared/table/`), reachable only at `?grid=v2`. See "The `?grid=v2` rewire" below for what it does and does not do yet. |
+| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Also picks between the two grids on `?grid=v2` (defaulting to `DeliveriesLedger`), with an IDENTICAL prop set in both branches. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
 | `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; **`PRICE_FIELDS` + `stripPrices()` + `redactAuditJson()`** (the ONE ₱ boundary — one list, two consumers: named fields on a row shape, and keys inside the audit trail's jsonb); **the audit vocabulary** (`RcDeliveryAuditRow`, `DeliveryHistoryEntry`, `AUDIT_TRAIL_START`, `readAuditChanges` / `auditColumnLabel` / `formatAuditValue` / `auditHeadline` / `auditSnapshotColumns`); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, **`getDeliveryHistory`** (one receipt's audit trail, ₱-redacted server-side), `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
@@ -928,6 +929,43 @@ shift+arrow started their selections at (0,0) too. No behaviour that any of them
 want is changed — a ref that agrees with state sooner is strictly more correct.
 `lib/hooks/use-grid-keyboard-nav.ts`, `use-grid-paste.ts` and `use-clipboard-copy.ts` were
 **NOT** touched; the other grids keep using the latter two verbatim.
+
+### The `?grid=v2` rewire — built BESIDE the ledger, not in place of it (2026-08-17)
+
+Stage 1D of the universal-table migration. `deliveries-grid-v2.tsx` renders this same
+screen through the platform's `BlackwoodTable`; `deliveries-ledger.tsx` stays the
+production path and **is not edited by one character** while both are alive. The method,
+and why the earlier atomic attempts could never land, is in
+`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`.
+
+- **`page.tsx` picks on `?grid=v2`, defaulting to the OLD grid.** Both branches hand the
+  two components the identical prop set — v2 imports `DeliveriesLedgerProps` from the
+  ledger rather than re-declaring it, so the two can never drift — and both read the same
+  server data. No action, RPC or query changes with the flag.
+- **`?grid=v2` joins `axesKey(...)`** (`ledger-url.ts`, `parseGrid` / `GRID_V2`) so a
+  switch REMOUNTS rather than reconciling one component's tree into the other's. The field
+  is optional and contributes nothing when absent, so every existing key is unchanged.
+- **The column table is TRANSLATED, never re-declared.** The specs are built from
+  `buildColumns(canViewPrices)`, so `types.ts` stays the ONE definition of the order, the
+  widths, the pinned block, the summary lanes, the filter grammar and — critically — which
+  columns are money. The module's `visible: (ctx) => …` seam is the more idiomatic
+  spelling, but using it here would create a SECOND definition of the price boundary.
+- **Slice 1 (2026-08-17) is READ-ONLY.** Column specs, row families, the flatten (day
+  heading, `Σ DAY TOTAL`, the endless day spacer, the sticky month footer) and the render,
+  in both scopes. **Not built yet:** editing, save, the toolbar, filter popovers, the row
+  context menu, the dialogs, and the blank draft rows. `ctx.canEdit` is FALSE and every
+  editable column ANDs its own rule with it, so nothing can be typed into — one switch, not
+  fifteen omissions. The duplicate and import-flag POPOVERS are rendered as `title` text
+  instead: same facts, nothing pretending to be a button.
+- **Two known divergences from the ledger, both structural.** (1) `occupies()` answers both
+  *"does the caret have a coordinate here"* and *"does this row render content here"*, and
+  `#` / `TTL PRICE` / `PAID?` need those answers to differ — they carry content but the old
+  grid's caret never lands on them. v2 marks them occupied so they RENDER, which lets the
+  caret and a Tab run visit them (they stay unselectable, so no total can include them).
+  (2) The pager's `firstItemIndex` is corrected **at the call site** with
+  `shiftFirstItemIndex`, measured as "items above a fixed anchor row" —
+  `use-deliveries-window.ts` decrements by RECORDS while the flat array grows by more
+  (draws, spacers), which is the pre-existing approximation noted under "The day spacer".
 
 ### Two scopes (`?scope=endless|focus`)
 

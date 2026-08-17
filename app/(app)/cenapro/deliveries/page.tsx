@@ -8,13 +8,16 @@ import {
 import { fetchPaymentDimensions } from '../liquidation/actions';
 import { isPrivileged } from '@/lib/auth';
 import { DeliveriesLedger } from './deliveries-ledger';
+import { DeliveriesGridV2 } from './deliveries-grid-v2';
 import {
     axesKey,
     parseColumnFilters,
+    parseGrid,
     parseIssueLens,
     parseQuery,
     parseScope,
     resolvePeriod,
+    GRID_V2,
 } from './ledger-url';
 
 // ─────────────────────────────────────────────────────────────────────────────────
@@ -52,6 +55,24 @@ export default async function CenaproDeliveriesPage({
     // rather than honoured — a filter is never a price oracle.
     const filters = parseColumnFilters(params);
 
+    // ── WHICH GRID (`?grid=v2`) ──────────────────────────────────────────────────
+    //
+    // Stage 1D of the universal-table migration is built BESIDE the live ledger, not in
+    // place of it (the strangler-fig method — see
+    // `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`).
+    // `DeliveriesGridV2` is the same screen rendered through `BlackwoodTable`, and it is
+    // reachable ONLY on request: the default, and every existing link, still gets
+    // `DeliveriesLedger`.
+    //
+    // Both branches below hand the two components the IDENTICAL prop set — v2 imports
+    // `DeliveriesLedgerProps` rather than re-declaring it — and both read the same server
+    // data. No action, RPC or query changes with the flag; it decides only which component
+    // renders the payload. It joins `axesKey` so a switch remounts cleanly.
+    //
+    // Temporary: at cutover this param and the old ledger go together.
+    const grid = parseGrid(params.grid);
+    const v2 = grid === GRID_V2;
+
     // The month index, the two dimension lists and the payment pickers are independent of
     // each other and of the row read — one round trip, not four in series.
     //
@@ -85,32 +106,35 @@ export default async function CenaproDeliveriesPage({
     // The axes fingerprint keys the client so a scope/lens/search change remounts with
     // the server-prefetched window for the NEW axes — one deterministic seeding path,
     // and it resets react-virtuoso's `firstItemIndex` by construction (no scroll jump).
-    const key = axesKey({ scope, period, issue, query, filters });
+    const key = axesKey({ scope, period, issue, query, filters, grid });
 
     if (scope === 'focus') {
         const month = period
             ? await fetchDeliveryMonth(period, issue, query, filters)
             : { records: [], canViewPrices: false, error: undefined };
 
-        return (
-            <DeliveriesLedger
-                key={key}
-                scope="focus"
-                initialPage={null}
-                monthRecords={month.records}
-                anchor={anchor}
-                period={period}
-                monthKeys={monthKeys}
-                issue={issue}
-                query={query}
-                filters={filters}
-                dimensions={dimensions}
-                canViewPrices={month.canViewPrices}
-                canDelete={canDelete}
-                paymentSuppliers={payment.suppliers}
-                paymentAccounts={payment.accounts}
-                loadError={month.error ?? months.error ?? dimensions.error ?? null}
-            />
+        const focusProps = {
+            scope: 'focus' as const,
+            initialPage: null,
+            monthRecords: month.records,
+            anchor,
+            period,
+            monthKeys,
+            issue,
+            query,
+            filters,
+            dimensions,
+            canViewPrices: month.canViewPrices,
+            canDelete,
+            paymentSuppliers: payment.suppliers,
+            paymentAccounts: payment.accounts,
+            loadError: month.error ?? months.error ?? dimensions.error ?? null,
+        };
+
+        return v2 ? (
+            <DeliveriesGridV2 key={key} {...focusProps} />
+        ) : (
+            <DeliveriesLedger key={key} {...focusProps} />
         );
     }
 
@@ -124,30 +148,33 @@ export default async function CenaproDeliveriesPage({
         filters,
     });
 
-    return (
-        <DeliveriesLedger
-            key={key}
-            scope="endless"
-            initialPage={{
-                records: page.records,
-                hasOlder: page.hasOlder,
-                hasNewer: page.hasNewer,
-                totalCount: page.totalCount ?? null,
-                notice: page.notice,
-            }}
-            monthRecords={null}
-            anchor={{ kind: 'latest' }}
-            period={period}
-            monthKeys={monthKeys}
-            issue={issue}
-            query={query}
-            filters={filters}
-            dimensions={dimensions}
-            canViewPrices={page.canViewPrices}
-            canDelete={canDelete}
-            paymentSuppliers={payment.suppliers}
-            paymentAccounts={payment.accounts}
-            loadError={page.error ?? months.error ?? dimensions.error ?? null}
-        />
+    const endlessProps = {
+        scope: 'endless' as const,
+        initialPage: {
+            records: page.records,
+            hasOlder: page.hasOlder,
+            hasNewer: page.hasNewer,
+            totalCount: page.totalCount ?? null,
+            notice: page.notice,
+        },
+        monthRecords: null,
+        anchor: { kind: 'latest' } as const,
+        period,
+        monthKeys,
+        issue,
+        query,
+        filters,
+        dimensions,
+        canViewPrices: page.canViewPrices,
+        canDelete,
+        paymentSuppliers: payment.suppliers,
+        paymentAccounts: payment.accounts,
+        loadError: page.error ?? months.error ?? dimensions.error ?? null,
+    };
+
+    return v2 ? (
+        <DeliveriesGridV2 key={key} {...endlessProps} />
+    ) : (
+        <DeliveriesLedger key={key} {...endlessProps} />
     );
 }

@@ -396,6 +396,26 @@ export interface DeliveryLedgerAxes {
     issue: IssueLens | null;
     query: string;
     filters: ColumnFilters;
+    /**
+     * WHICH GRID renders the axes (`?grid=v2`). Not an axis of the DATA — both grids read
+     * the identical server payload — but it is an axis of the CLIENT: the two components
+     * hold entirely separate state, so switching between them must remount rather than
+     * try to reconcile one's tree into the other's.
+     *
+     * It is OPTIONAL and contributes NOTHING to the key when absent, so every existing
+     * key is byte-identical to what it was before this field existed.
+     *
+     * Temporary, and it goes at cutover with the old ledger — see
+     * `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`.
+     */
+    grid?: string | null;
+}
+
+/** The one recognised value of `?grid=`. Anything else means "the production ledger". */
+export const GRID_V2 = 'v2';
+
+export function parseGrid(raw: string | string[] | null | undefined): string | null {
+    return one(raw) === GRID_V2 ? GRID_V2 : null;
 }
 
 /**
@@ -405,13 +425,17 @@ export interface DeliveryLedgerAxes {
  * the order they were parsed, so the same filters always produce the same key.
  */
 export function axesKey(axes: DeliveryLedgerAxes): string {
-    return [
+    const base = [
         axes.scope,
         axes.period ? periodKey(axes.period) : 'none',
         axes.issue ?? 'all',
         axes.query,
         filtersKey(axes.filters),
     ].join('|');
+    // Appended only when it says something, so the key an existing caller produces is
+    // unchanged. `?grid=v2` therefore remounts cleanly instead of swapping components
+    // under a shared key.
+    return axes.grid ? `${base}|${axes.grid}` : base;
 }
 
 export function filtersKey(filters: ColumnFilters): string {
