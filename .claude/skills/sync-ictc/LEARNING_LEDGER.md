@@ -739,4 +739,83 @@ production in a transaction forced to roll back, leaving zero residue. Full spec
 
 ---
 
+## L-043 — A PRIVILEGED WRITER MASKS A BROKEN UNPRIVILEGED PATH (2026-08-14)
+
+**In-app delivery editing was 100% broken for nine days and nothing in the system noticed**, because
+the only writer that ever exercised the broken path in an automated way was the one holding the keys.
+
+**What happened.** `tr_blackwood_delivery` on `public.deliveries` runs `fn_update_blackwood_state()`,
+which is **SECURITY INVOKER** — so its body executes as whoever wrote the row. Every branch of it
+calls `fn_recompute_batch_state(text)`, which the BUG-017/BUG-018 migration
+(`20260804060000`) granted to **`service_role` only**. So an authenticated user's INSERT / UPDATE /
+DELETE fired a trigger that instantly hit a function they had no rights on:
+
+    ERROR:  permission denied for function fn_recompute_batch_state
+    SQLSTATE: 42501
+
+...and the whole write rolled back. Last successful human delivery edit: **2026-08-04 02:51** — the
+day the helper was created. Renzo hit the error every time from then until 2026-08-14.
+
+**Why nine days.** The sync writes with the **service-role key**, which holds EXECUTE. So the
+privileged path stayed perfectly green the entire time: every run succeeded, no finding fired, no
+gate tripped, no drift appeared, `current_weight` and `avg_cost` stayed correct. **The system's own
+health signals were all being produced by the one actor immune to the bug.** The sole symptom
+anywhere was a human hitting an error toast in the UI — which is to say, the bug's only detector was
+Renzo.
+
+**The lesson, stated generally.** *Whenever a privileged actor and an unprivileged actor exercise the
+same code path, the privileged one's success is not evidence the path works.* A green sync says
+nothing about whether a person can save a row. This is the mirror image of L-041 ("a warning written
+as a comment is not a control"): there the instruction existed but nothing enforced it; here the
+enforcement existed but nothing **tested it as the victim**. A check that runs as an admin cannot
+see a hole that bites exactly one role.
+
+**Three rules that follow.**
+
+1. **A role that can fire a trigger is a CALLING ROLE of everything that trigger reaches.** The
+   project rule is "grant back only the roles that call it" — that rule was applied correctly to an
+   **incomplete list of callers**. The grant was not a deliberate restriction; nobody counted the
+   trigger path. When granting a function, ask which roles reach it *through a trigger*, not only
+   which call it by name.
+2. **Do NOT close this shape with SECURITY DEFINER on the trigger function.** It looks tighter — the
+   helper stays service-role-only and is reachable only through the trigger — but it re-roots the
+   privilege context of **everything the trigger does**, including its writes to `batches`, so that
+   path would run as `postgres` and **bypass RLS**. It trades a narrow, auditable grant on a
+   derive-only function for a permanent RLS-bypassing hole on the main delivery write path. Grant
+   the helper. (Safe to grant precisely because `fn_recompute_batch_state` *derives* everything it
+   writes from the base tables — a client calling it directly can only recompute truth, never inject
+   a value of its own, and `authenticated` already held SELECT on the inputs and UPDATE on `batches`
+   under permissive `(true)` RLS.)
+3. **Prove a fix by assuming the victim's role, not by inspecting the grant.** "The grant exists" is
+   not "the write works". The fix was verified by `SET ROLE authenticated` with a plausible
+   `request.jwt.claims` (so `auth.uid()` was non-null and the human-edit latch behaved as it does in
+   production), running a real UPDATE **and** INSERT **and** DELETE — all three branches call the
+   helper — checking the recomputed `current_weight` / `avg_cost` arithmetic exactly, then rolling
+   the whole thing back and confirming `deliveries` was byte-identical at **1,701 rows**.
+
+**The guard.** `public.fn_audit_trigger_function_grants(p_role)` +
+`scripts/verify-trigger-grants.ts`. For every non-internal trigger on a table the role can write, it
+walks the SECURITY INVOKER call graph out from the trigger function and reports any reachable
+function the role cannot EXECUTE; **zero rows is the passing state**. SECURITY DEFINER callees
+terminate a branch (they re-root privileges to their owner). Edges are word-boundary matched against
+`prosrc` because Postgres records no function→function dependency — it can **over**-report, never
+**under**-report a plain call, and over-reporting is the correct direction here: a false positive
+costs one look, a false negative cost nine days. It was proven against the reconstructed pre-fix
+state (revoke, audit, write, roll back): **1 finding and exit code 1 with the grant off, 0 findings
+with it on**, and the write refused with the exact reported error in the same state. It checks
+`authenticated` and `anon`; **`service_role` is deliberately NOT checked — it is the role whose
+omnipotence caused the blind spot.**
+
+**Sweep result.** DB-wide, across `public` and `cenapro`, `tr_blackwood_delivery` →
+`fn_recompute_batch_state` was the **only** instance. Every RPC the app calls that `authenticated`
+cannot execute (`set_audit_comment`, `write_ingestion_audit`) is called exclusively with the
+service-role `admin` client, which is correct.
+
+**Provenance:** 2026-08-14. Migrations `20260814025344_grant_recompute_batch_state_to_authenticated.sql`
+(the grant — grants only, no body change; `avg_cost` keeps its ONE definition, delivery-weighted over
+priced rows) and `20260814025716_audit_trigger_function_grants_guard.sql` (the guard). No delivery
+data was altered.
+
+---
+
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

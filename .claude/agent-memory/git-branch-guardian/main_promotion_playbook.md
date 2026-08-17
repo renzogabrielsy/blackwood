@@ -801,3 +801,26 @@ new soft `awaiting_batch_assignment` class. 21 files / +1633/−19, **12 of them
   after committing, merge exit 0 via `ort`, `git ls-files --unmerged` empty, post-merge `git diff
   --stat main <feat>` empty, old main tip `43a66f8` still an ancestor, `git ls-remote` confirming
   `main=d6c69da` / `feat=5369fa6`): **36 consecutive clean promotions.**
+
+### Promotion 50 (2026-08-13, `b76def7` → `5f24f23`) — TWENTY-FIRST consecutive clean `git add .`
+
+`feat(shipments): download just the customer send-out set` — `planSendOutSet()` /
+`sendOutZipBaseName()` in `lib/shipments/requirements.ts`, a `?set=sendout` param on the EXISTING
+ZIP route, a set-download button + `SET` row pill, and `scripts/verify-sendout-set.ts`. 5 files /
++660/−21. **Zero files under `workers/sync/**` ⇒ Vercel alone ships it, no Fly deploy** — the first
+promotion in a while where the brief's "no deploy needed" claim was checkable in one command:
+`git diff --name-only <oldmain>..<newmain> | grep -c "^workers/sync/"` → `0`. Use that, not the
+commit's file list, since the promotion range includes any riding-along commits.
+- Network calls unpiped in their own invocations again (`push feat`, `fetch main`, `checkout`,
+  `pull --ff-only`, `merge`, `push main`), each with `echo "EXIT=$?"`. All 0. `origin/main` read
+  `d6c69da` before the merge and the pull said "Already up to date", so nothing was stale.
+- **A brief saying "verified independently just now" is still re-run firsthand** — root
+  `npx tsc --noEmit` **0**, `npx tsx scripts/verify-sendout-set.ts` **"14 checks passed."**,
+  `git diff --quiet main -- middleware.ts` **0**, no bypass/`SKIP_AUTH` token in `middleware.ts`.
+  Root `npm run build` and `npm run lint` waived per promotion 30 (lint baseline unchanged claim
+  taken as-is; it is a baseline, not a gate).
+- Merge stat read **7 files / +693** against the commit's own 5 / +660: the 2 extra (+34, −1) are
+  `.claude/agent-memory/git-branch-guardian/**` from the pre-existing `2ccbae4` `chore(memory)`
+  commit riding along for the **twentieth** time. Expect this every promotion.
+- Gates clean (merge-base tree diff empty, merge exit 0 via `ort`, post-push `main` == `origin/main`
+  at `5f24f23`, feature branch restored): **37 consecutive clean promotions.**
