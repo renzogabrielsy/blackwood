@@ -89,6 +89,16 @@ nothing wires them into call sites yet (Phase 1+ migrates each grid).
   `use-cell-selection.ts`, `use-clipboard-copy.ts`, `use-cell-delete.ts`,
   `use-cell-aggregation.ts`.
 
+### `scripts/` (guards — framework-free, run with `npx tsx`)
+- **`verify-grid-keyboard-nav.ts`** (2026-08-17) — the range branch of
+  `use-grid-keyboard-nav.ts`. A pure MODEL of "which cell does a printable character
+  edit?" (showing the old anchor-vs-active divergence and the new agreement, across
+  every drag direction and `Ctrl/Cmd+A`), plus a SOURCE SCAN asserting the shipped
+  branch contains no `setActiveCell` and no `anchorId()`, that a character still edits
+  `active`, and that the nav and char branches stay symmetric. **6 assertions, must stay
+  green.** Its vacuous-pass guard is anchored on CODE, not a comment — `stripComments`
+  removes the section headers, so a comment anchor would fail on a healthy file.
+
 ## Data
 
 The primitives are **data-agnostic** — they carry no schema knowledge. The contracts:
@@ -141,6 +151,25 @@ The primitives are **data-agnostic** — they carry no schema knowledge. The con
   purely by dragging (the coordinate grids set `activeCell` on a single-cell *click*,
   not on a drag) will not respond to Delete/Copy until some cell has been clicked.
   Consumers needing otherwise must handle those keys before delegating.
+  - **Corollary a consumer can get wrong: never set `activeCell` to `null` just because
+    the clicked cell is read-only.** A cell that is selectable but not editable is still
+    a place the caret may rest — the resolvers only ever test the **target's**
+    addressability, so arrows and Tab resolve correctly *from* one, and `isEditable`
+    already refuses the edit. Nulling it instead makes this hook inert and the whole
+    sheet loses arrows, Escape, Delete and copy until another cell is clicked. That was
+    BUG-023 in the Cenapro deliveries ledger (`setActiveCell(canEdit ? … : null)`).
+- **Typing over a range edits the ACTIVE cell, never the range's anchor (2026-08-17,
+  BUG-022).** The RANGE MODE printable-char branch used to `setActiveCell(range.anchorId())`
+  and then fall through to the char handler, which starts the edit on `active` — the cell
+  captured at the top of `handleKeyDown`, before the move. **`anchorId()` is the geometric
+  TOP-LEFT** (every consumer derives it from `useCellSelection`'s `normalizeRange`, which
+  is `Math.min`/`Math.max`), while `activeCell` is where the **drag started**. They differ
+  on every drag that went up or left, so the typed character went into one cell while the
+  editor mounted on another showing a different value — in **all 8 grids on this hook**.
+  The branch now only calls `range.clear()`, which makes it symmetric with the `NAV_KEYS`
+  branch above it and matches Google Sheets (the active cell of a selection is the drag
+  origin). `anchorId` stays on `GridRangeSlot` — a paste that tiles a block over a
+  selection will need it. Guarded by `scripts/verify-grid-keyboard-nav.ts`.
 - **Active ring z-scale over frozen panes (CLAUDE.md rule):** the active-cell ring
   must sit at **z-20** so it clears `.frozen-col` (z-10). Frozen cells repaint
   opaquely; never glass. This package keeps `GridCell`/`DatePickerCell` ring at the
@@ -193,8 +222,16 @@ The primitives are **data-agnostic** — they carry no schema knowledge. The con
 
 ## See Also
 
+- **`.agents/prompts/universal-table-module.md` — the plan of record for "Blackwood
+  Table v2" (2026-08-17).** This package is its starting point: the module being built in
+  `lib/table/` + `components/shared/table/` absorbs these primitives and the ~44% of
+  `app/(app)/cenapro/deliveries/deliveries-ledger.tsx` that is generic, behind a column
+  spec / row model / data-source port. `useGridPaste`, `useClipboardCopy`, `useCellDelete`
+  and `GridCell` are slated for **retirement** once no consumer remains — the Cenapro
+  deliveries ledger already opted out of the first three because they could not do its
+  job. Evidence pack: `docs/universal-table/`.
 - Approved plan: `/Users/renzosy/.claude/plans/delightful-popping-grove.md`
-  (Blackwood Table consolidation — phased migration).
+  (Blackwood Table consolidation — phased migration; superseded by the prompt above).
 - Reference state machine (Phase 1 source): `app/(app)/inventory/rc-in/bulk-delivery-input.tsx`.
 - DOM resolver + EditInput source: `app/(app)/cenapro/production/production-daily-block.tsx`.
 - Canonical SelectCell/DatePickerCell source + a context menu:

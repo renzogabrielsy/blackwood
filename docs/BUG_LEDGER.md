@@ -1193,3 +1193,106 @@ once, and every run after it is a zero-write run. Phase B (the editing UI) needs
 three pieces already in place: read `view_production_schedule_state`, call
 `fn_save_schedule_day` with the loaded `row_version`, render
 `view_production_schedule_conflicts`.
+
+---
+
+## BUG-022 — Typing over a range dragged UP or LEFT edits the WRONG cell (every grid) ✅ FIXED (2026-08-17, uncommitted)
+**Status:** ✅ FIXED · **Effort:** S (a 4-line deletion) · **Severity:** HIGH — silent wrong data, platform-wide
+
+- **Symptom.** Drag-select a rectangle **upwards or leftwards**, then type a character.
+  The character is written into the cell the drag STARTED from — which goes dirty with no
+  editor on it — while the editor opens on the rectangle's **top-left** cell showing *its*
+  stored value. Two cells wrong, only one of them visible, and the next keystroke lands in
+  the wrong one. After `Ctrl/Cmd+A` the editor opens in the sheet's first column, which in
+  the deliveries ledger is the unaddressable row-ordinal lane.
+- **Root cause (confirmed).** `lib/hooks/use-grid-keyboard-nav.ts:191-198` — the RANGE
+  MODE printable-char branch called `setActiveCell(anchor)` and then **fell through** to
+  the char handler at `:241-247`, which still used `active`, captured at `:134` *before*
+  the move. `range.anchorId()` is the **geometric top-left** (`normalizeRange` is
+  `Math.min`/`Math.max`, `lib/hooks/use-cell-selection.ts:23-29`) — verified identical at
+  all 8 consumer call sites — while `activeCell` is the drag ORIGIN, set on mousedown.
+  They differ on exactly the up/left drags.
+- **Blast radius.** The shared hook: RC IN + RC OUT bulk grids, Production Daily /
+  Electricity / Trucks, both Cenapro production grids, the QC ledger, the digest schedule
+  grid, and the Cenapro deliveries ledger.
+- **Fix shipped.** Delete `setActiveCell(anchor)` (and the now-unused `anchorId()` read),
+  keeping `range.clear()`. This makes the branch **symmetric with the `NAV_KEYS` branch
+  four lines above**, which has always cleared and fallen through on `active`; and it is
+  the Google-Sheets rule — the active cell of a selection is where the drag began.
+  `anchorId` stays on `GridRangeSlot` (a tiling paste will need it).
+- **Guarded by** `scripts/verify-grid-keyboard-nav.ts` (new): a pure MODEL of the decision
+  showing the old divergence and the new agreement, plus a SOURCE SCAN asserting the
+  shipped branch contains no `setActiveCell` and no `anchorId()` — with a code-anchored
+  vacuous-pass guard.
+- **Found by** the 2026-08-17 universal-table audit (finding A1), `docs/universal-table/`.
+
+## BUG-023 — Clicking a read-only cell kills the keyboard for the whole sheet ✅ FIXED (2026-08-17, uncommitted)
+**Status:** ✅ FIXED · **Effort:** S · **Severity:** medium (annoying, no data loss)
+
+- **Symptom.** Click a `TTL PRICE` cell in `/cenapro/deliveries` (selectable, never
+  editable — a range may legitimately cover a run of receipt totals). Arrows, Tab, Escape,
+  Delete and Ctrl/Cmd+C all stop working until another cell is clicked.
+- **Root cause.** `deliveries-ledger.tsx:2939` set the active cell to **`null`** for a
+  non-addressable cell, and `useGridKeyboardNav` returns on its first line
+  (`use-grid-keyboard-nav.ts:133`) when there is no active cell — so the entire state
+  machine, range branches included, went inert.
+- **Fix shipped.** Set the active cell unconditionally (the handler already returned
+  unless the cell `exists`). Safe because `createDeliveryNavResolver` only ever tests the
+  **target's** addressability, so arrows/Tab resolve correctly *from* a read-only cell;
+  `isEditable` still refuses F2 / Delete / type-over; and any open editor commits on the
+  blur `focusGrid()` causes in the same handler, so an editor cannot mount there.
+- **Still open (Phase 1):** clicking a cell the row does not have (a moisture draw's WT
+  lane) remains a dead click — that needs the universal table's `occupies()` row model.
+- **Found by** the same audit (finding A2).
+
+## BUG-024 — A multi-row paste scatters cells into moisture sub-rows and reports success ✅ FIXED (2026-08-17, uncommitted)
+**Status:** ✅ FIXED · **Effort:** M · **Severity:** HIGH — wrong data written into real receipts
+
+- **Symptom.** Copy 5 receipt rows out of Google Sheets, paste onto a receipt that carries
+  moisture draws. Block rows 1–2 land on the **draws** — and only their seven lab lanes,
+  because every other column fails the per-cell `addressable` test and is dropped in
+  silence — then rows 3–4 land on the following receipts. The toast says `Pasted 5 rows`.
+- **Root cause.** `deliveries-ledger.tsx:1770` mapped block row `r` to nav row
+  `anchor.row + r`, pure arithmetic with no notion of row FAMILY, even though the sheet
+  interleaves three kinds (`delivery` / `sample` / `draft`).
+- **Fix shipped.** New pure helper `pasteRowTargets()` in
+  `app/(app)/cenapro/deliveries/types.ts` resolves the target rows **by family** first
+  (`sample` anchor → draws only; `delivery`/`draft` anchor → receipts and blank rows, which
+  are one family so a pasted slip still becomes new receipts). `planPaste` is then called
+  with `startRow: 0` and `navRowCount: targets.length` — its row math
+  (`needed = startRow + blockRows - navRowCount`) yields exactly the overflow and its
+  column math is untouched. `canCreateRows` additionally requires the anchor not be a
+  draw, so a draw-anchored block can never manufacture receipts. The step-over is
+  **reported** (`· 2 draw rows skipped`), and a draw-anchored overflow gets its own
+  sentence instead of the "no blank rows to grow into" one.
+- **Byte-identical where it should be:** with no foreign rows in the way `targets` is
+  `[anchorRow, anchorRow+1, …]` and `skipped` is 0 — asserted over every anchor × block
+  size on a flat sheet.
+- **Guarded by** 3 new checks in `scripts/verify-rc-deliveries-cells.ts` (the family rule,
+  the planPaste equivalence, and a source scan refusing the return of `anchor.row + r`).
+- **Found by** the same audit (finding A4).
+
+## BUG-025 — Cenapro receipt delete had no role gate and printed cheque numbers + ₱ to any role ✅ FIXED (2026-08-17, uncommitted)
+**Status:** ✅ FIXED · **Effort:** S · **Severity:** HIGH (security / disclosure)
+
+- **Symptom.** `deleteDelivery` (`app/(app)/cenapro/deliveries/actions.ts:1057`) was the
+  **only** exported action in that file never to call `canViewPrices()`, and nothing
+  anywhere checked the caller's role — `/cenapro/**` has no role gate of its own
+  (`layout.tsx`, `deliveries/page.tsx` both checked). So any signed-in user, including
+  Production, could open `Delete receipt…` on a receipt with money against it and read the
+  allocated total, every cheque number and every amount out of the refusal dialog
+  (`:4111-4157`) and the success toast (`:2559-2571`) — then hard-delete it.
+- **Fix shipped.** (a) New canonical predicate **`isPrivileged()`** in `lib/auth.ts`,
+  built exactly like `canViewPrices()` (so it honours the impersonation cookie and fails
+  closed with no user). `deleteDelivery` refuses a non-privileged caller with outcome
+  `forbidden` before the RPC; `page.tsx` resolves `canDelete` server-side and the menu item
+  is `hidden` for everyone else, matching RC IN. (b) The action now calls `canViewPrices()`
+  and, when false, returns `allocatedPhp: null`, `releasedPhp: null`, **`blocking: []`**
+  and `pricesHidden: true`; the counts survive. The dialog says *"…has money assigned to it
+  from 2 payments. The amounts are hidden by your role."* — it never renders a blank that
+  would read as "nothing is assigned to this receipt".
+- **Note.** `isPrivileged()` exists because this check was being retyped inline at every
+  call site (`rc-in/actions.ts` repeats it in four actions) — and a gate that is copied is
+  a gate that gets forgotten, which is precisely what happened here. Phase 2 reuses it for
+  RC IN's ungated selection-bar bulk Delete.
+- **Found by** the same audit (finding A3).

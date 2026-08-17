@@ -33,6 +33,9 @@ import {
   clipboardNumber,
   parseClipboardTable,
   planPaste,
+  pasteRowTargets,
+  pasteKindsCompatible,
+  type PasteRowKind,
   tsvEscape,
   frozenOffsets,
   columnOffsets,
@@ -1204,6 +1207,134 @@ check('a paste TALLER than the sheet creates the blank rows it needs — it neve
   // Columns past the last one are refused the same way, never wrapped onto the next row.
   assert.equal(planPaste({ ...base, startRow: 0, blockRows: 1, navRowCount: 5, startCol: 15, blockCols: 4 }).droppedCols, 2)
   assert.equal(planPaste({ ...base, startRow: 0, blockRows: 1, navRowCount: 5, startCol: 13, blockCols: 4 }).droppedCols, 0)
+})
+
+check('a pasted block lands on rows of the ANCHOR\'S OWN FAMILY, stepping over the rest', () => {
+  // BUG (2026-08-17 audit, A4): the paste mapped block row `r` onto nav row
+  // `anchor.row + r`, straight through the moisture draws that sit under a receipt. A
+  // 5-row receipt block pasted onto a receipt with 2 draws wrote rows 1–2 into the
+  // DRAWS — and only their seven lab lanes, because every other column failed the
+  // per-cell `addressable` test and was dropped in silence — then carried on into the
+  // following receipts, and toasted "Pasted 5 rows". Wrong data in real receipts,
+  // reported as success.
+  const K = (s: string): PasteRowKind[] =>
+    [...s].map((c) => (c === 'd' ? 'delivery' : c === 's' ? 'sample' : 'draft'))
+
+  // A receipt, its 2 draws, then three more receipts. A 5-row block anchored on the
+  // first receipt fills the RECEIPTS and steps over the draws.
+  const withDraws = K('dssddd')
+  const r5 = pasteRowTargets({ kinds: withDraws, anchorRow: 0, blockRows: 5 })
+  assert.deepEqual(r5.targets, [0, 3, 4, 5], 'only the receipt rows are targeted')
+  assert.equal(r5.skipped, 2, 'the two draws are reported as stepped over')
+  // Four targets for a five-row block ⇒ one row of overflow, which is what planPaste
+  // turns into a new blank row (or reports as dropped).
+  assert.equal(r5.targets.length, 4)
+
+  // The no-sub-row case must be BYTE-IDENTICAL to the old positional mapping.
+  for (let anchorRow = 0; anchorRow < 6; anchorRow++) {
+    for (let blockRows = 1; blockRows <= 8; blockRows++) {
+      const flat = K('dddddd')
+      const got = pasteRowTargets({ kinds: flat, anchorRow, blockRows })
+      const old = Array.from({ length: blockRows }, (_, i) => anchorRow + i).filter(
+        (r) => r < flat.length,
+      )
+      assert.deepEqual(got.targets, old, `flat sheet, anchor ${anchorRow}, ${blockRows} rows`)
+      assert.equal(got.skipped, 0)
+    }
+  }
+
+  // A receipt block flowing off the last receipt into the blank rows is how a pasted
+  // slip BECOMES new receipts — `delivery` and `draft` are ONE family here.
+  const withDrafts = K('ddnnn')
+  assert.deepEqual(
+    pasteRowTargets({ kinds: withDrafts, anchorRow: 0, blockRows: 5 }).targets,
+    [0, 1, 2, 3, 4],
+  )
+
+  // A block anchored on a DRAW fills draws only, and never reaches the receipt below.
+  const draws = K('dsssd')
+  const fromDraw = pasteRowTargets({ kinds: draws, anchorRow: 1, blockRows: 5 })
+  assert.deepEqual(fromDraw.targets, [1, 2, 3], 'three draws, then nothing')
+  assert.ok(
+    !fromDraw.targets.includes(4),
+    'a draw-anchored block must never write into a receipt',
+  )
+  assert.equal(fromDraw.skipped, 0, 'nothing was stepped OVER — the sheet simply ran out')
+
+  // The compatibility rule itself, stated once.
+  assert.ok(pasteKindsCompatible('delivery', 'draft'))
+  assert.ok(pasteKindsCompatible('draft', 'delivery'))
+  assert.ok(!pasteKindsCompatible('delivery', 'sample'))
+  assert.ok(!pasteKindsCompatible('sample', 'delivery'))
+  assert.ok(!pasteKindsCompatible('sample', 'draft'))
+  assert.ok(pasteKindsCompatible('sample', 'sample'))
+
+  // Degenerate inputs return nothing rather than throwing.
+  assert.deepEqual(pasteRowTargets({ kinds: withDraws, anchorRow: 99, blockRows: 3 }).targets, [])
+  assert.deepEqual(pasteRowTargets({ kinds: withDraws, anchorRow: 0, blockRows: 0 }).targets, [])
+})
+
+check('the resolved targets feed planPaste the SAME overflow the positional call produced', () => {
+  // `targets.length` becomes planPaste's `navRowCount` with `startRow: 0`, because the
+  // existing rows are already resolved. Its row math is
+  // `needed = startRow + blockRows - navRowCount`, so the two forms agree exactly
+  // whenever no foreign row is in the way — and where one IS, the new form asks for the
+  // extra blank rows the old one silently stole from the draws.
+  const base = { startCol: 1, blockCols: 4, colCount: 17, canCreateRows: true, maxNewRows: MAX_DRAFT_ADD }
+  const flat: PasteRowKind[] = Array.from({ length: 20 }, () => 'delivery')
+
+  for (const [anchorRow, blockRows] of [[0, 10], [0, 30], [5, 30], [19, 4]] as const) {
+    const { targets } = pasteRowTargets({ kinds: flat, anchorRow, blockRows })
+    const viaTargets = planPaste({ ...base, startRow: 0, blockRows, navRowCount: targets.length })
+    const positional = planPaste({ ...base, startRow: anchorRow, blockRows, navRowCount: flat.length })
+    assert.deepEqual(viaTargets, positional, `anchor ${anchorRow}, ${blockRows} rows`)
+  }
+
+  // With draws in the way the NEW form needs one more blank row than the old one — that
+  // row is precisely the receipt the old code overwrote a draw with.
+  const withDraws: PasteRowKind[] = ['delivery', 'sample', 'delivery', 'delivery']
+  const { targets } = pasteRowTargets({ kinds: withDraws, anchorRow: 0, blockRows: 4 })
+  assert.equal(targets.length, 3)
+  assert.equal(planPaste({ ...base, startRow: 0, blockRows: 4, navRowCount: targets.length }).newRows, 1)
+  assert.equal(planPaste({ ...base, startRow: 0, blockRows: 4, navRowCount: withDraws.length }).newRows, 0)
+})
+
+check('the ledger resolves paste rows by family, and the positional mapping is gone', () => {
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /<TableVirtuoso/, 'comment-stripping destroyed the source; this scan would be vacuous')
+
+  assert.match(code, /pasteRowTargets\(\{/, 'the paste resolves its target rows through the pure helper')
+  assert.ok(
+    !/anchor\.row \+ r\b/.test(code),
+    'the positional row mapping `anchor.row + r` must be gone — it walked through sub-rows',
+  )
+  // A block anchored on a draw must never manufacture receipts.
+  assert.match(
+    code,
+    /canCreateRows:\s*showDrafts && anchorKind !== 'sample'/,
+    'draft creation is refused for a sample-anchored paste',
+  )
+  // Stepping over rows is correct, but it is not what the block looked like on screen —
+  // so it has to be said out loud.
+  assert.match(code, /draw row\$\{skipped === 1 \? '' : 's'\} skipped/, 'the skip is reported')
+})
+
+check('clicking a read-only cell keeps the caret — it never nulls the active cell', () => {
+  // BUG (2026-08-17 audit, A2): `setActiveCell(canEdit ? … : null)` meant clicking a
+  // TTL PRICE cell (selectable, never addressable) set the active cell to null — and
+  // `useGridKeyboardNav` returns on its first line when there is no active cell, so the
+  // whole sheet lost arrows, Escape, Delete and copy until another cell was clicked.
+  const code = stripComments(readFileSync(LEDGER, 'utf8'))
+  assert.match(code, /onMouseDown=\{\(e\) =>/, 'this scan would be vacuous')
+  assert.ok(
+    !/setActiveCell\(canEdit \?/.test(code),
+    'the caret must land on any cell that EXISTS, editable or not',
+  )
+  assert.match(
+    code,
+    /if \(!e\.shiftKey\) \{[\s\S]{0,900}?setActiveCell\(\{ row: navRow, col: colIndex \}\)/,
+    'a plain click sets the active cell unconditionally',
+  )
 })
 
 check('a paste block maps to the right columns from a NON-ZERO anchor', () => {

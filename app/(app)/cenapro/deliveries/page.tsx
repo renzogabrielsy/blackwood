@@ -6,6 +6,7 @@ import {
     type DeliveryAnchor,
 } from './actions';
 import { fetchPaymentDimensions } from '../liquidation/actions';
+import { isPrivileged } from '@/lib/auth';
 import { DeliveriesLedger } from './deliveries-ledger';
 import {
     axesKey,
@@ -61,10 +62,18 @@ export default async function CenaproDeliveriesPage({
     // are behind `canViewPrices()` INSIDE the fetcher — a gated viewer does not even learn
     // which bank accounts exist, and the button they would feed is not rendered for that
     // role either.
-    const [months, dimensions, payment] = await Promise.all([
+    //
+    // ── WHO MAY DELETE ───────────────────────────────────────────────────────────
+    // Owner / Admin / Dev. Resolved here, on the server, and passed down as a plain
+    // boolean — the same path `canViewPrices` takes, and for the same reason: a client
+    // component must never re-derive a capability (an inline role lookup would ignore
+    // the impersonation cookie). It only hides the menu item; `deleteDelivery` itself
+    // re-checks with the same predicate, which is the gate that holds.
+    const [months, dimensions, payment, canDelete] = await Promise.all([
         fetchDeliveryMonthKeys(),
         fetchDeliveryDimensions(),
         fetchPaymentDimensions(),
+        isPrivileged(),
     ]);
     const monthKeys = months.monthKeys;
     const period = resolvePeriod(monthKeys, params.year, params.month);
@@ -97,6 +106,7 @@ export default async function CenaproDeliveriesPage({
                 filters={filters}
                 dimensions={dimensions}
                 canViewPrices={month.canViewPrices}
+                canDelete={canDelete}
                 paymentSuppliers={payment.suppliers}
                 paymentAccounts={payment.accounts}
                 loadError={month.error ?? months.error ?? dimensions.error ?? null}
@@ -134,6 +144,7 @@ export default async function CenaproDeliveriesPage({
             filters={filters}
             dimensions={dimensions}
             canViewPrices={page.canViewPrices}
+            canDelete={canDelete}
             paymentSuppliers={payment.suppliers}
             paymentAccounts={payment.accounts}
             loadError={page.error ?? months.error ?? dimensions.error ?? null}

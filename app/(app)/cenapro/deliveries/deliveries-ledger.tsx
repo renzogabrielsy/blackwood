@@ -138,6 +138,7 @@ import {
     parseDestinationCell,
     parseSupplierCell,
     planPaste,
+    pasteRowTargets,
     priceEditText,
     rowIssues,
     sampleFieldFor,
@@ -435,6 +436,12 @@ export interface DeliveriesLedgerProps {
     /** Derived SERVER-SIDE from `canViewPrices()`; the ₱ fields are already nulled. */
     canViewPrices: boolean;
     /**
+     * Derived SERVER-SIDE from `isPrivileged()` — Owner / Admin / Dev. Hides the
+     * "Delete receipt…" item. The real gate is in `deleteDelivery` itself; this only
+     * stops the control being offered to someone the server would refuse.
+     */
+    canDelete: boolean;
+    /**
      * The payment form's two pickers (Step 4). Fetched only when prices are visible — a
      * gated viewer never learns which bank accounts exist, and the "Add cheque" button they
      * would feed is not rendered for that role either.
@@ -457,6 +464,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
         filters,
         dimensions,
         canViewPrices,
+        canDelete,
         paymentSuppliers,
         paymentAccounts,
         loadError,
@@ -1719,6 +1727,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     // same `makeDraftIds` / `draftEdits` path the "Add N more rows" control uses. There
     // is no second way to make a draft row.
     //
+    // And a third defect, found in the 2026-08-17 audit: the block was mapped onto nav
+    // rows POSITIONALLY (`anchor.row + r`), which walks straight through the moisture
+    // draws under a receipt. `pasteRowTargets` in `types.ts` now resolves the target rows
+    // by row FAMILY first — see the comment on it, and the block below.
+    //
     // What is deliberately UNCHANGED: an unresolvable supplier or warehouse is still
     // refused at commit and again at save; a pasted date goes through `parseDeliveryDate`
     // with the same context year a typed one gets; a cell the row does not have (a
@@ -1743,18 +1756,38 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             }
 
             const blockCols = block.reduce((w, r) => Math.max(w, r.length), 0);
+
+            // WHICH rows the block lands on — by row FAMILY, not by arithmetic. This used
+            // to be `anchor.row + r` inside the loop, which walked straight through the
+            // moisture draws sitting under a receipt: a 5-row receipt block wrote its lab
+            // columns into the draws (silently — every other column failed the
+            // `addressable` test below) and then carried on into the following receipts,
+            // reporting "Pasted 5 rows". A block of receipts lands on receipts.
+            const anchorKind = navRows[anchor.row]?.kind;
+            const { targets, skipped } = pasteRowTargets({
+                kinds: navRows.map((n) => n.kind),
+                anchorRow: anchor.row,
+                blockRows: block.length,
+            });
+
             const plan = planPaste({
-                startRow: anchor.row,
+                // The rows that already exist are resolved above, so what is left for
+                // `planPaste` is "how much of the block is left over" — which is what it
+                // computes from startRow 0 against that count. Its COLUMN arithmetic is
+                // untouched, and with no foreign rows in the way the result is identical
+                // to the old positional call.
+                startRow: 0,
                 startCol: anchor.col,
                 blockRows: block.length,
                 blockCols,
-                navRowCount: navRows.length,
+                navRowCount: targets.length,
                 colCount: cols.length,
                 // Blank rows only exist where a blank row MEANS something — never under a
                 // lens or a search, and in endless only at the true newest end. Where they
                 // are absent, the overflow is REPORTED, not invented in the middle of
-                // history.
-                canCreateRows: showDrafts,
+                // history. A block anchored on a DRAW may never manufacture receipts
+                // either: its overflow is not a run of new receipts, it is a mistake.
+                canCreateRows: showDrafts && anchorKind !== 'sample',
                 maxNewRows: MAX_DRAFT_ADD,
             });
 
@@ -1767,9 +1800,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             let rowsTouched = 0;
 
             for (let r = 0; r < block.length; r++) {
-                const targetRow = anchor.row + r;
-                const isNew = targetRow >= navRows.length;
-                const newId = isNew ? newIds[targetRow - navRows.length] : undefined;
+                // A row of the block either lands on a resolved target of the anchor's own
+                // family, or it is overflow that becomes a new blank row at the bottom.
+                const targetRow: number | undefined = targets[r];
+                const isNew = targetRow === undefined;
+                const newId = isNew ? newIds[r - targets.length] : undefined;
                 if (isNew && newId === undefined) continue; // refused above; counted in plan.droppedRows
 
                 let touched = false;
@@ -1819,17 +1854,26 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 toast.info('Nothing pasted — that block lands outside the editable cells.');
             } else {
                 const extra = plan.newRows > 0 ? ` · ${plan.newRows} new row${plan.newRows === 1 ? '' : 's'}` : '';
-                toast.success(`Pasted ${rowsTouched} row${rowsTouched === 1 ? '' : 's'}${extra}`);
+                // Stepping over the draws is the correct behaviour, but it is not what the
+                // block looked like on screen — so it is said out loud rather than left for
+                // the operator to notice.
+                const stepped =
+                    skipped > 0 ? ` · ${skipped} draw row${skipped === 1 ? '' : 's'} skipped` : '';
+                toast.success(`Pasted ${rowsTouched} row${rowsTouched === 1 ? '' : 's'}${extra}${stepped}`);
             }
 
             // Never truncate in silence — the whole point of the rewrite.
             if (plan.droppedRows > 0 || plan.droppedCols > 0) {
                 const parts: string[] = [];
                 if (plan.droppedRows > 0) {
+                    const n = plan.droppedRows;
+                    const rows = `${n} row${n === 1 ? '' : 's'}`;
                     parts.push(
-                        showDrafts
-                            ? `${plan.droppedRows} row${plan.droppedRows === 1 ? '' : 's'} ran past the ${MAX_DRAFT_ADD}-row limit on a single paste. Save what landed, then paste the rest.`
-                            : `${plan.droppedRows} row${plan.droppedRows === 1 ? '' : 's'} ran past the last row of this view, and this view has no blank rows to grow into — a lens, a search or a scrolled-back window is a CUT of history, so a new receipt cannot be appended to it. Clear the filter (or scroll to the newest end) and paste again.`,
+                        anchorKind === 'sample'
+                            ? `${rows} ran past the last moisture draw of this receipt. A block pasted onto a draw fills draws only — a draw has no date, truck, weight or price, so the overflow cannot become receipts. Start the paste on the receipt row instead.`
+                            : showDrafts
+                              ? `${rows} ran past the ${MAX_DRAFT_ADD}-row limit on a single paste. Save what landed, then paste the rest.`
+                              : `${rows} ran past the last row of this view, and this view has no blank rows to grow into — a lens, a search or a scrolled-back window is a CUT of history, so a new receipt cannot be appended to it. Clear the filter (or scroll to the newest end) and paste again.`,
                     );
                 }
                 if (plan.droppedCols > 0) {
@@ -1841,7 +1885,9 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
             }
         },
         [
-            navRows.length, cols, lastCol, addressable, setCellText, canViewPrices,
+            // The whole array, not just its length: the paste now reads each row's KIND to
+            // decide where the block lands.
+            navRows, cols, lastCol, addressable, setCellText, canViewPrices,
             showDrafts, fallbackYear, contextYearFor, draftCanonical,
         ],
     );
@@ -2323,6 +2369,11 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                 label: 'Delete receipt…',
                 icon: Trash2,
                 variant: 'destructive',
+                // Owner / Admin / Dev only. HIDDEN rather than disabled, matching RC IN's
+                // `hidden: () => !hasPermission('delete:all')` — an item that is only ever
+                // refused is an item that should not be offered. `deleteDelivery` re-checks
+                // server-side, which is the gate that actually holds.
+                hidden: () => !canDelete,
                 onSelect: (ref) => {
                     const rec = recordsById.get(ref.deliveryId);
                     if (rec) setDeleteTarget(rec);
@@ -2332,7 +2383,7 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
     }, [
         menuIsDraft, addSample, removeSample, fillMoistureFromSamples, copyRow, revertRow,
         clearDraftRow, dirtyIds, dirtyDraftIds, recordsById,
-        canViewPrices, selectedDeliveryIds, recordChequeFor,
+        canViewPrices, canDelete, selectedDeliveryIds, recordChequeFor,
     ]);
 
     // ═══ Save ════════════════════════════════════════════════════════════════════
@@ -2563,9 +2614,14 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                         : ''
                 }${
                     result.releasedCount > 0
-                        ? ` · ₱${formatBalancePeso(result.releasedPhp)} released back to ${
-                              result.releasedCount
-                          } payment${result.releasedCount === 1 ? '' : 's'}`
+                        ? // The COUNT is always said; the ₱ figure only when the viewer may
+                          // see prices. "Released back to 2 payments" still tells them the
+                          // money moved, which is the fact that matters here.
+                          `${
+                              result.pricesHidden
+                                  ? ' · released back to'
+                                  : ` · ₱${formatBalancePeso(result.releasedPhp)} released back to`
+                          } ${result.releasedCount} payment${result.releasedCount === 1 ? '' : 's'}`
                         : ''
                 }`,
             );
@@ -2936,7 +2992,19 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                             // was — the anchor is the thing being measured from.
                             cellSelection.handleCellMouseDown(navRow, colIndex, e);
                             if (!e.shiftKey) {
-                                setActiveCell(canEdit ? { row: navRow, col: colIndex } : null);
+                                // The caret lands on ANY cell that exists — including a
+                                // selectable-but-read-only one like TTL PRICE. This used to be
+                                // `canEdit ? … : null`, and a null active cell makes
+                                // `useGridKeyboardNav` return on its first line: clicking a
+                                // total left the sheet with no arrows, no Escape, no Delete and
+                                // no copy until another cell was clicked. Nothing needs the
+                                // null — the resolver only ever tests the TARGET's
+                                // addressability, so arrows and Tab resolve correctly FROM a
+                                // read-only cell, and `isEditable` still refuses F2 / Delete /
+                                // type-over on it. An editor cannot mount here either: the
+                                // `focusGrid()` below blurs any open one, and `EditInput`'s
+                                // blur-commit clears `edit.isEditing` in this same handler.
+                                setActiveCell({ row: navRow, col: colIndex });
                             }
                             // The paste sink, not the wrapper — a click is the gesture that
                             // most often precedes a Ctrl/Cmd+V, and the wrapper cannot
@@ -4114,13 +4182,26 @@ export function DeliveriesLedger(props: DeliveriesLedgerProps) {
                         <AlertDialogTitle>This receipt has money assigned to it</AlertDialogTitle>
                         <AlertDialogDescription asChild>
                             <div className="space-y-2 text-sm">
+                                {/* The COUNT is stated to everyone; the AMOUNT and the cheque
+                                    list only to a viewer who may see prices. A gated viewer is
+                                    told plainly that money is there and that the figures are
+                                    hidden — never shown a blank that would read as "nothing is
+                                    assigned to this receipt", which is the one thing that
+                                    would make them delete it confidently and wrongly. */}
                                 <p>
                                     {deleteBlocked ? rowLabel(deleteBlocked.record) : ''} has{' '}
-                                    <span className="font-mono font-medium">
-                                        ₱{formatBalancePeso(deleteBlocked?.result.allocatedPhp)}
-                                    </span>{' '}
+                                    {deleteBlocked?.result.pricesHidden ? (
+                                        'money'
+                                    ) : (
+                                        <span className="font-mono font-medium">
+                                            ₱{formatBalancePeso(deleteBlocked?.result.allocatedPhp)}
+                                        </span>
+                                    )}{' '}
                                     assigned to it from {deleteBlocked?.result.allocationCount ?? 0} payment
                                     {(deleteBlocked?.result.allocationCount ?? 0) === 1 ? '' : 's'}.
+                                    {deleteBlocked?.result.pricesHidden
+                                        ? ' The amounts are hidden by your role.'
+                                        : ''}
                                 </p>
                                 {(deleteBlocked?.result.blocking.length ?? 0) > 0 && (
                                     <ul className="space-y-0.5 rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-[11px]">

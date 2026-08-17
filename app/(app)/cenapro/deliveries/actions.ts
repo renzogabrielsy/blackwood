@@ -25,7 +25,7 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { canViewPrices } from '@/lib/auth';
+import { canViewPrices, isPrivileged } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
 import {
     readAuditChanges,
@@ -991,6 +991,12 @@ export interface DeleteDeliveryResult {
     /** On a successful release: what went back to the payments' unassigned pools. */
     releasedCount: number;
     releasedPhp: number | null;
+    /**
+     * TRUE when the ₱ figures above were withheld because the caller may not see
+     * prices — so the UI can SAY the money is there and that the amounts are hidden,
+     * rather than rendering a blank that reads as "no money against this receipt".
+     */
+    pricesHidden: boolean;
 }
 
 function emptyDelete(
@@ -1001,7 +1007,7 @@ function emptyDelete(
     return {
         ok, outcome, message,
         samplesDeleted: 0, allocationCount: 0, allocatedPhp: null, blocking: [],
-        releasedCount: 0, releasedPhp: null,
+        releasedCount: 0, releasedPhp: null, pricesHidden: false,
     };
 }
 
@@ -1059,6 +1065,22 @@ export async function deleteDelivery(
     expectedRowVersion: number,
     releaseAllocations = false,
 ): Promise<DeleteDeliveryResult> {
+    // ── ROLE GATE (2026-08-17) ───────────────────────────────────────────────────
+    // Deleting a receipt is destructive, irreversible for the receipt itself, and can
+    // MOVE money — and `/cenapro/**` has no role gate of its own, so until now any
+    // signed-in user could do it. Owner / Admin / Dev only, mirroring RC IN's delete.
+    // The menu item is hidden client-side too (`canDelete`), but the UI hiding a
+    // control is not a gate: this is the one that counts.
+    if (!(await isPrivileged())) {
+        return emptyDelete(false, 'forbidden', 'Only Admin, Owner, or Dev can delete a receipt.');
+    }
+
+    // ── ₱ GATING ─────────────────────────────────────────────────────────────────
+    // This action returns the allocated total, the released total and the cheques
+    // involved — money, and the only reason it escaped the module's price boundary is
+    // that it was the one action nobody thought of as a READ. It is one.
+    const showPrices = await canViewPrices();
+
     const supabase = await createClient();
     const { data, error } = await supabase.rpc('cenapro_delete_rc_delivery', {
         p_id: id,
@@ -1091,10 +1113,18 @@ export async function deleteDelivery(
               : readOutcome(r.outcome, 'rpc_error'),
         samplesDeleted: typeof r.samples_deleted === 'number' ? r.samples_deleted : 0,
         message: readMessage(r.message),
+        // The COUNTS survive redaction and the AMOUNTS do not. "This receipt has money
+        // against it, from two payments" is the part the operator needs in order to
+        // decide; ₱212,000 and cheque #4471 are not. Nulling the figures while keeping
+        // the count is the same shape as `redactAuditJson` — a hidden figure still
+        // announces itself rather than lying by silence.
         allocationCount: Math.round(readNumeric(r.allocation_count) ?? 0),
-        allocatedPhp: readNumeric(r.allocated_php),
-        blocking: readBlocking(r.payments),
+        allocatedPhp: showPrices ? readNumeric(r.allocated_php) : null,
+        // The cheque list is dropped WHOLE for a gated viewer: a cheque number is
+        // liquidation data even with its amount blanked.
+        blocking: showPrices ? readBlocking(r.payments) : [],
         releasedCount: Math.round(readNumeric(r.allocations_released) ?? 0),
-        releasedPhp: readNumeric(r.allocations_released_php),
+        releasedPhp: showPrices ? readNumeric(r.allocations_released_php) : null,
+        pricesHidden: !showPrices,
     };
 }
