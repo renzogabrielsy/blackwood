@@ -3,8 +3,8 @@
 import * as React from 'react';
 
 import { BlackwoodTable } from '@/components/shared/table';
-import type { TableState } from '@/components/shared/table';
-import { needsGroupSpacer } from '@/lib/table';
+import type { TableChromeRowApi, TableState } from '@/components/shared/table';
+import { DEFAULT_FIRST_ITEM_INDEX, needsGroupSpacer, shiftFirstItemIndex } from '@/lib/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 
@@ -16,15 +16,19 @@ import { useTableEdits } from '@/lib/hooks/use-table-edits';
 // array built from a pure function of the row index, so every assertion is a fixed
 // string rather than whatever happened to be in the database this morning.
 //
-// It deliberately exercises the four shapes the first real consumer structurally cannot
+// It deliberately exercises the six shapes the first real consumer structurally cannot
 // produce, which is the whole reason the module was generalised:
 //
 //   • a pin: 'start' block of TWO columns and a pin: 'end' actions column (the old
 //     `frozen: boolean` could only ever describe a prefix),
 //   • a second ROW FAMILY — every 7th record carries 2 child sub-rows that occupy only
 //     three of the columns, so `occupies()` has something to answer,
-//   • a column hidden by a `ctx` flag (how a price boundary reaches a grid), and
-//   • a pool of blank draft rows a paste can grow into.
+//   • a column hidden by a `ctx` flag (how a price boundary reaches a grid),
+//   • a pool of blank draft rows a paste can grow into,
+//   • a LANE-SPANNING chrome row inside the body — a group heading rendered through
+//     `renderChromeRow`, which the footer-only `summaryRows` cannot express, and
+//   • a bidirectional pager: `Load older` PREPENDS rows and decrements `firstItemIndex`
+//     by the ITEMS added, in ONE state update, so the viewport does not move.
 //
 // The debug strip at the top is not decoration: it is what lets a test assert "the caret
 // is on row 3, column 2" without reaching into a Tailwind class name.
@@ -51,6 +55,8 @@ const RECORD_COUNT = 120;
 /** Every Nth record carries child sub-rows. 7 is coprime with the group size below. */
 const CHILD_EVERY = 7;
 const GROUP_SIZE = 10;
+/** How many OLDER records one press of `Load older` fetches. Exactly one group. */
+const OLDER_BATCH = 10;
 
 /** Deterministic by construction: row `i` is a pure function of `i`, forever. */
 export function makeRecords(count = RECORD_COUNT): PlayRow[] {
@@ -64,6 +70,27 @@ export function makeRecords(count = RECORD_COUNT): PlayRow[] {
         note: `note ${i}`,
         secret: `s${i}`,
     }));
+}
+
+/**
+ * One page of OLDER records, as a keyset pager fetches them: deterministic, childless,
+ * and each batch its own group — so a prepend adds a heading too, which is precisely why
+ * `firstItemIndex` must be decremented by ITEMS rather than by the 10 records asked for.
+ */
+export function makeOlder(startAt: number, size = OLDER_BATCH): PlayRow[] {
+    return Array.from({ length: size }, (_, i) => {
+        const n = startAt + i;
+        return {
+            id: `o${n}`,
+            group: `o${Math.floor(n / GROUP_SIZE)}`,
+            code: `O-${String(n).padStart(3, '0')}`,
+            label: `Older ${n}`,
+            qty: (n + 1) * 5,
+            rate: 1,
+            note: `older note ${n}`,
+            secret: `os${n}`,
+        };
+    });
 }
 
 function makeChildren(records: readonly PlayRow[]): Map<string, PlayRow[]> {
@@ -193,7 +220,34 @@ const KINDS: ReadonlyMap<string, RowKind<PlayRow>> = new Map<string, RowKind<Pla
     // A real row of the spreadsheet, and NOT addressable — the caret cannot land on one
     // by construction, so the coordinate space is byte-identical with and without spacers.
     ['spacer', { kind: 'spacer', height: 32, addressable: false, occupies: () => null }],
+    // Also non-addressable, and it renders its OWN cells through `renderChromeRow` — a
+    // heading that spans lanes, which the footer-only `summaryRows` cannot express.
+    ['group-header', { kind: 'group-header', height: 28, addressable: false, occupies: () => null }],
 ]);
+
+/**
+ * The flat item array, as a PURE function of the records — the ONE place the shape of the
+ * sheet is decided, so the pager can measure `items.length` either side of a prepend
+ * instead of counting records and guessing.
+ */
+function buildRows(
+    records: readonly PlayRow[],
+    children: ReadonlyMap<string, PlayRow[]>,
+): GridRow<PlayRow>[] {
+    const out: GridRow<PlayRow>[] = [];
+    let prevGroup: string | undefined;
+    for (const r of records) {
+        if (needsGroupSpacer(prevGroup, r.group)) out.push({ kind: 'spacer', key: `sp:${r.group}` });
+        // A heading above EVERY group, the first one included — so a prepend adds a
+        // heading AND a spacer the old leading group never needed, and the item delta is
+        // 12 for 10 records.
+        if (prevGroup !== r.group) out.push({ kind: 'group-header', key: `gh:${r.group}` });
+        prevGroup = r.group;
+        out.push({ kind: 'record', id: r.id, data: r });
+        for (const c of children.get(r.id) ?? []) out.push({ kind: 'child', id: c.id, data: c });
+    }
+    return out;
+}
 
 function fieldText(row: PlayRow, field: string): string {
     switch (field) {
@@ -231,6 +285,16 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
     );
     const draftSeq = React.useRef(5);
 
+    /**
+     * The pager's two halves in ONE piece of state, so a prepend and its index shift can
+     * only ever be committed together. Two `useState`s would render the list once with
+     * every row moved and jump it back on the next commit — which is the bug the base
+     * exists to prevent, reintroduced by the shape of the state.
+     */
+    const [pager, setPager] = React.useState<{ older: PlayRow[]; firstItemIndex: number }>(
+        () => ({ older: [], firstItemIndex: DEFAULT_FIRST_ITEM_INDEX }),
+    );
+
     // `ctx` MUST be referentially stable — it is a dependency of the column resolution and
     // of every editability verdict, so a fresh object per render re-renders the sheet.
     const ctx = React.useMemo<PlayCtx>(() => ({ showSecret }), [showSecret]);
@@ -248,17 +312,68 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
     const edits = useTableEdits({ canonicalText, isDraft });
 
     const items = React.useMemo<GridRow<PlayRow>[]>(() => {
-        const out: GridRow<PlayRow>[] = [];
-        let prevGroup: string | undefined;
-        for (const r of records) {
-            if (needsGroupSpacer(prevGroup, r.group)) out.push({ kind: 'spacer', key: `sp:${r.group}` });
-            prevGroup = r.group;
-            out.push({ kind: 'record', id: r.id, data: r });
-            for (const c of children.get(r.id) ?? []) out.push({ kind: 'child', id: c.id, data: c });
-        }
+        const out = buildRows([...pager.older, ...records], children);
         for (const id of draftIds) out.push({ kind: 'draft', id });
         return out;
-    }, [records, children, draftIds]);
+    }, [pager.older, records, children, draftIds]);
+
+    /**
+     * Prepend a page of older records and rebase the public index by the ITEMS that added
+     * — measured off the flat array, never counted off the 10 records fetched. Both land
+     * in one update, so the viewport does not move.
+     */
+    const loadOlder = React.useCallback(() => {
+        setPager((prev) => {
+            const older = [...makeOlder(prev.older.length), ...prev.older];
+            return {
+                older,
+                firstItemIndex: shiftFirstItemIndex({
+                    firstItemIndex: prev.firstItemIndex,
+                    previousItemCount: buildRows([...prev.older, ...records], children).length,
+                    nextItemCount: buildRows([...older, ...records], children).length,
+                }),
+            };
+        });
+    }, [records, children]);
+
+    /**
+     * A group heading, tiled onto the column table rather than guessed at: the pinned
+     * block gets its own OPAQUE cell (any alpha and the scrolling rows bleed through it),
+     * everything right of it is one span, and a lane of span 0 renders NO cell — because
+     * `colSpan={0}` means "to the end of the column group" in HTML.
+     */
+    const renderChromeRow = React.useCallback(
+        (item: GridRow<PlayRow>, api: TableChromeRowApi<PlayRow, PlayCtx>) => {
+            if (item.kind !== 'group-header' || !('key' in item)) return null;
+            const group = item.key.slice(item.key.indexOf(':') + 1);
+            const rest = api.colCount - api.spans.frozen;
+            const base = 'border-b border-b-border px-2 py-1 text-[11px] font-medium';
+            return (
+                <>
+                    {api.spans.frozen > 0 ? (
+                        <th
+                            scope="row"
+                            colSpan={api.spans.frozen}
+                            className={`frozen-col frozen-edge bg-background text-left text-muted-foreground ${base}`}
+                            style={{ left: 0 }}
+                        >
+                            GROUP
+                        </th>
+                    ) : null}
+                    {rest > 0 ? (
+                        <td
+                            colSpan={rest}
+                            data-group-heading={group}
+                            className={`bg-muted text-left ${base}`}
+                        >
+                            {group}
+                        </td>
+                    ) : null}
+                </>
+            );
+        },
+        [],
+    );
 
     const onAddDrafts = React.useCallback((count: number) => {
         const ids = Array.from({ length: count }, (_, i) => `d${draftSeq.current + i}`);
@@ -320,6 +435,24 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                 </span>
                 <button
                     type="button"
+                    data-testid="load-older"
+                    data-grid-chrome
+                    onClick={loadOlder}
+                    className="rounded border border-input px-2 py-0.5"
+                >
+                    Load older
+                </button>
+                <span data-testid="older-count" className="font-mono">
+                    {pager.older.length}
+                </span>
+                <span data-testid="first-item-index" className="font-mono">
+                    {pager.firstItemIndex}
+                </span>
+                <span data-testid="item-count" className="font-mono">
+                    {items.length}
+                </span>
+                <button
+                    type="button"
                     data-testid="reset"
                     data-grid-chrome
                     onClick={() => edits.reset()}
@@ -346,6 +479,8 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                 onRemoveDrafts={onRemoveDrafts}
                 onRestoreDrafts={onRestoreDrafts}
                 summaryRows={summaryRows}
+                renderChromeRow={renderChromeRow}
+                firstItemIndex={pager.firstItemIndex}
                 onStateChange={setState}
                 className="min-h-0 flex-1"
             />

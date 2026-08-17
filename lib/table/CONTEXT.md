@@ -30,8 +30,9 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `edits.ts` | `mergeFieldEdit`, `isDirtyFieldEdits`, `countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`, the draft-row constants, and **`createJournal` / `invertStep`** (new). |
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
+| `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **30 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **32 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver, the chrome row, the pager's index base — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -101,6 +102,60 @@ write. Note the deliberate asymmetry — **clearing** a stored value IS an edit.
 `describeUnsavedWork` takes its **nouns as a parameter** so each consumer names its own rows
 ("3 edited receipts and 8 typed new rows") without a second copy of the counting.
 
+### `firstItemIndex` — the two index spaces a bidirectional pager lives in
+
+A virtualiser that can PREPEND reports a **PUBLIC** index out (array position +
+`firstItemIndex`) and takes a **RAW** one in. Prepending shifts every raw position, so a
+row keeps its public index — and the viewport keeps its place — only if `firstItemIndex`
+is decremented by exactly the number of rows added.
+
+Three rules, and each of them is a way this goes wrong:
+
+- **Decrement by the ITEMS prepended, never by the RECORDS fetched.** One fetched record
+  can add several items — its child sub-rows, the group spacer above it, a heading. In the
+  playground, 10 older records add **12** items; rebasing by 10 leaves the sheet two rows
+  out. `shiftFirstItemIndex` therefore takes the flat array's length either side and does
+  the subtraction itself: measure the array, do not count what you asked for.
+- **The prepend and the new base land in ONE state batch.** Two updates render the list
+  once with every row shifted and jump it back on the next commit. The playground keeps
+  both halves in a single `useState` so they *cannot* be committed separately.
+- **It rebases what comes OUT and nothing that goes IN.** `scrollIntoView` and
+  `initialTopMostItemIndex` still take RAW array positions — both clamp against
+  `totalCount`, so a rebased index resolves to the last row every time. `computeItemKey`
+  reads the item and ignores the index entirely, which makes it immune by construction.
+
+Two clamps in the helper, both deliberate: a list that got SHORTER shifts nothing (the
+property is specified for inverse infinite scrolling and is only ever decreased), and the
+result never goes negative (the virtualiser requires a positive base).
+
+**A prepend that lands mid-scroll legitimately drifts by a row.** The virtualiser
+suppresses its upward-scroll compensation while a scroll is in progress, so the parity
+spec waits for the scroller to come to rest before pressing "load older" — which is also
+what an operator does. Settled, the anchor row does not move by a pixel across two pages.
+
+### `renderChromeRow` — a lane-spanning row INSIDE the body
+
+`summaryRows` reaches the footer only (`fixedFooterContent` in the endless scope, `<tfoot>`
+in focus), and every item in `items` goes through `TableCells`, which emits exactly one
+`<td>` per column with no `colSpan`. So a group HEADING or a per-group rule-off interleaved
+with the data was inexpressible. `renderChromeRow(item, api)` fills that seam:
+
+- **Consulted only for items whose `RowKind.addressable` is false.** Returning `null`, or
+  omitting the prop, is byte-identical with the behaviour before it existed. An addressable
+  row can never be replaced by chrome, so the caret can never be pointed at one.
+- **It returns the row's CELLS, not a `<tr>`.** The container wraps them in its own row
+  element in both scopes, and that is load-bearing: `TableVirtuoso` owns the `<tr>` (it puts
+  `data-index` / `data-known-size` / its own `style` there and measures rows off `<tbody>`'s
+  children), so a renderer emitting its own row element would lose measurement — the defect
+  already fixed once in `Row.tsx`, and the reason `TableCells` and `TableRowShell` are
+  separate to begin with.
+- **The row still gets its family's declared `height`, and never enters `navRows`.**
+- The `api` carries `cols`, `spans` and `colCount` so a consumer can OBEY the layout rules
+  rather than guess at them: **a lane of span 0 renders NO cell** (`colSpan={0}` is "to the
+  end of the column group" in HTML, the opposite of nothing), and **a cell over a pinned
+  column stays OPAQUE** — a solid token, never glass, or the scrolling rows bleed through.
+- Must be referentially stable (`useCallback`): it is a dependency of every row's content.
+
 ### The jump keys read two probes, never the DOM
 
 `edgeJump` implements Sheets' actual rule (run to the end of a block · skip a gap from a
@@ -121,8 +176,14 @@ these helpers under its own names, so the grid, the server page and that module'
 was behaviour-preserving.
 
 **Stages 1B and 1C are complete** (2026-08-17). The React half is built, the dev playground
-mounts it on an in-memory data source, and **29 Playwright specs drive the real component**
+mounts it on an in-memory data source, and **33 Playwright specs drive the real component**
 with no login and no database. See the two sections at the end of this file.
+
+**Two additive seams were added afterwards** (2026-08-17), both found by a migration attempt
+that correctly refused to proceed without them: **`firstItemIndex`** (a bidirectional keyset
+pager needs the virtualiser's public index base) and **`renderChromeRow`** (a group heading
+or per-group rule-off inside the BODY, which `summaryRows` reaches only in the footer).
+Purely additive — a consumer that passes neither behaves exactly as before.
 
 **Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — has NOT started.**
 Nothing under `app/(app)/**` was touched.
@@ -161,7 +222,7 @@ None. That is the point — this module imports nothing outside itself.
 | `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
 | `components/shared/table/Row.tsx` | `TableCells` (**the memo boundary**, with the `NO_EDITS` / `NO_INVALID` singletons), `TableRowShell` (the `<tr>` and the four handlers, dispatching by `data-col`) and `TableRow` (their composition). Split 2026-08-17 — see below. |
 | `components/shared/table/HeaderCell.tsx` | **New.** Label + `title`, column-selection on the label, a `data-grid-chrome` filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |
-| `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules. |
+| `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules, and the two seams above — `firstItemIndex` (endless only) and `renderChromeRow` + `TableChromeRowApi`. |
 | `components/shared/table/PasteSink.tsx` | The hidden `<textarea>`, `isGridChrome` (with the sink exempted FIRST) and `focusGrid` (always `preventScroll`). Carries the full explanation of why a `paste` handler on a non-editable div can never fire. |
 
 ### Three defects found in the pieces 1B inherited
@@ -220,8 +281,8 @@ no-op that journals nothing.
 | File | Role |
 |---|---|
 | `app/dev/table-playground/page.tsx` | Dev-only route. `notFound()` in production unless `TABLE_PLAYGROUND` is set. |
-| `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a draft pool, and a debug strip the suite asserts against. |
-| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **29 specs, all passing.** `npm run test:e2e`. |
+| `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a **group heading through `renderChromeRow`**, a draft pool, a **`Load older` pager** that prepends a page and rebases `firstItemIndex`, and a debug strip the suite asserts against. |
+| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **33 specs, all passing.** `npm run test:e2e`. |
 
 **The playground lives OUTSIDE the `(app)` route group, deliberately.** That group's layout
 calls `supabase.auth.getUser()` and redirects to `/login`, and `middleware.ts` does the same

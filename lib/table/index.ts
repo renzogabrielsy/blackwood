@@ -93,4 +93,7 @@ export type {
 export { edgeJump, rowEdge, sheetCorner, pageJump } from './nav';
 export type { JumpGrid, JumpDir, PageJumpInput } from './nav';
 
+export { shiftFirstItemIndex, DEFAULT_FIRST_ITEM_INDEX } from './paging';
+export type { FirstItemIndexShiftInput } from './paging';
+
 export { needsGroupSpacer } from './grouping';

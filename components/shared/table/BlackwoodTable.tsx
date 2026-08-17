@@ -6,7 +6,9 @@ import type { ItemProps, TableComponents, TableProps, TableVirtuosoHandle } from
 
 import { cn } from '@/lib/utils';
 import { clampDraftAdd, DEFAULT_DRAFT_ROWS } from '@/lib/table';
-import type { CellAddress, ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
+import type {
+    CellAddress, ColumnSpec, GridRow, RowKind, SummarySpans, TableSettings,
+} from '@/lib/table';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
 import { useTableRows } from '@/lib/hooks/use-table-rows';
 import { useTableInteraction } from '@/lib/hooks/use-table-interaction';
@@ -69,6 +71,17 @@ import type { RowHandlers } from './Row';
 //     invisible and a second copy of the table.
 //   • Pinned cells are fully OPAQUE. Never glass, no alpha, no `backdrop-blur`.
 //   • Nothing on a row, a cell or a selection is ever animated.
+//
+// ── THE TWO SEAMS A BIDIRECTIONAL PAGER AND A GROUPED SHEET NEED ────────────────
+//
+//   • **`firstItemIndex`** is the virtualiser's PUBLIC index base. It rebases the index
+//     reported OUT and NOTHING handed IN — `scrollIntoView` and `initialTopMostItemIndex`
+//     still take RAW array positions, because both clamp against `totalCount` and a
+//     rebased index would resolve to the last row every time. The consumer decrements it
+//     by the ITEMS it prepended, in the same state batch as the prepend.
+//   • **`renderChromeRow`** lets a NON-ADDRESSABLE row render its own cells — a group
+//     heading, a per-group rule-off — where `summaryRows` can only reach the footer. It
+//     returns CELLS and never a `<tr>`, because the virtualiser owns the row element.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 /** A row's stable identity — its own id, or a chrome row's key. */
@@ -140,6 +153,22 @@ export interface TableContextTarget<Row> {
     close(): void;
 }
 
+/**
+ * What a CHROME row's renderer is handed — everything it needs to tile the column table
+ * actually rendered, so it obeys the layout rules rather than guessing at them.
+ *
+ * All three are read off the resolved columns, so a column hidden for this viewer, moved
+ * by a saved order or resized moves the chrome row with it.
+ */
+export interface TableChromeRowApi<Row, Ctx> {
+    /** The visible columns, in display order, with saved widths applied. */
+    cols: readonly ColumnSpec<Row, Ctx>[];
+    /** The same lanes the summary rows tile with — `frozen`, `spacer`, `weight`, `note`, `total`, `trailing`. */
+    spans: SummarySpans;
+    /** `cols.length` — the `colSpan` of a cell that runs the whole width. */
+    colCount: number;
+}
+
 export interface BlackwoodTableProps<Row, Ctx> {
     /** Already FLAT — records, their children, drafts and chrome rows, in render order. */
     items: readonly GridRow<Row>[];
@@ -161,6 +190,31 @@ export interface BlackwoodTableProps<Row, Ctx> {
      */
     rowKey?(item: GridRow<Row>, index: number): string;
     renderEditor?(args: TableEditorArgs<Row, Ctx>): React.ReactNode;
+    /**
+     * The CELLS of a row the caret can never land on — a group heading, a per-group
+     * rule-off, an inline notice. Consulted **only** for items whose `RowKind.addressable`
+     * is false; returning `null` (or omitting the prop) leaves today's behaviour exactly as
+     * it is, one empty cell per column.
+     *
+     * **It returns cells, NOT a `<tr>`** — the container wraps them in its own row element
+     * in both scopes, and that is load-bearing rather than a style choice. `TableVirtuoso`
+     * owns the row element: it puts `data-index` / `data-known-size` / its own `style` on
+     * the `<tr>` and measures rows by reading them back off `<tbody>`'s children, so a
+     * renderer that emitted its own row element would lose measurement — the defect already
+     * fixed once in `Row.tsx`, which is why `TableCells` and `TableRowShell` are separate.
+     *
+     * The row still gets its family's declared `height`, and it never enters `navRows`.
+     *
+     * Two layout rules the `api` exists so a consumer can OBEY rather than guess:
+     *   • **A lane of span 0 renders NO cell at all.** `colSpan={0}` means "to the end of
+     *     the column group" in HTML, which is the opposite of nothing.
+     *   • **A cell sitting under a pinned column stays OPAQUE** — a solid theme token, never
+     *     glass and never an alpha, or the scrolling cells bleed through it.
+     *
+     * Must be referentially stable (`useCallback`): it is a dependency of every row's
+     * content, so a fresh identity per render re-renders the whole sheet.
+     */
+    renderChromeRow?(item: GridRow<Row>, api: TableChromeRowApi<Row, Ctx>): React.ReactNode | null;
     summaryRows?: readonly TableSummaryRow[];
     /** Show the blank-row pool's `Add N more rows` control. */
     drafts?: { enabled: boolean; defaultCount?: number };
@@ -190,6 +244,27 @@ export interface BlackwoodTableProps<Row, Ctx> {
     startReached?(): void;
     endReached?(): void;
     initialTopMostItemIndex?: number;
+    /**
+     * endless only — the virtualiser's PUBLIC index base, which is what makes a
+     * bidirectional keyset pager possible. Ignored in the focus scope.
+     *
+     * Seed it with a large number (`DEFAULT_FIRST_ITEM_INDEX`) and **DECREMENT it by the
+     * number of ITEMS prepended — never by the number of RECORDS fetched.** One fetched
+     * record can add several items: its child sub-rows, the group spacer above it, a
+     * heading. Counting records while the array grows by more is a known bug class here,
+     * and it fails in exactly the way this prop exists to prevent — the viewport jumps by
+     * the difference. Measure `items.length` either side, or hand both lengths to
+     * `shiftFirstItemIndex`.
+     *
+     * The prepend and the new base must land in **ONE state batch**. Two updates render the
+     * list once with every row shifted and jump it back on the next commit.
+     *
+     * **It rebases the index the virtualiser reports OUT, and nothing this component hands
+     * IN.** `scrollIntoView` and `initialTopMostItemIndex` still take RAW array positions:
+     * both inbound APIs clamp against `totalCount`, so a rebased index resolves to the last
+     * row every time.
+     */
+    firstItemIndex?: number;
     emptyMessage?: React.ReactNode;
 }
 
@@ -326,10 +401,11 @@ function DefaultCellEditor({
 export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     const {
         items, kinds, specs, ctx, settings, onSettingsChange, edits, storedText, scope,
-        rowKey, renderEditor: renderEditorProp, summaryRows, drafts, onAddDrafts,
-        onRemoveDrafts, onRestoreDrafts, draftKind = 'draft', childKinds,
+        rowKey, renderEditor: renderEditorProp, renderChromeRow, summaryRows, drafts,
+        onAddDrafts, onRemoveDrafts, onRestoreDrafts, draftKind = 'draft', childKinds,
         contextMenuItems, rowClassFor, rowRules, onSelectionChange, onStateChange,
-        className, startReached, endReached, initialTopMostItemIndex, emptyMessage,
+        className, startReached, endReached, initialTopMostItemIndex, firstItemIndex,
+        emptyMessage,
     } = props;
 
     const columns = useTableColumns(specs, ctx, settings);
@@ -600,11 +676,31 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
 
     // ── Rows ─────────────────────────────────────────────────────────────────────
 
+    /**
+     * The lanes and the column table a chrome row tiles. Memoized because it is a
+     * dependency of every row's content — a fresh object here re-renders the whole sheet.
+     */
+    const chromeApi = React.useMemo<TableChromeRowApi<Row, Ctx>>(
+        () => ({ cols, spans: columns.spans, colCount: cols.length }),
+        [cols, columns.spans],
+    );
+
     /** Everything a row needs that is NOT static, resolved per item. */
     const cellsFor = React.useCallback(
         (item: GridRow<Row>, index: number): React.ReactNode => {
             const kind = kinds.get(item.kind);
             if (!kind) return null;
+
+            // A NON-ADDRESSABLE row may render its own cells — a group heading, a
+            // per-group rule-off. Asked here and nowhere else, and gated on `addressable`,
+            // so an addressable row can never be replaced by chrome and the caret can never
+            // be pointed at one. Returning null falls through to the ordinary cells, which
+            // is what keeps "omit the prop" byte-identical with the behaviour before it.
+            if (!kind.addressable && renderChromeRow) {
+                const chrome = renderChromeRow(item, chromeApi);
+                if (chrome !== null && chrome !== undefined) return chrome;
+            }
+
             const navRow = rows.navIndexOfItem.get(index) ?? -1;
             const nav = navRow >= 0 ? rows.navRows[navRow] : undefined;
             const rowId = nav?.rowId ?? null;
@@ -634,6 +730,7 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         [
             kinds, rows, cols, ctx, edits.edits, activeCell, bandFor, invalidByRow,
             isEditing, renderEditor, columns.pinnedLeft, columns.pinnedRight, classes,
+            renderChromeRow, chromeApi,
         ],
     );
 
@@ -737,6 +834,9 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                         context={virtuosoContext}
                         computeItemKey={computeItemKey}
                         initialTopMostItemIndex={initialTopMostItemIndex}
+                        // The PUBLIC index base, and the ONLY place it is used. Nothing this
+                        // component hands the virtualiser is rebased by it — see the prop.
+                        firstItemIndex={firstItemIndex}
                         startReached={startReached}
                         endReached={endReached}
                         increaseViewportBy={{ top: 400, bottom: 400 }}

@@ -48,6 +48,8 @@ import {
   sheetCorner,
   pageJump,
   needsGroupSpacer,
+  shiftFirstItemIndex,
+  DEFAULT_FIRST_ITEM_INDEX,
 } from '../lib/table/index'
 import type { ColumnSpec, GridRow, JumpGrid, RowKind, SummaryLaneCol } from '../lib/table/index'
 import { resolveColumns } from '../lib/hooks/use-table-columns'
@@ -436,6 +438,55 @@ check('PageUp/PageDown move a VIEWPORT, measured in real row heights', () => {
   assert.equal(pageJump({ rowHeights: [], viewportHeight: 100, from: 0, dir: 'down' }), 0)
 })
 
+// ═══ The bidirectional pager's PUBLIC index base ═══════════════════════════════
+
+check('a prepend rebases by the ITEMS added, never by the RECORDS fetched', () => {
+  // The case the playground actually produces: 10 older records arrive, and the flat array
+  // grows by 12 — their group heading, plus the spacer the old leading group never needed.
+  // Decrementing by 10 would leave the viewport 2 rows out; this is why the helper takes
+  // the two ARRAY lengths and does the subtraction itself.
+  assert.equal(
+    shiftFirstItemIndex({
+      firstItemIndex: DEFAULT_FIRST_ITEM_INDEX,
+      previousItemCount: 156,
+      nextItemCount: 168,
+    }),
+    DEFAULT_FIRST_ITEM_INDEX - 12,
+  )
+
+  // Nothing prepended ⇒ nothing rebased, so calling it on a no-op page is harmless.
+  assert.equal(
+    shiftFirstItemIndex({ firstItemIndex: 1_000, previousItemCount: 40, nextItemCount: 40 }),
+    1_000,
+  )
+
+  // A list that got SHORTER never RAISES the base: `firstItemIndex` is specified for
+  // inverse infinite scrolling and is only ever decreased, so un-shifting it would drag
+  // the viewport instead of leaving it alone.
+  assert.equal(
+    shiftFirstItemIndex({ firstItemIndex: 1_000, previousItemCount: 40, nextItemCount: 9 }),
+    1_000,
+  )
+
+  // And it never hands the virtualiser a negative base, which it refuses.
+  assert.equal(
+    shiftFirstItemIndex({ firstItemIndex: 5, previousItemCount: 0, nextItemCount: 12 }),
+    0,
+  )
+  assert.equal(
+    shiftFirstItemIndex({ firstItemIndex: 0, previousItemCount: 0, nextItemCount: 999 }),
+    0,
+  )
+
+  // Successive pages compose: the base walks down by the items each one added.
+  let base = DEFAULT_FIRST_ITEM_INDEX
+  for (const [before, after] of [[156, 168], [168, 180], [180, 192]] as const) {
+    base = shiftFirstItemIndex({ firstItemIndex: base, previousItemCount: before, nextItemCount: after })
+  }
+  assert.equal(base, DEFAULT_FIRST_ITEM_INDEX - 36)
+  assert.ok(DEFAULT_FIRST_ITEM_INDEX > 1_000, 'the default base must leave a pager real headroom')
+})
+
 // ═══ The pieces that moved, still behaving ═════════════════════════════════════
 
 check('the moved helpers kept their contracts', () => {
@@ -728,6 +779,48 @@ check('a NON-ADDRESSABLE row never enters the nav space, but is still MEASURED',
     withDraft.navRows.slice(0, 3).map((n) => n.rowId),
     ['r1', 'c1', 'r2'],
     'the nav space is byte-identical above the new row',
+  )
+})
+
+check('a CHROME row is MEASURED, tiles the lanes, and is still not a coordinate', () => {
+  // The family a `renderChromeRow` consumer declares: a group heading. It is exactly a
+  // spacer as far as the axis is concerned — the renderer changes what it PAINTS, never
+  // whether the caret may land on it.
+  const kinds = new Map<string, RowKind<PRow>>([
+    ...ROW_KINDS,
+    ['group-header', { kind: 'group-header', height: 28, addressable: false, occupies: () => null }],
+  ])
+  const items: GridRow<PRow>[] = [{ kind: 'group-header', key: 'gh:a' }, ...ROW_ITEMS]
+  const r = resolveRows({ items, kinds, cols: ROW_COLS })
+
+  // A real row of the sheet: it keeps its family's declared height, and every item is
+  // measured because a virtualiser has to size the rows it may not visit.
+  assert.equal(r.rowHeights[0], 28)
+  assert.equal(r.rowHeights.length, items.length)
+
+  // …and it is not a coordinate. The nav space is byte-identical with and without it.
+  assert.deepEqual(r.navRows.map((n) => n.rowId), ['r1', 'c1', 'r2'])
+  assert.equal(r.navIndexOfItem.get(0), undefined, 'a heading has no nav row')
+  assert.equal(r.placeById.has('gh:a'), false)
+  assert.equal(r.itemIndexOfNav.get(0), 1, 'nav 0 is the record BELOW the heading')
+  assert.ok(r.cellExists(0, 0), 'nav 0 still resolves against the record, not the heading')
+
+  // What the renderer is handed. The lanes tile the column table exactly once, so a
+  // heading built from them covers every column and none twice — and a lane of span 0
+  // must render NO cell, because `colSpan={0}` is "to the end of the column group".
+  const bare = summarySpans(ROW_COLS)
+  assert.equal(
+    bare.frozen + bare.spacer + bare.weight + bare.note + bare.total + bare.trailing,
+    ROW_COLS.length,
+  )
+  assert.equal(bare.frozen, 0, 'no pinned block ⇒ no pinned cell on the chrome row at all')
+
+  const pinnedSpans = summarySpans(both)
+  assert.equal(pinnedSpans.frozen, 2)
+  assert.equal(
+    pinnedSpans.frozen + (both.length - pinnedSpans.frozen),
+    both.length,
+    'the pinned block plus everything right of it IS the row',
   )
 })
 

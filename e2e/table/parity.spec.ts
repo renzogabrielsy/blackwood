@@ -22,8 +22,12 @@ import type { Locator, Page } from '@playwright/test';
 //   nav 0 = r0 · nav 1,2 = r0's children · nav 3 = r1 · nav 4 = r2 · … · nav 9 = r7 ·
 //   nav 10,11 = r7's children · nav 12 = r8 …
 //   120 records + 36 children = nav 0…155, then 5 drafts = nav 156…160.
-// Group spacers are NOT addressable, so they never appear in that numbering — which is
-// the whole point of them.
+// Group spacers and group HEADINGS are NOT addressable, so neither ever appears in that
+// numbering — which is the whole point of them.
+//
+// ITEMS (what the virtualiser renders, which is a different count): 12 group headings +
+// 11 spacers + 120 records + 36 children + 5 drafts = 184. That gap between 184 items and
+// 120 records is exactly what `firstItemIndex` has to be decremented by.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 const PLAYGROUND = '/dev/table-playground';
@@ -42,6 +46,19 @@ const LAST_FILLED_ROW = 155;
 /** Last nav row of all — the fifth blank draft. */
 const LAST_NAV_ROW = 160;
 
+/** `DEFAULT_FIRST_ITEM_INDEX` — the public index base the playground seeds its pager with. */
+const FIRST_ITEM_INDEX_BASE = 100_000;
+/** Everything the flat array holds at load: see the ITEMS note above. */
+const ITEM_COUNT = 184;
+/**
+ * What ONE press of `Load older` adds to that array: 10 older records, **plus** the group
+ * heading the new batch brings with it, **plus** the spacer the old leading group never
+ * needed. 12, not 10 — which is the whole reason the base is rebased off the array's
+ * length rather than off the number of records fetched.
+ */
+const PREPENDED_ITEMS = 12;
+const PREPENDED_RECORDS = 10;
+
 const cell = (page: Page, row: number, col: number): Locator =>
     page.locator(`[data-nav-row="${row}"] [data-col="${col}"]`);
 
@@ -56,6 +73,31 @@ async function open(page: Page) {
 /** Click a cell the way an operator does — on the cell body, not on its edge. */
 async function clickCell(page: Page, row: number, col: number) {
     await cell(page, row, col).click({ position: { x: 8, y: 8 } });
+}
+
+/**
+ * Wait for the virtualised scroller to come to REST.
+ *
+ * The virtualiser suppresses its own upward-scroll compensation while a scroll is still in
+ * progress, so a prepend that lands mid-scroll legitimately drifts by a row — real
+ * behaviour, and not what the pager spec is about. An operator presses "load older" on a
+ * sheet that has stopped moving; so does the suite.
+ */
+async function scrollSettled(page: Page) {
+    const scrollTop = () =>
+        page.evaluate(
+            () =>
+                (document.querySelector('[data-blackwood-table] > div') as HTMLElement | null)
+                    ?.scrollTop ?? -1,
+        );
+    let last = await scrollTop();
+    let quiet = 0;
+    for (let i = 0; i < 25 && quiet < 3; i++) {
+        await page.waitForTimeout(120);
+        const now = await scrollTop();
+        quiet = now === last ? quiet + 1 : 0;
+        last = now;
+    }
 }
 
 const active = (page: Page) => readout(page, 'active-cell');
@@ -480,6 +522,68 @@ test.describe('Blackwood Table — the sheet itself', () => {
         await expect(cell(page, 14, 2)).toHaveText('Item 10');
     });
 
+    test('a chrome row renders INSIDE the body and tiles the lanes', async ({ page }) => {
+        await open(page);
+
+        const heading = page.locator('[data-group-heading="g0"]');
+        await expect(heading).toHaveText('g0');
+
+        // It is a BODY row. `summaryRows` can only reach the footer, so this is the seam
+        // that exists — a heading interleaved with the data, not pinned under it.
+        expect(await heading.evaluate((el) => el.closest('tbody') !== null)).toBe(true);
+        expect(await heading.evaluate((el) => el.closest('tfoot') !== null)).toBe(false);
+
+        // Two cells tile all eight columns: the pinned block, then everything right of it.
+        // A lane of span 0 would have to render NO cell — `colSpan={0}` is "to the end of
+        // the column group" in HTML, the opposite of nothing.
+        const row = page.locator('tr', { has: page.locator('[data-group-heading="g0"]') });
+        await expect(heading).toHaveAttribute('colspan', '6');
+        await expect(row.locator('th')).toHaveAttribute('colspan', '2');
+        expect(await row.locator('td, th').count()).toBe(2);
+
+        // The cell over the pinned block is OPAQUE — any alpha and the scrolling rows bleed
+        // through it, which is the frozen-panes rule, not a style preference.
+        const pinned = row.locator('th');
+        expect(await pinned.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(
+            'rgba(0, 0, 0, 0)',
+        );
+        expect(await pinned.evaluate((el) => getComputedStyle(el).backdropFilter)).toBe('none');
+
+        // Hiding a column moves the heading with the column table, because its spans are
+        // read off the columns actually rendered rather than hard-coded.
+        await page.getByTestId('toggle-secret').check();
+        await expect(page.locator('[data-group-heading="g0"]')).toHaveAttribute('colspan', '7');
+    });
+
+    test('the caret can never land on a chrome row', async ({ page }) => {
+        await open(page);
+
+        // r9 is nav 13 and r10 is nav 14, with a spacer AND a group heading rendered
+        // between them — the coordinate space is byte-identical with and without either.
+        await clickCell(page, 13, 2);
+        await expect(cell(page, 13, 2)).toHaveText('Item 9');
+        await expect(page.locator('[data-group-heading="g1"]')).toHaveCount(1);
+
+        await page.keyboard.press('ArrowDown');
+        await expect(active(page)).toHaveText('14,2');
+        await expect(cell(page, 14, 2)).toHaveText('Item 10');
+
+        await page.keyboard.press('ArrowUp');
+        await expect(active(page)).toHaveText('13,2');
+
+        // Tab walks the same gap in reading order and skips it too: off the end of r9,
+        // straight onto the first cell of r10.
+        await page.keyboard.press('End');
+        await expect(active(page)).toHaveText('13,7');
+        await page.keyboard.press('Tab');
+        await expect(active(page)).toHaveText('14,0');
+
+        // And clicking it moves nothing: a chrome cell carries no `data-col`, so the row's
+        // one dispatcher finds no column and the caret stays where it was.
+        await page.locator('[data-group-heading="g1"]').click({ position: { x: 8, y: 8 } });
+        await expect(active(page)).toHaveText('14,0');
+    });
+
     test('a resize handle reports a new width', async ({ page }) => {
         await open(page);
         const before = await cell(page, 0, 2).boundingBox();
@@ -494,5 +598,75 @@ test.describe('Blackwood Table — the sheet itself', () => {
 
         const after = await cell(page, 0, 2).boundingBox();
         expect(after!.width).toBeGreaterThan(before!.width + 40);
+    });
+});
+
+test.describe('Blackwood Table — the bidirectional pager', () => {
+    test('a prepend rebases by the ITEMS added, not by the records fetched', async ({ page }) => {
+        await open(page);
+        await expect(page.getByTestId('item-count')).toHaveText(String(ITEM_COUNT));
+        await expect(page.getByTestId('first-item-index')).toHaveText(String(FIRST_ITEM_INDEX_BASE));
+
+        await page.getByTestId('load-older').click();
+
+        await expect(page.getByTestId('older-count')).toHaveText(String(PREPENDED_RECORDS));
+        await expect(page.getByTestId('item-count')).toHaveText(String(ITEM_COUNT + PREPENDED_ITEMS));
+        // 12, not 10. Rebasing by the record count would leave the base two too high and
+        // every public index — and the viewport with it — two rows out.
+        await expect(page.getByTestId('first-item-index')).toHaveText(
+            String(FIRST_ITEM_INDEX_BASE - PREPENDED_ITEMS),
+        );
+
+        // The page really did land ABOVE: r0 is now the eleventh addressable row, and the
+        // sheet's first corner is the oldest row fetched.
+        await clickCell(page, PREPENDED_RECORDS, 2);
+        await expect(cell(page, PREPENDED_RECORDS, 2)).toHaveText('Item 0');
+        await page.keyboard.press('Control+Home');
+        await expect(active(page)).toHaveText('0,0');
+        await expect(cell(page, 0, 2)).toHaveText('Older 0');
+
+        // A second page composes with the first.
+        await page.getByTestId('load-older').click();
+        await expect(page.getByTestId('first-item-index')).toHaveText(
+            String(FIRST_ITEM_INDEX_BASE - PREPENDED_ITEMS * 2),
+        );
+    });
+
+    test('prepending older rows does not move the viewport', async ({ page }) => {
+        await open(page);
+
+        // Somewhere in the middle, so there is content above the fold for a prepend to
+        // push against. The caret-follow scrolls the active row into view, so whatever it
+        // lands on is on screen.
+        await clickCell(page, 0, 2);
+        await page.keyboard.press('PageDown');
+        await page.keyboard.press('PageDown');
+        await scrollSettled(page);
+
+        const anchorRow = Number((await active(page).textContent())!.split(',')[0]);
+        const label = (await cell(page, anchorRow, 2).textContent())!;
+        expect(label).toMatch(/^(Item|sub) /);
+
+        // Located by TEXT, deliberately: `data-nav-row` shifts by 10 across the prepend,
+        // which is exactly the index space `firstItemIndex` exists to hold still.
+        const anchor = page.getByText(label, { exact: true }).first();
+        const before = await anchor.boundingBox();
+        expect(before).toBeTruthy();
+
+        await page.getByTestId('load-older').click();
+        await expect(page.getByTestId('older-count')).toHaveText(String(PREPENDED_RECORDS));
+        await scrollSettled(page);
+
+        const after = await anchor.boundingBox();
+        expect(after).toBeTruthy();
+        // The row is still exactly where the operator left it. Without the rebase it drops
+        // by the whole height of the page inserted above it — 380px here.
+        expect(Math.abs(after!.y - before!.y)).toBeLessThan(2);
+
+        // …and a second page is the same non-event.
+        await page.getByTestId('load-older').click();
+        await expect(page.getByTestId('older-count')).toHaveText(String(PREPENDED_RECORDS * 2));
+        await scrollSettled(page);
+        expect(Math.abs((await anchor.boundingBox())!.y - before!.y)).toBeLessThan(2);
     });
 });
