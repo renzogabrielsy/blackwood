@@ -57,7 +57,9 @@ Scan pattern: `grep -nE '/Users/|/home/|/private/tmp/|sk-|eyJ|API_KEY|SERVICE_RO
 literally named **`secret`** — a template-literal value `s0`/`s1`/…, label `'SECRET'`, a `data-testid="toggle-secret"`
 checkbox — because it exists to exercise the column-visibility predicate `visible: (ctx) => ctx.showSecret`.
 So the standard scan pattern lands 4+ hits on `secret` in that one file, forever, on every commit that
-touches the playground. Values are `s0`, `s1`, `s2`… Read the match; do not flag it.
+touches the playground. Values are `s0`, `s1`, `s2`… — and since 2026-08-17 (`e131aef`) the
+older-page generator that feeds the bidirectional-prepend test emits a second variant, `os0`/`os1`/…
+The parity spec adds its own `toggle-secret` hits too. Read the match; do not flag it.
 
 Same lesson as the `token` false positive above: **the scan matches NAMES, and a grid demo needs a
 column named after the thing it demonstrates.** Judge a hit by what the value IS, never by the identifier.
