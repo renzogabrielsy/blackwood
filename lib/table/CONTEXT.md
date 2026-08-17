@@ -27,12 +27,12 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `types.ts` | **The PORT.** `ColumnSpec` (what a column IS), `RowKind` (what shape a row is — above all `occupies(colKey)`), `DataSource` (where rows come from), plus `GridRow`, `CellAddress`, `FieldEdits`, `TableSettings`, `SaveVerdict`. |
 | `geometry.ts` | `pinnedCounts` / `pinnedOffsets` / `pinnedEndOffsets` / `pinnedWidth` / `isPinned`, `columnOffsets`, `minTableWidth`, `columnScrollLeft` (the caret-follow), `dragAutoScrollDelta`, `summarySpans`. |
 | `clipboard.ts` | `parseClipboardTable`, `tsvEscape`, `clipboardNumber`, `planPaste`, `pasteRowTargets` + `pasteKindsCompatible`, and **`tilePaste`** (new). |
-| `edits.ts` | `mergeFieldEdit`, `isDirtyFieldEdits`, `countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`, the draft-row constants, and **`createJournal` / `invertStep`** (new). |
+| `edits.ts` | `mergeFieldEdit`, `isDirtyFieldEdits`, **`forgetRows`**, `countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`, the draft-row constants, and **`createJournal` / `invertStep`**. |
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **39 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam and the header slot — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **44 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -152,6 +152,29 @@ write. Note the deliberate asymmetry — **clearing** a stored value IS an edit.
 `describeUnsavedWork` takes its **nouns as a parameter** so each consumer names its own rows
 ("3 edited receipts and 8 typed new rows") without a second copy of the counting.
 
+### `forgetRows` / `TableEdits.forget` — a save is PER ROW, so forgetting is too
+
+A batch save returns one verdict per row, so "saved" is rarely all-or-nothing: three
+receipts go up and one comes back `version_conflict`. `reset()` throws the refused row's
+typing away; forgetting nothing leaves two saved rows lit forever and the next Save
+re-posts them. `forget(rowIds)` is the missing third door.
+
+Three properties, all asserted:
+
+- **It is NOT `revertRow`.** That writes the stored value back *through the writer*, so it
+  journals — correct for an operator discarding an edit, which is undoable. Landing an edit
+  is the opposite: the stored value has just BECOME what was typed.
+- **The journal is CLEARED, not filtered.** One gesture can touch a saved row and an unsaved
+  one — a paste across three receipts is one step — so no step can survive a save. Same rule
+  `reset` obeys, over a narrower map.
+- **The pure projection returns the SAME object when it owes nothing**, so a save of a clean
+  sheet does not re-render it, and it never mutates the map the caller is still holding
+  while the save is in flight.
+
+A consumer with CHILD rows must name them too: they are separate rows in the edit map, and
+forgetting a parent alone leaves its children's edits as permanently unsaved work over
+values that are now stored.
+
 ### `firstItemIndex` — the two index spaces a bidirectional pager lives in
 
 A virtualiser that can PREPEND reports a **PUBLIC** index out (array position +
@@ -182,6 +205,60 @@ result never goes negative (the virtualiser requires a positive base).
 suppresses its upward-scroll compensation while a scroll is in progress, so the parity
 spec waits for the scroller to come to rest before pressing "load older" — which is also
 what an operator does. Settled, the anchor row does not move by a pixel across two pages.
+
+### `CellContext` — a column is not the same thing on every row family
+
+`parse(text, ctx)` judged a lane. But `RowKind.occupies()` may hand back a **different
+`field`** for the same column on a child row — and when it does, the two cells mean
+different things and cannot share a verdict. On the first real consumer the SUPPLIER lane is
+a trader on a receipt (resolved against a closed list of twelve) and a free-text **label** on
+a moisture draw, so a column-level `parse` refused `NO MARK/SUNDRY` with a persistent toast
+and no way to satisfy it: the operator was locked out of a cell.
+
+`parse` and `normalize` therefore take an optional third argument, `CellContext<Row>` —
+`{ field, kind, rowId, row }`. **`field` is the load-bearing member**: it is the SLOT's own
+answer, the same key every edit is filed under, and it is what distinguishes the families.
+It is built in exactly one place (`cellContextOf`, from `slotAt`), so a verdict can never be
+handed a different answer than the writer uses.
+
+This is `occupies()`'s insight one level further in, and the same shape as
+`CellSlot.addressable`: two questions being answered with one value. **Additive** — an
+implementation written before it existed ignores the parameter and behaves identically.
+
+### `normalize` — the committed text is CANONICALISED, once, inside the writer
+
+Excel's habit, and every operator's expectation: a date cell holds `6/27` while you type and
+`2026-06-27` from the moment you leave it, so what is on screen is what will be stored. The
+grid had nowhere to express that. Three near-misses, and each fails differently:
+
+- **In the editor's `onBlur`** — a click on another cell `preventDefault`s the mousedown so
+  the editor never blurs; the commit happens with the raw text and the editor unmounts.
+- **In the editor's `onKeyDown`** — catches Enter and Tab and misses click-away entirely.
+- **After the write, from `parse`** — a second write, therefore a second journal step, so
+  one Ctrl+Z would leave the cell half-corrected.
+
+So it runs inside `commitEdit`, **before** the single write, where every commit path already
+funnels: Enter, Tab, a click on another cell, a blur out of the grid, an arrow that commits
+and moves. It **may not refuse** — `parse` runs immediately afterwards on whatever it
+returned, which is what keeps an unreadable value both KEPT VERBATIM and REFUSED BY NAME.
+
+Without it a sheet holds two spellings of one value: `cleanPasted` already produces the
+canonical form for the same text arriving on the clipboard, so a typed `6/27` and a pasted
+`6/27` would be stored differently — and a shorthand equal to the stored value could never
+stop counting as dirty, because `mergeFieldEdit` compares text.
+
+### `formatEdited` — an unsaved value that is a DERIVATION, not a string
+
+A dirty cell cannot render through `format`, which reads the STORED row (that was the defect
+fixed in `Row.tsx`); the fix renders the raw text. Raw text is right for most columns and
+wrong for any lane whose stored form is derived from what is typed: `=27045*88%` sitting in
+a right-aligned figure column loses the lane's alignment, and a blank row being typed reads
+nothing like the receipt above it.
+
+It receives the text and the ctx and **deliberately no cell context** — it runs on the row
+render path, and an object per dirty cell per render would buy an answer no derivation needs
+(a lane's derivation does not change with the row family). Omit it and the raw text renders,
+byte-identical with before.
 
 ### `renderChromeRow` — a lane-spanning row INSIDE the body
 
@@ -289,10 +366,10 @@ was behaviour-preserving.
 mounts it on an in-memory data source, and **33 Playwright specs drive the real component**
 with no login and no database. See the two sections at the end of this file.
 
-**Five additive seams were added afterwards** (2026-08-17), each found the same way — by a
+**Nine additive seams were added afterwards** (2026-08-17), each found the same way — by a
 migration that correctly refused to proceed without it. **This is the only way seams in
-this module get found**: all five were invisible until a consumer needed one, and none of
-them was predicted by the plan.
+this module get found**: every one of them was invisible until a consumer needed it, and
+not one was predicted by the plan.
 
 | Seam | What the consumer could not say without it |
 |---|---|
@@ -301,16 +378,22 @@ them was predicted by the plan.
 | `apiRef` / `BlackwoodTableApi` | The imperative half — "go to row N", and handing the caret back after a dialog closes. |
 | `CellSlot.addressable` | *"This cell renders content and the caret must never stop on it."* Found by the first real migration slice, which had three such columns and no way to say so. |
 | `renderHeaderSlot` | *"Hang this popover off that column's header."* `HeaderCell.filterSlot` existed from the start with no wire to it. |
+| `forgetRows` / `TableEdits.forget` | *"These rows LANDED; that one was refused for a stale version."* A batch save's outcome is per row, and `reset` is all-or-nothing. |
+| `CellContext` on `parse` / `normalize` | *"This lane is a trader on a receipt and a free-text label on its child."* A column-level verdict blind to the slot's field locks the operator out of the child cell. |
+| `ColumnSpec.normalize` | *"`6/27` IS `2026-06-27` from the moment you leave the cell."* Every other place it could run misses at least one commit path or costs a second journal step. |
+| `ColumnSpec.formatEdited` | *"This unsaved value is an EXPRESSION; show me the figure."* A dirty cell renders raw text, which breaks a numeric lane's alignment. |
 
 Purely additive — a consumer that passes none of them, and a `RowKind` whose `occupies()`
 never mentions `addressable`, behaves exactly as before.
 
 **Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — is UNDER WAY.**
-Slice 1 (read-only: column specs, row families, the flatten, both scopes) landed as
-`app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx`, reachable only at `?grid=v2` and
-built BESIDE the live ledger, which is not edited by one character. The last two seams above
-are what that slice found. See `app/(app)/cenapro/deliveries/CONTEXT.md` → "The `?grid=v2`
-rewire".
+It lives at `app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx`, reachable only at
+`?grid=v2` and built BESIDE the live ledger, which is not edited by one character.
+**Slice 1** (read-only: column specs, row families, the flatten, both scopes) found
+`CellSlot.addressable` and `renderHeaderSlot`. **Slice 2** (editing, undo/redo, paste, the
+blank-row pool and the save) found the last four in the table above. Slice 3 is the toolbar,
+the filters, the row menu and the dialogs. See
+`app/(app)/cenapro/deliveries/CONTEXT.md` → "The `?grid=v2` rewire".
 
 **The alias layer in the Cenapro module is temporary.** `frozenOffsets` / `frozenBlockWidth`
 / its `DragScrollInput` / its `UnsavedWork` exist so the extraction changed nothing; they
@@ -341,8 +424,8 @@ None. That is the point — this module imports nothing outside itself.
 |---|---|
 | `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. |
 | `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the three predicates the whole module runs on — `cellExists` (render) / `cellAddressable` (the caret) / `cellEditable`. |
-| `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. |
-| `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. |
+| `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. Three doors OUT, and they mean different things: `revertRow` (journalled — discarding an edit is undoable), **`forget(rowIds)`** (the rows a save LANDED, journal cleared) and `reset` (everything). |
+| `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. Also the two verdict seams: `commitEdit` applies `ColumnSpec.normalize` before the single write, and `cellContextOf` hands both `normalize` and `parse` the SLOT's own field. |
 | `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
 | `components/shared/table/Row.tsx` | `TableCells` (**the memo boundary**, with the `NO_EDITS` / `NO_INVALID` singletons), `TableRowShell` (the `<tr>` and the four handlers, dispatching by `data-col`) and `TableRow` (their composition). Split 2026-08-17 — see below. |
 | `components/shared/table/HeaderCell.tsx` | **New.** Label + `title`, column-selection on the label, a `data-grid-chrome` filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |

@@ -1,20 +1,33 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, History } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { AlertTriangle, History, Loader2, Save } from 'lucide-react';
 import { format as formatDateFns, isValid, parseISO } from 'date-fns';
+import { toast } from 'sonner';
 
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
 import {
+    DEFAULT_DRAFT_ROWS,
     DEFAULT_FIRST_ITEM_INDEX,
     pinnedOffsets,
     shiftFirstItemIndex,
 } from '@/lib/table';
-import type { CellSlot, ColumnSpec, GridRow, RowKind } from '@/lib/table';
+import type {
+    CellContext,
+    CellSlot,
+    ColumnParseResult,
+    ColumnSpec,
+    GridRow,
+    RowKind,
+} from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
+import { saveDeliveries } from './actions';
+import { hasActiveLens, periodBounds } from './ledger-url';
 import { useDeliveriesWindow } from './use-deliveries-window';
 // The props interface is IMPORTED, never re-declared — that is what makes the two grids
 // interchangeable in `page.tsx` and what stops them drifting while both are alive. A
@@ -23,8 +36,11 @@ import { useDeliveriesWindow } from './use-deliveries-window';
 import type { DeliveriesLedgerProps } from './deliveries-ledger';
 import {
     buildColumns,
+    cleanPastedCell,
     clipboardNumber,
     columnCalcType,
+    countUnsavedWork,
+    describeUnsavedWork,
     duplicateBadge,
     flagSummary,
     formatDestinationCell,
@@ -38,6 +54,7 @@ import {
     labDecimals,
     needsDaySpacer,
     num,
+    parseDeliveryDate,
     priceEditText,
     sampleFieldFor,
     weightEditText,
@@ -45,10 +62,27 @@ import {
     ROW_H,
     SAMPLE_ROW_H,
     type DeliveryCol,
+    type DeliveryField,
     type DeliveryRecord,
     type RcDeliveryRow,
     type RcDeliverySampleRow,
+    type SaveDeliveryInput,
 } from './types';
+import {
+    buildDeliveryPatch,
+    buildSampleBlock,
+    dirtyReceiptIds,
+    draftLabel,
+    drawKeyOf,
+    drawRowId,
+    editedCellText,
+    isDraftKey,
+    makeDraftIds,
+    patchField,
+    rowLabel,
+    saveOutcomeMessage,
+    type PatchEnv,
+} from './grid-v2-save';
 import {
     NOT_PRICED_TEXT,
     SETTLEMENT_LABEL,
@@ -72,24 +106,21 @@ import {
 // be compared row-for-row against the original on the same real receipts, and be reverted
 // by deleting one file.
 //
-// ── WHAT THIS SLICE IS ──────────────────────────────────────────────────────────
-// Column specs · row families (`occupies`) · the flatten (day heading, `Σ DAY TOTAL`,
-// the endless day spacer) · a READ-ONLY render of both scopes.
+// ── WHAT THIS GRID DOES (slices 1 + 2) ──────────────────────────────────────────
+// SLICE 1 — column specs · row families (`occupies`) · the flatten (day heading,
+// `Σ DAY TOTAL`, the endless day spacer) · the render, in both scopes.
+// SLICE 2 — editing (open / commit / cancel), the parse + validate path, dirty state,
+// undo/redo, clipboard paste, the blank draft-row pool and its `Add N more rows`
+// control, and THE SAVE — receipts and their moisture draws — with the unsaved chip,
+// the Save button and a persistent, copyable refusal surface.
 //
-// ── WHAT IT DELIBERATELY IS NOT, YET ────────────────────────────────────────────
-// No editing, no save, no toolbar, no filter popovers, no context menu, no dialogs, no
-// blank draft rows. Where a behaviour is not built, this file renders NOTHING rather
-// than a control that looks alive and does nothing:
-//
-//   • `ctx.canEdit` is FALSE, and every editable column's `editable()` is ANDed with it.
-//     That is one switch, not fifteen omissions: with it off, `columnAcceptsEdit` refuses
-//     every cell, so Enter / F2 / double-click open no editor, Delete clears nothing and a
-//     paste reports that it landed outside the editable cells. Cells read `cursor-default`.
-//     Slice 2 flips it to true and wires `parse` + the save path.
-//   • The duplicate-peer popover and the import-flag popover are BUTTONS in the old
-//     ledger. Here their content rides in the cell's `title` instead — the same facts,
-//     with nothing pretending to be clickable.
-//   • The draft-row pool is absent: a blank row you cannot type into is not a blank row.
+// ── WHAT IT DELIBERATELY IS NOT, YET (slice 3) ──────────────────────────────────
+// No toolbar: no scope toggle, no month picker, no issue lenses, no search box, no
+// per-column filter popovers, no row context menu, and none of the three dialogs
+// (history / assign cheque / delete). Where a behaviour is not built, this file renders
+// NOTHING rather than a control that looks alive and does nothing — so the duplicate-peer
+// and import-flag POPOVERS still ride in a cell `title` instead of a button, and there is
+// no way to add or remove a moisture draw (that lives on the row menu).
 //
 // ── THE ROW MODEL, AND THE ONE PLACE IT IS EXPRESSED ────────────────────────────
 // A receipt and one of its moisture draws are DIFFERENT FAMILIES: a draw has no date, no
@@ -101,6 +132,24 @@ import {
 //
 // A slot also says whether the CARET may land on it (`CellSlot.addressable`), which is a
 // different question from whether the row renders content there — see `buildSlots`.
+//
+// ── THE DRAW BLOCK IS WHY SLICE 2 IS NOT JUST "TURN ON canEdit" ─────────────────
+// `useTableEdits` is keyed per CELL; the sample RPC replaces a receipt's whole BLOCK. So
+// a draw row carries a STABLE id built from its own database uuid (never its position —
+// an insert renumbers positions and would re-point every edit below it), a receipt counts
+// as dirty when any of its draws does, and the save reassembles every draw including the
+// untouched ones. All three live in `./grid-v2-save.ts`, which is pure and asserted.
+//
+// ── THE THREE PLATFORM SEAMS THIS SLICE FOUND ──────────────────────────────────
+//   • `ColumnSpec.normalize` — the DATE cell turns `6/27` into `2026-06-27` AT COMMIT, so
+//     what the operator sees from then on is what will be saved, and a typed date and the
+//     same date pasted are stored identically.
+//   • `ColumnSpec.parse`'s third argument (`CellContext`) — the SUPPLIER lane is a trader
+//     on a receipt and a free-text LABEL on a draw. Without it the column's own verdict
+//     refuses every legal draw label with a persistent toast.
+//   • `TableEdits.forget(rowIds)` — a batch save returns one verdict PER ROW, so the two
+//     receipts that landed must stop counting as unsaved while the one refused for a
+//     stale `row_version` keeps every character.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 // ─── Ctx — referentially stable, or the whole sheet re-renders ───────────────────
@@ -113,11 +162,56 @@ export interface DeliveryGridCtx {
      */
     canViewPrices: boolean;
     /**
-     * The slice-1 read-only gate. Every editable column ANDs its own rule with this, so
-     * "nothing in this grid can be typed into" is ONE fact in ONE place rather than a
-     * property of fifteen columns that happen to have been left incomplete.
+     * The grid-wide edit gate. Every editable column ANDs its own rule with this, so
+     * "nothing in this grid can be typed into" stays ONE fact in ONE place. Slice 2 holds
+     * it TRUE; it exists because a future read-only surface (a printed view, a locked
+     * period) should be one switch rather than fifteen omissions.
      */
     canEdit: boolean;
+    /** The 12 traders. A cell that does not resolve against them is refused, never stored. */
+    supplierCodes: readonly string[];
+    /** The 16 yards. Same rule. */
+    destinationCodes: readonly string[];
+    /**
+     * The year a bare `6/27` means when the ROW itself cannot say — the newest dated
+     * receipt in view, or the focused month.
+     */
+    fallbackYear: number;
+    /**
+     * The focused month's year in the focus scope, else null. It WINS over the row's own
+     * year, exactly as the ledger's `contextYearFor` does: in a month view every date the
+     * operator types belongs to that month's year.
+     */
+    scopeYear: number | null;
+}
+
+/**
+ * What a bare `6/27` means in THIS cell.
+ *
+ * The month scope decides first; otherwise the receipt's own year, because an operator
+ * correcting a 2025 row means 2025. A blank row has no year of its own and falls through
+ * to the sheet's.
+ */
+function contextYearFor(ctx: DeliveryGridCtx, storedDate: string | null | undefined): number {
+    if (ctx.scopeYear !== null) return ctx.scopeYear;
+    if (storedDate) {
+        const y = Number(storedDate.slice(0, 4));
+        if (Number.isFinite(y) && y > 1900) return y;
+    }
+    return ctx.fallbackYear;
+}
+
+function contextYearOf(ctx: DeliveryGridCtx, cell?: CellContext<DeliveryGridRow>): number {
+    return contextYearFor(ctx, cell?.row?.rec.row.delivery_date);
+}
+
+function patchEnv(ctx: DeliveryGridCtx, contextYear: number): PatchEnv {
+    return {
+        supplierCodes: ctx.supplierCodes,
+        destinationCodes: ctx.destinationCodes,
+        canViewPrices: ctx.canViewPrices,
+        contextYear,
+    };
 }
 
 // ─── The row shape the grid renders ──────────────────────────────────────────────
@@ -187,6 +281,7 @@ const DAY_HEADER_CELL = 'h-6 border-b border-border/40 bg-muted/25 px-2 py-1';
 const ROW_RULES: Record<string, string> = {
     delivery: 'border-b border-b-border',
     sample: 'border-b border-b-border/60',
+    draft: 'border-b border-b-border/40',
 };
 
 // ═══ Columns — TRANSLATED from `buildColumns`, never re-declared ═════════════════
@@ -238,7 +333,43 @@ function flagTitle(row: RcDeliveryRow): string | undefined {
         .join('\n');
 }
 
+/** A verdict that refuses nothing. The module reads only `ok`; the patch is never used. */
+const PARSE_OK: ColumnParseResult = { ok: true, patch: {} };
+
+/**
+ * THE commit verdict for a column, and it is `patchField` — the same function the SAVE
+ * runs. A value typed and the same value refused at save can never disagree, because
+ * there is only one of them.
+ *
+ * Two rules that are not `patchField`'s business, and are therefore expressed here:
+ *
+ *   1. **A BLANK cell commits without complaint.** `patchField` refuses a blank DATE and
+ *      a blank SUPPLIER — correctly, at SAVE, where a receipt with no payee is a cheque
+ *      nobody can write. At COMMIT it would mean clearing a cell you are about to retype
+ *      raises a toast that stays until you dismiss it. The old ledger draws the line in
+ *      exactly the same place.
+ *   2. **A column can mean something else on a child row.** `occupies()` maps SUPPLIER to
+ *      the draw's free-text `label`, so `cell.field` and the column's own field disagree —
+ *      and resolving `NO MARK/SUNDRY` against the trader list would refuse every legal
+ *      draw label forever. When the slot names a different field, this column's verdict
+ *      does not apply to this cell. (The seven lab lanes map to themselves, so they take
+ *      the ordinary path on both families and one rule covers everything.)
+ */
+function makeParse(field: DeliveryField) {
+    return (
+        text: string,
+        ctx: DeliveryGridCtx,
+        cell?: CellContext<DeliveryGridRow>,
+    ): ColumnParseResult => {
+        if (text.trim() === '') return PARSE_OK;
+        if (cell !== undefined && cell.field !== field) return PARSE_OK;
+        const verdict = patchField(field, text, patchEnv(ctx, contextYearOf(ctx, cell)));
+        return verdict.ok ? { ok: true, patch: verdict.patch as Record<string, unknown> } : verdict;
+    };
+}
+
 function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx> {
+    const field = col.field;
     const base = {
         key: col.key,
         label: col.label,
@@ -261,9 +392,34 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
         // has no arithmetic meaning); TTL PRICE is in even though it is read-only (a run of
         // receipt totals is the most useful thing on the sheet to add up).
         selectable: isSelectableColumn(col),
-        // Every field-bearing column is editable — SUBJECT TO the grid's edit gate. Slice 1
-        // holds that gate closed; the declaration is the column's real rule.
-        editable: col.field !== null ? (_row: DeliveryGridRow | null, ctx: DeliveryGridCtx) => ctx.canEdit : undefined,
+        /**
+         * Every field-bearing column is editable, SUBJECT TO the grid's edit gate — and
+         * PHP/KG additionally to the price boundary.
+         *
+         * That second clause is belt and braces on purpose: `buildColumns(false)` already
+         * drops the three ₱ columns entirely, so a gated viewer has no PHP/KG coordinate at
+         * all. But "the column is absent" and "the cell refuses to be typed into" are two
+         * different guarantees, the boundary is the one thing in this module that must not
+         * depend on a single mechanism, and `patchField` refuses the ₱ patch a third time
+         * at save. The SERVER refuses it a fourth (`saveDeliveries`), which is the one that
+         * actually counts.
+         */
+        editable:
+            field !== null
+                ? (_row: DeliveryGridRow | null, ctx: DeliveryGridCtx) =>
+                      ctx.canEdit && (field !== 'price' || ctx.canViewPrices)
+                : undefined,
+        /** The commit verdict. One definition, shared with the save — see `makeParse`. */
+        parse: field !== null ? makeParse(field) : undefined,
+        /**
+         * A pasted cell loses the rendering a spreadsheet copied with it, per column, and
+         * a pasted DATE goes through the same verdict a typed one does with the same
+         * context year — so `6/27` typed and `6/27` pasted can never land on two years.
+         */
+        cleanPasted:
+            field !== null
+                ? (raw: string, ctx: DeliveryGridCtx) => cleanPastedCell(col, raw, contextYearOf(ctx))
+                : undefined,
     };
 
     switch (col.key) {
@@ -299,6 +455,27 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
             return {
                 ...base,
                 cellKind: 'date',
+                /**
+                 * `6/27` becomes `2026-06-27` AT COMMIT, and this is the whole reason the
+                 * platform grew a `normalize` seam.
+                 *
+                 * Excel's own habit, and the old ledger's: the cell holds whatever was
+                 * typed until the operator leaves it, and from then on it shows exactly
+                 * what the database will store. Without it the sheet would hold two
+                 * spellings of one date — `cleanPasted` already writes ISO for the same
+                 * text arriving on the clipboard — and a shorthand equal to the stored
+                 * value could never stop counting as dirty.
+                 *
+                 * Unreadable text is returned VERBATIM, never guessed at: `parse` runs
+                 * immediately after this and refuses it by name, the cell keeps the
+                 * operator's characters, and Save refuses the row.
+                 */
+                normalize: (text, ctx, cell) => {
+                    const t = text.trim();
+                    if (!t) return text;
+                    const parsed = parseDeliveryDate(t, contextYearOf(ctx, cell));
+                    return 'error' in parsed ? text : parsed.iso;
+                },
                 format: (row) => {
                     const r = row.rec.row;
                     const undated = !r.delivery_date && !!r.delivery_date_raw;
@@ -410,6 +587,13 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
                 format: (row) => (
                     <span className="text-xs font-bold">{formatKg(row.rec.row.net_weight_kg) || dash}</span>
                 ),
+                // An UNSAVED weight shows the kilos it evaluates to, not `=27045*88%` —
+                // otherwise the lane loses its right-aligned alignment the moment a row is
+                // typed into, and a blank row reads nothing like the receipt above it. The
+                // formula is still what the cell opens with on focus (`storedText`).
+                formatEdited: (text) => (
+                    <span className="text-xs font-bold">{editedCellText('wt', text)}</span>
+                ),
             };
 
         case 'bd':
@@ -478,6 +662,15 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
                     <span className="flex w-full items-center justify-between gap-1 text-xs font-bold">
                         <span className="text-muted-foreground/70">₱</span>
                         <span>{formatRate(row.rec.row.price_php_kg)}</span>
+                    </span>
+                ),
+                // Same rule as WT, and it keeps the accounting format too: a dirty ₱ cell
+                // that fell back to raw text would lose the pinned symbol as well as the
+                // alignment.
+                formatEdited: (text) => (
+                    <span className="flex w-full items-center justify-between gap-1 text-xs font-bold">
+                        <span className="text-muted-foreground/70">₱</span>
+                        <span>{editedCellText('php_kg', text)}</span>
                     </span>
                 ),
             };
@@ -603,6 +796,7 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
 function buildSlots(cols: readonly DeliveryCol[]) {
     const receipt = new Map<string, CellSlot>();
     const draw = new Map<string, CellSlot>();
+    const draft = new Map<string, CellSlot>();
 
     for (const col of cols) {
         const hasField = col.field !== null;
@@ -611,6 +805,14 @@ function buildSlots(cols: readonly DeliveryCol[]) {
             editable: hasField,
             addressable: hasField,
         });
+
+        // ── A BLANK ROW ─────────────────────────────────────────────────────────
+        // The same lanes as a receipt for everything typeable, and NONE of the three
+        // derived ones: a row that exists nowhere has no ordinal, no DB-generated total
+        // and no settlement state. Returning a slot there would paint an empty cell the
+        // caret can sit in and a range can total, over a row with nothing behind it.
+        if (hasField) draft.set(col.key, { field: col.field!, editable: true });
+
         if (col.key === 'num') {
             // The tree glyph. Content, never a coordinate the operator can type into.
             draw.set(col.key, { field: 'num', editable: false, addressable: false });
@@ -619,7 +821,7 @@ function buildSlots(cols: readonly DeliveryCol[]) {
         const sf = sampleFieldFor(col.field);
         if (sf !== null) draw.set(col.key, { field: sf, editable: true });
     }
-    return { receipt, draw };
+    return { receipt, draw, draft };
 }
 
 // ═══ The flatten ════════════════════════════════════════════════════════════════
@@ -658,7 +860,11 @@ function formatDayHeading(iso: string): string {
  * instead (`needsDaySpacer` in `./types` is the single rule, and `prevDate === undefined`
  * is the whole of "never a leading gap at the top of the sheet").
  */
-function flatten(records: readonly DeliveryRecord[], scope: 'endless' | 'focus'): Flattened {
+function flatten(
+    records: readonly DeliveryRecord[],
+    scope: 'endless' | 'focus',
+    draftIds: readonly string[],
+): Flattened {
     const items: DeliveryItem[] = [];
     const chrome = new Map<string, ChromePayload>();
     const monthTotals: MonthTotals = { count: 0, netKg: 0, php: 0, dupCount: 0, dupNetKg: 0, dupPhp: 0 };
@@ -749,16 +955,24 @@ function flatten(records: readonly DeliveryRecord[], scope: 'endless' | 'focus')
         rec.samples.forEach((s, i) => {
             items.push({
                 kind: 'sample',
-                // `${deliveryId}#${index}` — the draw's identity for the edit map, the
-                // journal and (slice 2) the save. Note `addSample` inserts AFTER an index,
-                // so these keys renumber below an insertion; that is slice 2's problem and
-                // is called out in the handoff.
-                id: `${id}#${i}`,
+                // ── THE DRAW'S IDENTITY, and it is NOT its position ──────────────
+                // `${deliveryId}#${sampleUuid}`. Slice 1 used `#${index}`, which is wrong
+                // the moment the block changes shape: adding a draw inserts AFTER an index
+                // and renumbers every draw below it, so an edit filed under `#1` would
+                // silently re-point onto the blank that took its place — the right numbers
+                // landing on the wrong draw, with nothing on screen to show it. The uuid is
+                // stable across any insert, delete or reorder; ORDER stays a separate fact
+                // and is what `buildSampleBlock` turns back into `position`.
+                id: drawRowId(id, drawKeyOf(s, i)),
                 data: { rec, num: rowNum, sample: s, sampleIndex: i },
             });
         });
     }
     closeDay();
+
+    // The blank rows, always at the very bottom — after the last `Σ DAY TOTAL`, because
+    // they belong to no day until the operator gives one a date.
+    for (const draftId of draftIds) items.push({ kind: 'draft', id: draftId });
 
     return { items, chrome, monthTotals };
 }
@@ -809,12 +1023,17 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
         initialPage,
         monthRecords,
         anchor,
+        period,
         issue,
         query,
         filters,
+        dimensions,
         canViewPrices,
         loadError,
     } = props;
+
+    const router = useRouter();
+    const [isPending, startTransition] = React.useTransition();
 
     // ── Data ─────────────────────────────────────────────────────────────────────
     const lens = React.useMemo(() => ({ issue, query, filters }), [issue, query, filters]);
@@ -827,17 +1046,54 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
         [scope, win.records, monthRecords],
     );
 
+    const recordsById = React.useMemo(() => {
+        const m = new Map<string, DeliveryRecord>();
+        for (const r of records) m.set(r.row.id ?? '', r);
+        return m;
+    }, [records]);
+
+    // ── The blank rows at the bottom ─────────────────────────────────────────────
+    //
+    // Rendered only where a blank row MEANS something: never under a data-quality lens, a
+    // search or a column filter (those views are a CUT of history, and a new receipt does
+    // not belong at the end of a cut), and in the endless scope only when the window is
+    // genuinely at the newest end — otherwise the blanks would sit in the MIDDLE of it.
+    const showDrafts = !hasActiveLens({ issue, query, filters }) && (scope === 'focus' || !win.hasNewer);
+    const [draftIds, setDraftIds] = React.useState<string[]>(() => makeDraftIds(DEFAULT_DRAFT_ROWS));
+
     const { items, chrome, monthTotals } = React.useMemo(
-        () => flatten(records, scope),
-        [records, scope],
+        () => flatten(records, scope, showDrafts ? draftIds : []),
+        [records, scope, showDrafts, draftIds],
     );
+
+    /**
+     * The date a blank row starts on: the NEWEST date already in view, because an operator
+     * adding rows is almost always continuing the day they were just reading. It is a
+     * DEFAULT, not an edit — it never makes a row dirty, and the strip above the sheet
+     * says it out loud, because a date nobody typed must not reach the database unseen.
+     */
+    const draftDefaultDate = React.useMemo(() => {
+        for (let i = records.length - 1; i >= 0; i--) {
+            const d = records[i].row.delivery_date;
+            if (d) return d;
+        }
+        if (scope === 'focus' && period) return periodBounds(period).from;
+        return formatDateFns(new Date(), 'yyyy-MM-dd');
+    }, [records, scope, period]);
+
+    /** The year a bare `6/27` means when the row itself cannot say. */
+    const fallbackYear = React.useMemo(() => {
+        if (scope === 'focus' && period) return period.year;
+        const y = Number(draftDefaultDate.slice(0, 4));
+        return Number.isFinite(y) && y > 1900 ? y : new Date().getFullYear();
+    }, [scope, period, draftDefaultDate]);
 
     // ── Columns and families ─────────────────────────────────────────────────────
     const cols = React.useMemo(() => buildColumns(canViewPrices), [canViewPrices]);
     const specs = React.useMemo(() => cols.map(specFor), [cols]);
 
     const kinds = React.useMemo<ReadonlyMap<string, RowKind<DeliveryGridRow>>>(() => {
-        const { receipt, draw } = buildSlots(cols);
+        const { receipt, draw, draft } = buildSlots(cols);
         return new Map<string, RowKind<DeliveryGridRow>>([
             ['delivery', {
                 kind: 'delivery',
@@ -851,6 +1107,14 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
                 addressable: true,
                 occupies: (colKey) => draw.get(colKey) ?? null,
             }],
+            // A blank row is a REAL, fully addressable, fully editable row that simply has
+            // no id yet — the same family shape as a receipt minus the three derived lanes.
+            ['draft', {
+                kind: 'draft',
+                height: ROW_H,
+                addressable: true,
+                occupies: (colKey) => draft.get(colKey) ?? null,
+            }],
             // Chrome. None of the three is addressable, so none of them enters `navRows`
             // and the keyboard coordinate space is byte-identical with and without them.
             ['group-header', { kind: 'group-header', height: 24, addressable: false, occupies: () => null }],
@@ -859,11 +1123,29 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
         ]);
     }, [cols]);
 
+    // The dimension CODES, one array each — every cell verdict resolves against these, and
+    // a fresh array per render would re-run every one of them.
+    const supplierCodes = React.useMemo(
+        () => dimensions.suppliers.map((s) => s.code ?? '').filter(Boolean),
+        [dimensions.suppliers],
+    );
+    const destinationCodes = React.useMemo(
+        () => dimensions.destinations.map((d) => d.code ?? '').filter(Boolean),
+        [dimensions.destinations],
+    );
+
     // `ctx` MUST be referentially stable — it is a dependency of the column resolution, of
     // every editability verdict and of every cell's `format`.
     const ctx = React.useMemo<DeliveryGridCtx>(
-        () => ({ canViewPrices, canEdit: false }),
-        [canViewPrices],
+        () => ({
+            canViewPrices,
+            canEdit: true,
+            supplierCodes,
+            destinationCodes,
+            fallbackYear,
+            scopeYear: scope === 'focus' && period ? period.year : null,
+        }),
+        [canViewPrices, supplierCodes, destinationCodes, fallbackYear, scope, period],
     );
 
     // ── Cell text ────────────────────────────────────────────────────────────────
@@ -874,16 +1156,22 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
     }, [items]);
 
     /**
-     * What a cell HOLDS, as text. Read by the jump keys (`filled`), by a COPY that has no
-     * `clipboardValue` on its column, and — once slice 2 opens an editor — by the editor's
-     * initial value, which is why the two formula lanes return the FORMULA.
+     * What a cell HOLDS, as text — the editor's opening value, the jump keys' `filled`
+     * probe, and the value an edit must return to in order to stop counting as unsaved.
+     * The two formula lanes therefore return the FORMULA, not the figure.
      *
      * The two DERIVED columns are answered here rather than in `receiptText` because their
      * value is not on the receipt row at all: `#` is a position in the current view and
      * `PAID?` comes from the settlement row riding alongside it.
+     *
+     * A BLANK ROW has no stored row, so its canonical text is empty everywhere except the
+     * DATE — which carries the sheet's default. That is what makes typing the default date
+     * by hand a NON-edit (`mergeFieldEdit` drops it) instead of a row that can never be
+     * made clean again.
      */
     const storedText = React.useCallback(
         (rowId: string, field: string): string => {
+            if (isDraftKey(rowId)) return field === 'delivery_date' ? draftDefaultDate : '';
             const row = byRowId.get(rowId);
             if (!row) return '';
             if (field === 'num') return row.sample ? '' : String(row.num);
@@ -895,14 +1183,12 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
             }
             return row.sample ? drawText(row.sample, field) : receiptText(row.rec.row, field);
         },
-        [byRowId],
+        [byRowId, draftDefaultDate],
     );
 
-    // Slice 1 has no drafts and writes nothing, but the module needs its single writer:
-    // `cellText` is what the jump keys read, and `edits` is what a cell renders over its
-    // stored value once slice 2 turns editing on.
-    const noDrafts = React.useCallback(() => false, []);
-    const edits = useTableEdits({ canonicalText: storedText, isDraft: noDrafts });
+    // THE single journalled writer. Every mutation in this grid — an inline commit, a
+    // Delete, a paste, an Escape revert, undo and redo — goes through `edits.applyEdits`.
+    const edits = useTableEdits({ canonicalText: storedText, isDraft: isDraftKey });
 
     // ── The pager's PUBLIC index base ────────────────────────────────────────────
     //
@@ -955,6 +1241,196 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
         }
         return 0;
     });
+
+    // ── The blank-row pool ───────────────────────────────────────────────────────
+    //
+    // `onAddDrafts` returns the ids it created SYNCHRONOUSLY, because a paste that runs
+    // past the last blank row needs them inside the same gesture — and those ids ride on
+    // the journal step, so one Ctrl+Z takes back the paste AND the rows it grew.
+    const onAddDrafts = React.useCallback((count: number) => {
+        const ids = makeDraftIds(count);
+        setDraftIds((prev) => [...prev, ...ids]);
+        return ids;
+    }, []);
+
+    const onRemoveDrafts = React.useCallback((ids: readonly string[]) => {
+        const gone = new Set(ids);
+        setDraftIds((prev) => prev.filter((id) => !gone.has(id)));
+    }, []);
+
+    const onRestoreDrafts = React.useCallback((ids: readonly string[]) => {
+        setDraftIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    }, []);
+
+    // ── Unsaved work ─────────────────────────────────────────────────────────────
+    //
+    // THE draw-block dirty union. `useTableEdits` reports dirty ROW ids, and a moisture
+    // draw is a row of its own — so a receipt whose only change is a lab reading on its
+    // third draw appears in that set as `${deliveryId}#<uuid>` and NEVER under its own id.
+    // Without this fold it would not look dirty, would not be counted, would not be saved,
+    // and the operator's typing would vanish at the next remount with no error anywhere.
+    const dirtyReceipts = React.useMemo(
+        () => dirtyReceiptIds(edits.dirtyRecords),
+        [edits.dirtyRecords],
+    );
+
+    /**
+     * ONE number, two consumers: the "N unsaved" chip and the Save button's disabled
+     * state. (Slice 3's axis guard becomes the third, and it must read this same number —
+     * a guard that prompts while Save is greyed out is a false alarm, and an operator who
+     * meets three false alarms clicks through the fourth without reading it.)
+     */
+    const unsaved = React.useMemo(
+        () => countUnsavedWork(dirtyReceipts, edits.dirtyDrafts),
+        [dirtyReceipts, edits.dirtyDrafts],
+    );
+    const dirtyCount = unsaved.total;
+
+    const [saving, setSaving] = React.useState(false);
+
+    // ── SAVE ─────────────────────────────────────────────────────────────────────
+    //
+    // Two loops, one server action, and one rule above both: **nothing is written unless
+    // every dirty row can be turned into a legal patch.** A batch that posted the good
+    // rows and reported the rest would leave the sheet half-saved with the refusals still
+    // on screen, and the operator with no way to tell which half landed.
+    //
+    // The moisture draws are the part that is easy to get wrong. `buildSampleBlock`
+    // reassembles the receipt's WHOLE block — every draw, edited or not — because
+    // `cenapro_save_rc_delivery_samples` REPLACES it; posting only the touched draws would
+    // delete the others. And the block only rides along when something in it actually
+    // moved (`touched`), so an ordinary field edit does not rewrite six unrelated draws.
+    const handleSave = React.useCallback(async () => {
+        if (dirtyCount === 0 || saving) return;
+
+        const map = edits.edits;
+        const inputs: SaveDeliveryInput[] = [];
+        const problems: string[] = [];
+
+        // ── Stored receipts ──────────────────────────────────────────────────────
+        for (const deliveryId of dirtyReceipts) {
+            const rec = recordsById.get(deliveryId);
+            // Scrolled out of the loaded window between the edit and the Save. Its text is
+            // gone with it, so there is nothing to post and nothing to warn about.
+            if (!rec) continue;
+
+            const label = rowLabel(rec);
+            const version = rec.row.row_version;
+            if (version === null || version === undefined) {
+                problems.push(`${label}: the row is missing its version token — reload before editing.`);
+                continue;
+            }
+
+            const env = patchEnv(ctx, contextYearFor(ctx, rec.row.delivery_date));
+            const built = buildDeliveryPatch(map[deliveryId] ?? {}, env);
+            const block = buildSampleBlock(deliveryId, rec.samples, map);
+            const errors = [...built.errors, ...block.errors];
+            if (errors.length > 0) {
+                for (const e of errors) problems.push(`${label}: ${e}`);
+                continue;
+            }
+
+            const samples = block.touched ? block.payload : undefined;
+            if (Object.keys(built.patch).length === 0 && !samples) continue;
+            inputs.push({ key: deliveryId, id: deliveryId, expectedRowVersion: version, patch: built.patch, samples, label });
+        }
+
+        // ── The blank rows at the bottom ─────────────────────────────────────────
+        for (const draftId of draftIds) {
+            if (!edits.dirtyDrafts.has(draftId)) continue;
+            const e = map[draftId] ?? {};
+            const label = draftLabel(e, draftDefaultDate);
+
+            const parsedDate = parseDeliveryDate(e.delivery_date ?? draftDefaultDate, fallbackYear);
+            if ('error' in parsedDate) {
+                problems.push(`${label}: ${parsedDate.error}`);
+                continue;
+            }
+            if (!(e.supplier ?? '').trim()) {
+                problems.push(`${label}: a new receipt needs a supplier — a cheque with no payee cannot be liquidated.`);
+                continue;
+            }
+
+            const built = buildDeliveryPatch(
+                { ...e, delivery_date: parsedDate.iso },
+                patchEnv(ctx, fallbackYear),
+            );
+            if (built.errors.length > 0) {
+                for (const err of built.errors) problems.push(`${label}: ${err}`);
+                continue;
+            }
+            if (Object.keys(built.patch).length === 0) continue;
+            inputs.push({ key: draftId, id: null, expectedRowVersion: null, patch: built.patch, label });
+        }
+
+        if (problems.length > 0) {
+            errorToast(
+                `${problems.length} change${problems.length === 1 ? '' : 's'} could not be saved — nothing was written.`,
+                { description: problems.join('\n') },
+            );
+            return;
+        }
+        if (inputs.length === 0) {
+            toast.info('Nothing to save.');
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const result = await saveDeliveries(inputs);
+            const savedKeys = result.results.filter((r) => r.ok).map((r) => r.key);
+            const failed = result.results.filter((r) => !r.ok);
+            const savedDrafts = savedKeys.filter(isDraftKey);
+
+            if (savedKeys.length > 0) {
+                // ── Forget the rows that LANDED, and NOTHING else ────────────────
+                // A batch verdict is per row, so a `version_conflict` on one receipt must
+                // not cost the other two their save, and must not cost ITSELF a character.
+                // A saved receipt's DRAW rows are named explicitly — they are separate
+                // rows in the edit map, and forgetting the receipt alone would leave its
+                // lab edits sitting there as permanently unsaved work over values that
+                // are now stored.
+                const forgettable: string[] = [];
+                for (const key of savedKeys) {
+                    forgettable.push(key);
+                    const rec = recordsById.get(key);
+                    if (rec) rec.samples.forEach((s, i) => forgettable.push(drawRowId(key, drawKeyOf(s, i))));
+                }
+                edits.forget(forgettable);
+            }
+            if (savedDrafts.length > 0) {
+                // The draft became a real receipt: drop its blank row, then top the pool
+                // back up so the run of blanks under the sheet stays the same length
+                // (Sheets never shrinks it either).
+                const consumed = new Set(savedDrafts);
+                setDraftIds((prev) => [
+                    ...prev.filter((k) => !consumed.has(k)),
+                    ...makeDraftIds(savedDrafts.length),
+                ]);
+            }
+
+            if (failed.length > 0) {
+                errorToast(`${failed.length} receipt${failed.length === 1 ? '' : 's'} did not save.`, {
+                    description: failed
+                        .map((f) => `${f.label} — ${saveOutcomeMessage(f.outcome, f.message)}`)
+                        .join('\n\n'),
+                });
+            }
+            if (result.savedCount > 0) {
+                toast.success(`Saved ${result.savedCount} receipt${result.savedCount === 1 ? '' : 's'}`);
+                // A NEW receipt has to be looked up, not merged in: it did not exist when
+                // this window was read, and its date decides where in history it belongs.
+                if (scope !== 'endless') startTransition(() => router.refresh());
+                else if (savedDrafts.length > 0) await win.reset({ kind: 'latest' });
+                else await win.refreshWindow();
+            }
+        } finally {
+            setSaving(false);
+        }
+    }, [
+        dirtyCount, saving, edits, dirtyReceipts, recordsById, ctx, draftIds,
+        draftDefaultDate, fallbackYear, scope, win, router,
+    ]);
 
     // ── Chrome rows — cells, never a `<tr>` ──────────────────────────────────────
     const renderChromeRow = React.useCallback(
@@ -1094,6 +1570,9 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
             );
         }
         if (item.kind === 'sample') return 'group bg-muted/20 transition-colors duration-150 hover:bg-muted/40';
+        // A blank row reads as a blank row: the same wash the ledger gives its draft pool,
+        // so the end of history is visible without a heading announcing it.
+        if (item.kind === 'draft') return 'group bg-muted/10 transition-colors duration-150 hover:bg-muted/30';
         return undefined;
     }, []);
 
@@ -1104,6 +1583,9 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
     const { fetchOlder, fetchNewer } = win;
     const startReached = React.useCallback(() => void fetchOlder(), [fetchOlder]);
     const endReached = React.useCallback(() => void fetchNewer(), [fetchNewer]);
+
+    /** Saving, or the focus scope's post-save `router.refresh()` still in flight. */
+    const busy = saving || isPending;
 
     // ═══ Render ══════════════════════════════════════════════════════════════════
     return (
@@ -1116,13 +1598,52 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
                     grid=v2
                 </span>
                 <span>
-                    Read-only preview of the Blackwood Table rewire — no editing, no save, no filters, no row
-                    menu. The live ledger is at the same URL without <code>?grid=v2</code>.
+                    Blackwood Table rewire — typing and saving are live; the toolbar, filters, row menu and
+                    dialogs are not built yet. The ledger is at the same URL without <code>?grid=v2</code>.
                 </span>
                 <span className="font-mono">
                     {monthTotals.count} receipt{monthTotals.count === 1 ? '' : 's'}
                     {win.totalCount !== null && scope === 'endless' ? ` of ${win.totalCount}` : ''}
                 </span>
+
+                {/* The blank rows' seeded date, SAID OUT LOUD. A `format` runs against the
+                    stored row and a blank row has none, so the muted per-row default the
+                    ledger paints has nowhere to render here — and a date nobody typed must
+                    not reach a payment ledger unseen. One sheet, one default, one sentence. */}
+                {showDrafts ? (
+                    <span className="font-mono">
+                        · new rows are dated <span className="font-bold">{draftDefaultDate}</span> unless you
+                        type one
+                    </span>
+                ) : null}
+
+                <div className="ml-auto flex items-center gap-2" data-grid-chrome>
+                    {dirtyCount > 0 ? (
+                        <span className="animate-fade-in rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">
+                            {describeUnsavedWork(unsaved)} unsaved
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        data-testid="save-deliveries"
+                        onClick={() => void handleSave()}
+                        disabled={dirtyCount === 0 || busy}
+                        className={cn(
+                            'inline-flex h-6 items-center gap-1 rounded border px-2 font-medium transition-colors duration-150',
+                            dirtyCount > 0 && !busy
+                                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                                : 'border-input text-muted-foreground',
+                            (dirtyCount === 0 || busy) && 'cursor-not-allowed opacity-60',
+                        )}
+                    >
+                        {busy ? (
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                        ) : (
+                            <Save className="size-3" aria-hidden="true" />
+                        )}
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
             </div>
 
             {loadError ? (
@@ -1149,6 +1670,14 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
                 storedText={storedText}
                 scope={scope}
                 childKinds={CHILD_KINDS}
+                // The blank-row pool and its `Add N more rows` control. `enabled` is what
+                // also lets a paste taller than the sheet GROW into new rows, so it is off
+                // under a lens for exactly the same reason the rows are.
+                draftKind="draft"
+                drafts={{ enabled: showDrafts, defaultCount: DEFAULT_DRAFT_ROWS }}
+                onAddDrafts={onAddDrafts}
+                onRemoveDrafts={onRemoveDrafts}
+                onRestoreDrafts={onRestoreDrafts}
                 rowRules={ROW_RULES}
                 rowClassFor={rowClassFor}
                 renderChromeRow={renderChromeRow}

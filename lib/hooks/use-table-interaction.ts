@@ -17,7 +17,7 @@ import {
     tilePaste,
     tsvEscape,
 } from '@/lib/table';
-import type { CellAddress, CellSlot, ColumnSpec, JumpDir, JumpGrid } from '@/lib/table';
+import type { CellAddress, CellContext, CellSlot, ColumnSpec, JumpDir, JumpGrid } from '@/lib/table';
 import { errorToast } from '@/lib/toast';
 import { focusGrid, isGridChrome } from '@/components/shared/table/PasteSink';
 import type { RowHandlers } from '@/components/shared/table/Row';
@@ -236,6 +236,24 @@ export function useTableInteraction<Row, Ctx>(
     );
 
     /**
+     * WHICH cell a column-level verdict is about — see `CellContext`.
+     *
+     * Built here, from the slot, so `parse` and `normalize` can never be handed a
+     * different answer than the one every edit is filed under. It matters because a column
+     * is not the same thing on every row family: `occupies()` may name a different `field`
+     * on a child row, and a verdict blind to that refuses text that is legal there.
+     */
+    const cellContextOf = React.useCallback(
+        (at: NonNullable<ReturnType<typeof slotAt>>): CellContext<Row> => ({
+            field: at.field,
+            kind: at.nav.kind.kind,
+            rowId: at.nav.rowId,
+            row: at.nav.data,
+        }),
+        [],
+    );
+
+    /**
      * May this cell be edited? The row family's answer AND the column's, combined here
      * and only here — see `columnAcceptsEdit` for why they are two different questions.
      */
@@ -272,7 +290,7 @@ export function useTableInteraction<Row, Ctx>(
             const at = slotAt(cell);
             if (!at || !at.spec.parse) return;
             const text = storeCellText(at.nav.rowId, at.field);
-            const verdict = at.spec.parse(text, ctx);
+            const verdict = at.spec.parse(text, ctx, cellContextOf(at));
             if (verdict.ok) {
                 onInvalid?.(at.nav.rowId, at.spec.key, false);
                 return;
@@ -284,7 +302,7 @@ export function useTableInteraction<Row, Ctx>(
                 description: `You typed: ${text}\n\n${verdict.error}\n\nThe cell keeps your text — nothing was written.`,
             });
         },
-        [slotAt, storeCellText, ctx, onInvalid],
+        [slotAt, storeCellText, ctx, onInvalid, cellContextOf],
     );
 
     /**
@@ -349,11 +367,27 @@ export function useTableInteraction<Row, Ctx>(
     const commitEdit = React.useCallback(() => {
         const draft = draftRef.current;
         draftRef.current = null;
-        // The write comes FIRST: `commit()` runs the parse verdict, which has to read the
-        // value the operator actually left in the cell.
-        if (draft) setCellText(draft.cell, draft.text);
+        if (draft) {
+            // ── The column canonicalises what was typed, ONCE, and HERE ──────────
+            // Every commit path funnels through this function — Enter, Tab, a click on
+            // another cell (which `preventDefault`s the mousedown, so the editor never
+            // blurs), a blur out of the grid, an arrow that commits and moves. Doing it in
+            // the editor instead would cover some of those and silently miss the rest, and
+            // doing it after the write would cost a second journal step.
+            //
+            // It is a rewrite, never a refusal: `commit()` below runs `parse` on whatever
+            // this produced, so an unreadable value is still kept verbatim and still
+            // refused by name.
+            const at = slotAt(draft.cell);
+            const text = at?.spec.normalize
+                ? at.spec.normalize(draft.text, ctx, cellContextOf(at))
+                : draft.text;
+            // The write comes FIRST: `commit()` runs the parse verdict, which has to read
+            // the value the operator actually left in the cell.
+            setCellText(draft.cell, text);
+        }
         commit();
-    }, [setCellText, commit]);
+    }, [setCellText, commit, slotAt, ctx, cellContextOf]);
 
     const revertEdit = React.useCallback(() => {
         draftRef.current = null;

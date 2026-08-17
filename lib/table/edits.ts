@@ -50,6 +50,39 @@ export function isDirtyFieldEdits(edits: FieldEdits | undefined): boolean {
     return Object.values(edits).some((v) => (v ?? '').trim() !== '');
 }
 
+/**
+ * Drop the unsaved state of the named rows, and NOTHING else.
+ *
+ * **A batch save is per-row, so its outcome is per-row too**: three receipts go up, one
+ * comes back `version_conflict`, and the two that landed must stop counting as unsaved
+ * while the third keeps every character the operator typed. Forgetting everything
+ * (`reset`) throws the refused row's work away; forgetting nothing leaves two saved rows
+ * lit forever, and the next Save re-posts them.
+ *
+ * It is a plain projection rather than a mutation so the caller can compare references:
+ * **the SAME object comes back when no named row held anything**, which is what keeps a
+ * save of a clean sheet from re-rendering it.
+ *
+ * This is deliberately NOT expressed as "write the stored value back through the writer".
+ * That is what `revertRow` does, and it is the right shape for an operator discarding an
+ * edit — it journals, so it can be undone. A save is the opposite: the stored value has
+ * just CHANGED to what was typed, and an undo reaching back past it would have to un-write
+ * the database. The caller clears the journal in the same gesture.
+ */
+export function forgetRows(
+    edits: Readonly<Record<string, FieldEdits>>,
+    rowIds: readonly string[],
+): Record<string, FieldEdits> {
+    let touched = false;
+    const next: Record<string, FieldEdits> = { ...edits };
+    for (const id of rowIds) {
+        if (!(id in next)) continue;
+        delete next[id];
+        touched = true;
+    }
+    return touched ? next : (edits as Record<string, FieldEdits>);
+}
+
 // ═══ Unsaved work — what an axis change is about to destroy ═════════════════════
 //
 // Changing a URL axis (the scope, the period, a lens, the search, a column filter)

@@ -18,6 +18,7 @@ export type {
     CalcType,
     CellKind,
     CellSlot,
+    CellContext,
     RowKind,
     GridRow,
     CellAddress,
@@ -73,6 +74,7 @@ export type {
 export {
     mergeFieldEdit,
     isDirtyFieldEdits,
+    forgetRows,
     countUnsavedWork,
     hasUnsavedWork,
     describeUnsavedWork,

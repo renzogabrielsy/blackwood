@@ -103,11 +103,48 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
     /** What the cell shows once it has FOCUS — the formula, not the result. */
     editText?(row: Row, ctx: Ctx): string;
     /**
+     * What a cell carrying an UNSAVED value shows at rest.
+     *
+     * A dirty cell cannot render through `format`, which reads the STORED row — that was
+     * the defect fixed in `Row.tsx`, and the fix renders the raw text instead. Raw text is
+     * right for most columns and wrong for any column whose stored form is a DERIVATION of
+     * what is typed: an arithmetic weight cell shows `=27045*88%` where every other row in
+     * the lane shows a right-aligned figure, so the column loses its alignment and reads
+     * as broken until the sheet is saved.
+     *
+     * It receives the text and nothing else, deliberately: it runs on the row render path,
+     * and a cell context object would be an allocation per dirty cell per render for an
+     * answer no such formatter needs (a lane's derivation does not change with the row
+     * family). Omit it and the raw text renders, byte-identical with before it existed.
+     */
+    formatEdited?(text: string, ctx: Ctx): React_Node;
+    /**
      * THE commit verdict, and the only one. Returns the patch to apply, or a refusal
      * the UI shows verbatim. Used by an inline commit AND by a paste, so a value typed
      * and the same value pasted can never be judged differently.
+     *
+     * `cell` says WHICH cell is being judged — see `CellContext`, and note that a column
+     * can mean two different things on two row families, so a verdict that ignores it can
+     * be flatly wrong on a child row. Optional and ignorable: a `parse` written before it
+     * existed behaves exactly as it did.
      */
-    parse?(text: string, ctx: Ctx): ColumnParseResult;
+    parse?(text: string, ctx: Ctx, cell?: CellContext<Row>): ColumnParseResult;
+    /**
+     * Canonicalise what the operator COMMITTED, before it is written.
+     *
+     * Applied once, inside the single writer's commit, so every commit path — Enter, Tab,
+     * a click on another cell, a blur out of the grid — stores the same thing, and what
+     * the operator sees from that moment on is what will be saved. A date cell that turns
+     * `6/27` into `2026-06-27` is the canonical case: without it the sheet holds two
+     * spellings of one value (the typed one and the one `cleanPasted` produced for the
+     * same text arriving on the clipboard), and a shorthand equal to the stored value can
+     * never stop counting as dirty.
+     *
+     * It may NOT refuse — that is `parse`'s job, which runs immediately afterwards on
+     * whatever this returns. Returning the text unchanged is always legal, and omitting it
+     * is byte-identical with the behaviour before it existed.
+     */
+    normalize?(text: string, ctx: Ctx, cell?: CellContext<Row>): string;
 
     // ── Capabilities, declared rather than switched on ───────────────────────────
     /** May this cell be edited right now? Absent ⇒ editable iff `parse` exists. */
@@ -156,6 +193,33 @@ type React_Node = any;
 export type ColumnParseResult =
     | { ok: true; patch: Record<string, unknown> }
     | { ok: false; error: string };
+
+/**
+ * WHICH cell a column-level verdict is about.
+ *
+ * A `ColumnSpec` describes a lane, but a lane is not the same thing on every row family:
+ * `RowKind.occupies()` may hand back a DIFFERENT `field` for the same column on a child
+ * row, and when it does, the two cells mean different things and must be judged
+ * differently. `parse(text, ctx)` alone cannot tell them apart, so a column whose parent
+ * cell resolves a value against a closed domain would refuse the free text that is
+ * perfectly legal in its child's lane — and the operator would be locked out of a cell
+ * with a persistent refusal and no way to satisfy it.
+ *
+ * `field` is therefore the load-bearing member: it is the slot's own answer, the same one
+ * every edit is filed under. The rest is context a verdict may want and can ignore.
+ *
+ * This is `occupies()`'s insight one level further in, and the same shape as
+ * `CellSlot.addressable`: two questions that were being answered with one value.
+ */
+export interface CellContext<Row> {
+    /** The field `RowKind.occupies()` named for this cell — what distinguishes families. */
+    field: string;
+    /** The row family's `kind` name. */
+    kind: string;
+    rowId: string;
+    /** The stored row, or null for a row that exists nowhere yet (a draft). */
+    row: Row | null;
+}
 
 // ═══ Rows ═══════════════════════════════════════════════════════════════════════
 

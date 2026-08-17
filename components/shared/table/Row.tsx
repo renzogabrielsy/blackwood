@@ -187,11 +187,17 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
                                     the STORED row, so without this a cell would keep showing
                                     the old figure after a commit and the whole sheet would
                                     read as broken — the amber dirty tint would be the only
-                                    sign anything had been typed at all. A consumer that
-                                    wants the typed text formatted (a formula's result, say)
-                                    does it in its own editor and its own `format`. */}
+                                    sign anything had been typed at all.
+
+                                    `formatEdited` is how a column whose stored form is a
+                                    DERIVATION of what is typed (an arithmetic weight, a
+                                    price) shows the figure rather than the expression, so
+                                    the lane keeps its alignment while the row is dirty.
+                                    Absent ⇒ the raw text, exactly as before it existed. */}
                                 {slot !== null && rowEdits[slot.field] !== undefined
-                                    ? rowEdits[slot.field]
+                                    ? col.formatEdited
+                                      ? col.formatEdited(rowEdits[slot.field] as string, ctx)
+                                      : rowEdits[slot.field]
                                     : exists && data !== null
                                       ? col.format(data, ctx)
                                       : null}

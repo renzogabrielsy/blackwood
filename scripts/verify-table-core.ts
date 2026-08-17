@@ -36,6 +36,7 @@ import {
   tilePaste,
   mergeFieldEdit,
   isDirtyFieldEdits,
+  forgetRows,
   countUnsavedWork,
   describeUnsavedWork,
   createJournal,
@@ -1228,6 +1229,126 @@ check('a consumer can reach HeaderCell.filterSlot, and omitting it changes nothi
   const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
   assert.match(header, /\{filterSlot \? \(/)
   assert.match(header, /data-grid-chrome/, 'the slot is chrome: a keystroke inside it is not a grid gesture')
+})
+
+// ═══ Slice 2's three seams — a partial save, a per-cell verdict, a canonical commit ═══
+//
+// All three were found the same way as the five before them: by a real consumer that
+// could not say something. Each is additive, defaulted, and asserted here.
+
+check('forgetRows drops ONLY the named rows, and returns the SAME object when it owes nothing', () => {
+  const before = {
+    a: { supplier: 'BRIX' },
+    'a#s1': { moisture_pct: '12.4' },
+    b: { remarks: 'wet' },
+  }
+
+  // A batch save is per ROW, so its outcome is per row: `a` and its draw landed, `b` came
+  // back `version_conflict` and must keep every character the operator typed.
+  const after = forgetRows(before, ['a', 'a#s1'])
+  assert.deepEqual(Object.keys(after).sort(), ['b'])
+  assert.deepEqual(after.b, { remarks: 'wet' })
+  assert.notEqual(after, before, 'a real removal must produce a new object or React sees nothing')
+
+  // The input is never mutated — the caller still holds the pre-save map while the save is
+  // in flight, and a mutation here would rewrite it under them.
+  assert.deepEqual(Object.keys(before).sort(), ['a', 'a#s1', 'b'])
+
+  // …and REFERENTIAL EQUALITY when nothing named was held, so a save of a clean sheet (or
+  // a verdict naming a row that was never dirty) does not re-render it.
+  assert.equal(forgetRows(before, []), before)
+  assert.equal(forgetRows(before, ['nobody', 'c#s9']), before)
+
+  // It is NOT `reset`: forgetting everything by name leaves an empty map, not the original.
+  assert.deepEqual(forgetRows(before, ['a', 'a#s1', 'b']), {})
+})
+
+check('TableEdits.forget clears the JOURNAL, because an undo past a save would un-write the DB', () => {
+  const src = readFileSync(join(ROOT, 'lib/hooks/use-table-edits.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('applyEdits'), 'comment-stripping ate the source; this scan would be vacuous')
+
+  // The pure projection above is the whole of "which rows", so there is no second copy of
+  // the removal living in the hook.
+  assert.match(code, /forgetRows\(editsRef\.current, rowIds\)/)
+
+  const body = code.slice(code.indexOf('const forget ='), code.indexOf('const reset ='))
+  assert.ok(body.length > 0, 'forget must be defined before reset; this slice would be vacuous')
+  // Cleared, never filtered: ONE gesture can touch a saved row and an unsaved one — a paste
+  // across three receipts is one step — so no step survives a save.
+  assert.match(body, /journal\.clear\(\)/)
+  // And it must not churn: no named row held anything AND no journal ⇒ no state write.
+  assert.match(body, /if \(!changed && !hadJournal\) return/)
+
+  // Both doors still exist and mean different things.
+  assert.match(code, /forget\(rowIds: readonly string\[\]\): void/)
+  assert.match(code, /reset\(\): void/)
+})
+
+check('parse is told WHICH cell it is judging — a column is not one thing on every family', () => {
+  const src = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('validateOnCommit'), 'comment-stripping ate the source')
+
+  // The context is built from the SLOT, so `field` is the one `occupies()` named and the
+  // one every edit is filed under — never the column key, which is what makes a child
+  // lane distinguishable from its parent's at all.
+  assert.match(code, /field: at\.field,/)
+  assert.match(code, /kind: at\.nav\.kind\.kind,/)
+  assert.match(code, /rowId: at\.nav\.rowId,/)
+  assert.match(code, /row: at\.nav\.data,/)
+  assert.match(code, /at\.spec\.parse\(text, ctx, cellContextOf\(at\)\)/)
+
+  // ADDITIVE: the argument is optional on the port, so a `parse` written before it existed
+  // still typechecks and still behaves identically.
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /parse\?\(text: string, ctx: Ctx, cell\?: CellContext<Row>\): ColumnParseResult/)
+  assert.match(types, /export interface CellContext<Row>/)
+})
+
+check('normalize runs INSIDE the single writer, before the write, on every commit path', () => {
+  const src = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
+  const body = code.slice(code.indexOf('const commitEdit ='), code.indexOf('const revertEdit ='))
+  assert.ok(body.includes('commit()'), 'commitEdit body not found; this scan would be vacuous')
+
+  // Enter, Tab, a click on another cell (which preventDefaults the mousedown, so the editor
+  // never blurs), a blur out of the grid and an arrow that commits all funnel through this
+  // one function. Normalising in the EDITOR would cover some of them and silently miss the
+  // rest; normalising AFTER the write would cost a second journal step.
+  assert.match(body, /at\?\.spec\.normalize/)
+  assert.ok(
+    body.indexOf('normalize') < body.indexOf('setCellText'),
+    'the canonical text must be produced BEFORE the single write, not corrected after it',
+  )
+  // Omitted ⇒ the operator's own text, byte-identical with before the seam existed.
+  assert.match(body, /: draft\.text;/)
+  // It may not refuse — `parse` runs on whatever it produced, which is what keeps an
+  // unreadable value both KEPT and REFUSED BY NAME.
+  assert.ok(body.indexOf('setCellText') < body.indexOf('commit()'))
+
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /normalize\?\(text: string, ctx: Ctx, cell\?: CellContext<Row>\): string/)
+})
+
+check('formatEdited renders an unsaved DERIVED value, and its absence is the raw text', () => {
+  const src = readFileSync(join(ROOT, 'components/shared/table/Row.tsx'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('TableCellsInner'), 'comment-stripping ate the source')
+
+  // A dirty cell cannot render through `format` (that reads the STORED row), so it renders
+  // the raw text — right for most columns, wrong for any lane whose stored form is a
+  // DERIVATION of what is typed: `=27045*88%` in a right-aligned figure column.
+  assert.match(code, /col\.formatEdited\s*\n?\s*\?\s*col\.formatEdited\(rowEdits\[slot\.field\] as string, ctx\)/)
+  // ADDITIVE: absent ⇒ the raw text, exactly as before.
+  assert.match(code, /:\s*rowEdits\[slot\.field\]/)
+
+  // It takes the TEXT and the ctx, and deliberately no cell context: it runs on the row
+  // render path, and an object per dirty cell per render would buy an answer no derivation
+  // needs.
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /formatEdited\?\(text: string, ctx: Ctx\): React_Node/)
 })
 
 check('the REACT half is tenant-neutral too: no app/ imports, no domain vocabulary', () => {

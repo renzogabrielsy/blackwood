@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { createJournal, isDirtyFieldEdits, mergeFieldEdit } from '@/lib/table';
+import { createJournal, forgetRows, isDirtyFieldEdits, mergeFieldEdit } from '@/lib/table';
 import type { CellMutation, FieldEdits, JournalStep } from '@/lib/table';
 
 // ─────────────────────────────────────────────────────────────────────────────────
@@ -56,6 +56,21 @@ export interface TableEdits {
     applyEdits(cells: readonly CellEdit[], label: string, draftsAdded?: readonly string[]): void;
     /** Drop every unsaved value on a row (the context menu's "discard changes"). */
     revertRow(rowId: string): void;
+    /**
+     * Drop the unsaved state of the rows that just LANDED IN THE STORE, and clear the
+     * journal — the partial-save half of `reset`.
+     *
+     * A batch save returns one verdict per row, so "saved" is rarely all-or-nothing: two
+     * receipts write and a third comes back `version_conflict`. `reset()` would throw the
+     * refused row's typing away and `revertRow` is the wrong shape entirely (it journals,
+     * because discarding an edit is undoable — landing one is not).
+     *
+     * **The journal is cleared, not filtered.** Any step may touch a saved row alongside an
+     * unsaved one — one paste across three receipts is ONE step — and an undo reaching past
+     * a save would have to un-write the database. That is the same rule `reset` obeys,
+     * applied to a narrower edit map.
+     */
+    forget(rowIds: readonly string[]): void;
     /** Forget everything — after a successful save, or an axis remount. */
     reset(): void;
     /** Stored rows with unsaved edits. */
@@ -205,6 +220,25 @@ export function useTableEdits(input: UseTableEditsInput): TableEdits {
         [applyEdits, canonicalText],
     );
 
+    const forget = React.useCallback(
+        (rowIds: readonly string[]) => {
+            const hadJournal = journal.canUndo() || journal.canRedo();
+            const next = forgetRows(editsRef.current, rowIds);
+            const changed = next !== editsRef.current;
+            if (!changed && !hadJournal) return; // nothing to forget ⇒ no render
+            if (hadJournal) {
+                journal.clear();
+                bumpJournal();
+            }
+            if (changed) {
+                editsRef.current = next;
+                setEdits(next);
+                onChange?.();
+            }
+        },
+        [journal, onChange, bumpJournal],
+    );
+
     const reset = React.useCallback(() => {
         journal.clear();
         bumpJournal();
@@ -232,6 +266,7 @@ export function useTableEdits(input: UseTableEditsInput): TableEdits {
         cellText,
         applyEdits,
         revertRow,
+        forget,
         reset,
         dirtyRecords,
         dirtyDrafts,
