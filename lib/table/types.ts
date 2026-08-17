@@ -160,13 +160,48 @@ export type ColumnParseResult =
 // ═══ Rows ═══════════════════════════════════════════════════════════════════════
 
 /**
+ * What a row family HAS at one column — the answer `occupies()` gives.
+ *
+ * **`addressable` separates "this row renders content here" from "the caret may land
+ * here", and they are genuinely different questions.** A row ordinal, a database-computed
+ * total and a derived status badge all carry real content that must be painted, copied and
+ * (for a total) swept into a selection — while a keyboard run must walk straight past
+ * them, because there is nothing there to do.
+ *
+ * Before this field, `occupies()` answered both with one value: returning `null` blanked
+ * the cell (the renderer only calls `format` where a slot exists), and returning a slot
+ * made it a stop in every Tab run. A consumer with a content-bearing, caret-free column
+ * could only pick which of the two defects it preferred.
+ *
+ * It is the PER-CELL twin of `RowKind.addressable`, which is per-ROW, and of
+ * `ColumnSpec.selectable`, which is per-COLUMN. This is the granularity gap `occupies()`
+ * itself was introduced to close (BUG-024), one level further in.
+ */
+export interface CellSlot {
+    /** The field this cell reads and writes — the key every edit is filed under. */
+    field: string;
+    /** May it be edited, as far as the ROW FAMILY is concerned? */
+    editable: boolean;
+    /**
+     * May the caret land here?
+     *
+     * **Defaults to `true`, and omitting it is byte-identical with the behaviour before
+     * this field existed** — which is what keeps the seam purely additive. Set it false
+     * for a cell that has content but no keyboard business: the cell still renders, still
+     * tints, still copies and may still be swept into a selection, and only the caret
+     * (arrows, Tab, Enter, the jump keys and `apiRef.goToRow`) steps over it.
+     */
+    addressable?: boolean;
+}
+
+/**
  * A row FAMILY — what shape rows of this kind have.
  *
- * `occupies()` is the whole point, and the thing the old code never had. The Cenapro
- * ledger interleaves receipts, their moisture sub-rows and blank draft rows; a sub-row
- * has no date, no truck, no weight and no price. Without a per-row answer, a paste
- * mapped block rows onto nav rows by ARITHMETIC and scattered cells into the sub-rows
- * while reporting success (BUG-024), and the keyboard needed a bespoke resolver.
+ * `occupies()` is the whole point, and the thing the old code never had. A ledger that
+ * interleaves records, their child sub-rows and blank draft rows has rows that disagree
+ * about which columns they have. Without a per-row answer, a paste mapped block rows onto
+ * nav rows by ARITHMETIC and scattered cells into the sub-rows while reporting success
+ * (BUG-024), and the keyboard needed a bespoke resolver.
  */
 export interface RowKind<Row = unknown> {
     /** Open string, never a closed union — a new family must not be a compile error. */
@@ -177,14 +212,20 @@ export interface RowKind<Row = unknown> {
     rule?: string;
     /**
      * Which column this family occupies, and as what field. `null` ⇒ **this row has no
-     * cell there** — the keyboard steps over it, a paste skips it, the pill ignores it,
-     * and no tint is painted.
+     * cell there** — nothing is rendered, the keyboard steps over it, a paste skips it,
+     * the pill ignores it, and no tint is painted.
+     *
+     * A slot with `addressable: false` is the middle answer: the cell RENDERS but the
+     * caret never lands on it. See `CellSlot`.
      */
-    occupies(colKey: string, row: Row | null): { field: string; editable: boolean } | null;
+    occupies(colKey: string, row: Row | null): CellSlot | null;
     /**
      * Can the keyboard land on this family at all? Group spacers, headings and summary
      * rows are `false` and never enter the coordinate space — which is what keeps the
      * caret from ever resting on one.
+     *
+     * Whole-ROW. The per-CELL question is `CellSlot.addressable`; a family may be
+     * addressable and still have individual cells the caret must skip.
      */
     addressable: boolean;
 }

@@ -17,6 +17,7 @@ export type {
     FilterKind,
     CalcType,
     CellKind,
+    CellSlot,
     RowKind,
     GridRow,
     CellAddress,

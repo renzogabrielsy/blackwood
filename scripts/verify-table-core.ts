@@ -59,6 +59,7 @@ import {
   columnSelectable,
   createTableNavResolver,
 } from '../lib/hooks/use-table-rows'
+import type { ResolvedRows } from '../lib/hooks/use-table-rows'
 import { cellClassKey, createCellClassTable } from '../components/shared/table/cell-classes'
 import type { CellClassKey } from '../components/shared/table/cell-classes'
 
@@ -865,7 +866,7 @@ check('the nav resolver steps OVER coordinates a row does not have', () => {
   const nav = createTableNavResolver({
     rowCount: r.navRows.length,
     colCount: ROW_COLS.length,
-    exists: r.cellExists,
+    addressable: r.cellAddressable,
     editable: r.cellEditable,
   })
 
@@ -893,8 +894,181 @@ check('the nav resolver steps OVER coordinates a row does not have', () => {
   assert.ok(nav.isEditable({ row: 0, col: 1 }) && !nav.isEditable({ row: 0, col: 0 }))
 
   // A sheet where NOTHING is addressable cannot spin the Tab walk.
-  const dead = createTableNavResolver({ rowCount: 5, colCount: 4, exists: () => false, editable: () => false })
+  const dead = createTableNavResolver({ rowCount: 5, colCount: 4, addressable: () => false, editable: () => false })
   assert.equal(dead.resolve({ row: 0, col: 0 }, { kind: 'tab', shift: false }), null)
+})
+
+// ═══ "renders content here" ≠ "the caret may land here" ════════════════════════
+//
+// The FOURTH seam, found the same way the first three were: by the first real migration
+// slice, which could not say what it needed with the API it had. `occupies()` answered
+// both questions with one value — a slot RENDERS and is a keyboard stop, `null` is neither
+// — so a column carrying a row ordinal, a database-computed total or a derived status
+// badge could either be blank or be a dead stop in every Tab run, and nothing else.
+//
+// `CellSlot.addressable` is the middle answer, and it DEFAULTS TO TRUE. The first check
+// below is the whole additivity claim: on a table where nothing declares it, the new
+// predicate is byte-identical with the old one.
+
+/**
+ * The shape the migration actually produced: an ordinal lane both families paint and
+ * neither may be typed in, plus a computed lane the CHILD shows read-only while its parent
+ * owns it. `record` and `child` both keep an ordinary editable lane, so the caret still has
+ * somewhere to be.
+ */
+const SEAM_KINDS = new Map<string, RowKind<PRow>>([
+  ['record', {
+    kind: 'record', height: 32, addressable: true,
+    occupies: (k) =>
+      k === 'num' ? { field: 'num', editable: false, addressable: false }
+      : k === 'a' || k === 'b' ? { field: k, editable: true }
+      : null,
+  }],
+  ['child', {
+    kind: 'child', height: 26, addressable: true,
+    occupies: (k) =>
+      k === 'num' ? { field: 'num', editable: false, addressable: false }
+      : k === 'a' ? { field: 'a', editable: true }
+      // Content, no coordinate: the child shows the figure its parent owns.
+      : k === 'b' ? { field: 'b', editable: false, addressable: false }
+      : null,
+  }],
+])
+
+const SEAM_ITEMS: GridRow<PRow>[] = [
+  { kind: 'record', id: 'r1', data: { id: 'r1', n: 1 } },
+  { kind: 'child', id: 'c1', data: { id: 'c1', n: 2 } },
+  { kind: 'record', id: 'r2', data: { id: 'r2', n: 3 } },
+]
+
+const seamResolver = (rows: ResolvedRows<PRow>, probe: 'addressable' | 'exists') =>
+  createTableNavResolver({
+    rowCount: rows.navRows.length,
+    colCount: ROW_COLS.length,
+    addressable: probe === 'addressable' ? rows.cellAddressable : rows.cellExists,
+    editable: rows.cellEditable,
+  })
+
+/** The same fixture as `ROW_KINDS`, with the family it deliberately leaves out. */
+const ROW_KINDS_WITH_DRAFT = new Map<string, RowKind<PRow>>([
+  ...ROW_KINDS,
+  ['draft', {
+    kind: 'draft', height: 32, addressable: true,
+    occupies: (k) => (k === 'num' ? null : { field: k, editable: true }),
+  }],
+])
+
+check('addressable DEFAULTS to true — a row family that omits it behaves exactly as before', () => {
+  // Every fixture above this line predates the field and mentions it nowhere. On all of
+  // them the two predicates must agree at EVERY coordinate, in bounds and out of it —
+  // which is the entire "purely additive" claim, asserted rather than asserted-to.
+  for (const kinds of [ROW_KINDS, ROW_KINDS_WITH_DRAFT]) {
+    const r = resolveRows({ items: ROW_ITEMS, kinds, cols: ROW_COLS })
+    for (let row = -1; row <= r.navRows.length; row++) {
+      for (let col = -1; col <= ROW_COLS.length; col++) {
+        assert.equal(
+          r.cellAddressable(row, col),
+          r.cellExists(row, col),
+          `cellAddressable diverged from cellExists at ${row},${col} with nothing declaring it`,
+        )
+      }
+    }
+  }
+
+  // …and the nav resolver built on either predicate resolves identically there. Same
+  // moves as the check above, same answers.
+  const r = resolveRows({ items: ROW_ITEMS, kinds: ROW_KINDS, cols: ROW_COLS })
+  const byAddressable = seamResolver(r, 'addressable')
+  const byExists = seamResolver(r, 'exists')
+  for (const from of [{ row: 0, col: 1 }, { row: 0, col: 2 }, { row: 1, col: 2 }, { row: 2, col: 0 }]) {
+    for (const move of [
+      { kind: 'arrow', dir: 'down' }, { kind: 'arrow', dir: 'up' },
+      { kind: 'arrow', dir: 'left' }, { kind: 'arrow', dir: 'right' },
+      { kind: 'tab', shift: false }, { kind: 'tab', shift: true },
+      { kind: 'enter', shift: false },
+    ] as const) {
+      assert.deepEqual(byAddressable.resolve(from, move), byExists.resolve(from, move))
+    }
+  }
+})
+
+check('a non-addressable cell still EXISTS — it renders, it is never a coordinate', () => {
+  const r = resolveRows({ items: SEAM_ITEMS, kinds: SEAM_KINDS, cols: ROW_COLS })
+
+  // The ordinal lane: present on both families, so the cell is painted, tinted, copied and
+  // sweepable — and the caret may not land on it.
+  for (const row of [0, 1, 2]) {
+    assert.ok(r.cellExists(row, 0), 'the ordinal cell must RENDER')
+    assert.ok(!r.cellAddressable(row, 0), 'the caret must not land on the ordinal')
+    assert.ok(!r.cellEditable(row, 0))
+  }
+
+  // The computed lane, non-addressable on the CHILD only — the two answers differ per
+  // cell, not per column and not per row.
+  assert.ok(r.cellExists(1, 2) && !r.cellAddressable(1, 2), 'the child shows the figure it may not visit')
+  assert.ok(r.cellExists(0, 2) && r.cellAddressable(0, 2), 'the parent owns it and may')
+
+  // A lane neither family has stays absent on BOTH counts — `addressable` narrows
+  // `cellExists`, it never widens it.
+  const narrow = resolveRows({
+    items: SEAM_ITEMS,
+    kinds: new Map<string, RowKind<PRow>>([
+      ...SEAM_KINDS,
+      ['child', { kind: 'child', height: 26, addressable: true, occupies: (k) => (k === 'a' ? { field: 'a', editable: true } : null) }],
+    ]),
+    cols: ROW_COLS,
+  })
+  assert.ok(!narrow.cellExists(1, 0) && !narrow.cellAddressable(1, 0))
+
+  // Out of bounds is a clean false on the new predicate too, never a throw on a render path.
+  assert.ok(!r.cellAddressable(99, 0) && !r.cellAddressable(0, 99) && !r.cellAddressable(-1, -1))
+})
+
+check('the nav resolver SKIPS a non-addressable cell, and a vertical run steps over it', () => {
+  const r = resolveRows({ items: SEAM_ITEMS, kinds: SEAM_KINDS, cols: ROW_COLS })
+  const nav = seamResolver(r, 'addressable')
+  const old = seamResolver(r, 'exists')
+
+  // A VERTICAL run over a cell that renders but is not a coordinate: down column `b` from
+  // the first record, the child's read-only copy is stepped over entirely.
+  assert.deepEqual(nav.resolve({ row: 0, col: 2 }, { kind: 'arrow', dir: 'down' }), { row: 2, col: 2 })
+  assert.deepEqual(old.resolve({ row: 0, col: 2 }, { kind: 'arrow', dir: 'down' }), { row: 1, col: 2 },
+    'the old predicate stopped on it — this is the regression the seam removes')
+  // …and back up again, symmetrically.
+  assert.deepEqual(nav.resolve({ row: 2, col: 2 }, { kind: 'arrow', dir: 'up' }), { row: 0, col: 2 })
+
+  // A TAB RUN never visits the ordinal. Wrapping off the end of a row lands on the first
+  // addressable lane of the next, not on column 0.
+  assert.deepEqual(nav.resolve({ row: 0, col: 2 }, { kind: 'tab', shift: false }), { row: 1, col: 1 })
+  assert.deepEqual(old.resolve({ row: 0, col: 2 }, { kind: 'tab', shift: false }), { row: 1, col: 0 },
+    'three dead stops per row is exactly what the old answer bought')
+  // Shift+Tab off the FRONT of a row skips the ordinal on the way back up.
+  assert.deepEqual(nav.resolve({ row: 1, col: 1 }, { kind: 'tab', shift: true }), { row: 0, col: 2 })
+  // And the ordinal column is not reachable sideways either.
+  assert.equal(nav.resolve({ row: 0, col: 1 }, { kind: 'arrow', dir: 'left' }), null)
+
+  // Enter walks the same rule as ArrowDown, and the Tab-run anchor's fallback obeys it too:
+  // asked for lane 2 on a child that only SHOWS lane 2, it lands past the child.
+  assert.deepEqual(nav.resolve({ row: 0, col: 2 }, { kind: 'enter', shift: false }), { row: 2, col: 2 })
+  const inRow = nav.resolveInRow
+  assert.ok(inRow, 'the Enter-after-a-Tab-run anchor needs an in-row resolver')
+  assert.deepEqual(inRow({ row: 0, col: 2 }, 2, 1), { row: 2, col: 2 })
+
+  // A lane nothing may land in cannot be walked at all — no move, rather than a wrong one.
+  assert.equal(nav.resolve({ row: 0, col: 0 }, { kind: 'arrow', dir: 'down' }), null)
+  assert.equal(nav.resolve({ row: 0, col: 0 }, { kind: 'arrow', dir: 'up' }), null)
+
+  // The jump keys read the same probe, so they cannot land where the arrows refuse to go.
+  // (`filled` is only consulted where `exists` is true, so narrowing one narrows both.)
+  const jump: JumpGrid = {
+    rowCount: r.navRows.length,
+    colCount: ROW_COLS.length,
+    exists: r.cellAddressable,
+    filled: () => true,
+  }
+  assert.deepEqual(rowEdge(jump, { row: 0, col: 2 }, 'start'), { row: 0, col: 1 }, 'Home skips the ordinal')
+  assert.deepEqual(sheetCorner(jump, 'start'), { row: 0, col: 1 })
+  assert.deepEqual(edgeJump(jump, { row: 0, col: 2 }, 'down'), { row: 2, col: 2 })
 })
 
 // ═══ Purity — the layer rule, enforced ═════════════════════════════════════════
@@ -977,12 +1151,19 @@ check('goToRow can never park the caret on a cell the row does not occupy', () =
   const handle = code.slice(code.indexOf('React.useImperativeHandle'), code.indexOf('// ── The editor'))
   assert.ok(handle.includes('goToRow'), 'this scan would be vacuous')
 
-  // Every candidate lane is tested with `cellExists` — the row family's own answer. A
-  // child row is narrower than its parent, so the column a caller asks for (or the one
-  // the caret happens to be in) may simply not be there.
+  // Every candidate lane is tested with `cellAddressable` — the row family's own answer to
+  // the CARET's question. A child row is narrower than its parent, so the column a caller
+  // asks for (or the one the caret happens to be in) may simply not be there; and a lane
+  // that renders content without being a coordinate is refused for the same reason the
+  // keyboard refuses it. An API that can put the caret where no key can reach is the same
+  // defect wearing the other hat.
   assert.ok(
-    (handle.match(/rows\.cellExists\(place\.navRow,/g) ?? []).length >= 2,
-    'the asked-for lane AND the fallback sweep must both go through cellExists',
+    (handle.match(/rows\.cellAddressable\(place\.navRow,/g) ?? []).length >= 2,
+    'the asked-for lane AND the fallback sweep must both go through cellAddressable',
+  )
+  assert.ok(
+    !/rows\.cellExists\(place\.navRow/.test(handle),
+    'goToRow must not read the RENDER predicate — it places the caret',
   )
   // The caret is only moved once a lane has been found.
   const set = handle.indexOf('setActiveCell({ row: place.navRow, col })')
@@ -991,6 +1172,62 @@ check('goToRow can never park the caret on a cell the row does not occupy', () =
   // And the whole gesture is what "go to row N" means — not merely a scroll.
   assert.ok(set < handle.indexOf('scrollTo(place.navRow);\n                scrollToCol(col);'))
   assert.match(handle, /focusGrid\(\);\s*\n\s*return true;/, 'it must take focus, or the next keystroke goes nowhere')
+})
+
+check('every CARET path reads cellAddressable; every RENDER path still reads cellExists', () => {
+  // The seam is only worth having if it is wired to all of the caret and none of the rest,
+  // and that is a WIRING fact rather than a pure-function one — the two predicates have
+  // identical signatures, so swapping them is a silent behaviour change that no type and
+  // no unit test can catch. Scanned, for the same reason the imperative handle is.
+  const src = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('createTableNavResolver'), 'comment-stripping ate the source')
+
+  // The keyboard: the resolver, and the four jump gestures (which all end in `placeCaret`).
+  assert.match(code, /addressable:\s*rows\.cellAddressable/, 'the nav resolver takes the caret predicate')
+  assert.match(code, /exists:\s*rows\.cellAddressable/, 'the jump grid takes it too')
+  assert.equal(
+    (code.match(/rows\.cellAddressable\(/g) ?? []).length,
+    2,
+    "PageUp/PageDown's landing site (`snapToExisting`) must snap to an addressable cell, on both of its passes",
+  )
+
+  // …and the MOUSE deliberately does not. A drag has to be able to start on a
+  // content-bearing, caret-free cell — a run of computed totals is the most useful thing on
+  // a sheet to sweep — so `onCellMouseDown` and the context menu keep the render predicate.
+  // This is the one place the two are meant to disagree, so it is asserted rather than left
+  // to be re-litigated.
+  assert.equal(
+    (code.match(/rows\.cellExists\(navRow, col\)/g) ?? []).length,
+    2,
+    'the mousedown gate and the context-menu gate both stay on cellExists',
+  )
+})
+
+check('a consumer can reach HeaderCell.filterSlot, and omitting it changes nothing', () => {
+  // `HeaderCell` has carried `filterSlot` since it was written and `BlackwoodTable` built
+  // its header row internally, passing nothing — so twelve column-filter popovers had
+  // nowhere to hang. One prop, one wire, no filter UI in the platform layer.
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('headerRow'), 'comment-stripping ate the source; this scan would be vacuous')
+
+  // ADDITIVE: optional prop, and it resolves to `undefined` when absent — which is exactly
+  // what `HeaderCell` received before the seam existed.
+  assert.match(code, /renderHeaderSlot\?\(spec: ColumnSpec<Row, Ctx>, index: number\): React\.ReactNode/)
+  assert.match(code, /filterSlot=\{renderHeaderSlot \? renderHeaderSlot\(spec, i\) : undefined\}/)
+
+  // It is a dependency of every header cell, so the memo has to see it or a consumer's
+  // popover state would be frozen at the identity it had on first render.
+  const memo = code.slice(code.indexOf('const headerRow'), code.indexOf('const fixedHeaderContent'))
+  assert.ok(memo.includes('renderHeaderSlot'), 'the header memo must depend on the slot renderer')
+  assert.match(memo, /onSettingsChange, renderHeaderSlot\]/)
+
+  // The header cell renders NO slot element at all when it is handed nothing — not an
+  // empty wrapper, which would still occupy the gap beside every label.
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  assert.match(header, /\{filterSlot \? \(/)
+  assert.match(header, /data-grid-chrome/, 'the slot is chrome: a keystroke inside it is not a grid gesture')
 })
 
 check('the REACT half is tenant-neutral too: no app/ imports, no domain vocabulary', () => {

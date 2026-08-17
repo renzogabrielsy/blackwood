@@ -24,8 +24,16 @@ import type { NavMove, NavResolver } from '@/lib/hooks/use-grid-keyboard-nav';
 //   • the selection pill must not total one,
 //   • the cell must paint no tint and offer no hit area.
 //
-// So `cellExists` / `cellEditable` are computed HERE, once, and everything else reads
-// them. Two predicates, one definition each.
+// So `cellExists` / `cellAddressable` / `cellEditable` are computed HERE, once, and
+// everything else reads them. Three predicates, one definition each.
+//
+// The middle one is the seam between the first bullet and the other three. `occupies()`
+// used to answer "does this row RENDER content here" and "may the CARET land here" with a
+// single value, so a column carrying a row ordinal or a database-computed total could
+// either be blank or be a dead stop in every Tab run — and nothing else. A slot may now
+// say `addressable: false`, which keeps the cell rendering, tinting, copying and
+// selectable while the keyboard steps over it. It DEFAULTS to true, so a row family that
+// never mentions it behaves exactly as it did before the field existed.
 //
 // The other load-bearing rule: **a non-addressable item never enters `navRows`.** A
 // group spacer, a heading and a summary rule-off are real rows of the spreadsheet, but
@@ -60,10 +68,27 @@ export interface ResolvedRows<Row> {
     /** Row id → where it sits, so "go to row X" needs no scan. */
     placeById: Map<string, { navRow: number; index: number }>;
     /**
-     * Does an addressable cell exist at this coordinate? `false` means the row simply
-     * has no cell there — not that it is empty, and not that it is read-only.
+     * Does a cell exist at this coordinate? `false` means the row simply has no cell
+     * there — not that it is empty, and not that it is read-only.
+     *
+     * **This is the RENDER question**, and it is what everything except the caret reads:
+     * whether to paint content and a tint, whether a selection may cover it, whether a
+     * paste may write it, whether the pill may total it.
      */
     cellExists(navRow: number, col: number): boolean;
+    /**
+     * May the CARET land at this coordinate?
+     *
+     * The narrower twin of `cellExists`, and the only predicate the keyboard reads. A
+     * slot that omits `addressable` defaults to true, so on a table where nothing declares
+     * it this function is byte-identical with `cellExists` — which is exactly what makes
+     * the seam additive.
+     *
+     * Where they differ is a cell with CONTENT and no keyboard business: a row ordinal, a
+     * database-computed total, a derived status badge. It renders, it copies, it can be
+     * swept into a selection — and a Tab run walks past it instead of stopping there.
+     */
+    cellAddressable(navRow: number, col: number): boolean;
     /**
      * May this cell be edited, as far as the ROW FAMILY is concerned? The column has its
      * own say — see `columnAcceptsEdit`, which is the other half and is combined with
@@ -161,6 +186,12 @@ export function resolveRows<Row, Ctx>(input: {
         itemIndexOfNav,
         placeById,
         cellExists: (navRow, col) => slotAt(navRow, col) !== null,
+        // `!== false`, never `=== true`: the field is OPTIONAL and its default is true, so
+        // a slot that never mentions it must answer exactly as `cellExists` does.
+        cellAddressable: (navRow, col) => {
+            const slot = slotAt(navRow, col);
+            return slot !== null && slot.addressable !== false;
+        },
         cellEditable: (navRow, col) => slotAt(navRow, col)?.editable === true,
         unknownKinds: [...unknown],
     };
@@ -217,8 +248,17 @@ export function columnSelectable<Row, Ctx>(spec: ColumnSpec<Row, Ctx>): boolean 
 export interface TableNavGeometry {
     rowCount: number;
     colCount: number;
-    /** Does an addressable cell exist there? `ResolvedRows.cellExists`. */
-    exists(row: number, col: number): boolean;
+    /**
+     * **May the caret land there? `ResolvedRows.cellAddressable` — deliberately NOT
+     * `cellExists`.**
+     *
+     * The field is named for the question rather than for the predicate that used to
+     * answer it, because feeding this the render predicate is a silent defect rather than
+     * a type error: the sheet would still work, and a Tab run would simply acquire dead
+     * stops on every content-bearing, caret-free column. Naming it `addressable` makes the
+     * mis-wiring impossible to write by accident.
+     */
+    addressable(row: number, col: number): boolean;
     /** May it be edited? The two halves above, already combined. */
     editable(row: number, col: number): boolean;
 }
@@ -234,21 +274,26 @@ export interface TableNavGeometry {
  * The behavioural consequence is exactly the asymmetry the data already has: ArrowDown in
  * a column only records occupy walks record-to-record, stepping over the children in
  * between, while ArrowDown in a shared column walks through every child.
+ *
+ * **This is the ONE reader of `cellAddressable`.** Every branch below places the caret, so
+ * every branch asks the caret's own question — never the render one. A cell that exists
+ * without being addressable is therefore invisible to the keyboard and fully present to
+ * everything else.
  */
 export function createTableNavResolver(geo: TableNavGeometry): NavResolver<CellAddress> {
-    const { rowCount, colCount, exists, editable } = geo;
+    const { rowCount, colCount, addressable, editable } = geo;
     const lastCol = colCount - 1;
 
     const rowStep = (row: number, col: number, dir: 1 | -1): number | null => {
         for (let r = row + dir; r >= 0 && r < rowCount; r += dir) {
-            if (exists(r, col)) return r;
+            if (addressable(r, col)) return r;
         }
         return null;
     };
 
     const colStep = (row: number, col: number, dir: 1 | -1): number | null => {
         for (let c = col + dir; c >= 0 && c < colCount; c += dir) {
-            if (exists(row, c)) return c;
+            if (addressable(row, c)) return c;
         }
         return null;
     };
@@ -268,7 +313,7 @@ export function createTableNavResolver(geo: TableNavGeometry): NavResolver<CellA
                 col = lastCol;
             }
             if (row < 0 || row >= rowCount) return null;
-            if (exists(row, col)) return { row, col };
+            if (addressable(row, col)) return { row, col };
         }
         return null;
     };

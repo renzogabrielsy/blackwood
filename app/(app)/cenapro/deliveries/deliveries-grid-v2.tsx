@@ -11,7 +11,7 @@ import {
     pinnedOffsets,
     shiftFirstItemIndex,
 } from '@/lib/table';
-import type { ColumnSpec, GridRow, RowKind } from '@/lib/table';
+import type { CellSlot, ColumnSpec, GridRow, RowKind } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { cn } from '@/lib/utils';
 
@@ -98,6 +98,9 @@ import {
 // rows onto nav rows by arithmetic, wrote a receipt's data into its own moisture sub-rows
 // and reported success. `sampleFieldFor` / `SAMPLE_LAB_FIELDS` in `./types` stay the ONE
 // definition of which lanes a draw occupies; this file only asks them.
+//
+// A slot also says whether the CARET may land on it (`CellSlot.addressable`), which is a
+// different question from whether the row renders content there — see `buildSlots`.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 // ─── Ctx — referentially stable, or the whole sheet re-renders ───────────────────
@@ -245,8 +248,10 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
         align: (col.numeric ? 'right' : 'left') as 'left' | 'right',
         summaryLane: col.summaryLane,
         // Declared even though slice 1 renders no filter control: the metadata is the
-        // column's, and `./types` is where it is decided. `BlackwoodTable` has no header
-        // slot to hang a trigger off yet — see the seam report in the handoff.
+        // column's, and `./types` is where it is decided. The place to hang a trigger now
+        // EXISTS — `BlackwoodTable`'s `renderHeaderSlot` → `HeaderCell.filterSlot`, added
+        // 2026-08-17 — and slice 1 deliberately passes none, because a filter button that
+        // opens nothing is the thing this slice refuses to render.
         filter:
             col.filterKind && col.filterColumn
                 ? { kind: col.filterKind, column: col.filterColumn }
@@ -581,21 +586,34 @@ function specFor(col: DeliveryCol): ColumnSpec<DeliveryGridRow, DeliveryGridCtx>
  * A slot table built from the column table, so a column added in `./types` is covered
  * with no edit here.
  *
- * `#`, `TTL PRICE` and `PAID?` carry no `field` and are never editable, but they DO carry
- * content — so they are "occupied" with `editable: false`. That is a KNOWN divergence
- * from the old ledger and it is reported with the slice: `occupies()` answers both
- * *"does the caret have a coordinate here"* and *"does this row render content here"*, and
- * the RC Deliveries sheet needs those two answers to differ.
+ * **`#`, `TTL PRICE` and `PAID?` are `addressable: false`** — the module's per-cell seam,
+ * added 2026-08-17 because this sheet is what proved it was missing. All three carry real
+ * content (the row ordinal and its status rail, the DB-generated total, the settlement
+ * badge) and none of them is a place the caret has any business stopping: in the old
+ * ledger a `field: null` column is never a keyboard coordinate, and a Tab run walks
+ * straight past all three. Marking them merely "occupied" rendered the content and bought
+ * three dead stops with it; returning `null` skipped the stops and blanked the cells. The
+ * flag is what lets the sheet have both, and it is the SAME condition the ledger's own
+ * `addressable()` uses — `col.field !== null` — so there is no second rule to keep in step.
+ *
+ * `TTL PRICE` stays SELECTABLE (`isSelectableColumn`), which is the point of separating
+ * the two questions: a run of receipt totals is the most useful thing on this sheet to
+ * sweep and add up, and none of that involves the caret resting there.
  */
 function buildSlots(cols: readonly DeliveryCol[]) {
-    const receipt = new Map<string, { field: string; editable: boolean }>();
-    const draw = new Map<string, { field: string; editable: boolean }>();
+    const receipt = new Map<string, CellSlot>();
+    const draw = new Map<string, CellSlot>();
 
     for (const col of cols) {
-        receipt.set(col.key, { field: col.field ?? col.key, editable: col.field !== null });
+        const hasField = col.field !== null;
+        receipt.set(col.key, {
+            field: col.field ?? col.key,
+            editable: hasField,
+            addressable: hasField,
+        });
         if (col.key === 'num') {
             // The tree glyph. Content, never a coordinate the operator can type into.
-            draw.set(col.key, { field: 'num', editable: false });
+            draw.set(col.key, { field: 'num', editable: false, addressable: false });
             continue;
         }
         const sf = sampleFieldFor(col.field);

@@ -17,7 +17,7 @@ import {
     tilePaste,
     tsvEscape,
 } from '@/lib/table';
-import type { CellAddress, ColumnSpec, JumpDir, JumpGrid } from '@/lib/table';
+import type { CellAddress, CellSlot, ColumnSpec, JumpDir, JumpGrid } from '@/lib/table';
 import { errorToast } from '@/lib/toast';
 import { focusGrid, isGridChrome } from '@/components/shared/table/PasteSink';
 import type { RowHandlers } from '@/components/shared/table/Row';
@@ -930,24 +930,41 @@ export function useTableInteraction<Row, Ctx>(
 
     // ═══ Jump navigation ═════════════════════════════════════════════════════════
 
+    /**
+     * **`exists` is fed `cellAddressable`, not `cellExists` — deliberately.**
+     *
+     * Every one of the four jump gestures ends in `placeCaret(...)`, so the coordinate a
+     * jump returns is a coordinate the caret is put on. Handing them the RENDER predicate
+     * would let Ctrl+Arrow, Home/End and Ctrl+Home/End land on a cell the arrows and the
+     * Tab run both refuse — a stop reachable by one key and not another, which is the same
+     * inconsistency in two halves rather than one behaviour.
+     *
+     * `filled` is untouched: it is only ever consulted where `exists` is already true, so
+     * narrowing `exists` narrows it for free and there is nothing to decide.
+     */
     const jumpGrid = React.useCallback(
         (): JumpGrid => ({
             rowCount,
             colCount,
-            exists: rows.cellExists,
+            exists: rows.cellAddressable,
             filled: (r, c) => cellText({ row: r, col: c }).trim() !== '',
         }),
         [rowCount, colCount, rows, cellText],
     );
 
-    /** Land on a row that actually HAS this column — a page may end on a child row. */
+    /**
+     * Land on a row that actually HAS this column — a page may end on a child row.
+     *
+     * Same reasoning as `jumpGrid`: this is PageUp/PageDown's landing site, so it asks
+     * where the caret may go rather than where content is painted.
+     */
     const snapToExisting = React.useCallback(
         (row: number, col: number, dir: 1 | -1): CellAddress | null => {
             for (let r = row; r >= 0 && r < rowCount; r += dir) {
-                if (rows.cellExists(r, col)) return { row: r, col };
+                if (rows.cellAddressable(r, col)) return { row: r, col };
             }
             for (let c = 0; c < colCount; c++) {
-                if (rows.cellExists(row, c)) return { row, col: c };
+                if (rows.cellAddressable(row, c)) return { row, col: c };
             }
             return null;
         },
@@ -992,12 +1009,15 @@ export function useTableInteraction<Row, Ctx>(
 
     // ═══ The keyboard state machine ══════════════════════════════════════════════
 
+    // `cellAddressable`, never `cellExists` — see `TableNavGeometry`. Every branch of the
+    // resolver moves the caret, and a cell that renders content is not necessarily a cell
+    // the caret has any business stopping on.
     const resolver = React.useMemo(
         () =>
             createTableNavResolver({
                 rowCount,
                 colCount,
-                exists: rows.cellExists,
+                addressable: rows.cellAddressable,
                 editable: isEditable,
             }),
         [rowCount, colCount, rows, isEditable],
@@ -1169,6 +1189,12 @@ export function useTableInteraction<Row, Ctx>(
                 // it ever moves.
                 e.preventDefault();
                 if (editingRef.current) commitEdit();
+                // `cellExists`, NOT `cellAddressable`, and this is the one place the two
+                // deliberately disagree. A drag has to be able to START on a
+                // content-bearing, caret-free cell — a run of computed totals is the most
+                // useful thing on a sheet to sweep — and refusing the mousedown there
+                // would take the whole selection with it. So a CLICK may park the caret on
+                // a non-addressable cell; a keyboard run never walks onto one.
                 if (!rows.cellExists(navRow, col)) {
                     // A coordinate this row does not have. The caret stays where it is —
                     // there is nothing there to put it on — but the grid keeps the
@@ -1282,4 +1308,4 @@ export function useTableInteraction<Row, Ctx>(
 }
 
 /** `RowKind.occupies`, named so the paste loop can hold one without repeating its shape. */
-type RowKindOccupies<Row> = (colKey: string, row: Row | null) => { field: string; editable: boolean } | null;
+type RowKindOccupies<Row> = (colKey: string, row: Row | null) => CellSlot | null;

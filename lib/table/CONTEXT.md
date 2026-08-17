@@ -32,7 +32,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `grouping.ts` | `needsGroupSpacer`. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **34 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver, the chrome row, the pager's index base — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **39 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam and the header slot — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -48,6 +48,56 @@ selection pill (do not total it) and the tint (do not paint it).
 
 Its absence was **BUG-024**: a paste mapped block rows onto nav rows by arithmetic, wrote a
 receipt's data into its moisture sub-rows, and reported success.
+
+### `CellSlot.addressable` — "it renders here" is not "the caret may land here"
+
+`occupies()` answered two questions with one value, and the first real migration slice is
+what made that visible. A slot RENDERS *and* is a keyboard stop; `null` is neither. So a
+column carrying a **row ordinal**, a **database-computed total** or a **derived status
+badge** had exactly two settings, and both were wrong: marked occupied it painted its
+content and bought a dead stop in every Tab run, and returning `null` skipped the stop and
+blanked the cell. The consumer could pick which defect it preferred. On the RC Deliveries
+sheet that was three columns — `#`, `TTL PRICE`, `PAID?` — and three dead stops per row
+against a ledger whose caret lands on none of them.
+
+`occupies()` may now return `{ field, editable, addressable?: boolean }`. The rules:
+
+- **It DEFAULTS TO TRUE, and that is the whole additivity claim.** `cellAddressable` is
+  `slot !== null && slot.addressable !== false` — never `=== true` — so a family that never
+  mentions the field answers exactly as `cellExists` does. Asserted at every coordinate of
+  the pre-existing fixtures, in bounds and out, and again through a nav resolver built on
+  either predicate.
+- **It NARROWS `cellExists`, it never widens it.** A lane the row does not have stays
+  absent on both counts; there is no way to make the caret visit a cell that is not there.
+- **One reader, and it is the caret.** `createTableNavResolver` is the only consumer of the
+  predicate itself, and its geometry field is *named* `addressable` rather than `exists` —
+  the two have identical signatures, so mis-wiring them is a silent behaviour change no
+  type could catch, and the name is what makes it unwritable by accident. The **jump keys**
+  and **`apiRef.goToRow`** read it for the same reason (below). Render, tint, selection,
+  paste targeting, the aggregation pill and the copy all keep reading `cellExists`,
+  unchanged.
+- **The MOUSE deliberately does not.** `onCellMouseDown` and the context-menu gate stay on
+  `cellExists`, so a click may park the caret on a non-addressable cell while no keyboard
+  run ever walks onto one. That asymmetry is load-bearing rather than an oversight: a drag
+  has to be able to START on a content-bearing, caret-free cell — a run of computed totals
+  is the most useful thing on a sheet to sweep and add up — and gating the mousedown would
+  take the whole selection with it. It also matches the ledger this came from, which parks
+  the caret on `TTL PRICE` on click and never targets it from the keyboard.
+- **It is the per-CELL member of a family of three, and they are different questions.**
+  `RowKind.addressable` is per-ROW (a heading is not a coordinate at all),
+  `ColumnSpec.selectable` is per-COLUMN (may a rectangle cover it), and this is per-CELL.
+  `TTL PRICE` is `selectable: true` **and** `addressable: false` at the same time, which is
+  precisely the combination that was inexpressible before.
+
+**Which predicate feeds the jump keys' `exists` probe, and why.** `cellAddressable`. All
+four gestures (`edgeJump`, `rowEdge`, `sheetCorner`, `pageJump` → `snapToExisting`) end in
+`placeCaret(...)`, so the coordinate they return is a coordinate the caret is put on.
+Feeding them the render predicate would let Ctrl+Arrow and Home/End land on a cell the
+arrows and the Tab run both refuse — one stop reachable by one key and not another, which
+is not a smaller bug than a dead stop but the same bug in two halves. `filled` is untouched:
+it is only ever consulted where `exists` is already true, so narrowing one narrows both and
+there is nothing left to decide. Same argument, same answer, for `goToRow`: an API that can
+put the caret where no key can reach it is the dead stop wearing the other hat.
 
 ### A pinned column is `pin: 'start' | 'end'`, never `frozen: boolean`
 
@@ -156,6 +206,33 @@ with the data was inexpressible. `renderChromeRow(item, api)` fills that seam:
   column stays OPAQUE** — a solid token, never glass, or the scrolling rows bleed through.
 - Must be referentially stable (`useCallback`): it is a dependency of every row's content.
 
+### `renderHeaderSlot` — the wire to a seam that already existed
+
+`HeaderCell` has carried a `filterSlot` since it was written, and `BlackwoodTable` builds
+`headerRow` internally and passed it nothing — so a consumer holding twelve column-filter
+popovers had somewhere to put them in the markup and no way to reach it. A seam nobody can
+address is not a seam. One prop closes it:
+
+```ts
+renderHeaderSlot?(spec: ColumnSpec<Row, Ctx>, index: number): React.ReactNode
+```
+
+- **The platform still renders no filter UI and holds no filter state.** It has no opinion
+  about the grammar either — that stays in the consumer's URL module. This is the hook, and
+  deliberately nothing else.
+- `spec` is the **RESOLVED** column (saved width applied, hidden columns already gone) and
+  `index` is its **DISPLAY** position — the same index a column-selection click addresses,
+  so a consumer can key popover state off either without deriving a second column axis.
+- The node is wrapped in `data-grid-chrome`, so a keystroke or a paste aimed at the control
+  is that control's business and never a grid gesture.
+- **Omitting it is byte-identical with the behaviour before it existed**: `filterSlot`
+  resolves to `undefined` and `HeaderCell` renders no slot element at all — not an empty
+  wrapper, which would still occupy the gap beside every label.
+- Must be referentially stable (`useCallback`), for the same reason as `renderChromeRow`:
+  it is a dependency of every header cell, so a fresh identity per render rebuilds the whole
+  header row — and a consumer's popover state would be frozen at the identity it had on
+  first render.
+
 ### `apiRef` — the seam for ACTING on the grid, not merely reacting to it
 
 `onStateChange` and `onSelectionChange` let a surface outside the grid **react**; nothing
@@ -180,8 +257,10 @@ entirely inside `BlackwoodTable`:
   (Same class of bug as the `firstItemIndex` rebase: the wrong index space, silently.)
 - **`goToRow` can never park the caret on a cell the row does not occupy.** The lane is the
   one asked for, else the one the caret is already in, else the first this row occupies —
-  every candidate tested through `rows.cellExists`, because a child row is narrower than
-  its parent. No lane ⇒ it refuses rather than moving the caret nowhere.
+  every candidate tested through **`rows.cellAddressable`**, because a child row is narrower
+  than its parent *and* because a lane that renders content without being a coordinate is
+  refused for the same reason the keyboard refuses it. No lane ⇒ it refuses rather than
+  moving the caret nowhere.
 - **A row outside the loaded window returns `false`,** so a caller can say so instead of
   appearing to do nothing.
 
@@ -210,17 +289,28 @@ was behaviour-preserving.
 mounts it on an in-memory data source, and **33 Playwright specs drive the real component**
 with no login and no database. See the two sections at the end of this file.
 
-**Three additive seams were added afterwards** (2026-08-17), each found by a migration
-attempt that correctly refused to proceed without it: **`firstItemIndex`** (a bidirectional
-keyset pager needs the virtualiser's public index base), **`renderChromeRow`** (a group
-heading or per-group rule-off inside the BODY, which `summaryRows` reaches only in the
-footer), and **`apiRef` / `BlackwoodTableApi`** (the imperative half — "go to row N", and
-handing the caret back after a dialog closes; see the section above). Purely additive — a
-consumer that passes none of them behaves exactly as before.
+**Five additive seams were added afterwards** (2026-08-17), each found the same way — by a
+migration that correctly refused to proceed without it. **This is the only way seams in
+this module get found**: all five were invisible until a consumer needed one, and none of
+them was predicted by the plan.
 
-**Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — has NOT started.**
-Nothing under `app/(app)/**` was touched. The seam inventory above is the state of what a
-migration can now express; the migration itself is still to be done.
+| Seam | What the consumer could not say without it |
+|---|---|
+| `firstItemIndex` | A bidirectional keyset pager needs the virtualiser's PUBLIC index base. |
+| `renderChromeRow` | A group heading or per-group rule-off inside the BODY; `summaryRows` reaches the footer only. |
+| `apiRef` / `BlackwoodTableApi` | The imperative half — "go to row N", and handing the caret back after a dialog closes. |
+| `CellSlot.addressable` | *"This cell renders content and the caret must never stop on it."* Found by the first real migration slice, which had three such columns and no way to say so. |
+| `renderHeaderSlot` | *"Hang this popover off that column's header."* `HeaderCell.filterSlot` existed from the start with no wire to it. |
+
+Purely additive — a consumer that passes none of them, and a `RowKind` whose `occupies()`
+never mentions `addressable`, behaves exactly as before.
+
+**Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — is UNDER WAY.**
+Slice 1 (read-only: column specs, row families, the flatten, both scopes) landed as
+`app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx`, reachable only at `?grid=v2` and
+built BESIDE the live ledger, which is not edited by one character. The last two seams above
+are what that slice found. See `app/(app)/cenapro/deliveries/CONTEXT.md` → "The `?grid=v2`
+rewire".
 
 **The alias layer in the Cenapro module is temporary.** `frozenOffsets` / `frozenBlockWidth`
 / its `DragScrollInput` / its `UnsavedWork` exist so the extraction changed nothing; they
@@ -250,7 +340,7 @@ None. That is the point — this module imports nothing outside itself.
 | File | Role |
 |---|---|
 | `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. |
-| `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the two predicates the whole module runs on — `cellExists` / `cellEditable`. |
+| `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the three predicates the whole module runs on — `cellExists` (render) / `cellAddressable` (the caret) / `cellEditable`. |
 | `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. |
 | `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. |
 | `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
@@ -306,7 +396,8 @@ no-op that journals nothing.
 
 **Not built (chrome, deferred with Stage 1D):** `PeriodPicker`, `ScopeToggle`, `AxisGuard`,
 `ColumnFilterPopover`, `TableSettingsMenu`. `BlackwoodTable` exposes the seams they need —
-`onSettingsChange`, `onStateChange`, `onSelectionChange`, `HeaderCell.filterSlot`.
+`onSettingsChange`, `onStateChange`, `onSelectionChange`, `apiRef`, and (since 2026-08-17)
+`renderHeaderSlot`, which is the wire to `HeaderCell.filterSlot` that was missing.
 
 ---
 

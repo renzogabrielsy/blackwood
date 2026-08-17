@@ -43,7 +43,12 @@ export interface HeaderCellProps<Row, Ctx> {
     onSelectColumn?(index: number): void;
     /** Report a new width for this column. Called ONCE, when the drag ends. */
     onResize?(key: string, width: number): void;
-    /** A filter trigger, a sort caret — anything the consumer hangs off the header. */
+    /**
+     * A filter trigger, a sort caret — anything the consumer hangs off the header.
+     *
+     * `BlackwoodTable` fills it from its `renderHeaderSlot` prop; absent, no slot element
+     * is rendered at all.
+     */
     filterSlot?: React.ReactNode;
 }
 

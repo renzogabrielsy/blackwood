@@ -72,7 +72,11 @@ import type { RowHandlers } from './Row';
 //   • Pinned cells are fully OPAQUE. Never glass, no alpha, no `backdrop-blur`.
 //   • Nothing on a row, a cell or a selection is ever animated.
 //
-// ── THE TWO SEAMS A BIDIRECTIONAL PAGER AND A GROUPED SHEET NEED ────────────────
+// ── THE SEAMS A REAL CONSUMER TURNED OUT TO NEED ────────────────────────────────
+//
+// Each of these was found the same way: by a migration that could not express something
+// without it. Every one is purely additive — omit it and the grid behaves exactly as it
+// did before the seam existed.
 //
 //   • **`firstItemIndex`** is the virtualiser's PUBLIC index base. It rebases the index
 //     reported OUT and NOTHING handed IN — `scrollIntoView` and `initialTopMostItemIndex`
@@ -82,6 +86,14 @@ import type { RowHandlers } from './Row';
 //   • **`renderChromeRow`** lets a NON-ADDRESSABLE row render its own cells — a group
 //     heading, a per-group rule-off — where `summaryRows` can only reach the footer. It
 //     returns CELLS and never a `<tr>`, because the virtualiser owns the row element.
+//   • **`apiRef`** is the imperative half — "go to row N", and handing the caret back
+//     after a dialog closes. See `BlackwoodTableApi`.
+//   • **`renderHeaderSlot`** reaches `HeaderCell.filterSlot`, which existed from the start
+//     and had no wire to it. The module still renders no filter UI and holds no filter
+//     state; it only gives a consumer's popover somewhere to hang.
+//   • **`CellSlot.addressable`** (in `lib/table/types.ts`) is the row-family half: a cell
+//     that RENDERS content the caret must never stop on. Read by the nav resolver, the
+//     jump keys and `goToRow` — by nothing that paints, selects, copies or totals.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 /** A row's stable identity — its own id, or a chrome row's key. */
@@ -188,6 +200,10 @@ export interface TableChromeRowApi<Row, Ctx> {
  * NOT own `navRows` — that axis is resolved inside `useTableRows`, and a consumer
  * computing an index from `items` would be a second definition of the row axis, which is
  * precisely the drift this module exists to prevent. `placeById` already answers it.
+ *
+ * **And it obeys the keyboard's own rule.** `goToRow` tests every candidate lane with
+ * `cellAddressable`, so it can never park the caret somewhere the arrows and the Tab run
+ * refuse to go.
  */
 export interface BlackwoodTableApi {
     /** Put focus where the grid hears BOTH a keydown and a paste. Always `preventScroll`. */
@@ -258,6 +274,28 @@ export interface BlackwoodTableProps<Row, Ctx> {
      * content, so a fresh identity per render re-renders the whole sheet.
      */
     renderChromeRow?(item: GridRow<Row>, api: TableChromeRowApi<Row, Ctx>): React.ReactNode | null;
+    /**
+     * What hangs off a column HEADER, beside its label — a filter trigger, a sort caret,
+     * an active-filter dot.
+     *
+     * `HeaderCell` has carried a `filterSlot` since it was written, but `BlackwoodTable`
+     * builds `headerRow` internally and passed nothing to it, so a consumer holding a
+     * popover per column had nowhere to put it and no way to reach the cell. This is that
+     * one wire, and nothing else: the module renders no filter UI, owns no filter state
+     * and has no opinion about the grammar — the consumer's URL module keeps all of it.
+     *
+     * The node is wrapped in `data-grid-chrome`, so a keystroke or a paste aimed at it is
+     * that control's business and never a grid gesture.
+     *
+     * `spec` is the RESOLVED column (saved width applied, hidden columns already gone) and
+     * `index` is its DISPLAY position — the same index a column-selection click addresses,
+     * so a consumer can key its popover state off either.
+     *
+     * Returning `null` (or omitting the prop) is byte-identical with the behaviour before
+     * it existed. Must be referentially stable (`useCallback`): it is a dependency of every
+     * header cell, so a fresh identity per render rebuilds the whole header row.
+     */
+    renderHeaderSlot?(spec: ColumnSpec<Row, Ctx>, index: number): React.ReactNode;
     summaryRows?: readonly TableSummaryRow[];
     /** Show the blank-row pool's `Add N more rows` control. */
     drafts?: { enabled: boolean; defaultCount?: number };
@@ -445,7 +483,8 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     const {
         apiRef,
         items, kinds, specs, ctx, settings, onSettingsChange, edits, storedText, scope,
-        rowKey, renderEditor: renderEditorProp, renderChromeRow, summaryRows, drafts,
+        rowKey, renderEditor: renderEditorProp, renderChromeRow, renderHeaderSlot,
+        summaryRows, drafts,
         onAddDrafts, onRemoveDrafts, onRestoreDrafts, draftKind = 'draft', childKinds,
         contextMenuItems, rowClassFor, rowRules, onSelectionChange, onStateChange,
         className, startReached, endReached, initialTopMostItemIndex, firstItemIndex,
@@ -573,9 +612,9 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
 
     // ── The imperative surface ───────────────────────────────────────────────────
     //
-    // Everything here is expressed over `rows.placeById` and `rows.cellExists`, i.e. the
-    // ONE resolved row axis — never over an index the caller computed from `items`, which
-    // would be a second definition of that axis.
+    // Everything here is expressed over `rows.placeById` and `rows.cellAddressable`, i.e.
+    // the ONE resolved row axis — never over an index the caller computed from `items`,
+    // which would be a second definition of that axis.
     const activeCol = activeCell?.col ?? 0;
 
     React.useImperativeHandle(
@@ -595,12 +634,18 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                 // The lane, in preference order: the one asked for, the one the caret is
                 // already in, then the first this row actually occupies. A row family that
                 // has no cell in the requested column must not leave the caret nowhere.
+                //
+                // Every candidate is tested with `cellAddressable`, NOT `cellExists`: this
+                // method PLACES THE CARET, so it must obey the same rule the keyboard does.
+                // Reading the render predicate here would park the caret on a cell no
+                // arrow and no Tab run can ever reach — the same defect as a keyboard dead
+                // stop, wearing the other hat, and reachable only through the API.
                 const asked = colKey === undefined ? -1 : cols.findIndex((c) => c.key === colKey);
                 const candidates = [asked, activeCol];
-                let col = candidates.find((c) => c >= 0 && rows.cellExists(place.navRow, c)) ?? -1;
+                let col = candidates.find((c) => c >= 0 && rows.cellAddressable(place.navRow, c)) ?? -1;
                 if (col < 0) {
                     for (let c = 0; c < cols.length; c++) {
-                        if (rows.cellExists(place.navRow, c)) { col = c; break; }
+                        if (rows.cellAddressable(place.navRow, c)) { col = c; break; }
                     }
                 }
                 if (col < 0) return false;
@@ -693,12 +738,16 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                             right={pin === 'end' ? columns.pinnedRight[i - endStart] : undefined}
                             onSelectColumn={selectColumn}
                             onResize={onSettingsChange ? onResizeColumn : undefined}
+                            // The seam the deferred column-filter chrome needs. Omitted ⇒
+                            // `undefined` ⇒ `HeaderCell` renders no slot at all, exactly as
+                            // before this prop existed.
+                            filterSlot={renderHeaderSlot ? renderHeaderSlot(spec, i) : undefined}
                         />
                     );
                 })}
             </tr>
         ),
-        [cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart, selectColumn, onResizeColumn, onSettingsChange],
+        [cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart, selectColumn, onResizeColumn, onSettingsChange, renderHeaderSlot],
     );
 
     const fixedHeaderContent = React.useCallback(() => headerRow, [headerRow]);

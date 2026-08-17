@@ -957,15 +957,30 @@ and why the earlier atomic attempts could never land, is in
   editable column ANDs its own rule with it, so nothing can be typed into — one switch, not
   fifteen omissions. The duplicate and import-flag POPOVERS are rendered as `title` text
   instead: same facts, nothing pretending to be a button.
-- **Two known divergences from the ledger, both structural.** (1) `occupies()` answers both
-  *"does the caret have a coordinate here"* and *"does this row render content here"*, and
-  `#` / `TTL PRICE` / `PAID?` need those answers to differ — they carry content but the old
-  grid's caret never lands on them. v2 marks them occupied so they RENDER, which lets the
-  caret and a Tab run visit them (they stay unselectable, so no total can include them).
-  (2) The pager's `firstItemIndex` is corrected **at the call site** with
-  `shiftFirstItemIndex`, measured as "items above a fixed anchor row" —
-  `use-deliveries-window.ts` decrements by RECORDS while the flat array grows by more
-  (draws, spacers), which is the pre-existing approximation noted under "The day spacer".
+- **`#` / `TTL PRICE` / `PAID?` are `addressable: false`, and that seam exists because this
+  slice found it.** All three carry content the ledger paints (the row ordinal and its
+  status rail, the DB-generated total, the settlement badge) and none is a place the old
+  grid's caret ever lands — `field: null` makes a column unaddressable there. `occupies()`
+  originally answered *"does this row render content here"* and *"may the caret land here"*
+  with ONE value, so slice 1 shipped with the three columns marked occupied and a Tab run
+  walking through three dead stops per row. `CellSlot.addressable` (platform, 2026-08-17)
+  splits the two questions; `buildSlots` sets it from **`col.field !== null`**, the same
+  condition the ledger's own `addressable()` uses, so there is no second rule to keep in
+  step. `TTL PRICE` stays SELECTABLE — a run of receipt totals is the most useful thing on
+  this sheet to sweep and add up, and none of that involves the caret resting there. One
+  residual difference: v2 renders a hit area on all three, so a CLICK parks the caret on
+  `#` or `PAID?` where the old grid ignores the click entirely (it gates the mousedown on
+  its own `cellExists`, which is true only for `TTL PRICE`). The platform keeps the mouse on
+  the render predicate deliberately — see `lib/table/CONTEXT.md` → `CellSlot.addressable`.
+- **One known divergence from the ledger, structural.** The pager's `firstItemIndex` is
+  corrected **at the call site** with `shiftFirstItemIndex`, measured as "items above a
+  fixed anchor row" — `use-deliveries-window.ts` decrements by RECORDS while the flat array
+  grows by more (draws, spacers), which is the pre-existing approximation noted under "The
+  day spacer".
+- **The filter triggers now have somewhere to go.** `BlackwoodTable.renderHeaderSlot` →
+  `HeaderCell.filterSlot` was added by this slice too (the second seam it found). Slice 1
+  passes none: a filter button that opens nothing is exactly what this slice refuses to
+  render. The `filter` metadata is already declared on every spec, from `./types`.
 
 ### Two scopes (`?scope=endless|focus`)
 
