@@ -824,3 +824,30 @@ commit's file list, since the promotion range includes any riding-along commits.
   commit riding along for the **twentieth** time. Expect this every promotion.
 - Gates clean (merge-base tree diff empty, merge exit 0 via `ort`, post-push `main` == `origin/main`
   at `5f24f23`, feature branch restored): **37 consecutive clean promotions.**
+
+### Promotion 51 (2026-08-17, `6d1113f` → `b392e90`) — TWENTY-SECOND consecutive clean `git add .`
+
+`fix(db): let in-app delivery edits recompute batch state` — a nine-day outage where a SECURITY
+INVOKER trigger (`tr_blackwood_delivery` → `fn_update_blackwood_state`) called a helper granted to
+`service_role` only, so every authenticated write died on `permission denied for function
+fn_recompute_batch_state` (42501) and rolled back. 6 files / +575/−1: two migrations (the GRANT +
+a `fn_audit_trigger_function_grants` regression guard), `scripts/verify-trigger-grants.ts`,
+CLAUDE.md, LEARNING_LEDGER L-043, and the session handoff. **Zero `workers/sync/**` ⇒ Vercel alone.**
+
+- **`git merge-tree --write-tree --name-only` used as the pre-checkout gate** — clean is exit 0 with
+  a BARE tree OID and NO file names under it. Run it BEFORE `git checkout main` (it touches neither
+  index nor worktree), so a conflict is discovered while still parked on the feature branch.
+- **The dirty-tree checkout question is one command:** `git diff --stat main HEAD -- <dirty paths>`.
+  Empty ⇒ `main` and the branch agree on those blobs, so `git checkout main` carries the dirty
+  `.claude/agent-memory-local/**` across without "local changes would be overwritten". Cheaper and
+  more direct than the name-overlap comparison.
+- Network calls unpiped in their own invocations (`push feat`, `checkout`, `pull --ff-only`, `merge`,
+  `push main`), each with `echo "EXIT:$?"`. All 0. `main` read `5f24f23` == `origin/main` before the
+  merge and the pull said "Already up to date" — nothing stale.
+- **A migration already applied to prod ⇒ the deploy is code-only** (now the norm here). Both
+  migrations were live on the production DB before the commit; pushing `main` runs no SQL.
+- Merge stat read **7 files / +598** against the commit's own 6 / +575: the extra
+  (+23) is this playbook from the pre-existing `bc1029e` `chore(memory)` commit riding along for the
+  **twenty-first** time. 575 + 23 = 598 exactly.
+- Gates clean (merge-tree bare OID `c8ef813` exit 0, merge exit 0 via `ort`, post-push `main` ==
+  `origin/main` at `b392e90`, feature branch restored): **38 consecutive clean promotions.**
