@@ -6,8 +6,20 @@
 // `.agents/prompts/universal-table-module.md`.
 // ─────────────────────────────────────────────────────────────────────────────────
 
-export { TableRow, NO_EDITS, NO_INVALID } from './Row';
-export type { TableRowProps, RowHandlers } from './Row';
+export { BlackwoodTable } from './BlackwoodTable';
+export type {
+    BlackwoodTableProps,
+    TableEditorArgs,
+    TableSummaryRow,
+    TableContextTarget,
+    TableState,
+} from './BlackwoodTable';
+
+export { HeaderCell, MIN_COLUMN_WIDTH } from './HeaderCell';
+export type { HeaderCellProps } from './HeaderCell';
+
+export { TableRow, TableRowShell, TableCells, NO_EDITS, NO_INVALID } from './Row';
+export type { TableRowProps, TableRowShellProps, TableCellsProps, RowHandlers } from './Row';
 
 export { PasteSink, PASTE_SINK_ATTR, isGridChrome, focusGrid } from './PasteSink';
 export type { PasteSinkProps } from './PasteSink';

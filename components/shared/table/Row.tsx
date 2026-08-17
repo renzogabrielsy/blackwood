@@ -83,20 +83,37 @@ export interface TableRowProps<Row, Ctx> {
 /** The shared empty set, for the same reason as `NO_EDITS`. */
 export const NO_INVALID: ReadonlySet<string> = Object.freeze(new Set<string>()) as ReadonlySet<string>;
 
-function TableRowInner<Row, Ctx>(props: TableRowProps<Row, Ctx>) {
-    const {
-        navRow, kind, data, cols, ctx, rowEdits, activeCol, selectionBand,
-        invalidCols, editing, renderEditor, pinnedLeft, pinnedRight,
-        handlers, classes, rowClass,
-    } = props;
+/**
+ * The `<tr>` — and ONLY the `<tr>`.
+ *
+ * Split out of `TableRow` (2026-08-17) because **`TableVirtuoso` owns the row element
+ * too**: it puts `data-index` / `data-known-size` / its own `style` on the `<tr>` and
+ * measures the rows by reading them back off `<tbody>`'s children. A component that
+ * renders its own `<tr>` cannot receive those, so the endless scope would either lose
+ * measurement or grow a second copy of the cell markup. The shell takes the virtualiser's
+ * props through `...rest`; the cells are `children`, so there is exactly one definition of
+ * each and both scopes use both.
+ *
+ * The handlers live HERE, on the row, and dispatch by `data-col` — 4 closures per row
+ * instead of 4 per cell.
+ */
+export interface TableRowShellProps extends React.HTMLAttributes<HTMLTableRowElement> {
+    navRow: number;
+    height: number;
+    handlers: RowHandlers;
+}
 
-    const startCount = pinnedLeft.length;
-    const endStart = cols.length - pinnedRight.length;
-
+export function TableRowShell({
+    navRow, height, handlers, children, style, ...rest
+}: TableRowShellProps) {
     return (
         <tr
-            className={rowClass}
-            style={{ height: kind.height }}
+            {...rest}
+            data-nav-row={navRow}
+            // Height last: a virtualiser's own `style` must never decide a row's height,
+            // because the row family already declared it and virtuoso measures what it
+            // finds rather than the other way round.
+            style={{ ...style, height }}
             onMouseDown={(e) => {
                 const col = colOf(e);
                 if (col !== null) handlers.onCellMouseDown(navRow, col, e);
@@ -114,6 +131,25 @@ function TableRowInner<Row, Ctx>(props: TableRowProps<Row, Ctx>) {
                 if (col !== null) handlers.onCellContextMenu(navRow, col, e);
             }}
         >
+            {children}
+        </tr>
+    );
+}
+
+/** Everything `TableCells` needs — `TableRowProps` minus the `<tr>`'s own concerns. */
+export type TableCellsProps<Row, Ctx> = Omit<TableRowProps<Row, Ctx>, 'handlers' | 'rowClass'>;
+
+function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
+    const {
+        navRow, kind, data, cols, ctx, rowEdits, activeCol, selectionBand,
+        invalidCols, editing, renderEditor, pinnedLeft, pinnedRight, classes,
+    } = props;
+
+    const startCount = pinnedLeft.length;
+    const endStart = cols.length - pinnedRight.length;
+
+    return (
+        <>
             {cols.map((col, i) => {
                 const slot = kind.occupies(col.key, data);
                 const exists = slot !== null;
@@ -147,13 +183,24 @@ function TableRowInner<Row, Ctx>(props: TableRowProps<Row, Ctx>) {
                             <div className="absolute inset-0">{renderEditor(navRow, i)}</div>
                         ) : (
                             <div className={cls.inner}>
-                                {exists && data !== null ? col.format(data, ctx) : null}
+                                {/* An UNSAVED value is what the cell shows. `format` renders
+                                    the STORED row, so without this a cell would keep showing
+                                    the old figure after a commit and the whole sheet would
+                                    read as broken — the amber dirty tint would be the only
+                                    sign anything had been typed at all. A consumer that
+                                    wants the typed text formatted (a formula's result, say)
+                                    does it in its own editor and its own `format`. */}
+                                {slot !== null && rowEdits[slot.field] !== undefined
+                                    ? rowEdits[slot.field]
+                                    : exists && data !== null
+                                      ? col.format(data, ctx)
+                                      : null}
                             </div>
                         )}
                     </td>
                 );
             })}
-        </tr>
+        </>
     );
 }
 
@@ -167,14 +214,19 @@ function colOf(e: React.MouseEvent): number | null {
 }
 
 /**
- * Memoized on a shallow prop compare, with the two collection props compared by content
- * because they are rebuilt per render by their owners.
+ * THE memo boundary — memoized on a shallow prop compare, with the one collection prop
+ * compared by content because it is rebuilt per render by its owner.
+ *
+ * It sits on the CELLS rather than on the `<tr>` so that both scopes can share it: the
+ * plain table wraps it in a `TableRowShell`, and `TableVirtuoso` renders the shell itself
+ * (it owns the row element) with this as its `itemContent`. Either way an untouched row's
+ * props are referentially equal and its ~18 `<td>` are not rebuilt.
  *
  * `React.memo` loses the generic signature, so it is re-asserted through a cast — the
  * standard workaround, and the alternative (dropping the generics) would push `any` into
  * every consumer's column specs.
  */
-export const TableRow = React.memo(TableRowInner, (a, b) => {
+export const TableCells = React.memo(TableCellsInner, (a, b) => {
     if (
         a.navRow !== b.navRow ||
         a.data !== b.data ||
@@ -186,9 +238,7 @@ export const TableRow = React.memo(TableRowInner, (a, b) => {
         a.activeCol !== b.activeCol ||
         a.editing !== b.editing ||
         a.invalidCols !== b.invalidCols ||
-        a.handlers !== b.handlers ||
         a.classes !== b.classes ||
-        a.rowClass !== b.rowClass ||
         a.pinnedLeft !== b.pinnedLeft ||
         a.pinnedRight !== b.pinnedRight ||
         a.renderEditor !== b.renderEditor
@@ -201,4 +251,23 @@ export const TableRow = React.memo(TableRowInner, (a, b) => {
     if (x === y) return true;
     if (x === null || y === null) return false;
     return x[0] === y[0] && x[1] === y[1];
-}) as <Row, Ctx>(props: TableRowProps<Row, Ctx>) => React.ReactElement;
+}) as <Row, Ctx>(props: TableCellsProps<Row, Ctx>) => React.ReactElement;
+
+/**
+ * A whole row — the shell plus the memoized cells. What a NON-virtualised table renders.
+ *
+ * The external API is unchanged from the single-component version; only the seam is new.
+ */
+export function TableRow<Row, Ctx>(props: TableRowProps<Row, Ctx>) {
+    const { handlers, rowClass, ...cells } = props;
+    return (
+        <TableRowShell
+            navRow={props.navRow}
+            height={props.kind.height}
+            handlers={handlers}
+            className={rowClass}
+        >
+            <TableCells {...cells} />
+        </TableRowShell>
+    );
+}

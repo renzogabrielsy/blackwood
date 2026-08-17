@@ -31,7 +31,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **25 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys — plus the purity scan above. |
+| `../../scripts/verify-table-core.ts` | **30 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its two predicates, the per-cell nav resolver — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -120,8 +120,12 @@ these helpers under its own names, so the grid, the server page and that module'
 **120 assertions run through this code unchanged** — which is what proves the extraction
 was behaviour-preserving.
 
-**Stage 1B is under way** — see the section at the end of this file for what has landed and
-what has not. The dev playground and the Playwright parity suite are Stages 1C–1E.
+**Stages 1B and 1C are complete** (2026-08-17). The React half is built, the dev playground
+mounts it on an in-memory data source, and **29 Playwright specs drive the real component**
+with no login and no database. See the two sections at the end of this file.
+
+**Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — has NOT started.**
+Nothing under `app/(app)/**` was touched.
 
 **The alias layer in the Cenapro module is temporary.** `frozenOffsets` / `frozenBlockWidth`
 / its `DragScrollInput` / its `UnsavedWork` exist so the extraction changed nothing; they
@@ -144,19 +148,92 @@ None. That is the point — this module imports nothing outside itself.
 
 ---
 
-## Stage 1B (in progress) — the React half
+## Stage 1B — the React half
 
-`components/shared/table/` and the `lib/hooks/use-table-*` hooks. Landed so far:
+`components/shared/table/` and the `lib/hooks/use-table-*` hooks.
 
 | File | Role |
 |---|---|
 | `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. |
+| `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the two predicates the whole module runs on — `cellExists` / `cellEditable`. |
 | `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. |
+| `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. |
 | `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
-| `components/shared/table/Row.tsx` | **The render boundary** — `React.memo`'d, with `NO_EDITS` / `NO_INVALID` singletons so an untouched row's props are referentially equal. Handlers live on the `<tr>` and dispatch by `data-col`: 3 closures per row instead of 4 per cell. |
+| `components/shared/table/Row.tsx` | `TableCells` (**the memo boundary**, with the `NO_EDITS` / `NO_INVALID` singletons), `TableRowShell` (the `<tr>` and the four handlers, dispatching by `data-col`) and `TableRow` (their composition). Split 2026-08-17 — see below. |
+| `components/shared/table/HeaderCell.tsx` | **New.** Label + `title`, column-selection on the label, a `data-grid-chrome` filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |
+| `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules. |
 | `components/shared/table/PasteSink.tsx` | The hidden `<textarea>`, `isGridChrome` (with the sink exempted FIRST) and `focusGrid` (always `preventScroll`). Carries the full explanation of why a `paste` handler on a non-editable div can never fire. |
 
-**Still to build in 1B:** `BlackwoodTable` (the container — colgroup, header, virtuoso/plain
-body, summary rows, draft pool), `use-table-rows`, `use-table-interaction` (keyboard +
-selection + clipboard + caret-follow + drag auto-scroll), `HeaderCell`, and the chrome
-(`PeriodPicker`, `ScopeToggle`, `AxisGuard`, `ColumnFilterPopover`, `TableSettingsMenu`).
+### Three defects found in the pieces 1B inherited
+
+1. **`TableRow` owned the `<tr>`, and so does `TableVirtuoso`.** The virtualiser puts
+   `data-index` / `data-known-size` / its own `style` on the row element and measures the
+   rows by reading them back off `<tbody>`'s children, so a component that renders its own
+   `<tr>` cannot receive them — the endless scope would have lost measurement or grown a
+   second copy of the cell markup. Split into `TableCells` + `TableRowShell`, with
+   `TableRow` keeping the original API. Nothing else changed.
+2. **A cell showed its STORED value while carrying an unsaved one.** `format(row, ctx)`
+   renders the stored row, so a committed edit left the old figure on screen and the amber
+   dirty tint was the only sign anything had been typed. `TableCells` already received
+   `rowEdits` (it used them for the dirty flag); it now renders the unsaved text when there
+   is one.
+3. **`useCellSelection` rebuilds its `range` object every render**, so anything memoized
+   against it re-runs whether or not the selection moved — including the aggregation over
+   the whole rectangle. The range is rebuilt here from four primitives instead.
+
+### The one structural rule that runs through the React half
+
+Every hook this composes returns a **fresh object each render** while its individual
+members are `useCallback`'d and stable. So the module destructures the members and never
+depends on the container — `edits.cellText`, not `edits`. Depending on the object gives
+every derived callback a new identity per render, `renderEditor` with it, and the row memo
+compares unequal for every row on every keystroke: a memo that is a lie, costing a
+comparison and saving nothing. It is invisible unless you look for it.
+
+### An edit session is ONE gesture
+
+The open editor owns its own text and publishes it to a ref on each keystroke; the grid
+learns it once, at COMMIT. The obvious wiring (`onChange` → `applyEdits`) makes every
+character a separate Ctrl+Z — undo after typing `newvalue` takes back the `e` — and
+rewrites the whole edit map and re-renders the sheet per character. Escape needs no
+special case under this: nothing was ever written, so restoring the pre-edit snapshot is a
+no-op that journals nothing.
+
+### Two things the shared nav hook could not express, added here
+
+- **The jumps are resolved BEFORE delegation.** `useGridKeyboardNav` tests
+  `NAV_KEYS.includes(e.key)` before it looks at any modifier, so a Ctrl+Arrow reaching it
+  is handled as a plain Arrow. Ctrl/Cmd+Arrow, Home/End, Ctrl+Home/End and PageUp/PageDown
+  are therefore matched first, and each is consumed even when it owes nothing.
+- **Enter OPENS the cell.** The shared hook reads a plain Enter as "move down". Enter
+  *while editing* still commits and moves, which is what keeps the Tab-run → Enter lane
+  return working.
+
+**Not built (chrome, deferred with Stage 1D):** `PeriodPicker`, `ScopeToggle`, `AxisGuard`,
+`ColumnFilterPopover`, `TableSettingsMenu`. `BlackwoodTable` exposes the seams they need —
+`onSettingsChange`, `onStateChange`, `onSelectionChange`, `HeaderCell.filterSlot`.
+
+---
+
+## Stage 1C — the playground and the parity suite
+
+| File | Role |
+|---|---|
+| `app/dev/table-playground/page.tsx` | Dev-only route. `notFound()` in production unless `TABLE_PLAYGROUND` is set. |
+| `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a draft pool, and a debug strip the suite asserts against. |
+| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **29 specs, all passing.** `npm run test:e2e`. |
+
+**The playground lives OUTSIDE the `(app)` route group, deliberately.** That group's layout
+calls `supabase.auth.getUser()` and redirects to `/login`, and `middleware.ts` does the same
+before the layout is reached — so a playground inside it could only be driven by a suite
+holding real credentials, which is the one thing this page exists to avoid. It is gated
+twice and the locks are independent: the page 404s, and `middleware.ts` only adds the path
+to `PUBLIC_PATHS` under the identical condition. It reads nothing, writes nothing, and
+imports no tenant code.
+
+**Two things the suite taught us about testing this grid.** Paste is the one gesture the
+grid does not implement on keydown — the browser must dispatch a real `paste` event, and it
+only does that for the platform's own accelerator, so the spec presses **Cmd+V on macOS**
+(Ctrl+V produces a keydown and no clipboard event at all). And the endless scope is
+virtualised, so a spec that scrolls to the far end cannot then click a row at the top:
+`Ctrl+Home` first.

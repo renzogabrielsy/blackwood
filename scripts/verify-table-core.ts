@@ -49,8 +49,14 @@ import {
   pageJump,
   needsGroupSpacer,
 } from '../lib/table/index'
-import type { ColumnSpec, JumpGrid, SummaryLaneCol } from '../lib/table/index'
+import type { ColumnSpec, GridRow, JumpGrid, RowKind, SummaryLaneCol } from '../lib/table/index'
 import { resolveColumns } from '../lib/hooks/use-table-columns'
+import {
+  resolveRows,
+  columnAcceptsEdit,
+  columnSelectable,
+  createTableNavResolver,
+} from '../lib/hooks/use-table-rows'
 import { cellClassKey, createCellClassTable } from '../components/shared/table/cell-classes'
 import type { CellClassKey } from '../components/shared/table/cell-classes'
 
@@ -652,6 +658,152 @@ check('the class table CACHES — that is the whole point of it', () => {
   assert.notEqual(cellClassKey({ ...baseKey, rowKind: 'record' }), cellClassKey({ ...baseKey, rowKind: 'child' }))
 })
 
+// ═══ Row resolution — the coordinate space, and the two predicates ═════════════
+
+type PRow = { id: string; n: number }
+
+const spec = (key: string, extra: Partial<ColumnSpec<PRow, unknown>> = {}): ColumnSpec<PRow, unknown> =>
+  ({ key, label: key.toUpperCase(), width: 80, format: () => null, ...extra })
+
+const ROW_COLS: ColumnSpec<PRow, unknown>[] = [
+  spec('num', { cellKind: 'derived' }),
+  spec('a', { parse: () => ({ ok: true, patch: {} }) }),
+  spec('b', { parse: () => ({ ok: true, patch: {} }) }),
+]
+
+/** A record has all three lanes; a child has only `b`; a spacer has none and is inert. */
+const ROW_KINDS = new Map<string, RowKind<PRow>>([
+  ['record', {
+    kind: 'record', height: 32, addressable: true,
+    occupies: (k) =>
+      k === 'num' ? { field: 'num', editable: false }
+      : k === 'a' || k === 'b' ? { field: k, editable: true }
+      : null,
+  }],
+  ['child', {
+    kind: 'child', height: 26, addressable: true,
+    occupies: (k) => (k === 'b' ? { field: 'b', editable: true } : null),
+  }],
+  ['spacer', { kind: 'spacer', height: 32, addressable: false, occupies: () => null }],
+])
+
+const ROW_ITEMS: GridRow<PRow>[] = [
+  { kind: 'record', id: 'r1', data: { id: 'r1', n: 1 } },
+  { kind: 'child', id: 'c1', data: { id: 'c1', n: 2 } },
+  { kind: 'spacer', key: 'sp' },
+  { kind: 'record', id: 'r2', data: { id: 'r2', n: 3 } },
+  { kind: 'draft', id: 'd1' },
+]
+
+check('a NON-ADDRESSABLE row never enters the nav space, but is still MEASURED', () => {
+  // 'draft' is deliberately absent from the map here — an item whose family nobody
+  // described must fail CLOSED rather than becoming a cell the caret can land on.
+  const r = resolveRows({ items: ROW_ITEMS, kinds: ROW_KINDS, cols: ROW_COLS })
+
+  assert.deepEqual(r.navRows.map((n) => n.rowId), ['r1', 'c1', 'r2'])
+  assert.deepEqual(r.unknownKinds, ['draft'])
+
+  // Heights cover EVERY item — a virtualiser has to size the rows it may not visit.
+  assert.deepEqual(r.rowHeights, [32, 26, 32, 32, 0])
+  assert.deepEqual(r.navRowHeights, [32, 26, 32])
+
+  // The two index spaces are inverses of each other on the rows they share.
+  assert.equal(r.navIndexOfItem.get(3), 2)
+  assert.equal(r.itemIndexOfNav.get(2), 3)
+  assert.equal(r.navIndexOfItem.get(2), undefined, 'a spacer has no nav row')
+  assert.deepEqual(r.placeById.get('r2'), { navRow: 2, index: 3 })
+
+  // Adding the missing family adds exactly one nav row, and moves nothing else.
+  const withDraft = resolveRows({
+    items: ROW_ITEMS,
+    kinds: new Map([
+      ...ROW_KINDS,
+      ['draft', { kind: 'draft', height: 32, addressable: true, occupies: (k: string) => (k === 'num' ? null : { field: k, editable: true }) }],
+    ]),
+    cols: ROW_COLS,
+  })
+  assert.deepEqual(withDraft.navRows.map((n) => n.rowId), ['r1', 'c1', 'r2', 'd1'])
+  assert.deepEqual(withDraft.unknownKinds, [])
+  assert.deepEqual(
+    withDraft.navRows.slice(0, 3).map((n) => n.rowId),
+    ['r1', 'c1', 'r2'],
+    'the nav space is byte-identical above the new row',
+  )
+})
+
+check('cellExists / cellEditable are per CELL, not per column', () => {
+  const r = resolveRows({ items: ROW_ITEMS, kinds: ROW_KINDS, cols: ROW_COLS })
+
+  // A record has every lane; a child has only `b`. That single disagreement is what the
+  // keyboard, the paste, the pill and the tint all read.
+  assert.ok(r.cellExists(0, 0) && r.cellExists(0, 1) && r.cellExists(0, 2))
+  assert.ok(!r.cellExists(1, 0) && !r.cellExists(1, 1) && r.cellExists(1, 2))
+
+  // Existing is not editable: a row ordinal is addressable and unwritable.
+  assert.ok(!r.cellEditable(0, 0))
+  assert.ok(r.cellEditable(0, 1))
+  assert.ok(r.cellEditable(1, 2))
+
+  // Out of bounds is a clean `false`, never a throw on a render path.
+  assert.ok(!r.cellExists(99, 0) && !r.cellExists(0, 99) && !r.cellEditable(-1, 0))
+})
+
+check('the COLUMN has its own say, and it is a different question', () => {
+  // A column with no `parse` is read-only by construction: nothing could turn typed text
+  // into a patch, so an editor on it could only discard what it collected.
+  assert.ok(!columnAcceptsEdit(spec('x'), null, {}))
+  assert.ok(columnAcceptsEdit(spec('x', { parse: () => ({ ok: true, patch: {} }) }), null, {}))
+  assert.ok(!columnAcceptsEdit(spec('x', { cellKind: 'readonly', parse: () => ({ ok: true, patch: {} }) }), null, {}))
+  assert.ok(!columnAcceptsEdit(spec('x', { cellKind: 'derived', parse: () => ({ ok: true, patch: {} }) }), null, {}))
+  // An explicit predicate outranks the default, and sees the row and the context.
+  assert.ok(!columnAcceptsEdit(spec('x', { parse: () => ({ ok: true, patch: {} }), editable: (row) => row !== null }), null, {}))
+
+  // Selectable defaults to "yes unless the column is a pure ornament" — and a read-only
+  // column may deliberately opt IN, because a run of computed totals is the most useful
+  // thing on a sheet to add up.
+  assert.ok(columnSelectable(spec('x')))
+  assert.ok(!columnSelectable(spec('x', { cellKind: 'derived' })))
+  assert.ok(columnSelectable(spec('x', { cellKind: 'readonly', selectable: true })))
+  assert.ok(!columnSelectable(spec('x', { selectable: false })))
+})
+
+check('the nav resolver steps OVER coordinates a row does not have', () => {
+  const r = resolveRows({ items: ROW_ITEMS, kinds: ROW_KINDS, cols: ROW_COLS })
+  const nav = createTableNavResolver({
+    rowCount: r.navRows.length,
+    colCount: ROW_COLS.length,
+    exists: r.cellExists,
+    editable: r.cellEditable,
+  })
+
+  // Column `b` exists on the child, so ArrowDown walks into it…
+  assert.deepEqual(nav.resolve({ row: 0, col: 2 }, { kind: 'arrow', dir: 'down' }), { row: 1, col: 2 })
+  // …while column `a` does not, so the same key in that lane steps over it entirely.
+  assert.deepEqual(nav.resolve({ row: 0, col: 1 }, { kind: 'arrow', dir: 'down' }), { row: 2, col: 1 })
+
+  // Reading order for Tab: across the row, then on to the next, skipping inert cells.
+  assert.deepEqual(nav.resolve({ row: 0, col: 2 }, { kind: 'tab', shift: false }), { row: 1, col: 2 })
+  assert.deepEqual(nav.resolve({ row: 1, col: 2 }, { kind: 'tab', shift: true }), { row: 0, col: 2 })
+
+  // A boundary returns null (stay put) rather than clamping onto a cell that is not there.
+  assert.equal(nav.resolve({ row: 0, col: 0 }, { kind: 'arrow', dir: 'up' }), null)
+  assert.equal(nav.resolve({ row: 0, col: 0 }, { kind: 'arrow', dir: 'left' }), null)
+  assert.equal(nav.resolve({ row: 2, col: 2 }, { kind: 'tab', shift: false }), null)
+
+  // The Enter-anchor's lane may not exist in the next row; the caret still advances.
+  const inRow = nav.resolveInRow
+  assert.ok(inRow, 'the Enter-after-a-Tab-run anchor needs an in-row resolver')
+  assert.deepEqual(inRow({ row: 0, col: 2 }, 1, 1), { row: 2, col: 1 })
+  assert.deepEqual(inRow({ row: 0, col: 2 }, 2, 1), { row: 1, col: 2 })
+
+  assert.equal(nav.laneOf({ row: 0, col: 2 }), 2)
+  assert.ok(nav.isEditable({ row: 0, col: 1 }) && !nav.isEditable({ row: 0, col: 0 }))
+
+  // A sheet where NOTHING is addressable cannot spin the Tab walk.
+  const dead = createTableNavResolver({ rowCount: 5, colCount: 4, exists: () => false, editable: () => false })
+  assert.equal(dead.resolve({ row: 0, col: 0 }, { kind: 'tab', shift: false }), null)
+})
+
 // ═══ Purity — the layer rule, enforced ═════════════════════════════════════════
 
 check('lib/table is PURE: no React, no Next, no Supabase, no app/ or tenant imports', () => {
@@ -681,6 +833,41 @@ check('lib/table is PURE: no React, no Next, no Supabase, no app/ or tenant impo
       assert.ok(
         !new RegExp(`\\b${word}\\b`, 'i').test(code),
         `${f} names "${word}" in CODE — the platform layer carries no tenant knowledge`,
+      )
+    }
+  }
+})
+
+check('the REACT half is tenant-neutral too: no app/ imports, no domain vocabulary', () => {
+  // The pure core's scan above also refuses React. This one cannot — these files ARE
+  // React — so it enforces the half of the layer rule that still applies: **platform code
+  // carries zero tenant knowledge, and the dependency arrow never points at `app/`.**
+  const targets = [
+    ...readdirSync(join(ROOT, 'components/shared/table'))
+      .filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'))
+      .map((f) => join('components/shared/table', f)),
+    'lib/hooks/use-table-columns.ts',
+    'lib/hooks/use-table-rows.ts',
+    'lib/hooks/use-table-edits.ts',
+    'lib/hooks/use-table-interaction.ts',
+  ]
+  assert.ok(targets.length >= 9, 'the React half should have its modules; this scan would be vacuous')
+
+  for (const rel of targets) {
+    const src = readFileSync(join(ROOT, rel), 'utf8')
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    assert.ok(code.includes('export'), `${rel}: comment-stripping ate the source`)
+
+    for (const m of code.matchAll(/from\s+'([^']+)'/g)) {
+      assert.ok(
+        !m[1].startsWith('@/app/') && !m[1].includes('(app)'),
+        `${rel} imports "${m[1]}" — the platform layer may never depend on a page`,
+      )
+    }
+    for (const word of ['charcoal', 'supplier', 'batch_code', 'peso', 'cenapro', 'moisture']) {
+      assert.ok(
+        !new RegExp(`\\b${word}\\b`, 'i').test(code),
+        `${rel} names "${word}" in CODE — the platform layer carries no tenant knowledge`,
       )
     }
   }
