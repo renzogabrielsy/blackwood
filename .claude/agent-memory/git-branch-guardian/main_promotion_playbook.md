@@ -840,3 +840,41 @@ commit's file list, since the promotion range includes any riding-along commits.
   commit riding along for the **twentieth** time. Expect this every promotion.
 - Gates clean (merge-base tree diff empty, merge exit 0 via `ort`, post-push `main` == `origin/main`
   at `5f24f23`, feature branch restored): **37 consecutive clean promotions.**
+
+### Promotion 52 (2026-08-17, `c5ad702` → `ff8b583`) — first promotion of `feat/universal-table`
+
+`Merge: universal table module — plan, research pack, and Phase 0 (four defects fixed)`. 23 files /
++2947/−35: the plan of record (`.agents/prompts/universal-table-module.md`), 5 evidence docs under
+`docs/universal-table/`, and Phase 0 fixes for BUG-022/023/024/025. **Zero files under
+`workers/sync/**` and zero migrations ⇒ Vercel alone ships it** (checked with
+`git diff --name-only <oldmain>..<newmain> -- 'workers/**' | wc -l` → 0, same for
+`supabase/migrations/**`; use the promotion RANGE, not the commit list, per promotion 50).
+
+**The numbering gap in this file is real, not an error.** Promotion 51's note (`7662056`) is
+stranded on `feat/cenapro-deliveries-qol` and never reached `main`, so this branch — cut fresh off
+`main` — carries a playbook whose last entry was 50. `git merge-base --is-ancestor <memory-commit>
+main` settles "did that note ship" in one call. Expect this whenever two feature branches are alive
+at once; do NOT cherry-pick the stranded commit across.
+
+- **On a branch cut from `main` that has NEVER been promoted, `git merge-base --is-ancestor main
+  <feat>` (exit 0) is the STRONGEST clean-merge proof available** — main is a strict ancestor, so
+  `--no-ff` is guaranteed conflict-free and `merge-tree` adds nothing. This does not contradict
+  promotion 34's "don't trust `--is-ancestor`": that warning is about LONG-LIVED branches where main
+  has accumulated its own merge commits and the check false-alarms DIVERGED. Ancestor-true is always
+  conclusive; ancestor-false is the reading that means nothing on its own.
+- **New step: a brief may ask you to LEVEL the branch, not merely return to it.** Steps 6–7 here were
+  `git checkout <feat>` → `git merge main` (fast-forwards, since main's tip has the feat tip as
+  parent #2) → `git push origin <feat>`, leaving all four refs at the SAME OID for Phase 1 work. The
+  usual recipe only restores the branch and leaves it behind main. Prove it with
+  `git rev-list --left-right --count <feat>...main` → `0 0`.
+- Gates: `npx tsc --noEmit` exit 0, run ON `main` AFTER the merge and BEFORE the push, exactly as the
+  brief ordered. Secret scan on the promotion range found 2 `/Users/renzosy/…` hits, both markdown
+  PROSE in docs (an approved-plan pointer and a scope note) — benign, unlike promotion 40's hardcoded
+  fixture path in executable test code. Judge a home-path hit by whether code READS it.
+- The two `.claude/agent-memory-local/**` files were **identical on both branches**
+  (`git diff <feat> main -- <paths>` empty), so `git checkout main` carried them across untouched —
+  the branch-to-branch form of the pre-checkout check, per promotion 34. They stayed unstaged
+  throughout, as always.
+- No `chore(memory)` commit rode along this time (the branch's memory commit `c8b4b93` was already
+  in the promoted range), so the merge stat matched the branch diff exactly — 23 files both ways.
+  **38 consecutive clean promotions.**
