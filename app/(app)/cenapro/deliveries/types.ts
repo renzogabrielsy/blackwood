@@ -1258,6 +1258,94 @@ export function planPaste(input: PastePlanInput): PastePlan {
     };
 }
 
+// ═══ WHICH rows a pasted block lands on ═════════════════════════════════════════
+//
+// `planPaste` answers "how many rows does this block need"; this answers "which rows
+// are they". They are different questions the moment the sheet holds more than one
+// ROW FAMILY, and this one was never asked: the paste mapped block row `r` to nav row
+// `anchor.row + r`, straight through any moisture draws sitting under a receipt. A
+// 5-row receipt block pasted onto a receipt with 2 draws therefore wrote rows 1–2
+// into the DRAWS — and only their seven lab lanes, because the other columns failed
+// the per-cell `addressable` test and were dropped in silence — then carried on into
+// the following receipts, and toasted "Pasted 5 rows". Wrong data in real receipts,
+// reported as success.
+//
+// The rule: **a block lands on rows of the anchor's own family, stepping over the
+// rest.** This is also the seed of the universal table module's `occupies()` row
+// model, which asks the same question per CELL.
+
+/** The row families a paste can land on. Mirrors the ledger's `NavRow['kind']`. */
+export type PasteRowKind = 'delivery' | 'sample' | 'draft';
+
+/**
+ * May a block anchored on `anchor` write to a row of kind `row`?
+ *
+ * A moisture draw is not a small receipt — it has no date, truck, weight, warehouse
+ * or price — so a block anchored on a draw fills draws only. In the other direction a
+ * receipt block flowing off the last receipt into the blank rows at the bottom is how
+ * a pasted slip BECOMES new receipts, which is existing, wanted behaviour: `delivery`
+ * and `draft` are one family for this purpose.
+ */
+export function pasteKindsCompatible(anchor: PasteRowKind, row: PasteRowKind): boolean {
+    if (anchor === 'sample') return row === 'sample';
+    return row === 'delivery' || row === 'draft';
+}
+
+export interface PasteRowTargetsInput {
+    /** Every nav row's kind, in nav order. */
+    kinds: readonly PasteRowKind[];
+    /** The nav row the paste is anchored on. */
+    anchorRow: number;
+    /** How many rows the clipboard block has. */
+    blockRows: number;
+}
+
+export interface PasteRowTargets {
+    /**
+     * Nav row indices the block's rows land on, in block order. SHORTER than
+     * `blockRows` when the block outruns the sheet — the remainder is the overflow
+     * `planPaste` turns into new rows or reports as dropped.
+     */
+    targets: number[];
+    /** Rows of another family stepped over inside the span actually used. */
+    skipped: number;
+}
+
+/**
+ * Resolve the nav rows a pasted block occupies, skipping rows of another family.
+ *
+ * Feed `targets.length` to `planPaste` as its `navRowCount` (with `startRow: 0`) and
+ * its row arithmetic — `needed = startRow + blockRows - navRowCount` — becomes exactly
+ * the overflow, while its column arithmetic is untouched.
+ *
+ * When no foreign rows are in the way this is byte-identical to the old positional
+ * mapping: `targets` is `[anchorRow, anchorRow+1, …]` and `skipped` is 0.
+ */
+export function pasteRowTargets(input: PasteRowTargetsInput): PasteRowTargets {
+    const { kinds, anchorRow, blockRows } = input;
+    const targets: number[] = [];
+    if (blockRows <= 0 || anchorRow < 0 || anchorRow >= kinds.length) {
+        return { targets, skipped: 0 };
+    }
+    const anchorKind = kinds[anchorRow];
+    let skipped = 0;
+    // A foreign row only counts as STEPPED OVER once a later row is actually landed on.
+    // Held back until then, because a run of foreign rows at the point the block (or the
+    // sheet) runs out was not stepped over by anything — reporting it as skipped would
+    // double-count the overflow `planPaste` already reports as dropped rows.
+    let pending = 0;
+    for (let r = anchorRow; r < kinds.length && targets.length < blockRows; r++) {
+        if (pasteKindsCompatible(anchorKind, kinds[r])) {
+            targets.push(r);
+            skipped += pending;
+            pending = 0;
+        } else {
+            pending++;
+        }
+    }
+    return { targets, skipped };
+}
+
 // ═══ Unsaved cell text, and when it stops being unsaved ═════════════════════════
 
 /** Per-receipt unsaved field edits, held as the raw text the operator typed. */

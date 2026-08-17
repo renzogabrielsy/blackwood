@@ -66,6 +66,22 @@ prove it in the report).
 `feat/cenapro-deliveries-qol` (promotion `c8ffc53`) is the first branch cut this way. Same
 promotion recipe, no `dev`, no PR. Latest promotion off it: `7a8bee6` (2026-08-06, #39).
 
+### Cutting a NEW `feat/*` off `main` while carrying a dirty tree (2026-08-17, `feat/universal-table`)
+
+A planning/research changeset that belongs to a *new* work line starts from `main`, not from
+whatever branch the tree happens to sit on: `git fetch origin` → confirm `git rev-list
+--left-right --count main...origin/main` is `0 0` → `git checkout -b feat/<slug> main`.
+**The pre-check that makes a plain checkout safe with uncommitted work is one command:**
+`git diff --name-only main..HEAD` — if none of those paths intersect the dirty set from
+`git status -sb`, the checkout carries every modification and untracked file across
+untouched and **no stash is needed**. (Measured here: the only path differing was
+`.claude/agent-memory/git-branch-guardian/main_promotion_playbook.md`, the dirty set was
+`.claude/agent-memory-local/**` + `.claude/agent-memory/perf-reviewer/MEMORY.md` — disjoint,
+clean checkout.) Note the old branch's unmerged commits simply stay on it; that a memory
+commit is left behind on the source branch is intended, never cherry-pick it across.
+**Commit-only brief: do not merge, do not touch the source branch, push with
+`git push -u origin feat/<slug>`.**
+
 **A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
 23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
 belonged to the same module, so it committed straight onto `feat/cenapro-deliveries-qol` and

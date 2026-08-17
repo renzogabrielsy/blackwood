@@ -43,7 +43,7 @@ the receipt side"** below.
 | `delivery-history-dialog.tsx` | **Client** — the per-receipt audit trail, opened from the grid's row context menu (*View history*). Renders one entry per `cenapro.rc_delivery_audit` row, newest first, with the receipt AND its moisture draws in one list. See "Audit trail" below. Imports nothing from ICTC's `DeliveryHistoryDialog` — same reading experience, entirely separate wiring. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. **the flag-resolution surface** (the 12→2 lens shape modelled from the live counts, the rail/badge predicate, the unknown-`kind` fail-safe, the `has_unresolved_flags` OR, the no-state-column fallback, `kind`/`detail`/`raw` preservation, the per-kind resolution sentence, a malformed element that must not shift verdicts, plus source scans that the lens filters on `has_unresolved_flags`, that `ROW_COLS` is still ONE literal carrying all four derived columns, and that the grid reaches the verdict in exactly one place while a fully-repaired row keeps an openable history), `npx tsx scripts/verify-rc-deliveries-cells.ts` — **116 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. **the flag-resolution surface** (the 12→2 lens shape modelled from the live counts, the rail/badge predicate, the unknown-`kind` fail-safe, the `has_unresolved_flags` OR, the no-state-column fallback, `kind`/`detail`/`raw` preservation, the per-kind resolution sentence, a malformed element that must not shift verdicts, plus source scans that the lens filters on `has_unresolved_flags`, that `ROW_COLS` is still ONE literal carrying all four derived columns, and that the grid reaches the verdict in exactly one place while a fully-repaired row keeps an openable history), **the paste ROW-FAMILY rule** (a receipt block steps over moisture draws and lands on receipts; a draw-anchored block never reaches a receipt; `delivery`+`draft` are one family; the flat-sheet case is byte-identical to the old positional mapping at every anchor × block size; the resolved targets feed `planPaste` the same plan it used to compute positionally — plus source scans that `anchor.row + r` is gone and the skip is reported), **and the read-only-cell caret** (a click never nulls the active cell). `npx tsx scripts/verify-rc-deliveries-cells.ts` — **120 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -289,6 +289,22 @@ Enter-opens-the-cell and Delete-clears-outright are the two departures from Exce
 This holds for EVERY editable column — the DATE cell included (item 8 removed the reason
 it was special-cased), empty cells (the geometry fix gave them a hit area), REMARKS, the
 sample sub-rows and the draft rows.
+
+**The caret lands on any cell that EXISTS, editable or not (2026-08-17, BUG-023).** A
+click used to set the active cell to `null` when the cell was not addressable —
+`setActiveCell(canEdit ? … : null)` — and `useGridKeyboardNav` returns on its first line
+when there is no active cell. So clicking a **`TTL PRICE`** cell (selectable by design, so
+a run of receipt totals can be summed in the pill) left the whole sheet with no arrows, no
+Tab, no Escape, no Delete and no copy until another cell was clicked. It is unconditional
+now. Nothing needed the null: `createDeliveryNavResolver` only ever tests the **target's**
+addressability, so movement resolves correctly *from* a read-only cell (left/right/Tab
+find the next addressable lane; up/down in the `TTL PRICE` column correctly stay put,
+since no row has that cell); `isEditable` still refuses F2 / Delete / type-over; and an
+open editor is already committing — `focusGrid()` in the same handler blurs it and
+`EditInput`'s blur-commit clears `edit.isEditing` before the render, so `isEditingThis`
+cannot become true on a non-addressable cell. **Still open:** clicking a cell the row does
+not have at all (a draw's WT lane) is still a dead click — that needs the module's
+`occupies()` row model.
 
 The grid's own `onGridKeyDown`/`onGridPaste` wrappers hold one further guard: a keystroke
 or paste aimed at a real form control inside the grid (the "add rows" counter, a column
@@ -816,6 +832,38 @@ used here).** Two further defects, both silent, both fixed in earlier rounds:
 - **A numeric column strips the rendering Sheets copied with it** (`₱`, thousands
   commas, stray quotes) — and only a numeric column, because a supplier origin or a
   remark may legitimately contain a comma. A formula (`=27045*88%`) pastes through intact.
+
+**A block lands on rows of the ANCHOR'S OWN FAMILY (2026-08-17, BUG-024).** A fourth
+defect, and the worst of them: the block was mapped onto nav rows **positionally**
+(`anchor.row + r`), which walks straight through the moisture draws sitting under a
+receipt. A 5-row receipt block pasted onto a receipt with 2 draws wrote block rows 1–2
+into the **draws** — and only their seven lab lanes, because every other column failed the
+per-cell `addressable` test and was dropped in silence — then carried on into the
+following receipts, and toasted *"Pasted 5 rows"*. Wrong data in real receipts, reported
+as success.
+
+- **`pasteRowTargets({kinds, anchorRow, blockRows})` in `types.ts` is the single rule**,
+  pure and asserted. It walks the nav rows from the anchor collecting only rows whose kind
+  is **compatible** with the anchor's: a `sample` anchor takes draws only; a
+  `delivery`/`draft` anchor takes receipts **and** blank rows, because a pasted slip
+  flowing off the last receipt into the draft pool is how it BECOMES new receipts. That
+  predicate is `pasteKindsCompatible`, stated once.
+- **`planPaste` is reused verbatim, not replaced.** It is called with `startRow: 0` and
+  `navRowCount: targets.length`, so its row math (`needed = startRow + blockRows −
+  navRowCount`) is exactly the overflow and its column math is untouched. Asserted: with
+  no foreign rows in the way the two forms return the *same* plan, for every anchor × block
+  size on a flat sheet — the ordinary paste is byte-identical to before.
+- **A draw-anchored block may never manufacture receipts**: `canCreateRows` gained
+  `&& anchorKind !== 'sample'`, and that overflow gets its own sentence rather than the
+  "no blank rows to grow into" one, which would have been the wrong advice.
+- **The step-over is REPORTED** — `Pasted 5 rows · 2 draw rows skipped`. Skipping is
+  correct, but it is not what the block looked like on screen. `skipped` counts only rows
+  genuinely stepped OVER to reach a later target: a run of foreign rows at the point the
+  block (or the sheet) ran out is not reported, because `planPaste` already reports that
+  as dropped rows and double-counting it would read as two different problems.
+- **This is the seed of the universal table module's `occupies()` row model** — the same
+  question ("does this row have this cell, and as what?") asked per cell instead of per
+  row. See `.agents/prompts/universal-table-module.md`.
 
 **COPY (`clipboardCellText` + `copySelectionToClipboard`; the platform
 `useClipboardCopy` is no longer used here).** Three defects:
@@ -1521,6 +1569,30 @@ number does.)
   look like a successful save that lost the operator's typing.
 - Visibility is never re-derived with an inline `profiles.select('role')` lookup — that
   would ignore the impersonation cookie.
+- **`deleteDelivery` was the hole, and it is closed (2026-08-17, BUG-025).** It was the
+  ONLY exported action in `actions.ts` that never called `canViewPrices()`, and it returns
+  money: the allocated total, the released total, and a `blocking[]` of cheques with
+  numbers and amounts — all rendered verbatim in the refusal dialog and the success toast.
+  Nothing anywhere checked the caller's ROLE either, and `/cenapro/**` has no route gate,
+  so any signed-in user could read a receipt's cheques out of that dialog and then delete
+  it. Two changes, both required:
+  - **`isPrivileged()` (new, `lib/auth.ts`)** — the canonical Owner/Admin/Dev predicate,
+    built exactly like `canViewPrices()` so it honours the impersonation cookie and fails
+    closed. `deleteDelivery` refuses with outcome `forbidden` **before** the RPC;
+    `page.tsx` resolves `canDelete` server-side and passes it down, and the
+    `Delete receipt…` item is `hidden` for everyone else (the same shape as RC IN's
+    `hidden: () => !hasPermission('delete:all')`). The UI hiding a control is not a gate —
+    the server check is the one that holds.
+  - **The ₱ redaction** — when `!canViewPrices()` the action returns `allocatedPhp: null`,
+    `releasedPhp: null` and **`blocking: []`**, plus **`pricesHidden: true`**. The COUNTS
+    survive. The dialog then reads *"…has money assigned to it from 2 payments. The amounts
+    are hidden by your role."* — it must **never** render a blank where the figure was,
+    because that reads as *"nothing is assigned to this receipt"*, which is the one thing
+    that would make a gated viewer delete it confidently and wrongly. Same principle as
+    `redactAuditJson`: a hidden figure still announces itself rather than lying by silence.
+  - `blocking` being emptied server-side is deliberate belt-and-braces: the cheque list's
+    `<ul>` is already `.length > 0`-gated, so even an unguarded future render of it cannot
+    leak a cheque number.
 - **The audit view is the one ₱ surface `stripPrices()` cannot protect — and it is now
   read.** `public.cenapro_rc_delivery_audit` carries `changed` / `snapshot` as free-form
   jsonb containing every column, `total_price_php` included. `stripPrices()` nulls **named

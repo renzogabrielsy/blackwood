@@ -60,3 +60,30 @@ export async function canViewPrices(): Promise<boolean> {
     const role = await getUserRole(user.id);
     return roleCanViewPrices(role);
 }
+
+/**
+ * CANONICAL server-side privileged-role gate — Owner / Admin / Dev only.
+ *
+ * The sibling of `canViewPrices()` for capabilities that are not about money:
+ * destructive actions, user management, anything the client hides behind
+ * `hasPermission('delete:all')`. Like the price gate it derives the EFFECTIVE role via
+ * `getUserRole()`, so an Owner "viewing as Production" is correctly denied, and it
+ * fails CLOSED when there is no authenticated user.
+ *
+ * Use it in a server action *before* the write, and pass its result down as a prop
+ * when a client component needs to hide a control:
+ *   if (!(await isPrivileged())) return { ok: false, outcome: 'forbidden' };
+ *
+ * It exists because this check was being re-typed inline at every call site (see
+ * `app/(app)/inventory/rc-in/actions.ts`, which repeats the
+ * getUser → getUserRole → PRIVILEGED_ROLES sequence in four actions) — and a gate that
+ * is copied is a gate that gets forgotten, which is exactly what happened to Cenapro's
+ * delete path.
+ */
+export async function isPrivileged(): Promise<boolean> {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+    const role = await getUserRole(user.id);
+    return PRIVILEGED_ROLES.includes(role);
+}

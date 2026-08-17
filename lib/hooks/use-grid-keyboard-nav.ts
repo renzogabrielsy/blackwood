@@ -187,13 +187,27 @@ export function useGridKeyboardNav<Id>(cfg: GridKeyboardNavConfig<Id>): {
           range.clear();
           // fall through to existing nav handling below
         }
-        // Printable char → exit range, start editing anchor cell
+        // Printable char → exit range, type into the ACTIVE cell.
+        //
+        // It MUST be `active` (captured at the top of this handler) and NOT the
+        // range's anchor. `anchorId()` is the geometric TOP-LEFT of the rectangle —
+        // every consumer derives it from `normalizeRange`, which is Math.min/Math.max
+        // (`use-cell-selection.ts`) — while the ACTIVE cell is where the drag STARTED.
+        // The two differ on every drag that went up or left.
+        //
+        // This branch used to `setActiveCell(anchor)` and then fall through to the
+        // char handler below, which still calls `edit.start(active, …)`. So the
+        // character was written into the drag-origin cell (dirty, no editor on it)
+        // while the editor mounted on the top-left cell showing ITS stored value —
+        // two cells wrong, one of them invisible. After Ctrl/Cmd+A the anchor is the
+        // sheet's first column, so an editor could mount inside a read-only one.
+        //
+        // Typing into the active cell is also what Google Sheets does, and it makes
+        // this branch symmetric with the NAV_KEYS branch above: both clear the range
+        // and fall through on `active`. `anchorId` stays on GridRangeSlot — a paste
+        // that tiles over a selection needs it.
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          const anchor = range.anchorId() as Id | null;
-          if (anchor !== null && anchor !== undefined) {
-            range.clear();
-            setActiveCell(anchor);
-          }
+          range.clear();
           // fall through to existing char handling below
         }
       }
