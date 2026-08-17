@@ -31,7 +31,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **18 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys — plus the purity scan above. |
+| `../../scripts/verify-table-core.ts` | **25 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys — plus the purity scan above. |
 
 ---
 
@@ -120,10 +120,8 @@ these helpers under its own names, so the grid, the server page and that module'
 **120 assertions run through this code unchanged** — which is what proves the extraction
 was behaviour-preserving.
 
-**Not built yet:** the React half (`components/shared/table/` — `Cell`, memoized `Row`,
-`BlackwoodTable`, `PasteSink`, `HeaderCell`, `PeriodPicker`, `ScopeToggle`), the hooks
-(`use-table-columns/rows/edits/interaction/window`), the dev playground and the Playwright
-parity suite. See the plan's Stages 1B–1E.
+**Stage 1B is under way** — see the section at the end of this file for what has landed and
+what has not. The dev playground and the Playwright parity suite are Stages 1C–1E.
 
 **The alias layer in the Cenapro module is temporary.** `frozenOffsets` / `frozenBlockWidth`
 / its `DragScrollInput` / its `UnsavedWork` exist so the extraction changed nothing; they
@@ -143,3 +141,22 @@ None. That is the point — this module imports nothing outside itself.
   decision re-expressed here.
 - Project `CLAUDE.md` — Excel Standard, "never crush always scroll", Frozen Panes, Motion,
   the Error Toast HARD RULE, price gating.
+
+---
+
+## Stage 1B (in progress) — the React half
+
+`components/shared/table/` and the `lib/hooks/use-table-*` hooks. Landed so far:
+
+| File | Role |
+|---|---|
+| `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. |
+| `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. |
+| `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
+| `components/shared/table/Row.tsx` | **The render boundary** — `React.memo`'d, with `NO_EDITS` / `NO_INVALID` singletons so an untouched row's props are referentially equal. Handlers live on the `<tr>` and dispatch by `data-col`: 3 closures per row instead of 4 per cell. |
+| `components/shared/table/PasteSink.tsx` | The hidden `<textarea>`, `isGridChrome` (with the sink exempted FIRST) and `focusGrid` (always `preventScroll`). Carries the full explanation of why a `paste` handler on a non-editable div can never fire. |
+
+**Still to build in 1B:** `BlackwoodTable` (the container — colgroup, header, virtuoso/plain
+body, summary rows, draft pool), `use-table-rows`, `use-table-interaction` (keyboard +
+selection + clipboard + caret-follow + drag auto-scroll), `HeaderCell`, and the chrome
+(`PeriodPicker`, `ScopeToggle`, `AxisGuard`, `ColumnFilterPopover`, `TableSettingsMenu`).

@@ -49,7 +49,10 @@ import {
   pageJump,
   needsGroupSpacer,
 } from '../lib/table/index'
-import type { JumpGrid, SummaryLaneCol } from '../lib/table/index'
+import type { ColumnSpec, JumpGrid, SummaryLaneCol } from '../lib/table/index'
+import { resolveColumns } from '../lib/hooks/use-table-columns'
+import { cellClassKey, createCellClassTable } from '../components/shared/table/cell-classes'
+import type { CellClassKey } from '../components/shared/table/cell-classes'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -476,6 +479,177 @@ check('the moved helpers kept their contracts', () => {
   assert.equal(needsGroupSpacer('2026-08-01', '2026-08-01'), false)
   assert.equal(needsGroupSpacer('2026-08-01', '2026-08-02'), true)
   assert.equal(needsGroupSpacer('', '2026-08-01'), true, 'ungrouped → first group is a boundary')
+})
+
+// ═══ Column resolution — visibility, then order, then widths ═══════════════════
+
+check('a hidden column is ABSENT, so the coordinate space has no unreachable holes', () => {
+  type Ctx = { prices: boolean }
+  const specs: ColumnSpec<unknown, Ctx>[] = [
+    { key: 'num', label: '#', width: 40, pin: 'start', format: () => null, hideable: false },
+    { key: 'a', label: 'A', width: 100, format: () => null },
+    { key: 'php', label: '₱', width: 100, format: () => null, visible: (c) => c.prices },
+  ]
+
+  const shown = resolveColumns(specs, { prices: true })
+  assert.deepEqual(shown.cols.map((c) => c.key), ['num', 'a', 'php'])
+  assert.equal(shown.minWidth, 240)
+
+  const gated = resolveColumns(specs, { prices: false })
+  assert.deepEqual(gated.cols.map((c) => c.key), ['num', 'a'])
+  assert.equal(gated.minWidth, 140, 'the min-width follows the columns that exist')
+  assert.equal(gated.indexByKey.has('php'), false, 'nothing can address a hidden column')
+
+  // A saved layout cannot hide a column the spec says is not hideable.
+  const forced = resolveColumns(specs, { prices: true }, { hidden: ['num', 'a'] })
+  assert.deepEqual(forced.cols.map((c) => c.key), ['num', 'php'])
+})
+
+check('a saved order is honoured, but never across a PIN boundary', () => {
+  const specs: ColumnSpec<unknown, unknown>[] = [
+    { key: 'p1', label: 'P1', width: 40, pin: 'start', format: () => null },
+    { key: 'p2', label: 'P2', width: 40, pin: 'start', format: () => null },
+    { key: 'a', label: 'A', width: 60, format: () => null },
+    { key: 'b', label: 'B', width: 60, format: () => null },
+    { key: 'z', label: 'Z', width: 50, pin: 'end', format: () => null },
+  ]
+
+  // Reordering within the scrolling group is honoured.
+  assert.deepEqual(
+    resolveColumns(specs, {}, { order: ['p1', 'p2', 'b', 'a', 'z'] }).cols.map((c) => c.key),
+    ['p1', 'p2', 'b', 'a', 'z'],
+  )
+  // Swapping the pinned pair is honoured — it stays inside the group.
+  assert.deepEqual(
+    resolveColumns(specs, {}, { order: ['p2', 'p1', 'a', 'b', 'z'] }).cols.map((c) => c.key),
+    ['p2', 'p1', 'a', 'b', 'z'],
+  )
+  // Dragging a pinned column into the middle is CORRECTED, not honoured: a pinned run
+  // must stay contiguous or `position: sticky` cannot paint it, and its width is
+  // subtracted by the caret-follow and the drag auto-scroll.
+  const smuggled = resolveColumns(specs, {}, { order: ['a', 'p1', 'z', 'b', 'p2'] })
+  assert.deepEqual(smuggled.cols.map((c) => c.key), ['p1', 'p2', 'a', 'b', 'z'])
+  assert.deepEqual(smuggled.pinned, { start: 2, end: 1 })
+
+  // A stale order naming a dead column, and one missing a new column, both survive.
+  assert.deepEqual(
+    resolveColumns(specs, {}, { order: ['gone', 'p2', 'p1'] }).cols.map((c) => c.key),
+    ['p2', 'p1', 'a', 'b', 'z'],
+  )
+})
+
+check('a saved width moves the geometry with it', () => {
+  const specs: ColumnSpec<unknown, unknown>[] = [
+    { key: 'p', label: 'P', width: 40, pin: 'start', format: () => null },
+    { key: 'a', label: 'A', width: 60, format: () => null },
+    { key: 'fixed', label: 'F', width: 60, format: () => null, resizable: false },
+  ]
+  const r = resolveColumns(specs, {}, { widths: { p: 90, a: 100, fixed: 999 } })
+  assert.equal(r.cols[0].width, 90)
+  assert.equal(r.cols[1].width, 100)
+  assert.equal(r.cols[2].width, 60, 'a column that refuses resizing keeps its declared width')
+  assert.equal(r.minWidth, 250)
+  assert.equal(r.pinnedWidths.start, 90, 'the pinned wall moves with the resize')
+  assert.deepEqual(r.offsets, [0, 90, 190])
+  // A nonsense width is ignored rather than collapsing the column.
+  assert.equal(resolveColumns(specs, {}, { widths: { a: 0 } }).cols[1].width, 60)
+})
+
+// ═══ The cell class table ══════════════════════════════════════════════════════
+
+const baseKey: CellClassKey = {
+  pin: null, edge: false, rowKind: 'record', exists: true,
+  active: false, selected: false, invalid: false, dirty: false,
+  numeric: false, editable: true,
+}
+
+check('a cell gets exactly ONE background, by an explicit precedence', () => {
+  const t = createCellClassTable()
+  const bgCount = (s: string) => (s.match(/(?:^|\s)bg-[^\s]+/g) ?? []).length
+
+  // Every combination of the three tint states, and none may stack.
+  for (const invalid of [false, true]) {
+    for (const selected of [false, true]) {
+      for (const dirty of [false, true]) {
+        const { inner } = t.get({ ...baseKey, invalid, selected, dirty })
+        assert.ok(bgCount(inner) <= 1, `stacked backgrounds for i=${invalid} s=${selected} d=${dirty}`)
+      }
+    }
+  }
+
+  // Precedence: invalid outranks selected outranks dirty.
+  assert.match(t.get({ ...baseKey, invalid: true, selected: true, dirty: true }).inner, /bg-destructive/)
+  assert.match(t.get({ ...baseKey, selected: true, dirty: true }).inner, /bg-primary/)
+  assert.match(t.get({ ...baseKey, dirty: true }).inner, /bg-amber/)
+})
+
+check('a pinned cell is OPAQUE, and its tint rides on the inner layer', () => {
+  const t = createCellClassTable()
+  const pinned = t.get({ ...baseKey, pin: 'start', selected: true })
+  // The `<td>` carries a SOLID token — any alpha and scrolling rows bleed through it.
+  assert.match(pinned.td, /\bbg-background\b/)
+  assert.ok(!/bg-\w+\/\d/.test(pinned.td), 'a pinned cell must never carry a translucent background')
+  assert.ok(!/backdrop-blur/.test(pinned.td), 'frozen surfaces are never glass')
+  assert.match(pinned.td, /frozen-col/)
+  // The state tint is on the INNER layer, above the opaque base.
+  assert.match(pinned.inner, /bg-primary/)
+
+  // The seam sits on the edge column only.
+  assert.match(t.get({ ...baseKey, pin: 'start', edge: true }).td, /frozen-edge/)
+  assert.ok(!/frozen-edge/.test(t.get({ ...baseKey, pin: 'start', edge: false }).td))
+
+  // A scrolling cell needs its own containing block; a pinned one already has one
+  // (`position: sticky`) and must not be given a second.
+  assert.match(t.get(baseKey).td, /\brelative\b/)
+  assert.ok(!/\brelative\b/.test(pinned.td))
+})
+
+check('the interactive layer fills the CELL, never its text', () => {
+  const t = createCellClassTable()
+  // `absolute inset-0`, not `h-full`: a percentage height against a cell the browser has
+  // not sized collapses onto the text, which shipped as both a mis-drawn active ring and
+  // an empty cell with no hit area at all.
+  assert.match(t.get(baseKey).inner, /absolute inset-0/)
+  assert.ok(!/h-full/.test(t.get(baseKey).inner))
+  // The ring clears a pinned cell's stacking context.
+  assert.match(t.get({ ...baseKey, active: true }).inner, /z-20/)
+  assert.match(t.get({ ...baseKey, active: true }).inner, /ring-2/)
+  // No animation on cells, ever.
+  for (const k of [baseKey, { ...baseKey, active: true }, { ...baseKey, selected: true }]) {
+    assert.ok(!/transition|animate-/.test(t.get(k).inner), 'cell selection is never animated')
+  }
+  // A cell the row does not have is inert.
+  const missing = t.get({ ...baseKey, exists: false })
+  assert.match(missing.inner, /pointer-events-none/)
+  assert.ok(!/cursor-cell/.test(missing.inner))
+  assert.match(t.get({ ...baseKey, editable: false }).inner, /cursor-default/)
+})
+
+check('the class table CACHES — that is the whole point of it', () => {
+  const t = createCellClassTable()
+  const a = t.get(baseKey)
+  const b = t.get({ ...baseKey })
+  assert.equal(a, b, 'the same key must return the identical object, not an equal one')
+  assert.equal(t.size(), 1)
+
+  // A realistic sheet: 18 columns × 3 row families × a handful of states resolves to a
+  // few dozen entries, not thousands — measured here so a future field that explodes the
+  // key space is caught.
+  for (const rowKind of ['record', 'child', 'draft']) {
+    for (const pin of [null, 'start', 'end'] as const) {
+      for (const active of [false, true]) {
+        for (const selected of [false, true]) {
+          t.get({ ...baseKey, rowKind, pin, active, selected })
+        }
+      }
+    }
+  }
+  assert.ok(t.size() <= 40, `class table grew to ${t.size()} entries`)
+
+  // Distinct keys never collide.
+  assert.notEqual(cellClassKey(baseKey), cellClassKey({ ...baseKey, active: true }))
+  assert.notEqual(cellClassKey({ ...baseKey, pin: 'start' }), cellClassKey({ ...baseKey, pin: 'end' }))
+  assert.notEqual(cellClassKey({ ...baseKey, rowKind: 'record' }), cellClassKey({ ...baseKey, rowKind: 'child' }))
 })
 
 // ═══ Purity — the layer rule, enforced ═════════════════════════════════════════
