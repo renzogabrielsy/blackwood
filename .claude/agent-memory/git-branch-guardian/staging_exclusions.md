@@ -75,3 +75,20 @@ is not proof. **Prove it positively:** `git status --short --ignored=matching --
 `git diff --staged --name-only | grep -iE 'test-results|playwright-report'` returning nothing.
 `package-lock.json` moving by ~65 lines with only `@playwright/test`, `playwright`, `playwright-core`
 and `fsevents` added is the expected shape of adding that devDependency.
+
+### That ignore rule is BRANCH-SCOPED, so a dirty path changes status across a checkout
+
+2026-08-18, `main` (`49dfd70`) → `feat/universal-table` (`fb8c75b`). The `/test-results/` block is
+part of the *feature branch's* `.gitignore` and has **not** reached `main` yet. So the identical
+on-disk file reads `?? test-results/` on `main` and **vanishes from `git status` entirely** on the
+feature branch — nothing was deleted, moved or cleaned.
+
+**Why it matters:** "the file is no longer in `git status`" is the exact shape of a report that
+sounds like data loss, and a brief that asks you to confirm N dirty files survive will look like it
+failed. **Prove survival by CONTENT, not by status** — `shasum -a 256` the paths before and after
+the checkout and compare. Status is a *view* that two branches can render differently; the bytes are
+the fact. Then explain the disappearance with `git check-ignore -v <path>`, which names the exact
+`.gitignore:<line>` responsible.
+
+Generalises: any brief listing dirty files to preserve across a branch switch should be verified with
+hashes, because `.gitignore` itself is versioned content that the switch can change.

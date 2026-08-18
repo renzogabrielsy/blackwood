@@ -186,7 +186,28 @@ state, transaction_date, supplier, batch_code, block_loc, truck_plate, weight_kg
 - `@/components/shared/mobile/mobile-card-list` — `MobileCardList`, the platform-layer Archetype C primitive (virtualized card list + tap→bottom-sheet detail + "View full table" escape hatch). `delivery-cards-mobile.tsx` is one of its two reference sites.
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `date-fns`, `sonner`
 
+## `delivery-grid-v2.tsx` — RC IN on the Blackwood Table (`?grid=v2`, read-only, 2026-08-18)
+
+A SECOND rendering of the same `DeliveryHistoryRow[]` `page.tsx` already fetches, on the universal table module (`@/components/shared/table` + `@/lib/table`), reachable only at `/inventory?grid=v2`. `delivery-master-table.tsx` is production and is **not edited by one character**; see `../CONTEXT.md` → "The `?grid=v2` side-by-side" for the toggle wiring.
+
+**Read-only structurally, not by promise.** Every column is `cellKind: 'readonly'` and none carries a `parse`, so `columnAcceptsEdit` is false at every coordinate and an editor can never open. No `renderEditor`, no draft pool, no context menu, no server action imported. `RowKind.occupies()` still reports the TRUTH about which fields would be editable (`EDITABLE_FIELD`), because that is the answer the later edit pass builds on — it is simply inert while the column half of the verdict says no.
+
+**Column order is `CLAUDE.md`'s, not the live table's.** Project `CLAUDE.md` → "RC IN Column Config" is canonical and this grid obeys it exactly: Date · Supplier · Batch Code · Block/Loc · Truck Plate · Sacks · Weight · MC, Grit, VM, Ash, FC (2dp) · BD ASTM, BD JIS (3dp) · PHP/KG · PHP Total · Remarks. The live table predates that config and differs in three places (labs interleaved as MC/GRIT/BD·BD/VM/ASH/FC, Weight before Sacks, Remarks before the ₱ columns), **so flipping the toggle visibly reorders the sheet.** That is the intended reading of the two sides.
+
+**STATE leads the row**, ahead of Date. It is not one of the 17 columns `CLAUDE.md` lists — it is the live table's first column and what an operator scans for, so dropping it would make the comparison poorer for no gain. One entry in `COLUMNS`; removing it is a one-line change.
+
+**Dates render VERBATIM.** `transaction_date` is stored as `yyyy-MM-dd`, which is also the format `CLAUDE.md` asks for, so there is no `new Date(...)` anywhere near it — the live table parses it back to a `Date` to re-print it as `MM/DD/YYYY`, and that round trip is the classic place a timezone quietly moves a delivery to the previous day.
+
+**Price gating.** `canViewPrices` arrives as a PROP, resolved server-side in `page.tsx` by the canonical `lib/auth.canViewPrices()` — the same call that already stripped `cost_basis` from the payload. This file never calls `hasPermission` and never re-derives the role. The two ₱ columns do not EXIST for a gated viewer (`ColumnSpec.visible`), so they are absent from the coordinate space rather than blanked, and the totals lane collapses on its own.
+
+**What it reads from the shared provider, read-only:** `settings.densityMode` (row height 32/48), `settings.labHighlights` (the same thresholds `getLabHighlightBg` applies in the live table) and `settings.hiddenColumns` (a column hidden there is absent here). Nothing writes back — column widths dragged in v2 live in local state and are never persisted, because persisting them would be a write.
+
+**Month group headings** are rendered through `renderChromeRow` (label · delivery count · kg · ₱), with a real blank spacer row at each month boundary. The sticky totals rule-off is ALWAYS shown, where the live table shows its TOTALS footer only when a filter is active.
+
+**Not built (read-only pass):** search, the year dropdown + month strip (`DeliverySheetFooter`), the STATE/Supplier/LOC header filters and their `?sx=`/`?sup=`/`?loc=`/`?m=` URL persistence, the "All Years" auto-switch and pre-filter date restore, the Columns popover, the Settings dialog, the density toggle, Add / Edit / Delete / Refresh, row-selection mode, both context menus, `DeliveryHistoryDialog`, `TrueWeightPopover` (the Σ deduction marker), the `?editBatch=` deep link, expanded-mode annotations, per-column bold/italic/underline, and the mobile card layer. Because there is no month filter, **v2 shows the whole `?year=` scope at once** while the live table opens on the current month.
+
 ## See Also
+- [Blackwood Table — the universal table module](../../../../lib/table/CONTEXT.md) — the port (`ColumnSpec` / `RowKind.occupies` / `TableSettings`), the React half, and the `?grid=v2` recipe `delivery-grid-v2.tsx` follows.
 - [Blackwood Table — shared grid package](../../../../components/shared/grid/CONTEXT.md) — the three-layer grid primitives the bulk input grid now consumes (keyboard state machine + resolvers + edit session + paste). `bulk-delivery-input.tsx` is the canonical reference diff for migrating the other flat grids.
 - [RC OUT](../rc-out/CONTEXT.md) — shares `DeliverySheetFooter` (at `../components/DeliverySheetFooter`) and `parseExcelDate()` (at `@/lib/paste-utils`)
 - [Blocking](../blocking/CONTEXT.md) — warehouse grid visualization; reuses `bulkUpdateDeliveries()` for edit-in-place and `DeliveryHistoryDialog` for per-delivery info view

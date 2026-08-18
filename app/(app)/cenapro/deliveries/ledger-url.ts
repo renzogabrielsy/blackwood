@@ -411,12 +411,17 @@ export interface DeliveryLedgerAxes {
     grid?: string | null;
 }
 
-/** The one recognised value of `?grid=`. Anything else means "the production ledger". */
-export const GRID_V2 = 'v2';
-
-export function parseGrid(raw: string | string[] | null | undefined): string | null {
-    return one(raw) === GRID_V2 ? GRID_V2 : null;
-}
+// ─── The `?grid=` axis lives in the PLATFORM layer now ──────────────────────────
+//
+// It was defined here, which was right while this screen was the only one with two
+// grids and wrong the moment a second screen got one: the toggle control, every server
+// page and every screen's URL helpers have to agree on the param name and its one
+// recognised value, and a copy per screen is a chance per screen to disagree.
+// `lib/table/grid-param.ts` is the single definition; this is a re-export so every
+// existing importer of `./ledger-url` — `page.tsx` among them — is unchanged, and the
+// behaviour is byte-for-byte what it was (same value, same "first of a repeated param",
+// same "anything else means the production ledger").
+export { GRID_V2, parseGrid } from '@/lib/table';
 
 /**
  * Stable fingerprint of every axis — used as the client's React key, so a lens, a

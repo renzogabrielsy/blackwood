@@ -104,7 +104,26 @@ Read-only SQL view (migration `20260629000000_create_view_rc_out_closed_blocks.s
 - `@/components/ui/checkbox` — checkboxes in filter popovers
 - `@tanstack/react-table`, `@tanstack/react-virtual`, `sonner`
 
+## `rc-out-grid-v2.tsx` — RC OUT on the Blackwood Table (`?grid=v2`, read-only, 2026-08-18)
+
+A SECOND rendering of the same `RcOutRow[]` that `fetchRcOutTabData()` already returns, on the universal table module (`@/components/shared/table` + `@/lib/table`), reachable only at `/inventory?grid=v2`. `components/rc-out-table.tsx` is production and is **not edited by one character**; see `../CONTEXT.md` → "The `?grid=v2` side-by-side" for the toggle wiring.
+
+**Read-only structurally, not by promise.** Every column is `cellKind: 'readonly'` and none carries a `parse`, so `columnAcceptsEdit` is false at every coordinate and an editor can never open. No `renderEditor`, no draft pool, no context menu, no write action imported. `RowKind.occupies()` still reports which fields WOULD be editable (`EDITABLE_FIELD` — `state`, `batch_code`, `avg_price` and `avg_wtd_value` are false, the last two being DB-computed columns), inert until the edit pass.
+
+**Columns are the live table's, in the live table's order** — RC OUT has no `CLAUDE.md` column config, so there is nothing to reorder to: DATE · STATE · BATCH · BLOCK · WT · PLANT/ETC · BLOCK LOC · REMARKS · AVG PRICE · AVG VAL. The kebab `actions` column is deliberately absent — its only two items are Edit and Delete.
+
+**NO column is pinned here, and that is a decision, not an omission.** RC IN v2 pins its STATE+DATE pair because eighteen columns always scroll sideways. RC OUT does not, for a reason only this sheet has: it **tints the whole row** by batch status (`getRowStateClasses`), and a row tint cannot reach a pinned cell. The module paints every pinned `<td>` with an opaque `bg-background` — correctly and non-negotiably, since a frozen column sits ON TOP of scrolling content and any alpha lets the moving cells bleed through (`CLAUDE.md` → "Frozen Panes"). A class from `rowClassFor` lands on the `<tr>`, which the opaque cell then covers, so pinning would paint the red CLOSED wash across columns 3–10 and leave DATE and STATE plain — a half-painted row. The live table has no frozen columns either, so this also keeps the two sides comparable. **The missing seam:** a per-ROW background token the class table layers into the pinned cell as well. Reported, not worked around.
+
+**`getStateClasses` / `getRowStateClasses` are copied verbatim** into the v2 file. They are module-private in `rc-out-table.tsx`, and exporting them would mean EDITING a production file this migration may not touch. They are deleted with that file at cutover.
+
+**Price gating.** RC OUT already used the server-first pattern and v2 keeps it: `canViewPrices` arrives as a PROP that `fetchRcOutTabData()` computed with the canonical `lib/auth.canViewPrices()`, in the same call that nulled `avg_price` / `avg_wtd_value` before the payload left the server. The two ₱ columns do not EXIST for a gated viewer (`ColumnSpec.visible`) rather than rendering blank.
+
+**Month group headings** are rendered through `renderChromeRow` (label · feeding count · kg · ₱), with a real blank spacer row at each month boundary. The sticky totals rule-off is ALWAYS shown (the live table shows its TOTALS footer only when a filter is active), and its ₱/kg is **BLENDED — total value ÷ total kg, never the mean of the per-row averages**, which would weight a 500 kg feeding the same as a 20,000 kg one.
+
+**Not built (read-only pass):** search, all five filter popovers (BATCH / YEAR / STATE / PLANT-ETC / BLOCK LOC), the **Closed Blocks** summary toggle and its lazy `fetchClosedBlocks()`, the Settings popover, Add Record / Refresh, row-selection mode, the per-row kebab menu (Edit / Delete), the `?editBatch=&editView=usage` deep link, and the mobile card layer. Because there is no year filter, **v2 shows every `rc_out` row the action returned** while the live table opens on its default STATE-excluded view.
+
 ## See Also
+- [Blackwood Table — the universal table module](../../../../lib/table/CONTEXT.md) — the port (`ColumnSpec` / `RowKind.occupies` / `TableSettings`), the React half, and the `?grid=v2` recipe `rc-out-grid-v2.tsx` follows.
 - [Shared Mobile Primitives (Archetype C)](../../../../components/shared/mobile/CONTEXT.md) — `rc-out-cards-mobile.tsx` consumes `MobileCardList`, the platform card-list + detail-sheet primitive
 - [Blackwood Table (shared grid primitives)](../../../../components/shared/grid/CONTEXT.md) — `bulk-usage-input.tsx` consumes the shared keyboard/edit/paste hooks
 - [RC IN](../rc-in/CONTEXT.md) — shares paste utilities; the canonical reference migration for the shared grid primitives

@@ -12,9 +12,10 @@ Read-only view of FLECON bag stock — an **Excel-style frozen matrix** that mir
 ## Files
 | File | Role |
 |------|------|
-| `page.tsx` | Async Server Component — calls `fetchFleconBagData()`, passes `balances`/`movements`/`error` to the client view. Thin; navbar owns the title (no header rendered). |
+| `page.tsx` | Async Server Component — calls `fetchFleconBagData()`, passes `balances`/`movements`/`error` to the client view. Thin; navbar owns the title (no header rendered). Also reads **`?grid=v2`** and picks between the live view and the v2 grid (see "The `?grid=v2` rewire" below) — the ONLY file that switch touches. |
 | `actions.ts` | Read server action `fetchFleconBagData()` (exports `FleconBagMovementRow`) + the ONE mutation `updateFleconBagNickname(bagTypeId, nickname)` — writes the column nickname on `flecon_bag_types` (dimension only, never movement facts). |
 | `components/flecon-bags-view.tsx` | Client view — the **frozen bag-movement matrix** (rebuild of the old card grid). Owns the page container. Includes `BagTypeHeaderCell` — the click-to-edit nickname header. |
+| `components/flecon-bags-grid-v2.tsx` | **NEW (2026-08-19).** The same matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`), reachable only at `?grid=v2`. READ-ONLY and built BESIDE the live view, which is not edited by one character. See "The `?grid=v2` rewire". |
 
 ## Data
 - **View: `view_flecon_bag_balance`** — one row per bag type. Columns (ALL nullable): `bag_type_id`, `code`, `label`, `nickname`, `sort_order`, `opening`, `total_in`, `total_out`, `balance`, `last_movement_date`. **`balance` is SQL-computed — NEVER recomputed in TS** (the `nz()` helper only COALESCEs null → 0 for display). The header display label = `nickname?.trim() || label` (fall back to the internal label; the full `label` stays in the cell `title`). 14 rows. Ordered by `sort_order` ascending server-side.
@@ -42,6 +43,57 @@ Read-only view of FLECON bag stock — an **Excel-style frozen matrix** that mir
 - **Mobile (Archetype E phone-summary):** the 14-column matrix can't shrink to a phone (frozen region alone is 276px), so the `<div ref={scrollRef}>` matrix is `hidden … sm:block` (desktop/landscape only, byte-for-byte unchanged) and a `sm:hidden` **`FleconBagsSummaryMobile`** renders instead. It has two sections: (1) a **Current-Balance card list of all 14 bag types** (`columns[].{label|nickname, balance}` — the same `view_flecon_bag_balance` numbers the frozen footer shows, red when negative) and (2) a **recent-movements feed** — `movements` is reversed (it arrives ASC) for newest-first, capped at `MOBILE_FEED_CAP` (120) with a "showing latest N of M" note, each row = date (`.slice(5)`) · particular · `SignedQty(qty_delta)` · bag-type label. **No number is recomputed** and there is no ₱ in Flecon. Component + cap are local to `flecon-bags-view.tsx`.
 - **Error handling:** on `error`, `errorToast()` fires (persist-until-dismissed + Copy, per the Error Toasts HARD RULE — never `toast.error` directly) AND an inline banner renders with its own Copy button. Matrix still renders whatever arrived.
 - **Date format:** `transaction_date` is already `yyyy-MM-dd`. The frozen DATE cell renders `MM-dd` (via `.slice(5)` — no date-fns) with the full `yyyy-MM-dd` in the native `title`; month separators use the month slice for TZ-safe grouping.
+
+## The `?grid=v2` rewire (universal-table migration, 2026-08-19)
+
+`components/flecon-bags-grid-v2.tsx` renders the SAME `balances` + `movements` payload on
+the platform grid, so the two can be compared row-for-row on the same real data. It is
+reachable only at `/inventory/flecon-bags?grid=v2`; `?grid=` absent, misspelt or `V2` all
+mean the live view. Only `page.tsx` changed — `flecon-bags-view.tsx` and `actions.ts` are
+byte-identical.
+
+- **READ-ONLY, structurally.** Every column is `cellKind: 'readonly'`, no column carries a
+  `parse`, no `renderEditor` is passed ⇒ `columnAcceptsEdit` is false at every coordinate
+  and an editor can never open. `updateFleconBagNickname` is deliberately NOT imported, so
+  the one dimension mutation the live view owns is unreachable here.
+- **`Ctx` is `null`.** This grid needs no ambient state: there is no ₱ in the flecon domain
+  and therefore no price gate, and no per-user settings are read. A primitive also cannot
+  fail the module's "`ctx` must be referentially stable" rule.
+- **Forwarded Balance / Current Balance are CHROME ROWS (`renderChromeRow`), not summary
+  lanes.** A `TableSummaryRow` tiles six DECLARED lanes (`label · frozen · spacer · figure ·
+  note · total · trailing`), so it can carry ONE headline figure and one total — while each
+  balance lane carries a DIFFERENT figure under every one of the 14 bag columns.
+  `renderChromeRow` returns the row's own cells, one `<td>` per column, which is the only
+  shape that fits. Month rules are chrome rows too. All three are `addressable: false`, so
+  they never enter `navRows` and the caret can never land on one. **The cost:** Current
+  Balance is the LAST ROW OF THE BODY, not pinned to the bottom of the scrollport — the
+  footer is only reachable through `summaryRows`. Mitigated with
+  `initialTopMostItemIndex = items.length − 1`, which opens the sheet at the newest
+  movements exactly as the live view's `scrollTop = scrollHeight` does.
+- **The width clamp is load-bearing.** `BlackwoodTable` renders `width: 100%` +
+  `minWidth: Σ widths` and gives EVERY column an explicit `<col width>`; under
+  `table-layout: fixed` a table wider than its columns scales ALL of them proportionally
+  (measured in Chrome at a 1600px container: a declared 76px column renders **94.7px**, a
+  declared 200px one **249.2px**). The sticky `left` offsets come from the DECLARED widths,
+  so a stretched table would pin PARTICULAR ~19px inside DATE. The grid therefore clamps
+  its own `maxWidth` to `useTableColumns(...).minWidth` (= `minTableWidth` = Σ resolved
+  widths = `76 + 200 + 14 × 72 = 1284`, the live view's hand-written formula), which makes
+  the stretch unreachable — the same guarantee `rc-movement-matrix.tsx` gets from
+  `width: 'max-content'`. **Consequence:** the live view STRETCHES its bag columns to fill
+  a wide monitor (its bag `<col>`s have no width, so `table-fixed` hands them the slack);
+  v2 sizes to content and leaves the page empty to the right of 1284px.
+- **Not reproduced in v2** (left out rather than stubbed): the click-to-edit column
+  nicknames (a write), the `sm:hidden` phone summary (v2 renders the same scrolling matrix
+  at every width), two-line wrapped bag headers (`ColumnSpec.label` is a string in a
+  truncating `<th>`), and the floating selection-aggregate pill — the module computes the
+  aggregates inside `useTableInteraction` and hands a consumer only the RANGE, so the grid
+  shows the selection's `rows × cols` instead of a total.
+- **What IS live from the module:** cell selection and rectangular ranges, the full
+  keyboard (arrows, Tab, Ctrl/Cmd+Arrow, Home/End, Ctrl+Home/End, PageUp/PageDown),
+  Ctrl/Cmd+C as TSV, column resize (session-local), the frozen DATE + PARTICULAR block, and
+  virtualised scrolling over the whole year of movements.
+- Error handling is unchanged: `errorToast()` (persist + Copy, HARD RULE) plus the inline
+  banner with its own Copy button.
 
 ## Dependencies
 - `@/lib/supabase/server` — `createClient()` for the read query

@@ -13,9 +13,11 @@ A cross-tab / pivot of feeding activity, mirroring how the user reasons about a 
 | File | Lines | Role |
 |------|-------|------|
 | `actions.ts` | ~700 | Backend. Single server action `fetchRcMovementMatrix(campaign?)` → `RcMovementMatrix`. `campaign` = the encoded campaign key `"PRODUCTION_BATCH-YEAR"` (e.g. `"JUNE-2026"`); absent/invalid → resolves to the most recent campaign. Builds `campaignOptions` from `view_rc_movement_campaign_options` (filtered `campaign_year >= 2025`, ordered `max_date` desc). For the resolved `(pb, yr)` it pivots `view_rc_movement_campaign_cells` into ordered block-columns × calendar-day-rows (day-range from the options view's `min_date`→`max_date`), and reads the campaign fed-price views (`_campaign_day_price`, `_campaign_price`) + the campaign production/yield views (`_campaign_production_daily`, `_campaign_production_daily_total`, `_campaign_production`, `_campaign_yield`). Every campaign view is filtered `.eq('production_batch', pb).eq('campaign_year', yr)`. The per-block footer pass (status / totalIn / totalOut / mc / ash / blockLoss / `avgFedPrice`) is **all-time per-batch, campaign-independent** — unchanged (`batches`, `deliveries`, `rc_out`, `view_rc_movement_batch_price`). Pages through every view via the **shared `fetchAllRows()` helper** (`@/lib/supabase/paginate`, DUP-1 — a thin local `fetchAll` delegates to it; the helper's throw surfaces as the action's `empty` fallback) to bypass PostgREST's 1000-row cap. |
-| `page.tsx` | ~25 | **Standalone route entry (`/inventory/rc-movement`).** Server component — renders `<RcMovementRouteView>` inside a `<Suspense>` (the view uses `useSearchParams`). |
+| `page.tsx` | ~70 | **Standalone route entry (`/inventory/rc-movement`).** Server component. Reads **`?grid=v2`** and picks the grid (see "The `?grid=v2` rewire" below): the LIVE branch renders `<RcMovementRouteView>` inside a `<Suspense>` exactly as before (the view uses `useSearchParams`), while the v2 branch awaits `fetchRcMovementMatrix(campaign)` HERE and hands the payload down as a prop. |
 | `rc-movement-route-view.tsx` | ~95 | **NEW. Standalone-route host.** Client component owning the matrix fetch (`fetchRcMovementMatrix(campaign?)`), the spinner/empty states, the `?campaign=` URL param (read via `useSearchParams`, written via `router.replace`), and the `onNavigateToBatch` wiring (`router.push('/inventory?tab=…')`). SHELL-AGNOSTIC — does NOT use `useInventoryTab`. Repurposed from the deleted `rc-movement-matrix-lazy-tab`. |
 | `rc-movement-matrix.tsx` | ~1400 | **Matrix** client table. Frozen-pane sticky table: **5** pinned left columns (Row # / Date / Day / Fed ₱/kg / Total fed) + frozen header row + pinned top-left corner **+ frozen summary footer pinned to the container bottom** (per-column stacked summary + bottom-left corner). Scrolling region: **PRODUCED group (TOTAL PRODUCED + dynamic per-grade columns)** FIRST, then the dynamic per-batch BLOCK columns; 2px `GROUP_DIVIDER` borders separate the two scrolling groups. `table-fixed`, explicit px widths, `h-8` rows, mono right-aligned numerics, thousands separators, blank zero cells. **Active campaign** is shown as a prominent toolbar label (eyebrow "Campaign" over the `campaignLabel` heading, e.g. "June 2026") beside the **campaign picker** (shadcn `Select`, value = encoded key, options = `campaignOptions`); selecting calls `onCampaignChange?(campaign)` → the route view writes it to the `?campaign=` URL param and re-fetches. Block column headers are **clickable** → open the shared `BlockingDetailPanel` (slide-over) for that column's batch. **Props:** `data`, `onCampaignChange?`, **`onNavigateToBatch?`** (passed straight to the detail panel's "Edit All"; the standalone route wires it to `router.push('/inventory?tab=…')`). |
+
+| `rc-movement-grid-v2.tsx` | ~840 | **NEW (2026-08-19).** The same day×block matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`), reachable only at `?grid=v2`. READ-ONLY, built BESIDE the live matrix, which is not edited by one character — nor is `rc-movement-route-view.tsx`. Owns its own campaign picker (writes `?campaign=`, preserving every other param) and a `useTransition` busy state. See "The `?grid=v2` rewire". |
 
 > The folder now HAS a `page.tsx` (Phase 2) — `/inventory/rc-movement` is a real standalone route. The matrix is reached there (no longer via a tab).
 
@@ -195,6 +197,72 @@ Footer height grew by one line; the frozen geometry is unchanged (`.frozen-corne
 - `rc-movement-route-view.tsx` is the client host (rendered by `page.tsx` inside a `Suspense`). The selected campaign is **driven by the `?campaign=` URL search param** (read via `useSearchParams`, the URL is the source of truth). It fetches `fetchRcMovementMatrix(campaignParam || undefined)` on first render and whenever the param changes, shows a `Loader2` spinner while loading (only when there's no prior data), and renders `<RcMovementMatrix data={…} onCampaignChange={…} onNavigateToBatch={…} />`. `onCampaignChange` writes the param via `router.replace(pathname?campaign=KEY, { scroll: false })`; `onNavigateToBatch` does `router.push('/inventory?tab=deliveries|usage&search=…&editBatch=…')`.
 - The route renders in the thin inventory layout's content area (full height) with **no tab-bar footer** — it is shell-agnostic (does NOT use `useInventoryTab`). The old in-tab `RcMovementMatrixLazyTab` was deleted this wave.
 - Campaign switching re-fetches the server action **without a page reload** — the spinner shows only when there is no prior data.
+
+## The `?grid=v2` rewire (universal-table migration, 2026-08-19)
+
+`rc-movement-grid-v2.tsx` renders the SAME `RcMovementMatrix` payload on the platform grid,
+so the two can be compared cell-for-cell on the same campaign. Reachable only at
+`/inventory/rc-movement?grid=v2`; `?grid=` absent, misspelt or `V2` all mean the live
+matrix. Only `page.tsx` changed — `rc-movement-matrix.tsx`, `rc-movement-route-view.tsx`
+and `actions.ts` are byte-identical.
+
+- **Why the v2 branch is fetched on the SERVER.** The live branch's payload is fetched
+  client-side by `rc-movement-route-view.tsx`, and that file may not be edited — so rather
+  than adding a prop to it, `page.tsx` awaits the SAME read action for the v2 branch and
+  passes the result down. No second copy of the campaign-resolution logic, no client fetch,
+  no spinner state, and the live host keeps every line it had.
+- **PRICE GATING is unchanged and is not decided in the client.** `canViewPrices` arrives
+  inside `data` (resolved by `lib/auth.canViewPrices()` inside `fetchRcMovementMatrix`,
+  which also nulls every ₱ field and does not even QUERY the three ACTUAL FED ₱/kg views for
+  a gated viewer). The v2 grid mirrors the live matrix exactly: `Fed ₱/kg` is
+  `visible: (ctx) => ctx.canViewPrices`, so for a gated viewer the column does not EXIST —
+  absent from the coordinate space, not blanked. **The runtime `LEFT_TOTAL` arithmetic the
+  live file has to do by hand disappears:** the module recomputes every pinned offset from
+  the RESOLVED column set, so `Total fed` slides left to sit directly after `Day` and keeps
+  `.frozen-edge` on its own. The footer's `₱/kg` + `actual` lines and the coverage badge are
+  gated on the same flag.
+- **The `#` column is the module's `CellSlot.addressable: false` case.** A row ordinal
+  RENDERS its number and must never be a keyboard stop; it is `cellKind: 'derived'` (so
+  `columnSelectable` also excludes it from rectangles) and the `day` row family returns
+  `addressable: false` for that one slot. Every Tab run and every jump key steps straight
+  over it.
+- **The summary footer is a CHROME ROW (`renderChromeRow`), not `summaryRows`.** A
+  `TableSummaryRow` tiles six DECLARED lanes, so it can carry one headline figure and one
+  total — this footer carries a different stack under every one of ~40 columns (per-block
+  `fed` / `loss` / `₱/kg` / `actual` with the opaque `statusTint()` state colour, the
+  tricolor produced/yield/loss bands, each grade's campaign total, the grand total fed and
+  the campaign delivered + actual ₱/kg). `renderChromeRow` returns one `<td>` per column,
+  which is the only shape that fits. **The cost:** it is the LAST ROW OF THE BODY rather
+  than pinned to the container bottom — `summaryRows` is the only route to the footer.
+- **The 2px `GROUP_DIVIDER` is painted from inside the cells.** The module owns every
+  `<td>`/`<th>` className (`cell-classes.ts` builds it from ten enums), so a consumer cannot
+  add a border to one. Body cells draw the rule on their own `absolute inset-0` inner span
+  (`TOTAL PRODUCED` and the first block column), the header draws it through
+  `renderHeaderSlot` (an `inset-y-0 left-0 w-0.5` sliver — the `<th>` is a positioned box),
+  and the totals row draws it directly. All three sections therefore carry it, as they do
+  today.
+- **The width clamp is load-bearing.** The live matrix uses `width: 'max-content'` so
+  `table-fixed` cannot stretch its columns on a campaign with few blocks. `BlackwoodTable`
+  renders `width: 100%` + `minWidth: Σ widths` with an explicit `<col width>` per column,
+  and a fixed table wider than its columns scales ALL of them proportionally (measured in
+  Chrome at a 1600px container: a declared 76px column renders 94.7px) — which would drift
+  the sticky `left` offsets computed from the DECLARED widths. The grid clamps its own
+  `maxWidth` to `useTableColumns(...).minWidth`, so the stretch is unreachable and the clamp
+  follows a column resize and the price gate automatically.
+- **Not reproduced in v2** (left out rather than stubbed): the clickable block header →
+  shared `BlockingDetailPanel` slide-over (and therefore `fetchBlockDataForBatch` /
+  `onNavigateToBatch`), the `OpenBlocksDialog` behind the coverage badge (rendered as an
+  inert pill in v2), the Radix hover info card per footer column (a native multi-line
+  `title` carries the same figures), two-line block headers (`ColumnSpec.label` is a string
+  in a truncating `<th>`), the `sm:hidden` phone summary, and the floating
+  selection-aggregate pill (the module computes the aggregates inside
+  `useTableInteraction` and exposes only the RANGE, so the toolbar shows `rows × cols`).
+- **What IS live from the module:** cell selection and rectangular ranges, the full keyboard
+  (arrows, Tab, Ctrl/Cmd+Arrow, Home/End, Ctrl+Home/End, PageUp/PageDown), Ctrl/Cmd+C as
+  TSV, column resize (session-local), the 5-column frozen block with the price column
+  dropping out of it for Production, the sticky header, the weekend amber cue, the emerald
+  fed-cell wash, and the zero-fed-day dimming. `scope="focus"` (a plain sticky `<table>`,
+  no virtualisation) matches the live matrix's own choice for ~31 × ~44 cells.
 
 ## Dependencies
 - `@/lib/supabase/server` — used by `actions.ts` (server-side only)

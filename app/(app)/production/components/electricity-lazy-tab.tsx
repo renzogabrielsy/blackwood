@@ -22,7 +22,12 @@ function periodKey(year: number | null, batch: string | null): string {
     return `${year ?? 'all'}|${batch ?? 'all'}`;
 }
 
-export function ElectricityLazyTab() {
+/** `?grid=v2` — passed straight through to the view, which owns the switch. */
+export interface ElectricityLazyTabProps {
+    v2?: boolean;
+}
+
+export function ElectricityLazyTab({ v2 = false }: ElectricityLazyTabProps) {
     const { activeTab } = useProductionTab();
     const { year, batch, periodsLoading } = useProductionPeriod();
 
@@ -87,6 +92,7 @@ export function ElectricityLazyTab() {
 
     return (
         <ElectricityView
+            v2={v2}
             readings={data.readings}
             year={data.year}
             month={data.month}

@@ -30,6 +30,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `edits.ts` | `mergeFieldEdit`, `isDirtyFieldEdits`, **`forgetRows`**, `countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`, the draft-row constants, and **`createJournal` / `invertStep`**. |
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
+| `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V2` / `parseGrid` / `isGridV2` / `withGrid` / `gridHref` — the `?grid=v2` side-by-side axis, and the ONE definition of it. Temporary: deleted with the last old grid. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
 | `../../scripts/verify-table-core.ts` | **44 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
@@ -354,6 +355,96 @@ there, so a key that owes nothing is a no-op rather than a re-render. `pageJump`
 
 ---
 
+## The side-by-side toggle (`?grid=v2`) — how a screen gets one
+
+Every screen migrated onto this module builds its new grid **beside** the existing one and
+picks between them on a query param, so the rewire can land half-finished and be compared
+row-for-row on the same real data (the strangler-fig method —
+`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`). This section
+is the recipe for making that switch a **button** instead of an edit to the address bar.
+
+**Two pieces, both platform-layer, both temporary:**
+
+| Piece | Path | What it is |
+|---|---|---|
+| The param | `lib/table/grid-param.ts` (barrelled from `@/lib/table`) | Pure. `GRID_PARAM` (`'grid'`), `GRID_V2` (`'v2'`), `parseGrid`, `isGridV2`, `withGrid`, `gridHref`. |
+| The control | `components/shared/table/GridVersionToggle.tsx` (barrelled from `@/components/shared/table`) | `GridVersionToggle` (the segmented control) and `GridVersionBar` (a `shrink-0` strip that carries it). |
+
+### The recipe — three edits to one file, and neither table is touched
+
+The server `page.tsx` is the ONLY file that changes. Both table components are left alone
+— which is the point: the current table is production and the migration may not edit it.
+
+**1. Import the bar and the param helpers.**
+
+```tsx
+import { GridVersionBar } from '@/components/shared/table';
+import { GRID_V2, parseGrid } from '@/lib/table';
+```
+
+**2. Read the param and build the bar** (the page already reads `searchParams`):
+
+```tsx
+const v2 = parseGrid(params.grid) === GRID_V2;
+const gridBar = <GridVersionBar note="Same rows, same filters — this switches only which table renders them." />;
+```
+
+**3. Render the bar ABOVE whichever grid the flag selected**, at every `return` in the file:
+
+```tsx
+return (
+    <>
+        {gridBar}
+        {v2 ? <ThingGridV2 {...props} /> : <ThingTable {...props} />}
+    </>
+);
+```
+
+That is the whole change. A page with an early `return` per scope gets the fragment at each
+one — hence `gridBar` as a variable rather than the element inline.
+
+### The five rules this obeys, and why each one is not optional
+
+1. **EVERY OTHER PARAM SURVIVES THE FLIP.** A screen's URL carries its scope, month,
+   search, lens and per-column filters; a toggle that dropped one would put two different
+   sets of rows on the two sides and make the comparison worthless. `withGrid` copies the
+   query exhaustively, `append`s (so a legitimately repeated param stays a repeat) and
+   touches only its own key. **Never build the query string by hand in a caller** — that is
+   how a filter goes missing. Verified live in both directions on a URL carrying
+   `scope`, `year`, `month`, `issue`, `q` and two `f_<column>` filters.
+2. **ONE definition of the param, in the platform layer.** The first migrated screen
+   defined `GRID_V2` / `parseGrid` in its own tenant module; `app/(app)/cenapro/deliveries/ledger-url.ts`
+   now **re-exports them from `@/lib/table`** rather than keeping a second copy. A screen
+   that needs them locally re-exports the same way. Three copies of a string literal is
+   three chances to disagree about which URL means what.
+3. **The bar carries its own layout.** `GridVersionBar` is `shrink-0` with the strip's
+   padding and border baked in, because a page that forgets `shrink-0` squeezes the sheet
+   below it instead of the strip — the exact failure "never crush, always scroll" exists to
+   prevent. Mount the bar; do not re-type its classes.
+4. **The Suspense boundary ships with the control.** `useSearchParams()` opts its subtree
+   out of static prerendering and fails the production build on any page that has not
+   opted out itself. `GridVersionToggle` wraps its own internals, so the recipe works on a
+   `force-dynamic` page and a static one alike and no caller has to remember.
+5. **The default is untouched.** `?grid=` absent — and `?grid=V2`, `?grid=3`, `?grid=`
+   — all mean the CURRENT table. The param is an axis of the CLIENT, never of the data:
+   both components read the identical server payload, and nothing here reaches a query, an
+   action or a role gate.
+
+### Where the control goes when the new grid has its own toolbar
+
+Prefer the page-level bar — one mount, both sides, neither component edited. Drop the bare
+`<GridVersionToggle />` into a toolbar only when that toolbar is in a file this migration
+owns (a `*-v2.tsx`), and then do **not** also render the bar for that branch, or the screen
+grows two toggles. The control already carries `data-grid-chrome`, so it is safe inside a
+Blackwood Table toolbar: Enter/Space activate the button instead of opening the caret cell.
+
+### At cutover
+
+The param, `grid-param.ts`, `GridVersionToggle.tsx` and the page's three edits are deleted
+together with the last old grid. A permanent escape hatch is a second grid nobody maintains.
+
+---
+
 ## Status
 
 **Stage 1A of Phase 1 is complete** (2026-08-17). The pure core exists and the Cenapro RC
@@ -506,3 +597,136 @@ only does that for the platform's own accelerator, so the spec presses **Cmd+V o
 (Ctrl+V produces a keydown and no clipboard event at all). And the endless scope is
 virtualised, so a spec that scrolls to the far end cannot then click a row at the top:
 `Ctrl+Home` first.
+
+---
+
+## Stage 1D at scale — eight consumers in one night (2026-08-19)
+
+Renzo asked for a v2 of **every** editable grid in the app, each built beside the one in
+production and reachable on `?grid=v2`, so he could compare before authorising a migration.
+**Blocking was excluded on his instruction and is byte-identical.** Screens covered: ICTC
+RC IN · RC OUT · Production Daily / Electricity / Trucks · Flecon Bags · RC Movement ·
+Cenapro Production (both scopes), on top of Cenapro Deliveries from the day before.
+
+**Every one is READ-ONLY, and structurally so.** No `ColumnSpec` in any of them declares a
+`parse`, and `columnAcceptsEdit` falls back to `spec.parse !== undefined` — so the editor,
+Delete/Backspace and the paste loop's per-cell guard all refuse at every coordinate. That
+one absence removes the whole write surface at once, which is what made an unattended
+overnight build safe. The row families still declare each slot's **honest** `editable` flag:
+that is the row's half of the verdict, the two halves are ANDed, and it is what a later
+editing pass builds on. Setting `editable: () => true` on a *spec* would have opened real
+edit sessions — do not.
+
+### The measured layout bug — a stretched table moves its own frozen columns
+
+`BlackwoodTable` renders `width: 100%` **plus** `minWidth: Σ widths` **plus** an explicit
+`<col width>` per column. Under `table-layout: fixed`, a table wider than its columns scales
+**all** of them proportionally: measured in headless Chrome at a 1600px container, a declared
+**76px column rendered 94.703px** and a declared **200px one rendered 249.219px** (both exact
+at 800px). The sticky `left` offsets come from the **declared** widths, so on a wide monitor
+the frozen block **overlaps itself** — Flecon's columns sum to only 1284px, so this was
+reachable on any normal screen.
+
+Mitigated consumer-side for now: each grid clamps its wrapper `maxWidth` to
+`useTableColumns(...).minWidth` — the module's own resolved sum, so it tracks a column resize
+and a role-hidden column instead of drifting from a hand-written formula. **The cost is
+visible**: a screen that deliberately let `table-fixed` hand slack to its columns (Flecon)
+now sizes to content and leaves the page empty to its right.
+
+**This wants a platform decision, not N consumer clamps.** Either `BlackwoodTable` takes a
+`sizing: 'fill' | 'content'` prop (`width: 'max-content'` for the latter), or
+`useTableColumns` gains a fill mode that distributes slack into named columns **so the
+offsets stay derived from the widths actually rendered**. The invariant to restore is that
+one number describes both the layout and the sticky arithmetic.
+
+### Six seams the eight consumers proved were missing
+
+Each is additive — omit it and behaviour is byte-identical — and each was invisible until a
+real screen could not be expressed. That remains this module's dominant development mechanic.
+
+1. **A row tint cannot reach a pinned cell.** `rowClassFor` lands on the `<tr>`, and every
+   pinned `<td>` is opaque by design (a frozen cell sits over scrolling content; any alpha
+   bleeds through). So a row-status wash paints on the scrolling columns and is covered on
+   exactly the frozen ones — a half-painted row that reads as a bug. Two routes were proven:
+   **drop the pin** (RC OUT, whose live table has none either), or **paint inside the pinned
+   cell's `format`** with `absolute inset-0 -z-10` (Cenapro Production). The `-z-10` is
+   load-bearing and was verified in a browser across four cases: without it the wash covers
+   the selection tint **and** the active-cell ring, so a selected pinned cell stops looking
+   selected. Proper seam: `rowTint?(item): string` layered by `cell-classes.ts` into the
+   pinned cell's background as well as the row's — the module's own Frozen Panes rule already
+   says row state "must be applied to the frozen cells too", and there is no wire for it.
+2. **The selection aggregates never leave the table.** `useTableInteraction` computes
+   `sum`/`average`/`count`/`min`/`max`/`recommendedCalcType`; `BlackwoodTable` forwards only
+   the `CellRange` through `onSelectionChange`, and `TableState` carries no aggregates. A
+   consumer **cannot** recompute them: the range is in **nav-row** coordinates and `navRows`
+   is resolved inside `useTableRows`, so deriving it from `items` would be a second
+   definition of that axis — the same class of bug as rebasing `firstItemIndex`. Every v2
+   therefore shows a cell **count** where the live grids show a total; none fakes a number.
+   Seam: add `aggregates: CellAggregates | null` to `TableState`, or a second optional
+   argument to `onSelectionChange`.
+3. **A two-level column header is inexpressible.** `headerRow` is one `<tr>` of `HeaderCell`s
+   and `ColumnSpec.label` is typed `string`; `renderHeaderSlot` hangs a node *beside* a label
+   inside one cell and cannot span. Trucks lost its plate band over four sub-columns (the
+   plate now rides in each label, `AAV START`, with the full name on the tooltip) and is the
+   most visible difference of the night. Seam: `ColumnSpec.group?: string` plus an optional
+   band row tiled `summarySpans`-style over consecutive equal groups. `label: React.ReactNode`
+   separately covers a two-line label.
+4. **A summary row cannot carry a figure per COLUMN.** `TableSummaryRow` tiles six declared
+   lanes (`label · frozen · spacer · figure · note · total · trailing`), so a footer with a
+   different number under every column is impossible. Flecon's Forwarded / Current Balance
+   and RC Movement's whole footer are therefore `renderChromeRow` **as the last body row**,
+   which loses the bottom pin (mitigated with `initialTopMostItemIndex`). Seam:
+   `TableSummaryRow.cells?(api: TableChromeRowApi)` — the escape hatch `renderChromeRow`
+   already is, in the footer slot.
+5. **A sticky summary row cannot put its `figure` lane inside the pinned block.** The sticky
+   form is `frozen + spacer + weight + note + total + trailing`; with `figIdx < pinnedCount`
+   the spacer clamps at 0 and the row **over-tiles** the column table — a `figure` on column
+   6 of an 8-column pinned block emitted 25 cells for a 23-column table. Worked around by
+   moving the lane. A one-line guard (`hasWeight && figIdx >= frozen`, degrading to no figure
+   lane) would make it unwritable by accident.
+6. **A consumer cannot paint a cell or header border.** `cell-classes.ts` owns every
+   `<td>`/`<th>` className, so "give this column a left rule in all three sections" has no
+   expression. Worked around inside the paint (the cell's own `absolute inset-0` inner span;
+   an `inset-y-0 left-0 w-0.5` sliver through `renderHeaderSlot`). Wants
+   `ColumnSpec.groupStart?: boolean`.
+
+### The pivot views, and why they were NOT attempted
+
+Cenapro's `?view=daily-w6|daily-w7` (`production-daily-block.tsx`,
+`production-endless-pivots.tsx`) got no v2, deliberately. Three of the four things a pivot
+needs already exist — `renderChromeRow` for arbitrary cells, `occupies()` for differing lanes
+per family, `pin` for the frozen block. The missing one is **vertical cell merging**:
+`TableCells` emits exactly one `<td>` per column per row with no `rowSpan`, and a day-block
+pivot's whole grammar is one DATE cell spanning its five grade rows.
+
+**`rowSpan` is not the seam to add.** It breaks the invariant the module rests on — that a
+row's cells are a function of that row alone. `TableVirtuoso` measures rows off `<tbody>`'s
+children and recycles them independently, so a cell owned by row *n* but painted across
+*n…n+4* cannot be measured, cannot recycle, and is destroyed when row *n* leaves the window.
+The additive seam worth proposing instead is a per-family **`renderRowCells`** escape hatch
+plus expressing the merge as **first-cell-only + borderless continuation rows** — visually
+identical, still one `<td>` per row, and `occupies()` already lets the continuation rows
+return `null` for the merged lane so the caret behaviour falls out.
+
+### Two consumer-side notes for the cutover
+
+- **`firstItemIndex` is corrected at the call site in two grids independently.** The pager
+  hooks (`use-deliveries-window.ts`, `use-ledger-window.ts`) decrement their base by
+  **records**, which is short whenever the flat array carries chrome — measured, 4 records
+  prepended add **6** items. Not a module gap; the correction belongs in the pager hook once
+  one grid remains.
+- **`daily-grid-v2.tsx` imports `buildGridRows` from `daily-ledger-grid.tsx`** — a value
+  import, not a copy, which is what guarantees both sides assign the same PRIMARY row. That
+  import must move somewhere neutral before the live ledger is deleted.
+
+### The side-by-side toggle is now the pattern for all of them
+
+One recipe, applied nine times: read `parseGrid(params.grid)` in the server `page.tsx`, mount
+`<GridVersionBar>`, and pick the component. Never build the query string by hand —
+`withGrid` is what preserves scope, period, lens, search, `?campaign=`, `?m=` and every
+`f_<column>` filter, and losing a filter on a flip makes comparison useless. Two structural
+exceptions were needed and are worth knowing: the **Production tabs are one page** switching
+via localStorage, so the flag is read once and threaded down as a prop (a `useSearchParams`
+per view would opt three subtrees out of static prerendering); and **RC Movement's page owns
+no data**, so its v2 branch awaits the same existing read action rather than adding a prop to
+the client host.

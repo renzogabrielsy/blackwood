@@ -100,3 +100,6 @@ export { shiftFirstItemIndex, DEFAULT_FIRST_ITEM_INDEX } from './paging';
 export type { FirstItemIndexShiftInput } from './paging';
 
 export { needsGroupSpacer } from './grouping';
+
+export { GRID_PARAM, GRID_V2, parseGrid, isGridV2, withGrid, gridHref } from './grid-param';
+export type { GridParam, QueryEntries } from './grid-param';

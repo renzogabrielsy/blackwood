@@ -26,6 +26,11 @@ export type { TableRowProps, TableRowShellProps, TableCellsProps, RowHandlers } 
 export { PasteSink, PASTE_SINK_ATTR, isGridChrome, focusGrid } from './PasteSink';
 export type { PasteSinkProps } from './PasteSink';
 
+// The side-by-side control. Temporary, and it goes with `?grid=v2` at cutover — see
+// `lib/table/grid-param.ts`.
+export { GridVersionToggle, GridVersionBar } from './GridVersionToggle';
+export type { GridVersionToggleProps, GridVersionBarProps } from './GridVersionToggle';
+
 export {
     createCellClassTable,
     cellClassKey,

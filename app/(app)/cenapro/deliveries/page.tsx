@@ -7,6 +7,7 @@ import {
 } from './actions';
 import { fetchPaymentDimensions } from '../liquidation/actions';
 import { isPrivileged } from '@/lib/auth';
+import { GridVersionBar } from '@/components/shared/table';
 import { DeliveriesLedger } from './deliveries-ledger';
 import { DeliveriesGridV2 } from './deliveries-grid-v2';
 import {
@@ -73,6 +74,21 @@ export default async function CenaproDeliveriesPage({
     const grid = parseGrid(params.grid);
     const v2 = grid === GRID_V2;
 
+    // ── The visible switch ───────────────────────────────────────────────────────
+    //
+    // Mounted HERE, above whichever grid the flag selected, rather than inside either
+    // of them — which is the whole point. `deliveries-ledger.tsx` is the production path
+    // and this migration does not edit it by one character, so its toolbar is not
+    // available; putting the control in the page means BOTH sides carry it, from ONE
+    // mount, with neither table component touched. It is a `shrink-0` strip in the
+    // Cenapro layout's flex column, so the sheet below keeps `flex-1 min-h-0` and is not
+    // squeezed.
+    //
+    // It writes only `?grid=`; every other axis on the URL (scope, period, lens, search,
+    // the `f_<column>` filters) is carried across verbatim, or the two sides would be
+    // showing two different sets of receipts and the comparison would be worthless.
+    const gridBar = <GridVersionBar note="Same rows, same filters — this switches only which table renders them." />;
+
     // The month index, the two dimension lists and the payment pickers are independent of
     // each other and of the row read — one round trip, not four in series.
     //
@@ -131,10 +147,15 @@ export default async function CenaproDeliveriesPage({
             loadError: month.error ?? months.error ?? dimensions.error ?? null,
         };
 
-        return v2 ? (
-            <DeliveriesGridV2 key={key} {...focusProps} />
-        ) : (
-            <DeliveriesLedger key={key} {...focusProps} />
+        return (
+            <>
+                {gridBar}
+                {v2 ? (
+                    <DeliveriesGridV2 key={key} {...focusProps} />
+                ) : (
+                    <DeliveriesLedger key={key} {...focusProps} />
+                )}
+            </>
         );
     }
 
@@ -172,9 +193,14 @@ export default async function CenaproDeliveriesPage({
         loadError: page.error ?? months.error ?? dimensions.error ?? null,
     };
 
-    return v2 ? (
-        <DeliveriesGridV2 key={key} {...endlessProps} />
-    ) : (
-        <DeliveriesLedger key={key} {...endlessProps} />
+    return (
+        <>
+            {gridBar}
+            {v2 ? (
+                <DeliveriesGridV2 key={key} {...endlessProps} />
+            ) : (
+                <DeliveriesLedger key={key} {...endlessProps} />
+            )}
+        </>
     );
 }
