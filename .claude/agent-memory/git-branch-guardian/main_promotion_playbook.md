@@ -840,3 +840,27 @@ commit's file list, since the promotion range includes any riding-along commits.
   commit riding along for the **twentieth** time. Expect this every promotion.
 - Gates clean (merge-base tree diff empty, merge exit 0 via `ort`, post-push `main` == `origin/main`
   at `5f24f23`, feature branch restored): **37 consecutive clean promotions.**
+
+**Promotion 50 (`d1ef776` + `c10680d` → `49dfd70`) — first promotion off
+`feat/sync-rc-in-recovery`, a NEW branch cut off `main` for a live production defect**
+(RC IN stopped flowing; four truckloads at ₱0). Branch sat exactly AT `main` with zero
+commits and the entire changeset uncommitted in the tree — so the merge-base gate and the
+`merge-tree` gate were both trivially clean, and the merge was a normal `--no-ff` (`ort`,
+25 files, +2706/−105). Confirms the "cut a new `feat/*` off `main` for a new work line"
+shape from the 2026-08-17 note, now with a same-day promotion attached.
+
+Two things worth carrying forward:
+
+- **The `chore(memory)` + feature SPLIT is the right default when the tree holds a guardian
+  memory edit.** A `fix(sync):` body enumerating three production faults cannot honestly
+  describe a git-guardian process note. Mechanics per [[feedback-commit-splitting]]:
+  `git commit -F <msg> -- <the one memory path>` FIRST, then a bare `git commit -F <msg>`
+  for the rest of the index — that ordering leaves the substantive commit as the branch TIP,
+  which is what you want in `git log` and in the merge stat. No per-file staging.
+- **A brief that states gate numbers is worth spot-checking on a production-defect
+  promotion, and it is cheap.** Ran worker `npm test` (52 files / **816** tests) + `parity`
+  (12 cases, 2 expected deviations, 0 fail) + root `tsc` in parallel background calls while
+  writing the commit message: ~2 min of wall clock, all three matched the brief exactly,
+  including its prediction of the one stale `.next` tsc error. Matching numbers is real
+  corroboration that the brief's author actually ran them; take the 8-minute root build
+  from the brief, re-run the 2-minute subset yourself.

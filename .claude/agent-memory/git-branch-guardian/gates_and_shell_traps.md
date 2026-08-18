@@ -14,7 +14,7 @@ Run the gates BEFORE merging to `main`, and never trust a gate whose exit code y
 ## The gates
 
 - **`npm run build` from the repo root** — always. **Exit code 0 is the gate.**
-- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → 674 → 708 → 720 → 745 → 764 → 772 → **789 passing / 51 files, ~11s** (2026-08-13, promotion 49). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out. **This session's Bash cwd can already BE `workers/sync`** (the env's working directory), so a bare `npm test` may run the worker suite without a `cd` — read vitest's `RUN … /workers/sync` header to confirm which suite you actually ran. The worker also type-checks separately: `npx tsc --noEmit -p workers/sync/tsconfig.json` (root `tsc` does NOT cover it).
+- **`cd workers/sync && npm test`** — baseline grew 540 → 586 → 612 → 636 → 647 → 674 → 708 → 720 → 745 → 764 → 772 → 789 → **816 passing / 52 files, ~9s** (2026-08-18, promotion 50). Take the expected count from the task prompt; it is usually stated. Skip when nothing under `workers/sync/` is touched and the prompt scopes it out. **This session's Bash cwd can already BE `workers/sync`** (the env's working directory), so a bare `npm test` may run the worker suite without a `cd` — read vitest's `RUN … /workers/sync` header to confirm which suite you actually ran. The worker also type-checks separately: `npx tsc --noEmit -p workers/sync/tsconfig.json` (root `tsc` does NOT cover it).
 - **When `workers/sync/**` IS touched, `npm test` + `npm run parity` are the RIGHT cheap subset** — ~2 min for both, and they exercise exactly the code that changed. Prefer them over a fresh 8-min root `npm run build` when the brief already reports the build green (promotion 40: both matched the brief's numbers exactly, alongside `tsc --noEmit` 0).
 - **`cd workers/sync && npm run parity`** when the sync worker is touched — expect "parity clean", 12 cases (deliveries 2 / flecon 3 / gsheet 2 / production 2 / rc_movement_audit 1 / rc_out 2).
 - **Scoped lint:** `npx eslint <touched files>` exits **0 on warnings-only, 1 on any error**, so the plain exit code IS the "0 errors" gate — no `--max-warnings` needed. Still read the log to report the warning count (2026-08-03: 9 cenapro ledger files, exit 0, 7 warnings all pre-existing in `production-ledger-grid.tsx`).
@@ -93,6 +93,23 @@ or `+` (list items, `--flag` docs, front-matter rules).
 **When `--numstat` and your changed-line grep disagree, the grep is wrong.** Corroborate with
 `git diff --staged -U1 <file> | grep -nE '^(@@|-)'`, then diff the old/new form of the specific
 line with an anchored pattern (`grep -E '^[-+]- \*\*\`batch_code\`'`) to prove what actually moved.
+
+## Root `tsc` exits 1 on a stale `.next/dev/types/validator.ts` — NOT your changeset
+
+2026-08-18 (promotion 50): root `npx tsc --noEmit` exited **1** with exactly one error —
+`.next/dev/types/validator.ts(341,39): error TS2307: Cannot find module
+'../../../app/dev/table-playground/page.js'`. That route exists only on
+`feat/universal-table`; Next.js had generated the route-type validator while that branch
+was checked out, and `.next/` is **gitignored build state that does not follow a branch
+switch**. So every main-based branch inherits a red root `tsc` until something regenerates it.
+
+- **The gate is "zero errors in a file the changeset touches", not the bare exit code.** Read
+  the log and attribute each error to a path before calling a promotion blocked. Same
+  judgement as the "a red build is not automatically yours" note above.
+- **Do NOT delete `.next/` to make it green.** The brief that flagged this said so explicitly
+  and was right: erasing build state to launder a gate hides the next real error too.
+- Cheap disambiguation: `git log --all --oneline -- <the missing path>` — if the path only
+  ever existed on another branch, the error is stale generated state, full stop.
 
 ## Route-table gate for route-group moves
 
