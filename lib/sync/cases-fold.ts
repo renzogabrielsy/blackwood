@@ -20,10 +20,12 @@ import type {
   ProductionHumanEdit,
   DeliveryHumanEdit,
   ReportArtifact,
+  ReportNotReceived,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
   StaleStream,
+  StaleStreamCheck,
   SyncReportType,
   SyncRunResult,
   UnpricedOverdue,
@@ -194,6 +196,28 @@ export function collectAwaitingBatchAssignments(
 }
 
 /**
+ * Every report whose SOURCE FILE never arrived this run
+ * (`result.reports[type].apply.report_not_received`, 2026-08-18, L-044).
+ *
+ * Unlike its siblings this is a SINGLE optional object per report, not an array — a report
+ * either arrived or it did not — so the fold is a presence check rather than a spread. Same
+ * guarded, generic contract as `collectPriceNotes` otherwise, and equally not folded into
+ * durable cases: the moment the report shows up the finding stops firing on its own, so
+ * there would be nothing to close by hand.
+ */
+export function collectReportsNotReceived(result: SyncRunResult): ReportNotReceived[] {
+  const reports = result.reports
+  if (!reports) return []
+
+  const out: ReportNotReceived[] = []
+  for (const key of Object.keys(reports) as SyncReportType[]) {
+    const note = reports[key]?.apply?.report_not_received
+    if (note && typeof note === 'object') out.push(note)
+  }
+  return out
+}
+
+/**
  * Flatten every held row across all reports in a run result. Returns [] when the
  * result has no `reports` (nothing per-report to persist yet).
  */
@@ -278,6 +302,21 @@ export function collectScheduleConflicts(result: SyncRunResult): ScheduleConflic
  */
 export function collectStaleStreams(result: SyncRunResult): StaleStream[] {
   return result.reconciliation?.stale_streams ?? []
+}
+
+/**
+ * The freshness watch's own failure, when it had one (2026-08-18, L-044).
+ *
+ * Returns null on every healthy run — the member is written ONLY on failure, so absence
+ * means the check ran and `collectStaleStreams` carries its answer. Guarded + pure.
+ *
+ * This is the collector that makes `stale_streams: []` honest: without it, "nothing is
+ * late" and "the view returned 42501" are the same empty array, which is precisely how the
+ * watch stayed dead and unnoticed from the day it was built.
+ */
+export function collectStaleStreamCheck(result: SyncRunResult): StaleStreamCheck | null {
+  const c = result.reconciliation?.stale_stream_check
+  return c && typeof c === 'object' ? c : null
 }
 
 /**

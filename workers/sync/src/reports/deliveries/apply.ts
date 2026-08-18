@@ -23,6 +23,7 @@
 import type { DbClient } from "../../lib/db.js";
 import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
 import { type DeliveryHumanEdit, deliveryHumanEditNote } from "../deliveryHumanEdit.js";
+import type { ReportNotReceived } from "../reportNotReceived.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
@@ -145,6 +146,12 @@ export interface ApplyResult {
    * classifier, so there is nothing to look up.
    */
   awaiting_batch_assignment: AwaitingBatchAssignment[];
+  /**
+   * Set ONLY when this report's source file did not arrive at all (L-044). Absent on
+   * every ordinary run, so its mere presence IS the fact. Never an array: a report either
+   * arrived or it did not, and "how late" is one number that the DB view owns.
+   */
+  report_not_received?: ReportNotReceived;
 }
 
 const REPORT_TYPE = "deliveries";

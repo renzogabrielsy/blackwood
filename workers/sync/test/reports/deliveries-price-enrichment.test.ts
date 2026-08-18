@@ -31,6 +31,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
+import ExcelJS from "exceljs";
 
 import {
   monthsSpanned,
@@ -676,5 +677,106 @@ describe("normalizers — Python parity", () => {
     expect(normWeight(9754.6)).toBe(9755);
     expect(normWeight("not a number")).toBeNull();
     expect(normWeight(null)).toBeNull();
+  });
+});
+
+// ===========================================================================
+// L-044 — THE WRONG WORKBOOK. A 100% unmatched rate is a FILE problem.
+//
+// On 2026-08-17 the sync priced four truckloads (69,900 kg) at zero and reported
+// NOTHING. The price file is fetched by SENDER only, and the newest .xlsx Czarina had
+// sent was `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx`, whose
+// tabs include `AUGUST 2026`. So the 2026-08-07 hardening worked perfectly, on a bank
+// cheque ledger: the file opened (no `price_file_unreadable`), the month resolved (no
+// `price_tab_unresolved`), rows were read — and every delivery came back `no_candidate`,
+// which is deliberately "an ordinary unmatched row, not a finding".
+//
+// The mail clerk now refuses that workbook by name. This is the second lock: the ONLY
+// symptom the wrong workbook ever produces is the RESULT, so the result is now watched.
+// The workbook below is built here rather than fetched, so this regression is pinned even
+// on a fresh clone with no `.sync-flags/`.
+// ===========================================================================
+async function wrongWorkbookBuffer(): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  // A tab whose NAME satisfies the month resolver — that is the whole trap.
+  const ws = wb.addWorksheet("AUGUST 2026");
+  ws.getCell("A3").value = "BDO CHEQUE REQUISITION";
+  // Cheque rows: a payee in the supplier column, amounts where weight/rate would be. They
+  // parse as "priceable rows", which is exactly why nothing upstream noticed.
+  const cheques = [
+    ["2026-08-03", "MERALCO", "CHK-100241", 1, 20, 148_320, 1],
+    ["2026-08-04", "PLDT", "CHK-100242", 1, 20, 9_875, 1],
+    ["2026-08-05", "BIR", "CHK-100243", 1, 20, 402_110, 1],
+  ];
+  cheques.forEach((row, i) => {
+    const r = 5 + i;
+    ws.getCell(r, 1).value = row[0] as string; // date
+    ws.getCell(r, 2).value = row[1] as string; // "supplier" = payee
+    ws.getCell(r, 3).value = row[2] as string; // "truck plate" = cheque no
+    ws.getCell(r, 5).value = row[3] as number; // "sacks"
+    ws.getCell(r, 8).value = row[5] as number; // "net weight" = cheque amount
+    ws.getCell(r, 9).value = row[6] as number; // "php/kg"
+  });
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+describe("L-044 — the WRONG workbook is caught by its RESULT", () => {
+  /** The four 2026-08-14 truckloads, the ones that actually went in at zero. */
+  const FOUR: Seed[] = [
+    { date: "2026-08-14", supplier: "Ornales",  batch: "AUGUST-26-BLK6", block: "A-10A", plate: "MAV 9202", sacks: 520, kg: 19_500, want: 0 },
+    { date: "2026-08-14", supplier: "Ornales",  batch: "AUGUST-26-BLK6", block: "A-10A", plate: "KCA 378",  sacks: 470, kg: 17_800, want: 0 },
+    { date: "2026-08-14", supplier: "Paquibot", batch: "AUGUST-26-BLK7", block: "A-11B", plate: "AAV 6111", sacks: 480, kg: 18_200, want: 0 },
+    { date: "2026-08-14", supplier: "Esito",    batch: "AUGUST-26-BLK8", block: "D-12A", plate: "JDF 981",  sacks: 400, kg: 14_400, want: 0 },
+  ];
+
+  it("reproduces the incident: every check passes and NOT ONE row is priced", async () => {
+    const rows = FOUR.map((s, i) => mkRow(s, i + 1));
+    const res = await enrichPrices(await wrongWorkbookBuffer(), rows);
+
+    // Everything L-039 hardened is satisfied by this file — that is the point.
+    expect(res.ok).toBe(true);
+    expect(res.tabs_loaded).toEqual(["AUGUST 2026"]);
+    expect(res.czarina_rows_loaded).toBeGreaterThan(0);
+    expect(res.notes.some((n) => n.kind === "price_tab_unresolved")).toBe(false);
+    expect(res.notes.some((n) => n.kind === "price_file_unreadable")).toBe(false);
+
+    // And nothing was priced.
+    expect(res.matched_count).toBe(0);
+    expect(res.unmatched_count).toBe(4);
+    expect(rows.every((r) => r.cost_basis === 0)).toBe(true);
+  });
+
+  it("raises price_no_row_matched, naming the FILE and the TAB", async () => {
+    const rows = FOUR.map((s, i) => mkRow(s, i + 1));
+    const res = await enrichPrices(await wrongWorkbookBuffer(), rows, {
+      filename: "BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx",
+    });
+
+    const note = res.notes.find((n) => n.kind === "price_no_row_matched");
+    expect(note).toBeTruthy();
+    // The filename is the answer to "why did this happen", and it was the one fact the
+    // pipeline could not previously state.
+    expect(note!.source_filename).toBe(
+      "BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx"
+    );
+    expect(note!.tabs_loaded).toEqual(["AUGUST 2026"]);
+    expect(note!.rows_considered).toBe(4);
+    expect(note!.rows_loaded).toBeGreaterThan(0);
+    expect(note!.detail).toContain("RAW CHARCOAL PURCHASES");
+    // No note on this channel may ever carry a peso value.
+    expect(JSON.stringify(note)).not.toMatch(/\u20B1/);
+  });
+
+  it("does NOT fire when even one row matched — one miss is ordinary", async () => {
+    if (!HAVE_WORKBOOK) return;
+    const rows = TEN.map((s, i) => mkRow(s, i + 1));
+    const res = await enrichPrices(buf(), rows);
+    expect(res.matched_count).toBeGreaterThan(0);
+    expect(res.notes.some((n) => n.kind === "price_no_row_matched")).toBe(false);
+  });
+
+  it("does NOT fire on an empty row list — there is nothing to fail to match", async () => {
+    const res = await enrichPrices(await wrongWorkbookBuffer(), []);
+    expect(res.notes.some((n) => n.kind === "price_no_row_matched")).toBe(false);
   });
 });

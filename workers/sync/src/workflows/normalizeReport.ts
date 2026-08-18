@@ -195,6 +195,13 @@ const REDACTED_DELIVERY_FIELDS: ReadonlySet<string> = new Set(["cost_basis"]);
  * `price_out_of_band` (priced, but the number is unlike this
  * supplier's recent range).
  *
+ * L-044 added three: `price_file_missing` (no price workbook in the mailbox window at
+ * all), `price_no_row_matched` (the file opened, a month tab resolved, and NOT ONE
+ * delivery matched — the signature of the WRONG workbook, which is how a bank cheque
+ * ledger was used as the price list for two weeks) and `price_overdue_check_failed` (the
+ * unpriced-delivery check could not be run, so this run cannot say whether any are
+ * overdue — reported instead of returning a reassuring empty list).
+ *
  * CARRIES NO ₱/COST FIELD, deliberately — see `toPriceNote`.
  */
 export interface PriceNoteEntry {
@@ -218,6 +225,14 @@ export interface PriceNoteEntry {
   tabs_found: string[];
   /** Tabs that all normalize to the same month (the ambiguous case). */
   candidates: string[];
+  /** The attachment filename the run actually used (L-044). A NAME, never a value. */
+  source_filename: string | null;
+  /** The tabs that resolved and were read, in the order requested (L-044). */
+  tabs_loaded: string[];
+  /** Priceable rows read out of those tabs. 0 with tabs loaded = an empty tab (L-044). */
+  rows_loaded: number | null;
+  /** How many of OUR deliveries the run tried to price (L-044). */
+  rows_considered: number | null;
   /** `czarina` | `ours` — whose side the fallback key collided on. */
   collided_on: string | null;
   differences: Array<{ field: string; ours: string; theirs: string }>;
@@ -257,6 +272,30 @@ export interface AwaitingBatchAssignmentNote {
 }
 
 /**
+ * The report's source file did not arrive at all (2026-08-18, L-044). Mirror of the
+ * frontend `ReportNotReceived`, built by `reports/reportNotReceived.ts`.
+ *
+ * OPTIONAL and ABSENT on an ordinary run — the presence of the key IS the fact, which is
+ * why it is not an array with a length to check. `missed_working_days` is NULL, never 0,
+ * when the stream-status view could not be read: 0 means "measured, on time", and a guess
+ * must never impersonate a measurement.
+ */
+export interface ReportNotReceivedNote {
+  report_type: string;
+  source_label: string;
+  stream: string;
+  stream_label: string;
+  since: string;
+  through_date: string | null;
+  operational_date: string | null;
+  missed_working_days: number | null;
+  /** WHY the number is null: `unreadable` | `unregistered` | `not_computable`. */
+  lateness_unknown_reason: string | null;
+  reports_next_day: boolean;
+  as_of: string;
+}
+
+/**
  * Mirror of the frontend `ApplyResult`. `applied` is ALWAYS present on any non-null
  * apply (default zeros) so the card never sees a missing `applied` — even on a
  * gate-failure / error path where nothing was written. `held` carries the ROWS.
@@ -287,6 +326,8 @@ export interface ApplyResult {
   unpriced_overdue: UnpricedOverdueNote[];
   /** Deliveries with no pile assigned yet (L-042). ALWAYS present (default []). */
   awaiting_batch_assignment: AwaitingBatchAssignmentNote[];
+  /** Set ONLY when this report's source file never arrived (L-044). Absent otherwise. */
+  report_not_received?: ReportNotReceivedNote;
 }
 
 /** Terminal card status the worker may pre-decide (mirror of frontend SyncCardStatus). */
@@ -361,6 +402,8 @@ interface RawApply {
   unpriced_overdue?: unknown;
   /** deliveries only — rows weighed in with no pile assigned yet (L-042). */
   awaiting_batch_assignment?: unknown;
+  /** Set only when this report's source file never arrived at all (L-044). */
+  report_not_received?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -548,6 +591,13 @@ function toPriceNote(v: unknown): PriceNoteEntry {
     looked_for: nullable(o.looked_for),
     tabs_found: strArray(o.tabs_found),
     candidates: strArray(o.candidates),
+    // L-044 — WHICH workbook was read, and what came out of it. `source_filename` is a
+    // NAME, never a value: it is the one fact that distinguishes "the price file has a
+    // problem" from "that was never the price file", and it carries no PHP.
+    source_filename: nullable(o.source_filename),
+    tabs_loaded: strArray(o.tabs_loaded),
+    rows_loaded: nnum(o.rows_loaded),
+    rows_considered: nnum(o.rows_considered),
     collided_on: nullable(o.collided_on),
     differences: diffs.map((d) => {
       const e = (d ?? {}) as Record<string, unknown>;
@@ -616,6 +666,43 @@ function toAwaitingBatchAssignments(v: unknown): AwaitingBatchAssignmentNote[] {
   return Array.isArray(v) ? v.map(toAwaitingBatchAssignment) : [];
 }
 
+/**
+ * Coerce a raw "the report never arrived" note → ReportNotReceivedNote, or null (L-044).
+ *
+ * `missed_working_days` is the one field that must NOT be coerced with `num()`: that helper
+ * returns 0 for anything unreadable, and 0 means "measured, and on time". An unreadable
+ * lateness figure has to stay NULL so the finding says "no report arrived" without also
+ * claiming, on no evidence, that nothing is late.
+ */
+function toReportNotReceived(v: unknown): ReportNotReceivedNote | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const nullable = (x: unknown): string | null =>
+    typeof x === "string" && x.trim() ? x : typeof x === "number" ? String(x) : null;
+  // NOTE `Number(null) === 0` — the exact coercion this field must not suffer. An
+  // absent/unreadable lateness figure has to stay NULL: 0 means "measured, on time".
+  const rawMissed = o.missed_working_days;
+  const missed =
+    rawMissed == null
+      ? NaN
+      : typeof rawMissed === "number"
+        ? rawMissed
+        : Number(rawMissed);
+  return {
+    report_type: str(o.report_type),
+    source_label: str(o.source_label),
+    stream: str(o.stream),
+    stream_label: str(o.stream_label),
+    since: str(o.since),
+    through_date: nullable(o.through_date),
+    operational_date: nullable(o.operational_date),
+    missed_working_days: Number.isFinite(missed) ? missed : null,
+    lateness_unknown_reason: nullable(o.lateness_unknown_reason),
+    reports_next_day: o.reports_next_day === true,
+    as_of: str(o.as_of),
+  };
+}
+
 /** Coerce a raw gate_failures array → contract GateFailure[]. */
 function toGateFailures(v: unknown): GateFailure[] {
   if (!Array.isArray(v)) return [];
@@ -670,6 +757,7 @@ export function normalizeApply(
   raw: RawApply | null | undefined,
 ): ApplyResult | null {
   if (raw == null) return null;
+  const notReceived = toReportNotReceived(raw.report_not_received);
   return {
     report_type: str(raw.report_type) || reportType,
     ok: raw.ok !== false, // default true
@@ -689,6 +777,9 @@ export function normalizeApply(
     price_notes: toPriceNotes(raw.price_notes),
     unpriced_overdue: toUnpricedOverdues(raw.unpriced_overdue),
     awaiting_batch_assignment: toAwaitingBatchAssignments(raw.awaiting_batch_assignment),
+    // L-044 — spread, not assigned: the KEY'S PRESENCE is the fact ("no report arrived"),
+    // so an ordinary run must keep the byte-identical shape it had before this existed.
+    ...(notReceived ? { report_not_received: notReceived } : {}),
   };
 }
 

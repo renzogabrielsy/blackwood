@@ -30,10 +30,12 @@ import type {
   DeliveryHumanEdit,
   RcOutSource,
   ReportArtifact,
+  ReportNotReceived,
   ScheduleConflict,
   SingleSourceOverdue,
   SourceDiff,
   StaleStream,
+  StaleStreamCheck,
   SyncReportType,
   SyncRunResult,
   UnpricedOverdue,
@@ -51,9 +53,11 @@ import {
   collectProductionHumanEdits,
   collectDeliveryHumanEdits,
   collectReportArtifact,
+  collectReportsNotReceived,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
   collectSourceDiffs,
+  collectStaleStreamCheck,
   collectStaleStreams,
   collectUnpricedOverdue,
   collectUnresolvedBatches,
@@ -798,6 +802,51 @@ function fromStaleStream(s: StaleStream): RunFinding {
 }
 
 /**
+ * THE FRESHNESS WATCH COULD NOT RUN (2026-08-18, L-044).
+ *
+ * THE FAILURE THIS EXISTS TO END, and it is the sharpest one in this codebase so far:
+ * `findStaleStreams` ended in `catch { return [] }`. The worker's service role had no
+ * SELECT grant on `view_digest_stream_status` (the denial cascaded up the
+ * `security_invoker` chain from `view_digest_operational_days`), so every read since the
+ * watch was built on 2026-08-04 returned
+ *
+ *     {"code":"42501","message":"permission denied for view view_digest_stream_status"}
+ *
+ * ...and that catch turned it into `[]`, which Stage 3e then announced to the operator as
+ * **"Every report stream is up to date."** `stale_streams` is absent from EVERY run in
+ * `sync_runs`. A detector that has never once fired is indistinguishable from a plant that
+ * has never once been late — and it stayed that way for two weeks while RC IN went stale
+ * and four truckloads sat unpriced.
+ *
+ * So `[]` now means "I looked and nothing is late", and NOTHING else. This is the finding
+ * for the other case.
+ *
+ * `attention`, not `high` — the same register as `price_overdue_check_failed` and
+ * `report_generation_failed`, and the same reasoning: no stream is KNOWN to be late, so
+ * this must not out-shout a finding about a stream that is. What is broken is the sync's
+ * ability to look, and the reason line says exactly that in the words the operator needs.
+ */
+function fromStaleStreamCheckFailure(c: StaleStreamCheck): RunFinding {
+  return {
+    key: 'stale_stream_check_failed',
+    kind: 'stale_stream_check_failed',
+    kindLabel: 'The report-freshness check could not run',
+    source: 'Sync run',
+    title: 'Could not check whether any report is late — this run cannot say either way',
+    location: 'end of run',
+    data: { error: c.error ?? null },
+    reason:
+      `The sync could not read the report-freshness view, so THIS RUN CANNOT SAY whether ` +
+      `any stream is late. Read the absence of a staleness warning above as "not checked", ` +
+      `not as "none" — nothing here means the reports are on time. Every other finding in ` +
+      `this run is unaffected; what failed is the check itself. ` +
+      `${c.error ? `The read failed with: ${c.error}` : 'No detail was captured.'}`,
+    severity: 'attention',
+    section: 'run',
+  }
+}
+
+/**
  * A production-batch CHANGEOVER: MC's report marked the last runs of the batch that
  * was running (`ENDING`) and the first runs of a brand-new one (`STARTING`) on the
  * same day. The new batch's NAME is written nowhere in the workbook, so the sync
@@ -1060,18 +1109,36 @@ const PRICE_KIND_LABEL: Record<string, string> = {
   price_tab_unresolved: 'Price file has no tab for this month',
   price_tab_ambiguous: 'Price file has two tabs for the same month',
   price_file_unreadable: 'Price file could not be read',
+  price_file_missing: 'No price file arrived',
+  price_no_row_matched: 'Nothing matched the price file — wrong workbook?',
   price_fuzzy_match: 'Priced, but the two sheets spell it differently',
   price_fuzzy_ambiguous: 'Could not price — more than one possible match',
   price_date_drift: 'Could not price — the only match is months away',
   price_out_of_band: 'Priced, but the rate is unlike this supplier',
+  price_overdue_check_failed: 'The unpriced-delivery check could not run',
 }
 
-/** A whole-file/whole-month failure is `high`; everything else needs a look. */
+/**
+ * A whole-file/whole-month failure is `high`; everything else needs a look.
+ *
+ * `price_no_row_matched` joins the `high` set (2026-08-18, L-044) because it IS a
+ * whole-file failure — it just does not look like one from inside the matcher. Every
+ * check upstream of it passed: the workbook opened, a tab resolved for the month, rows
+ * were read. Only the RESULT gives it away, and the result was that a bank
+ * cheque-requisition ledger priced nothing for two weeks while the run reported success.
+ *
+ * `price_overdue_check_failed` is deliberately NOT `high`, on the same reasoning as
+ * `report_generation_failed`: nothing is known to be wrong with any delivery. What broke
+ * is the sync's ability to look, which must be said out loud but must not out-shout an
+ * actual data problem in the same list.
+ */
 function priceSeverity(kind: string): FindingSeverity {
   switch (kind) {
     case 'price_tab_unresolved':
     case 'price_tab_ambiguous':
     case 'price_file_unreadable':
+    case 'price_file_missing':
+    case 'price_no_row_matched':
       return 'high'
     default:
       return 'attention'
@@ -1086,8 +1153,16 @@ function priceSeverity(kind: string): FindingSeverity {
 function fromPriceNote(n: PriceNote): RunFinding {
   const kind = n.kind || 'price_fuzzy_ambiguous'
   const label = PRICE_KIND_LABEL[kind] ?? titleCase(kind)
+  // File-level = "this is about the WORKBOOK, not about one truckload", which decides both
+  // the location column and the title. `price_overdue_check_failed` is file-level in that
+  // same sense (it names no row) even though it is about the database, not the workbook.
   const isFileLevel =
-    kind === 'price_tab_unresolved' || kind === 'price_tab_ambiguous' || kind === 'price_file_unreadable'
+    kind === 'price_tab_unresolved' ||
+    kind === 'price_tab_ambiguous' ||
+    kind === 'price_file_unreadable' ||
+    kind === 'price_file_missing' ||
+    kind === 'price_no_row_matched' ||
+    kind === 'price_overdue_check_failed'
 
   // Location: the month for a file-level failure, else the delivery's date + plate.
   const rowLoc = [str(n.transaction_date), str(n.truck_plate)].filter(Boolean) as string[]
@@ -1102,6 +1177,24 @@ function fromPriceNote(n: PriceNote): RunFinding {
     title = `Two price tabs both mean ${str(n.looked_for) ?? 'that month'} — refused to guess`
   } else if (kind === 'price_file_unreadable') {
     title = 'The price file could not be opened — nothing was priced'
+  } else if (kind === 'price_file_missing') {
+    const considered = num(n.rows_considered)
+    title =
+      considered == null
+        ? 'No price file arrived — nothing could be priced'
+        : `No price file arrived — ${considered} deliver${considered === 1 ? 'y is' : 'ies are'} unpriced`
+  } else if (kind === 'price_no_row_matched') {
+    // Names the FILE, because the file IS the answer. "0 of N matched, out of
+    // <filename>" is the sentence that was true, damning and unsaid on every run for two
+    // weeks while a bank cheque ledger stood in for the price list.
+    const considered = num(n.rows_considered)
+    const file = str(n.source_filename)
+    title =
+      `Not one of ${considered ?? 'the'} deliveries matched the price file` +
+      (file ? ` "${file}"` : '') +
+      ' — is that the right workbook?'
+  } else if (kind === 'price_overdue_check_failed') {
+    title = 'Could not check for unpriced deliveries — this run cannot say there are none'
   } else {
     const who = [str(n.supplier), str(n.truck_plate)].filter(Boolean).join(' ') || 'a delivery'
     // Never say "priced" for a kind that refused — `price_fuzzy_ambiguous` and
@@ -1132,6 +1225,12 @@ function fromPriceNote(n: PriceNote): RunFinding {
   if (n.matched_row != null) data.matched_row = num(n.matched_row)
   if (n.date_tolerance_days != null) data.date_tolerance_days = num(n.date_tolerance_days)
   if (str(n.looked_for)) data.looked_for = n.looked_for
+  // L-044 — WHICH workbook, WHICH tabs, and how much was on each side. `source_filename`
+  // is a NAME; no ₱ value rides this channel (see PriceNote's contract).
+  if (str(n.source_filename)) data.source_filename = n.source_filename
+  if (n.tabs_loaded?.length) data.tabs_loaded = n.tabs_loaded
+  if (n.rows_loaded != null) data.rows_loaded = num(n.rows_loaded)
+  if (n.rows_considered != null) data.rows_considered = num(n.rows_considered)
   // The two halves of the tab-miss message: what it wanted AND what is actually there.
   if (n.tabs_found.length) data.tabs_found = n.tabs_found
   if (n.candidates.length) data.candidates = n.candidates
@@ -1261,6 +1360,107 @@ function fromAwaitingBatchAssignment(a: AwaitingBatchAssignment): RunFinding {
 }
 
 /**
+ * A report whose SOURCE FILE never arrived in this run (2026-08-18, L-044).
+ *
+ * THE SENTENCE THIS REPLACES: *"Nothing new today — no RC DELIVERIES report waiting."*,
+ * emitted at 100% progress on the days RC IN was going stale and four truckloads were
+ * sitting unpriced. It was true, and it read as a clean bill of health. A run in which
+ * NOTHING arrived is otherwise indistinguishable from a quiet day — the absence of a
+ * signal is not a signal unless something says so.
+ *
+ * NO SECOND STALENESS RULE. `missed_working_days` is `view_digest_stream_status`'s number,
+ * which already excludes rest days and reports that are not due yet. This decides only how
+ * loudly to say the mail is missing:
+ *   `info`      0-1 — including 0, which is a real and useful state (see below)
+ *   `attention` 2-3
+ *   `high`      4+
+ * The exact ladder `fromAwaitingBatchAssignment` uses, for the exact reason: a thing that
+ * normally clears itself is quiet, and a thing that has not cleared in four days is not
+ * late, it is forgotten.
+ *
+ * NOT A DUPLICATE OF `stale_stream`, which is the DATA fact (the table has no rows for
+ * recent working days) to this FETCH fact (no email was in the mailbox window). They are
+ * usually true together — and each is true alone in a case that matters. The one that
+ * justifies firing at zero: the Google Sheet pass keeps `deliveries` current while the
+ * email pipeline is quietly dead. `stale_stream` is then silent and CORRECT, and this is
+ * the only thing in the system that notices. When both fire, the data-side finding carries
+ * the alarm and this one carries the explanation — which is why this ladder starts quieter.
+ *
+ * `missed_working_days === null` means the view could not be read. The finding still fires
+ * (the missing report is the fact; the number was only ever the volume knob) at `attention`
+ * — not `info`, because "we don't know" must not be quieter than "we measured it and it is
+ * fine".
+ */
+/**
+ * WHY the lateness number is missing, in the operator's words. Three states that used to
+ * share one sentence — and they need different ones, because the next action differs: a
+ * grant/view problem is an engineering fix (and is exactly the failure that blinded the
+ * freshness watch for two weeks), a registry gap is a config fix, and a stream that has
+ * never reported is neither.
+ */
+const LATENESS_UNKNOWN_TEXT: Record<string, string> = {
+  unreadable:
+    'How far behind this leaves the data could NOT be measured — the report-freshness view ' +
+    'could not be read at all, which is a fault in the sync, not in the plant.',
+  unregistered:
+    'How far behind this leaves the data could not be measured: this report is not listed ' +
+    'in the freshness registry, so nothing tracks how late it is.',
+  not_computable:
+    'How far behind this leaves the data cannot be measured, because this stream has never ' +
+    'reported at all — there is no last report to count forward from.',
+}
+
+function fromReportNotReceived(r: ReportNotReceived): RunFinding {
+  const missed = r.missed_working_days
+  const lateness =
+    missed == null
+      ? (LATENESS_UNKNOWN_TEXT[r.lateness_unknown_reason ?? ''] ??
+        'How far behind this leaves the data could not be measured this run.')
+      : missed === 0
+        ? `No planned working day has been missed yet, so nothing is late — but the report ` +
+          `itself did not arrive, and if another source is keeping the data current that is ` +
+          `the only reason this looks calm.`
+        : `${missed} planned working day${missed === 1 ? '' : 's'} of reports ` +
+          `${missed === 1 ? 'is' : 'are'} now outstanding (rest days and reports that are ` +
+          `not due yet are already excluded, so this is a real gap).`
+  const through = r.through_date
+    ? `The last data on record is ${r.through_date}.`
+    : 'There is no data on record for this stream at all.'
+
+  return {
+    key: `report_not_received:${r.report_type}`,
+    kind: 'report_not_received',
+    kindLabel: 'The daily report never arrived',
+    source: r.source_label,
+    title:
+      missed && missed > 0
+        ? `No ${r.source_label} arrived — ${r.stream_label} has missed ${missed} working day${missed === 1 ? '' : 's'}`
+        : `No ${r.source_label} arrived in this run's mailbox window`,
+    location: r.through_date ?? r.as_of,
+    data: {
+      report_type: r.report_type,
+      stream: r.stream,
+      searched_since: r.since,
+      through_date: r.through_date,
+      operational_date: r.operational_date,
+      missed_working_days: missed,
+      lateness_unknown_reason: r.lateness_unknown_reason,
+      reports_next_day: r.reports_next_day,
+      as_of: r.as_of,
+    },
+    reason:
+      `The sync searched the mailbox back to ${r.since} and found no ${r.source_label}, so ` +
+      `this run had nothing to read and wrote nothing for it. ${through} ${lateness} ` +
+      `Nothing is wrong with the sync — chase the sender, or check the report was not filed ` +
+      `under a different subject.`,
+    severity: missed == null ? 'attention' : missed >= 4 ? 'high' : missed >= 2 ? 'attention' : 'info',
+    // REUSED, not re-derived: `staleStreamSection` already owns "which lane does this
+    // stream belong to", and the two findings describe the same stream from two sides.
+    section: staleStreamSection(r.stream),
+  }
+}
+
+/**
  * The Excel sync report could not be generated (2026-08-07).
  *
  * The report is pure observability — a reporting tool that can break the thing it reports
@@ -1364,9 +1564,21 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   //      the longer the cell stays empty.
   for (const a of collectAwaitingBatchAssignments(result)) out.push(fromAwaitingBatchAssignment(a))
 
+  // 12c. Reports whose SOURCE FILE never arrived (L-044). Immediately before the stale
+  //      streams because it is the other half of the same sentence: this says the email is
+  //      missing, `stale_stream` says the data is behind, and when both fire the operator
+  //      should read them together.
+  for (const r of collectReportsNotReceived(result)) out.push(fromReportNotReceived(r))
+
   // 13. Streams that have gone quiet (Stage 3e) — the one finding about what did NOT
   //     arrive. Last, because it describes the state the whole run leaves behind.
   for (const s of collectStaleStreams(result)) out.push(fromStaleStream(s))
+
+  // 13b. …and the case where that check could not run at all. Directly after the streams
+  //      it would have reported, because it is the caveat ON that list: an empty staleness
+  //      section above means "nothing is late" ONLY when this finding is absent.
+  const freshness = collectStaleStreamCheck(result)
+  if (freshness && freshness.ok === false) out.push(fromStaleStreamCheckFailure(freshness))
 
   // 14. The Excel report failed to generate. ABSOLUTELY LAST and ONLY on failure — the
   //     successful pointer is provenance, not a flag, and a note on every clean run would
@@ -1436,6 +1648,11 @@ const SHORT_KIND: Record<string, string> = {
   price_tab_unresolved: 'no price tab',
   price_tab_ambiguous: 'duplicate price tab',
   price_file_unreadable: 'price file unreadable',
+  price_file_missing: 'no price file',
+  price_no_row_matched: 'nothing matched prices',
+  price_overdue_check_failed: 'price check failed',
+  report_not_received: 'report never arrived',
+  stale_stream_check_failed: 'freshness check failed',
   price_fuzzy_match: 'price spelling differs',
   price_fuzzy_ambiguous: 'price match not unique',
   price_date_drift: 'price match too old',
@@ -1464,10 +1681,11 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   price_tab_unresolved: 'Price file has no tab for this month',
   price_tab_ambiguous: 'Price file has two tabs for the same month',
   price_file_unreadable: 'Price file could not be read',
-  price_fuzzy_match: 'Priced, but the two sheets spell it differently',
-  price_fuzzy_ambiguous: 'Could not price — more than one possible match',
-  price_date_drift: 'Could not price — the only match is months away',
-  price_out_of_band: 'Priced, but the rate is unlike this supplier',
+  price_file_missing: 'No price file arrived',
+  price_no_row_matched: 'Nothing matched the price file — wrong workbook?',
+  price_overdue_check_failed: 'The unpriced-delivery check could not run',
+  report_not_received: 'The daily report never arrived',
+  stale_stream_check_failed: 'The report-freshness check could not run',
   unpriced_overdue: 'Delivery still has no price',
   awaiting_batch_assignment: 'Waiting on a pile assignment',
   report_generation_failed: 'Excel report could not be generated',

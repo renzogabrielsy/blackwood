@@ -54,6 +54,8 @@ import {
   type ApplyResult,
   type UnpricedOverdue,
 } from "./apply.js";
+import { reportNotReceivedNote } from "../reportNotReceived.js";
+import { findStreamStatus } from "../../lib/streamStaleness.js";
 
 export const REPORT_TYPE = "deliveries";
 
@@ -208,7 +210,53 @@ export async function runReport(
   const czarinaAtt = firstAttachment(manifest, "deliveries_czarina");
 
   if (!primaryAtt) {
-    await emit?.("finalize", "Nothing new today — no RC DELIVERIES report waiting.", 100);
+    // -------------------------------------------------------------------------
+    // NO RC DELIVERIES REPORT AT ALL (L-044). This branch used to emit
+    // "Nothing new today — no RC DELIVERIES report waiting." at 100% and return an empty
+    // envelope, and it printed exactly that on the days RC IN was going stale. Two things
+    // were wrong with it and both are fixed here:
+    //
+    //   1. It REASSURED. A run in which nothing arrived is indistinguishable from a quiet
+    //      day unless something says otherwise, so the absence is now a durable FINDING
+    //      whose severity comes from `view_digest_stream_status.missed_working_days` (the
+    //      ONE lateness rule — see reports/reportNotReceived.ts; nothing is re-derived).
+    //   2. It skipped the unpriced-overdue check, which reads the DATABASE and has nothing
+    //      to do with the mailbox. That check exists precisely to catch a price outage
+    //      "independent of why", and it was gated on the very thing that had failed — so
+    //      on the first day it would have fired, it did not run. It now runs on EVERY run.
+    // -------------------------------------------------------------------------
+    const runTs = deps.runTs ?? new Date().toISOString();
+    const notReceived = reportNotReceivedNote({
+      reportType: REPORT_TYPE,
+      sourceLabel: "RC DELIVERIES report",
+      stream: "deliveries",
+      since,
+      runTs,
+      read: await findStreamStatus(db, "deliveries"),
+    });
+
+    const overdueRead = await readUnpricedOverdue(db);
+    const emptyNotes: PriceNote[] = [];
+    if (overdueRead.error) emptyNotes.push(unpricedCheckFailedNote(overdueRead.error));
+
+    // Overdue first (pct 99), then the closing beat (pct 100) — the emitter keeps pct
+    // monotonic, so a 99 emitted after a 100 would be clamped and read out of order.
+    await emitOverdueBeat(emit, overdueRead.rows);
+
+    const missed = notReceived.missed_working_days;
+    await emit?.(
+      "finalize",
+      missed && missed > 0
+        ? `No RC DELIVERIES report arrived — and RC IN has now missed ${missed} working ` +
+            `day${missed === 1 ? "" : "s"}.`
+        : "No RC DELIVERIES report arrived in this run's mailbox window.",
+      100,
+      notReceived.through_date
+        ? `RC IN has data through ${notReceived.through_date}.`
+        : undefined,
+      "warn",
+    );
+
     const emptyApply: ApplyResult = {
       report_type: REPORT_TYPE,
       ok: true,
@@ -218,10 +266,11 @@ export async function runReport(
       labeled: false,
       watermark_updated: false,
       errors: [],
-      price_notes: [],
-      unpriced_overdue: [],
+      price_notes: emptyNotes,
+      unpriced_overdue: overdueRead.rows,
       delivery_human_edits: [],
       awaiting_batch_assignment: [],
+      report_not_received: notReceived,
     };
     return {
       classify: {
@@ -258,11 +307,20 @@ export async function runReport(
   // run carried on cheerfully. Nine truckloads sat at cost_basis = 0 for a week.
   //
   // Now there are THREE distinguishable outcomes, and none of them is quiet:
-  //   1. no Czarina attachment at all      → info: there is genuinely no price file.
+  //   1. no Czarina attachment at all      → a `price_file_missing` note + a WARN beat.
   //   2. the file is there but UNUSABLE    → a `price_*` note + a WARN/ERROR beat.
   //   3. the file worked, with caveats     → notes for every fuzzy/out-of-band match.
+  //   4. the file worked and matched NOTHING → `price_no_row_matched`, high (L-044).
   // Every note becomes a run finding via `apply.price_notes`, so it survives past the
   // progress feed and shows up in Sync Review.
+  //
+  // OUTCOME 1 BECAME A DURABLE NOTE ON 2026-08-18 (L-044). It was a progress beat and
+  // nothing else, i.e. it died with the run — and the mail clerk now REFUSES a workbook
+  // from Czarina that is not the price file by name, which makes "no price file" a state
+  // the sync can reach on its own. A guard that can silence the price step must not be
+  // able to do so quietly. Note the 5-day mailbox window means a single missed send does
+  // NOT reach here (yesterday's file is still in range), so this note firing means five
+  // days without a recognisable price file — genuinely worth saying.
   // ---------------------------------------------------------------------------
   const priceNotes: PriceNote[] = [];
   let priceSummary: CzarinaMatch | null = null;
@@ -270,6 +328,17 @@ export async function runReport(
   if (!czarinaAtt) {
     // Outcome 1 — an honest, materially different message from "the file broke".
     if (windowRows.length) {
+      priceNotes.push({
+        kind: "price_file_missing",
+        rows_considered: windowRows.length,
+        detail:
+          `No price file was found in the mailbox window, so none of the ${windowRows.length} ` +
+          `deliveries in this run could be priced — new rows carry the unpriced placeholder. ` +
+          `The sync looks for a workbook named "RAW CHARCOAL PURCHASES -Daily" from Czarina ` +
+          `within the last 5 days and deliberately ignores her other attachments, so this ` +
+          `means either nothing arrived or what arrived was named differently. Prices are ` +
+          `not supposed to lag — chase the file.`,
+      });
       await emit?.(
         "extract",
         "No price file came with today's report — new deliveries will be recorded unpriced.",
@@ -291,7 +360,14 @@ export async function runReport(
         readSupplierPriceBands(db, since),
       ]);
 
-      priceSummary = await enrichPrices(czBuf, windowRows, { aliases, priceBands });
+      // The FILENAME goes in with the bytes (L-044): `enrich` never matches on it, but
+      // the finding it raises when nothing matched has to be able to say which workbook
+      // it read, and that is the one fact this pipeline could not previously state.
+      priceSummary = await enrichPrices(czBuf, windowRows, {
+        aliases,
+        priceBands,
+        filename: czarinaAtt.filename,
+      });
       priceNotes.push(...priceSummary.notes);
 
       // Persist every alias this run EARNED (each one already corroborated by a
@@ -416,21 +492,17 @@ export async function runReport(
   // `view_digest_unpriced_recent` count is now a thin projection of that same view),
   // so the sync and the Home digest can never disagree about what "unpriced" means.
   // ---------------------------------------------------------------------------
-  const overdue: UnpricedOverdue[] = await readUnpricedOverdue(db);
+  const overdueRead = await readUnpricedOverdue(db);
+  // A FAILED read is reported, never swallowed (L-044). The bare `catch { return [] }`
+  // this replaces made a broken check indistinguishable from a clean bill of health —
+  // the exact shape of the "Price file unavailable" lie L-039 was written about.
+  if (overdueRead.error) priceNotes.push(unpricedCheckFailedNote(overdueRead.error));
+
   // Attach both price channels to the apply envelope, so they become durable run
   // findings (lib/sync/findings.ts) rather than dying with the progress feed.
   apply.price_notes = priceNotes;
-  apply.unpriced_overdue = overdue;
-  if (overdue.length) {
-    await emit?.(
-      "finalize",
-      `${overdue.length} deliver${overdue.length === 1 ? "y" : "ies"} still have no price — ` +
-        `oldest is ${overdue[0].days_pending} days old.`,
-      99,
-      undefined,
-      "warn",
-    );
-  }
+  apply.unpriced_overdue = overdueRead.rows;
+  await emitOverdueBeat(emit, overdueRead.rows);
 
   return {
     classify: {
@@ -582,8 +654,21 @@ async function recordEarnedAliases(db: DbClient, learned: readonly EarnedAlias[]
  * `is_overdue` — the overdue rule is NOT re-derived here. That view is also what
  * `view_digest_unpriced_recent` (the Home digest's count) projects from, so the sync
  * warning and the digest flag can never drift apart.
+ *
+ * IT RETURNS ITS FAILURE (2026-08-18, L-044). This function used to end in
+ * `catch { return [] }`, so a broken read — a renamed column, a revoked grant, a timeout —
+ * returned the same empty array as a genuinely clean database, and the run would state
+ * "nothing overdue" on the strength of a question it never managed to ask. That is the
+ * `catch` from `enrich_prices`' caller wearing a different hat, and it sits on the ONE
+ * check that is meant to catch a price outage independent of its cause. The caller turns a
+ * non-null `error` into a durable note; the empty list is only ever an ANSWER now.
+ *
+ * Callers: BOTH branches of `runReport`. It reads the database, not the mailbox, so it
+ * must not be behind the "did an attachment arrive" guard.
  */
-async function readUnpricedOverdue(db: DbClient): Promise<UnpricedOverdue[]> {
+async function readUnpricedOverdue(
+  db: DbClient,
+): Promise<{ rows: UnpricedOverdue[]; error: string | null }> {
   try {
     const rows = await db.readRows("view_digest_unpriced_deliveries", {
       sinceColumn: null,
@@ -593,17 +678,53 @@ async function readUnpricedOverdue(db: DbClient): Promise<UnpricedOverdue[]> {
       ],
       extraFilters: { is_overdue: "is.true", order: "transaction_date.asc" },
     });
-    return rows.map((r) => ({
-      id: String(r.id),
-      transaction_date: String(r.transaction_date).slice(0, 10),
-      supplier: r.supplier == null ? null : String(r.supplier),
-      batch_code: r.batch_code == null ? null : String(r.batch_code),
-      truck_plate: r.truck_plate == null ? null : String(r.truck_plate),
-      weight_kg: r.weight_kg == null ? null : Number(r.weight_kg),
-      sacks: r.sacks == null ? null : Number(r.sacks),
-      days_pending: Number(r.days_pending ?? 0),
-    }));
-  } catch {
-    return [];
+    return {
+      rows: rows.map((r) => ({
+        id: String(r.id),
+        transaction_date: String(r.transaction_date).slice(0, 10),
+        supplier: r.supplier == null ? null : String(r.supplier),
+        batch_code: r.batch_code == null ? null : String(r.batch_code),
+        truck_plate: r.truck_plate == null ? null : String(r.truck_plate),
+        weight_kg: r.weight_kg == null ? null : Number(r.weight_kg),
+        sacks: r.sacks == null ? null : Number(r.sacks),
+        days_pending: Number(r.days_pending ?? 0),
+      })),
+      error: null,
+    };
+  } catch (err) {
+    return { rows: [], error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * The note for a FAILED overdue check. Says plainly that the answer is unknown rather
+ * than clean, because those are different facts and only one of them is reassuring.
+ * `attention`, not `high` (see `lib/sync/findings.ts::priceSeverity`): nothing is known to
+ * be wrong with any delivery — what is broken is the sync's own ability to look.
+ */
+function unpricedCheckFailedNote(message: string): PriceNote {
+  return {
+    kind: "price_overdue_check_failed",
+    detail:
+      `The check for deliveries that are still unpriced could not be run this sync, so ` +
+      `this run CANNOT say whether any are overdue — read the absence of that warning as ` +
+      `"not checked", not as "none". Everything else in this run is unaffected. The read ` +
+      `failed with: ${message}`,
+  };
+}
+
+/** The one place the overdue warning is worded, so both run paths say it identically. */
+async function emitOverdueBeat(
+  emit: ProgressEmitter | undefined,
+  overdue: readonly UnpricedOverdue[],
+): Promise<void> {
+  if (!overdue.length) return;
+  await emit?.(
+    "finalize",
+    `${overdue.length} deliver${overdue.length === 1 ? "y" : "ies"} still have no price — ` +
+      `oldest is ${overdue[0].days_pending} days old.`,
+    99,
+    undefined,
+    "warn",
+  );
 }

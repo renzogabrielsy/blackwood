@@ -816,6 +816,128 @@ service-role `admin` client, which is correct.
 priced rows) and `20260814025716_audit_trigger_function_grants_guard.sql` (the guard). No delivery
 data was altered.
 
+## L-044 — VERIFYING THAT A NAME HAS THE RIGHT SHAPE IS NOT VERIFYING IT IS THE RIGHT THING (2026-08-18)
+
+**The sync spent two weeks reading a BANK CHEQUE LEDGER as the charcoal price list, and reported
+nothing.** Four truckloads (2026-08-14, 69,900 kg) went in at `cost_basis = 0` and the run said
+success. Every guard L-039 installed eleven days earlier was working — on the wrong workbook.
+
+**What happened.** Czarina's price file is fetched by **SENDER ONLY**:
+`from:czarinaloumaximoictc@gmail.com newer_than:5d`, no subject, no filename. The Mail Clerk then
+walked her emails newest-first and took **the first `.xlsx` it saw**. She sends the office several
+workbooks, and measured over two weeks the sync had used all of these as "the price list":
+
+| filename | is it the price file? |
+|---|---|
+| `RAW CHARCOAL PURCHASES -Daily(1).xlsx` | yes |
+| `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx` | no — cheque requisitions |
+| `VAN LOADING FILE.xlsx` | no |
+| `POWDER ( l. RIVERA).xlsx` | no |
+
+The 2026-08-17 run held the BDO workbook. Its tabs are `August 2026 Requisition Weekly`,
+`2025 Requisition Weekly`, `August 2026-Weekly Check`, `MAY 2026`, `JUNE 2026`, `JULY 2026`,
+**`AUGUST 2026`**, `2025-Weekly Check Iss.` — so L-039's semantic month resolver **found a tab for
+August, was satisfied, and raised nothing**. No `price_tab_unresolved`. No `price_file_unreadable`
+(the file opened fine). It then searched a cheque ledger for truckloads, matched zero rows, and
+every delivery came back `no_candidate` — which the code explicitly documents as *"an ordinary
+unmatched row, not a finding."* `price_notes: []`.
+
+**Why L-039 could not catch it.** L-039 hardened *how a NAME is compared* — a hand-typed worksheet
+tab is not a computable string, so both sides normalize to `(month, year)`. That fix is correct and
+stays. But it made the resolver **more** willing to accept a plausible name, and nothing anywhere
+asked whether the DOCUMENT was the right document. A name-shaped check cannot distinguish
+`AUGUST 2026` in the price file from `AUGUST 2026` in a cheque ledger. **The only symptom the wrong
+workbook ever produces is the RESULT.**
+
+**A second, independent silence.** `readUnpricedOverdue(db)` — the check written to catch a price
+outage *independent of why*, precisely so a repeat of L-039 would be caught on day two — reads the
+DATABASE, but sat **after** the "no RC DELIVERIES attachment" early return. So it was gated on the
+very thing that had failed. The four rows crossed the overdue threshold on exactly the day the
+workbook stopped arriving, and the alarm was skipped on the first day it would have fired. It also
+ended in `catch { return [] }`, so a broken read and a clean database gave the same answer.
+
+**Five rules now govern it** (spec: `workers/sync/specs/deliveries.md` §9.9-§9.12):
+
+1. **Identify a source file by NAME, not merely by SENDER.** `MailQuery` gained
+   `attachmentMatches` (the guard) + `attachmentPatterns` (the download hint). Three layers, each
+   looser than the next, only the innermost authoritative: the Gmail operators are a **search hint**
+   (an operator is not a contract), the globs decide **which bytes are downloaded** — which is what
+   lets the clerk walk back past a newer wrong workbook and **recover** the right one instead of
+   merely rejecting it — and the predicate is the guard. When nothing matches, **store nothing**:
+   an absent file is a state every consumer handles and reports; the wrong file is indistinguishable
+   from the right one all the way down. Tenant filenames live on the **query definition**, never
+   inside the generic clerk. Audited: of the seven queries, `deliveries_czarina` was the **only**
+   sender-only one; the other six are pinned by subject and/or label and were deliberately left alone.
+2. **A 100% UNMATCHED RATE IS A LOUD FINDING** (`price_no_row_matched`, **high**), naming the
+   FILENAME used and the TABS resolved. One unmatched row is ordinary; **every** row unmatched is not
+   a row problem at all. 100% is the only defensible line — the window is `watermark − 3 days`, so it
+   always contains several days of deliveries that *are* in her file. A percentage threshold would
+   fire on normal days (she records the PAYMENT date, so yesterday's trucks legitimately are not in
+   it yet), and the honest per-row alarm for a partial gap already exists and is time-based:
+   `unpriced_overdue`.
+3. **A DB-backed check must not live behind a MAILBOX-shaped guard.** The unpriced-overdue read now
+   runs on **every** deliveries run, both branches.
+4. **A missing daily report is a FINDING, not a reassurance** (`report_not_received`). The old
+   `"Nothing new today — no RC DELIVERIES report waiting."` at 100% progress reads as *checked, all
+   fine*, and was printed on the days RC IN was going stale. **No second staleness rule was
+   invented**: severity comes from `view_digest_stream_status.missed_working_days`, which already
+   excludes rest days and not-yet-due reports, on the L-042 ladder (`info` 0-1 → `attention` 2-3 →
+   `high` 4+), measured in **Asia/Manila**. It is NOT a duplicate of `stale_stream`: that is a DATA
+   fact (the table has no rows), this is a FETCH fact (no email arrived). It **still fires at zero**,
+   because the case that needs it is the Google Sheet keeping the data current while the email
+   pipeline is quietly dead — there `stale_stream` is silent and correct, and this is the only thing
+   that notices.
+5. **Kill every bare `catch { return [] }` on a watchdog.** A failed read now returns its error and
+   becomes `price_overdue_check_failed` — *"this run CANNOT say whether any are overdue; read the
+   absence of that warning as 'not checked', not as 'none'."* `attention`, not `high`: nothing is
+   known to be wrong with a delivery; what broke is the sync's ability to look.
+
+**THE SAME LINE, ONE LEVEL UP — AND THIS ONE HAD NEVER WORKED AT ALL.** Auditing rule 5 turned up
+the sharper instance. Running the worker's own read with the worker's own service-role credentials:
+
+    {"code":"42501","message":"permission denied for view view_digest_stream_status"}
+
+**The worker could not read `view_digest_stream_status` or `view_digest_unpriced_deliveries` at all**
+— 403 on both, since the day each was built. The cause was a grant gap across the `security_invoker`
+dependency chain: `view_digest_operational_days` had no `service_role` grant and the denial cascaded
+up through both views. Measured consequence: `sync_runs.result.reconciliation.stale_streams` is
+absent on **every run in the table**. The freshness watch (Stage 3e, built 2026-08-04) had **never
+fired once**, and the unpriced-overdue alarm (rule 5 above, 2026-08-07) never fired either.
+
+**But the grant is not what hid it for two weeks — `findStaleStreams`'s bare `catch { return [] }`
+is.** It converted "permission denied" into "nothing is stale", and Stage 3e then announced that to
+the operator as **"Every report stream is up to date."** A detector that has never fired is
+indistinguishable from a plant that has never been late. Two independent things had to be true for
+the RC IN outage to stay invisible, and *both* were a swallowed read.
+
+So the rule generalises past deliveries: **an empty result must mean "I looked and found nothing",
+never "I could not look" — and the way you tell them apart is that the failing path RETURNS ITS
+FAILURE.** `findStaleStreams` now returns `{streams, error}`; a non-null error becomes
+`stale_stream_check_failed` (`attention`, `section: 'run'`) reading *"this run CANNOT say whether any
+stream is late; read the absence of a staleness warning as 'not checked', not as 'none'."* It is
+carried on `reconciliation.stale_stream_check` **only on failure**, so a healthy run's shape is
+unchanged. The grant itself is fixed by migration `20260818071855` and guarded by
+`scripts/verify-worker-view-grants.ts`, which derives the view list from `workers/sync/src` and
+proves readability by actually reading **as `service_role`** — the L-043 discipline ("prove a fix by
+assuming the victim's role") applied to reads.
+
+**And one null that was doing two jobs.** `findStreamStatus` returned a bare `null` for BOTH "the
+read failed" and "no such stream", which are different problems with different fixes — the first is
+this grant failure, the second is a `view_digest_stream_registry` gap. It now returns a named
+`unknownReason` (`unreadable` | `unregistered` | `not_computable`), and the finding prints the
+matching sentence. The third value exists because the view returns SQL NULL for a stream that has
+never reported, and the module's own `asNum` helper would have read that as `0` — *"measured, and on
+time"*. That is `Number(null) === 0` a second time in the same feature, in a different helper.
+
+**One coercion bug this fix nearly reintroduced, worth its own line:** `Number(null) === 0`. The
+normalizer's stock `num()` helper would have turned an **unreadable** `missed_working_days` into
+`0` — which means *"measured, and on time"* — silently downgrading the finding to the quietest level
+on no evidence. A guess must never impersonate a measurement: it stays NULL, and NULL is reported at
+`attention`, because "we don't know" must not be quieter than "we measured it and it is fine".
+
+**Provenance:** 2026-08-18, branch `feat/sync-rc-in-recovery`. Worker-only + `lib/sync/findings.ts`;
+no migration, no DB write. The four ₱0 rows are **not self-healing** — see §9.12.
+
 ---
 
 *This ledger is the source of truth for hard-won corrections. When in doubt, it wins over the agent's heuristics.*

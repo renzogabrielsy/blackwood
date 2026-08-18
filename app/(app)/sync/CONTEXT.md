@@ -737,6 +737,57 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   `scripts/verify-awaiting-batch-assignment-fold.ts`. MALFORMED still reports separately and louder
   (an **orphan wet-recovery sub-row** stays there on purpose — see
   `workers/sync/specs/deliveries.md` §11.3).
+  **THE WRONG WORKBOOK, AND THE REPORT THAT NEVER CAME (2026-08-18, L-044).** Four channels were
+  added after the sync spent two weeks reading a bank cheque-requisition workbook as the charcoal
+  price list and reported **nothing** — four truckloads (2026-08-14, 69,900 kg) at ₱0 on a run that
+  said "success". The price file is fetched by SENDER only, and
+  `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx` has a tab called
+  `AUGUST 2026`, so **every L-039 guard passed on it**: the file opened, the month resolved, rows
+  loaded. Verifying that a NAME has the right SHAPE is not verifying it is the right THING.
+  - **`price_no_row_matched`** (`high`, `section: 'deliveries'`) — `rows > 0 && matched === 0`. The
+    wrong workbook's ONLY symptom is the RESULT, so the aggregate is watched; the finding names the
+    **filename used** and the **tabs resolved**. **100% is the threshold, deliberately**: a partial
+    miss is normal (Czarina records the PAYMENT date, so yesterday's trucks are legitimately absent),
+    and the honest per-row alarm for that is the existing time-based `unpriced_overdue`. Any
+    percentage in between fires on normal days.
+  - **`price_file_missing`** (`high`) — no recognisable price workbook in the 5-day window. Was a
+    progress beat only (it died with the run); it is durable now because the Mail Clerk's new
+    filename guard makes "no price file" a state the sync can reach on its own, and a guard that can
+    silence the price step must not do so quietly.
+  - **`price_overdue_check_failed`** (`attention`) — `readUnpricedOverdue` used to end in
+    `catch { return [] }`, so a broken read and a clean database gave the same answer. It now reports:
+    *"this run CANNOT say whether any are overdue."* Not `high` — nothing is known to be wrong with a
+    delivery; what broke is the sync's ability to look (the `report_generation_failed` reasoning).
+  - **`report_not_received`** (`collectReportsNotReceived(result)` →
+    `result.reports[type].apply.report_not_received`, a **single optional object**, not an array — a
+    report either arrived or it did not). Replaces *"Nothing new today — no RC DELIVERIES report
+    waiting."* at 100% progress, which read as a clean bill of health on the days RC IN was going
+    stale. **No second staleness rule**: severity is
+    `view_digest_stream_status.missed_working_days` on the L-042 ladder (`info` 0-1 → `attention` 2-3
+    → `high` 4+), Asia/Manila; an unreadable view gives `null` (never 0) at `attention`, because "we
+    don't know" must not be quieter than "we measured it and it is fine". **Not a duplicate of
+    `stale_stream`** — that is a DATA fact, this is a FETCH fact, and it fires even at 0 missed days
+    because that is the case where the Google Sheet keeps the data current while the email pipeline is
+    quietly dead. `section` comes from the shared `staleStreamSection`, so the two agree on the lane.
+  - **`stale_stream_check_failed`** (`attention`, `section: 'run'`, via
+    `collectStaleStreamCheck(result)` → `result.reconciliation.stale_stream_check`, written **only on
+    failure**). The sharpest instance of the same shape, found while auditing the one above:
+    `findStaleStreams` ended in `catch { return [] }`, and the worker's service role had **no SELECT
+    grant** on `view_digest_stream_status` (the denial cascaded up the `security_invoker` chain from
+    `view_digest_operational_days`). Every read since the watch was built on 2026-08-04 returned
+    `42501`, the catch turned it into `[]`, and Stage 3e announced that as **"Every report stream is
+    up to date."** `stale_streams` is absent from **every run in `sync_runs`** — the detector had
+    never once fired, and its failure was indistinguishable from a healthy plant. The grant is fixed
+    (migration `20260818071855`) and guarded by `scripts/verify-worker-view-grants.ts`; this finding
+    is the guard against the *silence*, which is what actually hid it. It is **not** redundant with
+    `stale_stream`: that reports streams the check FOUND late, this reports that the check could not
+    run, and an empty staleness section means "nothing is late" only when this finding is absent.
+  Nothing in the Excel generator changed — `section` files them on the existing sheets. Proof:
+  `scripts/verify-findings.ts` (30 checks), `workers/sync/test/workflows/mailClerk.test.ts`,
+  `workers/sync/test/reports/deliveries-price-enrichment.test.ts`,
+  `workers/sync/test/reports/deliveries-report-not-received.test.ts`,
+  `workers/sync/test/lib/streamStaleness.test.ts`. Full spec:
+  `workers/sync/specs/deliveries.md` §9.9-§9.13; ledger **L-044**.
   **THE BLOCKING GRAND TOTAL IS SEVERITY-SPLIT ON ITS RESIDUAL (2026-08-12, Renzo's ask).**
   `fromBlockDiff` used to hard-code `severity: 'high'` for every `grand_total` diff — and measured
   across **all 11 stored runs** that ever produced a block diff, the per-block gaps summed to the

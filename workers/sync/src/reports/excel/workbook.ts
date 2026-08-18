@@ -409,6 +409,30 @@ export function sidesForFinding(f: RunFinding): Sides {
     return { a: `looked for: ${wanted}`, b: found ? `file has: ${found}` : "" };
   }
 
+  // The WRONG WORKBOOK (L-044): the file we actually read against the file we wanted. This
+  // is the pair that makes it obvious at a glance — the whole incident was a run holding
+  // `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx` while every check
+  // downstream compared names INSIDE it and was satisfied.
+  if (f.kind === "price_no_row_matched") {
+    const used = str(d.source_filename);
+    const tabs = Array.isArray(d.tabs_loaded) ? (d.tabs_loaded as unknown[]) : [];
+    const tabText = tabs.length ? ` (tab ${tabs.map((t) => String(t)).join(", ")})` : "";
+    return {
+      a: used ? `read: ${used}${tabText}` : `read: (filename not recorded)${tabText}`,
+      b: "expected: RAW CHARCOAL PURCHASES -Daily",
+    };
+  }
+
+  // A report that never arrived (L-044): what we have against what day it is.
+  if (f.kind === "report_not_received") {
+    const through = str(d.through_date);
+    const opDate = str(d.operational_date) ?? str(d.as_of);
+    return {
+      a: through ? `data through: ${through}` : "data through: (never reported)",
+      b: opDate ? `operating day: ${opDate}` : "",
+    };
+  }
+
   // rc_out: two or three witnesses on one field.
   const sources = Array.isArray(d.sources) ? d.sources : null;
   if (sources && sources.length >= 2) {

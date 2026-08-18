@@ -81,7 +81,11 @@ import {
   type ScheduleConflict,
 } from "../reports/prodSchedule/refresh.js";
 import { planGsheetCloses, toChannelBatchCloses, type BatchClose, type BatchDirEntry } from "../lib/gsheetCloseScan.js";
-import { findStaleStreams, describeStaleStream, type StaleStream } from "../lib/streamStaleness.js";
+import {
+  findStaleStreams,
+  describeStaleStream,
+  type StaleStreamRead,
+} from "../lib/streamStaleness.js";
 import { generateRunReport } from "../reports/excel/generate.js";
 import type { AppSyncRunResult } from "../reports/excel/findingsBridge.js";
 
@@ -317,22 +321,28 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // actually leaves behind. It is the one finding that is about what did NOT arrive:
   // a run where nothing came in is otherwise indistinguishable from a quiet day, and
   // that is precisely how RC OUT went 5 days stale in July without anyone noticing.
-  const staleStreams = await DBOS.runStep(() => checkStreamFreshness(runId), {
+  const freshness = await DBOS.runStep(() => checkStreamFreshness(runId), {
     name: "check:stream_freshness",
   });
 
   // Merge the orthogonal reconciliation channels (any may be absent).
   const hasCloses = batchCloses.length > 0;
   const hasScheduleConflicts = scheduleConflicts.length > 0;
-  const hasStaleStreams = staleStreams.length > 0;
+  const hasStaleStreams = freshness.streams.length > 0;
+  // Carried ONLY on failure — the same discipline as `report_not_received`: the key's
+  // presence IS the fact, so a healthy run keeps byte-identical shape. (Unlike
+  // `report_artifact`, a SUCCESSFUL check has no payload of its own to carry: the streams
+  // it found are already `stale_streams`.)
+  const freshnessFailed = Boolean(freshness.error);
   const reconciliation: ReconciliationChannel | undefined =
-    rcOutRecon || blockingRecon || hasCloses || hasScheduleConflicts || hasStaleStreams
+    rcOutRecon || blockingRecon || hasCloses || hasScheduleConflicts || hasStaleStreams || freshnessFailed
       ? {
           ...(rcOutRecon ?? {}),
           ...(blockingRecon ? { blocking: blockingRecon } : {}),
           ...(hasCloses ? { batch_closes: batchCloses } : {}),
           ...(hasScheduleConflicts ? { schedule_conflicts: scheduleConflicts } : {}),
-          ...(hasStaleStreams ? { stale_streams: staleStreams } : {}),
+          ...(hasStaleStreams ? { stale_streams: freshness.streams } : {}),
+          ...(freshnessFailed ? { stale_stream_check: { ok: false, error: freshness.error } } : {}),
         }
       : undefined;
 
@@ -1025,37 +1035,64 @@ async function refreshProdSchedule(runId: string): Promise<ScheduleConflict[]> {
  * days and not-yet-due next-day reports are already excluded there), so this only
  * decides how to say it.
  *
- * NON-FATAL, like every other Stage-3 channel: any throw is swallowed and returns [].
- * A watchdog that can fail the thing it watches is worse than no watchdog.
+ * NON-FATAL, like every other Stage-3 channel: it never throws, so it can never fail the
+ * run. A watchdog that can fail the thing it watches is worse than no watchdog.
  *
- * Returns the stale streams so runSync can fold them into
+ * ── BUT IT NO LONGER SAYS "ALL CLEAR" WHEN IT COULD NOT LOOK (2026-08-18, L-044) ──
+ * The worker's service role had no SELECT grant on `view_digest_stream_status`, so every
+ * read since 2026-08-04 returned 42501. `findStaleStreams` swallowed it into `[]`, and
+ * this function turned `[]` into the beat **"Every report stream is up to date."** —
+ * printed to an operator whose RC IN was days behind. `stale_streams` is absent from
+ * EVERY run in `sync_runs`: the watch has never once fired.
+ *
+ * The empty list and the failed read are now different things all the way through. On a
+ * failure this emits a WARN naming the blindness and returns the error, which runSync
+ * folds into `reconciliation.stale_stream_check` → a `stale_stream_check_failed` finding.
+ *
+ * Returns both halves so runSync can fold the streams into
  * `result.reconciliation.stale_streams` → the panel's findings list.
  */
-async function checkStreamFreshness(runId: string): Promise<StaleStream[]> {
+async function checkStreamFreshness(runId: string): Promise<StaleStreamRead> {
   try {
     const db = DbClient.fromEnv();
     const emit = makeEmitter(db, runId, "_run");
-    const stale = await findStaleStreams(db);
+    const read = await findStaleStreams(db);
 
-    if (stale.length === 0) {
-      await emit("reconcile", "Every report stream is up to date.", 99, undefined, "info");
-      return [];
+    // THE FAILURE BRANCH COMES FIRST, and it never says "up to date". `read.streams` is
+    // empty here, and an empty list that was never populated is not an observation.
+    if (read.error) {
+      await emit(
+        "reconcile",
+        "Could not check whether any report stream is late — this run cannot say either way.",
+        99,
+        read.error,
+        "warn",
+      );
+      return read;
     }
 
-    const worst = stale[0].missed_working_days;
-    const names = stale.map((s) => s.label).join(", ");
+    if (read.streams.length === 0) {
+      await emit("reconcile", "Every report stream is up to date.", 99, undefined, "info");
+      return read;
+    }
+
+    const worst = read.streams[0].missed_working_days;
+    const names = read.streams.map((s) => s.label).join(", ");
     await emit(
       "reconcile",
-      `${stale.length} report stream(s) behind: ${names}. Worst is ${worst} working day(s) with no report.`,
+      `${read.streams.length} report stream(s) behind: ${names}. Worst is ${worst} working day(s) with no report.`,
       99,
-      stale.map(describeStaleStream).join(" "),
+      read.streams.map(describeStaleStream).join(" "),
       "warn",
     );
-    return stale;
+    return read;
   } catch (err) {
-    // Never fails the run — see the module note.
-    DBOS.logger.warn(`stream freshness check skipped: ${String(err)}`);
-    return [];
+    // Belt-and-braces: `findStaleStreams` already guards its own read, so reaching here
+    // means the DB CLIENT or the emitter failed. Still never fails the run — but it is
+    // reported as blindness, not as silence, for the same reason as the branch above.
+    const msg = err instanceof Error ? err.message : String(err);
+    DBOS.logger.warn(`stream freshness check could not run: ${msg}`);
+    return { streams: [], error: msg };
   }
 }
 
