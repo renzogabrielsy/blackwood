@@ -902,3 +902,46 @@ diagnosis.*
 - `/Users/renzosy/blackwood/cenapro/CENAPRO_SCHEMA.md` — the authoritative schema contract (tables, `flec_ledger`/`flec_balance`, `view_production_daily`, the 28 ported business rules, DVO deferral).
 - [Navbar](../../../components/NAVBAR.md) — page titles / breadcrumbs / Modules dropdown.
 - [Production module](../production/CONTEXT.md) — ICTC production; source of the dense-table + `ColumnFilterMenu` patterns reused here.
+
+---
+
+## QC and Flec Inventory — the `?grid=v2` side-by-side (2026-08-19)
+
+Both screens gained a second, **read-only** implementation on the universal table
+module, built beside the existing client and reachable only on `?grid=v2`. The
+existing components are byte-identical and remain the production path; the default is
+unchanged. Recipe and rationale: `lib/table/CONTEXT.md` → "Stage 1D at scale".
+
+| File | Role |
+|---|---|
+| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. Same fifteen columns, order and widths as `qc-ledger-client.tsx`. |
+| `inventory/flec-inventory-grid-v2.tsx` | The flec movement ledger on `<BlackwoodTable>`. Same nine columns as the existing client's ledger table. |
+
+**READ-ONLY is structural, not a promise.** No `ColumnSpec` in either declares a
+`parse`, and `columnAcceptsEdit` falls back to `spec.parse !== undefined` — so the
+editor, Delete/Backspace and the paste loop's per-cell guard all refuse at every
+coordinate. Neither imports a writing action, so `cenapro_save_ccc_analysis` and the
+APPEND-ONLY `cenapro_set_opening_balance` are unreachable from both files. The row
+families still declare each slot's honest `editable` flag — the ROW's half of the
+verdict, ANDed with the column's, and what a later editing pass builds on.
+
+**QC is the module's clearest two-family case.** The sheet is one row per DRAW (a
+weight belongs to a single draw), but a LAB READING covers a whole sample group and
+the existing ledger puts those four metric cells on the group's **first** draw only.
+So `draw-first` occupies all fifteen columns and `draw` occupies eleven, returning
+**`null`** for BD / ASH / GRIT / MC. `null` means "this row has no cell there", not
+"an empty one" — and that one answer drives the keyboard (a vertical run steps over
+it), the paste (it never lands there), the selection pill (it is not totalled) and the
+tint. Getting it wrong is BUG-024.
+
+Day headings and `Σ DAY TOTAL` rule-offs go through `renderChromeRow` (they sit inside
+the body, which `summaryRows` cannot reach); the month rollup is a declared summary
+lane. Chrome keys are a run **ordinal**, never a date — a chrome key is the
+virtualiser's React key and a repeatable value would collide.
+
+**Visibly missing on both, deliberately:** everything that writes or is a different
+shape — the ADD/draw composer, the metric editors and their carry-over, Save/Discard,
+the month picker, the openings (STARTING) block, the opening-balance history dialog,
+the warehouse/date pickers, and the metric charts. Nothing is stubbed. The selection
+shows a cell count rather than a SUM, because the module computes its aggregates
+internally and does not hand them out (seam 2 in the module CONTEXT).
