@@ -28,6 +28,7 @@ import {
 import type {
   BlockDiff,
   PriceNote,
+  ReportNotReceived,
   SingleSourceOverdue,
   SourceDiff,
   SyncRunResult,
@@ -410,6 +411,10 @@ function priceNote(over: Partial<PriceNote> & { kind: string }): PriceNote {
     looked_for: over.looked_for ?? null,
     tabs_found: over.tabs_found ?? [],
     candidates: over.candidates ?? [],
+    source_filename: over.source_filename ?? null,
+    tabs_loaded: over.tabs_loaded ?? [],
+    rows_loaded: over.rows_loaded ?? null,
+    rows_considered: over.rows_considered ?? null,
     collided_on: over.collided_on ?? null,
     differences: over.differences ?? [],
     collisions: over.collisions ?? [],
@@ -499,6 +504,66 @@ check('a fuzzy match surfaces BOTH spellings side by side, and says it WAS price
   assert.ok(/priced/i.test(f.title), 'a successful fuzzy match should read as priced')
 })
 
+// ── 3.6 The L-044 channels: the WRONG WORKBOOK, and the missing report. ────
+//
+// THE REGRESSION THESE PIN: on 2026-08-17 the sync priced four truckloads (69,900 kg) at
+// zero and reported NOTHING. The price file is fetched by SENDER only, so the clerk had
+// picked up `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx` — whose
+// tabs include `AUGUST 2026`. Every L-039 check passed on it: the file opened, the month
+// resolved, rows were read. Then nothing matched, and "nothing matched" was, by design,
+// not a finding. The only symptom of the wrong workbook is the RESULT.
+check('a 100% unmatched rate is HIGH and names the workbook it read', () => {
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({
+        kind: 'price_no_row_matched',
+        source_filename: 'BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx',
+        tabs_loaded: ['AUGUST 2026'],
+        tabs_found: ['MAY 2026', 'JUNE 2026', 'JULY 2026', 'AUGUST 2026'],
+        looked_for: '2026-08',
+        rows_loaded: 31,
+        rows_considered: 4,
+      }),
+    ]),
+  )
+  assert.equal(findings.length, 1)
+  const f = findings[0]
+  // HIGH: this is a whole-FILE failure that does not look like one from inside the matcher.
+  assert.equal(f.severity, 'high')
+  assert.equal(f.kind, 'price_no_row_matched')
+  // The filename is the answer, so it must be in the sentence a human reads first.
+  assert.ok(f.title.includes('BDO REQUISTION'), f.title)
+  assert.ok(f.title.includes('4'), f.title)
+  assert.equal(f.data.source_filename, 'BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx')
+  assert.deepEqual(f.data.tabs_loaded, ['AUGUST 2026'])
+  assert.equal(f.data.rows_loaded, 31)
+  assert.equal(f.section, 'deliveries')
+})
+
+check('no price file at all is HIGH, and never silent', () => {
+  const findings = flattenRunFindings(
+    priceRun([priceNote({ kind: 'price_file_missing', rows_considered: 12 })]),
+  )
+  assert.equal(findings[0].severity, 'high')
+  assert.ok(findings[0].title.includes('12'), findings[0].title)
+})
+
+check('a FAILED overdue check reports, and never reads as "none overdue"', () => {
+  const findings = flattenRunFindings(
+    priceRun([
+      priceNote({
+        kind: 'price_overdue_check_failed',
+        detail: 'The read failed with: column does not exist',
+      }),
+    ]),
+  )
+  const f = findings[0]
+  // attention, not high: nothing is known to be wrong with a delivery — what broke is the
+  // sync's ability to LOOK. But it must never be absent.
+  assert.equal(f.severity, 'attention')
+  assert.ok(/cannot say/i.test(f.title), f.title)
+})
+
 check('the two REFUSED kinds never read as "priced"', () => {
   // The wording matters: a refusal leaves the row at 0, and a title claiming otherwise
   // would be exactly the same class of lie as "Price file unavailable".
@@ -537,6 +602,109 @@ check('an unpriced-overdue delivery is named, and escalates at 4 days', () => {
   assert.equal(findings[0].data.delivery_id, 'id-a')
   assert.ok(findings[1].title.includes('22,375 kg'), findings[1].title)
   assert.ok(findings[1].title.includes('7 days'))
+})
+
+// ── 3.7 The report that never arrived (L-044). ─────────────────────────────
+//
+// THE REGRESSION THIS PINS: the deliveries run answered "no RC DELIVERIES attachment" with
+// "Nothing new today — no RC DELIVERIES report waiting." at 100% progress, on the days RC
+// IN was going stale. A run where nothing arrived must not be indistinguishable from a
+// quiet day.
+function notReceivedRun(over: Partial<ReportNotReceived> = {}): SyncRunResult {
+  return {
+    reports: {
+      deliveries: {
+        apply: {
+          report_type: 'deliveries',
+          ok: true,
+          held: [],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+          price_notes: [],
+          unpriced_overdue: [],
+          report_not_received: {
+            report_type: 'deliveries',
+            source_label: 'RC DELIVERIES report',
+            stream: 'deliveries',
+            stream_label: 'RC In (deliveries)',
+            since: '2026-08-11',
+            through_date: '2026-08-14',
+            operational_date: '2026-08-17',
+            missed_working_days: 1,
+            lateness_unknown_reason: null,
+            reports_next_day: false,
+            as_of: '2026-08-18',
+            ...over,
+          },
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+check('a missing report is a FINDING, and escalates on the view\'s own number', () => {
+  const sev = (missed: number | null) => {
+    const f = flattenRunFindings(notReceivedRun({ missed_working_days: missed }))
+    assert.equal(f.length, 1, 'exactly one finding')
+    assert.equal(f[0].kind, 'report_not_received')
+    assert.equal(f[0].section, 'deliveries')
+    return f[0]
+  }
+  // 0 still FIRES — that is the case where another writer (the Google Sheet) is keeping
+  // the data current while the email pipeline is quietly dead, and nothing else notices.
+  assert.equal(sev(0).severity, 'info')
+  assert.equal(sev(1).severity, 'info')
+  assert.equal(sev(2).severity, 'attention')
+  assert.equal(sev(3).severity, 'attention')
+  assert.equal(sev(4).severity, 'high')
+  // Unmeasurable is NOT quieter than measured-and-fine.
+  assert.equal(sev(null).severity, 'attention')
+})
+
+check('the missing-report finding never reassures, and says what it searched', () => {
+  const f = flattenRunFindings(notReceivedRun({ missed_working_days: 3 }))[0]
+  assert.ok(!/nothing new/i.test(f.title + f.reason), 'must not revive the reassuring wording')
+  assert.ok(f.title.includes('3 working days'), f.title)
+  assert.ok(f.reason.includes('2026-08-11'), 'must state how far back it searched')
+  assert.equal(f.data.through_date, '2026-08-14')
+  assert.equal(f.data.missed_working_days, 3)
+})
+
+// ── 3.8 The freshness watch that could not run (L-044). ───────────────────
+//
+// THE REGRESSION THIS PINS: `findStaleStreams` ended in `catch { return [] }`, and the
+// worker's service role had no SELECT grant on `view_digest_stream_status`. Every read
+// since 2026-08-04 returned 42501, the catch turned it into `[]`, and Stage 3e announced
+// that as "Every report stream is up to date." `stale_streams` is absent from EVERY run in
+// `sync_runs` — the detector had never once fired, and nobody could tell.
+check('a freshness check that could NOT run is reported, and never reads as "all clear"', () => {
+  const result: SyncRunResult = {
+    reconciliation: {
+      stale_stream_check: {
+        ok: false,
+        error: 'permission denied for view view_digest_stream_status',
+      },
+    },
+  } as unknown as SyncRunResult
+  const findings = flattenRunFindings(result)
+  assert.equal(findings.length, 1)
+  const f = findings[0]
+  assert.equal(f.kind, 'stale_stream_check_failed')
+  assert.equal(f.section, 'run')
+  // attention, not high: no stream is KNOWN to be late, so this must not out-shout a
+  // finding about one that is. But it must never be absent.
+  assert.equal(f.severity, 'attention')
+  assert.ok(/cannot say/i.test(f.title), f.title)
+  assert.ok(/not checked/i.test(f.reason), 'must tell the reader how to read the silence')
+  // The DB's own words survive — that 42501 is the whole diagnosis.
+  assert.ok(String(f.data.error).includes('permission denied'))
+})
+
+check('a HEALTHY run raises no freshness-check finding (absence = it ran)', () => {
+  // The member is written only on failure, so a clean run keeps byte-identical shape.
+  const clean: SyncRunResult = { reconciliation: { stale_streams: [] } } as unknown as SyncRunResult
+  assert.deepEqual(flattenRunFindings(clean), [])
 })
 
 check('NO price finding ever leaks a ₱ value into the panel or the Claude block', () => {

@@ -31,6 +31,34 @@
  *      already knows that pair. L-010 covers PLATE typos; this class was uncovered.
  *
  * ============================================================================
+ * IT HAPPENED AGAIN, THROUGH THE HOLE THE FIX ABOVE LEFT (2026-08-18, L-044)
+ * ============================================================================
+ * Four truckloads (2026-08-14, 69,900 kg) went in at cost_basis = 0 and the run
+ * reported NOTHING. Not one note. The 2026-08-07 hardening was working exactly as
+ * designed — on the wrong workbook.
+ *
+ * Czarina's price file is fetched by SENDER ONLY, and the clerk took the newest .xlsx
+ * she had sent. On 2026-08-17 that was `BDO REQUISTION DETAILS & WEEKLY CHECK
+ * ISSUANCE (REVISED)-2026.xlsx`, whose tabs include `AUGUST 2026`. So (a)'s semantic
+ * resolver found a tab for August, was satisfied, and raised nothing; (b)'s loud
+ * whole-file failure never fired because the file opened fine; (c) loaded every month
+ * the window spanned, all from a cheque ledger. Then all four rows came back
+ * `no_candidate` — "an ordinary unmatched row, not a finding" — and the run said
+ * success.
+ *
+ * The lesson: VERIFYING THAT A NAME HAS THE RIGHT SHAPE IS NOT VERIFYING IT IS THE
+ * RIGHT THING. Two changes, in two places, because either alone is insufficient:
+ *
+ *  (e) THE FILE IS NOW IDENTIFIED BY NAME, not merely by sender — `mailClerk.ts`,
+ *      `MailQuery.attachmentMatches`. That is the fix; everything below is the alarm.
+ *  (f) A 100% UNMATCHED RATE IS A LOUD FINDING — `price_no_row_matched`, below. ONE
+ *      unmatched row is ordinary. EVERY row unmatched is not a row problem at all: it
+ *      is the signature of the wrong workbook (or the right workbook whose month tab
+ *      is a different document), and it is the ONLY symptom that survives when every
+ *      other check is satisfied. It names the FILENAME and the TABS, because those are
+ *      the two facts that were true, wrong, and invisible for two weeks.
+ *
+ * ============================================================================
  * THE MATCH LADDER — each rung is stricter about evidence than the last
  * ============================================================================
  *  1. EXACT   key = (canonical_supplier, plate[alnum-upper], weight[whole kg]).
@@ -181,10 +209,13 @@ export type PriceNoteKind =
   | "price_tab_unresolved"
   | "price_tab_ambiguous"
   | "price_file_unreadable"
+  | "price_file_missing"
+  | "price_no_row_matched"
   | "price_fuzzy_match"
   | "price_fuzzy_ambiguous"
   | "price_date_drift"
-  | "price_out_of_band";
+  | "price_out_of_band"
+  | "price_overdue_check_failed";
 
 /**
  * One thing the price step wants a human to see. NEVER carries a ₱/cost value — the
@@ -220,6 +251,15 @@ export interface PriceNote {
   looked_for?: string | null;
   tabs_found?: string[];
   candidates?: string[];
+  // -- file-level identity (L-044): WHICH workbook, and WHICH tabs it read ---
+  /** The attachment filename the run actually used. The fact nobody could see. */
+  source_filename?: string | null;
+  /** The worksheet tabs that resolved and were read, in the order requested. */
+  tabs_loaded?: string[];
+  /** How many priceable rows were read out of those tabs. 0 = the tab is empty. */
+  rows_loaded?: number | null;
+  /** How many of OUR deliveries the run tried to price. */
+  rows_considered?: number | null;
   // -- refusal bookkeeping -------------------------------------------------
   collided_on?: "czarina" | "ours";
   collisions?: Array<{ sheet?: string; row: string | number; date?: string | null }>;
@@ -230,6 +270,13 @@ export interface EnrichDeps {
   aliases?: readonly SourceAlias[];
   /** canonical supplier → recent observed ₱/kg band (the result sanity check). */
   priceBands?: ReadonlyMap<string, PriceBand>;
+  /**
+   * The attachment filename this Buffer came from (L-044). Purely for the NOTES: the
+   * matcher never reads it. A workbook that is the wrong document is identified to a
+   * human by its NAME, and this module is handed bytes — so the caller, which knows the
+   * manifest, must pass the name in or the loudest finding here cannot say what it read.
+   */
+  filename?: string | null;
 }
 
 export interface CzarinaMatch {
@@ -734,6 +781,43 @@ export async function enrichPrices(
         });
       }
     }
+  }
+
+  // -- (f) EVERY row unmatched is a FILE problem, not a row problem (L-044) --
+  //
+  // WHY 100% AND NOT A PERCENTAGE. A partial miss is normal and already covered: her
+  // file records the PAYMENT date, so yesterday's trucks legitimately are not in it yet,
+  // and the honest per-row alarm for that is `unpriced_overdue` — which is time-based,
+  // names the specific truckload, and escalates. Any threshold between those two is a
+  // number invented to feel safe, and a threshold that fires on a normal day is how an
+  // operator learns to stop reading this list. 100% is the only line that means
+  // something structural: the window is `watermark − 3 days`, so it always contains
+  // several days of deliveries that ARE in her file — for not one of them to match, the
+  // workbook we opened is not the price list, or its month tab is a different document.
+  // Measured: on 2026-08-17 this condition was TRUE and nothing said so.
+  //
+  // Guarded on `czarinaRows.length` only for the wording — an EMPTY resolved tab is
+  // just as alarming as a full wrong one, so it still fires, and `rows_loaded` says which.
+  if (rows.length > 0 && matched === 0) {
+    const where = tabsLoaded.length ? `"${tabsLoaded.join('", "')}"` : "no tab";
+    notes.push({
+      kind: "price_no_row_matched",
+      source_filename: deps.filename ?? null,
+      tabs_loaded: tabsLoaded,
+      tabs_found: sheetNames,
+      looked_for: monthsRequested.join(", "),
+      rows_loaded: czarinaRows.length,
+      rows_considered: rows.length,
+      detail:
+        `NOT ONE of the ${rows.length} deliveries in this window could be matched to the ` +
+        `price file, so every one of them was left unpriced. The file opened fine and ` +
+        `${where} resolved for ${monthsRequested.join(", ")}, holding ${czarinaRows.length} ` +
+        `priceable row(s) — so this is not a spelling problem in one row; either the ` +
+        `workbook that was used is not the price list, or that tab is not the daily ` +
+        `purchase log. The file used was ` +
+        `"${deps.filename ?? "(filename not recorded)"}". Check it is ` +
+        `"RAW CHARCOAL PURCHASES -Daily" and not another workbook from the same sender.`,
+    });
   }
 
   return {

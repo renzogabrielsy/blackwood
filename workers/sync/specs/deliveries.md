@@ -426,6 +426,138 @@ definition** — the BUG-018 formula is byte-identical, delivery-weighted; only 
 because `cost_basis = 0` is the L-008 placeholder, not a ₱0 delivery. `current_weight` is untouched:
 an unpriced delivery is still physically there.
 
+
+### 9.9 The price file is identified by NAME, not by SENDER (2026-08-18, L-044)
+
+**The sync read a bank cheque ledger as the price list for two weeks.** `GMAIL_CZ` is
+`from:czarinaloumaximoictc@gmail.com newer_than:5d` — sender only — and `pickLatestXlsx` returned
+the **first `.xlsx` it saw**. Measured over two weeks, all four of these had been used as "the price
+file": `RAW CHARCOAL PURCHASES -Daily(1).xlsx` (correct),
+`BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx`, `VAN LOADING FILE.xlsx`,
+`POWDER ( l. RIVERA).xlsx`.
+
+The BDO workbook's tabs include **`AUGUST 2026`**, so §9.2's semantic resolver found the month, was
+satisfied, and raised nothing; §9.5's whole-file alarm never fired because the file opened fine.
+Four truckloads (2026-08-14, 69,900 kg) went in at ₱0 and the run reported success.
+**Verifying that a NAME has the right SHAPE is not verifying it is the right THING** — and §9.2 made
+the resolver *more* willing to accept a plausible name, so the two changes compose badly by design.
+
+`MailQuery` (`workflows/mailClerk.ts`) gained two fields. **Three layers, each looser than the next,
+only the innermost authoritative:**
+
+| layer | field | what it is |
+|---|---|---|
+| 1 | the Gmail query (`has:attachment filename:xlsx`) | a **search hint** — Gmail decides what `filename:` means; an operator is not a contract |
+| 2 | `attachmentPatterns` (`*raw*charcoal*purchase*.xls*`) | which part's **BYTES are downloaded** |
+| 3 | `attachmentMatches` | **the guard** |
+
+Layer 2 is not an optimisation: `gmail.searchLatestAttachment` materializes exactly ONE part — the
+newest email carrying a **matching** part — so narrowing it lets the clerk walk back past a newer,
+unrelated workbook and **RECOVER** the right file, rather than merely rejecting the wrong one. When
+all three come up empty the manifest stores **nothing**, and §9.10's `price_file_missing` reports it.
+
+`normalizeAttachmentName` folds the ways a filename drifts (case, spacing, punctuation, a `(1)` copy
+suffix) and is **tenant-free**; the phrase `RAW CHARCOAL PURCHASES` lives on the query definition,
+beside the already tenant-specific query string. `pickLatestXlsx` stays generic and knows no filenames.
+
+**Audit of the other six queries (do not churn them).** A query is exposed when its scope does not
+pin the DOCUMENT — only the sender or the window. `deliveries_czarina` was the **only** sender-only
+one. `rc_out_movement` is subject-scoped (`subject:"RC MOVEMENT"`), and the other five are pinned by
+subject AND (label or sender). Adding a predicate to a subject-pinned query buys nothing and costs a
+second place for a rename to break the sync silently.
+
+### 9.10 A 100% unmatched rate is a FILE problem (`price_no_row_matched`, **high**)
+
+The wrong workbook's **only** symptom is the RESULT: every row returns `no_candidate`, which the
+matcher documents as *"an ordinary unmatched row, not a finding."* So the aggregate is now watched.
+The note names the **FILENAME used** (passed in via `EnrichDeps.filename` — `enrich` never matches on
+it) and the **TABS resolved**, plus `rows_loaded` / `rows_considered`.
+
+**Why 100% and not a percentage.** A partial miss is NORMAL: Czarina records the payment date, so
+yesterday's trucks legitimately are not in her file yet. The honest alarm for that already exists and
+is time-based and per-row — `unpriced_overdue` (§9.8). Any threshold in between is a number invented
+to feel safe, and one that fires on a normal day is how an operator learns to stop reading the list.
+100% is the only structural line: the window is `watermark − 3 days`, so it always contains several
+days of deliveries that *are* in her file.
+
+Two more kinds joined the §9.5 table:
+
+| kind | priced? | severity | meaning |
+|---|---|---|---|
+| `price_file_missing` | no | **high** | no recognisable price workbook in the 5-day window at all |
+| `price_no_row_matched` | no | **high** | the file opened, a tab resolved, and NOT ONE row matched |
+| `price_overdue_check_failed` | n/a | attention | the unpriced check could not run — see §9.11 |
+
+`price_file_missing` is new because the §9.9 guard makes "no price file" a state the sync can now
+reach **on its own**, and a guard that can silence the price step must not do so quietly. It was
+previously a progress beat only, i.e. it died with the run. The 5-day window means a single missed
+send does not reach it.
+
+### 9.11 A DB-backed check must not sit behind a MAILBOX-shaped guard
+
+`readUnpricedOverdue(db)` reads the DATABASE — it exists to catch a price outage *independent of
+why* — but it sat AFTER `runReport`'s "no RC DELIVERIES attachment" early return, so it was gated on
+the very thing that had failed. The four ₱0 rows crossed the overdue threshold on **exactly the day**
+the workbook stopped arriving, and the alarm was skipped on the first day it would have fired. It now
+runs on **every** deliveries run, in both branches.
+
+It also ended in `catch { return [] }` — so a broken read and a genuinely clean database returned the
+same answer, and the run would state "nothing overdue" on the strength of a question it never asked.
+It now returns `{rows, error}`, and an error becomes `price_overdue_check_failed`: *"this run CANNOT
+say whether any are overdue; read the absence of that warning as 'not checked', not as 'none'."*
+`attention`, not `high` — nothing is known to be wrong with a delivery; what broke is the ability to
+look.
+
+### 9.12 A missing daily report is a FINDING, not a reassurance (`report_not_received`)
+
+The early return emitted *"Nothing new today — no RC DELIVERIES report waiting."* at **100%
+progress**, on the days RC IN was going stale. It reads as *checked, all fine*.
+
+**No second staleness rule was invented.** Severity comes from
+`view_digest_stream_status.missed_working_days`, which already excludes rest days and reports that
+are not due yet, on the L-042 ladder — `info` 0-1, `attention` 2-3, `high` 4+ — measured in
+**Asia/Manila**. A missing number gives `missed_working_days = null` (never 0, which means
+"measured, on time") reported at `attention`, because "we don't know" must not be quieter than "we
+measured it and it is fine". Constructor: `reports/reportNotReceived.ts`; reader:
+`lib/streamStaleness.ts::findStreamStatus` (the same columns `findStaleStreams` selects — one view,
+one rule).
+
+**A missing number says WHICH kind of missing** (`lateness_unknown_reason`, tightened same day). One
+bare `null` meant three different things, and the operator's next action differs for each:
+
+| reason | what happened | who fixes it |
+|---|---|---|
+| `unreadable` | the view could not be read — **the 42501 grant failure that blinded the freshness watch for two weeks** | engineering: grants / the view |
+| `unregistered` | the view read fine and has no row for this stream | config: `view_digest_stream_registry` |
+| `not_computable` | the row exists but the stream has **never reported**, so there is no baseline to count from | nobody — there is nothing to measure yet |
+
+`not_computable` exists because the view returns SQL NULL in that case and `asNum` would read it as
+`0` — *"measured, and on time"*. That is `Number(null) === 0` a second time in the same feature, in
+a different helper. All three still report at `attention`; only the words change.
+
+**It is NOT a duplicate of `stale_stream`.** That is a DATA fact (the table has no rows for recent
+working days); this is a FETCH fact (no email was in the mailbox window). Each is true without the
+other in a case that matters, and the one that justifies firing even at `missed_working_days = 0`:
+the Google Sheet pass keeps `deliveries` current while the email pipeline is quietly dead —
+`stale_stream` is then silent and CORRECT, and this is the only thing in the system that notices.
+When both fire, the data-side finding carries the alarm and this one carries the explanation, which
+is why its ladder starts quieter.
+
+### 9.13 Do the four ₱0 rows self-heal?
+
+**Yes, but only inside a closing window.** The path exists: `field_differences` DOES diff
+`cost_basis` once the extracted side is non-null (`classify.ts` — it is skipped only when the
+operator file carries no price), so an enriched row classifies VALUE_CHANGED and writes through
+`fn_apply_delivery_upstream`, whose allowlist includes `cost_basis`. All four rows are
+**`human_edited_at IS NULL`**, so the latch will not refuse them.
+
+The constraint is the WINDOW. `since = dataWatermark("deliveries") − 3 days`, and the watermark is
+`MAX(transaction_date)`. With the watermark at **2026-08-14** the four 08-14 rows are inside the
+window. The watermark is read at the START of a run, so a run that ingests 08-15…08-18 for the first
+time still re-prices them in that same run. But once a delivery dated **2026-08-18 or later** is on
+record, `since` becomes 2026-08-15+ and those rows leave the window **permanently** — after that they
+need a manual re-price.
+
 ---
 
 ## 10. The human-edit latch (2026-08-08) — a warning written as a comment is not a control

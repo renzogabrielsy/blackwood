@@ -21,6 +21,11 @@
  *                        GMAIL_IVY  from:edilloivymae306ictc@gmail.com subject:"WASTE PRODUCTION REPORT" after:{since} -label:"Blackwood-Processed"
  *   sync_flecon.py     : GMAIL     from:edilloivymae306ictc@gmail.com subject:"FLECON BAGGED" after:{since} -label:"Blackwood-Processed"
  *
+ * ONE of those queries is no longer verbatim: `GMAIL_CZ` is sender-only, and on 2026-08-17
+ * that let the clerk hand the price enricher a BANK CHEQUE-REQUISITION workbook (L-044).
+ * It now also pins the FILENAME — see the comment on the `deliveries_czarina` entry, and
+ * the audit of the other six queries above `mailQueries()`.
+ *
  * `{since}` is the DATA watermark (MAX(transaction_date)) minus a lookback, computed
  * per report by the per-report workflows in M3. For the Mail Clerk (M1) the caller
  * supplies a `since` (YYYY/MM/DD Gmail-date form) so the clerk is a pure fetcher.
@@ -48,6 +53,50 @@ export interface MailQuery {
   query: string;
   /** Whether this is the primary source or an auxiliary (price/reconcile) file. */
   role: "primary" | "auxiliary";
+  /**
+   * Attachment-name GLOBS handed to the IMAP part selector (`*.xlsx,*.xls` when absent).
+   *
+   * This is a DOWNLOAD HINT, not the guard — but it is load-bearing, because
+   * `gmail.searchLatestAttachment` materializes the bytes of exactly ONE part: the newest
+   * email that has a part MATCHING these globs. Narrow them and the clerk walks back past
+   * the wrong workbooks to the right one; leave them wide and the only bytes in memory are
+   * whatever arrived last, so a later predicate can reject but never recover. Deliberately
+   * LOOSER than `attachmentMatches` (a superset), so the two can never disagree about a
+   * file the predicate would accept.
+   */
+  attachmentPatterns?: string[];
+  /**
+   * THE GUARD (2026-08-18, L-044). Returns true when this filename is the file this query
+   * is actually looking for. When nothing in the window matches, the clerk stores NOTHING
+   * — an absent attachment is a state every consumer already handles and reports, whereas
+   * the WRONG attachment is indistinguishable from the right one all the way down.
+   *
+   * Tenant knowledge lives HERE, on the query definition, beside the (already
+   * tenant-specific) query string. `pickLatestXlsx` stays generic and knows no filenames.
+   */
+  attachmentMatches?: (filename: string) => boolean;
+}
+
+/**
+ * Fold a human-typed attachment name to a comparable form: drop the extension, drop a
+ * browser/Gmail "(1)" copy suffix, upper-case, and collapse every run of non-alphanumerics
+ * to ONE space. So all four of these fold to `RAW CHARCOAL PURCHASES DAILY`:
+ *
+ *   "RAW CHARCOAL PURCHASES -Daily.xlsx"   "RAW CHARCOAL PURCHASES -Daily(1).xlsx"
+ *   "raw charcoal purchases - daily.xlsx"  "RAW  CHARCOAL   PURCHASES-Daily.XLSX"
+ *
+ * Generic and tenant-free: it encodes only the ways a FILENAME drifts (case, spacing,
+ * punctuation, copy suffix), never what any particular file is called. Same discipline as
+ * `czarinaSheet.ts` normalizing a hand-typed WORKSHEET name — L-039 and L-042 are both the
+ * same lesson, that a name a human typed is a convention to be folded, not malformed input.
+ */
+export function normalizeAttachmentName(filename: string): string {
+  return String(filename ?? "")
+    .replace(/\.[A-Za-z0-9]{1,5}$/, "") // extension
+    .replace(/\s*\(\d+\)\s*$/, "") // "(1)" copy suffix
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
 }
 
 export type ReportType =
@@ -60,6 +109,24 @@ export type ReportType =
  * The canonical query set — VERBATIM from the Python orchestrators. Auxiliary
  * queries (Czarina price, RC MOVEMENT) use their own time windows (newer_than) and
  * do NOT take {since}.
+ *
+ * WHICH QUERIES CAN PICK UP THE WRONG WORKBOOK (audited 2026-08-18, L-044). A query is
+ * exposed when its scope does not pin the DOCUMENT — only the sender or the window:
+ *
+ *   deliveries_czarina  from: ONLY, no subject, no filename  →  EXPOSED. Fixed below.
+ *   rc_out_movement     subject:"RC MOVEMENT" newer_than:7d  →  subject-scoped. An email
+ *                       whose SUBJECT says RC MOVEMENT carrying some other workbook is not
+ *                       a thing that happens; the subject IS the document here.
+ *   deliveries          label + subject "RC DELIVERIES"      →  label AND subject-scoped.
+ *   rc_out              label + subject "PROPOSED DAILY…"    →  label AND subject-scoped.
+ *   production_mc       from + subject "Daily Production…"   →  from AND subject-scoped.
+ *   production_waste    from + subject "WASTE PRODUCTION…"   →  from AND subject-scoped.
+ *   flecon              from + subject "FLECON BAGGED"       →  from AND subject-scoped.
+ *
+ * Only ONE of the seven was sender-only, and it is the one that broke. The other six are
+ * deliberately left alone: adding a filename predicate to a query that is already pinned to
+ * a subject buys nothing and costs a second place for a rename to break the sync silently.
+ * If one of them ever becomes sender-only, it inherits this exposure — pin it then.
  */
 export function mailQueries(): MailQuery[] {
   return [
@@ -71,10 +138,50 @@ export function mailQueries(): MailQuery[] {
         'label:"Work/ICTC Daily" subject:"RC DELIVERIES" after:{since} -label:"Blackwood-Processed"',
     },
     {
+      // ---------------------------------------------------------------------
+      // THE PRICE FILE — identified by NAME, not merely by SENDER (2026-08-18, L-044).
+      //
+      // This query was `from:czarinaloumaximoictc@gmail.com newer_than:5d` and NOTHING
+      // else, and `pickLatestXlsx` took the first .xlsx it saw. Czarina sends the office
+      // several workbooks; measured over two weeks the sync had used ALL of these as "the
+      // price list": `RAW CHARCOAL PURCHASES -Daily(1).xlsx` (correct),
+      // `BDO REQUISTION DETAILS & WEEKLY CHECK ISSUANCE (REVISED)-2026.xlsx`,
+      // `VAN LOADING FILE.xlsx`, `POWDER ( l. RIVERA).xlsx`.
+      //
+      // The 2026-08-17 run was holding the BDO CHEQUE-REQUISITION workbook. Its tabs are
+      // `August 2026 Requisition Weekly`, `2025 Requisition Weekly`, `August 2026-Weekly
+      // Check`, `MAY 2026` … `AUGUST 2026`. So L-039's month resolver found `AUGUST 2026`,
+      // was satisfied, and raised NEITHER `price_tab_unresolved` NOR `price_file_unreadable`
+      // — then searched a cheque ledger for truckloads, matched zero, and reported nothing,
+      // because a row that matches nothing is an ordinary unmatched row. Four truckloads
+      // (69,900 kg) went in at ₱0 and the run said "success".
+      //
+      // THE LESSON, and it generalises past this file: VERIFYING THAT A NAME HAS THE RIGHT
+      // SHAPE IS NOT VERIFYING IT IS THE RIGHT THING. L-039 hardened the tab lookup so
+      // hard that it happily validated a tab inside the wrong workbook. Nobody checked the
+      // workbook.
+      //
+      // Three layers, each looser than the next, only the innermost authoritative:
+      //   1. the Gmail operators below      — a search HINT (Gmail decides what `filename:`
+      //                                       means; an operator is not a contract),
+      //   2. `attachmentPatterns`           — which part's BYTES get downloaded, so the
+      //                                       clerk RECOVERS the right file instead of
+      //                                       merely rejecting the wrong one,
+      //   3. `attachmentMatches`            — the guard that holds.
+      // If all three come up empty the manifest gets NO price file, and the enricher's
+      // "no price file" path fires and reports it (`price_file_missing`).
+      // ---------------------------------------------------------------------
       key: "deliveries_czarina",
       reportType: "deliveries",
       role: "auxiliary",
-      query: "from:czarinaloumaximoictc@gmail.com newer_than:5d",
+      query:
+        "from:czarinaloumaximoictc@gmail.com has:attachment filename:xlsx newer_than:5d",
+      // Wider than the predicate on purpose: any spacing/punctuation between the words,
+      // any suffix, .xls or .xlsx. It only has to be narrow enough to skip the BDO / VAN
+      // LOADING / POWDER workbooks when choosing which part to download.
+      attachmentPatterns: ["*raw*charcoal*purchase*.xls*"],
+      attachmentMatches: (filename) =>
+        normalizeAttachmentName(filename).includes("RAW CHARCOAL PURCHASES"),
     },
     {
       key: "rc_out",
@@ -249,7 +356,7 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
       hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
     }));
 
-    const latest = pickLatestXlsx(res?.emails ?? []);
+    const latest = pickLatestXlsx(res?.emails ?? [], q.attachmentMatches);
     if (!latest) {
       manifest.reports[q.key] = [];
       continue;
@@ -332,36 +439,53 @@ async function fetchAllOverOneSession(
         const label = reportLabel(q.key);
         await emit(`Looking for ${label}…`, pctFor(done));
 
+        // The query's own download hint, when it has one. `searchLatestAttachment`
+        // materializes exactly ONE part — the newest email carrying a part that matches
+        // these — so a narrowed list is what lets the clerk walk back past a newer,
+        // unrelated workbook and still come home with the right file.
+        const patterns = q.attachmentPatterns ?? ["*.xlsx", "*.xls"];
+
         let emails: FetchedEmail[];
         try {
-          // FAST path — metadata-first, download only the newest xlsx part.
-          const res = await gmail.searchLatestAttachment(query, {
-            patterns: ["*.xlsx", "*.xls"],
-          });
+          // FAST path — metadata-first, download only the newest matching xlsx part.
+          const res = await gmail.searchLatestAttachment(query, { patterns });
           emails = res.emails;
         } catch (err) {
           // The slow fallback exists for per-message STRUCTURE/PART edge cases. A
           // connection-level refusal (the Gmail cap) is NOT one of those — retrying it
           // on a refused/dead session just burns another command, so let it out.
           if (isGmailConnectionLimit(err)) throw err;
-          // Fallback for THIS report — full-source parse (slower but robust).
+          // Fallback for THIS report — full-source parse (slower but robust). SAME
+          // patterns: a fallback that widens the filter would hand back a file the fast
+          // path would have refused, i.e. exactly the bug, only intermittent.
           await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
-          const res = await gmail.search(query, {
-            outDir: null,
-            patterns: ["*.xlsx", "*.xls"],
-          });
+          const res = await gmail.search(query, { outDir: null, patterns });
           emails = res.emails;
         }
         out[q.key] = { query, emails };
 
         // Report what we found (real filename + size from the chosen attachment).
-        const latest = pickLatestXlsx(emails);
+        const latest = pickLatestXlsx(emails, q.attachmentMatches);
         if (latest) {
           await emit(
             `Found ${label} (${humanSize(latest.attachment.sizeBytes)})`,
             pctFor(done),
             latest.attachment.filename
           );
+        } else if (q.attachmentMatches) {
+          // The predicate rejected everything. If spreadsheets DID arrive, name them —
+          // this beat is the one that would have read "using BDO REQUISTION DETAILS…"
+          // out loud on 2026-08-17 instead of nothing at all.
+          const seen = spreadsheetNames(emails);
+          if (seen.length) {
+            await emit(
+              `No ${label} in the mailbox window — ${seen.length} other workbook(s) from ` +
+                `this sender were skipped because they are not that file.`,
+              pctFor(done),
+              seen.join(", "),
+              "warn"
+            );
+          }
         }
         done += 1;
         await emit(`Downloaded ${done} of ${total} reports…`, pctFor(done));
@@ -385,17 +509,47 @@ async function fetchAllOverOneSession(
   }
 }
 
+/**
+ * Newest-first, the first spreadsheet attachment that PASSES `matches`.
+ *
+ * Stays GENERIC — it knows "is a spreadsheet" and nothing else. Every filename a query
+ * cares about is expressed by that query's own `attachmentMatches`, so this function can
+ * never grow a tenant's document names (see the MailQuery doc). With no predicate the
+ * behaviour is byte-identical to what it always was.
+ */
 function pickLatestXlsx(
-  emails: FetchedEmail[]
+  emails: FetchedEmail[],
+  matches?: (filename: string) => boolean
 ): { attachment: FetchedEmail["attachments"][number]; email: FetchedEmail } | null {
   for (let i = emails.length - 1; i >= 0; i--) {
     const em = emails[i];
     for (const att of em.attachments) {
       const n = att.filename.toLowerCase();
-      if (n.endsWith(".xlsx") || n.endsWith(".xls")) return { attachment: att, email: em };
+      if (!n.endsWith(".xlsx") && !n.endsWith(".xls")) continue;
+      if (matches && !matches(att.filename)) continue;
+      return { attachment: att, email: em };
     }
   }
   return null;
+}
+
+/**
+ * Every spreadsheet filename the fetch actually saw for a query, newest first.
+ *
+ * Only used to SAY what was there when the predicate rejected everything. "No price file
+ * arrived" and "four workbooks arrived and none of them was the price file" are different
+ * problems with different fixes, and the difference is exactly what nobody could see for
+ * the two weeks the sync was reading a cheque ledger.
+ */
+function spreadsheetNames(emails: FetchedEmail[]): string[] {
+  const out: string[] = [];
+  for (let i = emails.length - 1; i >= 0; i--) {
+    for (const att of emails[i].attachments) {
+      const n = att.filename.toLowerCase();
+      if (n.endsWith(".xlsx") || n.endsWith(".xls")) out.push(att.filename);
+    }
+  }
+  return out;
 }
 
 async function uploadToStorage(
@@ -447,7 +601,7 @@ export async function runMailClerk(
       hadAttachment: e.hasMatchingAttachment ?? e.attachments.length > 0,
     }));
 
-    const latest = pickLatestXlsx(res?.emails ?? []);
+    const latest = pickLatestXlsx(res?.emails ?? [], q.attachmentMatches);
     if (!latest) {
       manifest.reports[q.key] = [];
       continue;

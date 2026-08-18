@@ -30,6 +30,20 @@ import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
 import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
 import type { StaleStream } from "../lib/streamStaleness.js";
+
+/**
+ * The freshness watch could not RUN. Mirrors `app/(app)/sync/types.ts::StaleStreamCheck`.
+ *
+ * Shaped like `ReportArtifact` (an `ok` flag plus the reason) because it is the same kind
+ * of fact: a run-level helper that either did its job or did not, and whose failure is a
+ * FINDING rather than a run failure. `ok` is only ever `false` here — a successful check
+ * is represented by this member being absent.
+ */
+export interface StaleStreamCheck {
+  ok: boolean;
+  /** Why the read failed, in the DB's own words (e.g. the 42501 permission message). */
+  error: string | null;
+}
 import type { ReportArtifact } from "../reports/excel/artifact.js";
 import {
   LAG_DAYS,
@@ -119,6 +133,17 @@ export interface ReconciliationChannel {
   batch_closes?: BatchClose[];
   schedule_conflicts?: ScheduleConflict[];
   stale_streams?: StaleStream[];
+  /**
+   * Set ONLY when the freshness watch could not RUN (2026-08-18, L-044). Its absence means
+   * the check ran; `stale_streams` then carries the answer (possibly none).
+   *
+   * It exists because `stale_streams` alone cannot distinguish "nothing is late" from "I
+   * could not look" — and for two weeks it was the second, silently: the worker's service
+   * role had no SELECT grant on `view_digest_stream_status`, every read returned 42501,
+   * and a bare `catch { return [] }` reported that to the operator as "Every report stream
+   * is up to date." Carried only on failure, so a healthy run's shape is unchanged.
+   */
+  stale_stream_check?: StaleStreamCheck;
   /**
    * The Excel sync report generated for this run (`../reports/excel/generate.ts`),
    * 2026-08-07. Unlike every other member this is not something the sync OBSERVED — it is

@@ -347,6 +347,15 @@ export interface PriceNote {
    * `price_out_of_band` — priced, but the number is unlike this supplier's recent range.
    *
    * The two REFUSED kinds leave the row at ₱0 — never word them as "priced".
+   *
+   * 2026-08-18 (L-044) added three more, all of which leave rows at ₱0:
+   * `price_file_missing` — no price workbook in the mailbox window at all.
+   * `price_no_row_matched` — the file opened, a month tab resolved, and NOT ONE delivery
+   * matched. One unmatched row is ordinary; every row unmatched is not a row problem, it
+   * is the signature of the WRONG workbook — a bank cheque-requisition file whose tabs
+   * happen to be named `AUGUST 2026` satisfies every other check in this list, and did,
+   * for two weeks. `price_overdue_check_failed` — the unpriced-delivery check itself
+   * could not be run, so the run cannot say whether any are overdue.
    */
   kind: string
   /** Plain-English specifics, already operator-facing. */
@@ -369,6 +378,18 @@ export interface PriceNote {
   tabs_found: string[]
   /** Tabs that all normalize to the same month (the ambiguous case). */
   candidates: string[]
+  /**
+   * The attachment filename the run actually read (L-044). A NAME, never a value — and
+   * the single fact that separates "the price file has a problem" from "that was never
+   * the price file", which is the distinction nobody could make for two weeks.
+   */
+  source_filename: string | null
+  /** The tabs that resolved and were read, in the order requested. */
+  tabs_loaded: string[]
+  /** Priceable rows read out of those tabs. 0 with tabs loaded = the tab was empty. */
+  rows_loaded: number | null
+  /** How many of OUR deliveries the run tried to price. */
+  rows_considered: number | null
   /** `czarina` | `ours` — whose side the fallback key collided on. */
   collided_on: string | null
   /** A spelling disagreement with BOTH values, so the operator can confirm at a glance. */
@@ -421,6 +442,60 @@ export interface AwaitingBatchAssignment {
   days_pending: number
 }
 
+/**
+ * A report whose SOURCE FILE did not arrive in a run at all (2026-08-18, L-044).
+ *
+ * The deliveries run used to answer this case with "Nothing new today — no RC DELIVERIES
+ * report waiting." at 100% progress, which reads as *checked, all fine*, and which was
+ * printed on the very days RC IN was going stale. A run where nothing arrived is otherwise
+ * indistinguishable from a quiet day — the absence of a signal is not a signal.
+ *
+ * NOT a second staleness rule: `missed_working_days` comes straight from
+ * `view_digest_stream_status`, which already excludes rest days and reports that are not
+ * due yet. It decides only how loudly to say the mail is missing.
+ *
+ * NOT a duplicate of `StaleStream` either. That one is a DATA fact (the table has no rows
+ * for recent working days); this is a FETCH fact (no email was in the mailbox window). The
+ * case that needs both: the Google Sheet pass keeps the data current while the email
+ * pipeline is quietly dead — `StaleStream` is silent and correct, and this is the only
+ * thing that notices. Which is why it still fires at `missed_working_days = 0`, as `info`.
+ */
+export interface ReportNotReceived {
+  /** The `reports` key that went without a file, e.g. "deliveries". */
+  report_type: string
+  /** Plain-English name of the missing document ("RC DELIVERIES report"). */
+  source_label: string
+  /** The `view_digest_stream_status` key this report feeds. */
+  stream: string
+  /** The stream's registry label ("RC In (deliveries)"). */
+  stream_label: string
+  /** The window floor the run searched from (YYYY-MM-DD). */
+  since: string
+  /** The latest date the stream has data for. Null if it never has. */
+  through_date: string | null
+  /** The operational date the view measured lateness against. */
+  operational_date: string | null
+  /**
+   * Planned working days missed, from the view. NULL (never 0) when the number was not
+   * measured — 0 means "measured, on time", and a guess must not impersonate a
+   * measurement. When null, `lateness_unknown_reason` says why.
+   */
+  missed_working_days: number | null
+  /**
+   * Why `missed_working_days` is null; null when it IS a measurement.
+   * `unreadable` — the stream-status view could not be read (**the failure that blinded
+   * the freshness watch for two weeks**: no `service_role` SELECT grant → 42501 on every
+   * call). `unregistered` — the view read fine and has no row for this stream (a registry
+   * gap). `not_computable` — the row exists but the stream has never reported, so there is
+   * no baseline to count working days from. Different next actions, so different words.
+   */
+  lateness_unknown_reason: 'unreadable' | 'unregistered' | 'not_computable' | null
+  /** True when this stream reports a day behind by design (wording only). */
+  reports_next_day: boolean
+  /** The run's Asia/Manila calendar date — what "today" means at the plant. */
+  as_of: string
+}
+
 export interface ApplyResult {
   report_type: string
   ok: boolean
@@ -462,6 +537,10 @@ export interface ApplyResult {
    *  read it as `apply?.awaiting_batch_assignment ?? []` (see
    *  `collectAwaitingBatchAssignments`). Only the `deliveries` report ever fills it. */
   awaiting_batch_assignment?: AwaitingBatchAssignment[]
+  /** Set ONLY when this report's source file never arrived (L-044). Absent on every
+   *  ordinary run, so the KEY'S PRESENCE is the fact — never an array with a length to
+   *  check. Read it via `collectReportsNotReceived`. */
+  report_not_received?: ReportNotReceived
 }
 
 // ============================================================
@@ -868,6 +947,25 @@ export interface StaleStream {
  * Never a ₱/cost field. `contains_prices` is a claim ABOUT the workbook (see the
  * `sync_run_reports.contains_prices` column comment), not a price.
  */
+/**
+ * The freshness watch could not RUN (2026-08-18, L-044) — app-side MIRROR of the worker's
+ * `reconcile/rcOutStage.ts::StaleStreamCheck`.
+ *
+ * PRESENT ONLY ON FAILURE, so its mere presence is the fact and a healthy run's shape is
+ * unchanged. It exists because `stale_streams: []` cannot distinguish "nothing is late"
+ * from "I could not look" — and for two weeks it silently meant the second: the worker's
+ * service role had no SELECT grant on `view_digest_stream_status`, every read returned
+ * 42501, and a bare `catch { return [] }` reported that as "Every report stream is up to
+ * date." `stale_streams` is absent from every run in `sync_runs`; the watch built on
+ * 2026-08-04 had never fired once. Never a ₱/cost field.
+ */
+export interface StaleStreamCheck {
+  /** Only ever `false` — a successful check is represented by this member being absent. */
+  ok: boolean
+  /** Why the read failed, in the DB's own words. */
+  error: string | null
+}
+
 export interface ReportArtifact {
   ok: boolean
   /** Storage bucket + object path, absent exactly when ok is false. */
@@ -905,6 +1003,8 @@ export interface ReconciliationChannel {
    * identical to a quiet day, which is how RC OUT went 5 days stale in July 2026.
    */
   stale_streams?: StaleStream[]
+  /** Set ONLY when the freshness watch could not run — see `StaleStreamCheck`. */
+  stale_stream_check?: StaleStreamCheck
   /**
    * The Excel report generated for this run (2026-08-07). A pointer, always written; a
    * FINDING only when `ok` is false.
