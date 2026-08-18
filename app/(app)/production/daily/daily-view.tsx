@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { DailyLedgerGrid } from './daily-ledger-grid';
+import { DailyGridV2 } from './daily-grid-v2';
 import { DailyCardsMobile } from './daily-cards-mobile';
 import type {
     ProductionShiftRow,
@@ -20,6 +21,13 @@ interface DailyViewProps {
     dataBatch: string | null;
     loading: boolean;
     onRefresh: () => Promise<void>;
+    /**
+     * `?grid=v2` — render the READ-ONLY Blackwood Table rewire instead of the live ledger.
+     * The switch lives here rather than in the lazy tab so the phone card list below is
+     * untouched by it: v2 is the desktop grid only, and `DailyCardsMobile` keeps serving
+     * the phone on both sides. See `app/(app)/production/(tabs)/page.tsx`.
+     */
+    v2?: boolean;
 }
 
 export function DailyView({
@@ -30,6 +38,7 @@ export function DailyView({
     dataYear,
     dataBatch,
     onRefresh,
+    v2 = false,
 }: DailyViewProps) {
     return (
         <div className="flex flex-col gap-0 min-h-0 flex-1">
@@ -40,14 +49,24 @@ export function DailyView({
             <div className="min-w-0 flex-1 min-h-0">
                 {/* Tablet / desktop — the dense inline-editable ledger (unchanged). */}
                 <div className="hidden sm:block">
-                    <DailyLedgerGrid
-                        key={`${dataYear ?? 'all'}-${dataBatch ?? 'all'}`}
-                        initialShifts={shifts}
-                        initialRuns={runs}
-                        initialDowntime={downtime}
-                        initialWaste={waste}
-                        onSaveSuccess={onRefresh}
-                    />
+                    {v2 ? (
+                        <DailyGridV2
+                            key={`v2-${dataYear ?? 'all'}-${dataBatch ?? 'all'}`}
+                            initialShifts={shifts}
+                            initialRuns={runs}
+                            initialDowntime={downtime}
+                            initialWaste={waste}
+                        />
+                    ) : (
+                        <DailyLedgerGrid
+                            key={`${dataYear ?? 'all'}-${dataBatch ?? 'all'}`}
+                            initialShifts={shifts}
+                            initialRuns={runs}
+                            initialDowntime={downtime}
+                            initialWaste={waste}
+                            onSaveSuccess={onRefresh}
+                        />
+                    )}
                 </div>
                 {/* Phone — read-only card list + section-grouped detail sheet. */}
                 <div className="h-[72dvh] sm:hidden">

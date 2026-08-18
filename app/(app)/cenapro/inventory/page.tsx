@@ -4,6 +4,9 @@ import {
     fetchOpeningBalanceHistory,
 } from './actions';
 import { FlecInventoryClient } from './flec-inventory-client';
+import { FlecInventoryGridV2 } from './flec-inventory-grid-v2';
+import { GridVersionBar } from '@/components/shared/table';
+import { GRID_V2, parseGrid } from '@/lib/table';
 import {
     FLEC_WAREHOUSES,
     DEFAULT_FLEC_WAREHOUSE,
@@ -25,7 +28,7 @@ function isIsoDate(v: string | undefined): v is string {
 export default async function CenaproInventoryPage({
     searchParams,
 }: {
-    searchParams: Promise<{ whse?: string; date?: string }>;
+    searchParams: Promise<{ whse?: string; date?: string; grid?: string }>;
 }) {
     const params = await searchParams;
 
@@ -46,15 +49,32 @@ export default async function CenaproInventoryPage({
         fetchOpeningBalanceHistory(warehouse),
     ]);
 
+    // ── WHICH GRID (`?grid=v2`) ──────────────────────────────────────────────────
+    // `FlecInventoryGridV2` is this same screen rendered through `BlackwoodTable`,
+    // built BESIDE the existing client rather than replacing it. The DEFAULT is
+    // unchanged: no `?grid=v2` means byte-identical behaviour to before it existed.
+    // ONE props object is built and spread into whichever component the flag picks,
+    // so the two sides provably read the identical payload.
+    const v2 = parseGrid(params.grid) === GRID_V2;
+
+    const gridProps = {
+        warehouse,
+        startDate,
+        balances: inventory.balances ?? [],
+        ledger: inventory.ledger ?? [],
+        openings: openings.openings ?? [],
+        history: history.history ?? [],
+        loadError: inventory.error ?? openings.error ?? history.error ?? null,
+    };
+
     return (
-        <FlecInventoryClient
-            warehouse={warehouse}
-            startDate={startDate}
-            balances={inventory.balances ?? []}
-            ledger={inventory.ledger ?? []}
-            openings={openings.openings ?? []}
-            history={history.history ?? []}
-            loadError={inventory.error ?? openings.error ?? history.error ?? null}
-        />
+        <>
+            <GridVersionBar note="Same rows, same warehouse and date — this switches only which table renders them." />
+            {v2 ? (
+                <FlecInventoryGridV2 {...gridProps} />
+            ) : (
+                <FlecInventoryClient {...gridProps} />
+            )}
+        </>
     );
 }

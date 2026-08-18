@@ -58,6 +58,21 @@
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import type { Database } from '@/types/supabase';
+// The PLATFORM table core. This module is the first consumer of it: everything generic
+// that used to live in this file — the geometry, the clipboard exchange, the dirty rules,
+// the draft-row constants — is now `lib/table/`, and what remains here is the DOMAIN
+// half. See `.agents/prompts/universal-table-module.md`.
+import {
+    pinnedOffsets,
+    pinnedWidth,
+    dragAutoScrollDelta as platformDragAutoScrollDelta,
+    countUnsavedWork as platformCountUnsavedWork,
+    describeUnsavedWork as platformDescribeUnsavedWork,
+} from '@/lib/table';
+import type {
+    DragScrollInput as PlatformDragScrollInput,
+    SummaryLane,
+} from '@/lib/table';
 import type { DeliverySettlementRow } from '../liquidation/types';
 import {
     formulaCellText,
@@ -258,8 +273,14 @@ export interface DeliveryCol {
     title?: string;
     /** Right-aligned + `font-mono tabular-nums`. */
     numeric?: boolean;
-    /** Part of the frozen identity block (`# · DATE · TRK# · SUPPLIER`). */
-    frozen?: boolean;
+    /**
+     * Part of the pinned identity block (`# · DATE · TRK# · SUPPLIER`).
+     * `pin` is the platform spelling — see `lib/table/geometry.ts`; it replaced a
+     * `frozen: boolean` that could only ever describe a PREFIX.
+     */
+    pin?: 'start' | 'end';
+    /** Which lane this column occupies in a summary row (`Σ DAY TOTAL`, month footer). */
+    summaryLane?: SummaryLane;
     /** The field this column edits — `null` makes it unaddressable by the keyboard. */
     field: DeliveryField | null;
     /** How this column filters. Absent ⇒ the header offers no filter control. */
@@ -269,12 +290,12 @@ export interface DeliveryCol {
 }
 
 const BASE_COLS: DeliveryCol[] = [
-    { key: 'num', label: '#', width: 44, title: 'Row number in view', frozen: true, field: null },
+    { key: 'num', label: '#', width: 44, title: 'Row number in view', pin: 'start', field: null },
     {
         key: 'date',
         label: 'DATE',
         width: 92,
-        frozen: true,
+        pin: 'start',
         field: 'delivery_date',
         filterKind: 'dateRange',
         filterColumn: 'delivery_date',
@@ -284,7 +305,7 @@ const BASE_COLS: DeliveryCol[] = [
         label: 'TRK#',
         width: 78,
         title: 'Truck plate / number',
-        frozen: true,
+        pin: 'start',
         field: 'truck_no',
         filterKind: 'text',
         filterColumn: 'truck_no',
@@ -294,7 +315,7 @@ const BASE_COLS: DeliveryCol[] = [
         label: 'SUPPLIER',
         width: 210,
         title: 'Trader − origin, plus the PSAU permit when the load carries one',
-        frozen: true,
+        pin: 'start',
         field: 'supplier',
         filterKind: 'set',
         filterColumn: 'supplier_code',
@@ -307,6 +328,9 @@ const BASE_COLS: DeliveryCol[] = [
         title: 'Net weight (kg). Type arithmetic: =27045*88% stores the 27,045 kg scale reading and the 12% deduction',
         numeric: true,
         field: 'wt',
+        // The headline figure of a `Σ DAY TOTAL` / month-footer row. Replaces the
+        // hard-coded `key === 'wt'` lookup `summarySpans` used to do.
+        summaryLane: 'figure',
     },
     { key: 'bd', label: 'BD', width: 68, title: 'Bulk density', numeric: true, field: 'bd', filterKind: 'range', filterColumn: 'bd' },
     { key: 'moist', label: 'MOIST', width: 72, title: 'Moisture % — the official reading for the receipt', numeric: true, field: 'moisture_pct', filterKind: 'range', filterColumn: 'moisture_pct' },
@@ -336,6 +360,7 @@ const PRICE_COLS: DeliveryCol[] = [
         title: 'Net weight × ₱/kg — a DB-generated column. Read-only here, and never computed in the browser.',
         numeric: true,
         field: null,
+        summaryLane: 'total',
     },
     // ── SETTLEMENT (liquidation Step 4) ──────────────────────────────────────────
     //
@@ -369,241 +394,48 @@ export function buildColumns(canViewPrices: boolean): DeliveryCol[] {
     return canViewPrices ? [...BASE_COLS, ...PRICE_COLS] : [...BASE_COLS];
 }
 
-/** Cumulative `left` offsets for the frozen identity block, in column order. */
+// ═══ Geometry — now the PLATFORM's, re-exported under this module's names ═══════
+//
+// These were defined here until 2026-08-17 and are now `lib/table/geometry.ts`, where
+// they are generalised in one respect: a pinned column is `pin: 'start' | 'end'` rather
+// than a `frozen: boolean` that could only describe a PREFIX. The reasoning, the comments
+// and the assertions moved with them.
+//
+// The aliases below keep this module's existing vocabulary (`frozen…`) so the grid, the
+// server page and the 120-assertion verify script are untouched by the move. They are
+// DELETED when the ledger itself moves onto the module — they exist to make the
+// extraction a no-op, not to be a permanent second naming.
+
+export {
+    columnOffsets,
+    minTableWidth,
+    columnScrollLeft,
+    summarySpans,
+    DRAG_EDGE_PX,
+    DRAG_STEP_PX,
+} from '@/lib/table';
+export type { ColumnScrollInput, SummarySpans } from '@/lib/table';
+
+/** Cumulative `left` offsets for the pinned identity block, in column order. */
 export function frozenOffsets(cols: DeliveryCol[]): number[] {
-    const out: number[] = [];
-    let x = 0;
-    for (const c of cols) {
-        if (!c.frozen) break;
-        out.push(x);
-        x += c.width;
-    }
-    return out;
+    return pinnedOffsets(cols);
 }
 
-export function minTableWidth(cols: DeliveryCol[]): number {
-    return cols.reduce((sum, c) => sum + c.width, 0);
-}
-
-/** Cumulative `left` offset of EVERY column, index-aligned with `cols`. */
-export function columnOffsets(cols: DeliveryCol[]): number[] {
-    const out: number[] = [];
-    let x = 0;
-    for (const c of cols) {
-        out.push(x);
-        x += c.width;
-    }
-    return out;
-}
-
-/**
- * Total width of the pinned identity block — the strip of the scrollport that a
- * scrolling column is hidden UNDERNEATH rather than merely scrolled past. Same walk as
- * `frozenOffsets` (stop at the first non-frozen column), so the two can never disagree
- * about where the frozen block ends.
- */
+/** Total width of the pinned identity block. */
 export function frozenBlockWidth(cols: DeliveryCol[]): number {
-    let x = 0;
-    for (const c of cols) {
-        if (!c.frozen) break;
-        x += c.width;
-    }
-    return x;
+    return pinnedWidth(cols, 'start');
 }
 
-export interface ColumnScrollInput {
-    /** Index of the column the caret has just moved to. */
-    col: number;
-    cols: DeliveryCol[];
-    /** The scroller's current horizontal offset. */
-    scrollLeft: number;
-    /** The scroller's visible width. */
-    clientWidth: number;
-    /** The scroller's full scrollable width. */
-    scrollWidth: number;
-}
-
-/**
- * The horizontal offset that brings `col` into view, or **null when nothing is owed** —
- * which is the whole point: Tab must never move the sheet a pixel it does not have to.
- *
- * Two things this has to get right that a bare `scrollIntoView` does not:
- *
- *   • **The frozen block.** `# · DATE · TRK# · SUPPLIER` are pinned over the first 424px
- *     of the scrollport, so the window a scrolling column is actually visible in starts
- *     at `scrollLeft + frozenBlockWidth`, not at `scrollLeft`. Scrolling a target to its
- *     own `left` would park it UNDERNEATH the pinned columns, which reads as "Tab went
- *     somewhere invisible".
- *   • **Minimum nudge.** A column already fully inside that window returns null, so a
- *     purely VERTICAL move never shifts the sheet sideways — and a frozen column, which
- *     is visible at every offset, returns null always.
- */
-export function columnScrollLeft(input: ColumnScrollInput): number | null {
-    const { col, cols, scrollLeft, clientWidth, scrollWidth } = input;
-    const c = cols[col];
-    if (!c || c.frozen) return null;
-
-    // Nothing overflows ⇒ nothing to scroll. This is also the branch that keeps the
-    // maths honest: `table-fixed` + `width:100%` stretches the columns past their
-    // declared widths ONLY when there is no overflow, so the declared widths below are
-    // exact in precisely the case where they are consulted.
-    const maxScroll = Math.max(0, scrollWidth - clientWidth);
-    if (maxScroll <= 0) return null;
-
-    const left = columnOffsets(cols)[col];
-    const right = left + c.width;
-    const frozen = frozenBlockWidth(cols);
-
-    let next: number;
-    if (left < scrollLeft + frozen) next = left - frozen;
-    else if (right > scrollLeft + clientWidth) next = right - clientWidth;
-    else return null;
-
-    next = Math.max(0, Math.min(next, maxScroll));
-    return next === scrollLeft ? null : next;
-}
-
-// ═══ Drag auto-scroll — where the pointer must be for the sheet to follow ═══════
-//
-// Click-dragging a selection to the edge of the scrollport has to scroll it, and the two
-// things that make this grid's version different from the platform hook's are the same
-// two the caret-follow had to solve:
-//
-//   • **The scroller is a different element in each scope.** `focus` renders a plain
-//     table inside a wrapper the ledger owns; `endless` renders through virtuoso, whose
-//     scroller is virtuoso's own div. `useCellSelection` takes ONE ref object and was
-//     handed the focus wrapper, which is NULL under endless — so its auto-scroll bailed
-//     on the first frame and a drag to the edge did nothing there at all. The ledger
-//     drives this itself off `scrollerEl()`, which already answers "which element
-//     scrolls in this scope".
-//   • **The frozen block is a WALL, not a scroll position.** `# · DATE · TRK# ·
-//     SUPPLIER` are pinned over the first 424px of the scrollport, so a pointer at
-//     `rect.left + 100` is not near the left edge of anything — it is sitting ON the
-//     pinned columns, with the scrolling cells hidden underneath. The left trigger is
-//     therefore measured from the INNER edge of that block, exactly as
-//     `columnScrollLeft` measures its visible window from `scrollLeft + frozen`. Without
-//     it a drag can never reach the cells parked under the pinned columns.
-//
-// Both deltas are zeroed at their wall, so the loop cannot grind against a scroller with
-// nowhere left to go — and a table that fits its scrollport never scrolls sideways.
-
-/** How close to an edge the pointer has to get. Matches the platform hook's feel. */
-export const DRAG_EDGE_PX = 40;
-/** Pixels per animation frame. Applied by assignment — never a smooth scroll. */
-export const DRAG_STEP_PX = 5;
-
-export interface DragScrollInput {
-    /** The pointer, in viewport coordinates. */
-    pointer: { x: number; y: number };
-    /** The scroller's own viewport rect. */
-    rect: { top: number; bottom: number; left: number; right: number };
+/** The drag auto-scroll's input, with this module's `frozen` spelling for the pinned block. */
+export interface DragScrollInput extends Omit<PlatformDragScrollInput, 'pinnedStart' | 'pinnedEnd'> {
     /** Width of the pinned identity block — `frozenBlockWidth(cols)`. */
     frozen: number;
-    scrollTop: number;
-    scrollLeft: number;
-    maxScrollTop: number;
-    maxScrollLeft: number;
 }
 
-/**
- * The per-frame scroll delta a drag owes, or `{0,0}` when it owes nothing — the drag
- * counterpart of `columnScrollLeft` returning null.
- */
+/** The per-frame scroll delta a drag owes, or `{0,0}` when it owes nothing. */
 export function dragAutoScrollDelta(input: DragScrollInput): { dx: number; dy: number } {
-    const { pointer, rect, frozen, scrollTop, scrollLeft, maxScrollTop, maxScrollLeft } = input;
-
-    let dy = 0;
-    if (pointer.y < rect.top + DRAG_EDGE_PX) dy = -DRAG_STEP_PX;
-    else if (pointer.y > rect.bottom - DRAG_EDGE_PX) dy = DRAG_STEP_PX;
-
-    // The left band starts where the PINNED columns end, not where the scrollport does.
-    let dx = 0;
-    if (pointer.x < rect.left + frozen + DRAG_EDGE_PX) dx = -DRAG_STEP_PX;
-    else if (pointer.x > rect.right - DRAG_EDGE_PX) dx = DRAG_STEP_PX;
-
-    if (dy < 0 && scrollTop <= 0) dy = 0;
-    if (dy > 0 && scrollTop >= maxScrollTop) dy = 0;
-    if (dx < 0 && scrollLeft <= 0) dx = 0;
-    if (dx > 0 && scrollLeft >= maxScrollLeft) dx = 0;
-
-    return { dx, dy };
-}
-
-// ═══ Summary-row spans — read off the column table, never counted ═══════════════
-//
-// The `Σ DAY TOTAL` rule-off and the sticky month footer are ordinary `<tr>`s that have
-// to TILE the same column table the data rows do, with each figure landing on its own
-// column. They used to derive their `colSpan`s arithmetically (`spanAll - 7`,
-// `cols.length - frozenCount - 3`, a literal `colSpan={5}`), with a `canViewPrices`
-// ternary standing in for "is TTL PRICE there". That was correct for both gating states
-// and wrong the moment anyone touched the column table: the constants encode WHERE `wt`
-// and `ttl` sit, and nothing tells you so.
-//
-// `buildColumns()` already produces two different shapes in production (the two ₱
-// columns are ABSENT for a gated viewer), so this is not a hypothetical second shape —
-// it is a live one, and a third is one product request away.
-//
-// So the spans are derived from the columns themselves: the label lane is everything
-// LEFT of `wt`, the note lane is everything BETWEEN `wt` and `ttl`, and the ₱ cell exists
-// exactly when the `ttl` column does. Insert a column anywhere and the lane containing it
-// widens by one on its own; gate the prices and the ₱ lane disappears with its column.
-//
-// The corner span is `frozenOffsets(cols).length` rather than a count of `frozen: true`
-// columns, so the footer's bottom-left corner and the frozen `left` offsets can never
-// disagree about where the pinned block ends — the corner overhanging into scrolling
-// territory is precisely the frozen-pane failure the project rule warns about.
-
-export interface SummarySpans {
-    /** `# … SKS` — the `Σ DAY TOTAL` label lane, everything left of WT. */
-    label: number;
-    /** Exactly the pinned identity block — the month footer's bottom-left corner. */
-    frozen: number;
-    /** The footer's gap between that corner and the weight figure (`SKS` today). */
-    spacer: number;
-    /** The WT column, where the net-kg figure sits. */
-    weight: number;
-    /** WT → TTL PRICE, exclusive: the "includes … from duplicates" lane. */
-    note: number;
-    /** TTL PRICE, or **0** when prices are gated and the column is absent. */
-    total: number;
-    /**
-     * Anything to the RIGHT of TTL PRICE — 0 today, and rendered as an empty filler cell
-     * so that a column appended at the far end is COVERED rather than leaving the summary
-     * rows one column short of the data rows. This lane is the difference between "tiles
-     * for the two shapes that exist" and "tiles, full stop".
-     */
-    trailing: number;
-}
-
-/**
- * Where each figure in a summary row sits, given the column table actually rendered.
- *
- * Both forms tile exactly: `label + weight + note + total + trailing` and
- * `frozen + spacer + weight + note + total + trailing` each equal `cols.length`, for ANY
- * column table. A span of 0 means the segment has no column and its cell must not be
- * rendered at all — `colSpan={0}` is "to the end of the column group" in HTML, which is
- * the opposite of nothing.
- */
-export function summarySpans(cols: DeliveryCol[]): SummarySpans {
-    const frozen = frozenOffsets(cols).length;
-    const totalIdx = cols.findIndex((c) => c.key === 'ttl');
-    const noteEnd = totalIdx >= 0 ? totalIdx : cols.length;
-
-    // A column table with no WT degenerates cleanly rather than throwing on a render
-    // path: the label lane simply swallows the whole row.
-    const wtIdx = cols.findIndex((c) => c.key === 'wt');
-    const hasWeight = wtIdx >= 0 && wtIdx < noteEnd;
-    const label = hasWeight ? wtIdx : noteEnd;
-
-    return {
-        label,
-        frozen,
-        spacer: Math.max(0, label - frozen),
-        weight: hasWeight ? 1 : 0,
-        note: Math.max(0, noteEnd - label - (hasWeight ? 1 : 0)),
-        total: totalIdx >= 0 ? 1 : 0,
-        trailing: totalIdx >= 0 ? cols.length - totalIdx - 1 : 0,
-    };
+    const { frozen, ...rest } = input;
+    return platformDragAutoScrollDelta({ ...rest, pinnedStart: frozen });
 }
 
 /** Visual row height (Excel Standard `h-8`). */
@@ -1113,84 +945,11 @@ export function parseDeliveryDate(
 //      `₱39.50`, so a numeric column strips formatting on the way in — and only a
 //      numeric column, because a supplier origin may legitimately contain a comma.
 
-/**
- * Split a clipboard payload into a rectangle of cell texts.
- *
- * Tab between columns, newline between rows — plus the quoting convention Sheets and
- * Excel use, so a cell holding a tab or a line break survives the round trip. A doubled
- * `""` inside a quoted cell is one literal quote.
- *
- * TRAILING blank rows are dropped (Sheets ends its payload with a newline; that is not
- * an extra row). A blank row in the MIDDLE is kept — pasting a blank cell over a value
- * clears it, which is what Excel does and what this grid's paste already did.
- */
-export function parseClipboardTable(text: string): string[][] {
-    const rows: string[][] = [];
-    let row: string[] = [];
-    let cell = '';
-    let quoted = false;
-
-    for (let i = 0; i < text.length; i++) {
-        const ch = text[i];
-
-        if (quoted) {
-            if (ch === '"') {
-                if (text[i + 1] === '"') {
-                    cell += '"';
-                    i++;
-                } else {
-                    quoted = false;
-                }
-            } else {
-                cell += ch;
-            }
-            continue;
-        }
-
-        if (ch === '"' && cell === '') {
-            quoted = true;
-        } else if (ch === '\t') {
-            row.push(cell);
-            cell = '';
-        } else if (ch === '\n' || ch === '\r') {
-            // CRLF is ONE row break, not two.
-            if (ch === '\r' && text[i + 1] === '\n') i++;
-            row.push(cell);
-            rows.push(row);
-            row = [];
-            cell = '';
-        } else {
-            cell += ch;
-        }
-    }
-    row.push(cell);
-    rows.push(row);
-
-    while (rows.length > 0 && rows[rows.length - 1].every((c) => c === '')) rows.pop();
-    return rows;
-}
-
-/** The mirror of `parseClipboardTable`: quote a cell that would otherwise break the grid. */
-export function tsvEscape(value: string): string {
-    return /[\t\n\r"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
-/**
- * A number the way a spreadsheet wants it: digits, a decimal point, nothing else.
- *
- * PostgREST hands `numeric` back as a STRING, and that string is the database's exact
- * decimal. When it already looks like a plain number it is emitted verbatim — no
- * `Number()` round trip, so `total_price_php` reaches the clipboard as the ledger holds
- * it rather than as the nearest float.
- */
-export function clipboardNumber(v: number | string | null | undefined): string {
-    if (v === null || v === undefined || v === '') return '';
-    if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
-    const t = v.trim();
-    if (/^-?\d+(\.\d+)?$/.test(t)) return t;
-    const n = num(t);
-    return n === null ? '' : String(n);
-}
+// The TSV reader/writer moved to `lib/table/clipboard.ts` on 2026-08-17 — comments and
+// reasoning included. `cleanPastedCell` below stays HERE: it is the one piece of the
+// exchange that is domain-shaped, because it knows which column holds a date and which
+// holds free text.
+export { parseClipboardTable, tsvEscape, clipboardNumber } from '@/lib/table';
 
 /**
  * Clean ONE pasted cell for its target column.
@@ -1211,174 +970,27 @@ export function cleanPastedCell(col: DeliveryCol, raw: string, contextYear: numb
     return col.numeric ? stripNumericFormatting(text) : text;
 }
 
-/** What a paste of a given shape, dropped at a given anchor, can actually land on. */
-export interface PastePlanInput {
-    /** The anchor cell — the block's top-left corner. */
-    startRow: number;
-    startCol: number;
-    /** The clipboard block's shape. */
-    blockRows: number;
-    blockCols: number;
-    /** The grid as it stands. */
-    navRowCount: number;
-    colCount: number;
-    /** Are blank draft rows on screen at all? (A lens/search view has none.) */
-    canCreateRows: boolean;
-    /** Defensive ceiling on one gesture — `MAX_DRAFT_ADD`. */
-    maxNewRows: number;
-}
-
-export interface PastePlan {
-    /** How many blank rows to append so the block fits. */
-    newRows: number;
-    /** Block rows that land nowhere and will NOT be written. */
-    droppedRows: number;
-    /** Block columns that fall past the last column of the sheet. */
-    droppedCols: number;
-}
-
-/**
- * Where a pasted block goes — the arithmetic, on its own, so it can be asserted.
- *
- * The rule this exists to express: **a block taller than the rows available CREATES the
- * rows it needs.** The old adapter looped `r < Math.min(block.length, navRows.length)`,
- * so pasting a 30-row slip into a sheet showing 20 blank rows wrote 20 and threw 10 away
- * without a word. Blank rows only exist where a blank row MEANS something (never under a
- * lens or a search), so when they are absent the overflow is reported rather than
- * invented — `droppedRows` is what the operator is told about.
- */
-export function planPaste(input: PastePlanInput): PastePlan {
-    const needed = Math.max(0, input.startRow + input.blockRows - input.navRowCount);
-    const newRows = input.canCreateRows ? Math.min(needed, Math.max(0, input.maxNewRows)) : 0;
-    const lastTargetCol = input.startCol + input.blockCols - 1;
-    return {
-        newRows,
-        droppedRows: needed - newRows,
-        droppedCols: Math.max(0, lastTargetCol - (input.colCount - 1)),
-    };
-}
-
-// ═══ WHICH rows a pasted block lands on ═════════════════════════════════════════
-//
-// `planPaste` answers "how many rows does this block need"; this answers "which rows
-// are they". They are different questions the moment the sheet holds more than one
-// ROW FAMILY, and this one was never asked: the paste mapped block row `r` to nav row
-// `anchor.row + r`, straight through any moisture draws sitting under a receipt. A
-// 5-row receipt block pasted onto a receipt with 2 draws therefore wrote rows 1–2
-// into the DRAWS — and only their seven lab lanes, because the other columns failed
-// the per-cell `addressable` test and were dropped in silence — then carried on into
-// the following receipts, and toasted "Pasted 5 rows". Wrong data in real receipts,
-// reported as success.
-//
-// The rule: **a block lands on rows of the anchor's own family, stepping over the
-// rest.** This is also the seed of the universal table module's `occupies()` row
-// model, which asks the same question per CELL.
-
-/** The row families a paste can land on. Mirrors the ledger's `NavRow['kind']`. */
-export type PasteRowKind = 'delivery' | 'sample' | 'draft';
-
-/**
- * May a block anchored on `anchor` write to a row of kind `row`?
- *
- * A moisture draw is not a small receipt — it has no date, truck, weight, warehouse
- * or price — so a block anchored on a draw fills draws only. In the other direction a
- * receipt block flowing off the last receipt into the blank rows at the bottom is how
- * a pasted slip BECOMES new receipts, which is existing, wanted behaviour: `delivery`
- * and `draft` are one family for this purpose.
- */
-export function pasteKindsCompatible(anchor: PasteRowKind, row: PasteRowKind): boolean {
-    if (anchor === 'sample') return row === 'sample';
-    return row === 'delivery' || row === 'draft';
-}
-
-export interface PasteRowTargetsInput {
-    /** Every nav row's kind, in nav order. */
-    kinds: readonly PasteRowKind[];
-    /** The nav row the paste is anchored on. */
-    anchorRow: number;
-    /** How many rows the clipboard block has. */
-    blockRows: number;
-}
-
-export interface PasteRowTargets {
-    /**
-     * Nav row indices the block's rows land on, in block order. SHORTER than
-     * `blockRows` when the block outruns the sheet — the remainder is the overflow
-     * `planPaste` turns into new rows or reports as dropped.
-     */
-    targets: number[];
-    /** Rows of another family stepped over inside the span actually used. */
-    skipped: number;
-}
-
-/**
- * Resolve the nav rows a pasted block occupies, skipping rows of another family.
- *
- * Feed `targets.length` to `planPaste` as its `navRowCount` (with `startRow: 0`) and
- * its row arithmetic — `needed = startRow + blockRows - navRowCount` — becomes exactly
- * the overflow, while its column arithmetic is untouched.
- *
- * When no foreign rows are in the way this is byte-identical to the old positional
- * mapping: `targets` is `[anchorRow, anchorRow+1, …]` and `skipped` is 0.
- */
-export function pasteRowTargets(input: PasteRowTargetsInput): PasteRowTargets {
-    const { kinds, anchorRow, blockRows } = input;
-    const targets: number[] = [];
-    if (blockRows <= 0 || anchorRow < 0 || anchorRow >= kinds.length) {
-        return { targets, skipped: 0 };
-    }
-    const anchorKind = kinds[anchorRow];
-    let skipped = 0;
-    // A foreign row only counts as STEPPED OVER once a later row is actually landed on.
-    // Held back until then, because a run of foreign rows at the point the block (or the
-    // sheet) runs out was not stepped over by anything — reporting it as skipped would
-    // double-count the overflow `planPaste` already reports as dropped rows.
-    let pending = 0;
-    for (let r = anchorRow; r < kinds.length && targets.length < blockRows; r++) {
-        if (pasteKindsCompatible(anchorKind, kinds[r])) {
-            targets.push(r);
-            skipped += pending;
-            pending = 0;
-        } else {
-            pending++;
-        }
-    }
-    return { targets, skipped };
-}
+// The paste PLAN (how many rows a block needs) and the paste TARGETS (which rows it
+// lands on, by row family) moved to `lib/table/clipboard.ts` on 2026-08-17, together
+// with the new `tilePaste` — the Sheets habit where one copied value fills a whole
+// selected range.
+export { planPaste, pasteKindsCompatible, pasteRowTargets, tilePaste } from '@/lib/table';
+export type {
+    PastePlanInput,
+    PastePlan,
+    PasteRowKind,
+    PasteRowTargetsInput,
+    PasteRowTargets,
+} from '@/lib/table';
 
 // ═══ Unsaved cell text, and when it stops being unsaved ═════════════════════════
 
 /** Per-receipt unsaved field edits, held as the raw text the operator typed. */
 export type FieldEdits = Partial<Record<DeliveryField, string>>;
 
-/**
- * Apply one cell's new text to a row's edit map — and DROP the field when the text is
- * back to what the database already holds.
- *
- * This is the whole of item 5. `useGridEditSession.revertChanges` cancels an Escape by
- * calling `setValue` with the pre-edit snapshot, which is a perfectly correct VALUE and
- * a perfectly wrong DIRTY STATE: the field stayed present in the map, so the row stayed
- * in `dirtyIds`, the unsaved-count chip kept counting it and Save stayed enabled with
- * nothing to write. Removing the key here fixes Escape as a special case of the general
- * rule — a cell typed back to its stored value is not an edit, however it got there.
- */
-export function mergeFieldEdit(
-    current: FieldEdits | undefined,
-    field: DeliveryField,
-    value: string,
-    canonical: string,
-): FieldEdits {
-    const next: FieldEdits = { ...(current ?? {}) };
-    if (value === canonical) delete next[field];
-    else next[field] = value;
-    return next;
-}
-
-/** Does this edit map hold anything worth saving? Whitespace alone does not count. */
-export function isDirtyFieldEdits(edits: FieldEdits | undefined): boolean {
-    if (!edits) return false;
-    return Object.values(edits).some((v) => (v ?? '').trim() !== '');
-}
+// Both moved to `lib/table/edits.ts` on 2026-08-17 — the "an edit that undoes itself is
+// not an edit" rule, comments and all. They are the module's ONE definition of dirty.
+export { mergeFieldEdit, isDirtyFieldEdits } from '@/lib/table';
 
 // ═══ Unsaved work — what an axis change is about to destroy ═════════════════════
 //
@@ -1400,6 +1012,11 @@ export function isDirtyFieldEdits(edits: FieldEdits | undefined): boolean {
 // receipt still exists in the database with its old values; a typed blank row exists
 // nowhere at all, and eight of them is a morning's work.
 
+// The counting moved to `lib/table/edits.ts`. These three are thin ADAPTERS that keep
+// this module's vocabulary — a stored row here is a "receipt", and the guard dialog says
+// so. The platform version takes the nouns as a parameter precisely so each consumer can
+// name its own rows without a second copy of the counting.
+
 export interface UnsavedWork {
     /** Stored receipts carrying unsaved cell edits or moisture-draw changes. */
     editedReceipts: number;
@@ -1413,11 +1030,8 @@ export function countUnsavedWork(
     dirtyReceipts: ReadonlySet<string>,
     dirtyDrafts: ReadonlySet<string>,
 ): UnsavedWork {
-    return {
-        editedReceipts: dirtyReceipts.size,
-        newRows: dirtyDrafts.size,
-        total: dirtyReceipts.size + dirtyDrafts.size,
-    };
+    const work = platformCountUnsavedWork(dirtyReceipts, dirtyDrafts);
+    return { editedReceipts: work.editedRecords, newRows: work.newRows, total: work.total };
 }
 
 /** True exactly when the Save button is enabled. The guard's whole firing condition. */
@@ -1425,21 +1039,12 @@ export function hasUnsavedWork(work: UnsavedWork): boolean {
     return work.total > 0;
 }
 
-/**
- * The phrase the guard dialog names the stakes with. Both kinds when both exist, and
- * never a kind that is zero — "0 typed new rows" reads as a machine talking to itself
- * and buries the number that matters.
- */
+/** The phrase the guard dialog names the stakes with. */
 export function describeUnsavedWork(work: UnsavedWork): string {
-    const parts: string[] = [];
-    if (work.editedReceipts > 0) {
-        parts.push(`${work.editedReceipts} edited receipt${work.editedReceipts === 1 ? '' : 's'}`);
-    }
-    if (work.newRows > 0) {
-        parts.push(`${work.newRows} typed new row${work.newRows === 1 ? '' : 's'}`);
-    }
-    if (parts.length === 0) return 'nothing unsaved';
-    return parts.join(' and ');
+    return platformDescribeUnsavedWork(
+        { editedRecords: work.editedReceipts, newRows: work.newRows, total: work.total },
+        { record: 'edited receipt', draft: 'typed new row' },
+    );
 }
 
 // ═══ Draft receipts (the blank rows at the bottom) ══════════════════════════════
@@ -1452,15 +1057,7 @@ export function describeUnsavedWork(work: UnsavedWork): string {
 //
 // A draft the operator never touches is not saved and is not counted as unsaved.
 
-export const DEFAULT_DRAFT_ROWS = 20;
-/** Defensive ceiling on one "add more rows" click — 20 blank rows is the point. */
-export const MAX_DRAFT_ADD = 500;
-
-export function clampDraftAdd(raw: string): number {
-    const n = Number.parseInt(raw.trim(), 10);
-    if (!Number.isFinite(n) || n < 1) return 1;
-    return Math.min(n, MAX_DRAFT_ADD);
-}
+export { DEFAULT_DRAFT_ROWS, MAX_DRAFT_ADD, clampDraftAdd } from '@/lib/table';
 
 // ═══ Data-quality surface ═══════════════════════════════════════════════════════
 

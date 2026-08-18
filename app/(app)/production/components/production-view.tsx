@@ -8,7 +8,13 @@ import { DailyLazyTab } from './daily-lazy-tab';
 import { ElectricityLazyTab } from './electricity-lazy-tab';
 import { TrucksLazyTab } from './trucks-lazy-tab';
 
-export function ProductionView() {
+/** `?grid=v2` — which implementation of each tab's grid renders. Read once by the
+ *  server page and threaded down; see `app/(app)/production/(tabs)/page.tsx`. */
+export interface ProductionViewProps {
+    v2?: boolean;
+}
+
+export function ProductionView({ v2 = false }: ProductionViewProps) {
     const { activeTab } = useProductionTab();
     const [displayTab, setDisplayTab] = useState<ProductionTab>(activeTab);
     const [transitioning, setTransitioning] = useState(false);
@@ -35,13 +41,13 @@ export function ProductionView() {
     return (
         <>
             <div className={getTabClass('daily')}>
-                <DailyLazyTab />
+                <DailyLazyTab v2={v2} />
             </div>
             <div className={getTabClass('electricity')}>
-                <ElectricityLazyTab />
+                <ElectricityLazyTab v2={v2} />
             </div>
             <div className={getTabClass('trucks')}>
-                <TrucksLazyTab />
+                <TrucksLazyTab v2={v2} />
             </div>
         </>
     );

@@ -396,7 +396,32 @@ export interface DeliveryLedgerAxes {
     issue: IssueLens | null;
     query: string;
     filters: ColumnFilters;
+    /**
+     * WHICH GRID renders the axes (`?grid=v2`). Not an axis of the DATA — both grids read
+     * the identical server payload — but it is an axis of the CLIENT: the two components
+     * hold entirely separate state, so switching between them must remount rather than
+     * try to reconcile one's tree into the other's.
+     *
+     * It is OPTIONAL and contributes NOTHING to the key when absent, so every existing
+     * key is byte-identical to what it was before this field existed.
+     *
+     * Temporary, and it goes at cutover with the old ledger — see
+     * `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`.
+     */
+    grid?: string | null;
 }
+
+// ─── The `?grid=` axis lives in the PLATFORM layer now ──────────────────────────
+//
+// It was defined here, which was right while this screen was the only one with two
+// grids and wrong the moment a second screen got one: the toggle control, every server
+// page and every screen's URL helpers have to agree on the param name and its one
+// recognised value, and a copy per screen is a chance per screen to disagree.
+// `lib/table/grid-param.ts` is the single definition; this is a re-export so every
+// existing importer of `./ledger-url` — `page.tsx` among them — is unchanged, and the
+// behaviour is byte-for-byte what it was (same value, same "first of a repeated param",
+// same "anything else means the production ledger").
+export { GRID_V2, parseGrid } from '@/lib/table';
 
 /**
  * Stable fingerprint of every axis — used as the client's React key, so a lens, a
@@ -405,13 +430,17 @@ export interface DeliveryLedgerAxes {
  * the order they were parsed, so the same filters always produce the same key.
  */
 export function axesKey(axes: DeliveryLedgerAxes): string {
-    return [
+    const base = [
         axes.scope,
         axes.period ? periodKey(axes.period) : 'none',
         axes.issue ?? 'all',
         axes.query,
         filtersKey(axes.filters),
     ].join('|');
+    // Appended only when it says something, so the key an existing caller produces is
+    // unchanged. `?grid=v2` therefore remounts cleanly instead of swapping components
+    // under a shared key.
+    return axes.grid ? `${base}|${axes.grid}` : base;
 }
 
 export function filtersKey(filters: ColumnFilters): string {

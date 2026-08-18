@@ -68,6 +68,30 @@ These routes are dynamic, so **every** `?param=` write costs a server round-trip
 | Movement (`/inventory/rc-movement`) | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix |
 | Bag Inventory (`/inventory/flecon-bags`) | `flecon-bags/` | [FLECON Bags](./flecon-bags/CONTEXT.md) — packaging-material stock |
 
+## The `?grid=v2` side-by-side (universal-table migration, 2026-08-18)
+
+`/inventory?grid=v2` renders BOTH tabs on the **Blackwood Table** (`components/shared/table`) instead of the live tables. It is the strangler-fig method from `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`: the new grids are built BESIDE the production ones, and **`delivery-master-table.tsx`, `rc-out-table.tsx`, `bulk-delivery-input.tsx`, `bulk-usage-input.tsx`, both `actions.ts` and both mobile-card files are not edited by one character.**
+
+| File | Role |
+|------|------|
+| `page.tsx` | **The only edited file.** Reads `?grid=` via `parseGrid` from `@/lib/table`, mounts `<GridVersionBar>` above the sheet, and picks `<InventoryViewV2>` or `<InventoryView>` with the same props. |
+| `components/inventory-view-v2.tsx` | The `?grid=v2` twin of `inventory-view.tsx` — same `InventoryTabProvider`, both panes mounted, inactive one hidden. **No cross-fade** (see below). |
+| `components/rc-out-lazy-tab-v2.tsx` | The twin of `rc-out-lazy-tab.tsx`; calls the SAME read-only `fetchRcOutTabData()` and mounts `RcOutGridV2`. |
+| `rc-in/delivery-grid-v2.tsx` | RC IN on the Blackwood Table. Read-only. |
+| `rc-out/rc-out-grid-v2.tsx` | RC OUT on the Blackwood Table. Read-only. |
+
+**Five rules this obeys** (the recipe lives in `lib/table/CONTEXT.md` → "The side-by-side toggle"):
+
+1. **ONE toggle governs BOTH tabs.** Deliveries and Usage are two views of one shell; two switches would let the screen sit half-migrated. `?tab=` and `?grid=` are independent axes — flipping either never disturbs the other.
+2. **The param is an axis of the CLIENT, never of the data.** Every fetch in `page.tsx` runs identically either way; `?grid=` reaches no query, no action and no role gate.
+3. **`?grid=` absent, misspelt, `V2` or `3` all mean the CURRENT tables.** Only the exact `v2` switches.
+4. **The bar carries its own layout.** `GridVersionBar` is `shrink-0`; the page mounts it and never re-types its classes.
+5. **BOTH v2 grids are READ-ONLY** — no editor, no save, no delete, no draft rows, no context menu, and no server action that writes is imported by either file. Column resize is session-local state, deliberately NOT persisted, because persisting it would be a write.
+
+**Deliberate difference from the live view:** `inventory-view-v2.tsx` swaps tabs instantly instead of cross-fading. The live 150ms fade is driven by a `setTransitioning(true)` inside a `useEffect`, which is one of the repo's 28 pre-existing `react-hooks` lint errors (`inventory-view.tsx:26:9`); copying it would have added a 29th.
+
+At cutover the bar, the param and all four v2 files either replace the live tables or are deleted with them. A permanent escape hatch is a second grid nobody maintains.
+
 ## Dependencies
 - Submodules share `@/components/providers/auth-context` / `lib/auth` for permission gating (cost visibility).
 - The logs shell uses `@/components/ui/card`.

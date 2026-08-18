@@ -28,7 +28,12 @@ function periodKey(year: number | null, batch: string | null): string {
     return `${year ?? 'all'}|${batch ?? 'all'}`;
 }
 
-export function DailyLazyTab() {
+/** `?grid=v2` — passed straight through to the view, which owns the switch. */
+export interface DailyLazyTabProps {
+    v2?: boolean;
+}
+
+export function DailyLazyTab({ v2 = false }: DailyLazyTabProps) {
     const { activeTab } = useProductionTab();
     const { year, batch, periodsLoading } = useProductionPeriod();
 
@@ -104,6 +109,7 @@ export function DailyLazyTab() {
 
     return (
         <DailyView
+            v2={v2}
             shifts={data.shifts}
             runs={data.runs}
             downtime={data.downtime}

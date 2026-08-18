@@ -22,7 +22,12 @@ function periodKey(year: number | null, batch: string | null): string {
     return `${year ?? 'all'}|${batch ?? 'all'}`;
 }
 
-export function TrucksLazyTab() {
+/** `?grid=v2` — passed straight through to the view, which owns the switch. */
+export interface TrucksLazyTabProps {
+    v2?: boolean;
+}
+
+export function TrucksLazyTab({ v2 = false }: TrucksLazyTabProps) {
     const { activeTab } = useProductionTab();
     const { year, batch, periodsLoading } = useProductionPeriod();
 
@@ -87,6 +92,7 @@ export function TrucksLazyTab() {
 
     return (
         <TrucksView
+            v2={v2}
             readings={data.readings}
             year={data.year}
             month={data.month}

@@ -5,9 +5,13 @@ import {
     fetchDailyPivotWindow,
     type LedgerAnchor,
 } from './actions';
+import { GridVersionBar } from '@/components/shared/table';
+import { GRID_V2, parseGrid } from '@/lib/table';
 import { ProductionView } from './production-view';
 import { ProductionEndlessSheet } from './production-endless-sheet';
 import { ProductionEndlessPivots } from './production-endless-pivots';
+import { ProductionEndlessSheetV2 } from './production-endless-sheet-v2';
+import { ProductionLedgerGridV2 } from './production-ledger-grid-v2';
 import {
     hasActiveFilters,
     ledgerFilterKey,
@@ -81,6 +85,28 @@ export default async function CenaproProductionPage({
     // anchor already uses, and it resets `firstItemIndex` by construction (no scroll jump).
     const filterKey = ledgerFilterKey(filters);
 
+    // ── The `?grid=v2` side-by-side axis (temporary; see `lib/table/grid-param.ts`) ──
+    //
+    // An axis of the CLIENT, never of the data: both implementations read the identical
+    // server payload below, and nothing here reaches a query, an action or a role gate. The
+    // param's ONLY effect is which component renders the rows that were fetched either way.
+    //
+    // The bar is mounted at EVERY return, so the toggle exists on all six view × scope
+    // combinations and there is no dead end. It only SWITCHES anything on the two LEDGER
+    // combinations, because the Daily W6 / W7 pivots are merged-`rowSpan` matrices rather
+    // than ledgers and have no v2 — so on those two the note says so out loud rather than
+    // letting the operator click a control that appears to do nothing.
+    const v2 = parseGrid(params.grid) === GRID_V2;
+    const gridBar = (
+        <GridVersionBar
+            note={
+                plantView
+                    ? 'The Daily W6 / W7 pivots have no v2 grid yet — this switch changes nothing on this view.'
+                    : 'Same rows, same filters — this switches only which table renders them.'
+            }
+        />
+    );
+
     // ── endless + ledger → the endless sheet. Anchor-first: resolve the anchor from the
     // URL, then prefetch the FIRST keyset window server-side (already anchored). ──────
     if (scope === 'endless' && view === 'ledger') {
@@ -95,22 +121,32 @@ export default async function CenaproProductionPage({
         // filter fingerprint joins it for exactly the same reason.
         const anchorKey = anchor.kind === 'latest' ? 'latest' : `${anchor.batch_year}:${anchor.batch}`;
 
+        // ONE props object, handed to whichever sheet the flag picked — so the two sides are
+        // provably reading the identical payload rather than two similar-looking ones.
+        const endlessProps = {
+            initialPage: {
+                rows: page.rows,
+                hasOlder: page.hasOlder,
+                hasNewer: page.hasNewer,
+                notice: page.notice,
+            },
+            anchor,
+            filters,
+            filtersActive,
+            periods,
+            selectedPeriod,
+            loadError: page.error ?? periodsResult.error ?? null,
+        };
+
         return (
-            <ProductionEndlessSheet
-                key={`${anchorKey}|${filterKey}`}
-                initialPage={{
-                    rows: page.rows,
-                    hasOlder: page.hasOlder,
-                    hasNewer: page.hasNewer,
-                    notice: page.notice,
-                }}
-                anchor={anchor}
-                filters={filters}
-                filtersActive={filtersActive}
-                periods={periods}
-                selectedPeriod={selectedPeriod}
-                loadError={page.error ?? periodsResult.error ?? null}
-            />
+            <>
+                {gridBar}
+                {v2 ? (
+                    <ProductionEndlessSheetV2 key={`${anchorKey}|${filterKey}`} {...endlessProps} />
+                ) : (
+                    <ProductionEndlessSheet key={`${anchorKey}|${filterKey}`} {...endlessProps} />
+                )}
+            </>
         );
     }
 
@@ -126,35 +162,58 @@ export default async function CenaproProductionPage({
         const dayWindow = await fetchDailyPivotWindow({ mode: 'anchor', anchor, plant: plantView });
         const anchorKey = anchor.kind === 'latest' ? 'latest' : `${anchor.batch_year}:${anchor.batch}`;
 
+        // NO v2 branch: a day-windowed pivot is a merged-`rowSpan` matrix, not a ledger. The
+        // bar still mounts (no dead ends), and its note says the switch does nothing here.
         return (
-            <ProductionEndlessPivots
-                key={`${plantView}:${anchorKey}`}
-                initialWindow={{
-                    events: dayWindow.events,
-                    hasOlder: dayWindow.hasOlder,
-                    hasNewer: dayWindow.hasNewer,
-                    notice: dayWindow.notice,
-                }}
-                anchor={anchor}
-                plantView={plantView}
-                view={view}
-                periods={periods}
-                selectedPeriod={selectedPeriod}
-                loadError={dayWindow.error ?? periodsResult.error ?? null}
-            />
+            <>
+                {gridBar}
+                <ProductionEndlessPivots
+                    key={`${plantView}:${anchorKey}`}
+                    initialWindow={{
+                        events: dayWindow.events,
+                        hasOlder: dayWindow.hasOlder,
+                        hasNewer: dayWindow.hasNewer,
+                        notice: dayWindow.notice,
+                    }}
+                    anchor={anchor}
+                    plantView={plantView}
+                    view={view}
+                    periods={periods}
+                    selectedPeriod={selectedPeriod}
+                    loadError={dayWindow.error ?? periodsResult.error ?? null}
+                />
+            </>
         );
     }
 
     // ── focus + any view → the month-scoped, EDITABLE ProductionView. The grid's own
     // toolbar carries the view switcher + scope toggle, so the axis framework stays
     // reachable here too. ─────────────────────────────────────────────────────────────
+    //
+    // `?grid=v2` substitutes the read-only Blackwood-Table ledger for the LEDGER view only.
+    // On `daily-w6` / `daily-w7` the live `ProductionView` keeps rendering, because it is
+    // what owns the merged-`rowSpan` daily pivot and there is no v2 of that shape.
     const result = await fetchProductionEvents(selectedPeriod ?? undefined);
+    const focusProps = {
+        rows: result.data ?? [],
+        periods,
+        selectedPeriod,
+        loadError: result.error ?? periodsResult.error ?? null,
+    };
+
+    if (v2 && !plantView) {
+        return (
+            <>
+                {gridBar}
+                <ProductionLedgerGridV2 {...focusProps} />
+            </>
+        );
+    }
+
     return (
-        <ProductionView
-            rows={result.data ?? []}
-            periods={periods}
-            selectedPeriod={selectedPeriod}
-            loadError={result.error ?? periodsResult.error ?? null}
-        />
+        <>
+            {gridBar}
+            <ProductionView {...focusProps} />
+        </>
     );
 }

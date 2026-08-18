@@ -42,6 +42,21 @@ export async function middleware(request: NextRequest) {
     '/icon',
     '/apple-icon',
   ]
+
+  // The Blackwood Table playground (`/dev/table-playground`) is a rendering fixture with
+  // NO data access of any kind — it mounts the shared grid on an in-memory array — and it
+  // exists so the Playwright parity suite can drive the real component without holding
+  // real credentials. It is public ONLY where it is meant to run: outside production, or
+  // in production with `TABLE_PLAYGROUND` explicitly set. The page itself carries the
+  // identical condition and 404s, so the two locks are independent and either one alone
+  // keeps it off the live site.
+  if (
+    process.env.NODE_ENV !== 'production' ||
+    process.env.TABLE_PLAYGROUND
+  ) {
+    PUBLIC_PATHS.push('/dev/table-playground')
+  }
+
   const isPublic = PUBLIC_PATHS.some((p) =>
     request.nextUrl.pathname.startsWith(p)
   )

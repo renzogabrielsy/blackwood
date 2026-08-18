@@ -35,7 +35,9 @@ the receipt side"** below.
 
 | File | Role |
 |---|---|
-| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
+| `deliveries-grid-v2.tsx` | **Client — the Stage 1D rewire, built BESIDE the live ledger.** The same screen rendered through the platform's **`BlackwoodTable`** (`components/shared/table/`), reachable only at `?grid=v2`. Slices 1 + 2: the read-only render, then editing, undo/redo, paste, the blank-row pool and the save. See "The `?grid=v2` rewire" below for what it does and does not do yet. |
+| `grid-v2-save.ts` | **PURE module** (no React, no Supabase) — v2's EDIT + SAVE model, split out so the two things this slice can most easily get silently wrong are asserted without a browser: **which receipt a moisture draw's edit belongs to**, and **what patch a dirty row produces**. Owns the draw-row identity (`drawKeyOf` / `drawRowId` / `parentRowId`), **`dirtyReceiptIds`** (THE dirty union), **`buildSampleBlock`** (the whole draw block reassembled, `position` re-derived from ORDER), **`patchField`** (the ONE per-field verdict, shared by every column's `parse` and by the save) and `buildDeliveryPatch`, the draft-row identity (`makeDraftIds` / `isDraftKey`), `rowLabel` / `draftLabel`, `saveOutcomeMessage` and `editedCellText`. At cutover it absorbs the ledger's module-private `buildPatch` / `canonicalEditText` and becomes the only copy. |
+| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Also picks between the two grids on `?grid=v2` (defaulting to `DeliveriesLedger`), with an IDENTICAL prop set in both branches, and mounts the platform `<GridVersionBar>` above whichever one renders. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
 | `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; **`PRICE_FIELDS` + `stripPrices()` + `redactAuditJson()`** (the ONE ₱ boundary — one list, two consumers: named fields on a row shape, and keys inside the audit trail's jsonb); **the audit vocabulary** (`RcDeliveryAuditRow`, `DeliveryHistoryEntry`, `AUDIT_TRAIL_START`, `readAuditChanges` / `auditColumnLabel` / `formatAuditValue` / `auditHeadline` / `auditSnapshotColumns`); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, **`getDeliveryHistory`** (one receipt's audit trail, ₱-redacted server-side), `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
@@ -43,7 +45,7 @@ the receipt side"** below.
 | `delivery-history-dialog.tsx` | **Client** — the per-receipt audit trail, opened from the grid's row context menu (*View history*). Renders one entry per `cenapro.rc_delivery_audit` row, newest first, with the receipt AND its moisture draws in one list. See "Audit trail" below. Imports nothing from ICTC's `DeliveryHistoryDialog` — same reading experience, entirely separate wiring. |
 | `use-deliveries-window.ts` | **Client hook** — `useDeliveriesWindow(initial, lens)`: the endless sheet's self-contained bidirectional keyset pager (no TanStack Query, mirroring `production/use-ledger-window.ts`). Owns react-virtuoso's `firstItemIndex` so a prepend and its index decrement land in one state batch, and holds the server's `totalCount`. Exposes `fetchOlder` / `fetchNewer` / `reset` / `refreshWindow` / `dropRecord`. |
 | `deliveries-ledger.tsx` | **Client** — the grid. Both scopes, one set of closures. Custom `NavResolver`, edit state, cell renderers, toolbar, per-column filter popovers, the duplicate-peer popover, context menu, save, delete. Also owns **`requestAxisChange`**, the single guarded path every URL write goes through, and the unsaved-work prompt it raises, plus the **caret-follow** (`scrollTo` / `scrollToCol` / `scrollerEl`) **and the drag auto-scroll**, whose every scroll is contained to the table's own scroller. |
-| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. **the flag-resolution surface** (the 12→2 lens shape modelled from the live counts, the rail/badge predicate, the unknown-`kind` fail-safe, the `has_unresolved_flags` OR, the no-state-column fallback, `kind`/`detail`/`raw` preservation, the per-kind resolution sentence, a malformed element that must not shift verdicts, plus source scans that the lens filters on `has_unresolved_flags`, that `ROW_COLS` is still ONE literal carrying all four derived columns, and that the grid reaches the verdict in exactly one place while a fully-repaired row keeps an openable history), **the paste ROW-FAMILY rule** (a receipt block steps over moisture draws and lands on receipts; a draw-anchored block never reaches a receipt; `delivery`+`draft` are one family; the flat-sheet case is byte-identical to the old positional mapping at every anchor × block size; the resolved targets feed `planPaste` the same plan it used to compute positionally — plus source scans that `anchor.row + r` is gone and the skip is reported), **and the read-only-cell caret** (a click never nulls the active cell). `npx tsx scripts/verify-rc-deliveries-cells.ts` — **120 assertions**, must stay green. |
+| `../../../../scripts/verify-rc-deliveries-cells.ts` | Framework-free assertions over the two single-column pairs, the DATE parse, the dirty-clearing rule, the draft-row rules, the column/selection geometry, **the horizontal caret-follow's frozen-block arithmetic**, **the drag auto-scroll's** (same block, same correction, plus a source scan that the loop reads its element from `scrollerEl()` rather than a one-scope ref), **the summary-row spans** (both gating states tile with no gap or overhang, each figure lands on its own column, the frozen corner spans exactly the pinned block, a column inserted anywhere is absorbed — plus a source scan refusing any arithmetic `colSpan` in the ledger), **the virtuoso index space** (`jn`'s clamp modelled verbatim, plus a source scan of `deliveries-ledger.tsx` refusing any `firstItemIndex` rebase at a scroll call site), **the filter grammar + predicate builder, the duplicate-badge logic and the axis guard's firing condition** (what counts as unsaved work, and which URL writes actually move the axes key), **the clear ⇄ Escape-revert round trip** (single cell, range, draft row, and Escape's two-stage verdict — plus a source scan that the wiring is still there and that clearing does not drop the selection), **the day spacer** (a gap on every day change and never before the first row, the undated→dated transition, `navRows` byte-identical with and without spacers, the span against `summarySpans` in both gating states, the post-save regroup, plus a source scan that the spacer never enters `navRows`, is endless-only, and is a FULL-height row of per-column cells carrying the ordinary rules, opaque and unanimated), **the clipboard** (the TSV parse/escape round trip over the cells that used to shred a row, the DB-decimal copy payload, the per-column paste cleaning, the paste geometry — a block taller than the sheet creates the rows it needs and a non-zero anchor maps to the right columns — plus source scans that the truncating bridge is gone, that copy is reachable for a SINGLE cell, that the payload reads the stored generated columns rather than recomputing them, that a multi-cell delete keeps its selection, and that `use-cell-selection.ts` publishes its anchor/focus refs synchronously), **the paste SINK** (it exists, is a single real `<textarea>`, is hidden by opacity/size rather than by anything that would make it unfocusable, is not `readOnly`, is exempt from `isGridChrome` *before* the form-control test, is the target of every `focusGrid()` and the only focus target left — no `gridRef.current.focus(` survives; the orphan-focus effect cannot fire over an open editor; the `document`-level fallback is bubble-phase and guarded four ways; the two delivery paths cannot double-apply; and every paste outcome names itself), ending in a **replay over all 991 real receipts**. **the flag-resolution surface** (the 12→2 lens shape modelled from the live counts, the rail/badge predicate, the unknown-`kind` fail-safe, the `has_unresolved_flags` OR, the no-state-column fallback, `kind`/`detail`/`raw` preservation, the per-kind resolution sentence, a malformed element that must not shift verdicts, plus source scans that the lens filters on `has_unresolved_flags`, that `ROW_COLS` is still ONE literal carrying all four derived columns, and that the grid reaches the verdict in exactly one place while a fully-repaired row keeps an openable history), **the paste ROW-FAMILY rule** (a receipt block steps over moisture draws and lands on receipts; a draw-anchored block never reaches a receipt; `delivery`+`draft` are one family; the flat-sheet case is byte-identical to the old positional mapping at every anchor × block size; the resolved targets feed `planPaste` the same plan it used to compute positionally — plus source scans that `anchor.row + r` is gone and the skip is reported), **the read-only-cell caret** (a click never nulls the active cell), **and — since slice 2 — the v2 grid's EDIT + SAVE model** (the draw's stable uuid key against the positional key it replaces, so an insert re-points nothing; the dirty union that makes a receipt dirty when any of its DRAWS is; the whole-block reassembly with untouched draws included, `position` re-derived from ORDER, a non-numeric lab value reported rather than silently nulled, and an edit that follows its draw across an insert; `patchField`'s one-cell-to-many-columns verdicts, its two illegal blanks and its ₱ refusal; `buildDeliveryPatch`'s fold; the stale-version sentence; the unsaved formula cell's figure; plus a source scan that the positional draw key is GONE, that `canEdit` is on, that the price column ANDs `canViewPrices`, that no second edit-state setter exists, that a partial save forgets the landed rows AND their draws, and that `toast.error` is never used). `npx tsx scripts/verify-rc-deliveries-cells.ts` — **129 assertions**, must stay green. |
 
 Engine (pre-existing, not owned here): **`lib/cenapro/rc-formula.ts`** + its verifier
 `scripts/verify-rc-formula.ts` (22 assertions).
@@ -928,6 +930,134 @@ shift+arrow started their selections at (0,0) too. No behaviour that any of them
 want is changed — a ref that agrees with state sooner is strictly more correct.
 `lib/hooks/use-grid-keyboard-nav.ts`, `use-grid-paste.ts` and `use-clipboard-copy.ts` were
 **NOT** touched; the other grids keep using the latter two verbatim.
+
+### The `?grid=v2` rewire — built BESIDE the ledger, not in place of it (2026-08-17)
+
+Stage 1D of the universal-table migration. `deliveries-grid-v2.tsx` renders this same
+screen through the platform's `BlackwoodTable`; `deliveries-ledger.tsx` stays the
+production path and **is not edited by one character** while both are alive. The method,
+and why the earlier atomic attempts could never land, is in
+`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`.
+
+- **`page.tsx` picks on `?grid=v2`, defaulting to the OLD grid.** Both branches hand the
+  two components the identical prop set — v2 imports `DeliveriesLedgerProps` from the
+  ledger rather than re-declaring it, so the two can never drift — and both read the same
+  server data. No action, RPC or query changes with the flag.
+- **`?grid=v2` joins `axesKey(...)`** (`ledger-url.ts`, `parseGrid` / `GRID_V2`) so a
+  switch REMOUNTS rather than reconciling one component's tree into the other's. The field
+  is optional and contributes nothing when absent, so every existing key is unchanged.
+- **The param is PLATFORM now, and there is a visible switch (2026-08-18).** `GRID_V2` /
+  `parseGrid` moved to `lib/table/grid-param.ts` and `ledger-url.ts` **re-exports them**,
+  so every importer here is unchanged and the definition is shared with the other screens
+  getting a v2 tonight. `page.tsx` mounts `<GridVersionBar>` (from
+  `@/components/shared/table`) ABOVE whichever grid the flag selected — one mount, both
+  sides, and `deliveries-ledger.tsx` still untouched, which is why the control could not
+  live in its toolbar. It writes only `?grid=`; scope, period, lens, search and every
+  `f_<column>` filter are carried across verbatim, or the two sides would be comparing
+  different receipts. Recipe and rules: `lib/table/CONTEXT.md` → "The side-by-side toggle".
+- **The column table is TRANSLATED, never re-declared.** The specs are built from
+  `buildColumns(canViewPrices)`, so `types.ts` stays the ONE definition of the order, the
+  widths, the pinned block, the summary lanes, the filter grammar and — critically — which
+  columns are money. The module's `visible: (ctx) => …` seam is the more idiomatic
+  spelling, but using it here would create a SECOND definition of the price boundary.
+- **Slice 1 (2026-08-17) was READ-ONLY.** Column specs, row families, the flatten (day
+  heading, `Σ DAY TOTAL`, the endless day spacer, the sticky month footer) and the render,
+  in both scopes. The duplicate and import-flag POPOVERS are rendered as `title` text
+  instead of buttons: same facts, nothing pretending to be clickable.
+- **Slice 2 (2026-08-17) made it TYPEABLE and SAVEABLE.** Editing (Enter / F2 / double-click
+  / type-over, Escape's two stages, Delete), the parse + validate path, dirty state,
+  **undo/redo**, clipboard paste (including the tiling and row-growing forms the ledger
+  never had), the blank **draft-row pool** with `Add N more rows`, and **the save** — for
+  receipts AND their moisture draws — behind an unsaved-work chip and a Save button, with
+  every refusal on a persistent, copyable `errorToast`. `ctx.canEdit` is now TRUE.
+  **Still not built (slice 3):** the scope toggle, the month picker, the issue lenses, the
+  search box, the per-column filter popovers, the row context menu, and the history /
+  assign-cheque / delete dialogs. Adding or removing a moisture draw lives on that menu, so
+  it is not reachable here yet either.
+
+### The draw block — why slice 2 is not just "turn on `canEdit`"
+
+`useTableEdits` is keyed per CELL; `cenapro_save_rc_delivery_samples` REPLACES a receipt's
+whole block. Three rules follow, all of them in the pure `grid-v2-save.ts` and all asserted:
+
+1. **A draw row's id is `${deliveryId}#${sample.id}` — its DATABASE UUID, never its
+   position.** Slice 1 keyed them `#${index}`, which is wrong the moment the block changes
+   shape: the ledger's `addSample` inserts AFTER an index and renumbers every draw below it,
+   so an edit filed under `#1` would silently re-point onto the blank draw that took its
+   place — the right numbers landing on the wrong draw, with nothing on screen to show it.
+   The uuid survives any insert, delete or reorder. (`drawKeyOf` falls back to
+   `p<position>` — the draw's own stored ordinal, not its array index — for a row that came
+   back without an id.) **Identity is the uuid; ORDER is a separate fact.**
+2. **A receipt is dirty when ANY of its draws is** — `dirtyReceiptIds` folds every dirty
+   ROW id onto its parent with `parentRowId`. Without that fold a receipt whose only change
+   is a lab reading on its third draw never appears under its own id at all: it would not
+   look dirty, would not be counted by the chip, would not be saved, and the typing would
+   vanish at the next remount with no error anywhere. The `#` split is exact rather than a
+   guess, because a delivery id is a uuid and cannot contain one.
+3. **The save posts the WHOLE block, untouched draws included** (`buildSampleBlock`), and
+   `position` is re-derived from the block's ORDER (`i + 1`) rather than read back off the
+   stored row — which is what lets an insert renumber positions without touching a single
+   key. The block only rides along when something in it actually moved (`touched`), so an
+   ordinary field edit does not rewrite six unrelated draws.
+
+One deliberate divergence from the ledger: a draw's lab value that is **not a number is
+REFUSED BY NAME**, where `toSamplePayload` runs every field through `num()` and posts a
+silent NULL — destroying a reading inside a "successful" save. The receipt side already
+refused that (`patchField`), so the draw side now matches it.
+
+### One verdict, two callers
+
+`patchField(field, text, env)` is the only place a cell's text becomes database columns.
+Every column's `parse` calls it (so a COMMIT refuses exactly what Save would) and
+`buildDeliveryPatch` calls it (so Save refuses exactly what the commit did). Two rules sit
+around it rather than inside it: a **blank** cell commits without complaint but is judged at
+save (`delivery_date` and `supplier` are the two blanks that are never legal), and a column
+whose slot names a **different field** — SUPPLIER is a trader on a receipt and a free-text
+`label` on a draw — does not apply its verdict to that cell at all.
+
+### The seeded date on a blank row is SAID OUT LOUD
+
+The ledger paints the default date muted in each blank row's DATE cell. A `format` runs
+against the stored row and a blank row has none, so v2 states it once above the sheet
+instead — *"new rows are dated 2026-08-12 unless you type one"*. Same guarantee (a date
+nobody typed never reaches the ledger unseen), one sentence instead of twenty muted cells.
+Typing that exact date is still a NON-edit: it is the draft's `canonicalText`, so
+`mergeFieldEdit` drops it.
+- **`#` / `TTL PRICE` / `PAID?` are `addressable: false`, and that seam exists because this
+  slice found it.** All three carry content the ledger paints (the row ordinal and its
+  status rail, the DB-generated total, the settlement badge) and none is a place the old
+  grid's caret ever lands — `field: null` makes a column unaddressable there. `occupies()`
+  originally answered *"does this row render content here"* and *"may the caret land here"*
+  with ONE value, so slice 1 shipped with the three columns marked occupied and a Tab run
+  walking through three dead stops per row. `CellSlot.addressable` (platform, 2026-08-17)
+  splits the two questions; `buildSlots` sets it from **`col.field !== null`**, the same
+  condition the ledger's own `addressable()` uses, so there is no second rule to keep in
+  step. `TTL PRICE` stays SELECTABLE — a run of receipt totals is the most useful thing on
+  this sheet to sweep and add up, and none of that involves the caret resting there. One
+  residual difference: v2 renders a hit area on all three, so a CLICK parks the caret on
+  `#` or `PAID?` where the old grid ignores the click entirely (it gates the mousedown on
+  its own `cellExists`, which is true only for `TTL PRICE`). The platform keeps the mouse on
+  the render predicate deliberately — see `lib/table/CONTEXT.md` → `CellSlot.addressable`.
+- **One known divergence from the ledger, structural.** The pager's `firstItemIndex` is
+  corrected **at the call site** with `shiftFirstItemIndex`, measured as "items above a
+  fixed anchor row" — `use-deliveries-window.ts` decrements by RECORDS while the flat array
+  grows by more (draws, spacers), which is the pre-existing approximation noted under "The
+  day spacer".
+- **The filter triggers now have somewhere to go.** `BlackwoodTable.renderHeaderSlot` →
+  `HeaderCell.filterSlot` was added by slice 1 (the second seam it found). Neither slice
+  passes one: a filter button that opens nothing is exactly what they refuse to render. The
+  `filter` metadata is already declared on every spec, from `./types`.
+- **Slice 2 found three more platform seams**, each because this consumer could not say
+  something (full write-ups in `lib/table/CONTEXT.md`):
+  **`ColumnSpec.normalize`** — the DATE cell turns `6/27` into `2026-06-27` AT COMMIT, so
+  what the operator sees is what will be saved and a typed date matches a pasted one;
+  **`ColumnSpec.parse`'s `CellContext`** — the SUPPLIER lane is a trader on a receipt and a
+  free-text label on a draw, and without it the column's verdict refuses every legal draw
+  label with a persistent toast; **`TableEdits.forget(rowIds)`** — a batch save returns one
+  verdict PER ROW, so the receipts that landed must stop counting as unsaved while the one
+  refused for a stale `row_version` keeps every character. (A fourth,
+  **`ColumnSpec.formatEdited`**, keeps a dirty WT/PHP-KG cell showing its figure rather than
+  `=27045*88%`, so the numeric lane keeps its alignment while a row is being typed.)
 
 ### Two scopes (`?scope=endless|focus`)
 

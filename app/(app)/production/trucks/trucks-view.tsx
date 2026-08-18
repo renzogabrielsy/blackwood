@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { TrucksGrid } from './trucks-grid';
+import { TrucksGridV2 } from './trucks-grid-v2';
 import type { Tables } from '@/types/supabase';
 
 type TruckReadingRow = Tables<'truck_readings'>;
@@ -12,6 +13,14 @@ interface TrucksViewProps {
     year: number | null;
     month: number | null;
     onRefresh: () => Promise<void>;
+    /**
+     * `?grid=v2` — render the READ-ONLY Blackwood Table rewire instead of the live grid.
+     * DESKTOP ONLY, and that is the reason this switch is here: `TrucksGrid` carries its
+     * own `sm:hidden` phone summary inside itself, so on a phone the live component must
+     * keep rendering on BOTH sides — hence the `hidden sm:block` wrapper below the v2
+     * branch, and the live grid left whole. See `app/(app)/production/(tabs)/page.tsx`.
+     */
+    v2?: boolean;
 }
 
 const MONTH_NAMES = [
@@ -27,7 +36,7 @@ function describeScope(year: number | null, month: number | null): string {
     return `${MONTH_NAMES[month]} ${year}`;
 }
 
-export function TrucksView({ readings, year, month, onRefresh }: TrucksViewProps) {
+export function TrucksView({ readings, year, month, onRefresh, v2 = false }: TrucksViewProps) {
     return (
         <div className="flex flex-col gap-0 min-h-0">
             <div className="flex-none flex items-center gap-2 px-2 py-1 border-b bg-muted/20">
@@ -37,10 +46,28 @@ export function TrucksView({ readings, year, month, onRefresh }: TrucksViewProps
                     {readings.length} readings
                 </span>
             </div>
-            <TrucksGrid
-                initialData={readings}
-                onSaveSuccess={onRefresh}
-            />
+            {v2 ? (
+                <>
+                    <div className="hidden sm:block">
+                        <TrucksGridV2 initialData={readings} />
+                    </div>
+                    {/* The phone summary lives INSIDE `TrucksGrid` (its `sm:hidden`
+                        companion), and v2 is the desktop grid only — so on a phone the live
+                        component still renders and nothing about the phone changes. Its own
+                        `hidden sm:block` wrapper keeps the editable matrix off the phone. */}
+                    <div className="sm:hidden">
+                        <TrucksGrid
+                            initialData={readings}
+                            onSaveSuccess={onRefresh}
+                        />
+                    </div>
+                </>
+            ) : (
+                <TrucksGrid
+                    initialData={readings}
+                    onSaveSuccess={onRefresh}
+                />
+            )}
         </div>
     );
 }
