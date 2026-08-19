@@ -21,6 +21,7 @@ import { DigestCharts } from "@/components/digest/digest-charts";
 import { WeekStrip } from "@/components/digest/week-strip";
 import { SchedulePreview } from "@/components/digest/schedule-preview";
 import { SyncSummary } from "@/components/digest/sync-summary";
+import { SyncNeedsYou } from "@/components/digest/sync-needs-you";
 import { ActivityFeed } from "@/components/digest/activity-feed";
 import { DigestFooterBand } from "@/components/digest/digest-footer-band";
 import { TrucksSummary } from "@/components/digest/trucks-summary";
@@ -209,8 +210,19 @@ async function DigestBoard() {
         </Suspense>
       </section>
 
-      {/* D. Sync band — what the last sync brought in */}
+      {/* D. Sync band — what the last sync brought in, and what of it is still
+             waiting on a human. The "N need you" chip is the panel's OWN count
+             (same flatten → same ack ledger), privileged-only and silent at zero;
+             its own <Suspense> so the sync-run read never delays the band. */}
       <section className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Last sync
+          </h2>
+          <Suspense fallback={null}>
+            <SyncNeedsYou />
+          </Suspense>
+        </div>
         <SyncSummary latestSync={data.latestSync} />
         <ActivityFeed activity={data.activity} />
       </section>

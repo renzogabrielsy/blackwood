@@ -17,16 +17,24 @@
  */
 import assert from 'node:assert/strict'
 
+import { createHash } from 'node:crypto'
+
 import {
+  findingIdentity,
   flattenRunFindings,
   serializeCaseForClaude,
   serializeCasesForClaude,
   serializeFindingsForClaude,
   summarizeFindings,
+  type RunFinding,
   type SerializableCase,
 } from '../lib/sync/findings'
+import { caseFingerprint } from '../lib/sync/fingerprint'
+import { canonicalHashPortable, sha256Hex } from '../lib/sync/portable-hash'
 import type {
   BlockDiff,
+  DeliveryHumanEdit,
+  HeldRow,
   PriceNote,
   ReportNotReceived,
   SingleSourceOverdue,
@@ -879,6 +887,411 @@ check('serializeCaseForClaude: minimal case (no verdict, no row) never throws', 
   assert.ok(block.includes('Diagnose this Blackwood sync flag'), 'header present')
   assert.ok(block.includes('row 4'), 'natural key present')
   assert.ok(!block.includes('Prior investigator verdict'), 'no verdict line when absent')
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. FINDING IDENTITY — the ack ledger's two strings (2026-08-19).
+//
+// `findingIdentity` gives every finding, durable-case-backed or not, a stable
+// `fingerprint` (WHICH discrepancy) and a `contentHash` (WHAT it currently says).
+// The pair is what makes "acknowledged UNTIL IT CHANGES" possible for the five
+// findings per run that are recomputed every time and stored nowhere.
+//
+// The load-bearing claims asserted below:
+//   a. the browser-safe SHA-256 is byte-identical to node:crypto (this is the whole
+//      safety argument for hand-rolling a hash at all);
+//   b. a held-row finding's fingerprint IS its durable case's fingerprint — one
+//      identity, not two;
+//   c. identity survives a different run; content does not survive a real change;
+//   d. two sources disagreeing about ONE delivery is ONE decision, not two;
+//   e. no ₱ can reach either string, even if a cost value starts arriving unredacted.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const HEX64 = /^[0-9a-f]{64}$/
+
+// ── (a) The portable SHA-256 is the real SHA-256. ───────────────────────────
+check('portable sha256 === node:crypto sha256 (edge lengths + multi-byte UTF-8)', () => {
+  const corpus = [
+    '',
+    'a',
+    'abc',
+    'x'.repeat(55), // one byte short of a padded block
+    'x'.repeat(56), // forces a second block
+    'x'.repeat(63),
+    'x'.repeat(64), // exact block boundary
+    'x'.repeat(65),
+    'x'.repeat(4096),
+    'MAV 9202 · ₱ — 日本語 🚚', // peso sign, em dash, CJK, emoji
+    JSON.stringify({ a: 1, b: [1, 2, 3], c: null }),
+  ]
+  for (const input of corpus) {
+    assert.equal(
+      sha256Hex(input),
+      createHash('sha256').update(input).digest('hex'),
+      `sha256 mismatch for a ${input.length}-char input`,
+    )
+  }
+})
+
+check('portable canonicalHash === fingerprint.ts canonicalHash on a real case object', () => {
+  // The exact canonical shape `caseFingerprint` builds for a non-gate held row.
+  const canonical = { reportType: 'gsheet', kind: 'cross_batch_reassignment', natural_key: 'x · y' }
+  assert.equal(
+    canonicalHashPortable(canonical),
+    createHash('sha256')
+      .update(JSON.stringify({ kind: canonical.kind, natural_key: canonical.natural_key, reportType: canonical.reportType }))
+      .digest('hex'),
+    'canonicalization must sort keys recursively, exactly as fingerprint.ts does',
+  )
+})
+
+// ── (b) ONE identity: a held finding reuses its durable case's fingerprint. ──
+function heldRun(reportType: 'gsheet' | 'deliveries', held: HeldRow) {
+  return {
+    reports: {
+      [reportType]: {
+        apply: {
+          report_type: reportType,
+          ok: true,
+          held: [held],
+          labeled: false,
+          watermark_updated: false,
+          errors: [],
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+}
+
+check('cross_batch_reassignment fingerprint IS the durable case fingerprint (not a second one)', () => {
+  const held: HeldRow = {
+    reason: 'the Sheet moved this delivery to a different batch',
+    natural_key: 'RC IN · 2026-08-05 · AAV 6111 · 19,185 kg',
+    detail: 'Sheet says AUG-26-RECOOKED1; the app has FEEDING AREA',
+    kind: 'cross_batch_reassignment',
+    row: { batch_code: 'AUG-26-RECOOKED1', weight_kg: 19_185, cost_basis: 49.5 },
+  }
+  const f = flattenRunFindings(heldRun('gsheet', held)).find(
+    (x) => x.kind === 'cross_batch_reassignment',
+  )
+  assert.ok(f, 'the held row must flatten to a finding')
+  const id = findingIdentity(f!)
+  assert.match(id.fingerprint, HEX64)
+  assert.match(id.contentHash, HEX64)
+  assert.equal(
+    id.fingerprint,
+    caseFingerprint('gsheet', held),
+    'the ack fingerprint must EQUAL sync_held_cases.fingerprint — one identity, never two',
+  )
+})
+
+check('every held kind reuses its case fingerprint (exhaustive over the fixture kinds)', () => {
+  const kinds: HeldRow['kind'][] = ['unmapped_batch_code', 'location_occupied', 'malformed', 'already_exists']
+  for (const kind of kinds) {
+    const held: HeldRow = {
+      reason: 'r',
+      natural_key: `RC IN · ${kind} · row 12`,
+      detail: 'd',
+      kind,
+      row: { batch_code: 'AUG-26-BLK3', weight_kg: 100 },
+    }
+    const f = flattenRunFindings(heldRun('deliveries', held))[0]
+    assert.equal(
+      findingIdentity(f).fingerprint,
+      caseFingerprint('deliveries', held),
+      `${kind}: ack fingerprint diverged from the case fingerprint`,
+    )
+  }
+})
+
+// ── (c) Identity is stable across runs; content tracks the situation. ────────
+check('the same finding hashes identically in two runs with different run ids', () => {
+  const d: BlockDiff = {
+    kind: 'balance',
+    block_loc: 'A-9C',
+    sheet_kg: 5000,
+    computed_kg: 4200,
+    delta: 800,
+    detail: 'Sheet 5,000 vs app 4,200 (off by 800 kg).',
+  }
+  const runA = runWithGrandTotal(d)
+  const runB = JSON.parse(JSON.stringify(runWithGrandTotal(d))) as SyncRunResult
+  // Simulate the run-varying junk a real result carries around the finding.
+  ;(runA as unknown as Record<string, unknown>).runId = '312b3213-aaaa'
+  ;(runB as unknown as Record<string, unknown>).runId = '99999999-bbbb'
+
+  const a = findingIdentity(flattenRunFindings(runA)[0])
+  const b = findingIdentity(flattenRunFindings(runB)[0])
+  assert.equal(a.fingerprint, b.fingerprint, 'fingerprint must not depend on the run')
+  assert.equal(a.contentHash, b.contentHash, 'contentHash must not depend on the run')
+})
+
+check('a CHANGED delta changes contentHash but NOT fingerprint (ack until it changes)', () => {
+  const base: BlockDiff = {
+    kind: 'balance',
+    block_loc: 'A-9C',
+    sheet_kg: 5000,
+    computed_kg: 4200,
+    delta: 800,
+    detail: 'off by 800 kg',
+  }
+  const moved: BlockDiff = { ...base, computed_kg: 3100, delta: 1900, detail: 'off by 1,900 kg' }
+
+  const a = findingIdentity(flattenRunFindings(runWithGrandTotal(base))[0])
+  const b = findingIdentity(flattenRunFindings(runWithGrandTotal(moved))[0])
+  assert.equal(a.fingerprint, b.fingerprint, 'the same block is the same discrepancy')
+  assert.notEqual(a.contentHash, b.contentHash, 'a new gap must re-alarm an acknowledged block')
+})
+
+check('sub-kg jitter does NOT re-alarm an acknowledged block (rounded to integer kg)', () => {
+  const base: BlockDiff = { kind: 'balance', block_loc: 'A-9C', sheet_kg: 5000, computed_kg: 4200, delta: 800, detail: 'x' }
+  const jitter: BlockDiff = { ...base, computed_kg: 4200.4, delta: 799.6, detail: 'x' }
+  assert.equal(
+    findingIdentity(flattenRunFindings(runWithGrandTotal(base))[0]).contentHash,
+    findingIdentity(flattenRunFindings(runWithGrandTotal(jitter))[0]).contentHash,
+  )
+})
+
+check('two different blocks never share a fingerprint, and neither do two subkinds on one block', () => {
+  const seen = new Set<string>()
+  const diffs: BlockDiff[] = [
+    { kind: 'balance', block_loc: 'A-9C', sheet_kg: 1, computed_kg: 2, delta: -1, detail: 'x' },
+    { kind: 'balance', block_loc: 'B-4A', sheet_kg: 1, computed_kg: 2, delta: -1, detail: 'x' },
+    { kind: 'batch_mismatch', block_loc: 'A-9C', sheet_kg: 1, computed_kg: 2, delta: -1, detail: 'x', sheet_batch: 'P', computed_batch: 'Q' },
+    { kind: 'grand_total', block_loc: null, sheet_kg: 9, computed_kg: 8, delta: 1, detail: 'x' },
+  ]
+  for (const d of diffs) {
+    const fp = findingIdentity(flattenRunFindings(runWithGrandTotal(d))[0]).fingerprint
+    assert.ok(!seen.has(fp), `collision on ${d.kind} ${d.block_loc ?? 'grand total'}`)
+    seen.add(fp)
+  }
+  assert.equal(seen.size, 4)
+})
+
+// ── (d) One delivery, two sources, ONE decision. ─────────────────────────────
+function deliveryEdit(over: Partial<DeliveryHumanEdit> = {}): DeliveryHumanEdit {
+  return {
+    section: over.section ?? 'deliveries',
+    table: 'deliveries',
+    record_id: over.record_id ?? '11111111-2222-3333-4444-555555555555',
+    transaction_date: over.transaction_date ?? '2026-08-14',
+    supplier: over.supplier ?? 'Lapayag',
+    batch_code: over.batch_code ?? 'AUG-26-BLK1',
+    block_loc: over.block_loc ?? 'A-7C',
+    truck_plate: over.truck_plate ?? 'CDD 1689',
+    changed_fields: over.changed_fields ?? [{ field: 'remarks', yours: 'FEED', sheet: 'FEEDING' }],
+    outcome: over.outcome ?? 'refused_by_db',
+  }
+}
+
+function deliveryEditRun(edits: DeliveryHumanEdit[]): SyncRunResult {
+  const bySection: Record<string, DeliveryHumanEdit[]> = {}
+  for (const e of edits) (bySection[e.section] ??= []).push(e)
+  const reports: Record<string, unknown> = {}
+  for (const [section, list] of Object.entries(bySection)) {
+    reports[section] = {
+      apply: {
+        report_type: section,
+        ok: true,
+        held: [],
+        labeled: false,
+        watermark_updated: false,
+        errors: [],
+        delivery_human_edits: list,
+      },
+    }
+  }
+  return { reports } as unknown as SyncRunResult
+}
+
+check('delivery_human_edited: TWO sources, ONE record_id → ONE fingerprint (one decision)', () => {
+  const findings = flattenRunFindings(
+    deliveryEditRun([deliveryEdit({ section: 'deliveries' }), deliveryEdit({ section: 'gsheet' })]),
+  ).filter((f) => f.kind === 'delivery_human_edited')
+  assert.equal(findings.length, 2, 'both sources still raise their own finding')
+  assert.notEqual(findings[0].key, findings[1].key, 'and they are still two rendered rows')
+  assert.equal(
+    findingIdentity(findings[0]).fingerprint,
+    findingIdentity(findings[1]).fingerprint,
+    'but acknowledging the delivery once must answer both',
+  )
+})
+
+check('delivery_human_edited: a different delivery is a different fingerprint', () => {
+  const a = flattenRunFindings(deliveryEditRun([deliveryEdit({ record_id: 'aaaaaaaa-0000-0000-0000-000000000001' })]))[0]
+  const b = flattenRunFindings(deliveryEditRun([deliveryEdit({ record_id: 'bbbbbbbb-0000-0000-0000-000000000002' })]))[0]
+  assert.notEqual(findingIdentity(a).fingerprint, findingIdentity(b).fingerprint)
+})
+
+check('delivery_human_edited: a NEW disagreeing field re-alarms an acknowledged row', () => {
+  const a = flattenRunFindings(deliveryEditRun([deliveryEdit()]))[0]
+  const b = flattenRunFindings(
+    deliveryEditRun([
+      deliveryEdit({
+        changed_fields: [
+          { field: 'remarks', yours: 'FEED', sheet: 'FEEDING' },
+          { field: 'sacks', yours: 540, sheet: 334 },
+        ],
+      }),
+    ]),
+  )[0]
+  assert.equal(findingIdentity(a).fingerprint, findingIdentity(b).fingerprint)
+  assert.notEqual(findingIdentity(a).contentHash, findingIdentity(b).contentHash)
+})
+
+check('delivery_human_edited: field ORDER is not a change (canonical sort)', () => {
+  const fields = [
+    { field: 'sacks', yours: 540, sheet: 334 },
+    { field: 'remarks', yours: 'FEED', sheet: 'FEEDING' },
+  ]
+  const a = flattenRunFindings(deliveryEditRun([deliveryEdit({ changed_fields: fields })]))[0]
+  const b = flattenRunFindings(deliveryEditRun([deliveryEdit({ changed_fields: [...fields].reverse() })]))[0]
+  assert.equal(findingIdentity(a).contentHash, findingIdentity(b).contentHash)
+})
+
+// ── (e) No ₱ can reach either string. ────────────────────────────────────────
+check('a cost_basis refusal leaks NO ₱ into either string, redacted or not', () => {
+  // The shape the worker actually sends today: both sides nulled, `redacted: true`.
+  const redacted = flattenRunFindings(
+    deliveryEditRun([
+      deliveryEdit({ changed_fields: [{ field: 'cost_basis', yours: null, sheet: null, redacted: true }] }),
+    ]),
+  )[0]
+  // The shape a future writer might send if BOTH upstream strips were removed in one
+  // edit. This module is the third defence and must behave identically.
+  const leaking = flattenRunFindings(
+    deliveryEditRun([
+      deliveryEdit({ changed_fields: [{ field: 'cost_basis', yours: 39.99, sheet: 11.01, redacted: false }] }),
+    ]),
+  )[0]
+
+  const a = findingIdentity(redacted)
+  const b = findingIdentity(leaking)
+  assert.equal(a.fingerprint, b.fingerprint, 'identity never depended on the price')
+  assert.equal(
+    a.contentHash,
+    b.contentHash,
+    'a ₱ VALUE must not participate in the hash — only the FACT that the price field differs',
+  )
+  // Both outputs are pure hex: nothing legible, no glyph, no digits of a peso figure.
+  for (const s of [a.fingerprint, a.contentHash, b.fingerprint, b.contentHash]) {
+    assert.match(s, HEX64)
+    assert.ok(!s.includes('₱'), 'no peso glyph')
+  }
+})
+
+check('a cost-named key anywhere in `data` is stripped from the content hash', () => {
+  const withCost: RunFinding = {
+    key: 'made_up:1',
+    kind: 'made_up',
+    kindLabel: 'x',
+    source: 'x',
+    title: 'x',
+    location: 'x',
+    data: { batch_code: 'AUG-26-BLK1', cost_basis: 42.5, php_kg: 39.99, weight_kg: 100 },
+    reason: 'x',
+    severity: 'info',
+    section: 'run',
+  }
+  const without: RunFinding = { ...withCost, data: { batch_code: 'AUG-26-BLK1', weight_kg: 100 } }
+  assert.equal(findingIdentity(withCost).contentHash, findingIdentity(without).contentHash)
+})
+
+// ── Price notes: the spelling is what differs, so it cannot be the identity. ──
+check('price_fuzzy_match: identity is date + NORMALIZED plate + sacks', () => {
+  const spellings = ['CDD 1689', 'cdd-1689', 'CDD1689']
+  const ids = spellings.map(
+    (plate) =>
+      findingIdentity(
+        flattenRunFindings(
+          priceRun([
+            priceNote({
+              kind: 'price_fuzzy_match',
+              transaction_date: '2026-07-23',
+              truck_plate: plate,
+              sacks: 540,
+              supplier: 'Ornales',
+              differences: [{ field: 'truck_plate', ours: plate, theirs: '1689' }],
+            }),
+          ]),
+        )[0],
+      ).fingerprint,
+  )
+  assert.equal(new Set(ids).size, 1, 'one truck spelled three ways is ONE acknowledgement')
+})
+
+check('price_fuzzy_match: a different truck, date or sack count is a different fingerprint', () => {
+  const base = { kind: 'price_fuzzy_match', transaction_date: '2026-07-23', truck_plate: 'CDD 1689', sacks: 540 }
+  const variants = [
+    base,
+    { ...base, truck_plate: 'AAV 6111' },
+    { ...base, transaction_date: '2026-07-24' },
+    { ...base, sacks: 334 },
+  ]
+  const ids = variants.map(
+    (v) => findingIdentity(flattenRunFindings(priceRun([priceNote(v)]))[0]).fingerprint,
+  )
+  assert.equal(new Set(ids).size, 4)
+})
+
+check('price: a file-level note keys on the MONTH, not on a truckload', () => {
+  const a = findingIdentity(
+    flattenRunFindings(priceRun([priceNote({ kind: 'price_tab_unresolved', looked_for: 'August 2026', tabs_found: ['Aug. 2026'] })]))[0],
+  )
+  const b = findingIdentity(
+    flattenRunFindings(priceRun([priceNote({ kind: 'price_tab_unresolved', looked_for: 'August 2026', tabs_found: ['Aug. 2026', 'July 2026'] })]))[0],
+  )
+  const c = findingIdentity(
+    flattenRunFindings(priceRun([priceNote({ kind: 'price_tab_unresolved', looked_for: 'September 2026' })]))[0],
+  )
+  assert.equal(a.fingerprint, b.fingerprint, 'same month = same acknowledgement')
+  assert.notEqual(a.contentHash, b.contentHash, 'a different set of tabs in the file IS a change')
+  assert.notEqual(a.fingerprint, c.fingerprint, 'a different month is a different problem')
+})
+
+// ── The clock is not a change. ───────────────────────────────────────────────
+check('an unpriced delivery ageing by a day does NOT re-alarm (days_pending is volatile)', () => {
+  const mk = (days: number) =>
+    findingIdentity(
+      flattenRunFindings(
+        priceRun([], [
+          {
+            id: 'dddddddd-0000-0000-0000-000000000001',
+            transaction_date: '2026-08-14',
+            supplier: 'Lapayag',
+            batch_code: 'AUG-26-BLK1',
+            truck_plate: 'CDD 1689',
+            weight_kg: 19_010,
+            sacks: 540,
+            days_pending: days,
+          },
+        ]),
+      ).find((f) => f.kind === 'unpriced_overdue')!,
+    )
+  const day2 = mk(2)
+  const day3 = mk(3)
+  assert.equal(day2.fingerprint, day3.fingerprint)
+  assert.equal(day2.contentHash, day3.contentHash, 'one more day is not a new situation')
+})
+
+// ── Totality: every finding the fixtures produce gets a well-formed identity. ─
+check('every finding in every fixture yields two 64-hex strings, and no two collide', () => {
+  const findings = [
+    ...flattenRunFindings(realRun),
+    ...flattenRunFindings(deliveryEditRun([deliveryEdit(), deliveryEdit({ section: 'gsheet', record_id: 'ffffffff-0000-0000-0000-00000000000f' })])),
+  ]
+  assert.ok(findings.length >= 10, 'fixture set should be non-trivial')
+  const fps = new Set<string>()
+  for (const f of findings) {
+    const id = findingIdentity(f)
+    assert.match(id.fingerprint, HEX64, `bad fingerprint for ${f.key}`)
+    assert.match(id.contentHash, HEX64, `bad contentHash for ${f.key}`)
+    fps.add(id.fingerprint)
+  }
+  // The two delivery_human_edited rows here carry DIFFERENT record_ids, so nothing is
+  // deliberately folded and every finding must land on its own fingerprint. An accidental
+  // collision would silently make one acknowledgement answer two unrelated problems.
+  assert.equal(fps.size, findings.length, 'unexpected fingerprint collision')
 })
 
 console.log(`\nAll ${passed} findings checks passed.`)
