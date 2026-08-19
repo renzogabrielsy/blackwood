@@ -5,12 +5,17 @@ import { TableVirtuoso } from 'react-virtuoso';
 import type { ItemProps, TableComponents, TableProps, TableVirtuosoHandle } from 'react-virtuoso';
 
 import { cn } from '@/lib/utils';
-import { clampDraftAdd, DEFAULT_DRAFT_ROWS } from '@/lib/table';
+import { clampDraftAdd, defaultTableMenu, DEFAULT_DRAFT_ROWS } from '@/lib/table';
 import type {
-    CellAddress, ColumnSpec, GridRow, RowKind, SummarySpans, TableSettings,
+    CellAddress, ColumnSpec, GridRow, RowKind, SummarySpans, TableMenuAction, TableSettings,
 } from '@/lib/table';
+import { useOptionalStatusBar } from '@/components/providers/status-bar-context';
+import { GridContextMenu } from '@/components/shared/grid/GridContextMenu';
+import type { GridMenuItem } from '@/components/shared/grid/GridContextMenu';
+import { useGridContextMenu } from '@/lib/hooks/use-grid-context-menu';
+import type { CellAggregates } from '@/lib/hooks/use-cell-aggregation';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
-import { useTableRows } from '@/lib/hooks/use-table-rows';
+import { columnAcceptsEdit, useTableRows } from '@/lib/hooks/use-table-rows';
 import { useTableInteraction } from '@/lib/hooks/use-table-interaction';
 import type { CellRange } from '@/lib/hooks/use-cell-selection';
 import type { TableEdits } from '@/lib/hooks/use-table-edits';
@@ -94,6 +99,26 @@ import type { RowHandlers } from './Row';
 //   • **`CellSlot.addressable`** (in `lib/table/types.ts`) is the row-family half: a cell
 //     that RENDERS content the caret must never stop on. Read by the nav resolver, the
 //     jump keys and `goToRow` — by nothing that paints, selects, copies or totals.
+//
+// ── AND FOUR THINGS THAT ARE NOT SEAMS, BECAUSE THEY ARE NOW DEFAULT-ON ─────────
+//
+// Renzo, on the ten grids built onto this module in one night: *"every part of the app
+// that uses the table should also universally use the following features as well: the
+// right click menu and the hover summary."* Each of the four below was present in the
+// module and reachable only through a prop most consumers had not supplied — which is
+// indistinguishable, from the operator's chair, from not being there at all.
+//
+//   • **The SUMMARY PILL publishes itself.** The selection's SUM/AVERAGE/COUNT/MIN/MAX
+//     were computed on every gesture and discarded. They now go to the app's floating
+//     status bar from inside this component, through an OPTIONAL provider so the grid
+//     still mounts outside the app shell. A consumer wires nothing.
+//   • **The CONTEXT MENU is built in.** `contextMenuItems` used to be the only menu there
+//     was, so a grid that omitted it had none. There is now a default one on every grid,
+//     and `contextMenuItems` adds to it rather than being it.
+//   • **RESIZE works without persistence.** The handle was gated on `onSettingsChange`;
+//     it now falls back to session-local widths, so no column is ever un-draggable.
+//   • **The SELECTION is one box.** `cell-classes.ts` paints the rectangle's outer edges
+//     and nothing inside it — see `lib/table/selection.ts` for the geometry.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 /** A row's stable identity — its own id, or a chrome row's key. */
@@ -307,13 +332,44 @@ export interface BlackwoodTableProps<Row, Ctx> {
     draftKind?: string;
     /** Row kinds that are CHILDREN — a paste anchored on one may never reach a parent. */
     childKinds?: readonly string[];
-    /** Right-click menu content. Returning null shows no menu. */
+    /**
+     * EXTRA right-click items, rendered ABOVE the built-in ones inside the same popover.
+     *
+     * **A default menu now ships with every grid** — Copy, Copy with headers, Copy row,
+     * Select row, Select column, Clear selection, plus Clear contents / Paste / Fill down
+     * wherever the clicked cell actually accepts an edit. Before this the prop existed and
+     * nothing rendered without it, so right-click on ten migrated grids did whatever the
+     * browser does.
+     *
+     * So this is now purely ADDITIVE content: return the consumer's own items (a "go to
+     * peer", a "delete receipt") and the shared ones appear below a separator. Returning
+     * null, or omitting the prop, leaves the built-in menu exactly as it is.
+     */
     contextMenuItems?(target: TableContextTarget<Row>): React.ReactNode;
+    /**
+     * Suppress the built-in menu entirely — the escape hatch for a surface that owns its
+     * own right-click gesture. Default false: the menu is ON everywhere, which is the
+     * whole point of it.
+     */
+    disableDefaultContextMenu?: boolean;
     /** Extra classes for a `<tr>` — a status rail, a duplicate wash. Never a border. */
     rowClassFor?(item: GridRow<Row>, navRow: number | null): string | undefined;
     /** Row family → bottom-rule classes. Defaults to `DEFAULT_ROW_RULES`. */
     rowRules?: Record<string, string>;
-    onSelectionChange?(range: CellRange | null): void;
+    /**
+     * The selection changed — and the SECOND argument is the half a consumer cannot
+     * compute for itself.
+     *
+     * The range is in NAV-ROW coordinates, and that axis is resolved inside
+     * `useTableRows`; re-totalling it against the consumer's own `items` would be a
+     * second definition of the row axis, which is the same class of bug as rebasing
+     * `firstItemIndex` by records instead of items. So the aggregates ride along.
+     *
+     * Note the table ALSO publishes them to the app's floating status bar by itself (see
+     * `useOptionalStatusBar` below), so a consumer that only wanted the pill needs no
+     * handler at all. This is for a consumer that wants the numbers somewhere else.
+     */
+    onSelectionChange?(range: CellRange | null, meta?: { size: number; aggregates: CellAggregates | null }): void;
     /**
      * The grid's observable state, whenever it moves. What a status bar, a save button or
      * an unsaved-work guard reads — and what makes the interaction testable from outside
@@ -486,12 +542,41 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         rowKey, renderEditor: renderEditorProp, renderChromeRow, renderHeaderSlot,
         summaryRows, drafts,
         onAddDrafts, onRemoveDrafts, onRestoreDrafts, draftKind = 'draft', childKinds,
-        contextMenuItems, rowClassFor, rowRules, onSelectionChange, onStateChange,
+        contextMenuItems, disableDefaultContextMenu = false,
+        rowClassFor, rowRules, onSelectionChange, onStateChange,
         className, startReached, endReached, initialTopMostItemIndex, firstItemIndex,
         emptyMessage,
     } = props;
 
-    const columns = useTableColumns(specs, ctx, settings);
+    // ── Column widths, resizable WHETHER OR NOT the consumer persists them ───────
+    //
+    // The handle used to appear only when a consumer passed `onSettingsChange`, so on
+    // every grid that had not wired per-user settings yet the columns simply could not be
+    // dragged — which is exactly what Renzo saw: *"Width adjustment also doesn't exist on
+    // every table used."* It existed; it was gated behind a prop nine of ten screens had
+    // not supplied.
+    //
+    // Resize is now DEFAULT-ON. With `onSettingsChange` the width is delegated exactly as
+    // before (persisted, and this state stays empty and inert); without it the width lives
+    // here for the session, so a column can always be widened to read a value. A spec that
+    // says `resizable: false` still opts out — that verdict never moved.
+    const [localWidths, setLocalWidths] = React.useState<Record<string, number>>({});
+
+    // The identity matters: `useTableColumns` memoizes on the widths OBJECT, so handing it
+    // a fresh `{}` per render would re-resolve the column table — and with it every sticky
+    // offset — on every keystroke. Undefined while nothing has been dragged, which is what
+    // keeps an unmanaged grid byte-identical with before this existed.
+    const effectiveWidths = React.useMemo(() => {
+        if (onSettingsChange || Object.keys(localWidths).length === 0) return settings?.widths;
+        return { ...(settings?.widths ?? {}), ...localWidths };
+    }, [onSettingsChange, settings?.widths, localWidths]);
+
+    const effectiveSettings = React.useMemo<TableSettings | undefined>(() => {
+        if (effectiveWidths === settings?.widths) return settings;
+        return { ...settings, widths: effectiveWidths };
+    }, [settings, effectiveWidths]);
+
+    const columns = useTableColumns(specs, ctx, effectiveSettings);
     const cols = columns.cols;
     const rows = useTableRows({ items, kinds, cols });
 
@@ -536,45 +621,36 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     }, []);
 
     // ── Context menu ─────────────────────────────────────────────────────────────
-    const [menu, setMenu] = React.useState<{ x: number; y: number; target: TableContextTarget<Row> } | null>(null);
+    //
+    // The state, the viewport edge-flip and the close-on-outside/Escape all come from
+    // `useGridContextMenu` — the shared primitive the older grids already use — rather
+    // than from a third hand-rolled copy of the same 30 lines.
+    const menu = useGridContextMenu<TableContextTarget<Row>>({ width: 200, height: 300 });
+    const openMenu = menu.open;
+    const closeMenu = menu.close;
 
     const onContextMenu = React.useCallback(
         (cell: CellAddress, e: React.MouseEvent) => {
-            if (!contextMenuItems) return;
+            // The menu is UNIVERSAL now: it opens whether or not the consumer supplied
+            // items of its own, because Copy / Select column / Clear selection are the
+            // grid's own gestures and every sheet has them.
+            if (disableDefaultContextMenu && !contextMenuItems) return;
             e.preventDefault();
             const nav = rows.navRows[cell.row];
-            setMenu({
-                x: e.clientX,
-                y: e.clientY,
-                target: {
+            openMenu(
+                {
                     cell,
                     rowId: nav?.rowId ?? null,
                     row: nav?.data ?? null,
                     kind: nav?.kind.kind ?? null,
-                    close: () => setMenu(null),
+                    close: () => closeMenu(),
                 },
-            });
+                e.clientX,
+                e.clientY,
+            );
         },
-        [contextMenuItems, rows],
+        [disableDefaultContextMenu, contextMenuItems, rows, openMenu, closeMenu],
     );
-
-    React.useEffect(() => {
-        if (!menu) return;
-        const onDown = (e: PointerEvent) => {
-            const el = e.target as HTMLElement | null;
-            if (el?.closest?.('[data-table-context-menu]')) return;
-            setMenu(null);
-        };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setMenu(null);
-        };
-        document.addEventListener('pointerdown', onDown);
-        document.addEventListener('keydown', onKey);
-        return () => {
-            document.removeEventListener('pointerdown', onDown);
-            document.removeEventListener('keydown', onKey);
-        };
-    }, [menu]);
 
     // ── Interaction ──────────────────────────────────────────────────────────────
     const interaction = useTableInteraction<Row, Ctx>({
@@ -602,13 +678,52 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     // `use-table-interaction.ts`.
     const {
         activeCell, isEditing, rowHandlers, editorInitialText, setEditorText, commitEdit,
-        setActiveCell, scrollTo, scrollToCol, focus: focusGrid,
+        setActiveCell, scrollTo, scrollToCol, focus: focusGrid, menuActions,
     } = interaction;
-    const { bandFor, selectColumn, range: selectionRange } = interaction.selection;
+    const {
+        bandFor, rowEdgeFor, selectColumn, range: selectionRange,
+        size: selectionSize, aggregates,
+    } = interaction.selection;
 
     React.useEffect(() => {
         onStateChange?.({ activeCell, isEditing, selection: selectionRange });
     }, [onStateChange, activeCell, isEditing, selectionRange]);
+
+    // ── The floating summary pill, published by the TABLE itself ─────────────────
+    //
+    // `useTableInteraction` has always computed SUM / AVERAGE / COUNT / MIN / MAX over the
+    // selected rectangle and then thrown them away, so every migrated grid showed a cell
+    // COUNT where the live ledgers showed a total — and none of them could fix it, because
+    // the rectangle is in nav-row coordinates the consumer does not own. Renzo: *"every
+    // part of the app that uses the table should also universally use … the hover summary
+    // (the one on the bottom right where it shows the summation/average/count of the
+    // highlighted cells)."*
+    //
+    // So the table publishes them ITSELF, and a consumer wires nothing at all.
+    //
+    // The provider is OPTIONAL by construction (`useOptionalStatusBar`): the grid is
+    // mountable outside the app shell — the dev playground is — and a shared primitive
+    // that crashes a page over a missing ambient provider is not shared. Absent, this is
+    // silently a no-op.
+    const statusBar = useOptionalStatusBar();
+    const setCellSelectionCount = statusBar?.setCellSelectionCount;
+    const setCellAggregates = statusBar?.setCellAggregates;
+
+    React.useEffect(() => {
+        setCellSelectionCount?.(selectionSize);
+        setCellAggregates?.(aggregates);
+    }, [setCellSelectionCount, setCellAggregates, selectionSize, aggregates]);
+
+    // Clearing is its OWN effect with only the two stable setters as dependencies, so it
+    // runs on unmount and at no other time. Folding it into the cleanup above would fire a
+    // "0 cells" between every two selections — a pill that flickers empty on every drag.
+    React.useEffect(
+        () => () => {
+            setCellSelectionCount?.(0);
+            setCellAggregates?.(null);
+        },
+        [setCellSelectionCount, setCellAggregates],
+    );
 
     // ── The imperative surface ───────────────────────────────────────────────────
     //
@@ -700,8 +815,13 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     // ── Column chrome ────────────────────────────────────────────────────────────
     const onResizeColumn = React.useCallback(
         (key: string, width: number) => {
-            if (!onSettingsChange) return;
-            onSettingsChange({ ...settings, widths: { ...(settings?.widths ?? {}), [key]: width } });
+            // Delegate when the consumer persists layout; otherwise keep it for the
+            // session. One handler, two homes — a caller never has to know which.
+            if (onSettingsChange) {
+                onSettingsChange({ ...settings, widths: { ...(settings?.widths ?? {}), [key]: width } });
+                return;
+            }
+            setLocalWidths((prev) => (prev[key] === width ? prev : { ...prev, [key]: width }));
         },
         [onSettingsChange, settings],
     );
@@ -737,7 +857,9 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                             left={pin === 'start' ? columns.pinnedLeft[i] : undefined}
                             right={pin === 'end' ? columns.pinnedRight[i - endStart] : undefined}
                             onSelectColumn={selectColumn}
-                            onResize={onSettingsChange ? onResizeColumn : undefined}
+                            // ALWAYS supplied — see `onResizeColumn`. `resizable: false`
+                            // on the spec is still the way a column opts out.
+                            onResize={onResizeColumn}
                             // The seam the deferred column-filter chrome needs. Omitted ⇒
                             // `undefined` ⇒ `HeaderCell` renders no slot at all, exactly as
                             // before this prop existed.
@@ -747,7 +869,7 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                 })}
             </tr>
         ),
-        [cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart, selectColumn, onResizeColumn, onSettingsChange, renderHeaderSlot],
+        [cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart, selectColumn, onResizeColumn, renderHeaderSlot],
     );
 
     const fixedHeaderContent = React.useCallback(() => headerRow, [headerRow]);
@@ -855,6 +977,10 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                     rowEdits={(rowId ? edits.edits[rowId] : undefined) ?? NO_EDITS}
                     activeCol={onThisRow ? activeCell.col : -1}
                     selectionBand={navRow >= 0 ? bandFor(navRow) : null}
+                    // The other half of the selection box: which HORIZONTAL edges of the
+                    // rectangle this row sits on. A primitive, so it crosses the row memo
+                    // by `===`.
+                    selectionRowEdge={navRow >= 0 ? rowEdgeFor(navRow) : 'none'}
                     invalidCols={(rowId ? invalidByRow.get(rowId) : undefined) ?? NO_INVALID}
                     editing={isEditing && onThisRow}
                     renderEditor={renderEditor}
@@ -865,7 +991,7 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
             );
         },
         [
-            kinds, rows, cols, ctx, edits.edits, activeCell, bandFor, invalidByRow,
+            kinds, rows, cols, ctx, edits.edits, activeCell, bandFor, rowEdgeFor, invalidByRow,
             isEditing, renderEditor, columns.pinnedLeft, columns.pinnedRight, classes,
             renderChromeRow, chromeApi,
         ],
@@ -912,6 +1038,76 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         () => ({ minWidth: columns.minWidth, colGroup, onScroller, handlers: rowHandlers, rowMeta }),
         [columns.minWidth, colGroup, onScroller, rowHandlers, rowMeta],
     );
+
+    // ── The built-in right-click menu ────────────────────────────────────────────
+    //
+    // The item LIST is `defaultTableMenu` — a pure function in `lib/table/menu.ts` of two
+    // facts about the clicked cell — and this maps each action onto the interaction hook's
+    // OWN callback. So "Copy" in the menu is the same function Ctrl/Cmd+C calls, and
+    // there is no second definition of any gesture here.
+    //
+    // The mutating items (Clear contents / Paste / Fill down) are ABSENT, not disabled,
+    // wherever the cell does not accept an edit — which is every cell of every read-only
+    // grid, so switching the menu on for all of them cannot offer an action that would
+    // silently do nothing.
+    const menuTarget = menu.state?.ref ?? null;
+
+    const defaultMenuItems = React.useMemo<GridMenuItem<TableContextTarget<Row>>[]>(() => {
+        if (disableDefaultContextMenu || !menuTarget) return [];
+        const { cell, rowId } = menuTarget;
+        const spec = cols[cell.col];
+        const nav = rows.navRows[cell.row];
+        const slot = spec && nav ? nav.kind.occupies(spec.key, nav.data) : null;
+        // BOTH halves of the verdict, exactly as `useTableInteraction` combines them:
+        // the row family's `editable` AND the column's `columnAcceptsEdit`.
+        const editable =
+            slot !== null && slot.editable && spec !== undefined
+                ? columnAcceptsEdit(spec, nav?.data ?? null, ctx)
+                : false;
+
+        const run: Record<TableMenuAction, () => void> = {
+            copy: menuActions.copy,
+            'copy-with-headers': menuActions.copyWithHeaders,
+            'copy-row': () => menuActions.copyRow(cell.row),
+            'select-row': () => menuActions.selectRow(cell.row),
+            'select-column': () => menuActions.selectColumn(cell.col),
+            'clear-selection': menuActions.clearSelection,
+            'clear-contents': menuActions.clearContents,
+            paste: menuActions.paste,
+            'fill-down': menuActions.fillDown,
+        };
+
+        const out: GridMenuItem<TableContextTarget<Row>>[] = [];
+        for (const item of defaultTableMenu({
+            editable,
+            hasRow: rowId !== null,
+            hasSelection: selectionSize > 1,
+        })) {
+            if (item.separatorBefore && out.length > 0) out.push({ kind: 'separator' });
+            out.push({
+                kind: 'item',
+                label: item.label,
+                trailingLabel: item.shortcut,
+                onSelect: run[item.action],
+            });
+        }
+        return out;
+    }, [disableDefaultContextMenu, menuTarget, cols, rows, ctx, menuActions, selectionSize]);
+
+    const consumerMenu = menuTarget && contextMenuItems ? contextMenuItems(menuTarget) : null;
+
+    /**
+     * Closing the menu HANDS THE CARET BACK.
+     *
+     * A menu item is unmounted by the time focus would be restored to it, so focus lands
+     * on `<body>` and the next keystroke goes nowhere — the sheet reads as dead until
+     * another cell is clicked. This is the same fix `apiRef.focus()` exists for, applied
+     * to the grid's own menu so no consumer has to remember it.
+     */
+    const dismissMenu = React.useCallback(() => {
+        closeMenu();
+        focusGrid();
+    }, [closeMenu, focusGrid]);
 
     // ── Draft pool control ───────────────────────────────────────────────────────
     const [addCount, setAddCount] = React.useState(String(drafts?.defaultCount ?? DEFAULT_DRAFT_ROWS));
@@ -1018,17 +1214,22 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
 
             {draftControl}
 
-            {menu && contextMenuItems ? (
-                <div
-                    data-table-context-menu
-                    data-grid-chrome
-                    role="menu"
-                    style={{ left: menu.x, top: menu.y }}
-                    className="animate-fade-in fixed z-50 min-w-44 rounded-md border border-border bg-popover/95 p-1 text-xs shadow-md backdrop-blur-lg"
-                >
-                    {contextMenuItems(menu.target)}
-                </div>
-            ) : null}
+            <GridContextMenu
+                state={menu.state}
+                items={defaultMenuItems}
+                onClose={dismissMenu}
+                containerProps={{
+                    // Kept from the hand-rolled menu this replaced: `data-grid-chrome` is
+                    // what tells the grid a keystroke or a paste aimed at the menu is the
+                    // menu's business, and the other two are the hooks tests and older
+                    // consumers already address it by.
+                    'data-table-context-menu': true,
+                    'data-grid-chrome': true,
+                    role: 'menu',
+                }}
+            >
+                {consumerMenu}
+            </GridContextMenu>
         </div>
     );
 }

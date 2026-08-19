@@ -30,10 +30,12 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `edits.ts` | `mergeFieldEdit`, `isDirtyFieldEdits`, **`forgetRows`**, `countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`, the draft-row constants, and **`createJournal` / `invertStep`**. |
 | `nav.ts` | **New.** `edgeJump` (Ctrl/Cmd+Arrow), `rowEdge` (Home/End), `sheetCorner` (Ctrl+Home/End), `pageJump` (PageUp/Down). |
 | `grouping.ts` | `needsGroupSpacer`. |
+| `selection.ts` | **New.** `rangeRowEdge` / `cellRangeEdges` / `NO_RANGE_EDGES` — which edges of the selection RECTANGLE each cell paints, so a swept block is one box with no inner borders. |
+| `menu.ts` | **New.** `defaultTableMenu` — the built-in right-click menu as DATA, a pure function of "does this cell accept an edit" and "was there a row under the pointer". |
 | `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V2` / `parseGrid` / `isGridV2` / `withGrid` / `gridHref` — the `?grid=v2` side-by-side axis, and the ONE definition of it. Temporary: deleted with the last old grid. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **44 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **55 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -454,7 +456,7 @@ these helpers under its own names, so the grid, the server page and that module'
 was behaviour-preserving.
 
 **Stages 1B and 1C are complete** (2026-08-17). The React half is built, the dev playground
-mounts it on an in-memory data source, and **33 Playwright specs drive the real component**
+mounts it on an in-memory data source, and **47 Playwright specs drive the real component**
 with no login and no database. See the two sections at the end of this file.
 
 **Nine additive seams were added afterwards** (2026-08-17), each found the same way — by a
@@ -517,7 +519,7 @@ None. That is the point — this module imports nothing outside itself.
 | `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the three predicates the whole module runs on — `cellExists` (render) / `cellAddressable` (the caret) / `cellEditable`. |
 | `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. Three doors OUT, and they mean different things: `revertRow` (journalled — discarding an edit is undoable), **`forget(rowIds)`** (the rows a save LANDED, journal cleared) and `reset` (everything). |
 | `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. Also the two verdict seams: `commitEdit` applies `ColumnSpec.normalize` before the single write, and `cellContextOf` hands both `normalize` and `parse` the SLOT's own field. |
-| `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of ten enums, so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
+| `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of fourteen enums (ten, plus the selection box's four edges), so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
 | `components/shared/table/Row.tsx` | `TableCells` (**the memo boundary**, with the `NO_EDITS` / `NO_INVALID` singletons), `TableRowShell` (the `<tr>` and the four handlers, dispatching by `data-col`) and `TableRow` (their composition). Split 2026-08-17 — see below. |
 | `components/shared/table/HeaderCell.tsx` | **New.** Label + `title`, column-selection on the label, a `data-grid-chrome` filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |
 | `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules, and the two seams above — `firstItemIndex` (endless only) and `renderChromeRow` + `TableChromeRowApi`. |
@@ -581,7 +583,7 @@ no-op that journals nothing.
 |---|---|
 | `app/dev/table-playground/page.tsx` | Dev-only route. `notFound()` in production unless `TABLE_PLAYGROUND` is set. |
 | `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a **group heading through `renderChromeRow`**, a draft pool, a **`Load older` pager** that prepends a page and rebases `firstItemIndex`, and a debug strip the suite asserts against. |
-| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **33 specs, all passing.** `npm run test:e2e`. |
+| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **47 specs, all passing.** `npm run test:e2e`. The last 14 are the platform pass — the selection box, the pill, the built-in menu, unmanaged resize, the wrapped header and the tinted cell. |
 
 **The playground lives OUTSIDE the `(app)` route group, deliberately.** That group's layout
 calls `supabase.auth.getUser()` and redirects to `/login`, and `middleware.ts` does the same
@@ -644,7 +646,13 @@ one number describes both the layout and the sticky arithmetic.
 Each is additive — omit it and behaviour is byte-identical — and each was invisible until a
 real screen could not be expressed. That remains this module's dominant development mechanic.
 
-1. **A row tint cannot reach a pinned cell.** `rowClassFor` lands on the `<tr>`, and every
+> **~~1~~, ~~2~~ and ~~6~~ are BUILT** (2026-08-19, the platform pass below). 1 and 6 are
+> both closed by **`ColumnSpec.cellClass`**; 2 by **`onSelectionChange`'s second argument**
+> *and* by the table publishing the pill itself. **3 is half-built** — `labelNode` +
+> `headerWrap` cover the two-line label; the spanning BAND row is still missing.
+> **4 and 5 remain open** as written.
+
+1. ~~**A row tint cannot reach a pinned cell.**~~ **BUILT — `ColumnSpec.cellClass`.** `rowClassFor` lands on the `<tr>`, and every
    pinned `<td>` is opaque by design (a frozen cell sits over scrolling content; any alpha
    bleeds through). So a row-status wash paints on the scrolling columns and is covered on
    exactly the frozen ones — a half-painted row that reads as a bug. Two routes were proven:
@@ -655,7 +663,9 @@ real screen could not be expressed. That remains this module's dominant developm
    selected. Proper seam: `rowTint?(item): string` layered by `cell-classes.ts` into the
    pinned cell's background as well as the row's — the module's own Frozen Panes rule already
    says row state "must be applied to the frozen cells too", and there is no wire for it.
-2. **The selection aggregates never leave the table.** `useTableInteraction` computes
+2. ~~**The selection aggregates never leave the table.**~~ **BUILT — and it went further than
+   the seam proposed: the table publishes them to the status bar ITSELF, so a consumer
+   wires nothing.** `useTableInteraction` computes
    `sum`/`average`/`count`/`min`/`max`/`recommendedCalcType`; `BlackwoodTable` forwards only
    the `CellRange` through `onSelectionChange`, and `TableState` carries no aggregates. A
    consumer **cannot** recompute them: the range is in **nav-row** coordinates and `navRows`
@@ -664,7 +674,9 @@ real screen could not be expressed. That remains this module's dominant developm
    therefore shows a cell **count** where the live grids show a total; none fakes a number.
    Seam: add `aggregates: CellAggregates | null` to `TableState`, or a second optional
    argument to `onSelectionChange`.
-3. **A two-level column header is inexpressible.** `headerRow` is one `<tr>` of `HeaderCell`s
+3. **A two-level column header is inexpressible** — *half built:* `ColumnSpec.labelNode`
+   and `ColumnSpec.headerWrap` now cover the two-line label, so `JAN-26-BLK22` no longer
+   truncates. The spanning BAND row is still missing. `headerRow` is one `<tr>` of `HeaderCell`s
    and `ColumnSpec.label` is typed `string`; `renderHeaderSlot` hangs a node *beside* a label
    inside one cell and cannot span. Trucks lost its plate band over four sub-columns (the
    plate now rides in each label, `AAV START`, with the full name on the tooltip) and is the
@@ -684,7 +696,9 @@ real screen could not be expressed. That remains this module's dominant developm
    6 of an 8-column pinned block emitted 25 cells for a 23-column table. Worked around by
    moving the lane. A one-line guard (`hasWeight && figIdx >= frozen`, degrading to no figure
    lane) would make it unwritable by accident.
-6. **A consumer cannot paint a cell or header border.** `cell-classes.ts` owns every
+6. ~~**A consumer cannot paint a cell or header border.**~~ **BUILT for the CELL —
+   `ColumnSpec.cellClass`. The HEADER border is still unreachable** (`ColumnSpec.groupStart`
+   would be the seam). `cell-classes.ts` owns every
    `<td>`/`<th>` className, so "give this column a left rule in all three sections" has no
    expression. Worked around inside the paint (the cell's own `absolute inset-0` inner span;
    an `inset-y-0 left-0 w-0.5` sliver through `renderHeaderSlot`). Wants
@@ -730,3 +744,120 @@ via localStorage, so the flag is read once and threaded down as a prop (a `useSe
 per view would opt three subtrees out of static prerendering); and **RC Movement's page owns
 no data**, so its v2 branch awaits the same existing read action rather than adding a prop to
 the client host.
+
+---
+
+## The platform pass (2026-08-19) — "a mini product we're shipping for us to use internally"
+
+Renzo, having driven the ten v2 grids: *"every part of the app that uses the table should
+also universally use the following features as well: the right click menu and the hover
+summary (the one on the bottom right where it shows the summation/average/count of the
+highlighted cells)"* · *"Width adjustment also doesn't exist on every table used."*
+
+**The finding behind all three is one finding, and it is worth stating plainly: a
+capability reachable only through a prop most consumers do not pass is, from the
+operator's chair, indistinguishable from a capability that does not exist.** The menu, the
+pill and the resize handle were all *in* the module. Nine of ten screens had none of them.
+So this pass moved four things from *prop-gated* to **default-ON**, and added three genuine
+seams. Everything below is additive in the sense that matters — a consumer that passes none
+of the new props compiles and behaves identically — but the four default-on behaviours are
+deliberately visible on every grid at once, because that was the request.
+
+### The register
+
+| What | What the consumer needed | Why the old API could not say it | The rule that keeps it additive |
+|---|---|---|---|
+| **A cell CLIPS** (`cell-classes.ts`) | *"A value wider than its column must stay inside its column."* | The interactive layer was `absolute inset-0 flex` with **no `overflow`**, so a long value painted straight over the neighbouring cell and a two-word one wrapped inside a row whose height its family had declared. Measured on the QC sheet: a `yyyy-MM-dd` in a 62px column, and `WHSE 3` on two lines. | No prop at all — it is a correctness fix, not a capability. `overflow-hidden whitespace-nowrap` on the layer, plus `[&>*]:text-ellipsis` so the element children a `format` returns get a true ellipsis. A `format` returning a **bare string** still clips but shows no ellipsis (a flex container is not a block container, so `text-overflow` on it does nothing for anonymous items) — wrap it in a `<span>`, which nearly every truncating column already does. |
+| **Header wrap / rich label** (`ColumnSpec.headerWrap`, `ColumnSpec.labelNode`) | *"`JAN-26-BLK22` must not read as `JAN-26-B…`."* | `label` is typed `string` and `HeaderCell` truncated it unconditionally. | Both optional; absent ⇒ one line, truncated, byte-identical. **`label` stays a required plain string** — the header's `title`, the resize handle's `aria-label` and `Copy with headers` all read it as TEXT and none of them can render a node, so `labelNode` adds a rendering and never replaces the name. Wrapping is bounded at two lines (`line-clamp-2`), because the whole header row grows to its tallest cell. |
+| **The selection is ONE box** (`lib/table/selection.ts`) | *"Grow it into one big box surrounding the selected cells WITHOUT inner borders."* | `cell-classes.ts` had exactly two selection states — `active` (a ring on one cell) and `selected` (a tint) — so a swept block was a wash with a ring in the corner it started from. | No prop. `rangeRowEdge` + `cellRangeEdges` are pure and decide, **per cell**, which of the four sides it paints; interior cells return the shared `NO_RANGE_EDGES` and paint nothing. **A 1×1 selection paints no box at all** — a plain click seeds one, so that case has to stay byte-identical with the ring. The four flags are in the class cache key. |
+| **The summary pill is universal** (`BlackwoodTable` → `useOptionalStatusBar`) | *"The hover summary, on every table."* | `useTableInteraction` computed `sum`/`average`/`count`/`min`/`max` on every gesture and **discarded them**; `onSelectionChange` handed out the rectangle alone, and a consumer **cannot** re-total it — the range is in NAV-ROW coordinates resolved inside `useTableRows`, so deriving it from `items` would be a second definition of the row axis (the `firstItemIndex` bug in another costume). | The table publishes to the app's status bar **itself**, so zero wiring. The provider is read through **`useOptionalStatusBar`**, which returns null instead of throwing — the grid mounts outside the app shell (the playground does) and a shared primitive that crashes a page over a missing ambient provider is not shared. `onSelectionChange` also gained an optional second argument `{ size, aggregates }` for a consumer that wants the numbers somewhere else. |
+| **A built-in right-click menu** (`lib/table/menu.ts`) | *"The right click menu, on every table."* | `contextMenuItems` was the ONLY menu there was, and `onContextMenu` returned early without it — so nine of ten grids had the browser's menu. | The item LIST is `defaultTableMenu`, a **pure function of `editable` and `hasRow`**, and every action maps onto the interaction hook's own callback (menu "Copy" *is* Ctrl/Cmd+C). The three mutating items are **ABSENT, not disabled**, wherever the cell does not accept an edit — which is every cell of every read-only grid, so switching the menu on everywhere cannot offer an action that would silently do nothing. `contextMenuItems` now renders **above** the built-ins with a separator; `disableDefaultContextMenu` is the opt-out. |
+| **Resize without persistence** (`BlackwoodTable` local widths) | *"Every table can be widened."* | The handle rendered only when `onSettingsChange` was supplied (`HeaderCell.resizable` is `spec.resizable !== false && onResize !== undefined`). | Delegate when there is somewhere to delegate to; keep the width in component state otherwise. The local map is **`undefined` until something is dragged**, so an unmanaged grid resolves its columns from exactly the object identity it did before — which is what `useTableColumns` memoizes on. `resizable: false` on the spec is still the opt-out. The handle is now **visible on header hover**, which is the half that made it feel absent. |
+| **`ColumnSpec.cellClass`** | *"Tint the ENTIRE cell"* (RC IN's out-of-band GRIT read as a small red pill inside the cell), and *"a row wash that reaches a PINNED cell"*. | `cell-classes.ts` owns every `<td>`/`<div>` className, so the only place a consumer could paint was inside `format` — a badge, or an `absolute inset-0 -z-10` layer with the `-z-10` load-bearing. And a class on the `<tr>` is covered on exactly the pinned columns, because a frozen cell is opaque by design. | Merged **UNDER** the cached string (`cn(extra, cls.inner)`), so `invalid` / `selected` / `dirty` and the active ring all win — a consumer cannot hide the states the operator navigates by, however loud its tint. Never asked for a cell the row does not occupy. **Cost:** one `twMerge` per cell that returns a string; a column that returns `undefined` — nearly every cell of nearly every column — pays nothing, because the cached string is used directly. |
+
+### The three things a consumer writes — verbatim, for the migration pass
+
+**(i) Extra right-click items.** Unchanged prop, new meaning: these render ABOVE the
+built-in Copy / Copy row / Select column block, with a separator drawn between them.
+
+```tsx
+<BlackwoodTable
+    contextMenuItems={(target) => (
+        <button
+            type="button"
+            className="flex w-full items-center px-2.5 py-1.5 text-xs hover:bg-accent"
+            onClick={() => { openEditDialog(target.row); target.close(); }}
+        >
+            Edit this receipt
+        </button>
+    )}
+/>
+```
+
+`target` is `TableContextTarget<Row>` — `{ cell, rowId, row, kind, close }`. Return `null`
+(or omit the prop entirely) and the built-in menu is all that shows. Pass
+`disableDefaultContextMenu` to suppress the built-ins.
+
+**(ii) Tint a whole cell.** A field on the COLUMN, not a prop on the table:
+
+```ts
+{
+    key: 'grit', label: 'GRIT', width: 72, align: 'right',
+    format: (row) => fmt2(row.lab_results?.grit),
+    cellClass: (row, ctx) =>
+        row && isOutOfBand(row.lab_results?.grit) ? 'bg-destructive/15 text-destructive' : undefined,
+}
+```
+
+Return `undefined` for the ordinary case — that is the branch that costs nothing. `row` is
+`Row | null` (null on a blank draft row). Do **not** put a background here expecting it to
+beat the selection tint: it deliberately loses to `selected`, `active`, `invalid` and
+`dirty`.
+
+**(iii) Wrap a header.** Two fields on the COLUMN, both optional:
+
+```ts
+{
+    key: 'jan26blk22', label: 'JAN-26-BLK22', width: 96,
+    headerWrap: true,                       // two lines instead of `JAN-26-B…`
+    labelNode: <span className="leading-tight">JAN-26<br />BLK22</span>,  // optional
+    format: (row) => fmt0(row.kg),
+}
+```
+
+`headerWrap` alone is usually enough. `labelNode` is for a genuinely rich label (a unit
+under a name, a small icon); **keep `label` as the plain string** — it is what the tooltip,
+the resize handle's `aria-label` and `Copy with headers` read.
+
+### Two things in the brief for this pass that turned out to be wrong
+
+- **`GridContextMenu` is not Radix.** The brief said to reuse it *"(Radix)"* and to work
+  around Radix's focus restoration with `onCloseAutoFocus`. Its own header says the
+  opposite in capitals — *"NO shadcn / Radix (avoids focus-steal inside grids)"* — and it
+  is a plain `position: fixed` div. So there is no `onCloseAutoFocus` to set. **The
+  underlying hazard is real anyway**, for a different reason: a menu ITEM has unmounted by
+  the time the click finishes, so focus is orphaned regardless of who owns the popover.
+  `dismissMenu` therefore calls `closeMenu()` and then the grid's own `focus()`, and the
+  suite proves it by pressing an arrow key straight after clicking Copy.
+- **The selection border could not go on an overlay or a box-shadow.** A `box-shadow` on
+  the cell layer competes with the active cell's `ring-*` (Tailwind composes both into one
+  `box-shadow`), and an inset shadow on the `<td>` is painted over by the layer's own
+  background tint. It is a real 1px `border` on the layer instead — with **all four sides
+  declared `transparent` on every cell in the table**, so only the COLOUR changes when a
+  sweep arrives. That is what buys zero layout shift: a border added only to the cells that
+  happen to be on an edge would move their text by a pixel as the drag reached them, a
+  shimmer running along the perimeter of every selection.
+
+### What this pass did NOT build
+
+- **The spanning header BAND row** (seam 3's other half) — Trucks still carries its plate
+  in each sub-column's label.
+- **`TableSummaryRow.cells?(api)`** (seam 4) and the sticky-summary **`figure`-inside-the-
+  pinned-block guard** (seam 5). Both unchanged.
+- **The `width: 100%` + `minWidth` stretch bug** documented above. Still mitigated
+  consumer-side by clamping each wrapper's `maxWidth` to `useTableColumns(...).minWidth`;
+  it still wants `sizing: 'fill' | 'content'` on the component. Note the new session-local
+  resize interacts with it correctly — the local width flows through `resolveColumns`, so
+  `minWidth` and the sticky offsets move together, which is the invariant that mitigation
+  rests on.
+

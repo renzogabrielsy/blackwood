@@ -2,7 +2,9 @@
 
 import * as React from 'react';
 
-import type { ColumnSpec, FieldEdits, RowKind } from '@/lib/table';
+import { cn } from '@/lib/utils';
+import { cellRangeEdges } from '@/lib/table';
+import type { ColumnSpec, FieldEdits, RowKind, SelectionRowEdge } from '@/lib/table';
 import type { CellClassTable } from './cell-classes';
 
 // ─────────────────────────────────────────────────────────────────────────────────
@@ -64,6 +66,15 @@ export interface TableRowProps<Row, Ctx> {
     activeCol: number;
     /** `[fromCol, toCol]` of the selection band on THIS row, or null. */
     selectionBand: readonly [number, number] | null;
+    /**
+     * Where this row sits in the selection rectangle, VERTICALLY — which is the half the
+     * band cannot say, and the half the "one big box" needs.
+     *
+     * A string rather than two booleans because it crosses the memo boundary below and a
+     * primitive compares by `===`. `'none'` (the default) is the behaviour before the
+     * selection grew a border: tint only, no box.
+     */
+    selectionRowEdge?: SelectionRowEdge;
     /** Column keys refused at commit on this row. Usually the frozen empty set. */
     invalidCols: ReadonlySet<string>;
     /** Is an editor mounted on the active cell? */
@@ -79,6 +90,9 @@ export interface TableRowProps<Row, Ctx> {
     /** Extra classes for the `<tr>` — a status rail, a duplicate wash. */
     rowClass?: string;
 }
+
+/** No selection box on this cell. The shared instance — an interior cell allocates none. */
+const NO_EDGES = { top: false, right: false, bottom: false, left: false } as const;
 
 /** The shared empty set, for the same reason as `NO_EDITS`. */
 export const NO_INVALID: ReadonlySet<string> = Object.freeze(new Set<string>()) as ReadonlySet<string>;
@@ -142,6 +156,7 @@ export type TableCellsProps<Row, Ctx> = Omit<TableRowProps<Row, Ctx>, 'handlers'
 function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
     const {
         navRow, kind, data, cols, ctx, rowEdits, activeCol, selectionBand,
+        selectionRowEdge = 'none',
         invalidCols, editing, renderEditor, pinnedLeft, pinnedRight, classes,
     } = props;
 
@@ -158,6 +173,19 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
                     exists && selectionBand !== null && i >= selectionBand[0] && i <= selectionBand[1];
                 const pin = i < startCount ? 'start' : i >= endStart ? 'end' : null;
 
+                // The selection's own geometry, per cell. Interior cells get nothing —
+                // that is what "one big box WITHOUT inner borders" means, and it falls
+                // out of the pure helper rather than out of a stylesheet.
+                const edges =
+                    selected && selectionBand !== null
+                        ? cellRangeEdges({
+                              rowEdge: selectionRowEdge,
+                              fromCol: selectionBand[0],
+                              toCol: selectionBand[1],
+                              col: i,
+                          })
+                        : NO_EDGES;
+
                 const cls = classes.get({
                     pin,
                     // The seam sits on the LAST start-pinned column and the FIRST
@@ -171,7 +199,18 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
                     dirty: exists && slot !== null && rowEdits[slot.field] !== undefined,
                     numeric: col.align === 'right',
                     editable: exists && slot.editable,
+                    edgeTop: edges.top,
+                    edgeRight: edges.right,
+                    edgeBottom: edges.bottom,
+                    edgeLeft: edges.left,
                 });
+
+                // The consumer's own paint for this cell — an out-of-band tint, a
+                // row-direction wash that has to reach a PINNED cell. Merged UNDER the
+                // cached string, so `selected` / `active` / `invalid` / `dirty` win;
+                // a column that returns undefined pays nothing.
+                const extra = exists ? col.cellClass?.(data, ctx) : undefined;
+                const innerClass = extra ? cn(extra, cls.inner) : cls.inner;
 
                 const style: React.CSSProperties = { height: kind.height };
                 if (pin === 'start') style.left = pinnedLeft[i];
@@ -182,7 +221,7 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
                         {isActive && editing ? (
                             <div className="absolute inset-0">{renderEditor(navRow, i)}</div>
                         ) : (
-                            <div className={cls.inner}>
+                            <div className={innerClass}>
                                 {/* An UNSAVED value is what the cell shows. `format` renders
                                     the STORED row, so without this a cell would keep showing
                                     the old figure after a commit and the whole sheet would
@@ -243,6 +282,10 @@ export const TableCells = React.memo(TableCellsInner, (a, b) => {
         a.rowEdits !== b.rowEdits ||
         a.activeCol !== b.activeCol ||
         a.editing !== b.editing ||
+        // A primitive, deliberately: it says which horizontal edges of the selection
+        // rectangle this row is on, and a row whose vertical position in the rectangle
+        // changed has to repaint even when its band did not.
+        a.selectionRowEdge !== b.selectionRowEdge ||
         a.invalidCols !== b.invalidCols ||
         a.classes !== b.classes ||
         a.pinnedLeft !== b.pinnedLeft ||

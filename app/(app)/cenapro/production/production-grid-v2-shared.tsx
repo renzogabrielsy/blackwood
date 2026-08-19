@@ -208,9 +208,9 @@ export const PRODUCTION_DATE_COLUMNS: ReadonlyMap<string, 'recv_date' | 'prod_da
 const dash = <span className="text-muted-foreground/40">—</span>;
 
 /**
- * The IN/OUT/DVO wash, painted INSIDE a PINNED cell's own content.
+ * The IN/OUT/DVO wash on a PINNED cell — now through `ColumnSpec.cellClass`.
  *
- * ── WHY IT CANNOT GO ON THE `<tr>` ──────────────────────────────────────────────
+ * ── WHY IT CANNOT GO ON THE `<tr>` (unchanged, and the reason this exists) ──────
  * `rowClassFor` puts classes on the row element, and that is enough for the nine
  * scrolling columns — their `<td>` has no background, so the row's wash shows through.
  * A PINNED `<td>` is different: `cell-classes.ts` gives it a solid `bg-background`,
@@ -220,24 +220,24 @@ const dash = <span className="text-muted-foreground/40">—</span>;
  * the seam between a tinted scrolling half and an untinted frozen half is worse than no
  * tint at all. This is the same reason the live ledger carries TWO tint flavours.
  *
- * ── WHY `-z-10` ─────────────────────────────────────────────────────────────────
- * A pinned `<td>` is `position: sticky` with `z-index: 10` (`.frozen-col`), so it forms a
- * stacking context. Within one, painting runs: the context root's own background, THEN
- * negative-z descendants, THEN everything else. A `-z-10` layer therefore lands ABOVE the
- * cell's opaque `bg-background` — which is what keeps the result opaque — and BELOW the
- * module's own interactive layer, which is where the selection tint and the active ring
- * live. Painted the naive way (no z-index, after the content) the wash would cover both,
- * and a selected or active pinned cell would stop showing that it was.
+ * ── WHAT CHANGED: THE `-z-10` LAYER IS GONE ─────────────────────────────────────
+ * This used to be an extra `<span aria-hidden className="absolute inset-0 -z-10">` emitted
+ * from FIVE different `format`s, with the negative z-index load-bearing: a pinned `<td>` is
+ * a stacking context, so `-z-10` was what put the wash above the cell's opaque background
+ * and below the module's interactive layer, where the selection tint and the active ring
+ * live. Get that one utility wrong and a selected pinned cell stopped looking selected.
  *
- * Composited over an opaque base, so it is still opaque: the frozen flavour of the tint,
- * exactly as the live ledger layers `rowDirectionFrozenTint` over `bg-background`.
+ * `cellClass` says the same thing without the extra element or the stacking-order trick:
+ * the classes are merged UNDER the cached class string on the interactive layer itself, so
+ * `selected` / `active` / `invalid` / `dirty` beat the wash by construction rather than by
+ * a z-index that had to be remembered five times. Five DOM nodes per row are also five
+ * fewer things for `[&>*]` to style and for the browser to lay out.
+ *
+ * Still the FROZEN flavour of the tint (`rowDirectionFrozenTint`), composited over the
+ * cell's opaque base, exactly as the live ledger does it.
  */
-function pinnedTint(dir: RowDirection): React.ReactNode {
-    const tint = rowDirectionFrozenTint(dir);
-    if (!tint) return null;
-    return (
-        <span aria-hidden="true" className={cn('pointer-events-none absolute inset-0 -z-10', tint)} />
-    );
+function pinnedTintClass(row: ProductionGridRow | null): string | undefined {
+    return row ? rowDirectionFrozenTint(row.dir) || undefined : undefined;
 }
 
 /** The scrolling half of the same wash — translucent, so hover and selection blend through. */
@@ -296,13 +296,11 @@ function specFor(col: ProdCol): ColumnSpec<ProductionGridRow, ProductionGridCtx>
                 cellKind: 'derived',
                 resizable: false,
                 hideable: false,
+                cellClass: pinnedTintClass,
                 format: (row) => (
-                    <>
-                        {pinnedTint(row.dir)}
-                        <span className="w-full text-center font-mono text-[10px] font-bold text-muted-foreground">
-                            {row.num}
-                        </span>
-                    </>
+                    <span className="w-full text-center font-mono text-[10px] font-bold text-muted-foreground">
+                        {row.num}
+                    </span>
                 ),
             };
 
@@ -314,13 +312,11 @@ function specFor(col: ProdCol): ColumnSpec<ProductionGridRow, ProductionGridCtx>
             return {
                 ...base,
                 cellKind: 'date',
+                cellClass: pinnedTintClass,
                 format: (row) => (
-                    <>
-                        {pinnedTint(row.dir)}
-                        <span className="font-mono text-xs font-bold" title={row.g.recv_date || undefined}>
-                            {formatDateShort(row.g.recv_date) || dash}
-                        </span>
-                    </>
+                    <span className="font-mono text-xs font-bold" title={row.g.recv_date || undefined}>
+                        {formatDateShort(row.g.recv_date) || dash}
+                    </span>
                 ),
             };
 
@@ -328,36 +324,32 @@ function specFor(col: ProdCol): ColumnSpec<ProductionGridRow, ProductionGridCtx>
             return {
                 ...base,
                 cellKind: 'date',
+                cellClass: pinnedTintClass,
+                /* Muted, and often blank — the live ledger paints this lane the same way,
+                   because a missing production date is normal rather than a gap. */
                 format: (row) => (
-                    <>
-                        {pinnedTint(row.dir)}
-                        {/* Muted, and often blank — the live ledger paints this lane the same
-                            way, because a missing production date is normal rather than a gap. */}
-                        <span
-                            className="font-mono text-xs font-bold text-muted-foreground"
-                            title={row.g.prod_date || undefined}
-                        >
-                            {formatDateShort(row.g.prod_date) || dash}
-                        </span>
-                    </>
+                    <span
+                        className="font-mono text-xs font-bold text-muted-foreground"
+                        title={row.g.prod_date || undefined}
+                    >
+                        {formatDateShort(row.g.prod_date) || dash}
+                    </span>
                 ),
             };
 
         case 'batch':
             return {
                 ...base,
+                cellClass: pinnedTintClass,
                 format: (row) => (
-                    <>
-                        {pinnedTint(row.dir)}
-                        <span className="flex w-full min-w-0 items-center gap-1" title={row.g.batch || undefined}>
-                            <span className="truncate font-mono text-xs font-bold">{row.g.batch || dash}</span>
-                            {row.g.batch_year ? (
-                                <span className="shrink-0 font-mono text-[10px] font-bold text-muted-foreground/60">
-                                    {row.g.batch_year}
-                                </span>
-                            ) : null}
-                        </span>
-                    </>
+                    <span className="flex w-full min-w-0 items-center gap-1" title={row.g.batch || undefined}>
+                        <span className="truncate font-mono text-xs font-bold">{row.g.batch || dash}</span>
+                        {row.g.batch_year ? (
+                            <span className="shrink-0 font-mono text-[10px] font-bold text-muted-foreground/60">
+                                {row.g.batch_year}
+                            </span>
+                        ) : null}
+                    </span>
                 ),
             };
 
@@ -422,11 +414,9 @@ function specFor(col: ProdCol): ColumnSpec<ProductionGridRow, ProductionGridCtx>
             return {
                 ...base,
                 cellKind: 'select',
+                cellClass: pinnedTintClass,
                 format: (row) => (
-                    <>
-                        {pinnedTint(row.dir)}
-                        <span className="font-mono text-xs font-bold">{row.g.whse_side || dash}</span>
-                    </>
+                    <span className="font-mono text-xs font-bold">{row.g.whse_side || dash}</span>
                 ),
             };
 

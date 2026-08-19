@@ -51,6 +51,10 @@ import {
   needsGroupSpacer,
   shiftFirstItemIndex,
   DEFAULT_FIRST_ITEM_INDEX,
+  rangeRowEdge,
+  cellRangeEdges,
+  NO_RANGE_EDGES,
+  defaultTableMenu,
 } from '../lib/table/index'
 import type { ColumnSpec, GridRow, JumpGrid, RowKind, SummaryLaneCol } from '../lib/table/index'
 import { resolveColumns } from '../lib/hooks/use-table-columns'
@@ -620,6 +624,7 @@ const baseKey: CellClassKey = {
   pin: null, edge: false, rowKind: 'record', exists: true,
   active: false, selected: false, invalid: false, dirty: false,
   numeric: false, editable: true,
+  edgeTop: false, edgeRight: false, edgeBottom: false, edgeLeft: false,
 }
 
 check('a cell gets exactly ONE background, by an explicit precedence', () => {
@@ -1222,7 +1227,7 @@ check('a consumer can reach HeaderCell.filterSlot, and omitting it changes nothi
   // popover state would be frozen at the identity it had on first render.
   const memo = code.slice(code.indexOf('const headerRow'), code.indexOf('const fixedHeaderContent'))
   assert.ok(memo.includes('renderHeaderSlot'), 'the header memo must depend on the slot renderer')
-  assert.match(memo, /onSettingsChange, renderHeaderSlot\]/)
+  assert.match(memo, /onResizeColumn, renderHeaderSlot\]/)
 
   // The header cell renders NO slot element at all when it is handed nothing — not an
   // empty wrapper, which would still occupy the gap beside every label.
@@ -1384,6 +1389,308 @@ check('the REACT half is tenant-neutral too: no app/ imports, no domain vocabula
       )
     }
   }
+})
+
+// ═══ The selection RECTANGLE — one box, no inner borders ══════════════════════
+//
+// Renzo, on the shipped behaviour: *"highlighting and selecting multiple cells keeps the
+// border only on the first selected cell and never grows to the rest of the selection
+// (only highlight does)."* The geometry that fixes it is pure, so it is asserted here
+// rather than inferred from a screenshot.
+
+check('rangeRowEdge names a row\'s place in the rectangle, and only rows inside it', () => {
+  assert.equal(rangeRowEdge(3, 7, 2), 'none')
+  assert.equal(rangeRowEdge(3, 7, 8), 'none')
+  assert.equal(rangeRowEdge(3, 7, 3), 'top')
+  assert.equal(rangeRowEdge(3, 7, 5), 'middle')
+  assert.equal(rangeRowEdge(3, 7, 7), 'bottom')
+  // A ONE-ROW rectangle is both edges at once — the case a pair of "is first"/"is last"
+  // booleans gets right and a single "which edge" enum would get wrong.
+  assert.equal(rangeRowEdge(4, 4, 4), 'both')
+})
+
+check('a swept block paints its PERIMETER and nothing inside it', () => {
+  // Rows 2..4 × columns 1..3. Walk every cell of the rectangle and its surroundings.
+  const at = (navRow: number, col: number) =>
+    cellRangeEdges({ rowEdge: rangeRowEdge(2, 4, navRow), fromCol: 1, toCol: 3, col })
+
+  // The four corners carry two edges each.
+  assert.deepEqual(at(2, 1), { top: true, right: false, bottom: false, left: true })
+  assert.deepEqual(at(2, 3), { top: true, right: true, bottom: false, left: false })
+  assert.deepEqual(at(4, 1), { top: false, right: false, bottom: true, left: true })
+  assert.deepEqual(at(4, 3), { top: false, right: true, bottom: true, left: false })
+
+  // The sides carry one.
+  assert.deepEqual(at(2, 2), { top: true, right: false, bottom: false, left: false })
+  assert.deepEqual(at(3, 1), { top: false, right: false, bottom: false, left: true })
+  assert.deepEqual(at(3, 3), { top: false, right: true, bottom: false, left: false })
+  assert.deepEqual(at(4, 2), { top: false, right: false, bottom: true, left: false })
+
+  // THE WHOLE POINT: an interior cell paints NOTHING — no inner borders — and it is handed
+  // the shared instance, so an interior cell allocates nothing on the render path.
+  assert.equal(at(3, 2), NO_RANGE_EDGES)
+
+  // Outside the rectangle in either axis: nothing.
+  assert.equal(at(1, 2), NO_RANGE_EDGES)
+  assert.equal(at(5, 2), NO_RANGE_EDGES)
+  assert.equal(at(3, 0), NO_RANGE_EDGES)
+  assert.equal(at(3, 4), NO_RANGE_EDGES)
+})
+
+check('a 1x1 selection paints NO box — the caret ring is the whole answer', () => {
+  // A plain click seeds a 1x1 selection, so this is the DEFAULT state of the sheet: it
+  // has to be byte-identical with the behaviour before the box existed, or every click
+  // grows a second rectangle a pixel inside the ring.
+  assert.equal(cellRangeEdges({ rowEdge: 'both', fromCol: 4, toCol: 4, col: 4 }), NO_RANGE_EDGES)
+
+  // One row and MORE than one column is not that case, and does get a box.
+  assert.deepEqual(cellRangeEdges({ rowEdge: 'both', fromCol: 4, toCol: 5, col: 4 }), {
+    top: true, right: false, bottom: true, left: true,
+  })
+  // Neither is one column and more than one row.
+  assert.deepEqual(cellRangeEdges({ rowEdge: 'top', fromCol: 4, toCol: 4, col: 4 }), {
+    top: true, right: true, bottom: false, left: true,
+  })
+})
+
+check('the class key includes the four edge flags, and each one changes the paint', () => {
+  // The cache is only sound if the key names everything that changes the string. Omitting
+  // the edges would serve whichever combination the cache saw FIRST to every cell of the
+  // rectangle — one cell's worth of borders painted on all of them.
+  const t = createCellClassTable()
+  const base = t.get(baseKey)
+  assert.equal(t.size(), 1)
+
+  const flags = ['edgeTop', 'edgeRight', 'edgeBottom', 'edgeLeft'] as const
+  const seen = new Set<string>([cellClassKey(baseKey)])
+  for (const flag of flags) {
+    const key = { ...baseKey, [flag]: true }
+    const k = cellClassKey(key)
+    assert.ok(!seen.has(k), `${flag} does not reach the cache key`)
+    seen.add(k)
+    assert.notEqual(t.get(key).inner, base.inner, `${flag} does not change the class string`)
+  }
+  assert.equal(t.size(), 5, 'each distinct key built exactly one entry')
+
+  // ALL FOUR SIDES ARE ALWAYS DECLARED — transparent off an edge, primary on one — so no
+  // two of them can land in the same tailwind-merge group at different specificities and
+  // let the stylesheet decide which wins.
+  for (const key of [baseKey, { ...baseKey, edgeTop: true, edgeLeft: true }]) {
+    const inner = t.get(key).inner
+    for (const side of ['t', 'r', 'b', 'l']) {
+      assert.equal(
+        (inner.match(new RegExp(`(?:^|\\s)border-${side}-[^\\s]+`, 'g')) ?? []).length,
+        1,
+        `exactly one border-${side}-* class`,
+      )
+    }
+  }
+  assert.match(t.get({ ...baseKey, edgeTop: true }).inner, /border-t-primary/)
+  assert.match(t.get(baseKey).inner, /border-t-transparent/)
+})
+
+check('a cell CLIPS: no spill into the neighbour, no wrap onto a second line', () => {
+  // Measured on the QC sheet: a `yyyy-MM-dd` in a 62px column painted over the cell beside
+  // it, and `WHSE 3` wrapped to two lines inside a row whose height its family declared.
+  // Neither reads as a width problem, which is why neither got fixed by widening.
+  const t = createCellClassTable()
+  for (const exists of [true, false]) {
+    const inner = t.get({ ...baseKey, exists }).inner
+    assert.match(inner, /(?:^|\s)overflow-hidden(?:\s|$)/, 'a cell must clip its own content')
+    assert.match(inner, /(?:^|\s)whitespace-nowrap(?:\s|$)/, 'a cell is one line')
+    // Even a cell the row does not have reserves the border gutter, or its neighbours'
+    // text sits a pixel off from every other row.
+    assert.match(inner, /(?:^|\s)border(?:\s|$)/)
+  }
+  // True ellipsis for the element children a `format` returns — a flex container is not a
+  // block container, so `text-overflow` on the cell itself would do nothing for them.
+  assert.match(t.get(baseKey).inner, /\[&>\*\]:text-ellipsis/)
+  assert.match(t.get(baseKey).inner, /\[&>\*\]:min-w-0/)
+})
+
+// ═══ The built-in right-click menu ════════════════════════════════════════════
+
+check('the default menu is a pure function of the cell — mutating items only where an edit lands', () => {
+  const readOnly = defaultTableMenu({ editable: false, hasRow: true, hasSelection: true })
+  const editable = defaultTableMenu({ editable: true, hasRow: true, hasSelection: true })
+
+  const actions = (items: { action: string }[]) => items.map((i) => i.action)
+
+  // A READ-ONLY grid — which is what all ten migrated grids are, structurally, since none
+  // of their columns declares a `parse` — is offered nothing that could ask it to change.
+  assert.deepEqual(actions(readOnly), [
+    'copy', 'copy-with-headers', 'copy-row', 'select-row', 'select-column', 'clear-selection',
+  ])
+  for (const item of readOnly) assert.ok(!item.mutates, `${item.action} must not be offered on a read-only cell`)
+
+  // The mutating three are ADDED, and the read-only six are unchanged and in the same
+  // order — the menu grows, it never rearranges itself under the operator.
+  assert.deepEqual(actions(editable), [
+    'copy', 'copy-with-headers', 'copy-row',
+    'clear-contents', 'paste', 'fill-down',
+    'select-row', 'select-column', 'clear-selection',
+  ])
+  assert.deepEqual(
+    editable.filter((i) => i.mutates).map((i) => i.action),
+    ['clear-contents', 'paste', 'fill-down'],
+  )
+
+  // A click that landed on CHROME has no row to copy and no row to select.
+  assert.deepEqual(actions(defaultTableMenu({ editable: false, hasRow: false, hasSelection: false })), [
+    'copy', 'copy-with-headers', 'select-column',
+  ])
+  // "Clear selection" is offered only when there IS one.
+  assert.ok(!actions(defaultTableMenu({ editable: true, hasRow: true, hasSelection: false }))
+    .includes('clear-selection'))
+
+  // PURE: same input, same output, and never the same object twice (a caller mutating the
+  // list must not poison the next menu).
+  const a = defaultTableMenu({ editable: true, hasRow: true, hasSelection: true })
+  const b = defaultTableMenu({ editable: true, hasRow: true, hasSelection: true })
+  assert.deepEqual(a, b)
+  assert.notEqual(a, b)
+})
+
+check('the menu is rendered for EVERY grid, and each action is the gesture that already existed', () => {
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('defaultTableMenu'), 'comment-stripping ate the source')
+
+  // BEFORE: `if (!contextMenuItems) return;` — a grid that supplied no items had no menu,
+  // which is nine of the ten migrated screens. The gate is now the explicit opt-OUT.
+  assert.match(code, /if \(disableDefaultContextMenu && !contextMenuItems\) return;/)
+
+  // Every action maps onto the interaction hook's own callback, so "Copy" in the menu and
+  // Ctrl/Cmd+C cannot mean two different things.
+  for (const wire of [
+    'copy: menuActions.copy',
+    "'copy-with-headers': menuActions.copyWithHeaders",
+    'menuActions.copyRow(cell.row)',
+    'menuActions.selectRow(cell.row)',
+    'menuActions.selectColumn(cell.col)',
+    "'clear-selection': menuActions.clearSelection",
+    "'clear-contents': menuActions.clearContents",
+    'paste: menuActions.paste',
+    "'fill-down': menuActions.fillDown",
+  ]) {
+    assert.ok(code.includes(wire), `the menu does not wire ${wire}`)
+  }
+
+  // BOTH halves of the editability verdict, exactly as `useTableInteraction` combines
+  // them: the row family's `editable` AND the column's `columnAcceptsEdit`.
+  assert.match(code, /slot\.editable/)
+  assert.match(code, /columnAcceptsEdit\(spec, nav\?\.data \?\? null, ctx\)/)
+
+  // It REUSES the shared popover rather than growing a third hand-rolled one.
+  assert.match(code, /<GridContextMenu/)
+  assert.match(code, /useGridContextMenu</)
+
+  // Closing hands the caret back — a menu item has already unmounted when focus would be
+  // restored to it, so focus lands on <body> and the sheet reads as dead.
+  assert.match(code, /closeMenu\(\);\s*\n\s*focusGrid\(\);/)
+})
+
+// ═══ Resize, the summary pill, and the per-cell class — default-ON, not props ══
+
+check('a column resizes WITHOUT a consumer that persists widths', () => {
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('onResizeColumn'), 'comment-stripping ate the source')
+
+  // BEFORE: `onResize={onSettingsChange ? onResizeColumn : undefined}` — so `HeaderCell`'s
+  // `resizable` was false and no handle rendered at all on any grid that had not wired
+  // per-user settings. Which was nine of ten, and reads exactly like a missing feature.
+  assert.match(code, /onResize=\{onResizeColumn\}/)
+  assert.ok(
+    !/onResize=\{onSettingsChange \?/.test(code),
+    'the handle must not be gated on the persistence prop',
+  )
+  // Delegate when there is somewhere to delegate to; keep it for the session otherwise.
+  assert.match(code, /if \(onSettingsChange\) \{/)
+  assert.match(code, /setLocalWidths\(/)
+  // ADDITIVE: `undefined` while nothing has been dragged, so an unmanaged grid resolves
+  // its columns from exactly the object it did before — identity included, which is what
+  // the column memo compares.
+  assert.match(code, /if \(onSettingsChange \|\| Object\.keys\(localWidths\)\.length === 0\) return settings\?\.widths;/)
+
+  // The column's own opt-out is untouched: the spec still decides.
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  assert.match(header, /spec\.resizable !== false && onResize !== undefined/)
+  // And the handle ANNOUNCES itself, which is the difference between a feature and a
+  // feature nobody found.
+  assert.match(header, /group-hover\/th:opacity-100/)
+})
+
+check('the selection aggregates leave the table by themselves', () => {
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('useOptionalStatusBar'), 'comment-stripping ate the source')
+
+  // The numbers were computed on every gesture and DISCARDED, and a consumer could not
+  // recompute them: the rectangle is in nav-row coordinates it does not own. Published
+  // from inside the table, so a consumer wires nothing at all.
+  assert.match(code, /setCellSelectionCount\?\.\(selectionSize\)/)
+  assert.match(code, /setCellAggregates\?\.\(aggregates\)/)
+  // OPTIONAL provider: the grid mounts outside the app shell (the playground does), and a
+  // shared primitive that throws over a missing ambient provider is not shared.
+  const provider = readFileSync(join(ROOT, 'components/providers/status-bar-context.tsx'), 'utf8')
+  assert.match(provider, /export function useOptionalStatusBar\(\)/)
+  assert.ok(
+    !/useOptionalStatusBar[\s\S]{0,200}throw/.test(provider),
+    'the optional reader must never throw',
+  )
+
+  // The clear is its OWN effect over the two STABLE setters, so it runs on unmount and at
+  // no other time — folded into the cleanup above it would fire a "0 cells" between every
+  // two selections and the pill would flicker empty on every drag.
+  const clear = code.slice(code.indexOf('React.useEffect(\n        () => () => {'))
+  assert.match(clear.slice(0, 300), /setCellSelectionCount\?\.\(0\)/)
+  assert.match(clear.slice(0, 400), /\[setCellSelectionCount, setCellAggregates\],/)
+
+  // And the range still goes out with its numbers attached, for a consumer that wants
+  // them somewhere other than the pill.
+  const hook = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  assert.match(hook, /onSelectionChange\?\(range: CellRange \| null, meta\?: SelectionMeta\): void/)
+  assert.match(hook, /selectionChangeRef\.current\?\.\(selectionRange, \{ size: selectionSize, aggregates \}\)/)
+})
+
+check('cellClass tints a WHOLE cell and layers UNDER the states the operator navigates by', () => {
+  const row = readFileSync(join(ROOT, 'components/shared/table/Row.tsx'), 'utf8')
+  const code = row.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('TableCellsInner'), 'comment-stripping ate the source')
+
+  // PRECEDENCE, and it is the whole safety property: the consumer's classes are merged
+  // FIRST, so `selected` / `active` / `invalid` / `dirty` win. A consumer cannot hide the
+  // states the operator navigates by, however loud its tint.
+  assert.match(code, /cn\(extra, cls\.inner\)/)
+  assert.ok(!/cn\(cls\.inner, extra\)/.test(code), 'the cached string must win, not the tint')
+  // ADDITIVE: a column that declares nothing gets the cached string with no merge at all,
+  // so the cost is paid only by the cells that use it.
+  assert.match(code, /extra \? cn\(extra, cls\.inner\) : cls\.inner/)
+  // Never asked for a cell the row does not have.
+  assert.match(code, /exists \? col\.cellClass\?\.\(data, ctx\) : undefined/)
+
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /cellClass\?\(row: Row \| null, ctx: Ctx\): string \| undefined/)
+})
+
+check('a header may WRAP or carry a NODE, and label stays the string three things read', () => {
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /label: string;/, 'label stays a plain required string')
+  assert.match(types, /labelNode\?: React_Node;/)
+  assert.match(types, /headerWrap\?: boolean;/)
+
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  // DEFAULT IS TODAY'S BEHAVIOUR: one line, truncated. Wrapping is bounded at two lines,
+  // because the whole header row grows to its tallest cell.
+  assert.match(header, /spec\.headerWrap\s*\n?\s*\?\s*'whitespace-normal break-words leading-tight line-clamp-2'\s*\n?\s*:\s*'truncate'/)
+  assert.match(header, /\{spec\.labelNode \?\? spec\.label\}/)
+  // The three text readers keep reading the STRING — a node cannot be a tooltip, an
+  // aria-label or a clipboard header.
+  assert.match(header, /title=\{spec\.title \?\? spec\.label\}/)
+  assert.match(header, /aria-label=\{`Resize \$\{spec\.label\}`\}/)
+  const hook = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  assert.match(hook, /tsvEscape\(cols\[c\]\?\.label \?\? ''\)/)
 })
 
 console.log(`\n${passed} assertions passed.`)

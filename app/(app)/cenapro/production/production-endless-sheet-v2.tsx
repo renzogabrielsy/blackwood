@@ -7,7 +7,6 @@ import { BlackwoodTable } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
 import { DEFAULT_FIRST_ITEM_INDEX, shiftFirstItemIndex } from '@/lib/table';
 import type { ColumnSpec, TableSettings } from '@/lib/table';
-import type { CellRange } from '@/lib/hooks/use-cell-selection';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { cn } from '@/lib/utils';
 
@@ -92,8 +91,8 @@ import {
 // client-side re-sort would reorder the rows the pager is walking and make `hasOlder` /
 // `hasNewer` describe a different sheet than the one on screen.
 //
-// The selection aggregate pill is absent because the platform computes SUM/AVERAGE for its
-// own use and does not hand them out — see the note in the focus grid and the report.
+// The selection aggregate pill is the TABLE's now and needs no wiring here — see the note
+// in the focus grid for what it replaced.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 export interface ProductionEndlessSheetV2Props {
@@ -142,7 +141,6 @@ export function ProductionEndlessSheetV2({
     );
 
     const [settings, setSettings] = React.useState<TableSettings>({});
-    const [selection, setSelection] = React.useState<CellRange | null>(null);
 
     const byRowId = React.useMemo(() => {
         const m = new Map<string, ProductionGridRow>();
@@ -304,9 +302,6 @@ export function ProductionEndlessSheetV2({
     const endReached = React.useCallback(() => void fetchNewer(), [fetchNewer]);
 
     const activeFilterDescription = React.useMemo(() => describeActiveFilters(filters), [filters]);
-    const selectedCells = selection
-        ? (selection.endRow - selection.startRow + 1) * (selection.endCol - selection.startCol + 1)
-        : 0;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -330,11 +325,13 @@ export function ProductionEndlessSheetV2({
                         <span className="ml-1 text-muted-foreground/50">· scroll to load more</span>
                     ) : null}
                 </span>
-                {selectedCells > 0 ? (
-                    <span className="font-mono text-muted-foreground/70">
-                        · {selectedCells.toLocaleString('en-US')} cell{selectedCells === 1 ? '' : 's'} selected
-                    </span>
-                ) : null}
+                {/* The `N cells selected` chip that used to sit here is GONE. It existed
+                    because the platform computed SUM/AVERAGE/COUNT/MIN/MAX over the
+                    rectangle and did not hand them out, and a consumer cannot re-derive
+                    them from a range in nav-row coordinates it does not own — so a COUNT
+                    was the only honest thing this toolbar could print. `BlackwoodTable`
+                    now publishes the real aggregates to the app's floating status bar
+                    itself. A count beside a total is not a second opinion, it is noise. */}
                 <div className="flex-1" />
                 {filterUi.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                 {filterUi.activeCount > 0 ? (
@@ -394,8 +391,7 @@ export function ProductionEndlessSheetV2({
                     renderChromeRow={renderChromeRow}
                     renderHeaderSlot={renderHeaderSlot}
                     summaryRows={summaryRows}
-                    onSelectionChange={setSelection}
-                    firstItemIndex={firstItemIndex}
+                        firstItemIndex={firstItemIndex}
                     initialTopMostItemIndex={initialTop}
                     startReached={startReached}
                     endReached={endReached}

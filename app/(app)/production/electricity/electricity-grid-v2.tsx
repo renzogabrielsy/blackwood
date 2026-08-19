@@ -7,8 +7,6 @@ import { BlackwoodTable } from '@/components/shared/table';
 import type { TableState } from '@/components/shared/table';
 import type { CellSlot, ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
-import type { CellRange } from '@/lib/hooks/use-cell-selection';
-import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { Tables } from '@/types/supabase';
 
 // ═════════════════════════════════════════════════════════════════════════════════
@@ -85,8 +83,13 @@ function Centre({ children }: { children: React.ReactNode }) {
 
 // ═══ Columns ════════════════════════════════════════════════════════════════════
 //
-// Widths are the live grid's, column for column: 28 / 80 / 120 / 80 / 80 / 70 / 70 / 90
-// / 50. The 20px delete column is absent because deleting is a write.
+// Widths STARTED as the live grid's, column for column, and four of them were wrong here
+// for a reason that does not show up in a diff: the live grid pads its cells `px-1`, while
+// the module's cell is `px-2` and reserves a 1px selection-box gutter on all four sides.
+// **A cell's usable width here is `declared − 18`** — about one character at `text-xs`
+// narrower than the same declaration next door. So DATE (a full `yyyy-MM-dd`), the two
+// meter readings, DIFF and TTL KWH are widened against their longest REAL value; nothing
+// is narrowed. The 20px delete column is absent because deleting is a write.
 //
 // `cellKind` still says what KIND of editor each lane would want, because that is a fact
 // about the column rather than about this pass — and `readonly` / `derived` are read by
@@ -108,7 +111,9 @@ const COLUMNS: ColumnSpec<ElectricityReadingRow, ElectricityCtx>[] = [
     {
         key: 'reading_date',
         label: 'DATE',
-        width: 80,
+        // A full `yyyy-MM-dd` in mono at `text-xs` is ~72px and this lane is CENTRED, so
+        // it cannot lean on either margin: 72 + 18 of chrome = 90, against a declared 80.
+        width: 92,
         align: 'center',
         cellKind: 'date',
         clipboardValue: (r) => r.reading_date ?? '',
@@ -127,7 +132,10 @@ const COLUMNS: ColumnSpec<ElectricityReadingRow, ElectricityCtx>[] = [
         key: 'start_kwh',
         label: 'START KWH',
         title: 'Start meter reading (kWh)',
-        width: 80,
+        // Floored by the HEADER here, not the value: `START KWH` is nine characters at
+        // `text-[11px]` uppercase with `tracking-wide` (~69px) against 80 − 17 = 63, so it
+        // truncated to `START K…` on every render.
+        width: 92,
         align: 'right',
         cellKind: 'number',
         calcType: 'SUM',
@@ -139,7 +147,9 @@ const COLUMNS: ColumnSpec<ElectricityReadingRow, ElectricityCtx>[] = [
         key: 'end_kwh',
         label: 'END KWH',
         title: 'End meter reading (kWh)',
-        width: 80,
+        // `END KWH` fits at 80; it matches START anyway. A meter pair rendered at two
+        // different widths reads as two different quantities.
+        width: 92,
         align: 'right',
         cellKind: 'number',
         calcType: 'SUM',
@@ -151,7 +161,9 @@ const COLUMNS: ColumnSpec<ElectricityReadingRow, ElectricityCtx>[] = [
         key: 'diff',
         label: 'DIFF',
         title: 'END − START (kWh)',
-        width: 70,
+        // Renders `d.toFixed(2)` — a real meter delta reaches `12345.67`, eight mono
+        // characters ≈ 58px, + 18 of chrome = 76 against a declared 70.
+        width: 80,
         align: 'right',
         // Never editable, but a rectangle MAY cover it — a run of computed figures is the
         // most useful thing on a sheet to add up.
@@ -187,7 +199,10 @@ const COLUMNS: ColumnSpec<ElectricityReadingRow, ElectricityCtx>[] = [
         key: 'consumption',
         label: 'TTL KWH',
         title: 'DIFF × MULT (kWh consumed)',
-        width: 90,
+        // DIFF × MULT, and the multiplier is in the tens — so this is the WIDEST figure on
+        // the sheet by an order of magnitude. Grouped to two decimals, `1,234,567.89` is
+        // twelve mono characters ≈ 87px, + 18 = 105 against a declared 90.
+        width: 108,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -323,13 +338,25 @@ export interface ElectricityGridV2Props {
 }
 
 export function ElectricityGridV2({ initialData }: ElectricityGridV2Props) {
-    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
+    // No status-bar wiring, and no local selection count.
+    //
+    // This grid used to hold `selectionCount`, push it into the shared status bar on a
+    // 50ms timer, and push `setCellAggregates(null)` beside it — because the module
+    // computed SUM/AVERAGE/COUNT/MIN/MAX over the selected rectangle and then discarded
+    // them, and a consumer CANNOT recompute them: the range is in nav-row coordinates
+    // resolved inside `useTableRows`, so totalling it against `items` would be a second
+    // definition of the row axis. So the honest thing was a cell COUNT and an explicit
+    // `null` where the live grid shows a total.
+    //
+    // `BlackwoodTable` now publishes the real aggregates to the status bar ITSELF, through
+    // an optional provider. Every line of that workaround is deleted rather than left to
+    // race the table for the same slot — two writers to one pill is a flicker, and the one
+    // that wins is whichever effect happens to run last.
 
     // Column layout the operator owns for this session — resize only. Held locally: the
     // TABLE has no opinion about persistence, and a read-only side-by-side has no business
     // writing `user_table_settings`.
     const [settings, setSettings] = React.useState<TableSettings>({});
-    const [selectionCount, setSelectionCount] = React.useState(0);
 
     const rows = initialData;
 
@@ -358,33 +385,6 @@ export function ElectricityGridV2({ initialData }: ElectricityGridV2Props) {
     const isDraft = React.useCallback(() => false, []);
     const edits = useTableEdits({ canonicalText: storedText, isDraft });
 
-    const onSelectionChange = React.useCallback((range: CellRange | null) => {
-        setSelectionCount(
-            range === null
-                ? 0
-                : (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1),
-        );
-    }, []);
-
-    // The shared status bar's cell counter. The AGGREGATES are computed inside the table
-    // and are not on any prop it exposes, so they are deliberately left null rather than
-    // recomputed here — see this file's note in the migration report.
-    React.useEffect(() => {
-        const t = setTimeout(() => {
-            setCellSelectionCount(selectionCount);
-            setCellAggregates(null);
-        }, 50);
-        return () => clearTimeout(t);
-    }, [selectionCount, setCellSelectionCount, setCellAggregates]);
-
-    React.useEffect(
-        () => () => {
-            setCellSelectionCount(0);
-            setCellAggregates(null);
-        },
-        [setCellSelectionCount, setCellAggregates],
-    );
-
     const rowClassFor = React.useCallback(
         (): string => 'group transition-colors duration-150 hover:bg-muted/50',
         [],
@@ -406,11 +406,9 @@ export function ElectricityGridV2({ initialData }: ElectricityGridV2Props) {
                 <span className="font-mono">
                     {state.activeCell ? `r${state.activeCell.row + 1}·c${state.activeCell.col + 1}` : '—'}
                 </span>
-                {selectionCount > 1 ? (
-                    <span className="font-mono">{selectionCount} cells selected</span>
-                ) : null}
                 <span className="ml-auto">
-                    Read-only preview — the <strong className="font-semibold">Current</strong> switch above
+                    Read-only preview — selection, the right-click menu, the selection summary and column
+                    resize are live. The <strong className="font-semibold">Current</strong> switch above
                     returns to the editable grid.
                 </span>
             </div>
@@ -427,7 +425,6 @@ export function ElectricityGridV2({ initialData }: ElectricityGridV2Props) {
                 scope="focus"
                 rowRules={ROW_RULES}
                 rowClassFor={rowClassFor}
-                onSelectionChange={onSelectionChange}
                 onStateChange={setState}
                 emptyMessage="Awaiting Production Manager sync — no readings for this period."
                 className={GRID_HEIGHT}

@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Copy } from 'lucide-react';
 
 import { BlackwoodTable } from '@/components/shared/table';
-import type { TableChromeRowApi, TableState } from '@/components/shared/table';
+import type { TableChromeRowApi } from '@/components/shared/table';
 import { pinnedOffsets } from '@/lib/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
@@ -266,6 +266,12 @@ export function FleconBagsGridV2({ balances, movements, error }: FleconBagsGridV
                 // The live view's header: the operator's nickname when there is one, else
                 // the internal label. The full internal label stays in the `title`.
                 label: c.nickname?.trim() || c.label,
+                // A bag-type header is OPERATOR TEXT (`flecon_bag_types.nickname`), so its
+                // length is not something this file may assume — and at 72px a one-line
+                // truncating header turns fourteen columns into fourteen ellipses. Two
+                // lines, bounded by `line-clamp-2`; a short nickname renders exactly as
+                // before.
+                headerWrap: true,
                 title: c.label,
                 width: W_BAG,
                 align: 'right',
@@ -550,21 +556,15 @@ export function FleconBagsGridV2({ balances, movements, error }: FleconBagsGridV
         return `${firstMo} ${firstYr}–${lastMo} ${lastYr}`;
     }, [movements]);
 
-    // The selection's SIZE, not its total. The module computes the aggregates inside
-    // `useTableInteraction` and hands a consumer only the RANGE (`onSelectionChange` /
-    // `onStateChange`), so the floating aggregate pill cannot be built from out here —
-    // and a fake one that showed a number this file computed from a nav-row index space
-    // it does not own would be worse than none. Reported as a missing seam.
-    const [state, setState] = React.useState<TableState>({
-        activeCell: null,
-        isEditing: false,
-        selection: null,
-    });
-    const sel = state.selection;
-    const selLabel =
-        sel === null
-            ? null
-            : `${sel.endRow - sel.startRow + 1} × ${sel.endCol - sel.startCol + 1}`;
+    // The `3 × 4 selected` chip that used to live here is GONE, and so is the
+    // `TableState` it was built from.
+    //
+    // It existed because the module computed the aggregates inside `useTableInteraction`
+    // and handed a consumer only the RANGE — and a consumer cannot re-total a range in
+    // nav-row coordinates it does not own, so a SIZE was the only honest thing this file
+    // could print. `BlackwoodTable` now publishes SUM/AVERAGE/COUNT/MIN/MAX to the app's
+    // floating status bar itself. A dimensions chip beside a real total is not a second
+    // opinion, it is noise.
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-3">
@@ -598,15 +598,11 @@ export function FleconBagsGridV2({ balances, movements, error }: FleconBagsGridV
                     grid=v2
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                    Read-only. Selection, keyboard, copy and column resize are live; the
-                    editable column nicknames, the phone summary and the bottom-pinned
-                    Current Balance are not.
+                    Read-only. Selection, keyboard, copy, the right-click menu, the
+                    selection summary and column resize are live; the editable column
+                    nicknames, the phone summary and the bottom-pinned Current Balance are
+                    not.
                 </span>
-                {selLabel ? (
-                    <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {selLabel} selected
-                    </span>
-                ) : null}
             </div>
 
             {/* The max-width clamp — see the header. It is what keeps `table-fixed` from
@@ -629,7 +625,6 @@ export function FleconBagsGridV2({ balances, movements, error }: FleconBagsGridV
                     rowRules={rowRules}
                     rowClassFor={rowClassFor}
                     renderChromeRow={renderChromeRow}
-                    onStateChange={setState}
                     // Open at the BOTTOM, where the newest movements and the Current
                     // Balance lane are — the live view's `scrollTop = scrollHeight` on
                     // mount, expressed as an index because this scope is virtualised. A

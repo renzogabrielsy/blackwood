@@ -40,9 +40,20 @@ import { cn } from '@/lib/utils';
 // ── WHAT IT DOES DO ─────────────────────────────────────────────────────────────
 // Everything a spreadsheet does short of typing: cell selection and rectangular ranges,
 // the full keyboard including Ctrl/Cmd+Arrow · Home/End · Ctrl+Home/End · PageUp/PageDown,
-// Ctrl/Cmd+C to the clipboard as TSV, the floating selection-aggregate pill, column
-// resize, a frozen STATE+DATE block at the left edge, month group headings inside the body
-// (`renderChromeRow`) and a sticky totals rule-off.
+// Ctrl/Cmd+C to the clipboard as TSV, the floating selection-aggregate pill, the built-in
+// right-click menu, column resize, a frozen STATE+DATE block at the left edge, month group
+// headings inside the body (`renderChromeRow`) and a sticky totals rule-off.
+//
+// The pill and the menu are the TABLE's now, not this file's: `BlackwoodTable` publishes
+// the selection's SUM/AVERAGE/COUNT/MIN/MAX to the app's status bar itself and ships a
+// default Copy / Copy row / Select column menu, so there is nothing here to wire and —
+// more to the point — nothing here that could disagree with the other nine sheets.
+//
+// ── AN OUT-OF-BAND LAB READING TINTS THE WHOLE CELL ─────────────────────────────
+// Through `ColumnSpec.cellClass`, using `getLabHighlightBg` — the SAME predicate and the
+// same operator-configured colour the live table applies to its `<td>`. It used to be a
+// small rounded pill drawn inside `format`, because before that seam existed `format` was
+// the only place a consumer could paint; see the lab column block below.
 //
 // ── COLUMN ORDER IS CLAUDE.md's, NOT the live table's ───────────────────────────
 // Project `CLAUDE.md` → "RC IN Column Config" is the canonical left-to-right order and
@@ -180,7 +191,10 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'state',
         label: 'STATE',
         title: 'Batch status',
-        width: 84,
+        // Floored by `SUNDRYING` — the longest `batch_status` value — plus the 6px status
+        // dot and its gap, against the module's `px-2` + 1px selection gutter (18px of
+        // chrome). 84 left it a pixel or two short; 92 is the honest minimum.
+        width: 92,
         pin: 'start',
         cellKind: 'readonly',
         selectable: true,
@@ -229,7 +243,12 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         key: 'batch_code',
         label: 'BATCH',
         title: 'Batch code',
-        width: 118,
+        // MEASURED against the longest REAL code, not against the label: `SEPTEMBER-26-BLK18`
+        // renders **132.91px** in this cell's own mono font, so the column needs 151. The
+        // sheet also carries `AUGUST-26-BLK15` (109.17) and `FEBRUARY-26-FEED1`. At 118
+        // every long-month block truncated — and a batch code cut in the middle is exactly
+        // the value an operator is scanning this column for.
+        width: 152,
         cellKind: 'readonly',
         selectable: true,
         visible: hiddenBy('batch_code'),
@@ -309,7 +328,9 @@ for (const lab of LAB_COLUMNS) {
         key: lab.key,
         label: lab.label,
         title: lab.title,
-        width: lab.decimals === 3 ? 68 : 58,
+        // A 3-decimal BD lane is floored by its HEADER (`BD ASTM`, seven characters at
+        // `text-[11px]` uppercase ≈ 54px against 68 − 17 = 51 usable), not by `0.352`.
+        width: lab.decimals === 3 ? 76 : 58,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -317,17 +338,39 @@ for (const lab of LAB_COLUMNS) {
         visible: hiddenBy(lab.key),
         numericValue: (row) => labValue(row, lab.key),
         clipboardValue: (row) => labText(row, lab.key),
-        format: (row, ctx) => {
+        format: (row) => {
             const v = labValue(row, lab.key);
             if (v === null) return dash;
-            // The operator's own threshold, from the same provider the live table reads —
-            // so a limit changed there is honoured on both sides of the toggle.
-            const bg = getLabHighlightBg(lab.key, v, ctx.labHighlights);
             return (
-                <span className={cn('block w-full rounded-sm text-right font-mono tabular-nums', bg)}>
+                <span className="block w-full text-right font-mono tabular-nums">
                     {v.toFixed(lab.decimals)}
                 </span>
             );
+        },
+        /**
+         * OUT OF BAND TINTS THE WHOLE CELL — Renzo: *"I want the entire cell tinted"*.
+         *
+         * The predicate and the colour are BOTH `getLabHighlightBg`, the same call the
+         * live `delivery-master-table.tsx` makes, so no threshold is invented here: the
+         * operator's own limit, direction, on/off switch and colour choice come from the
+         * shared table-settings provider and a limit changed there moves both sides of
+         * the `?grid=v2` toggle at once. (The live table has ONE level, not two — a single
+         * threshold per metric, default red — so there is no warn tier to match.)
+         *
+         * Before this seam existed the only place a consumer could paint was INSIDE
+         * `format`, which is why this rendered as a small rounded pill hugging the digits
+         * with the rest of the cell plain. That is what the screenshot shows and it is not
+         * how a spreadsheet marks a bad reading.
+         *
+         * The classes merge UNDER the cached class string, so `selected` / `active` /
+         * `dirty` / `invalid` all win — an out-of-band cell the operator has swept still
+         * reads as swept.
+         */
+        cellClass: (row, ctx) => {
+            if (row === null) return undefined;
+            const v = labValue(row, lab.key);
+            if (v === null) return undefined;
+            return getLabHighlightBg(lab.key, v, ctx.labHighlights) || undefined;
         },
     });
 }
@@ -354,7 +397,11 @@ COLUMNS.push(
         key: 'php_total',
         label: 'PHP TOTAL',
         title: 'Weight × delivered price',
-        width: 118,
+        // Accounting format: the ₱ is pinned left and the figure right, so the cell has to
+        // hold BOTH plus the gap between them. A real total reaches `1,234,567.89` — twelve
+        // mono characters ≈ 87px — plus ~8px of glyph, 4px of gap and 18px of chrome: 117,
+        // against a declared 118. One peso more and it clipped.
+        width: 128,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -703,9 +750,9 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 </span>
                 <span>
                     RC IN on the Blackwood Table — <strong className="font-semibold">read-only</strong>. Selection,
-                    keyboard, copy and column resize are live; the toolbar, filters, the month strip, the row menu
-                    and every editing path are not built yet. <strong className="font-semibold">Current</strong>{' '}
-                    above returns to the live table.
+                    keyboard, copy, the right-click menu, the selection summary and column resize are live; the
+                    toolbar, filters, the month strip, the row menu and every editing path are not built yet.{' '}
+                    <strong className="font-semibold">Current</strong> above returns to the live table.
                 </span>
                 <span className="ml-auto font-mono tabular-nums">
                     {grand.count} row{grand.count === 1 ? '' : 's'}

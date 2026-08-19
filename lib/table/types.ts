@@ -92,6 +92,29 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
      */
     key: string;
     label: string;
+    /**
+     * A RICH header label — two lines, a unit under a name, a small icon beside it.
+     *
+     * `label` stays a plain `string` and stays REQUIRED, because three things read it as
+     * text and none of them can render a node: the header's `title` tooltip, the resize
+     * handle's `aria-label`, and any consumer building a column menu. So this is the
+     * node and `label` is the name; supplying one never removes the other.
+     *
+     * Absent ⇒ `label` renders, byte-identical with before this field existed.
+     */
+    labelNode?: React_Node;
+    /**
+     * May the header label WRAP instead of truncating?
+     *
+     * The header is one `<th>` of a fixed pixel width and its label has always been
+     * `truncate`, so a column named for something long — a batch code, a plate, a date
+     * with a unit — read as `JAN-26-B…` and the operator had to hover every one of them
+     * to tell two columns apart. With this set the label takes up to two lines and the
+     * header row grows to fit the tallest.
+     *
+     * Defaults to false — one line, truncated, exactly as before.
+     */
+    headerWrap?: boolean;
     /** Long form for the header's `title` when the label is an abbreviation. */
     title?: string;
     align?: 'left' | 'right' | 'center';
@@ -171,6 +194,32 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
     clipboardValue?(row: Row): string;
     /** Strip whatever rendering a spreadsheet copied in with a pasted value. */
     cleanPasted?(raw: string, ctx: Ctx): string;
+
+    /**
+     * Extra classes for THIS cell's interactive layer — how a consumer tints a WHOLE
+     * CELL rather than painting a badge inside `format`.
+     *
+     * The gap it closes: `cell-classes.ts` owns every `<td>`'s className, so an
+     * out-of-band lab reading could only be marked by rendering a coloured pill *inside*
+     * the cell — which is what Renzo saw and rejected ("I want the entire cell tinted").
+     * The same seam is what lets a row-status wash reach a PINNED cell, which a class on
+     * the `<tr>` structurally cannot: a frozen cell is opaque by design, so any row tint
+     * is covered on exactly the columns that are pinned.
+     *
+     * **PRECEDENCE: it layers UNDER the cell's own states.** The returned classes are
+     * merged BEFORE the cached class string, so `selected`, `active`, `invalid` and
+     * `dirty` all win — a selected out-of-band cell still reads as selected, and a
+     * refused cell still reads as refused. That ordering is the whole safety property:
+     * a consumer cannot accidentally hide the states the operator navigates by.
+     *
+     * **It costs one `twMerge` for every cell that returns a string.** The cached class
+     * table is keyed on enums and this is consumer-provided free text, so it cannot go
+     * through the cache; it is merged on top instead. A column that returns `undefined`
+     * — which is nearly every cell of nearly every column — pays nothing at all.
+     *
+     * `row` is null on a row that exists nowhere yet (a draft).
+     */
+    cellClass?(row: Row | null, ctx: Ctx): string | undefined;
 
     // ── Chrome ───────────────────────────────────────────────────────────────────
     calcType?: CalcType;

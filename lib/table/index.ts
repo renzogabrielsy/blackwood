@@ -101,5 +101,15 @@ export type { FirstItemIndexShiftInput } from './paging';
 
 export { needsGroupSpacer } from './grouping';
 
+// The selection RECTANGLE's own geometry — which edges each cell paints, so a swept
+// block reads as one box with no inner borders.
+export { rangeRowEdge, cellRangeEdges, NO_RANGE_EDGES } from './selection';
+export type { SelectionRowEdge, CellRangeEdges } from './selection';
+
+// The built-in right-click menu, as data. The component maps each action onto the
+// interaction hook's own callback.
+export { defaultTableMenu } from './menu';
+export type { TableMenuAction, TableMenuItemSpec } from './menu';
+
 export { GRID_PARAM, GRID_V2, parseGrid, isGridV2, withGrid, gridHref } from './grid-param';
 export type { GridParam, QueryEntries } from './grid-param';

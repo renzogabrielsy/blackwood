@@ -4,6 +4,8 @@ import * as React from 'react';
 
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableChromeRowApi, TableState } from '@/components/shared/table';
+import { FloatingStatusBar } from '@/components/floating-status-bar';
+import { useStatusBar } from '@/components/providers/status-bar-context';
 import { DEFAULT_FIRST_ITEM_INDEX, needsGroupSpacer, shiftFirstItemIndex } from '@/lib/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
@@ -49,6 +51,11 @@ export interface PlayRow {
 export interface PlayCtx {
     /** A column hidden for this viewer is ABSENT from the coordinate space, never blank. */
     showSecret: boolean;
+    /**
+     * Paint the whole cell on an out-of-band figure, through `ColumnSpec.cellClass` —
+     * the seam that replaces "render a coloured pill inside `format`".
+     */
+    tintOutOfBand: boolean;
 }
 
 const RECORD_COUNT = 120;
@@ -149,9 +156,22 @@ const COLUMNS: ColumnSpec<PlayRow, PlayCtx>[] = [
         clipboardValue: (r) => String(r.rate),
         cleanPasted: (raw) => raw.replace(/[^0-9.\-]/g, ''),
         format: (row) => row.rate.toFixed(2),
+        // THE WHOLE CELL, not a badge inside it. Merged UNDER the cached class string, so
+        // a selected out-of-band cell still reads as selected — which is the property the
+        // spec asserts.
+        cellClass: (row, ctx) =>
+            ctx.tintOutOfBand && row !== null && row.rate > 2 ? 'bg-destructive/20' : undefined,
     },
     {
-        key: 'note', label: 'NOTE', width: 200,
+        // A header that WRAPS rather than truncating, and a rich label beside the plain
+        // one. `label` stays the string — `title`, the resize handle's `aria-label` and
+        // any consumer-built column menu all read it as text.
+        key: 'note', label: 'NOTE', width: 200, headerWrap: true,
+        labelNode: (
+            <span data-testid="wrapped-header">
+                NOTE — THE LONG FORM THAT USED TO TRUNCATE
+            </span>
+        ),
         cellKind: 'text', parse: text, clipboardValue: (r) => r.note,
         format: (row) => <span className="max-w-[200px] truncate">{row.note}</span>,
     },
@@ -265,8 +285,40 @@ function fieldText(row: PlayRow, field: string): string {
     }
 }
 
+/**
+ * A readout of what the TABLE published to the app's floating status bar.
+ *
+ * The pill itself is mounted below and is what the suite really asserts against — this
+ * strip exists so a failure says which number was wrong rather than "the text did not
+ * match". Neither is wired to the grid: both read the shared provider, which is the whole
+ * claim being tested (the table publishes, and a consumer wires nothing).
+ */
+function StatusBarReadout() {
+    const { cellSelectionCount, cellAggregates } = useStatusBar();
+    return (
+        <>
+            <span data-testid="bar-count" className="font-mono">{cellSelectionCount}</span>
+            <span data-testid="bar-sum" className="font-mono">
+                {cellAggregates ? cellAggregates.sum : 'none'}
+            </span>
+            <span data-testid="bar-calc" className="font-mono">
+                {cellAggregates ? cellAggregates.recommendedCalcType : 'none'}
+            </span>
+        </>
+    );
+}
+
 export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'focus' }) {
     const [showSecret, setShowSecret] = React.useState(false);
+    const [tintOutOfBand, setTintOutOfBand] = React.useState(false);
+    /**
+     * Whether the consumer PERSISTS column widths.
+     *
+     * Unchecked, `onSettingsChange` is not passed at all — which is the state nine of the
+     * ten migrated grids were in, and the state in which the resize handle used to not
+     * exist. The table now keeps the width itself, and the suite drags one to prove it.
+     */
+    const [managedWidths, setManagedWidths] = React.useState(true);
     const [settings, setSettings] = React.useState<TableSettings>({});
     const [state, setState] = React.useState<TableState>({ activeCell: null, isEditing: false, selection: null });
 
@@ -297,7 +349,10 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
 
     // `ctx` MUST be referentially stable — it is a dependency of the column resolution and
     // of every editability verdict, so a fresh object per render re-renders the sheet.
-    const ctx = React.useMemo<PlayCtx>(() => ({ showSecret }), [showSecret]);
+    const ctx = React.useMemo<PlayCtx>(
+        () => ({ showSecret, tintOutOfBand }),
+        [showSecret, tintOutOfBand],
+    );
 
     const canonicalText = React.useCallback(
         (rowId: string, field: string) => {
@@ -418,6 +473,25 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                     />
                     show hidden column
                 </label>
+                <label className="flex items-center gap-1" data-grid-chrome>
+                    <input
+                        type="checkbox"
+                        data-testid="toggle-tint"
+                        checked={tintOutOfBand}
+                        onChange={(e) => setTintOutOfBand(e.target.checked)}
+                    />
+                    tint out-of-band cells
+                </label>
+                <label className="flex items-center gap-1" data-grid-chrome>
+                    <input
+                        type="checkbox"
+                        data-testid="toggle-managed-widths"
+                        checked={managedWidths}
+                        onChange={(e) => setManagedWidths(e.target.checked)}
+                    />
+                    persist widths
+                </label>
+                <StatusBarReadout />
                 <span data-testid="active-cell" className="font-mono">
                     {a ? `${a.row},${a.col}` : 'none'}
                 </span>
@@ -468,7 +542,10 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                 specs={COLUMNS}
                 ctx={ctx}
                 settings={settings}
-                onSettingsChange={setSettings}
+                // Deliberately UNDEFINED when unmanaged: the point of the seam is that a
+                // consumer which never wired per-user settings still gets a draggable
+                // column, so the fixture has to be able to be that consumer.
+                onSettingsChange={managedWidths ? setSettings : undefined}
                 edits={edits}
                 storedText={canonicalText}
                 scope={scope}
@@ -484,6 +561,12 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                 onStateChange={setState}
                 className="min-h-0 flex-1"
             />
+
+            {/* The app's REAL pill, mounted here so the suite asserts against the thing
+                the operator sees rather than against a fixture that merely mirrors it.
+                It is fed by nothing in this file — `BlackwoodTable` publishes to the
+                shared provider itself. */}
+            <FloatingStatusBar />
         </div>
     );
 }

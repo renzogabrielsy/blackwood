@@ -31,6 +31,18 @@
 // its columns scales all of them proportionally while the sticky offsets keep using
 // the DECLARED widths, so a stretched sheet can pin a frozen column inside its
 // neighbour. Clamping to `useTableColumns(...).minWidth` makes that unreachable.
+//
+// ── WIDTHS ARE NOT THE LIVE SHEET'S, AND THE REASON IS ONE NUMBER ───────────────
+// This grid copied `qc-ledger-client.tsx`'s pixel widths column for column, and four of
+// them were WRONG here for a reason invisible in the diff: the live sheet's identity
+// widths are floored by a `px-1` cell, while the module's cell is `px-2` and reserves a
+// 1px selection-box gutter on every side. **A cell's usable width here is `declared − 18`,
+// not `declared − 8`** — a ten-pixel tax on every column, which is exactly the size of one
+// character at `text-xs`. So a column measured to fit its longest value in the live sheet
+// clips its last character here. DATE, PROD, WHSE and SIDE are widened below, each against
+// its longest REAL value (`2026-08-01` = 71.03px, `WHSE 3` = 46.88px — MEASURED in the
+// browser against the cell's own computed font, not estimated) rather than against its
+// label.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
@@ -72,8 +84,18 @@ type Ctx = { readonly month: string };
 
 const dash = <span className="text-muted-foreground/40">—</span>;
 
+/**
+ * A text cell.
+ *
+ * The `<span>` is not decoration. The module's interactive layer is a FLEX container and
+ * clips (`overflow-hidden whitespace-nowrap`), but `text-overflow` on a flex container
+ * does nothing for an anonymous text item — so a bare string clips with a hard edge and
+ * no ellipsis, and the operator cannot tell a truncated value from a short one. The
+ * element child picks up `[&>*]:text-ellipsis` from `cell-classes.ts`; the bare string
+ * cannot.
+ */
 function txt(v: string | null | undefined): React.ReactNode {
-    return v ? v : dash;
+    return v ? <span>{v}</span> : dash;
 }
 
 function num(v: number | null | undefined): number | null {
@@ -114,7 +136,15 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     {
         key: 'date',
         label: 'DATE',
-        width: 62,
+        // 92, not the live ledger's 62. The live sheet pads its cells `px-1`; the module
+        // pads `px-2` and reserves a 1px selection-box gutter on all four sides, so a
+        // cell's usable width here is `declared − 18`.
+        //
+        // MEASURED IN THE BROWSER, not estimated: `2026-08-01` in this cell's own computed
+        // font is **71.03px**, so the column needs 90. At 62 it had 44px of room and the
+        // date was cut mid-value — and before the platform pass it did not even clip, it
+        // painted straight over PROD, which is exactly the screenshot Renzo sent.
+        width: 92,
         pin: 'start',
         align: 'left',
         cellKind: 'readonly',
@@ -127,7 +157,8 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     {
         key: 'prod',
         label: 'PROD',
-        width: 62,
+        // Same value, same measurement, same width as DATE — see above.
+        width: 92,
         align: 'left',
         cellKind: 'readonly',
         title: 'Production date of the material drawn',
@@ -166,7 +197,11 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     {
         key: 'whse',
         label: 'WHSE',
-        width: 62,
+        // The values are `WHSE 1` / `WHSE 2` / `WHSE 5` / `WHSE 7` — and `WHSE 3`, the DVO
+        // warehouse — never the bare number the header suggests. Six characters plus a
+        // space is ~45px, so 62 (44 usable) was one character short and the cell WRAPPED
+        // inside a 28px row before the platform pass made cells clip.
+        width: 76,
         align: 'left',
         cellKind: 'readonly',
         title: 'Warehouse (or plant, when unplaced)',
@@ -176,7 +211,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     {
         key: 'side',
         label: 'SIDE',
-        width: 44,
+        // Floored by its own HEADER, not by `LS`/`RS`: `SIDE` at `text-[11px]` uppercase
+        // with `tracking-wide` is ~31px, and the header's `px-2` leaves 44 − 17 = 27.
+        width: 52,
         align: 'left',
         cellKind: 'readonly',
         title: 'Warehouse side (LS / RS) — FLEC draws only',
@@ -451,7 +488,8 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                     draws · {days.length} day{days.length === 1 ? '' : 's'}
                 </span>
                 <span className="ml-auto text-[10px] text-muted-foreground">
-                    Read-only preview — use Current to log a reading or change month.
+                    Read-only preview — selection, the right-click menu, the selection summary and
+                    column resize are live. Use Current to log a reading or change month.
                 </span>
             </div>
 

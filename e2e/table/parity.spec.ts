@@ -670,3 +670,305 @@ test.describe('Blackwood Table — the bidirectional pager', () => {
         expect(Math.abs((await anchor.boundingBox())!.y - before!.y)).toBeLessThan(2);
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// THE PLATFORM PASS (2026-08-19) — the four things that were in the module and
+// reachable only through a prop most consumers had not supplied. Renzo: *"every part of
+// the app that uses the table should also universally use the following features as
+// well: the right click menu and the hover summary."*
+// ─────────────────────────────────────────────────────────────────────────────────
+
+/** The `<div>` inside a cell that carries every state class — tint, ring, box. */
+const inner = (page: Page, row: number, col: number): Locator =>
+    cell(page, row, col).locator('> div').first();
+
+const classesOf = async (page: Page, row: number, col: number): Promise<string> =>
+    (await inner(page, row, col).getAttribute('class')) ?? '';
+
+/** Which sides of the selection box this cell paints. */
+async function boxOf(page: Page, row: number, col: number) {
+    const c = await classesOf(page, row, col);
+    return {
+        top: c.includes('border-t-primary'),
+        right: c.includes('border-r-primary'),
+        bottom: c.includes('border-b-primary'),
+        left: c.includes('border-l-primary'),
+    };
+}
+
+test.describe('Blackwood Table — the selection is ONE box', () => {
+    test('a swept rectangle paints its perimeter and NOTHING inside it', async ({ page }) => {
+        await open(page);
+        // Rows 3..5 x columns 2..4, the same rectangle the drag spec sweeps.
+        await clickCell(page, 3, 2);
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowRight');
+        await page.keyboard.press('Shift+ArrowRight');
+        await expect(selection(page)).toHaveText('3,2,5,4');
+
+        // Corners carry two sides each.
+        expect(await boxOf(page, 3, 2)).toEqual({ top: true, right: false, bottom: false, left: true });
+        expect(await boxOf(page, 3, 4)).toEqual({ top: true, right: true, bottom: false, left: false });
+        expect(await boxOf(page, 5, 2)).toEqual({ top: false, right: false, bottom: true, left: true });
+        expect(await boxOf(page, 5, 4)).toEqual({ top: false, right: true, bottom: true, left: false });
+
+        // Sides carry one.
+        expect(await boxOf(page, 3, 3)).toEqual({ top: true, right: false, bottom: false, left: false });
+        expect(await boxOf(page, 4, 2)).toEqual({ top: false, right: false, bottom: false, left: true });
+
+        // THE WHOLE POINT: the middle of the rectangle has no border at all — it is one
+        // box, not nine. It still carries the tint, which is what it always had.
+        expect(await boxOf(page, 4, 3)).toEqual({ top: false, right: false, bottom: false, left: false });
+        expect(await classesOf(page, 4, 3)).toContain('bg-primary/10');
+
+        // And the cell just outside it carries neither.
+        expect(await boxOf(page, 6, 3)).toEqual({ top: false, right: false, bottom: false, left: false });
+        expect(await classesOf(page, 6, 3)).not.toContain('bg-primary/10');
+    });
+
+    test('a single click paints NO box — the caret ring is the whole answer', async ({ page }) => {
+        await open(page);
+        await clickCell(page, 2, 3);
+        await expect(selection(page)).toHaveText('2,3,2,3');
+
+        // A plain click seeds a 1x1 selection, so this is the sheet's DEFAULT state: a
+        // second rectangle a pixel inside the ring would be on screen at all times.
+        expect(await boxOf(page, 2, 3)).toEqual({ top: false, right: false, bottom: false, left: false });
+        const c = await classesOf(page, 2, 3);
+        expect(c).toContain('ring-2');
+        expect(c).toContain('ring-primary');
+
+        // Every cell always RESERVES the gutter, so nothing shifts by a pixel when a
+        // sweep reaches it — the shimmer along the perimeter of every drag.
+        expect(c).toContain('border-t-transparent');
+        // nav 3 is a RECORD (nav 1 and 2 are r0's children, which have no rate cell).
+        expect(await classesOf(page, 3, 4)).toContain('border-l-transparent');
+    });
+
+    test('a cell CLIPS: no spill into the neighbour, no wrap onto a second line', async ({ page }) => {
+        await open(page);
+        const c = await classesOf(page, 0, 2);
+        expect(c).toContain('overflow-hidden');
+        expect(c).toContain('whitespace-nowrap');
+
+        // MEASURED, not asserted on a class name. `label` renders a BARE STRING — the
+        // shape that used to spill, because nothing in the cell was clipping it — so type
+        // a value far too long for the column and check the painted layer still ends
+        // inside its own `<td>`. That is what was actually broken on the QC sheet (a
+        // `yyyy-MM-dd` in a 62px column painted over its neighbour) and no class name
+        // proves it on its own.
+        await clickCell(page, 0, 2);
+        await page.keyboard.type('WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW');
+        await page.keyboard.press('Enter');
+        await expect(editing(page)).toHaveText('idle');
+
+        // The content OVERFLOWS — so the clip is doing real work rather than passing
+        // because the value happened to fit.
+        const overflowing = await inner(page, 0, 2).evaluate((el) => el.scrollWidth > el.clientWidth);
+        expect(overflowing).toBe(true);
+
+        const td = await cell(page, 0, 2).boundingBox();
+        const layer = await inner(page, 0, 2).boundingBox();
+        expect(layer!.x + layer!.width).toBeLessThanOrEqual(td!.x + td!.width + 1);
+        // One line, always: the row height is declared by its family and a wrapped line
+        // has nowhere to go.
+        expect(layer!.height).toBeLessThanOrEqual(32);
+    });
+});
+
+test.describe('Blackwood Table — the summary pill is universal', () => {
+    test('the TABLE publishes SUM / COUNT to the status bar with no consumer wiring', async ({ page }) => {
+        await open(page);
+        // Nothing selected: the pill shows no cell section at all.
+        await expect(page.getByTestId('bar-count')).toHaveText('0');
+
+        // QTY on rows 0..2. Every 7th record carries children, so nav 0 = r0, nav 1,2 are
+        // its two sub-rows with qty 1 and 2 — 10 + 1 + 2 = 13, and the pill has to total
+        // what is actually THERE rather than what the consumer's own array says.
+        await clickCell(page, 0, 3);
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(selection(page)).toHaveText('0,3,2,3');
+
+        await expect(page.getByTestId('bar-count')).toHaveText('3');
+        await expect(page.getByTestId('bar-sum')).toHaveText('13');
+        await expect(page.getByTestId('bar-calc')).toHaveText('SUM');
+
+        // The REAL pill — the one in the corner of the app — reads the same numbers, and
+        // nothing in the playground feeds it.
+        const bar = page.locator('[data-floating-status-bar]');
+        await expect(bar).toContainText('3 cells');
+        await expect(bar).toContainText('13');
+
+        // A column whose declared calc type is AVERAGE recommends AVERAGE, so the pill is
+        // right about a rate lane without anyone telling it.
+        await clickCell(page, 0, 4);
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(page.getByTestId('bar-calc')).toHaveText('AVERAGE');
+    });
+
+    test('the pill empties when the selection is cleared', async ({ page }) => {
+        await open(page);
+        await clickCell(page, 0, 3);
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(page.getByTestId('bar-count')).toHaveText('2');
+
+        await page.keyboard.press('Escape');
+        await expect(selection(page)).toHaveText('none');
+        await expect(page.getByTestId('bar-count')).toHaveText('0');
+        await expect(page.getByTestId('bar-sum')).toHaveText('none');
+    });
+});
+
+test.describe('Blackwood Table — the built-in right-click menu', () => {
+    const menu = (page: Page) => page.locator('[data-table-context-menu]');
+
+    test('right-click opens a menu on a grid that supplied no items of its own', async ({ page }) => {
+        await open(page);
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+
+        await expect(menu(page)).toBeVisible();
+        for (const label of ['Copy', 'Copy with headers', 'Copy row', 'Select row', 'Select column']) {
+            await expect(menu(page).getByText(label, { exact: true })).toBeVisible();
+        }
+        // The right-click also parks the caret, so the menu always acts on a known cell.
+        await expect(active(page)).toHaveText('3,2');
+
+        // Escape closes it.
+        await page.keyboard.press('Escape');
+        await expect(menu(page)).toHaveCount(0);
+    });
+
+    test('Copy from the menu puts the STORED value on the clipboard', async ({ page, context }) => {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        await open(page);
+        await clickCell(page, 3, 2);
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+        await menu(page).getByText('Copy', { exact: true }).click();
+
+        await expect(menu(page)).toHaveCount(0);
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('Item 1');
+
+        // The menu handed the caret back — a menu item has already unmounted when focus
+        // would be restored to it, so without this the next keystroke goes nowhere.
+        await page.keyboard.press('ArrowDown');
+        await expect(active(page)).toHaveText('4,2');
+    });
+
+    test('Copy with headers prefixes the columns\' own labels', async ({ page, context }) => {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        await open(page);
+        await clickCell(page, 3, 2);
+        await page.keyboard.press('Shift+ArrowRight');
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+        await menu(page).getByText('Copy with headers', { exact: true }).click();
+
+        // The plain `label`, never `labelNode` — a clipboard carries text.
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('LABEL\tQTY\nItem 1\t20');
+    });
+
+    test('Select column from the menu sweeps the whole column', async ({ page }) => {
+        await open(page);
+        await cell(page, 3, 3).click({ button: 'right', position: { x: 8, y: 8 } });
+        await menu(page).getByText('Select column', { exact: true }).click();
+        await expect(selection(page)).toHaveText(`0,3,${LAST_NAV_ROW},3`);
+    });
+
+    test('a READ-ONLY cell is offered no action that could change it', async ({ page }) => {
+        await open(page);
+        // `total` (column 6) is `cellKind: 'readonly'` — selectable, never editable.
+        await cell(page, 3, 6).click({ button: 'right', position: { x: 8, y: 8 } });
+        await expect(menu(page)).toBeVisible();
+        await expect(menu(page).getByText('Copy', { exact: true })).toBeVisible();
+        for (const label of ['Clear contents', 'Paste', 'Fill down']) {
+            await expect(menu(page).getByText(label, { exact: true })).toHaveCount(0);
+        }
+        await page.keyboard.press('Escape');
+
+        // An EDITABLE cell is offered all three.
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+        for (const label of ['Clear contents', 'Paste', 'Fill down']) {
+            await expect(menu(page).getByText(label, { exact: true })).toBeVisible();
+        }
+    });
+
+    test('Fill down copies the top row of the selection over the rest, as ONE undo', async ({ page }) => {
+        await open(page);
+        await clickCell(page, 3, 2);
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(cell(page, 4, 2)).toHaveText('Item 2');
+
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+        await menu(page).getByText('Fill down', { exact: true }).click();
+
+        await expect(cell(page, 4, 2)).toHaveText('Item 1');
+        await expect(cell(page, 5, 2)).toHaveText('Item 1');
+        // The source row is untouched, and the whole fill is ONE gesture.
+        await expect(cell(page, 3, 2)).toHaveText('Item 1');
+        await expect(dirty(page)).toHaveText('2');
+
+        await page.keyboard.press('Control+z');
+        await expect(cell(page, 4, 2)).toHaveText('Item 2');
+        await expect(cell(page, 5, 2)).toHaveText('Item 3');
+        await expect(dirty(page)).toHaveText('0');
+    });
+});
+
+test.describe('Blackwood Table — resize, wrapped headers, tinted cells', () => {
+    test('a column resizes with NO consumer that persists widths', async ({ page }) => {
+        await open(page);
+        // The state nine of the ten migrated grids were in: no `onSettingsChange` at all,
+        // and therefore — until now — no resize handle rendered anywhere on the sheet.
+        await page.getByTestId('toggle-managed-widths').uncheck();
+
+        const before = await cell(page, 0, 2).boundingBox();
+        const handle = page.locator('[data-resize-handle="label"]');
+        await expect(handle).toHaveCount(1);
+        const box = await handle.boundingBox();
+
+        await page.mouse.move(box!.x + 1, box!.y + box!.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box!.x + 61, box!.y + box!.height / 2, { steps: 6 });
+        await page.mouse.up();
+
+        const after = await cell(page, 0, 2).boundingBox();
+        expect(after!.width).toBeGreaterThan(before!.width + 40);
+    });
+
+    test('a header may WRAP instead of truncating', async ({ page }) => {
+        await open(page);
+        const wrapped = page.getByTestId('wrapped-header');
+        const plain = page.locator('th[data-col-key="label"] button').first();
+
+        // The wrapping label is TALLER than a single-line one — it took a second line
+        // rather than becoming `NOTE - THE LONG FORM THAT...`.
+        const a = await wrapped.boundingBox();
+        const b = await plain.boundingBox();
+        expect(a!.height).toBeGreaterThan(b!.height);
+
+        // `label` is still the plain string every text reader uses.
+        await expect(page.locator('th[data-col-key="note"]')).toHaveAttribute('title', 'NOTE');
+    });
+
+    test('cellClass tints a WHOLE cell, and a selected one still reads as selected', async ({ page }) => {
+        await open(page);
+        // Off by default: a column that declares nothing pays nothing.
+        expect(await classesOf(page, 3, 4)).not.toContain('bg-destructive/20');
+
+        await page.getByTestId('toggle-tint').check();
+        // The fixture's rate is `1.5 + i * 0.25`, and the column tints above 2 — so r1
+        // (nav 3, rate 1.75) stays plain and r3 (nav 5, rate 2.25) is painted. The tint is
+        // on the CELL, not on a pill inside it, which is exactly what could not be said
+        // before this seam existed.
+        expect(await classesOf(page, 3, 4)).not.toContain('bg-destructive/20');
+        expect(await classesOf(page, 5, 4)).toContain('bg-destructive/20');
+
+        // SELECTED WINS. The consumer's tint is merged UNDER the cached string, so the
+        // operator can never lose the state they navigate by, however loud the paint.
+        await clickCell(page, 5, 4);
+        await page.keyboard.press('Shift+ArrowDown');
+        expect(await classesOf(page, 5, 4)).toContain('bg-primary/10');
+    });
+});
