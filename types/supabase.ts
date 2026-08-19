@@ -190,6 +190,8 @@ export type Database = {
           cost_basis: number
           created_at: string | null
           deduction_note: string | null
+          human_edited_at: string | null
+          human_edited_by: string | null
           id: string
           lab_results: Json
           remarks: string | null
@@ -206,6 +208,8 @@ export type Database = {
           cost_basis: number
           created_at?: string | null
           deduction_note?: string | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           lab_results?: Json
           remarks?: string | null
@@ -222,6 +226,8 @@ export type Database = {
           cost_basis?: number
           created_at?: string | null
           deduction_note?: string | null
+          human_edited_at?: string | null
+          human_edited_by?: string | null
           id?: string
           lab_results?: Json
           remarks?: string | null
@@ -233,6 +239,13 @@ export type Database = {
           weight_kg?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "deliveries_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
@@ -258,7 +271,21 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
             referencedColumns: ["batch_code"]
           },
           {
@@ -1360,6 +1387,13 @@ export type Database = {
             foreignKeyName: "usage_batch_id_fkey"
             columns: ["batch_id"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
           },
@@ -1483,6 +1517,47 @@ export type Database = {
           {
             foreignKeyName: "sync_case_rulings_ruled_by_fkey"
             columns: ["ruled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sync_finding_acks: {
+        Row: {
+          acked_at: string
+          acked_by: string
+          action: string
+          content_hash: string
+          fingerprint: string
+          id: string
+          kind: string
+          note: string | null
+        }
+        Insert: {
+          acked_at?: string
+          acked_by: string
+          action: string
+          content_hash: string
+          fingerprint: string
+          id?: string
+          kind: string
+          note?: string | null
+        }
+        Update: {
+          acked_at?: string
+          acked_by?: string
+          action?: string
+          content_hash?: string
+          fingerprint?: string
+          id?: string
+          kind?: string
+          note?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_finding_acks_acked_by_fkey"
+            columns: ["acked_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -2903,6 +2978,81 @@ export type Database = {
         }
         Relationships: []
       }
+      view_deliveries_human_edited: {
+        Row: {
+          batch_code: string | null
+          block_loc: string | null
+          human_edited_at: string | null
+          human_edited_by: string | null
+          human_edited_by_name: string | null
+          record_id: string | null
+          sacks: number | null
+          section: string | null
+          supplier: string | null
+          table_name: string | null
+          transaction_date: string | null
+          truck_plate: string | null
+          weight_kg: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deliveries_human_edited_by_fkey"
+            columns: ["human_edited_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_code"]
+          },
+        ]
+      }
       view_delivery_monthly_analytics: {
         Row: {
           ash: number | null
@@ -3202,7 +3352,21 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3457,7 +3621,21 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3514,6 +3692,13 @@ export type Database = {
             foreignKeyName: "usage_batch_id_fkey"
             columns: ["batch_id"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
           },
@@ -3524,6 +3709,65 @@ export type Database = {
           batch_code: string | null
           batch_id: string | null
           batch_price: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_block_actual_price: {
+        Row: {
+          actual_fed_php_kg: number | null
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          close_date: string | null
+          delivered_kg: number | null
+          delivered_php_kg: number | null
+          delivered_value_php: number | null
+          delivery_count: number | null
+          feed_count: number | null
+          first_fed_date: string | null
+          has_unpriced_delivery: boolean | null
+          is_closed: boolean | null
+          is_fully_priced: boolean | null
+          last_fed_date: string | null
+          loss_pct: number | null
+          priced_delivered_kg: number | null
+          priced_delivered_php_kg: number | null
+          priced_delivery_count: number | null
+          status: Database["public"]["Enums"]["batch_status"] | null
+          total_fed_kg: number | null
+          unpriced_delivered_kg: number | null
+          unpriced_delivery_count: number | null
+          uplift_pct: number | null
+          uplift_php_kg: number | null
+          weight_lost_kg: number | null
+        }
+        Relationships: []
+      }
+      view_rc_movement_campaign_actual_price: {
+        Row: {
+          actual_fed_php_kg: number | null
+          block_fed_kg: number | null
+          blocks_closed: number | null
+          blocks_closed_unpriced: number | null
+          blocks_fed: number | null
+          blocks_in_price: number | null
+          blocks_open: number | null
+          campaign_fed_kg: number | null
+          campaign_fed_kg_closed: number | null
+          campaign_fed_kg_excluded: number | null
+          campaign_fed_kg_included: number | null
+          campaign_fed_kg_included_pct: number | null
+          campaign_fed_kg_open: number | null
+          campaign_weighted_actual_fed_php_kg: number | null
+          campaign_year: number | null
+          delivered_kg: number | null
+          delivered_php_kg: number | null
+          delivered_value_php: number | null
+          is_fully_covered: boolean | null
+          loss_pct: number | null
+          production_batch: string | null
+          uplift_php_kg: number | null
+          weight_lost_kg: number | null
         }
         Relationships: []
       }
@@ -3563,6 +3807,13 @@ export type Database = {
             foreignKeyName: "usage_batch_id_fkey"
             columns: ["batch_id"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_id"]
           },
@@ -3577,6 +3828,71 @@ export type Database = {
           wtd_fed_price: number | null
         }
         Relationships: []
+      }
+      view_rc_movement_campaign_open_blocks: {
+        Row: {
+          balance_kg: number | null
+          batch_code: string | null
+          batch_id: string | null
+          block_loc: string | null
+          campaign_fed_kg: number | null
+          campaign_fed_kg_total: number | null
+          campaign_fed_share: number | null
+          campaign_feed_days: number | null
+          campaign_first_fed_date: string | null
+          campaign_last_fed_date: string | null
+          campaign_year: number | null
+          delivered_kg: number | null
+          delivered_php_kg: number | null
+          delivered_value_php: number | null
+          fed_kg_to_date: number | null
+          fed_share_of_delivered: number | null
+          feed_count: number | null
+          first_fed_date: string | null
+          has_unpriced_delivery: boolean | null
+          last_fed_date: string | null
+          priced_delivered_php_kg: number | null
+          production_batch: string | null
+          status: Database["public"]["Enums"]["batch_status"] | null
+          unpriced_delivery_count: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_blocking_grid"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_batch_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "usage_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "view_rc_out_closed_blocks"
+            referencedColumns: ["batch_id"]
+          },
+        ]
       }
       view_rc_movement_campaign_options: {
         Row: {
@@ -3769,7 +4085,21 @@ export type Database = {
             foreignKeyName: "fk_batch_code"
             columns: ["batch_code"]
             isOneToOne: false
+            referencedRelation: "view_rc_movement_block_actual_price"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
             referencedRelation: "view_rc_movement_campaign_cells"
+            referencedColumns: ["batch_code"]
+          },
+          {
+            foreignKeyName: "fk_batch_code"
+            columns: ["batch_code"]
+            isOneToOne: false
+            referencedRelation: "view_rc_movement_campaign_open_blocks"
             referencedColumns: ["batch_code"]
           },
           {
@@ -3778,6 +4108,27 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "view_rc_out_closed_blocks"
             referencedColumns: ["batch_code"]
+          },
+        ]
+      }
+      view_sync_finding_acks_current: {
+        Row: {
+          acked_at: string | null
+          acked_by: string | null
+          action: string | null
+          content_hash: string | null
+          fingerprint: string | null
+          id: string | null
+          kind: string | null
+          note: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sync_finding_acks_acked_by_fkey"
+            columns: ["acked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -4041,6 +4392,7 @@ export type Database = {
         }
         Returns: Json
       }
+      fn_apply_delivery_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_apply_production_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_apply_schedule_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_archive_and_delete_delivery: {
@@ -4058,6 +4410,17 @@ export type Database = {
           p_reason: string
         }
         Returns: string
+      }
+      fn_audit_trigger_function_grants: {
+        Args: { p_role?: unknown }
+        Returns: {
+          callee_is_secdef: boolean
+          hops: number
+          on_table: string
+          trigger_function: string
+          trigger_name: string
+          unexecutable_callee: string
+        }[]
       }
       fn_blend_proposal: {
         Args: { p_block_locs: string[] }
@@ -4098,6 +4461,7 @@ export type Database = {
         }
         Returns: string
       }
+      fn_release_delivery_rows: { Args: { p_ids: string[] }; Returns: Json }
       fn_release_production_rows: {
         Args: { p_ids: string[]; p_table: string }
         Returns: Json

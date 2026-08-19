@@ -451,7 +451,56 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   Production before the ₱ question is asked, so the ₱ branch is defence-in-depth for the day
   `PRIVILEGED_ROLES` widens.
 
+- **`acks.ts`** — the ONE-CLICK half of Sync Review (2026-08-19). Three server actions,
+  all `requirePrivileged()`-gated (Owner/Admin/Dev, respecting the impersonation cookie)
+  and all returning their refusal rather than throwing it, because each is wired to a
+  button whose failure must reach an `errorToast()` intact. A **sibling of `resolve.ts`,
+  not part of it**: `resolve.ts` owns resolution of a DURABLE CASE (re-read the proposal,
+  re-check eligibility, dispatch an operational write, record a `sync_case_rulings` row);
+  nothing here does any of that.
+  - **`acknowledgeFinding({ fingerprint, kind, contentHash, action, note? })`** →
+    `{ ok } | { ok:false, error }`. Appends ONE row to `sync_finding_acks`. `action` is
+    `'acknowledge' | 'keep_mine' | 'same_truck'`. **No operational write, and no effect
+    on what the sync reports** — the finding is still raised next run and still lands in
+    the Excel workbook; only the SCREEN filters. `acked_by` comes from the session and is
+    re-checked by the DB's INSERT policy against `auth.uid()`, so the name on an
+    acknowledgement is verified rather than supplied. Revalidates `/sync/cases` + `/`.
+  - **`releaseDeliveryRows(ids: uuid[])`** →
+    `{ ok, released: string[], skipped: string[], error? }`. The **in-app door** for the
+    deliveries human-edit latch that CLAUDE.md said was not built — it calls
+    `fn_release_delivery_rows(p_ids)` through the per-request client (the RPC is SECURITY
+    INVOKER, granted to `authenticated`). The *[Take the source]* button. **It writes no
+    delivery data**: it clears only `human_edited_at`/`human_edited_by`, so nothing
+    changes until the NEXT run actually has something different to write, and when it
+    does it writes through the latch-aware `fn_apply_delivery_upstream` path with its
+    normal audit trail. A row nobody claimed comes back `skipped`, not an error. Mirrors
+    `releaseProductionRows` in `app/(app)/production/actions.ts` shape-for-shape.
+    Revalidates `/sync/cases` + `/inventory/rc-in`.
+  - **`fetchCurrentAcks()`** →
+    `{ ok: true, acks: Map<fingerprint, { action, contentHash, acked_at }> } | { ok:false, error }`.
+    Reads `view_sync_finding_acks_current` (which owns "latest row wins" — never
+    re-derive it with an `order by acked_at desc limit 1`). A finding is still
+    acknowledged when its fingerprint is present AND the stored `contentHash` equals the
+    finding's current one; that comparison is the caller's, because only the caller holds
+    the run being rendered. A read failure is REPORTED, never folded to an empty map.
+- `needs-you.ts` (2026-08-19) — **NOT a server action**: a read-only, `server-only` module reached
+  only from a Server Component (`components/digest/sync-needs-you.tsx`). **`getSyncNeedsYou()`** →
+  `{ ok, count, flags, runId, error? }` — reads the newest `sync_runs` row that has a `result`, runs
+  the SAME `flattenRunFindings` → `countDecisionsNeedingYou` pair the panel runs, over the SAME
+  `fetchCurrentAcks()` map, so the dashboard chip can never claim a different number than the screen
+  it links to. Privileged-only via `getUserRole()` (impersonation-aware), and **every failure path
+  returns `count: 0`, which renders nothing** — a missing nudge costs a click, a fabricated one sends
+  someone hunting for work that is not there.
+
 ### Client (`components/sync/`)
+- `DecisionCards.tsx` (2026-08-19) — presentation for the decision cards: the per-card severity
+  edge/dot, the Yours-vs-Source proposal table, the ours/theirs spelling table, the data chips
+  (carried over verbatim from the old flat list), the action row + the `[Take the source]` confirm,
+  the quiet grand-total footer line, and the "N acknowledged" reveal. Presentation ONLY — grouping,
+  ack state and every displayed value come from `lib/sync/decision-cards.ts`.
+- `useFindingAcks.ts` (2026-08-19) — the client half of the ack ledger (load once, optimistic
+  overlay, revert-on-failure, the release-then-ack sequence). The ONLY caller of
+  `app/(app)/sync/acks.ts`.
 - `SyncLauncher.tsx` — the live entry point. Compact zinc "Run Sync" button in the
   digest header band, privileged-only (the trigger is `h-11` ≥44px on phones,
   `sm:h-8` compact on desktop). Owns `useSyncRun()` (lifted above the modal boundary
@@ -621,6 +670,65 @@ The old model spawned Python **on Renzo's laptop**, tied to his browser tab (SSE
   `SHORT_KIND[kind] ?? kindLabel ?? kind` — so a new finding kind needs no component change, only a
   builder in `findings.ts` and (optionally) a `SHORT_KIND` chip word.
 
+  **DECISION CARDS — 11 findings are really 4 decisions (2026-08-19).** The list above was honest
+  and unusable: on run `312b3213` it printed ten prose lines, each ending in a sentence written for
+  a human (*"please confirm the two records are the same truckload"*) beside **no button at all**,
+  and two of those lines were the same delivery seen by two sources. `HeldRows` now hands the flat
+  list to the PURE **`lib/sync/decision-cards.ts::buildDecisionCards(findings, acks)`** and renders
+  what comes back through **`components/sync/DecisionCards.tsx`**. Four regroupings, and nothing else
+  changed about what the run reports:
+  - **`delivery_human_edited` → ONE card per `record_id`**, however many sources disagreed, with
+    each source's proposed value in a Yours-vs-Source table beneath. (`findingIdentity` already folds
+    both onto one fingerprint; this is the same fold, rendered.)
+  - **`price_fuzzy_match` → one card per note**, with the two spellings side by side (`ours` /
+    `theirs` per field) rather than buried in a paragraph.
+  - **`block_diff` `subkind='grand_total'` → a quiet FOOTER under the per-block cards** when
+    `fully_accounted === true` ("Total gap 1,531 kg — fully explained by the 5 blocks flagged here.
+    Nothing unexplained."), carrying the existing `GRAND_TOTAL_LAG_BADGE`. A **non-zero residual**
+    (or a fully-accounted total with no blocks to sit under) stays a first-class alarm card — the
+    2026-08-12 severity rule, now expressed in the layout as well as the tint.
+  - **Everything else keeps its existing rendering** plus one `[Acknowledge]`.
+  **Nothing is ever dropped.** Every input finding lands in exactly one card or one footer
+  (asserted), and the header still states the honest FINDING total beside the decision count, so the
+  regroup can never look like the panel is showing less than the run found.
+
+  **ACKNOWLEDGE, AND HIDE UNTIL IT CHANGES.** Each card carries the button that answers it —
+  `block_diff`/other → **[Acknowledge]**; `price_fuzzy_match` → **[Same truck]** (no ✗: un-pricing +
+  retiring the alias is out of scope, so the card carries the plain hint *"Not the same? — fix the
+  price in RC IN"*); `delivery_human_edited` → **[Keep mine]** and **[Take the source]**. A click
+  writes one `sync_finding_acks` row per fingerprint the card speaks for, hides the card optimistically,
+  and **un-hides it on failure** into an `errorToast()` — an optimistic hide that survived a failed
+  write would be a lie about durable state. A card is hidden only while the stored `content_hash`
+  still equals the current one; when it moves the card returns with a **"CHANGED SINCE YOU LOOKED"**
+  chip. Hidden cards live behind a **"N acknowledged"** toggle at the bottom of the list, greyed,
+  reading `acknowledged <relative time> · <action>`.
+  **ONE COMPOSITION RULE lives in `decision-cards.ts` and nowhere else.** `findingIdentity` gives
+  BOTH `delivery_human_edited` findings for one delivery the same fingerprint but DIFFERENT content
+  hashes (measured on `312b3213`: the emailed report says the source's remarks are `"DONE FEED"`, the
+  Sheet says they are empty), so a per-finding comparison could never hide that card. A card's hash
+  **per fingerprint** is therefore the combination of its members' — byte-identical to the single hash
+  in the ordinary one-member case, a sorted join when a fingerprint really carries two statements.
+  It COMPOSES `findingIdentity`; it does not redefine it, and nothing else may build an ack key.
+  **Role gate:** the buttons render only for `PRIVILEGED_ROLES.includes(role)` from `useAuth()` — the
+  same test that gates Run Sync, never a second derivation — and every action re-checks server-side
+  (`acks.ts::requirePrivileged`). A non-privileged viewer sees the cards with no buttons.
+  **NO ₱, EVER.** The findings channel is not price-gated, so a refused `cost_basis` arrives
+  `redacted: true`; the pure module renders it as `(redacted)` and the card prints "price (redacted)".
+  The strip does not depend on the worker having set the flag — a cost-ish field NAME is enough on its
+  own — and `scripts/verify-decision-cards.ts` asserts a card with a live `cost_basis` value still
+  leaks neither the number nor a ₱ glyph.
+  **State lives in `components/sync/useFindingAcks.ts`** — loads `fetchCurrentAcks()` once (only when
+  privileged), holds the optimistic overlay, and owns the `[Take the source]` sequence: `releaseDeliveryRows`
+  FIRST, then the ack, and **no ack at all if the release failed** (an ack for a release that did not
+  happen would hide a decision nobody made). A failed ack read is SAID OUT LOUD in an inline banner
+  with a Copy button rather than folded into "nothing is acknowledged" — an empty map and a broken
+  read look identical to a filter (L-044).
+  **`[Take the source]` is confirm-gated** because it is the only button here that leads to a data
+  change: an inline *"Are you sure? Your edit to `notes` will be replaced next run"* restating BOTH
+  values, then Confirm/Cancel. On success the toast reads **"Handed back to the sync — the next run
+  will apply the source value"**, worded that way because the button itself writes nothing to the
+  delivery; a row nobody claimed reports "Already following the source" rather than pretending.
+
   **`stale_stream` — the freshness watch (2026-08-04).** The one finding that is about what did NOT
   arrive. Every other kind describes something the run saw; a run where a report simply never came in
   is otherwise indistinguishable from a quiet day, which is how RC OUT sat 5 days stale in July 2026.
@@ -707,6 +815,22 @@ Framework-free, DB-free, so they unit-drive under `scripts/verify-case-fingerpri
   Blocking tab). **2026-08-03:** **`collectProductionBatchStarts(result)`** →
   `result.reports[type].apply.production_batch_starts ?? []` (only `production` ever fills it —
   optional additive field, absent on pre-feature runs). Pure, no supabase import.
+- `lib/sync/decision-cards.ts` (**PURE, CLIENT-SAFE, NO REACT — imports ONLY `./findings`**,
+  2026-08-19) — the ONE definition of the 4-card regroup and of a card's acknowledgement state.
+  **`buildDecisionCards(findings, acks)`** → `{ groups, visibleCount, acknowledgedCount,
+  visibleFindingCount }`, where a `DecisionGroup` is `{source, cards, acknowledged, footers, topRank}`
+  and a `DecisionCard` carries its `findings`, its `ackTargets` (one per DISTINCT fingerprint), its
+  `actions`, and the already-formatted `proposals` / `spellings` rows so the component never reaches
+  back into `data` for a value. **`countDecisionsNeedingYou(findings, acks)`** → `{decisions, flags}`
+  is the dashboard's "N need you" number, and it is the panel's own count by construction — there is
+  deliberately no second definition. **`cardText(card)`** exists for the price-leak assertion.
+  Pure/total/never-throws → **`scripts/verify-decision-cards.ts`** (22 checks, fixtures taken verbatim
+  from run `312b3213`'s stored `result`): two human-edit findings for one record collapse to one card
+  and two records stay two; the grand total is a footer when fully accounted and an alarm when the
+  residual is non-zero (and when there are no blocks to sit under); an acked card with an unchanged
+  hash is hidden and a changed hash brings it back flagged stale, INCLUDING the one-fingerprint /
+  two-content-hashes case; a redacted — and an un-flagged but cost-named — `cost_basis` renders its
+  NAME with no number and no ₱ anywhere in the card's text; nothing is ever dropped.
 - `lib/sync/findings.ts` (**PURE, CLIENT-SAFE — imports ONLY `types` + `cases-fold`; NO server
   imports, NO `node:crypto`**) — the honest READ model for the panel. **`flattenRunFindings(result)`**
   → `RunFinding[]`: merges INTO ONE array every `reports[*].apply.held[]` PLUS the whole
@@ -1136,6 +1260,73 @@ regenerated so `sync_runs`/`sync_run_events` are typed:
   deliberately hands to a privileged user. Verified on remote — the `/object/public/` route
   returns 400 "Bucket not found", a direct object read with the anon key returns 400, and an
   anon bucket list returns `[]`.
+
+### Finding acknowledgements (migration `20260819025647_sync_finding_acks.sql`)
+
+- **`sync_finding_acks`** — the **append-only acknowledgement ledger**. `id`,
+  `fingerprint`, `kind`, `content_hash`, `action`
+  (`acknowledge | keep_mine | same_truck`, CHECKed), `note`, `acked_by` (→`profiles`,
+  no ON DELETE clause so a profile that acknowledged something cannot be deleted away),
+  `acked_at`.
+  **WHY IT EXISTS:** of run `312b3213`'s 11 findings only SIX had any durable record
+  (`sync_held_cases`); the other five — both `delivery_human_edited`, both
+  `price_fuzzy_match` and the blocking grand total — are recomputed every run and stored
+  nowhere, so there is nothing to mark resolved and the only way to silence one is to
+  change the source data. That is why those notes all end in "please confirm" beside no
+  button.
+  **THE DESIGN DECISION IT IS BUILT AROUND — the sync NEVER reads this ledger to decide
+  what to REPORT.** A finding is still raised, still lands in `sync_runs.result` and
+  still lands in the Excel workbook. The ledger decides only what the SCREEN shows.
+  Filtering at the glass is load-bearing twice: an old ack can never suppress a NEW
+  problem (the worker has never heard of it), and the workbook can never disagree with
+  the panel (only one of them is filtered). Contrast L-044, where a read that failed
+  silently made an alarm say "nothing to report" for weeks — nothing here is on the
+  reporting path at all.
+  **APPEND-ONLY, two independent locks** (the `cenapro.rc_supplier_opening_balance`
+  idiom): no UPDATE/DELETE privilege for any client role, AND RLS on with SELECT +
+  INSERT policies and **no update or delete policy at all**. Proven on remote as
+  `authenticated`: `UPDATE` → `42501 permission denied for table sync_finding_acks`,
+  `DELETE` → the same, and an INSERT naming someone else as `acked_by` →
+  `42501 new row violates row-level security policy`. `anon` holds nothing;
+  `service_role` holds **SELECT only** (it never writes acks — the grant exists so a
+  future worker read resolves the whole `security_invoker` chain, per L-044).
+- **`view_sync_finding_acks_current`** — one row per `fingerprint`, the LATEST ack
+  (`distinct on (fingerprint) … order by fingerprint, acked_at desc, id desc`).
+  `security_invoker`; SELECT to `authenticated` **and** `service_role`, and the base
+  table is granted to both as well — the unit of correctness is the dependency CLOSURE,
+  not the view you happen to name. THE definition of "the standing answer"; do not
+  re-derive it in a caller.
+
+**The two strings, and why there are two** — `lib/sync/findings.ts::findingIdentity(f)`
+is the ONE definition, pure and client-safe:
+- `fingerprint` = WHICH discrepancy. Identity only, so it survives the numbers changing.
+  For a finding that ALREADY has a durable case this is **that case's own fingerprint,
+  byte-identical** — one identity, never two. Reaching the same sha256 from a module that
+  cannot import `node:crypto` is the entire reason `lib/sync/portable-hash.ts` exists (a
+  browser-safe SHA-256, proven equal to `node:crypto` by differential test).
+- `content_hash` = WHAT it currently says. This is what makes **"acknowledged UNTIL IT
+  CHANGES"** work: the same delta stays quiet, a new delta re-surfaces.
+- Per-kind rule: **held rows** (which is where `cross_batch_reassignment` lives) reuse
+  `caseFingerprint`'s canonical `{reportType, kind, natural_key}`;
+  **`delivery_human_edited`** keys on `record_id` ALONE, deliberately dropping `section`
+  so the emailed report and the Google Sheet disagreeing about one delivery are ONE
+  decision; **row-level price notes** key on date + normalized truck plate + sacks (the
+  spelling is the thing that differs, so it cannot be the identity); everything else
+  reuses the builder's own curated `RunFinding.key`, which each builder already writes as
+  "kind + natural identity" — including `block_diff`, whose key is already
+  `block_diff:<block>:<subkind>` and the literal `block_diff:grand_total`.
+- **`gate_failure` is the ONE documented divergence:** its *case* fingerprint folds the
+  rounded drift numbers into the identity, because for cases a different drift is a
+  different case. The ack model expresses that same distinction as
+  fingerprint(identity) + content_hash(numbers), so its ack fingerprint is the identity
+  form. Same behaviour, different split — not a second namespace.
+- **Neither string can ever carry a ₱.** Both are hex digests, and the INPUT is
+  cost-stripped too (`isCostKey` on every key; a cost-named `changed_fields` entry
+  contributes its NAME and the fact that it differs, never its values). Asserted: a
+  redacted `cost_basis` refusal and a hypothetical leaking one hash IDENTICALLY.
+- Volatile keys (`days_pending`, `as_of`, `operational_date`, run ids, …) are excluded
+  from `content_hash`, so the clock alone never expires an acknowledgement.
+- 19 assertions in `scripts/verify-findings.ts` pin all of the above (32 → 51).
 
 ### Smart-Adjudicator case files (migration `20260706120000_smart_adjudicator_cases.sql`)
 Three DB tables applied to remote (2026-07-06); `sync_held_cases` + `sync_case_messages` in the

@@ -62,6 +62,7 @@ import {
   collectUnpricedOverdue,
   collectUnresolvedBatches,
 } from './cases-fold'
+import { canonicalHashPortable } from './portable-hash'
 
 /** How loud a finding is — drives the panel's ordering + tint. */
 export type FindingSeverity = 'info' | 'attention' | 'high'
@@ -1597,6 +1598,288 @@ export function summarizeFindings(findings: RunFinding[]): {
   const byKind: Record<string, number> = {}
   for (const f of findings) byKind[f.kind] = (byKind[f.kind] ?? 0) + 1
   return { total: findings.length, byKind }
+}
+
+// ============================================================================
+// FINDING IDENTITY — the ONE definition of "which finding is this" and
+// "has the situation changed", for the acknowledgement ledger
+// (`public.sync_finding_acks`, 2026-08-19).
+//
+// THE PROBLEM IT SOLVES. Of a real run's 11 findings only 6 had any durable
+// record; the other 5 (both `delivery_human_edited`, both `price_fuzzy_match`,
+// the blocking grand total) are recomputed every run and stored NOWHERE. They
+// have no identity, so there is nothing to mark resolved, so the only way to
+// silence one is to change the source data — which is why every one of them
+// ends in "please confirm" beside no button. This gives every finding, durable
+// or not, two stable strings:
+//
+//   fingerprint — WHICH discrepancy this is. Identity only. Survives the
+//                 numbers changing, so an ack can be looked up next run.
+//   contentHash — WHAT the situation currently is. Changes when a human would
+//                 say "that's different now", which is what makes
+//                 "acknowledged UNTIL IT CHANGES" work: same delta stays quiet,
+//                 a new delta re-alarms.
+//
+// TWO RULES THIS FILE ENFORCES AND NOTHING ELSE MAY RESTATE:
+//
+// 1. ONE IDENTITY, NOT TWO. For a finding that ALREADY has a durable case, the
+//    fingerprint is the case's OWN fingerprint, byte-identical — not a parallel
+//    one. Held rows (which is where `cross_batch_reassignment` lives) hash the
+//    exact canonical object `fingerprint.ts::caseFingerprint` hashes, proved by
+//    assertion in `scripts/verify-findings.ts`. Reaching the same sha256 from a
+//    client-safe module is the entire reason `./portable-hash` exists.
+//    THE ONE DOCUMENTED EXCEPTION IS `gate_failure`: its case fingerprint folds
+//    the rounded drift NUMBERS into the identity, because for cases "a
+//    different drift is a different case". The ack model expresses that same
+//    distinction as fingerprint(identity) + contentHash(numbers), so its
+//    fingerprint is deliberately the identity form and will not equal its case
+//    fingerprint. Same behaviour, different split — not a second namespace.
+//
+// 2. NEITHER STRING EVER CARRIES A ₱ VALUE. Both outputs are hex digests, so
+//    nothing is legible in them by construction — but the INPUT is scrubbed too
+//    (`isCostKey` on every key, `redacted`/cost-named fields reduced to their
+//    NAME), so a future field that starts arriving with a live `cost_basis`
+//    still cannot make a price change the thing that re-alarms a finding.
+//    `scripts/verify-findings.ts` asserts a cost-bearing and a redacted
+//    `delivery_human_edited` hash identically.
+//
+// PURE + CLIENT-SAFE, like the rest of this file: the only import is
+// `./portable-hash`, which has no imports at all.
+// ============================================================================
+
+/** The two stable strings the ack ledger stores per finding. Both 64-char hex. */
+export interface FindingIdentity {
+  /** WHICH discrepancy — stable while the numbers move. The ack ledger's key. */
+  fingerprint: string
+  /** WHAT it currently says — changes when the situation materially changes. */
+  contentHash: string
+}
+
+/**
+ * Keys that change on their own with the passage of time or the identity of the run,
+ * with no human doing anything. Excluded from `contentHash` so an acknowledgement is
+ * not silently expired by the clock — "still unpriced, one day older" is the SAME
+ * situation the operator already acknowledged, and re-alarming on it daily would
+ * rebuild the nagging this ledger exists to end.
+ */
+const VOLATILE_DATA_KEYS = new Set([
+  'run_id',
+  'as_of',
+  'age_days',
+  'lag_days',
+  'days_pending',
+  'occurrence_count',
+  'operational_date',
+  'through_date',
+  'searched_since',
+  'since',
+  'missed_working_days',
+  'generated_at',
+  'settled_at',
+])
+
+/**
+ * Normalize a truck plate for COMPARISON: alphanumerics only, upper-cased.
+ * `"MAV 9202"`, `"mav9202"` and `"MAV-9202"` are one truck.
+ *
+ * DELIBERATELY DUPLICATED from `workers/sync/src/lib/deliveryIdentity.ts::normPlate`
+ * rather than imported: app→worker is the forbidden import direction (CLAUDE.md), and
+ * this module must stay client-safe. `scripts/verify-findings.ts` pins the behaviour so
+ * the copies cannot drift silently.
+ */
+function normPlateForIdentity(v: unknown): string {
+  const s = v === null || v === undefined ? '' : String(v)
+  let out = ''
+  for (const ch of s.toUpperCase()) {
+    if (ch >= '0' && ch <= '9') out += ch
+    else if (ch >= 'A' && ch <= 'Z') out += ch
+  }
+  return out
+}
+
+/** Round a kg figure to the integer, so sub-kg jitter never re-alarms an ack. */
+function roundKg(v: unknown): number | null {
+  const n = num(v)
+  return n == null ? null : Math.round(n)
+}
+
+/**
+ * Strip every cost-ish key (and its value) out of an object, recursively. The
+ * belt-and-braces half of rule 2 above — `isCostKey` is the ONE definition of
+ * "cost-ish", shared with the Excel report's cell writer.
+ */
+function stripCostKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCostKeys)
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (isCostKey(k)) continue
+      out[k] = stripCostKeys(v)
+    }
+    return out
+  }
+  return value
+}
+
+/** True for the price notes that describe a WORKBOOK/month rather than one truckload. */
+function isFileLevelPriceKind(kind: string): boolean {
+  return (
+    kind === 'price_tab_unresolved' ||
+    kind === 'price_tab_ambiguous' ||
+    kind === 'price_file_unreadable' ||
+    kind === 'price_file_missing' ||
+    kind === 'price_no_row_matched' ||
+    kind === 'price_overdue_check_failed'
+  )
+}
+
+/**
+ * The identity half. Three kinds get a hand-built canonical object; everything else
+ * reuses the finding's OWN `key`, which each builder already curates as "kind + natural
+ * identity" and which carries no run-varying content. Re-deriving a fourteenth identity
+ * scheme here, beside fourteen keys that already exist, is precisely the drift this
+ * codebase keeps refusing.
+ */
+function fingerprintCanonical(f: RunFinding): Record<string, unknown> {
+  // ── 1. HELD ROWS → the durable case's OWN canonical object, byte-identical. ──
+  // `fromHeld` writes `held:<reportType>:<natural_key>`; the natural key may itself
+  // contain colons, so split on the first two only.
+  if (f.key.startsWith('held:')) {
+    const rest = f.key.slice('held:'.length)
+    const cut = rest.indexOf(':')
+    if (cut > 0) {
+      return {
+        // Exactly `caseFingerprint`'s non-gate-failure branch — same field names,
+        // same order-insensitive canonicalization, therefore the same sha256.
+        // `gate_failure` intentionally lands here too; see the header.
+        reportType: rest.slice(0, cut),
+        kind: f.kind,
+        natural_key: str(f.data.natural_key) ?? rest.slice(cut + 1),
+      }
+    }
+  }
+
+  // ── 2. A delivery a human owns → ONE fingerprint across BOTH sources. ────────
+  // The emailed report and the Google Sheet each raise their own finding for the same
+  // delivery (`delivery_human_edited:deliveries:<id>` and `…:gsheet:<id>`), but the
+  // operator faces ONE decision about ONE row. So `section` is deliberately dropped
+  // from the identity — acknowledging it once answers both.
+  if (f.kind === 'delivery_human_edited') {
+    const recordId = str(f.data.record_id)
+    if (recordId) return { kind: 'delivery_human_edited', record_id: recordId }
+  }
+
+  // ── 3. A price note about one truckload → the truck, not the spelling. ───────
+  // The whole point of a fuzzy-match note is that the SPELLING differs between the two
+  // sheets, so the identity must be built from the facts that do not get re-spelled:
+  // the date, the normalized plate and the sack count (the L-040b tier-1 delivery
+  // identity, which is unique across every plated delivery in the database). A
+  // file-level note names no truckload and keys on the month it wanted.
+  if (f.section === 'deliveries' && f.kind.startsWith('price_')) {
+    if (isFileLevelPriceKind(f.kind)) {
+      return { kind: f.kind, looked_for: str(f.data.looked_for) }
+    }
+    return {
+      kind: f.kind,
+      transaction_date: str(f.data.transaction_date),
+      truck_plate: normPlateForIdentity(f.data.truck_plate) || null,
+      sacks: num(f.data.sacks),
+    }
+  }
+
+  // ── 4. Everything else → the builder's own curated key. ──────────────────────
+  // Note this covers `block_diff` exactly as specified: `fromBlockDiff` emits the
+  // literal `block_diff:grand_total` for the total and `block_diff:<block>:<subkind>`
+  // per block, so two different checks on one block stay two acknowledgements while
+  // the balance figures live entirely in `contentHash`.
+  return { kind: f.kind, section: f.section, key: f.key }
+}
+
+/**
+ * The situation half — what a human would call "what it says right now". Changing it
+ * re-surfaces an acknowledged finding; leaving it alone keeps it quiet.
+ */
+function contentCanonical(f: RunFinding): Record<string, unknown> {
+  // Blocking cross-check: the NUMBERS are the situation. Rounded to integer kg, the
+  // same discipline `blockDiffFingerprint` already applies, so sub-kg jitter is not a
+  // change. `fully_accounted` rides along because a residual going from explained to
+  // unexplained genuinely is a different problem.
+  if (f.kind === 'block_diff') {
+    return {
+      kind: 'block_diff',
+      subkind: str(f.data.subkind),
+      sheet_kg: roundKg(f.data.sheet_kg),
+      computed_kg: roundKg(f.data.computed_kg),
+      delta: roundKg(f.data.delta),
+      sheet_batch: str(f.data.sheet_batch),
+      computed_batch: str(f.data.computed_batch),
+      active_batch_count: num(f.data.active_batch_count),
+      residual_kg: roundKg(f.data.residual_kg),
+      accounted_block_kg: roundKg(f.data.accounted_block_kg),
+      fully_accounted: f.data.fully_accounted === true,
+    }
+  }
+
+  // A delivery a human owns: WHICH FIELDS disagree and by what. A cost-ish field
+  // contributes its NAME and the fact that it differs — never its values, which are
+  // already stripped twice upstream and are stripped a third time here so this stays
+  // true even if a future writer forgets.
+  if (f.kind === 'delivery_human_edited') {
+    const raw = Array.isArray(f.data.changed_fields) ? f.data.changed_fields : []
+    const fields = raw
+      .map((entry) => {
+        const e = (entry ?? {}) as Record<string, unknown>
+        const field = str(e.field) ?? ''
+        if (isCostKey(field) || e.redacted === true) return { field, redacted: true }
+        return { field, yours: stripCostKeys(e.yours), sheet: stripCostKeys(e.sheet) }
+      })
+      .sort((a, b) => a.field.localeCompare(b.field))
+    return { kind: 'delivery_human_edited', changed_fields: fields }
+  }
+
+  // A price note: the spelling disagreement itself, plus which row it was matched to.
+  if (f.section === 'deliveries' && f.kind.startsWith('price_')) {
+    const diffs = (Array.isArray(f.data.differences) ? f.data.differences : [])
+      .map((d) => stripCostKeys(d) as Record<string, unknown>)
+      .sort((a, b) => String(a.field ?? '').localeCompare(String(b.field ?? '')))
+    return {
+      kind: f.kind,
+      differences: diffs,
+      collisions: stripCostKeys(f.data.collisions ?? null),
+      candidates: stripCostKeys(f.data.candidates ?? null),
+      tabs_found: stripCostKeys(f.data.tabs_found ?? null),
+      matched_sheet: str(f.data.matched_sheet),
+      matched_row: num(f.data.matched_row),
+      matched_via: str(f.data.matched_via),
+      collided_on: str(f.data.collided_on),
+    }
+  }
+
+  // Default: the whole `data` payload minus the keys that move on their own and minus
+  // anything cost-ish. Exhaustive by construction — a finding kind added tomorrow gets
+  // sensible ack behaviour with no edit here.
+  const rest: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(f.data)) {
+    if (VOLATILE_DATA_KEYS.has(k)) continue
+    if (isCostKey(k)) continue
+    if (v == null) continue
+    rest[k] = stripCostKeys(v)
+  }
+  return { kind: f.kind, section: f.section, data: rest }
+}
+
+/**
+ * The ONE definition of a finding's identity, for `public.sync_finding_acks`.
+ *
+ * Pure, deterministic and total — same finding in two different runs yields the same
+ * pair, and no input can make it throw. See the section header above for the two rules
+ * it enforces (one identity, never a ₱).
+ */
+export function findingIdentity(f: RunFinding): FindingIdentity {
+  return {
+    fingerprint: canonicalHashPortable(fingerprintCanonical(f)),
+    contentHash: canonicalHashPortable(contentCanonical(f)),
+  }
 }
 
 // ============================================================================
