@@ -53,7 +53,8 @@ import { reportWorkflow, type ReportEnvelope, type RunReportType } from "./repor
 import { failedReportResult } from "./normalizeReport.js";
 import { makeStorageFetcher } from "./reportDeps.js";
 import { DbClient } from "../lib/db.js";
-import { withGmailRunLease } from "../lib/gmailSession.js";
+import { withGmailRunLease, isGmailSessionAborted } from "../lib/gmailSession.js";
+import { withRunSlot } from "./runGate.js";
 import { makeEmitter } from "../lib/progress.js";
 import { loadWorkbook } from "../lib/xlsx.js";
 import { mailClerkWorkflowId, reportWorkflowId } from "./ids.js";
@@ -97,14 +98,22 @@ function reportFailed(r: ReportEnvelope): boolean {
 }
 
 /**
- * True if an error is a DBOS workflow-cancellation (this workflow was cancelled) or
- * an awaited-child cancellation (a child we were awaiting was cancelled). Either way
- * the run was STOPPED on purpose — settle it as 'cancelled', never 'failed'.
+ * True if an error is a DBOS workflow-cancellation (this workflow was cancelled), an
+ * awaited-child cancellation (a child we were awaiting was cancelled), or the Gmail
+ * session being torn down by Stop (BUG-026). Either way the run was STOPPED on purpose —
+ * settle it as 'cancelled', never 'failed'.
+ *
+ * The third case is NOT redundant with the first two: DBOS observes a cancellation only
+ * when a STEP RETURNS, so a run parked mid-IMAP-command sees nothing at all until Gmail
+ * answers — on 2026-08-19 that was 2 min 49 s after the operator pressed Stop. The socket
+ * teardown is what actually interrupts it, and this is the clause that reads that
+ * interruption as the stop it is rather than as a crash.
  */
 export function isCancellation(err: unknown): boolean {
   return (
     err instanceof DBOSErrors.DBOSWorkflowCancelledError ||
-    err instanceof DBOSErrors.DBOSAwaitedWorkflowCancelledError
+    err instanceof DBOSErrors.DBOSAwaitedWorkflowCancelledError ||
+    isGmailSessionAborted(err)
   );
 }
 
@@ -334,8 +343,19 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
   // `report_artifact`, a SUCCESSFUL check has no payload of its own to carry: the streams
   // it found are already `stale_streams`.)
   const freshnessFailed = Boolean(freshness.error);
+  // How the MAILBOX behaved this run (BUG-026) — measured in Stage 1 and carried through
+  // the manifest, because the run's own slowness is a fact about the day that has to
+  // outlive the progress beats. Absent unless something actually blew the budget.
+  const slowSearches = manifestResolved.slowSearches ?? [];
+  const hasSlowSearches = slowSearches.length > 0;
   const reconciliation: ReconciliationChannel | undefined =
-    rcOutRecon || blockingRecon || hasCloses || hasScheduleConflicts || hasStaleStreams || freshnessFailed
+    rcOutRecon ||
+    blockingRecon ||
+    hasCloses ||
+    hasScheduleConflicts ||
+    hasStaleStreams ||
+    freshnessFailed ||
+    hasSlowSearches
       ? {
           ...(rcOutRecon ?? {}),
           ...(blockingRecon ? { blocking: blockingRecon } : {}),
@@ -343,6 +363,7 @@ async function runSyncBody(params: RunSyncParams): Promise<RunSyncResult> {
           ...(hasScheduleConflicts ? { schedule_conflicts: scheduleConflicts } : {}),
           ...(hasStaleStreams ? { stale_streams: freshness.streams } : {}),
           ...(freshnessFailed ? { stale_stream_check: { ok: false, error: freshness.error } } : {}),
+          ...(hasSlowSearches ? { gmail_slow_searches: slowSearches } : {}),
         }
       : undefined;
 
@@ -402,10 +423,12 @@ async function emitProgress(
   stage: "fetch" | "extract" | "classify" | "apply" | "reconcile" | "finalize",
   label: string,
   pct: number,
+  detail?: string,
+  level?: "info" | "warn",
 ): Promise<void> {
   const db = DbClient.fromEnv();
   const emit = makeEmitter(db, runId, "_run");
-  await emit(stage, label, pct);
+  await emit(stage, label, pct, detail, level);
 }
 
 async function finishRun(
@@ -1111,13 +1134,38 @@ function defaultSince(): string {
  */
 async function runSyncGuarded(params: RunSyncParams): Promise<RunSyncResult> {
   try {
-    // ── ONE IMAP SESSION PER RUN (BUG-019). The lease PINS the shared Gmail session
-    // (lib/gmailSession.ts) for the whole run without forcing a connect: the Mail Clerk
-    // opens it in Stage 1, and the labelers (Stage 2b), the flecon fetcher and the
-    // schedule fetcher (Stage 3c) all reuse that same connection instead of opening
-    // their own. `withGmailRunLease` releases in a `finally`, so the session is closed
-    // exactly once — on success, on failure, and on a DBOS cancellation alike.
-    return await withGmailRunLease(() => runSyncBody(params));
+    // ── ONE RUN AT A TIME (BUG-026). The slot is taken BEFORE the Gmail lease and given
+    // back AFTER it, so it covers every moment a run can hold an IMAP session — including
+    // the tail of a run still unwinding from a Stop. On 2026-08-19 the operator pressed
+    // Run 57 s after pressing Stop and the account carried two simultaneous sessions;
+    // Gmail throttles those per account, so the replacement run was SLOWER than the one it
+    // replaced. A second run now queues here instead. See workflows/runGate.ts.
+    return await withRunSlot(
+      params.runId,
+      () =>
+        // ── ONE IMAP SESSION PER RUN (BUG-019). The lease PINS the shared Gmail session
+        // (lib/gmailSession.ts) for the whole run without forcing a connect: the Mail Clerk
+        // opens it in Stage 1, and the labelers (Stage 2b), the flecon fetcher and the
+        // schedule fetcher (Stage 3c) all reuse that same connection instead of opening
+        // their own. `withGmailRunLease` releases in a `finally`, so the session is closed
+        // exactly once — on success, on failure, and on a DBOS cancellation alike. The
+        // `runId` is what lets `POST /cancel` tear down THIS run's socket and no other's.
+        withGmailRunLease(() => runSyncBody(params), { runId: params.runId }),
+      {
+        // Observational only, and deliberately NOT a DBOS step: a step that exists only on
+        // the queued path would make the run's step sequence depend on wall-clock timing,
+        // which is precisely what a replay may not do. A duplicated beat in the log is a
+        // fair price for a deterministic checkpoint stream.
+        onWait: (activeRunId) =>
+          emitProgress(
+            params.runId,
+            "fetch",
+            "Waiting for the sync already in progress to finish…",
+            1,
+            `Run ${activeRunId} still holds the mailbox. This run will start on its own — nothing is lost.`,
+          ),
+      },
+    );
   } catch (err) {
     // A cancellation (Stop button) is NOT a crash: settle 'cancelled', keep every
     // already-written row, and re-throw so DBOS records the terminal CANCELLED state.
@@ -1125,7 +1173,17 @@ async function runSyncGuarded(params: RunSyncParams): Promise<RunSyncResult> {
       try {
         await DBOS.runStep(() => cancelRun(params.runId), { name: "cancelRun" });
       } catch {
-        /* best-effort terminal write */
+        // A workflow DBOS has already marked CANCELLED refuses to open new steps, so this
+        // is the ordinary path when `/cancel` reached DBOS before the socket teardown
+        // reached us — and losing the terminal write here would cost the "Stopped." beat
+        // and the stopped run's Excel log, which is exactly the log someone wants after a
+        // stop. Write it directly instead. `cancelSyncRunIfActive` is conditional, so the
+        // worst case is one extra beat in a log that already exists to be read.
+        try {
+          await cancelRun(params.runId);
+        } catch {
+          /* best-effort terminal write */
+        }
       }
       throw err;
     }

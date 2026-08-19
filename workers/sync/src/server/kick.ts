@@ -6,11 +6,16 @@
  *       runId as the workflow ID (idempotency key — a duplicate kick for the same
  *       runId is a no-op). Returns 202 immediately; the work continues durably.
  *   POST /cancel { runId }   Authorization: Bearer <SYNC_KICK_SECRET>
- *       Gracefully STOPS a run (the Stop button). Cancels the parent workflow
- *       `run:<runId>` and every child (`mailclerk:<runId>`, `report:<runId>:<type>`)
- *       via DBOS.cancelWorkflow. Idempotent + safe when NO workflow exists for the
- *       runId (the never-started / queued-and-lost case) — returns 200 either way.
- *       Rows already written are KEPT (never rolled back); the run settles 'cancelled'.
+ *       Gracefully STOPS a run (the Stop button). TWO moves, in this order:
+ *         1. `abortActiveGmailSession({runId})` — rejects the in-flight IMAP command and
+ *            closes the socket. Without this, a run parked mid-search does not notice the
+ *            stop until Gmail answers: on 2026-08-19 that was 2 min 49 s (BUG-026).
+ *         2. `DBOS.cancelWorkflow` on the parent `run:<runId>` and every child
+ *            (`mailclerk:<runId>`, `report:<runId>:<type>`) — what halts a run that is
+ *            stopped somewhere OTHER than a Gmail call.
+ *       Idempotent + safe when NO workflow exists for the runId (the never-started /
+ *       queued-and-lost case) — returns 200 either way. Rows already written are KEPT
+ *       (never rolled back); the run settles 'cancelled'.
  *   GET  /health              → 200 { ok: true }
  *
  * Fly.io auto-start wakes the machine on the inbound /kick request; auto-stop lets
@@ -23,6 +28,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { DBOS } from "../dbos.js";
 import { runSyncWorkflow } from "../workflows/runSync.js";
 import { childWorkflowIds, runWorkflowId } from "../workflows/ids.js";
+import { abortActiveGmailSession } from "../lib/gmailSession.js";
 
 export interface KickServerOptions {
   port?: number;
@@ -121,12 +127,43 @@ async function handle(
       return;
     }
 
-    // Graceful stop. Cancel the parent (cancelChildren:true reaches every descendant),
-    // then ALSO cancel each known child ID explicitly (belt-and-suspenders — covers a
-    // child not yet registered as a descendant at cancel time). cancelWorkflow on an
-    // ID that never started is a harmless no-op, so this is safe for the queued/lost
-    // case too. The workflows themselves catch the cancellation and settle 'cancelled'
-    // (rows already written are KEPT). We NEVER throw on a missing workflow.
+    // ── STEP 1: TEAR DOWN THE SOCKET, FIRST (BUG-026, 2026-08-19).
+    //
+    // DBOS cancellation is observed only when a STEP RETURNS. On 2026-08-19 run 35bfc6eb
+    // was parked mid-`await` on a 58-second IMAP search inside `DBOS.runStep`, so the
+    // cancel below had nothing to interrupt — it queued behind Gmail, and the cancelled
+    // run went on to emit `Found RC DELIVERIES (98 KB)` **2 min 49 s after the operator
+    // pressed Stop**, then kept downloading. Cancelling a WORKFLOW does not cancel a
+    // SOCKET; only this does.
+    //
+    // It runs BEFORE the DBOS cancel deliberately. The abort rejects the awaiting step in
+    // ~0 ms, which lets `runSyncGuarded` reach its own `cancelRun` step while the workflow
+    // is still runnable — so the "Stopped." beat and the stopped run's Excel log are
+    // actually written. Doing it the other way round marks the workflow CANCELLED first,
+    // and a cancelled workflow refuses to open the very step that records the stop.
+    //
+    // Owner-checked inside the broker: a cancel for run B can never tear down run A's
+    // session. `false` just means there was nothing to abort (the run had not reached
+    // Gmail, or had already left it) — an ordinary outcome, never an error.
+    let gmailAborted = false;
+    try {
+      gmailAborted = await abortActiveGmailSession({
+        runId,
+        reason:
+          "The sync was stopped — the Gmail session was closed mid-command, so nothing further was fetched.",
+      });
+    } catch (err) {
+      console.warn(`[cancel] gmail abort non-fatal:`, err instanceof Error ? err.message : err);
+    }
+
+    // ── STEP 2: graceful stop. Cancel the parent (cancelChildren:true reaches every
+    // descendant), then ALSO cancel each known child ID explicitly (belt-and-suspenders —
+    // covers a child not yet registered as a descendant at cancel time). Still required
+    // even with step 1: a run stopped mid-CLASSIFY is holding no socket at all, and this
+    // is what halts that one. cancelWorkflow on an ID that never started is a harmless
+    // no-op, so this is safe for the queued/lost case too. The workflows themselves catch
+    // the cancellation and settle 'cancelled' (rows already written are KEPT). We NEVER
+    // throw on a missing workflow.
     const cancelOne = async (wfId: string): Promise<void> => {
       try {
         await DBOS.cancelWorkflow(wfId);
@@ -143,7 +180,7 @@ async function handle(
     }
     await Promise.all(childWorkflowIds(runId).map(cancelOne));
 
-    sendJson(res, 200, { ok: true, runId, status: "cancelled" });
+    sendJson(res, 200, { ok: true, runId, status: "cancelled", gmailAborted });
     return;
   }
 

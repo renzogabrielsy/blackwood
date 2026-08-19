@@ -1011,6 +1011,7 @@ analysis is the most useful record — this section is the index:
 | BUG-021 — `production_schedule` ownership + conditional sync (no more unconditional upsert of the whole calendar) | 2026-07-30 | _(uncommitted)_ |
 | BUG-017 — `fn_update_blackwood_state` moved BEFORE → AFTER; batch-code moves and in-place weight/cost edits now recompute truthfully | 2026-08-04 | migration `20260804060000` (applied live) |
 | BUG-018 — `batches.avg_cost` unified on the delivery-weighted definition; all 693 batches recomputed | 2026-08-04 | migration `20260804060000` (applied live) |
+| BUG-026 — Stop did not stop an in-flight Gmail search; the cancelled run kept downloading for 2 min 49 s and a re-click opened a second IMAP session | 2026-08-19 | _(uncommitted)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none
@@ -1296,3 +1297,60 @@ three pieces already in place: read `view_production_schedule_state`, call
   a gate that gets forgotten, which is precisely what happened here. Phase 2 reuses it for
   RC IN's ungated selection-bar bulk Delete.
 - **Found by** the same audit (finding A3).
+
+---
+
+## BUG-026 — Stop did not stop an in-flight Gmail search, so a slow Gmail moment became a hang and a re-click stacked a second IMAP session ✅ FIXED (2026-08-19, uncommitted)
+**Status:** ✅ FIXED · **Effort:** M · **Severity:** HIGH (control surface — the Stop button did not stop)
+
+- **Symptom.** Run `35bfc6eb`, 2026-08-19:
+
+  | Time | What happened |
+  |---|---|
+  | 03:29:42 | Run clicked. `Looking for RC DELIVERIES…`. That IMAP search takes **58 s** — it took 4–7 s on every earlier run that day, on the **identical build**. Gmail was simply slow. |
+  | 03:30:08 | **Stop** clicked. `sync_runs.status` → `cancelled` immediately (`cancelSyncRun`). |
+  | 03:31:05 | Run clicked **again**. Run `1a3bd336` opens a **second** IMAP session while the first is still searching; Gmail throttles concurrent sessions per account, so it sat on `Looking for RC DELIVERIES…` for 3½ minutes. |
+  | 03:32:57 | **2 min 49 s after the cancel**, the *cancelled* run emitted `Found RC DELIVERIES (98 KB)`, `Downloaded 1 of 7 reports…`, `Looking for Czarina price sheet…`. |
+
+- **Root cause.** **DBOS cancellation is observed only when a STEP RETURNS.** The run was
+  parked mid-`await` on an IMAP command inside `DBOS.runStep`, so `DBOS.cancelWorkflow`
+  had nothing to interrupt — it queued behind Gmail. **Cancelling a WORKFLOW does not
+  cancel a SOCKET.** And because Stop appeared not to work, the operator did the
+  reasonable thing and clicked Run again, which made the next attempt *slower* than the
+  one it replaced — a retry whose only effect was to make things worse.
+- **The generalisable lesson.** A control the user can press has to reach the thing it is
+  named after. "Cancel the workflow" and "stop the network call the workflow is blocked
+  on" are different actions, and the first does not imply the second. This is a cousin of
+  the deliveries-latch lesson (a warning written as a comment is not a control): here the
+  instruction *was* code, but it was pointed at the wrong object.
+- **Fix.**
+  1. **Stop reaches the socket.** `lib/gmailSession.ts` gained an abort: every
+     `withGmailSession(fn)` body is raced against a per-generation gate, and
+     `abortActiveGmailSession({runId})` rejects that gate first (~0 ms) then closes the
+     socket. Owner-checked, and **sticky** so a straggler labeler cannot re-connect for a
+     stopped run. The error is cancellation-shaped, so `runSync::isCancellation` settles
+     the run `cancelled`, never `failed`.
+  2. **`POST /cancel` aborts BEFORE it cancels the workflow** — which also repairs a
+     second, quieter defect: a workflow DBOS has already marked CANCELLED refuses to open
+     new steps, so `runSyncGuarded`'s `cancelRun` step (the "Stopped." beat and the
+     stopped run's Excel log) was silently never running. It now also has a direct
+     fallback.
+  3. **One run at a time.** `workflows/runGate.ts` — a run holds a process-wide slot from
+     before the Gmail lease until after it releases, so the slot covers a cancelled run's
+     unwind. A second run **queues** (FIFO, re-entrant per runId, bounded at 15 min) and
+     emits a plain-English "waiting" beat.
+  4. **A slow mailbox is reported.** `GMAIL_SEARCH_BUDGET_MS` (45 s) → a `warn` beat
+     *while the search is still running* + a `gmail_slow_search` finding (`attention`,
+     `section: 'run'`). **It never aborts** — Gmail slow is not Gmail broken, and
+     `lib/gmail.ts`'s 5-minute `socketTimeout` still owns a true hang.
+- **Not a bug, checked:** the zombie finished downloading a workbook into `sync-inbox`
+  *after* being cancelled. Harmless — every reader of that bucket is **run-scoped**
+  (`<runId>/<key>/<filename>`), so it is an orphan under its own run's folder and nothing
+  later reads "the newest workbook in the bucket".
+- **Nothing here changes what the sync reports or writes to a data table.**
+- **Spec:** `workers/sync/specs/SHARED.md` §1.10. **Tests:**
+  `workers/sync/test/lib/gmailSessionAbort.test.ts`,
+  `workers/sync/test/workflows/runGate.test.ts`,
+  `workers/sync/test/workflows/mailClerkSlowSearch.test.ts`.
+- **Deploy:** touches `workers/sync/**` — needs `cd workers/sync && npm run deploy` on top
+  of the merge to `main`.

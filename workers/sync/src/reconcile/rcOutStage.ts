@@ -30,6 +30,9 @@ import type { BlockReconciliation } from "./blockBalance.js";
 import type { BatchClose } from "../lib/gsheetCloseScan.js";
 import type { ScheduleConflict } from "../reports/prodSchedule/plan.js";
 import type { StaleStream } from "../lib/streamStaleness.js";
+// TYPE-ONLY, and deliberately so: the mail clerk is a workflow, this is a reconcile
+// module, and a runtime edge between them would be a cycle waiting to happen.
+import type { SlowGmailSearch } from "../workflows/mailClerk.js";
 
 /**
  * The freshness watch could not RUN. Mirrors `app/(app)/sync/types.ts::StaleStreamCheck`.
@@ -133,6 +136,14 @@ export interface ReconciliationChannel {
   batch_closes?: BatchClose[];
   schedule_conflicts?: ScheduleConflict[];
   stale_streams?: StaleStream[];
+  /**
+   * Gmail searches that blew the per-search budget this run (BUG-026, 2026-08-19). Like
+   * `stale_streams` it describes the RUN rather than the data — how the mailbox behaved,
+   * not what it contained — and it is present ONLY when something was actually slow, so a
+   * normal run's shape is unchanged. Never an error state: a slow Gmail day is a fact to
+   * record, not a failure to raise.
+   */
+  gmail_slow_searches?: SlowGmailSearch[];
   /**
    * Set ONLY when the freshness watch could not RUN (2026-08-18, L-044). Its absence means
    * the check ran; `stale_streams` then carries the answer (possibly none).

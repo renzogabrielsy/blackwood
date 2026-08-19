@@ -23,6 +23,7 @@ import type {
   ReportNotReceived,
   ScheduleConflict,
   SingleSourceOverdue,
+  SlowGmailSearch,
   SourceDiff,
   StaleStream,
   StaleStreamCheck,
@@ -317,6 +318,19 @@ export function collectStaleStreams(result: SyncRunResult): StaleStream[] {
 export function collectStaleStreamCheck(result: SyncRunResult): StaleStreamCheck | null {
   const c = result.reconciliation?.stale_stream_check
   return c && typeof c === 'object' ? c : null
+}
+
+/**
+ * Gmail searches that blew the worker's per-search budget (2026-08-19, BUG-026). Absent on
+ * every run where the mailbox behaved, and on every run that predates the budget. Guarded
+ * + pure.
+ *
+ * This is the one collector whose subject is the sync's OWN behaviour rather than the
+ * plant's — it answers "was it slow, or was it stuck?", which nothing in the result could
+ * answer on the day that question cost two overlapping IMAP sessions.
+ */
+export function collectSlowGmailSearches(result: SyncRunResult): SlowGmailSearch[] {
+  return result.reconciliation?.gmail_slow_searches ?? []
 }
 
 /**
