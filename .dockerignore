@@ -41,15 +41,23 @@ workers/sync/*
 !workers/sync/src/**
 
 # ---- the ONE worker->app crossing --------------------------------------------
-# Transitive closure of workers/sync/src/reports/excel/findingsBridge.ts. Three files,
-# and three only: findings.ts imports cases-fold + the contract types, cases-fold
-# imports the contract types, and the contract types import nothing at all.
+# Transitive closure of workers/sync/src/reports/excel/findingsBridge.ts. FOUR files, and
+# four only: findings.ts imports cases-fold + portable-hash + the contract types,
+# cases-fold imports the contract types, and portable-hash and the contract types import
+# nothing at all.
+#
+# `portable-hash.ts` joined the closure on 2026-08-19 when `findings.ts` grew the
+# finding-ACK fingerprint, and this file was not updated with it — so the deploy gate was
+# already red before the BUG-026 work touched anything. That is precisely the failure mode
+# DEPLOY.md warns about: the app half stays green on Vercel while the worker cannot build
+# at all. When the closure grows, it grows HERE and in the Dockerfile, together.
 !lib
 lib/*
 !lib/sync
 lib/sync/*
 !lib/sync/findings.ts
 !lib/sync/cases-fold.ts
+!lib/sync/portable-hash.ts
 
 !app
 app/*

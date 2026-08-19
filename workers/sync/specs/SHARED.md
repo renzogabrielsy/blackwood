@@ -145,6 +145,48 @@ diagnosis lives on **fields**, not the message (`imap-flow.js:805-822`):
   `flattenRunFindings`. `HeldKind` is FRONTEND-LOCKED — reclassify via `reason`/`detail`,
   never a new kind.
 
+### 1.10 STOP TEARS DOWN THE SOCKET — the run lifecycle contract (2026-08-19, BUG-026)
+
+> **A WORKER rule, not a Python-parity rule.** The Python oracle had no Stop button and no
+> durable run; this section is about the TS worker's run lifecycle only.
+
+**The rule, in one sentence: pressing Stop closes the IMAP socket, and one Gmail session
+per account exists at a time — across runs, not merely within one.**
+
+**THE INCIDENT.** 2026-08-19, run `35bfc6eb` → `1a3bd336`.
+
+| Time | What happened |
+|---|---|
+| 03:29:42 | Run clicked. `Looking for RC DELIVERIES…`. That IMAP search takes **58 s** — it took 4–7 s on every earlier run that day on the **identical build**. Gmail was simply slow. |
+| 03:30:08 | **Stop** clicked. `sync_runs.status` → `cancelled` immediately (the app's `cancelSyncRun`). |
+| 03:31:05 | Run clicked **again**. Run `1a3bd336` opens a **second** IMAP session while the first is still searching. Gmail throttles concurrent sessions per account, so the new run sits on `Looking for RC DELIVERIES…` for 3½ minutes. |
+| 03:32:57 | **2 min 49 s after the cancel**, the *cancelled* run emits `Found RC DELIVERIES (98 KB)`, `Downloaded 1 of 7 reports…`, `Looking for Czarina price sheet…`. |
+
+**WHY, and this is the whole lesson: DBOS cancellation is observed only when a STEP
+RETURNS.** The run was parked mid-`await` on an IMAP command inside `DBOS.runStep`, so
+`DBOS.cancelWorkflow` had nothing to interrupt — it queued behind Gmail. **Cancelling a
+WORKFLOW does not cancel a SOCKET.** And because Stop appeared not to work, the operator
+did the reasonable thing and clicked Run again, which made the next attempt slower than the
+one it replaced — a retry whose only effect was to make things worse.
+
+**How it is enforced now.**
+
+| Rule | Mechanism |
+|---|---|
+| Stop reaches the socket | `POST /cancel` calls `lib/gmailSession.ts::abortActiveGmailSession({runId})` **BEFORE** `DBOS.cancelWorkflow`. Every `withGmailSession(fn)` body is RACED against a per-generation abort gate; the abort rejects that gate first (~0 ms) and closes the socket second, so promptness never depends on TLS teardown. |
+| A stop is a stop, not a crash | The rejection is a `GmailSessionAbortedError`, folded into `runSync.ts::isCancellation` — so the run settles `cancelled`, keeps every row it wrote, and the lease's `finally` closes the session exactly once. |
+| Abort BEFORE the DBOS cancel, deliberately | The abort leaves the workflow still runnable long enough to reach its own `cancelRun` step, so the "Stopped." beat and the stopped run's Excel log are actually written. A workflow DBOS has already marked CANCELLED refuses to open that step; `runSyncGuarded` therefore falls back to writing the terminal state directly. |
+| A straggler cannot re-connect | The abort is **sticky for the generation** and cleared only when a NEW run takes the lease. A labeler still unwinding inside a cancelled child workflow gets the same rejection instead of opening a fresh socket. |
+| A cancel cannot hit the wrong run | `abortActiveGmailSession` is **owner-checked** against the runId recorded by `withGmailRunLease(fn, {runId})`. |
+| One run at a time | `workflows/runGate.ts`. A run takes the slot BEFORE the Gmail run-lease and gives it back AFTER — so the slot covers the whole window a run can hold a session, **including the tail of a run still unwinding from a Stop**, which is exactly the window the second click landed in. A second run **QUEUES** (the click is already durable as a `queued` `sync_runs` row) and emits one plain-English beat saying what it waits for. Re-entrant per runId (DBOS replay), FIFO, and bounded by `RUN_SLOT_TIMEOUT_MS` (15 min — the watchdog's own staleness horizon; past it `selfHeal.ts` has already expired the predecessor). |
+| A slow mailbox is RECORDED, never aborted | `mailClerk.ts::GMAIL_SEARCH_BUDGET_MS` (45 s). Past it the clerk emits a `warn` beat **while the search is still running** and records the overrun in `manifest.slowSearches` → `reconciliation.gmail_slow_searches` → a `gmail_slow_search` finding (`attention`, `section: 'run'`). **It never aborts** — Gmail slow is not Gmail broken, and `lib/gmail.ts`'s 5-minute `socketTimeout` remains the only thing that ends a true hang. 45 s sits above the 4–7 s these searches normally take and below the 58 s that caused this. |
+
+**Nothing here changes what the sync reports or writes to a data table.** The Storage
+side-effect of a zombie is likewise harmless and was deliberately left alone: every reader
+of the `sync-inbox` bucket is **run-scoped** (`<runId>/<key>/<filename>`), so a workbook a
+cancelled run finished downloading is an orphan under its own run's folder and nothing
+later reads "the newest workbook in the bucket".
+
 ---
 
 ## 2. `lib/db.py` — PostgREST client contract

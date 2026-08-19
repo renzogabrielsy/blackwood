@@ -46,14 +46,17 @@ RUN npm ci
 COPY workers/sync/tsconfig.json workers/sync/esbuild.config.mjs ./
 COPY workers/sync/src ./src
 
-# The ONE worker->app crossing, and its COMPLETE transitive closure — three files:
-#   lib/sync/findings.ts    imports ./cases-fold + app/(app)/sync/types  (nothing else)
-#   lib/sync/cases-fold.ts  imports app/(app)/sync/types                 (nothing else)
-#   app/(app)/sync/types.ts ZERO imports
+# The ONE worker->app crossing, and its COMPLETE transitive closure — FOUR files:
+#   lib/sync/findings.ts      imports ./cases-fold + ./portable-hash + app/(app)/sync/types
+#   lib/sync/cases-fold.ts    imports app/(app)/sync/types              (nothing else)
+#   lib/sync/portable-hash.ts ZERO imports (that is the whole point of it)
+#   app/(app)/sync/types.ts   ZERO imports
 # If that closure ever grows, this COPY and .dockerignore must grow with it; the
 # verify:container-build gate is what makes forgetting that a red build instead of a
-# broken deploy.
-COPY lib/sync/findings.ts lib/sync/cases-fold.ts /repo/lib/sync/
+# broken deploy — and on 2026-08-19 it did exactly that: `portable-hash.ts` joined the
+# closure with the finding-ACK fingerprint and neither this COPY nor .dockerignore
+# followed, so the gate was already failing before the BUG-026 work started.
+COPY lib/sync/findings.ts lib/sync/cases-fold.ts lib/sync/portable-hash.ts /repo/lib/sync/
 COPY ["app/(app)/sync/types.ts", "/repo/app/(app)/sync/"]
 
 # Build identity. Passed in by the deploy wrapper (`--build-arg BUILD_SHA=$(git rev-parse

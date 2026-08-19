@@ -33,6 +33,7 @@ import type {
   ReportNotReceived,
   ScheduleConflict,
   SingleSourceOverdue,
+  SlowGmailSearch,
   SourceDiff,
   StaleStream,
   StaleStreamCheck,
@@ -56,6 +57,7 @@ import {
   collectReportsNotReceived,
   collectScheduleConflicts,
   collectSingleSourceOverdue,
+  collectSlowGmailSearches,
   collectSourceDiffs,
   collectStaleStreamCheck,
   collectStaleStreams,
@@ -848,6 +850,56 @@ function fromStaleStreamCheckFailure(c: StaleStreamCheck): RunFinding {
 }
 
 /**
+ * GMAIL WAS SLOW TODAY (2026-08-19, BUG-026).
+ *
+ * The only finding in this file about the SYNC'S OWN experience rather than the plant's,
+ * and it exists because of what its absence cost. On 2026-08-19 the RC DELIVERIES IMAP
+ * search took 58 s — it had taken 4 to 7 seconds on every earlier run that day, on the
+ * identical build. Nothing was broken. But from the panel a slow run and a hung run are
+ * the same picture: a status line that has not moved. So the run was read as hung and
+ * Stopped, then started again 57 seconds later, and because the stopped run was still
+ * holding its IMAP session the account carried two at once — Gmail throttles concurrent
+ * sessions per account, so the replacement run was SLOWER than the run it replaced.
+ *
+ * `attention`, never `high`, and the wording says "nothing is wrong" out loud: this is a
+ * weather report, not an alarm. A `high` here would out-shout the findings that describe
+ * actual missing data, and would train an operator to stop reading the list — the exact
+ * failure the blocking grand total was demoted for.
+ *
+ * `elapsed_ms` is deliberately NOT in `VOLATILE_DATA_KEYS`: each day's slowness is its own
+ * news, and an acknowledgement of "Gmail was slow on the 19th" must not quietly suppress
+ * the 20th.
+ */
+function fromSlowGmailSearch(s: SlowGmailSearch): RunFinding {
+  const secs = (s.elapsed_ms / 1000).toFixed(1)
+  const budgetSecs = Math.round(s.budget_ms / 1000)
+  return {
+    key: `gmail_slow_search:${s.key}`,
+    kind: 'gmail_slow_search',
+    kindLabel: 'Gmail was slow',
+    source: 'Sync run',
+    title: `Finding ${s.label} in Gmail took ${secs} s`,
+    location: 'mailbox search',
+    data: {
+      query_key: s.key,
+      report: s.label,
+      query: s.query,
+      elapsed_ms: s.elapsed_ms,
+      budget_ms: s.budget_ms,
+    },
+    reason:
+      `The mailbox search for ${s.label} took ${secs} seconds, past the ${budgetSecs}-second ` +
+      `mark this run watches for. NOTHING IS WRONG WITH THE SYNC and nothing was missed — ` +
+      `Gmail was simply slow, and the search finished normally. This is recorded so a slow ` +
+      `day is a fact you can look up later rather than a run that merely felt stuck. ` +
+      `If a run ever looks frozen, let it finish: stopping and restarting puts a second ` +
+      `mailbox session on the account and makes the next attempt slower still.`,
+    severity: 'attention',
+    section: 'run',
+  }
+}
+
+/**
  * A production-batch CHANGEOVER: MC's report marked the last runs of the batch that
  * was running (`ENDING`) and the first runs of a brand-new one (`STARTING`) on the
  * same day. The new batch's NAME is written nowhere in the workbook, so the sync
@@ -1581,6 +1633,12 @@ export function flattenRunFindings(result: SyncRunResult): RunFinding[] {
   const freshness = collectStaleStreamCheck(result)
   if (freshness && freshness.ok === false) out.push(fromStaleStreamCheckFailure(freshness))
 
+  // 13c. How the MAILBOX behaved (2026-08-19). Beside the freshness findings because it is
+  //      the same class of fact — about the run rather than the data — and directly after
+  //      them because it is the benign one: an operator who has just read "this stream is
+  //      late" should read "and Gmail was slow today" in that order, not the reverse.
+  for (const g of collectSlowGmailSearches(result)) out.push(fromSlowGmailSearch(g))
+
   // 14. The Excel report failed to generate. ABSOLUTELY LAST and ONLY on failure — the
   //     successful pointer is provenance, not a flag, and a note on every clean run would
   //     be exactly the noise that trains an operator to stop reading this list.
@@ -1943,6 +2001,7 @@ const SHORT_KIND: Record<string, string> = {
   unpriced_overdue: 'no price yet',
   awaiting_batch_assignment: 'no pile yet',
   report_generation_failed: 'no excel report',
+  gmail_slow_search: 'gmail slow',
 }
 
 /** Plain phrase for synthetic (non-held) case/finding kinds, on top of HELD_KIND_LABEL. */
@@ -1972,6 +2031,7 @@ const EXTRA_KIND_LABEL: Record<string, string> = {
   unpriced_overdue: 'Delivery still has no price',
   awaiting_batch_assignment: 'Waiting on a pile assignment',
   report_generation_failed: 'Excel report could not be generated',
+  gmail_slow_search: 'Gmail was slow',
 }
 
 /** Tolerant plain label for ANY finding/case kind (held kinds + synthetic kinds). */

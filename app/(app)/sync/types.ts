@@ -966,6 +966,32 @@ export interface StaleStreamCheck {
   error: string | null
 }
 
+/**
+ * A Gmail search that ran longer than the worker's per-search budget (app-side MIRROR of
+ * the worker's `workflows/mailClerk.ts::SlowGmailSearch`), 2026-08-19, BUG-026.
+ *
+ * WHY A RUN RECORDS HOW SLOW ITS OWN MAILBOX WAS. On 2026-08-19 the RC DELIVERIES search
+ * took 58 s where it had taken 4–7 s on every earlier run that day, on the identical
+ * build. Nothing was broken — Gmail was slow. But a slow run and a hung run look identical
+ * from the panel, so the run was read as hung, Stopped, and started again, which put two
+ * IMAP sessions on one account and made the replacement run slower still. Recording the
+ * slowness is what lets "was the 19th just a slow day?" be answered next week from the
+ * Excel report instead of guessed.
+ *
+ * Never a ₱/cost field — a query name, a Gmail query string and two durations.
+ */
+export interface SlowGmailSearch {
+  /** The mail-clerk query key, e.g. `deliveries`, `deliveries_czarina`. */
+  key: string
+  /** Plain-English report label, e.g. "RC DELIVERIES". */
+  label: string
+  /** The Gmail query as issued ({since} already substituted). */
+  query: string
+  elapsed_ms: number
+  /** The budget it exceeded, so a later reader knows what "slow" meant that day. */
+  budget_ms: number
+}
+
 export interface ReportArtifact {
   ok: boolean
   /** Storage bucket + object path, absent exactly when ok is false. */
@@ -1005,6 +1031,12 @@ export interface ReconciliationChannel {
   stale_streams?: StaleStream[]
   /** Set ONLY when the freshness watch could not run — see `StaleStreamCheck`. */
   stale_stream_check?: StaleStreamCheck
+  /**
+   * Gmail searches that blew the worker's per-search budget (2026-08-19). Like
+   * `stale_streams` this describes the RUN, not the data — how the mailbox behaved rather
+   * than what it contained — and it is present only when something was actually slow.
+   */
+  gmail_slow_searches?: SlowGmailSearch[]
   /**
    * The Excel report generated for this run (2026-08-07). A pointer, always written; a
    * FINDING only when `ok` is false.

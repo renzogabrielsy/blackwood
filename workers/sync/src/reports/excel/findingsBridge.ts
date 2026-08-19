@@ -11,9 +11,17 @@
  *
  * So the worker imports the app's flattener directly. That is safe because
  * `lib/sync/findings.ts` and its two dependencies are provably portable:
- *   - `lib/sync/findings.ts`     — imports only `./cases-fold` + the shared contract types.
- *   - `lib/sync/cases-fold.ts`   — imports only the shared contract types.
- *   - `app/(app)/sync/types.ts`  — ZERO imports. Types plus a handful of const tables.
+ *   - `lib/sync/findings.ts`       — imports only `./cases-fold`, `./portable-hash` and the
+ *                                    shared contract types.
+ *   - `lib/sync/cases-fold.ts`     — imports only the shared contract types.
+ *   - `lib/sync/portable-hash.ts`  — ZERO imports (that is the whole point of the file:
+ *                                    sha256 without `node:crypto`, so it ships to a browser).
+ *   - `app/(app)/sync/types.ts`    — ZERO imports. Types plus a handful of const tables.
+ *
+ * That closure is ALSO the container's file set. It is enumerated in `workers/sync/Dockerfile`
+ * and `.dockerignore`, and `npm run verify:container-build` is the gate that turns forgetting
+ * one into a red build rather than a broken deploy. On 2026-08-19 `portable-hash.ts` joined
+ * the closure and neither file followed — the gate was red, and nobody had run it.
  * No React, no `@/` path alias, no `next/*`, no `node:crypto`, no Supabase client. The
  * module's own header already commits to being pure and client-safe; "worker-safe" is the
  * same property.

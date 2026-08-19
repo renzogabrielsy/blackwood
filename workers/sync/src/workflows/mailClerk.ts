@@ -230,6 +230,34 @@ export interface StoredAttachment {
   threadId: string | null;
 }
 
+/**
+ * A Gmail search that took longer than `GMAIL_SEARCH_BUDGET_MS` (BUG-026, 2026-08-19).
+ *
+ * On 2026-08-19 the RC DELIVERIES search took **58 s** where it had taken 4–7 s on every
+ * earlier run that day, on the identical build. Gmail was slow; nothing was broken. But a
+ * slow run and a hung run look identical from the panel, and the operator — reasonably —
+ * read it as a hang, pressed Stop, then pressed Run again, which put two IMAP sessions on
+ * the account and made the next run slower still.
+ *
+ * So slowness is now RECORDED rather than merely endured: the day itself is the fact, and
+ * "the sync took 12 minutes on the 19th" needs to be answerable a week later from the
+ * Excel report, not reconstructed from progress beats nobody kept.
+ *
+ * Carries no ₱ and no row data — a query name, a Gmail query string and two durations.
+ */
+export interface SlowGmailSearch {
+  /** The MailQuery.key, e.g. "deliveries", "deliveries_czarina". */
+  key: string;
+  /** Plain-English report label, e.g. "RC DELIVERIES". */
+  label: string;
+  /** The Gmail X-GM-RAW query as actually issued ({since} already substituted). */
+  query: string;
+  /** How long the search actually took. */
+  elapsed_ms: number;
+  /** The budget it exceeded, so a later reader knows what "slow" meant that day. */
+  budget_ms: number;
+}
+
 export interface MailClerkManifest {
   runId: string;
   since: string;
@@ -240,6 +268,11 @@ export interface MailClerkManifest {
     string,
     { uid: number; subject: string; date: string | null; hadAttachment: boolean }[]
   >;
+  /**
+   * Searches that blew the budget. OMITTED (not `[]`) on a normal run, so a healthy
+   * manifest keeps byte-identical shape — the same discipline as `stale_stream_check`.
+   */
+  slowSearches?: SlowGmailSearch[];
 }
 
 export interface MailClerkParams {
@@ -249,6 +282,8 @@ export interface MailClerkParams {
   /** If true, do NOT upload to Storage — return the manifest with in-memory sizes
    *  only (used by the M1 live read-only test so it never mutates Storage/Gmail). */
   dryRun?: boolean;
+  /** Override the per-search budget (tests only). Production uses GMAIL_SEARCH_BUDGET_MS. */
+  searchBudgetMs?: number;
 }
 
 /**
@@ -270,6 +305,19 @@ export type MailClerkProgress = (
 // pct 3 (fetchStart) before this; the per-report stages take over from ~25 onward.
 const FETCH_PCT_START = 4;
 const FETCH_PCT_END = 25;
+
+/**
+ * How long ONE Gmail search may take before the run says so out loud (BUG-026).
+ *
+ * 45 s, chosen against the measured record: the same searches ran in 4–7 s all day on
+ * 2026-08-19 and the one that triggered the incident took 58 s. So this fires on a genuine
+ * outlier and stays quiet on an ordinary slow day.
+ *
+ * **It is a REPORTING threshold, never an abort.** Gmail slow is not Gmail broken, and a
+ * budget that killed the search would turn a slow morning into a failed sync — the socket
+ * timeout (`lib/gmail.ts`, 5 min) remains the only thing that ends a true hang.
+ */
+export const GMAIL_SEARCH_BUDGET_MS = 45_000;
 
 /** Human-friendly report label for a MailQuery.key (plain English, no IMAP chatter). */
 function reportLabel(key: string): string {
@@ -340,15 +388,18 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
   // events emitted inside are side effects, not part of the step's memoized result —
   // a crash re-runs the whole (read-only) fetch and re-emits, which is fine.
   const fetched = await DBOS.runStep(
-    () => fetchAllOverOneSession(params.since, onProgress),
+    () => fetchAllOverOneSession(params.since, onProgress, { searchBudgetMs: params.searchBudgetMs }),
     { name: "gmailFetchAllOneSession" }
   );
+  // Only ever SET when something was actually slow — a healthy manifest keeps the shape it
+  // has always had, so nothing downstream has to distinguish "fast" from "old manifest".
+  if (fetched.slowSearches.length > 0) manifest.slowSearches = fetched.slowSearches;
 
   // Upload step(s): one per (query, attachment). Storage upsert is idempotent.
   const sb = params.dryRun ? null : storageClient();
 
   for (const q of mailQueries()) {
-    const res = fetched[q.key];
+    const res = fetched.results[q.key];
     manifest.emailMeta[q.key] = (res?.emails ?? []).map((e) => ({
       uid: e.uid,
       subject: e.subject,
@@ -402,8 +453,12 @@ async function mailClerkBody(params: MailClerkParams): Promise<MailClerkManifest
  */
 async function fetchAllOverOneSession(
   since: string,
-  onProgress?: MailClerkProgress
-): Promise<Record<string, { query: string; emails: FetchedEmail[] }>> {
+  onProgress?: MailClerkProgress,
+  opts: { searchBudgetMs?: number } = {}
+): Promise<{
+  results: Record<string, { query: string; emails: FetchedEmail[] }>;
+  slowSearches: SlowGmailSearch[];
+}> {
   const emit = async (
     label: string,
     pct: number,
@@ -419,6 +474,8 @@ async function fetchAllOverOneSession(
   };
 
   const out: Record<string, { query: string; emails: FetchedEmail[] }> = {};
+  const slowSearches: SlowGmailSearch[] = [];
+  const budgetMs = opts.searchBudgetMs ?? GMAIL_SEARCH_BUDGET_MS;
   const queries = mailQueries();
   const total = queries.length;
 
@@ -445,22 +502,56 @@ async function fetchAllOverOneSession(
         // unrelated workbook and still come home with the right file.
         const patterns = q.attachmentPatterns ?? ["*.xlsx", "*.xls"];
 
+        // ── SEARCH BUDGET (BUG-026). A timer that only ever SPEAKS: it fires WHILE the
+        // search is still running, because the whole point is to reach the operator
+        // during the wait rather than to explain it afterwards. It never aborts — Gmail
+        // slow is not Gmail broken, and `lib/gmail.ts`'s socket timeout still owns a
+        // true hang. On 2026-08-19 this beat is the sentence that would have kept a
+        // 58-second search from being read as a hang and answered with Stop-then-Run.
+        const searchStartedAt = Date.now();
+        const budgetTimer = setTimeout(() => {
+          void emit(
+            `Gmail is slow today — the ${label} search has taken ` +
+              `${Math.round(budgetMs / 1000)} s and is still running. Nothing is wrong; it will finish.`,
+            pctFor(done),
+            query,
+            "warn",
+          );
+        }, budgetMs);
+        budgetTimer.unref?.();
+
         let emails: FetchedEmail[];
         try {
-          // FAST path — metadata-first, download only the newest matching xlsx part.
-          const res = await gmail.searchLatestAttachment(query, { patterns });
-          emails = res.emails;
-        } catch (err) {
-          // The slow fallback exists for per-message STRUCTURE/PART edge cases. A
-          // connection-level refusal (the Gmail cap) is NOT one of those — retrying it
-          // on a refused/dead session just burns another command, so let it out.
-          if (isGmailConnectionLimit(err)) throw err;
-          // Fallback for THIS report — full-source parse (slower but robust). SAME
-          // patterns: a fallback that widens the filter would hand back a file the fast
-          // path would have refused, i.e. exactly the bug, only intermittent.
-          await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
-          const res = await gmail.search(query, { outDir: null, patterns });
-          emails = res.emails;
+          try {
+            // FAST path — metadata-first, download only the newest matching xlsx part.
+            const res = await gmail.searchLatestAttachment(query, { patterns });
+            emails = res.emails;
+          } catch (err) {
+            // The slow fallback exists for per-message STRUCTURE/PART edge cases. A
+            // connection-level refusal (the Gmail cap) is NOT one of those — retrying it
+            // on a refused/dead session just burns another command, so let it out.
+            if (isGmailConnectionLimit(err)) throw err;
+            // Fallback for THIS report — full-source parse (slower but robust). SAME
+            // patterns: a fallback that widens the filter would hand back a file the fast
+            // path would have refused, i.e. exactly the bug, only intermittent.
+            await emit(`Retrying ${label} the slow way…`, pctFor(done), undefined, "warn");
+            const res = await gmail.search(query, { outDir: null, patterns });
+            emails = res.emails;
+          }
+        } finally {
+          clearTimeout(budgetTimer);
+        }
+        // The elapsed figure is taken AFTER the fallback, so a query that needed the slow
+        // path is judged on what it actually cost the run, not on its first attempt.
+        const elapsedMs = Date.now() - searchStartedAt;
+        if (elapsedMs >= budgetMs) {
+          slowSearches.push({ key: q.key, label, query, elapsed_ms: elapsedMs, budget_ms: budgetMs });
+          await emit(
+            `${label} took ${(elapsedMs / 1000).toFixed(1)} s to find — slower than usual.`,
+            pctFor(done),
+            query,
+            "warn",
+          );
         }
         out[q.key] = { query, emails };
 
@@ -490,7 +581,7 @@ async function fetchAllOverOneSession(
         done += 1;
         await emit(`Downloaded ${done} of ${total} reports…`, pctFor(done));
       }
-      return out;
+      return { results: out, slowSearches };
     });
   } catch (err) {
     // OBSERVABILITY (BUG-019 Fix 4): the whole run is about to fail on this. Emit the
@@ -589,11 +680,14 @@ export async function runMailClerk(
     reports: {},
     emailMeta: {},
   };
-  const fetched = await fetchAllOverOneSession(params.since, onProgress);
+  const fetched = await fetchAllOverOneSession(params.since, onProgress, {
+    searchBudgetMs: params.searchBudgetMs,
+  });
+  if (fetched.slowSearches.length > 0) manifest.slowSearches = fetched.slowSearches;
   const sb = params.dryRun ? null : storageClient();
 
   for (const q of mailQueries()) {
-    const res = fetched[q.key];
+    const res = fetched.results[q.key];
     manifest.emailMeta[q.key] = (res?.emails ?? []).map((e) => ({
       uid: e.uid,
       subject: e.subject,

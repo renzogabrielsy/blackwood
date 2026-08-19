@@ -1393,6 +1393,25 @@ Documented in the root `.env.example`. The worker's own env is in `workers/sync/
 - **Role gate.** `enqueueSyncRun` calls `requirePrivileged()` (effective role via
   `getUserRole()`, respects impersonation, fails closed). The launcher + body are also
   hidden client-side for non-privileged roles.
+- **Stop tears down the socket; one Gmail session per account at a time** (2026-08-19,
+  BUG-026). `cancelSyncRun` flips the row AND POSTs the worker's `/cancel`, and the worker
+  now **aborts the live IMAP session before** it cancels the DBOS workflow — because DBOS
+  observes a cancellation only when a STEP RETURNS, so a run parked mid-search notices
+  nothing until Gmail answers. On 2026-08-19 that was **2 min 49 s after Stop**: the
+  cancelled run went on to emit `Found RC DELIVERIES (98 KB)` and kept downloading.
+  Cancelling a WORKFLOW does not cancel a SOCKET. Two consequences the panel depends on:
+  a Stop now settles the run within about a second, and a **second Run while one is still
+  live (or still winding down from a Stop) QUEUES** — `workers/sync/src/workflows/runGate.ts`
+  holds the slot across the whole Gmail lease, so the account never carries two IMAP
+  sessions. It carried two on the 19th, and because Gmail throttles them per account the
+  replacement run was *slower* than the one it replaced. The queued run emits a
+  "Waiting for the sync already in progress to finish…" beat, so waiting never looks like
+  hanging. Full contract: `workers/sync/specs/SHARED.md` §1.10.
+- **A slow mailbox is reported, not endured.** A Gmail search past 45 s emits a `warn` beat
+  *while it is still running* and becomes a `gmail_slow_search` finding (`attention`,
+  `section: 'run'`) via `reconciliation.gmail_slow_searches`, so "was the 19th just a slow
+  day?" is answerable next week from the Excel report. It **never aborts** the search —
+  Gmail slow is not Gmail broken.
 - **Every run leaves an Excel report behind.** Generated + stored automatically at the end
   of every run — clean, partial, failed or stopped — and downloaded on demand through a
   60-second server-minted signed URL. Generation is the one stage that **cannot** fail a

@@ -163,13 +163,24 @@ export interface CancelSyncRunResult {
  *      id=runId AND status IN ('queued','running'). This is the authoritative UI
  *      signal: the Realtime UPDATE flows to every watcher and the cards settle to
  *      "Stopped" immediately — no dependency on the worker being reachable.
- *   2. Best-effort POST the worker's /cancel so DBOS actually preempts the running
- *      workflow at its next step boundary (frees the machine, stops further writes).
- *      A failed/timed-out/unconfigured /cancel is NON-fatal — the workflow will also
- *      observe the 'cancelled' row and its own guards halt further apply work; and on
- *      the worker's next wake the watchdog/recovery keep things consistent.
+ *   2. Best-effort POST the worker's /cancel. The worker does TWO things there, in this
+ *      order: it TEARS DOWN THE LIVE GMAIL SOCKET, then it cancels the DBOS workflow.
+ *      The socket teardown is the load-bearing half — DBOS observes a cancellation only
+ *      when a STEP RETURNS, so a run parked mid-IMAP-search notices nothing until Gmail
+ *      answers. On 2026-08-19 that was 2 min 49 s: the run flipped to 'cancelled' here
+ *      instantly while the worker went on to emit `Found RC DELIVERIES (98 KB)` and keep
+ *      downloading (BUG-026). A failed/timed-out/unconfigured /cancel is still NON-fatal —
+ *      the workflow will also observe the 'cancelled' row and its own guards halt further
+ *      apply work; and on the worker's next wake the watchdog/recovery keep things
+ *      consistent.
  *
  * NEVER rolls back already-written rows (idempotent / never-delete philosophy).
+ *
+ * PRESSING RUN AGAIN RIGHT AFTER A STOP IS SAFE. `enqueueSyncRun` still writes a fresh
+ * queued row and kicks; the worker's run gate (`workers/sync/src/workflows/runGate.ts`)
+ * parks the new run until the stopped one has finished unwinding, so the mailbox never
+ * carries two IMAP sessions. It carried two on 2026-08-19, and because Gmail throttles
+ * them per account the replacement run was SLOWER than the one it replaced.
  */
 export async function cancelSyncRun(runId: string): Promise<CancelSyncRunResult> {
   await requirePrivileged()

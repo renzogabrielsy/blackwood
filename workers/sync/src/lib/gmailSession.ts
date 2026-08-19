@@ -62,6 +62,40 @@
  *     lease generation (i.e. the rest of the run) and re-thrown to later callers WITHOUT
  *     opening another socket. During a connection-limit outage, four labelers must not
  *     become four more connection attempts.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * STOP TEARS DOWN THE SOCKET (BUG-026, 2026-08-19)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * MEASURED INCIDENT — run 35bfc6eb. 03:29:42 Run is clicked; the RC DELIVERIES IMAP
+ * search takes **58 s** (4–7 s on every earlier run that day on the identical build —
+ * Gmail was simply slow). 03:30:08 Stop is clicked; `sync_runs.status` flips to
+ * `cancelled` at once. And then, at **03:32:57 — 2 min 49 s AFTER the cancel — the
+ * cancelled run emitted `Found RC DELIVERIES (98 KB)`** and carried on downloading.
+ *
+ * THE REASON, and it is the whole lesson: **DBOS cancellation is observed only when a
+ * step RETURNS.** The run was parked mid-`await` on an IMAP command inside
+ * `DBOS.runStep`, so `DBOS.cancelWorkflow` had nothing to interrupt — it simply queued
+ * behind Gmail. Cancelling a WORKFLOW does not cancel a SOCKET. Meanwhile the operator
+ * clicked Run again at 03:31:05 and the second run opened a SECOND IMAP session on the
+ * same account while the zombie still held the first — and Gmail throttles concurrent
+ * sessions per account, so the new run was slower than the one it replaced.
+ *
+ * THE FIX — the broker owns an ABORT, and Stop pulls it:
+ *   - Every `withGmailSession(fn)` body is RACED against a per-generation abort gate.
+ *     `abortActiveGmailSession({runId})` rejects that gate FIRST (so the awaiting step
+ *     rejects in ~0 ms, not when Gmail eventually answers) and only THEN tears the
+ *     socket down. Rejecting before closing is deliberate: the operator's promptness
+ *     must not depend on how fast a TLS FIN gets acknowledged.
+ *   - The abort is STICKY for the generation. A labeler still unwinding inside a
+ *     cancelled child workflow gets the same rejection instead of opening a fresh
+ *     socket — the exact "zombie re-connects" shape this file already refuses for a
+ *     failed connect. It is cleared only when a NEW run takes the lease.
+ *   - The error is cancellation-SHAPED: `runSync.ts::isCancellation` recognises it, so
+ *     the run settles `cancelled` (never `failed`) and the lease's `finally` closes the
+ *     session exactly once, same as every other path.
+ *   - `abortActiveGmailSession` is OWNER-CHECKED. A cancel for run B may never tear down
+ *     run A's session; with the run gate (`workflows/runGate.ts`) there is only ever one
+ *     live run, and this makes that structural rather than assumed.
  */
 import {
   GmailClient,
@@ -86,7 +120,47 @@ export interface GmailSessionStats {
   leases: number;
   /** True while a live session exists. */
   open: boolean;
+  /** The runId that pinned the current run lease, or null. */
+  owner: string | null;
+  /** True once Stop tore this generation down — sticky until a new run takes the lease. */
+  aborted: boolean;
 }
+
+/**
+ * The Gmail session was TORN DOWN mid-command because the run was Stopped (BUG-026).
+ *
+ * Deliberately its own error class rather than a reused DBOS one: the worker must be able
+ * to say "this failed because a human pressed Stop" without importing the DBOS error
+ * taxonomy into `lib/`, and `runSync.ts::isCancellation` folds it in at the one place that
+ * already decides `cancelled` vs `failed`.
+ */
+export class GmailSessionAbortedError extends Error {
+  /** The run that owned the torn-down session, when one was recorded. */
+  readonly runId: string | null;
+  constructor(message: string, runId: string | null = null) {
+    super(message);
+    this.name = "GmailSessionAborted";
+    this.runId = runId;
+  }
+}
+
+/**
+ * True for the error above. Name-based as well as `instanceof`, so a copy that crossed a
+ * DBOS serialization boundary (a child workflow's rejection reaches the parent as a
+ * re-hydrated object, not the original instance) is still recognised as a Stop.
+ */
+export function isGmailSessionAborted(err: unknown): boolean {
+  if (err instanceof GmailSessionAbortedError) return true;
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "GmailSessionAborted"
+  );
+}
+
+/** Default wording when a caller does not supply its own. */
+const DEFAULT_ABORT_REASON =
+  "The sync was stopped — the Gmail session was closed mid-command, so nothing further was fetched.";
 
 class GmailSessionBroker {
   private factory: GmailClientFactory = () => GmailClient.fromEnv();
@@ -99,9 +173,22 @@ class GmailSessionBroker {
   private connectFailure: unknown = null;
   /** Serializes the acquire/connect decision so racing callers make ONE connection. */
   private chain: Promise<unknown> = Promise.resolve();
+  /** The runId that pinned the current run lease (`runLease`). Null outside a run. */
+  private owner: string | null = null;
+  /** Sticky Stop for this generation (BUG-026). Cleared only when a NEW run leases. */
+  private aborted: GmailSessionAbortedError | null = null;
+  /** Rejectors for every in-flight `run()` body — the thing that makes Stop immediate. */
+  private abortWaiters: Array<(err: GmailSessionAbortedError) => void> = [];
 
   stats(): GmailSessionStats {
-    return { opens: this.opens, closes: this.closes, leases: this.leases, open: this.client != null };
+    return {
+      opens: this.opens,
+      closes: this.closes,
+      leases: this.leases,
+      open: this.client != null,
+      owner: this.owner,
+      aborted: this.aborted != null,
+    };
   }
 
   /** Test seam. NEVER called in production code. */
@@ -120,6 +207,9 @@ class GmailSessionBroker {
     this.closes = 0;
     this.connectFailure = null;
     this.chain = Promise.resolve();
+    this.owner = null;
+    this.aborted = null;
+    this.abortWaiters = [];
   }
 
   /** Run `fn` serialized against every other broker state transition. */
@@ -152,9 +242,77 @@ class GmailSessionBroker {
     });
   }
 
+  /**
+   * Start a new run generation: record the owner and clear both sticky refusals.
+   *
+   * This — NOT `acquire`/`release` — is where `aborted` is cleared, and the difference is
+   * load-bearing. A Stop rejects the run's Gmail call, the run lease's `finally` releases,
+   * and a labeler inside a still-unwinding child workflow can call `withGmailSession`
+   * AFTER that. If the abort died with the lease, that straggler would open a brand-new
+   * socket for a run that was already stopped — the zombie, re-connected. So the abort
+   * outlives the lease and dies only when a genuinely NEW run takes it.
+   */
+  private beginGeneration(runId: string | null): void {
+    this.owner = runId;
+    this.aborted = null;
+    this.connectFailure = null;
+  }
+
+  /**
+   * Tear the live session down NOW because the run was Stopped. Returns true if there was
+   * something to abort. Never throws.
+   *
+   * ORDER MATTERS: the in-flight bodies are rejected FIRST, the socket closed SECOND.
+   * Reversing it would make "how fast does Stop respond" a question about TLS teardown.
+   */
+  async abortActive(opts: { runId?: string | null; reason?: string } = {}): Promise<boolean> {
+    // Nothing running and nothing open — a cancel for a run that never reached Gmail.
+    if (this.leases === 0 && this.client == null && this.abortWaiters.length === 0) return false;
+    // OWNER CHECK: a cancel for run B may never tear down run A's session.
+    if (opts.runId && this.owner && this.owner !== opts.runId) return false;
+
+    if (!this.aborted) {
+      this.aborted = new GmailSessionAbortedError(opts.reason ?? DEFAULT_ABORT_REASON, this.owner);
+    }
+    const err = this.aborted;
+    const waiters = this.abortWaiters;
+    this.abortWaiters = [];
+    for (const reject of waiters) {
+      try {
+        reject(err);
+      } catch {
+        /* a rejector cannot fail, but this must never break the teardown */
+      }
+    }
+    await this.serialize(() => this.teardown());
+    return true;
+  }
+
+  /**
+   * Race `p` against this generation's abort gate. The gate only ever REJECTS, so a body
+   * that finishes normally is completely unaffected — this adds a listener, never a timer
+   * and never a poll.
+   */
+  private raceAbort<T>(p: Promise<T>): Promise<T> {
+    if (this.aborted) return Promise.reject(this.aborted);
+    let waiter!: (err: GmailSessionAbortedError) => void;
+    const gate = new Promise<never>((_resolve, reject) => {
+      waiter = reject;
+      this.abortWaiters.push(reject);
+    });
+    // `Promise.race` subscribes to BOTH, so whichever loses is still "handled" — the
+    // abandoned IMAP command's own rejection can never surface as an unhandled rejection.
+    return Promise.race([p, gate]).finally(() => {
+      const i = this.abortWaiters.indexOf(waiter);
+      if (i >= 0) this.abortWaiters.splice(i, 1);
+    });
+  }
+
   /** THE client — connecting on first use, reused by everyone after that. */
   private ensureClient(): Promise<GmailClient> {
     return this.serialize(async () => {
+      // Stop already happened. Never open a socket for a run that is being torn down.
+      if (this.aborted) throw this.aborted;
       // A remembered failure short-circuits: never burn a second socket on a mailbox
       // that just refused us (the connection-limit case above all).
       if (this.connectFailure) throw this.connectFailure;
@@ -201,14 +359,27 @@ class GmailSessionBroker {
     await this.acquire();
     try {
       const client = await this.ensureClient();
-      return await fn(client);
+      // RACED, not merely awaited (BUG-026). A slow Gmail moment plus a Stop is exactly
+      // the 2 min 49 s zombie in this file's header.
+      return await this.raceAbort(fn(client));
     } finally {
       await this.release();
     }
   }
 
-  async runLease<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * Pin the session for a whole run. `runId` is recorded so a `/cancel` for a DIFFERENT
+   * run can never tear this one down, and so the sticky abort can tell "the run that was
+   * stopped" from "the next run".
+   *
+   * NOT raced against the abort gate on purpose: the run BODY awaits DBOS child
+   * workflows, and abandoning that promise would orphan them mid-flight. The Gmail call
+   * is the thing that is stuck, so the Gmail call is the thing that gets interrupted —
+   * the rejection then travels the ordinary error path all the way up.
+   */
+  async runLease<T>(fn: () => Promise<T>, opts: { runId?: string } = {}): Promise<T> {
     await this.acquire();
+    this.beginGeneration(opts.runId ?? null);
     try {
       return await fn();
     } finally {
@@ -234,8 +405,25 @@ export function withGmailSession<T>(fn: (client: GmailClient) => Promise<T>): Pr
  * the run opens exactly ONE session. Released in a `finally` — errors and DBOS
  * cancellations included.
  */
-export function withGmailRunLease<T>(fn: () => Promise<T>): Promise<T> {
-  return broker.runLease(fn);
+export function withGmailRunLease<T>(fn: () => Promise<T>, opts: { runId?: string } = {}): Promise<T> {
+  return broker.runLease(fn, opts);
+}
+
+/**
+ * STOP, reaching the socket (BUG-026). Rejects every in-flight `withGmailSession` body and
+ * closes the live IMAP session immediately, so a run parked mid-search stops within
+ * milliseconds instead of when Gmail eventually answers.
+ *
+ * Called by the kick server's `POST /cancel` handler — the ONE place a human's Stop
+ * becomes a worker-side action. Owner-checked: passing `runId` guarantees this can only
+ * tear down the session that run actually holds. Returns false when there was nothing to
+ * abort (a cancel that arrived before the run reached Gmail, or after it finished), which
+ * is a perfectly ordinary outcome and never an error.
+ */
+export function abortActiveGmailSession(
+  opts: { runId?: string | null; reason?: string } = {},
+): Promise<boolean> {
+  return broker.abortActive(opts);
 }
 
 /** Counters for diagnostics + the "exactly one session" tests. */
