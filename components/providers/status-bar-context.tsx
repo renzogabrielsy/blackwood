@@ -39,3 +39,20 @@ export function useStatusBar() {
   if (!ctx) throw new Error('useStatusBar must be used within StatusBarProvider');
   return ctx;
 }
+
+/**
+ * The same context, but NULL instead of a throw when there is no provider.
+ *
+ * `BlackwoodTable` publishes its selection's SUM/AVG/COUNT here itself, so that every
+ * grid in the app gets the bottom-right pill with no wiring at all. The platform grid is
+ * mountable outside the app shell — the dev playground and any future standalone surface
+ * are exactly that — and a shared primitive that CRASHES the page when an optional
+ * ambient provider is missing is not a shared primitive. So the dependency is optional by
+ * construction: present, the pill fills in; absent, the table simply says nothing.
+ *
+ * Use `useStatusBar` anywhere the provider is genuinely required — a missing one there is
+ * a wiring bug and should be loud.
+ */
+export function useOptionalStatusBar() {
+  return useContext(StatusBarContext);
+}

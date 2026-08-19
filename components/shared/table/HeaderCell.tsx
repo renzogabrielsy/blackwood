@@ -104,7 +104,11 @@ export function HeaderCell<Row, Ctx>({
             className={cn(
                 // Solid `bg-muted`, always — a frozen surface that overlaps scrolling
                 // content is opaque or it leaks.
-                'relative select-none border-b border-b-border border-r border-r-border/40 bg-muted p-0 text-left align-middle font-medium',
+                // `group/th` is what makes the resize handle DISCOVERABLE: it was a 4px
+                // invisible strip you had to already know about, which is why "width
+                // adjustment doesn't exist on every table" was the operator's reading of
+                // a feature that was in fact present. It now shows on header hover.
+                'group/th relative select-none border-b border-b-border border-r border-r-border/40 bg-muted p-0 text-left align-middle font-medium',
                 // The z-scale from CLAUDE.md: a header cell that is ALSO pinned sideways
                 // is a corner and out-ranks both (30); a plain header cell is the row (20).
                 pin ? 'frozen-corner' : 'frozen-row',
@@ -122,11 +126,22 @@ export function HeaderCell<Row, Ctx>({
                         onSelectColumn(index);
                     }}
                     className={cn(
-                        'min-w-0 flex-1 truncate text-left text-[11px] uppercase tracking-wide text-muted-foreground',
+                        'min-w-0 flex-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground',
+                        // WRAP or TRUNCATE — never both, and truncate is the default, so a
+                        // column that says nothing renders exactly as it did before.
+                        // `line-clamp-2` bounds the growth: a header may take two lines,
+                        // not five, because the whole header row grows to the tallest cell.
+                        spec.headerWrap
+                            ? 'whitespace-normal break-words leading-tight line-clamp-2'
+                            : 'truncate',
                         onSelectColumn && 'cursor-pointer hover:text-foreground',
                     )}
                 >
-                    {spec.label}
+                    {/* The NODE if the column has one, else the name. `label` stays a
+                        string and stays required — `title`, the resize handle's
+                        `aria-label` and any consumer-built column menu all read it as
+                        text, and none of them can render a node. */}
+                    {spec.labelNode ?? spec.label}
                 </button>
                 {filterSlot ? (
                     // Marked as chrome so a keystroke or a paste aimed at it is that
@@ -147,11 +162,27 @@ export function HeaderCell<Row, Ctx>({
                     onPointerDown={startResize}
                     onDoubleClick={(e) => e.stopPropagation()}
                     className={cn(
-                        'absolute inset-y-0 right-0 w-1 cursor-col-resize',
+                        // 1.5 rather than 1: the old 4px strip was a hit zone you had to
+                        // find by accident. `touch-none` so a pointer drag is not eaten by
+                        // the scroller on a trackpad or a tablet.
+                        'absolute inset-y-0 right-0 w-1.5 cursor-col-resize touch-none',
                         // 150ms — a micro-interaction, and the only thing in the header
-                        // that transitions at all.
-                        'transition-colors duration-150 hover:bg-primary/60',
-                        dragging && 'bg-primary',
+                        // that transitions at all. Compositor-safe: colour only.
+                        'transition-colors duration-150',
+                        // VISIBLE on header hover, brighter under the pointer. The handle
+                        // announcing itself is the whole difference between "this table
+                        // can be resized" and "this table cannot".
+                        //
+                        // Two AXES, deliberately, so nothing depends on how Tailwind
+                        // happens to order two variants of the same property: REVEAL is
+                        // `opacity` (bare `opacity-0`, beaten by the `group-hover`
+                        // variant), INTENSITY is `background-color` (bare `bg-border`,
+                        // beaten by the `hover` variant). A bare utility always loses to
+                        // a variant of itself, so both readings are ordering-proof.
+                        'opacity-0 group-hover/th:opacity-100',
+                        'bg-border hover:bg-primary/60',
+                        // A drag that wanders off the header keeps its handle lit.
+                        dragging && 'bg-primary opacity-100',
                     )}
                 />
             ) : null}

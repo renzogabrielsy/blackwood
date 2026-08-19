@@ -1598,9 +1598,9 @@ export function DeliveriesGridV2(props: DeliveriesLedgerProps) {
                     grid=v2
                 </span>
                 <span>
-                    Blackwood Table rewire — typing and saving are live; the toolbar, filters, row menu and
-                    dialogs are not built yet. The <strong className="font-semibold">Current</strong> switch
-                    above returns to the live ledger.
+                    Blackwood Table rewire — typing, saving, the right-click menu, the selection summary and
+                    column resize are live; the toolbar, filters, row menu and dialogs are not built yet. The{' '}
+                    <strong className="font-semibold">Current</strong> switch above returns to the live ledger.
                 </span>
                 <span className="font-mono">
                     {monthTotals.count} receipt{monthTotals.count === 1 ? '' : 's'}

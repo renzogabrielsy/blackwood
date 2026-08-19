@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
 import { BlackwoodTable } from '@/components/shared/table';
-import type { TableChromeRowApi, TableState } from '@/components/shared/table';
+import type { TableChromeRowApi } from '@/components/shared/table';
 import { pinnedOffsets } from '@/lib/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
@@ -77,7 +77,27 @@ const W_FEDPRICE = 96;
 const W_TOTAL = 88;
 const W_PRODUCED = 88;
 const W_GRADE = 80;
-const W_BLOCK = 92;
+/**
+ * 104, not the live matrix's 92 — and paired with `headerWrap` on every block column.
+ *
+ * A block column is NAMED FOR ITS BATCH, and a batch code is the longest string on this
+ * sheet: `SEPTEMBER-26-BLK12` is eighteen characters. At 92 with a one-line truncating
+ * header the whole column read `JAN-26-B…`, so four adjacent blocks were indistinguishable
+ * without hovering each one — Renzo: *"column thickness and width not accommodating for
+ * the block/batch names"*, and the reason he called this the dealbreaker.
+ *
+ * The header now WRAPS to two lines (`ColumnSpec.headerWrap`, bounded at two by
+ * `line-clamp-2`). CSS breaks at the code's own hyphens, so the natural split is
+ * `SEPTEMBER-` / `26-BLK12`, and 104 is what fits the longer of those two halves:
+ * ten characters at `text-[11px]` uppercase with `tracking-wide` is ~78px against the
+ * header's 104 − 17 = 87 usable. The month prefix is the only part that varies in length,
+ * so this is measured against the WORST case rather than against the sample in the
+ * screenshot.
+ *
+ * The body cells are unaffected — a fed figure is at most `123,456` — and stay right-
+ * aligned mono, because the header's wrap is a property of the `<th>` alone.
+ */
+const W_BLOCK = 104;
 
 const ROW_H = 32; // h-8, Excel Standard
 /** The totals rule-off: four stacked lines on a block column, three tricolor bands. */
@@ -274,6 +294,9 @@ function buildColumns(
         {
             key: KEY_TOTAL,
             label: 'TOTAL FED',
+            // Nine characters against 88 − 17 = 71 usable — one line does not fit, and
+            // `TOTAL F…` is not a column name. Two lines, at the space.
+            headerWrap: true,
             title: 'Total kg fed across every block that day',
             width: W_TOTAL,
             pin: 'start',
@@ -317,6 +340,11 @@ function buildColumns(
         out.push({
             key: gradeKey(grade),
             label: grade,
+            // Grade names come from `production_runs.grade` — operator text, not a closed
+            // enum — so their length is not something this file gets to assume. Wrapping
+            // costs nothing when the name is short and is the difference between a
+            // readable header and `4X8 SPE…` when it is not.
+            headerWrap: true,
             title: `Kg produced of grade ${grade}`,
             width: W_GRADE,
             align: 'right',
@@ -343,6 +371,11 @@ function buildColumns(
         out.push({
             key,
             label: c.batchCode,
+            // The whole point of this column: it is named for its block, so the name has
+            // to be readable without a hover. Two lines, breaking at the code's own
+            // hyphens. `label` deliberately stays the plain string — the `title` below,
+            // the resize handle's `aria-label` and `Copy with headers` all read it as text.
+            headerWrap: true,
             title: `${c.batchCode} · ${c.blockLoc ?? '—'} · opened ${c.firstFedDate}`,
             width: W_BLOCK,
             align: 'right',
@@ -882,16 +915,12 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
         [],
     );
 
-    const [state, setState] = React.useState<TableState>({
-        activeCell: null,
-        isEditing: false,
-        selection: null,
-    });
-    const sel = state.selection;
-    const selLabel =
-        sel === null
-            ? null
-            : `${sel.endRow - sel.startRow + 1} × ${sel.endCol - sel.startCol + 1}`;
+    // No local selection state, and no `onStateChange`. This grid used to hold a
+    // `TableState` for one purpose — printing `3 × 4 selected` in the toolbar — because
+    // the module computed SUM/AVERAGE/COUNT/MIN/MAX over the rectangle and handed a
+    // consumer only its DIMENSIONS. The table now publishes the real aggregates to the
+    // app's floating status bar itself, so a hand-rolled size chip beside it is a second,
+    // worse answer to the same question. Deleted rather than kept in parallel.
 
     const hasData = columns.length > 0 && rows.length > 0;
 
@@ -968,15 +997,11 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     grid=v2
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                    Read-only. Selection, keyboard, copy and column resize are live; the
-                    block-header detail panel, the open-blocks dialog, the hover info cards
-                    and the bottom-pinned footer are not.
+                    Read-only. Selection, keyboard, copy, the right-click menu, the
+                    selection summary and column resize are live; the block-header detail
+                    panel, the open-blocks dialog, the hover info cards and the
+                    bottom-pinned footer are not.
                 </span>
-                {selLabel ? (
-                    <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {selLabel} selected
-                    </span>
-                ) : null}
             </div>
 
             {/* The max-width clamp — see the header. Narrower than Σ widths, the module's
@@ -1006,7 +1031,6 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     rowClassFor={rowClassFor}
                     renderChromeRow={renderChromeRow}
                     renderHeaderSlot={renderHeaderSlot}
-                    onStateChange={setState}
                     emptyMessage="No feeding recorded for this campaign."
                     className="min-h-0 flex-1"
                 />

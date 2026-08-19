@@ -61,6 +61,19 @@ type Ctx = { readonly warehouse: string };
 
 const dash = <span className="text-muted-foreground/40">—</span>;
 
+/**
+ * A text cell, always wrapped in an element.
+ *
+ * The module's interactive layer is a FLEX container that clips
+ * (`overflow-hidden whitespace-nowrap`), but `text-overflow` on a flex container does
+ * nothing for an anonymous text item — so a bare string clips with a hard edge and no
+ * ellipsis, and a truncated value is indistinguishable from a short one. The element child
+ * picks up `[&>*]:text-ellipsis` from `cell-classes.ts`; the bare string cannot.
+ */
+function txt(v: string | null | undefined): React.ReactNode {
+    return v ? <span>{v}</span> : dash;
+}
+
 /** Integer flec counts, right-aligned mono. A 0 reads as 0, a null as a dash. */
 function intText(v: number | null | undefined): React.ReactNode {
     if (v === null || v === undefined) return dash;
@@ -100,7 +113,7 @@ const SPECS: readonly ColumnSpec<FlecLedgerRow, Ctx>[] = [
         cellKind: 'readonly',
         // Rendered verbatim from the stored string — never through `new Date()`, which
         // is where a timezone silently moves a receipt to the previous day.
-        format: (r) => (r.recv_date ? String(r.recv_date).slice(0, 10) : dash),
+        format: (r) => txt(r.recv_date ? String(r.recv_date).slice(0, 10) : null),
         clipboardValue: (r) => (r.recv_date ? String(r.recv_date).slice(0, 10) : ''),
     },
     {
@@ -109,7 +122,7 @@ const SPECS: readonly ColumnSpec<FlecLedgerRow, Ctx>[] = [
         width: 64,
         align: 'left',
         cellKind: 'readonly',
-        format: (r) => r.grade_code ?? dash,
+        format: (r) => txt(r.grade_code),
         clipboardValue: (r) => r.grade_code ?? '',
     },
     {
@@ -118,7 +131,7 @@ const SPECS: readonly ColumnSpec<FlecLedgerRow, Ctx>[] = [
         width: 52,
         align: 'left',
         cellKind: 'readonly',
-        format: (r) => r.side ?? dash,
+        format: (r) => txt(r.side),
         clipboardValue: (r) => r.side ?? '',
     },
     {
@@ -128,7 +141,7 @@ const SPECS: readonly ColumnSpec<FlecLedgerRow, Ctx>[] = [
         align: 'left',
         cellKind: 'readonly',
         title: 'How this movement left or entered the warehouse',
-        format: (r) => r.disposition_kind ?? dash,
+        format: (r) => txt(r.disposition_kind),
         clipboardValue: (r) => r.disposition_kind ?? '',
     },
     {
@@ -145,7 +158,10 @@ const SPECS: readonly ColumnSpec<FlecLedgerRow, Ctx>[] = [
     {
         key: 'opening_seed',
         label: 'OPENING',
-        width: 72,
+        // Floored by its own HEADER: `OPENING` is seven characters at `text-[11px]`
+        // uppercase with `tracking-wide` (~54px) against 72 − 17 = 55. One pixel of margin
+        // is not a margin — a saved column order or a resized neighbour and it truncates.
+        width: 80,
         align: 'right',
         cellKind: 'readonly',
         title: 'The stated opening count this row is measured forward from',
@@ -378,7 +394,8 @@ export function FlecInventoryGridV2(props: FlecInventoryGridV2Props) {
                     ))
                 )}
                 <span className="ml-auto text-[10px] text-muted-foreground">
-                    Read-only preview — use Current to edit openings or switch warehouse.
+                    Read-only preview — selection, the right-click menu, the selection summary and
+                    column resize are live. Use Current to edit openings or switch warehouse.
                 </span>
             </div>
 

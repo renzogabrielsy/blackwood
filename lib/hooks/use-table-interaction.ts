@@ -12,12 +12,15 @@ import {
     parseClipboardTable,
     planPaste,
     pasteRowTargets,
+    rangeRowEdge,
     rowEdge,
     sheetCorner,
     tilePaste,
     tsvEscape,
 } from '@/lib/table';
-import type { CellAddress, CellContext, CellSlot, ColumnSpec, JumpDir, JumpGrid } from '@/lib/table';
+import type {
+    CellAddress, CellContext, CellSlot, ColumnSpec, JumpDir, JumpGrid, SelectionRowEdge,
+} from '@/lib/table';
 import { errorToast } from '@/lib/toast';
 import { focusGrid, isGridChrome } from '@/components/shared/table/PasteSink';
 import type { RowHandlers } from '@/components/shared/table/Row';
@@ -93,6 +96,10 @@ const SYNTHETIC_LEFT_CLICK = { button: 0, shiftKey: false } as unknown as React.
 /** A viewport height to fall back on before the scroller has been measured. */
 const FALLBACK_VIEWPORT_PX = 400;
 
+/** How many cells a rectangle covers. Module-level: it closes over nothing. */
+const cellsIn = (range: CellRange) =>
+    (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1);
+
 export interface UseTableInteractionInput<Row, Ctx> {
     rows: ResolvedRows<Row>;
     columns: ResolvedColumns<Row, Ctx>;
@@ -134,8 +141,25 @@ export interface UseTableInteractionInput<Row, Ctx> {
     onInvalid?(rowId: string, colKey: string, invalid: boolean): void;
     /** Right-click on a cell, for a consumer-owned context menu. */
     onContextMenu?(cell: CellAddress, e: React.MouseEvent): void;
-    /** Told whenever the rectangular selection changes — a floating pill, a status bar. */
-    onSelectionChange?(range: CellRange | null): void;
+    /**
+     * Told whenever the rectangular selection changes — a floating pill, a status bar.
+     *
+     * **The second argument is the half a consumer cannot compute.** The range is in
+     * NAV-ROW coordinates, and `navRows` is resolved inside `useTableRows` — so a
+     * consumer deriving totals from its own `items` would be a second definition of the
+     * row axis, which is the same class of bug as rebasing `firstItemIndex` by records.
+     * The aggregates are therefore handed OUT, never re-derived. Optional, so a handler
+     * written before it existed compiles and behaves identically.
+     */
+    onSelectionChange?(range: CellRange | null, meta?: SelectionMeta): void;
+}
+
+/** What a selection IS, beyond its coordinates. Handed out; never recomputed outside. */
+export interface SelectionMeta {
+    /** How many cells the rectangle covers. 0 when nothing is selected. */
+    size: number;
+    /** SUM / AVERAGE / COUNT / MIN / MAX over the rectangle, or null when it is empty. */
+    aggregates: CellAggregates | null;
 }
 
 export interface TableInteraction {
@@ -162,12 +186,26 @@ export interface TableInteraction {
         size: number;
         /** `[fromCol, toCol]` of the band on this row, or null. Fed straight to a row. */
         bandFor(navRow: number): readonly [number, number] | null;
+        /**
+         * Which HORIZONTAL edges of the selection rectangle this row sits on — the half
+         * `bandFor` cannot say, and the half "one big box" needs. A primitive, so it can
+         * cross the row memo boundary by `===`.
+         */
+        rowEdgeFor(navRow: number): SelectionRowEdge;
         clear(): void;
         selectAll(): void;
         selectColumn(col: number): void;
+        /** Sweep one whole row across every selectable column. */
+        selectRow(navRow: number): void;
         isDragging: boolean;
         aggregates: CellAggregates | null;
     };
+    /**
+     * The actions the BUILT-IN right-click menu performs, each one the same function the
+     * corresponding keystroke already calls — so "Copy" from the menu and Ctrl/Cmd+C can
+     * never mean two different things. Stable.
+     */
+    menuActions: TableMenuActions;
     scrollTo(navRow: number): void;
     scrollToCol(col: number): void;
     /** ONE bundle for the whole table — 4 closures, not 4 per cell. */
@@ -185,6 +223,32 @@ export interface TableInteraction {
     focus(): void;
     /** Combined verdict: the row family's answer AND the column's. */
     isEditable(navRow: number, col: number): boolean;
+}
+
+/**
+ * Every action the default context menu can ask for, as ONE stable bundle.
+ *
+ * Each is the same callback the keyboard already uses where one exists — copy is the
+ * Ctrl/Cmd+C copy, clear is the Delete clear, paste is the same paste both clipboard
+ * delivery paths funnel into. The three that had no keystroke (copy with headers, copy
+ * row, fill down) are built on the same primitives, so none of them is a second
+ * definition of anything.
+ */
+export interface TableMenuActions {
+    copy(): void;
+    /** The rectangle, with its columns' LABELS as a first TSV line. */
+    copyWithHeaders(): void;
+    /** Every cell of one row, in column order. */
+    copyRow(navRow: number): void;
+    selectRow(navRow: number): void;
+    selectColumn(col: number): void;
+    clearSelection(): void;
+    /** Blank every editable cell under the selection. What Delete does. */
+    clearContents(): void;
+    /** Read the system clipboard and paste at the caret. What Ctrl/Cmd+V does. */
+    paste(): void;
+    /** Copy the selection's TOP row down over the rest of the selection. */
+    fillDown(): void;
 }
 
 export function useTableInteraction<Row, Ctx>(
@@ -413,11 +477,13 @@ export function useTableInteraction<Row, Ctx>(
     // scroller can differ per scope, so whichever were handed in would be null in the
     // other. The drag auto-scroll is driven below off `scrollerEl()` instead, which also
     // lets the horizontal band respect the pinned blocks.
+    // `onSelectionChange` is deliberately NOT forwarded here. It is fired below, once the
+    // aggregates for the new rectangle exist, so a consumer is handed the numbers rather
+    // than a range it would have to re-total against a row axis it does not own.
     const selection = useCellSelection({
         rowCount,
         colCount,
         isSelectableColumn: selectableCol,
-        onSelectionChange,
         enabled: true,
     });
     const {
@@ -601,31 +667,14 @@ export function useTableInteraction<Row, Ctx>(
         [slotAt, storeCellText, storedText],
     );
 
-    const copySelection = React.useCallback(() => {
-        const active = activeRef.current;
-        const range: CellRange | null =
-            selectionRange ??
-            (active
-                ? { startRow: active.row, startCol: active.col, endRow: active.row, endCol: active.col }
-                : null);
-        if (!range) {
-            errorToast('Nothing was copied — no cell is selected.');
-            return;
-        }
-
-        const lines: string[] = [];
-        for (let r = range.startRow; r <= range.endRow; r++) {
-            const cells: string[] = [];
-            for (let c = range.startCol; c <= range.endCol; c++) {
-                cells.push(tsvEscape(clipboardTextAt(r, c)));
-            }
-            lines.push(cells.join('\t'));
-        }
-        const payload = lines.join('\n');
-        const count = (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1);
-
-        // A refused clipboard write says so. Without a rejection handler an insecure
-        // origin or an unfocused document is an unhandled promise and a silent no-op.
+    /**
+     * ONE clipboard writer for every copy the grid offers.
+     *
+     * A refused write says so out loud. Without a rejection handler an insecure origin or
+     * an unfocused document is an unhandled promise and a silent no-op — the operator
+     * pastes yesterday's clipboard into a spreadsheet and never learns why.
+     */
+    const writeClipboard = React.useCallback((payload: string, count: number) => {
         void navigator.clipboard.writeText(payload).then(
             () => toast.success(count === 1 ? 'Copied 1 cell' : `Copied ${count} cells`),
             (err: unknown) =>
@@ -633,7 +682,75 @@ export function useTableInteraction<Row, Ctx>(
                     description: err instanceof Error ? err.message : String(err),
                 }),
         );
-    }, [selectionRange, clipboardTextAt]);
+    }, []);
+
+    /** The rectangle a copy applies to: the selection, else the caret's own 1x1. */
+    const copyRange = React.useCallback((): CellRange | null => {
+        if (selectionRange) return selectionRange;
+        const active = activeRef.current;
+        if (!active) return null;
+        return { startRow: active.row, startCol: active.col, endRow: active.row, endCol: active.col };
+    }, [selectionRange]);
+
+    /** A rectangle to escaped TSV. The one place the grid decides what a copy LOOKS like. */
+    const tsvOf = React.useCallback(
+        (range: CellRange): string => {
+            const lines: string[] = [];
+            for (let r = range.startRow; r <= range.endRow; r++) {
+                const cells: string[] = [];
+                for (let c = range.startCol; c <= range.endCol; c++) {
+                    cells.push(tsvEscape(clipboardTextAt(r, c)));
+                }
+                lines.push(cells.join('\t'));
+            }
+            return lines.join('\n');
+        },
+        [clipboardTextAt],
+    );
+
+    const copySelection = React.useCallback(() => {
+        const range = copyRange();
+        if (!range) {
+            errorToast('Nothing was copied — no cell is selected.');
+            return;
+        }
+        writeClipboard(tsvOf(range), cellsIn(range));
+    }, [copyRange, tsvOf, writeClipboard]);
+
+    /**
+     * The same rectangle with its columns' LABELS as a first line — what someone pasting
+     * into a spreadsheet or a chat actually wants, and the reason they otherwise retype
+     * the headers by hand.
+     *
+     * It reads `label`, never `labelNode`: a header may render a node, but a clipboard
+     * carries TEXT, and `label` is the plain string every column is required to have.
+     */
+    const copyWithHeaders = React.useCallback(() => {
+        const range = copyRange();
+        if (!range) {
+            errorToast('Nothing was copied — no cell is selected.');
+            return;
+        }
+        const headers: string[] = [];
+        for (let c = range.startCol; c <= range.endCol; c++) headers.push(tsvEscape(cols[c]?.label ?? ''));
+        writeClipboard(`${headers.join('\t')}\n${tsvOf(range)}`, cellsIn(range));
+    }, [copyRange, tsvOf, cols, writeClipboard]);
+
+    /**
+     * One whole row, in column order. A cell the row does not occupy copies as EMPTY
+     * rather than being skipped, so two copied rows of different families still line up
+     * under the same headers.
+     */
+    const copyRowCells = React.useCallback(
+        (navRow: number) => {
+            if (navRow < 0 || navRow >= rowCount || colCount === 0) return;
+            writeClipboard(
+                tsvOf({ startRow: navRow, startCol: 0, endRow: navRow, endCol: colCount - 1 }),
+                colCount,
+            );
+        },
+        [rowCount, colCount, tsvOf, writeClipboard],
+    );
 
     /** Sweep a rectangle through the ONE anchor/focus pair, never a second setter. */
     const sweep = React.useCallback(
@@ -673,6 +790,25 @@ export function useTableInteraction<Row, Ctx>(
             focus();
         },
         [rowCount, selectableCol, sweep, scrollToCol, focus],
+    );
+
+    /**
+     * Sweep ONE row across every selectable column — the horizontal twin of
+     * `selectColumn`, and the gesture a row header would give if the sheet had one.
+     *
+     * It reuses `selectableBounds` rather than sweeping 0…colCount, for the same reason
+     * Ctrl/Cmd+A does: a row ordinal has no arithmetic meaning, so putting the anchor on
+     * one would leave the selection starting somewhere nothing can be typed.
+     */
+    const selectRow = React.useCallback(
+        (navRow: number) => {
+            if (navRow < 0 || navRow >= rowCount) return;
+            const bounds = selectableBounds();
+            if (!bounds) return;
+            sweep({ row: navRow, col: bounds[0] }, { row: navRow, col: bounds[1] });
+            focus();
+        },
+        [rowCount, selectableBounds, sweep, focus],
     );
 
     // ═══ Clear / revert — what Delete and Escape do ══════════════════════════════
@@ -736,6 +872,40 @@ export function useTableInteraction<Row, Ctx>(
         applyEdits(writes, 'revert-selection');
         return true;
     }, [selectedCells, slotAt, editMap, storedText, applyEdits, onInvalid]);
+
+    /**
+     * FILL DOWN — the selection's TOP row copied over every row beneath it, as ONE
+     * gesture and therefore ONE Ctrl+Z.
+     *
+     * Three rules it obeys, and each of them is a way the naive version is wrong:
+     *   • it reads the SOURCE row's text through `cellText`, which is the unsaved value
+     *     where there is one — filling down from a cell you just typed and have not saved
+     *     must fill what you typed, not what the database still says;
+     *   • it writes only where `isEditable` agrees, so a run that crosses a child row or
+     *     a computed total skips those cells instead of refusing the whole gesture;
+     *   • it does nothing at all on a one-row selection — there is nothing below to fill,
+     *     and a step that moved nothing must not eat an undo.
+     */
+    const fillDown = React.useCallback(() => {
+        const range = selectionRange;
+        if (!range || range.endRow <= range.startRow) return;
+        const writes: CellEdit[] = [];
+        for (let c = range.startCol; c <= range.endCol; c++) {
+            const source = cellText({ row: range.startRow, col: c });
+            for (let r = range.startRow + 1; r <= range.endRow; r++) {
+                if (!isEditable(r, c)) continue;
+                const at = slotAt({ row: r, col: c });
+                if (!at) continue;
+                writes.push({ rowId: at.nav.rowId, field: at.field, value: source });
+                onInvalid?.(at.nav.rowId, at.spec.key, false);
+            }
+        }
+        if (writes.length === 0) {
+            toast.info('Nothing was filled — no cell below the first row accepts an edit.');
+            return;
+        }
+        applyEdits(writes, 'fill-down');
+    }, [selectionRange, cellText, isEditable, slotAt, applyEdits, onInvalid]);
 
     // ═══ Undo / redo ═════════════════════════════════════════════════════════════
 
@@ -913,6 +1083,32 @@ export function useTableInteraction<Row, Ctx>(
         },
         [applyClipboardPaste],
     );
+
+    /**
+     * A paste with NO clipboard event behind it — what a menu item has.
+     *
+     * The two existing delivery paths both ride a real `paste` event, which the browser
+     * only dispatches for the platform's own accelerator. A menu click is not that, so
+     * the payload has to be ASKED for; `readText()` is permission-gated and rejects on an
+     * insecure origin or a denied prompt, which is reported rather than swallowed. It
+     * ends in the same `applyClipboardPaste`, so a menu paste and Ctrl/Cmd+V cannot land
+     * differently.
+     */
+    const pasteFromSystemClipboard = React.useCallback(() => {
+        void navigator.clipboard.readText().then(
+            (text) => {
+                if (!text) {
+                    toast.info('Nothing pasted — the clipboard holds no text.');
+                    return;
+                }
+                applyClipboardPaste(text);
+            },
+            (err: unknown) =>
+                errorToast('The clipboard could not be read.', {
+                    description: `${err instanceof Error ? err.message : String(err)}\n\nUse Ctrl/Cmd+V instead — that paste does not need clipboard permission.`,
+                }),
+        );
+    }, [applyClipboardPaste]);
 
     /** The last native paste this grid consumed — interlock (a) against a double-apply. */
     const handledPasteRef = React.useRef<ClipboardEvent | null>(null);
@@ -1298,6 +1494,49 @@ export function useTableInteraction<Row, Ctx>(
         [selectionRange],
     );
 
+    /**
+     * The other half of the band — WHICH horizontal edges of the rectangle this row is
+     * on. Together they are everything a cell needs to paint one big box with no inner
+     * borders, and both are read per row on the render path, so both are primitives.
+     */
+    const rowEdgeFor = React.useCallback(
+        (navRow: number): SelectionRowEdge =>
+            selectionRange ? rangeRowEdge(selectionRange.startRow, selectionRange.endRow, navRow) : 'none',
+        [selectionRange],
+    );
+
+    // ═══ Telling the outside what the selection IS ═══════════════════════════════
+    //
+    // Fired HERE rather than forwarded into `useCellSelection`, so the aggregates for the
+    // new rectangle already exist when the consumer hears about it. A consumer cannot
+    // compute them: the range is in NAV-ROW coordinates and that axis is resolved inside
+    // `useTableRows`, so re-totalling from `items` would be a second definition of it.
+    const selectionChangeRef = React.useRef(onSelectionChange);
+    // eslint-disable-next-line react-hooks/refs
+    selectionChangeRef.current = onSelectionChange;
+
+    React.useEffect(() => {
+        selectionChangeRef.current?.(selectionRange, { size: selectionSize, aggregates });
+    }, [selectionRange, selectionSize, aggregates]);
+
+    const menuActions = React.useMemo<TableMenuActions>(
+        () => ({
+            copy: copySelection,
+            copyWithHeaders,
+            copyRow: copyRowCells,
+            selectRow,
+            selectColumn,
+            clearSelection,
+            clearContents: clearSelectedCells,
+            paste: pasteFromSystemClipboard,
+            fillDown,
+        }),
+        [
+            copySelection, copyWithHeaders, copyRowCells, selectRow, selectColumn,
+            clearSelection, clearSelectedCells, pasteFromSystemClipboard, fillDown,
+        ],
+    );
+
     const gridProps = React.useMemo(
         () => ({ ref: gridRef, tabIndex: -1, onKeyDown, onPaste, onMouseUp: handleMouseUp }),
         [onKeyDown, onPaste, handleMouseUp],
@@ -1310,13 +1549,18 @@ export function useTableInteraction<Row, Ctx>(
             range: selectionRange,
             size: selectionSize,
             bandFor,
+            rowEdgeFor,
             clear: clearSelection,
             selectAll: selectAllCells,
             selectColumn,
+            selectRow,
             isDragging,
             aggregates,
         }),
-        [selectionRange, selectionSize, bandFor, clearSelection, selectAllCells, selectColumn, isDragging, aggregates],
+        [
+            selectionRange, selectionSize, bandFor, rowEdgeFor, clearSelection,
+            selectAllCells, selectColumn, selectRow, isDragging, aggregates,
+        ],
     );
 
     return {
@@ -1338,6 +1582,7 @@ export function useTableInteraction<Row, Ctx>(
         commitEdit,
         focus,
         isEditable,
+        menuActions,
     };
 }
 

@@ -68,6 +68,15 @@ nothing wires them into call sites yet (Phase 1+ migrates each grid).
   `variant` must change) is modeled as two `hidden`-gated items, since `variant` is
   static. **Now consumed by all three grid menus:** RC IN delivery-master (row + column
   header), the Cenapro production ledger (row), and the daily production ledger (row).
+  **2026-08-19 (the Blackwood Table platform pass)** added three more, so the universal
+  table's built-in menu could reuse this popover instead of growing a fourth hand-rolled
+  copy: `children` (nodes rendered ABOVE the declarative items, with the separator between
+  them drawn here so a caller cannot forget it — the universal table puts a consumer's own
+  `contextMenuItems` there and the shared defaults below), `containerProps` (extra
+  attributes on the popover element — the table sets `data-table-context-menu`,
+  `data-grid-chrome` and `role="menu"` on it), and `GridMenuItem.trailingLabel` (a
+  right-aligned keyboard shortcut, the text twin of `trailingIcon`). All three are
+  optional; every existing caller renders byte-identically.
 - **`index.ts`** — barrel for the presentational components + their public types.
 - **`RemarksCellAdaptor.tsx`** — pre-existing remarks cell adaptor (not part of the
   Phase 0 primitives).

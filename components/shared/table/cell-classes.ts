@@ -48,6 +48,14 @@ export interface CellClassKey {
     numeric: boolean;
     /** Editable — decides the cursor only. */
     editable: boolean;
+    /** On the TOP edge of the selection rectangle. */
+    edgeTop: boolean;
+    /** On the RIGHT edge of the selection rectangle. */
+    edgeRight: boolean;
+    /** On the BOTTOM edge of the selection rectangle. */
+    edgeBottom: boolean;
+    /** On the LEFT edge of the selection rectangle. */
+    edgeLeft: boolean;
 }
 
 /** The two class strings a cell needs: the `<td>` and the interactive layer inside it. */
@@ -77,7 +85,39 @@ const INVALID_TINT = 'bg-destructive/15';
  * of the cell, and an EMPTY cell had zero height and therefore no hit area at all, so it
  * could not be clicked, let alone typed into.
  */
-const CELL_BASE = 'absolute inset-0 flex items-center px-2 text-xs outline-none';
+const CELL_BASE = [
+    'absolute inset-0 flex items-center px-2 text-xs outline-none',
+
+    // ── A CELL CLIPS. ────────────────────────────────────────────────────────────
+    //
+    // Without this a value wider than its column simply PAINTED OVER the neighbour —
+    // measured on the QC sheet, where a `yyyy-MM-dd` in a 62px column spilled into the
+    // cell beside it and `WHSE 3` wrapped to two lines inside a 32px row. Neither is a
+    // width problem the consumer can fix by widening, because neither is visible as a
+    // width problem: the sheet just reads as though two columns had swapped values.
+    //
+    // `overflow-hidden` is the hard guarantee (nothing ever leaves its own cell) and
+    // `whitespace-nowrap` is the other half (a cell is one line, always — a row's height
+    // is declared by its family and a wrapped line has nowhere to go).
+    'overflow-hidden whitespace-nowrap',
+    // TRUE ellipsis for the common case. A flex container is not a block container, so
+    // `text-overflow` on it does nothing for bare text — it is the element CHILDREN a
+    // `format` returns that can carry it, and they need `min-w-0` first or a flex item
+    // refuses to shrink below its content. A `format` returning a bare string still
+    // CLIPS (the rule above); wrap it in a `<span>` to get the ellipsis too.
+    '[&>*]:min-w-0 [&>*]:overflow-hidden [&>*]:text-ellipsis',
+
+    // ── THE SELECTION BOX'S GUTTER, RESERVED ON EVERY CELL. ──────────────────────
+    //
+    // The rectangle's border is painted with a real border (below), and a border added
+    // only to the cells that happen to be on an edge would move their text by a pixel
+    // the moment a sweep reached them — a shimmer running along the perimeter of every
+    // drag. So all four sides are declared on EVERY cell and only their COLOUR changes:
+    // transparent inside the rectangle and outside it, `primary` on an edge. Zero
+    // layout, zero jitter, and the four sides are always written together so their
+    // stylesheet order can never decide which one wins.
+    'border',
+].join(' ');
 
 function buildTd(k: CellClassKey, rules: Record<string, string>): string {
     const parts = [
@@ -101,13 +141,31 @@ function buildTd(k: CellClassKey, rules: Record<string, string>): string {
     return parts.filter(Boolean).join(' ');
 }
 
+/**
+ * The four sides of the selection box, ALWAYS all four, so no two of them can land in
+ * the same tailwind-merge group at different specificities and disagree.
+ *
+ * `primary` on an edge of the rectangle, `transparent` everywhere else — which is what
+ * makes "one big box surrounding the selected cells WITHOUT inner borders" a property of
+ * each cell rather than an overlay something has to position.
+ */
+function selectionBorders(k: CellClassKey): string {
+    return [
+        k.edgeTop ? 'border-t-primary' : 'border-t-transparent',
+        k.edgeRight ? 'border-r-primary' : 'border-r-transparent',
+        k.edgeBottom ? 'border-b-primary' : 'border-b-transparent',
+        k.edgeLeft ? 'border-l-primary' : 'border-l-transparent',
+    ].join(' ');
+}
+
 function buildInner(k: CellClassKey): string {
     if (!k.exists) {
-        // A cell the row does not have: inert, no hit area, no tint, no cursor.
-        return `${CELL_BASE} pointer-events-none`;
+        // A cell the row does not have: inert, no hit area, no tint, no cursor. It still
+        // reserves the border gutter, or its neighbours' text would sit a pixel off.
+        return `${CELL_BASE} border-transparent pointer-events-none`;
     }
 
-    const parts = [CELL_BASE];
+    const parts = [CELL_BASE, selectionBorders(k)];
     if (k.numeric) parts.push('justify-end font-mono tabular-nums');
 
     // ONE background, by explicit precedence.
@@ -139,6 +197,13 @@ export function cellClassKey(k: CellClassKey): string {
         k.dirty ? 'd' : '-',
         k.numeric ? 'n' : '-',
         k.editable ? 'e' : '-',
+        // The selection box. These MUST be in the key: they change the class string, so
+        // omitting them would serve the first combination the cache ever saw to every
+        // cell of the rectangle — one box's worth of borders painted on all of them.
+        k.edgeTop ? 'T' : '-',
+        k.edgeRight ? 'R' : '-',
+        k.edgeBottom ? 'B' : '-',
+        k.edgeLeft ? 'L' : '-',
     ].join('|');
 }
 

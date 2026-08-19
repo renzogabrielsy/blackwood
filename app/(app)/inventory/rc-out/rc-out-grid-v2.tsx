@@ -46,9 +46,18 @@ import { cn } from '@/lib/utils';
 // a half-painted row, which reads as a bug rather than as a trade-off. The live table has
 // no frozen columns either, so this also keeps the two sides comparable.
 //
-// The seam that would let a consumer have both is a per-ROW background token the class
-// table layers into the pinned cell as well; the module has no such prop today, and that
-// is reported rather than worked around.
+// **The seam now EXISTS** — `ColumnSpec.cellClass` puts consumer classes on a cell's own
+// interactive layer, which sits ABOVE a pinned `<td>`'s opaque background, so a pinned
+// cell can carry the row wash after all. It is deliberately NOT taken here, and the reason
+// is a different measured defect: this sheet's columns sum to ~1,180px, comfortably
+// narrower than a normal monitor, and `BlackwoodTable` renders `width: 100%` +
+// `minWidth: Σ widths`, so `table-layout: fixed` STRETCHES every declared width while the
+// sticky `left` offsets keep using the declared ones (`lib/table/CONTEXT.md` → "Stage 1D
+// at scale"). Pinning here would therefore introduce a frozen block that overlaps itself
+// on exactly the screens this sheet is read on — trading a cosmetic half-paint for a
+// layout bug. The pin is available the day the module grows `sizing: 'fill' | 'content'`;
+// until then the live table has no frozen columns either and the two sides stay
+// comparable.
 //
 // ── PRICE GATING IS A SECURITY BOUNDARY, AND IT IS NOT DECIDED HERE ─────────────
 // RC OUT already uses the server-first pattern and this grid keeps it: `canViewPrices`
@@ -162,7 +171,10 @@ const COLUMNS: ColumnSpec<RcOutRow, RcOutGridCtx>[] = [
         key: 'state',
         label: 'STATE',
         title: 'Batch status',
-        width: 88,
+        // The BADGE is what has to fit, not the word: `SUNDRYING` at `text-[10px]` is ~60px
+        // inside `px-1.5` padding (12) = 72, + 18 of cell chrome = 90 against a declared 88.
+        // Two pixels, and the longest batch status clipped on every SUNDRYING row.
+        width: 96,
         align: 'center',
         cellKind: 'readonly',
         selectable: true,
@@ -203,7 +215,11 @@ const COLUMNS: ColumnSpec<RcOutRow, RcOutGridCtx>[] = [
         key: 'batch_code',
         label: 'BLOCK',
         title: 'Source block (batch code)',
-        width: 118,
+        // MEASURED against the longest REAL code rather than the label: `SEPTEMBER-26-BLK18`
+        // renders **132.91px** in this cell's own mono font, + 18 of cell chrome = 151. At
+        // 118 every long-month block truncated, and a batch code cut in the middle is
+        // exactly the value an operator is scanning this column for.
+        width: 152,
         align: 'center',
         cellKind: 'readonly',
         selectable: true,
@@ -294,7 +310,10 @@ const COLUMNS: ColumnSpec<RcOutRow, RcOutGridCtx>[] = [
         key: 'avg_wtd_value',
         label: 'AVG VAL',
         title: 'Weighted value of this feeding',
-        width: 118,
+        // Accounting format holds BOTH the pinned-left ₱ and the pinned-right figure, and a
+        // real weighted value reaches `1,234,567.89` — twelve mono characters ≈ 87px, plus
+        // ~8 of glyph, 4 of gap and 18 of chrome: 117 against a declared 118.
+        width: 128,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -608,8 +627,8 @@ export function RcOutGridV2(props: RcOutGridV2Props) {
                 </span>
                 <span>
                     RC OUT on the Blackwood Table — <strong className="font-semibold">read-only</strong>. Selection,
-                    keyboard, copy and column resize are live; the five filters, search, the Closed Blocks summary,
-                    the row menu and every editing path are not built yet.{' '}
+                    keyboard, copy, the right-click menu, the selection summary and column resize are live; the five
+                    filters, search, the Closed Blocks summary, the row menu and every editing path are not built yet.{' '}
                     <strong className="font-semibold">Current</strong> above returns to the live table.
                 </span>
                 <span className="ml-auto font-mono tabular-nums">

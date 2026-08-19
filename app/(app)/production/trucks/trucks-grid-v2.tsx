@@ -6,8 +6,6 @@ import { BlackwoodTable } from '@/components/shared/table';
 import type { TableState } from '@/components/shared/table';
 import type { CellSlot, ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
-import type { CellRange } from '@/lib/hooks/use-cell-selection';
-import { useStatusBar } from '@/components/providers/status-bar-context';
 import type { Tables } from '@/types/supabase';
 
 // ═════════════════════════════════════════════════════════════════════════════════
@@ -22,13 +20,25 @@ import type { Tables } from '@/types/supabase';
 // Delete clears, no paste lands. No `renderEditor`, no draft pool, no context menu, no
 // import of `./actions`.
 //
-// ── THE ONE SHAPE THIS SHEET HAS THAT THE MODULE CANNOT SAY ─────────────────────
-// The live grid has a TWO-ROW header: a plate group label spanning four subcolumns, then
-// START / END / TTL / FUEL beneath it. `BlackwoodTable` builds ONE header row from the
-// column specs and `ColumnSpec.label` is a `string`, so the group band is inexpressible.
-// The plate therefore rides IN each label (`AAV START`) with the full
-// `AAV 6111 — START KM` on the header's `title`. That is the visible difference between
-// the two sides, and it is the seam named in the migration report.
+// ── THE PLATE BAND, AND WHAT IS AND IS NOT RECOVERED ────────────────────────────
+// The live grid has a TWO-ROW header: a plate group label SPANNING four subcolumns, then
+// START / END / TTL / FUEL beneath it. `BlackwoodTable` still builds ONE header row, so
+// the spanning band is still inexpressible — but `ColumnSpec.headerWrap` +
+// `ColumnSpec.labelNode` now let each header cell carry TWO LINES, so the plate is on top
+// and the metric beneath it, per column:
+//
+//        AAV 6111        AAV 6111        AAV 6111        AAV 6111
+//        START KM         END KM          TTL KM          FUEL L
+//
+// That reads as the band it stands in for, and it is a plain improvement on the previous
+// `AAV START` — the full plate is back, in full, on every column, without a hover. What is
+// still missing is only the SPAN: four separate cells each saying `AAV 6111`, rather than
+// one cell saying it once across all four. `ColumnSpec.group` + a tiled band row remains
+// the seam, and it remains unbuilt.
+//
+// `label` deliberately stays the flat `AAV 6111 START KM` string: the header's `title`,
+// the resize handle's `aria-label` and `Copy with headers` all read it as TEXT and none of
+// them can render a node, so `labelNode` ADDS a rendering and never replaces the name.
 //
 // ── ALSO NOT HERE ───────────────────────────────────────────────────────────────
 // The trailing blank input row, the Save / Discard toolbar, the date-picker cell, and
@@ -44,11 +54,13 @@ const KNOWN_PLATES = ['AAV 6111', 'KCA 378', 'FORKLIFT'] as const;
 const ROW_H = 28;
 const DATE_COL_WIDTH = 96;
 /**
- * 78 rather than the live grid's 72: a one-row header has to carry the plate as well as
- * the metric, and a label that truncates to `AAV S…` is a question the operator has to
- * ask someone. The `title` still carries the full name either way.
+ * 84 rather than the live grid's 72, because each header cell carries TWO lines and the
+ * wider of them has to fit: `AAV 6111` and `START KM` are both eight characters, ~55px at
+ * `text-[11px]` uppercase with `tracking-wide`, against 84 − 17 = 67 usable. (At the
+ * previous 78 the second line would have clipped to `START K…`, which is the same defect
+ * one row lower down.) The body cells are odometer readings and comfortably fit.
  */
-const SUBCOL_WIDTH = 78;
+const SUBCOL_WIDTH = 84;
 
 /** Fixed viewport, matching the live grid's `max-h-[60dvh]` scroll box. */
 const GRID_HEIGHT = 'h-[60dvh]';
@@ -165,15 +177,33 @@ const KEY_SEP = '::';
 const colKeyOf = (plate: string, metric: MetricField | 'ttl_km'): string =>
     `${plate}${KEY_SEP}${metric}`;
 
-/** `AAV 6111` → `AAV`. The header has one row, so the plate has to fit beside the metric. */
-const shortPlate = (plate: string): string => plate.trim().split(/\s+/)[0] ?? plate;
-
+/**
+ * The metric line of the two-line header — WITH its unit, which the one-line form had no
+ * room for. `TTL` and `TTL KM` are the same column; only one of them says what it counts.
+ */
 const METRIC_LABEL: Record<MetricField | 'ttl_km', string> = {
-    start_km: 'START',
-    end_km: 'END',
-    ttl_km: 'TTL',
-    fuel_liters: 'FUEL',
+    start_km: 'START KM',
+    end_km: 'END KM',
+    ttl_km: 'TTL KM',
+    fuel_liters: 'FUEL L',
 };
+
+/**
+ * The two-line header: the plate above, the metric below.
+ *
+ * A `<br/>` rather than two block children, deliberately — `headerWrap` renders the label
+ * inside a `line-clamp-2` box (`-webkit-box`), whose line counting works on INLINE content;
+ * block-level children inside one do not lay out the way they read.
+ */
+function plateLabelNode(plate: string, metric: MetricField | 'ttl_km'): React.ReactNode {
+    return (
+        <>
+            <span className="text-muted-foreground/80">{plate}</span>
+            <br />
+            <span className="font-semibold">{METRIC_LABEL[metric]}</span>
+        </>
+    );
+}
 
 const METRIC_TITLE: Record<MetricField | 'ttl_km', string> = {
     start_km: 'START KM (odometer at shift start)',
@@ -208,14 +238,15 @@ function buildColumns(plates: readonly string[]): ColumnSpec<DayRow, TrucksCtx>[
     ];
 
     for (const plate of plates) {
-        const short = shortPlate(plate);
         const metrics: (MetricField | 'ttl_km')[] = ['start_km', 'end_km', 'ttl_km', 'fuel_liters'];
 
         for (const metric of metrics) {
             if (metric === 'ttl_km') {
                 cols.push({
                     key: colKeyOf(plate, 'ttl_km'),
-                    label: `${short} TTL`,
+                    label: `${plate} ${METRIC_LABEL.ttl_km}`,
+                    labelNode: plateLabelNode(plate, 'ttl_km'),
+                    headerWrap: true,
                     title: `${plate} — ${METRIC_TITLE.ttl_km}`,
                     width: SUBCOL_WIDTH,
                     align: 'right',
@@ -245,7 +276,9 @@ function buildColumns(plates: readonly string[]): ColumnSpec<DayRow, TrucksCtx>[
 
             cols.push({
                 key: colKeyOf(plate, metric),
-                label: `${short} ${METRIC_LABEL[metric]}`,
+                label: `${plate} ${METRIC_LABEL[metric]}`,
+                labelNode: plateLabelNode(plate, metric),
+                headerWrap: true,
                 title: `${plate} — ${METRIC_TITLE[metric]}`,
                 width: SUBCOL_WIDTH,
                 align: 'right',
@@ -332,10 +365,22 @@ export interface TrucksGridV2Props {
 }
 
 export function TrucksGridV2({ initialData }: TrucksGridV2Props) {
-    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
+    // No status-bar wiring, and no local selection count.
+    //
+    // This grid used to hold `selectionCount`, push it into the shared status bar on a
+    // 50ms timer, and push `setCellAggregates(null)` beside it — because the module
+    // computed SUM/AVERAGE/COUNT/MIN/MAX over the selected rectangle and then discarded
+    // them, and a consumer CANNOT recompute them: the range is in nav-row coordinates
+    // resolved inside `useTableRows`, so totalling it against `items` would be a second
+    // definition of the row axis. So the honest thing was a cell COUNT and an explicit
+    // `null` where the live grid shows a total.
+    //
+    // `BlackwoodTable` now publishes the real aggregates to the status bar ITSELF, through
+    // an optional provider. Every line of that workaround is deleted rather than left to
+    // race the table for the same slot — two writers to one pill is a flicker, and the one
+    // that wins is whichever effect happens to run last.
 
     const [settings, setSettings] = React.useState<TableSettings>({});
-    const [selectionCount, setSelectionCount] = React.useState(0);
     const [state, setState] = React.useState<TableState>({
         activeCell: null,
         isEditing: false,
@@ -374,30 +419,6 @@ export function TrucksGridV2({ initialData }: TrucksGridV2Props) {
     const isDraft = React.useCallback(() => false, []);
     const edits = useTableEdits({ canonicalText: storedText, isDraft });
 
-    const onSelectionChange = React.useCallback((range: CellRange | null) => {
-        setSelectionCount(
-            range === null
-                ? 0
-                : (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1),
-        );
-    }, []);
-
-    React.useEffect(() => {
-        const t = setTimeout(() => {
-            setCellSelectionCount(selectionCount);
-            setCellAggregates(null);
-        }, 50);
-        return () => clearTimeout(t);
-    }, [selectionCount, setCellSelectionCount, setCellAggregates]);
-
-    React.useEffect(
-        () => () => {
-            setCellSelectionCount(0);
-            setCellAggregates(null);
-        },
-        [setCellSelectionCount, setCellAggregates],
-    );
-
     const rowClassFor = React.useCallback(
         (): string => 'group transition-colors duration-150 hover:bg-muted/50',
         [],
@@ -413,11 +434,9 @@ export function TrucksGridV2({ initialData }: TrucksGridV2Props) {
                 <span className="font-mono">
                     {state.activeCell ? `r${state.activeCell.row + 1}·c${state.activeCell.col + 1}` : '—'}
                 </span>
-                {selectionCount > 1 ? (
-                    <span className="font-mono">{selectionCount} cells selected</span>
-                ) : null}
                 <span className="ml-auto">
-                    Read-only preview — the <strong className="font-semibold">Current</strong> switch above
+                    Read-only preview — selection, the right-click menu, the selection summary and column
+                    resize are live. The <strong className="font-semibold">Current</strong> switch above
                     returns to the editable grid.
                 </span>
             </div>
@@ -434,7 +453,6 @@ export function TrucksGridV2({ initialData }: TrucksGridV2Props) {
                 scope="focus"
                 rowRules={ROW_RULES}
                 rowClassFor={rowClassFor}
-                onSelectionChange={onSelectionChange}
                 onStateChange={setState}
                 emptyMessage="Awaiting Production Manager sync — no truck readings for this period."
                 className={GRID_HEIGHT}

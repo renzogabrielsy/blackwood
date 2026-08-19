@@ -6,7 +6,6 @@ import { ArrowDown, ArrowUp, ChevronsUpDown, Loader2 } from 'lucide-react';
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
 import type { ColumnSpec, TableSettings } from '@/lib/table';
-import type { CellRange } from '@/lib/hooks/use-cell-selection';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { cn } from '@/lib/utils';
 
@@ -72,11 +71,12 @@ import {
 // writes or is a different table shape, so this file renders NOTHING for them — a control
 // that looks alive and does nothing is worse than a control that is not there.
 //
-// The SELECTION AGGREGATE PILL is absent for a different reason: the platform computes the
-// numbers and does not hand them out. `onSelectionChange` gives the rectangle only, and the
-// rectangle is in NAV-ROW coordinates that this component does not own, so a consumer
-// cannot honestly re-derive SUM/AVERAGE. The chip below therefore reports the one thing the
-// rectangle really does say — how many cells are in it. See the report for the seam.
+// The SELECTION AGGREGATE PILL is now the TABLE's, and this file wires nothing for it.
+// It used to be absent, because the platform computed SUM/AVERAGE/COUNT/MIN/MAX and did not
+// hand them out — `onSelectionChange` gives the rectangle only, in NAV-ROW coordinates this
+// component does not own — so the toolbar printed a cell COUNT, the one thing the rectangle
+// honestly says. `BlackwoodTable` publishes the real figures to the app's status bar itself
+// now, and the count chip is deleted rather than left to sit beside a truer number.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 export interface ProductionLedgerGridV2Props {
@@ -258,7 +258,6 @@ export function ProductionLedgerGridV2({
 
     // ── The grid's own state ─────────────────────────────────────────────────────
     const [settings, setSettings] = React.useState<TableSettings>({});
-    const [selection, setSelection] = React.useState<CellRange | null>(null);
 
     const byRowId = React.useMemo(() => {
         const m = new Map<string, ProductionGridRow>();
@@ -365,9 +364,6 @@ export function ProductionLedgerGridV2({
     );
 
     const activeFilterDescription = React.useMemo(() => describeActiveFilters(filters), [filters]);
-    const selectedCells = selection
-        ? (selection.endRow - selection.startRow + 1) * (selection.endCol - selection.startCol + 1)
-        : 0;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -392,14 +388,13 @@ export function ProductionLedgerGridV2({
                         : sorted.length.toLocaleString('en-US')}{' '}
                     row{sorted.length === 1 ? '' : 's'}
                 </span>
-                {selectedCells > 0 ? (
-                    // What the rectangle honestly says. The SUM/AVERAGE the platform computes
-                    // for its own use is not handed out, and this component cannot re-derive
-                    // it without inventing a second copy of the nav-row axis.
-                    <span className="font-mono text-muted-foreground/70">
-                        · {selectedCells.toLocaleString('en-US')} cell{selectedCells === 1 ? '' : 's'} selected
-                    </span>
-                ) : null}
+                {/* The `N cells selected` chip that used to sit here is GONE. It existed
+                    because the platform computed SUM/AVERAGE/COUNT/MIN/MAX over the
+                    rectangle and did not hand them out, and a consumer cannot re-derive
+                    them from a range in nav-row coordinates it does not own — so a COUNT
+                    was the only honest thing this toolbar could print. `BlackwoodTable`
+                    now publishes the real aggregates to the app's floating status bar
+                    itself. A count beside a total is not a second opinion, it is noise. */}
                 <div className="flex-1" />
                 {filterUi.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                 {filterUi.activeCount > 0 ? (
@@ -442,7 +437,6 @@ export function ProductionLedgerGridV2({
                 renderChromeRow={renderChromeRow}
                 renderHeaderSlot={renderHeaderSlot}
                 summaryRows={summaryRows}
-                onSelectionChange={setSelection}
                 emptyMessage={
                     filtersActive ? (
                         // Name the filters responsible — a bare "nothing here" reads as missing

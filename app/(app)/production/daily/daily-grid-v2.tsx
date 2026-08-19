@@ -7,8 +7,6 @@ import { BlackwoodTable } from '@/components/shared/table';
 import type { TableState, TableSummaryRow } from '@/components/shared/table';
 import type { CellSlot, ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
-import type { CellRange } from '@/lib/hooks/use-cell-selection';
-import { useStatusBar } from '@/components/providers/status-bar-context';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -142,6 +140,11 @@ function numberCol(
         title: opts.title,
         width,
         align: 'right',
+        // A two-WORD label at 52–60px has no chance on one line: `DT HRS` is six characters
+        // at `text-[11px]` uppercase (~46px) against 52 − 17 = 35, so it read `DT H…`.
+        // Wrapping costs nothing on the one-word waste lanes (`RS1A`, `BF`, `GRIT`) and is
+        // the difference between a name and an abbreviation of an abbreviation on the rest.
+        headerWrap: true,
         cellKind: 'number',
         calcType: 'SUM',
         numericValue: (r) => {
@@ -167,7 +170,15 @@ function rawNumberCol(
     };
 }
 
-// ═══ Columns — the live ledger's 23, width for width (Σ = 1604px) ═══════════════
+// ═══ Columns — the live ledger's 23, re-measured for THIS cell ══════════════════
+//
+// The widths started as the live ledger's, and several were wrong here for a reason that
+// does not appear in a diff: the live grid pads its cells `px-1`, the module pads `px-2`
+// and reserves a 1px selection-box gutter on all four sides. **Usable width is
+// `declared − 18`** in a body cell and `declared − 17` in a header — and a FILTERED header
+// gives up another 16 to the trigger it sits beside. Two-word labels therefore wrap
+// (`ColumnSpec.headerWrap`, bounded at two lines) and the three filtered lanes are widened,
+// because `CUSTOMER` has no space to break at. Nothing is narrowed.
 
 const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
     {
@@ -213,7 +224,11 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
     {
         key: 'shift_code',
         label: 'SHIFT',
-        width: 52,
+        // A FILTERED header is not the same width problem as an unfiltered one: the label
+        // shares its cell with a `shrink-0` filter trigger, so its budget is
+        // `width − 17 − 4 (gap) − 12 (icon)`. At 52 that is 19px for a five-character
+        // word, and `SHIFT` rendered as `S…` with a funnel beside it.
+        width: 68,
         pin: 'start',
         align: 'center',
         cellKind: 'text',
@@ -228,7 +243,10 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
     {
         key: 'customer',
         label: 'CUSTOMER',
-        width: 72,
+        // Eight characters (~61px) against 72 − 33 = 39 once the filter trigger is
+        // accounted for. Widened rather than wrapped: `CUSTOMER` has no space to break at,
+        // so wrapping would split it mid-word.
+        width: 100,
         pin: 'start',
         align: 'center',
         cellKind: 'text',
@@ -240,7 +258,9 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
     {
         key: 'grade',
         label: 'GRADE',
-        width: 60,
+        // Same filter-trigger arithmetic as SHIFT, and the same no-space-to-break-at
+        // reason for widening instead of wrapping.
+        width: 80,
         pin: 'start',
         align: 'center',
         cellKind: 'text',
@@ -254,6 +274,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         label: 'TTL KG',
         title: 'Total output for this run (kg)',
         width: 80,
+        headerWrap: true,
         pin: 'start',
         align: 'right',
         cellKind: 'number',
@@ -296,6 +317,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         label: 'DT TTL',
         title: 'DT HRS + DT MIN ÷ 60 (hours)',
         width: 60,
+        headerWrap: true,
         align: 'right',
         // Computed: never editable, and a rectangle MAY still cover it.
         cellKind: 'readonly',
@@ -324,6 +346,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         label: 'PROD HRS',
         title: '8h shift − DT TTL (hours)',
         width: 64,
+        headerWrap: true,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -358,6 +381,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         label: 'PROD LOSS',
         title: 'TTL WASTE ÷ (TTL KG + TTL WASTE)',
         width: 64,
+        headerWrap: true,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -379,6 +403,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         label: 'TTL WASTE',
         title: 'Sum of the eight waste streams (kg)',
         width: 72,
+        headerWrap: true,
         align: 'right',
         cellKind: 'readonly',
         selectable: true,
@@ -609,10 +634,22 @@ export function DailyGridV2({
     initialDowntime,
     initialWaste,
 }: DailyGridV2Props) {
-    const { setCellSelectionCount, setCellAggregates } = useStatusBar();
+    // No status-bar wiring, and no local selection count.
+    //
+    // This grid used to hold `selectionCount`, push it into the shared status bar on a
+    // 50ms timer, and push `setCellAggregates(null)` beside it — because the module
+    // computed SUM/AVERAGE/COUNT/MIN/MAX over the selected rectangle and then discarded
+    // them, and a consumer CANNOT recompute them: the range is in nav-row coordinates
+    // resolved inside `useTableRows`, so totalling it against `items` would be a second
+    // definition of the row axis. So the honest thing was a cell COUNT and an explicit
+    // `null` where the live grid shows a total.
+    //
+    // `BlackwoodTable` now publishes the real aggregates to the status bar ITSELF, through
+    // an optional provider. Every line of that workaround is deleted rather than left to
+    // race the table for the same slot — two writers to one pill is a flicker, and the one
+    // that wins is whichever effect happens to run last.
 
     const [settings, setSettings] = React.useState<TableSettings>({});
-    const [selectionCount, setSelectionCount] = React.useState(0);
     const [state, setState] = React.useState<TableState>({
         activeCell: null,
         isEditing: false,
@@ -703,30 +740,6 @@ export function DailyGridV2({
 
     const isDraft = React.useCallback(() => false, []);
     const edits = useTableEdits({ canonicalText: storedText, isDraft });
-
-    const onSelectionChange = React.useCallback((range: CellRange | null) => {
-        setSelectionCount(
-            range === null
-                ? 0
-                : (range.endRow - range.startRow + 1) * (range.endCol - range.startCol + 1),
-        );
-    }, []);
-
-    React.useEffect(() => {
-        const t = setTimeout(() => {
-            setCellSelectionCount(selectionCount);
-            setCellAggregates(null);
-        }, 50);
-        return () => clearTimeout(t);
-    }, [selectionCount, setCellSelectionCount, setCellAggregates]);
-
-    React.useEffect(
-        () => () => {
-            setCellSelectionCount(0);
-            setCellAggregates(null);
-        },
-        [setCellSelectionCount, setCellAggregates],
-    );
 
     // ── Footer totals ───────────────────────────────────────────────────────────
     // The live grid's four aggregates, over the same eligible sets: TTL KG sums every
@@ -886,11 +899,9 @@ export function DailyGridV2({
                 <span className="font-mono">
                     {state.activeCell ? `r${state.activeCell.row + 1}·c${state.activeCell.col + 1}` : '—'}
                 </span>
-                {selectionCount > 1 ? (
-                    <span className="font-mono">{selectionCount} cells selected</span>
-                ) : null}
                 <span className="ml-auto">
-                    Read-only preview — the <strong className="font-semibold">Current</strong> switch above
+                    Read-only preview — selection, the right-click menu, the selection summary and column
+                    resize are live. The <strong className="font-semibold">Current</strong> switch above
                     returns to the editable ledger.
                 </span>
             </div>
@@ -909,7 +920,6 @@ export function DailyGridV2({
                 rowClassFor={rowClassFor}
                 renderHeaderSlot={renderHeaderSlot}
                 summaryRows={summaryRows}
-                onSelectionChange={onSelectionChange}
                 onStateChange={setState}
                 emptyMessage="Awaiting Production Manager sync — no shifts for this period."
                 className={GRID_HEIGHT}
