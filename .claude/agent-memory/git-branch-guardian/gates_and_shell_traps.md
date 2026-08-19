@@ -39,6 +39,28 @@ Bit me twice in one run (2026-07-30): `VERIFY_EXIT=` and `ESLINT_EXIT=` both cam
 - **THE FIX, applied from promotion 49 on: give every network git call its OWN Bash invocation**, unpiped, `> /path/log 2>&1; echo "EXIT=$?"`, then read the log. `fetch` / `checkout` / `pull --ff-only` / `merge` / `push feat` / `push main` = six calls, not one `&&` chain. Six round-trips is the price of a gate that can actually fail; a chain is the price of one that cannot.
 - The background-task output file only holds the echoed exit code, **not** the command's stdout — always capture builds to your own log file if you need to grep them.
 
+## SHELL TRAP — a `-m` commit message with BACKTICKS is silently mangled by the shell
+
+The briefs on this repo write commit prose full of backticked identifiers (`` `items` ``,
+`` `navRows` ``, `` `placeById` ``) and literal angle brackets (`<body>`, `React.Ref<…>`).
+Passed through `git commit -m "…"`, zsh runs each backtick pair as **command substitution**
+and splices the (usually empty) output in — so the identifier vanishes from the committed
+message and **git still exits 0**. Same silent-green family as the empty `$PIPESTATUS`:
+nothing errors, the commit just quietly says something different from what you were given.
+
+**THE FIX — write the verbatim message to a scratchpad file and `git commit -F <file>`.**
+Used 2026-08-17 (`154717d`, `feat/universal-table`) on a message carrying four backticked
+identifiers plus `<body>`. Write it with the Write tool, never a heredoc/`echo` (both are
+shell input again). A single-quoted `-m` would survive backticks but not embedded
+apostrophes, and these bodies have them — the file is the only shape that is safe for
+every message.
+
+- **`-F` still produces a real trailer.** Verify, don't assume:
+  `git log -1 --format='%(trailers)'` must print the `Co-Authored-By:` line. Confirmed on
+  `154717d`, so the "pass the trailer as its own final `-m`" habit is not needed with `-F`.
+- Verify the body survived: `git log -1 --format=%B | grep -c '`'` should match the number
+  of backticks in the brief, and the em-dashes/arrows should still be there.
+
 ## GIT TRAP — `git rev-parse --short` takes ONE revision, and fails like a broken repo
 
 2026-08-06 (promotion 38): `git rev-parse --short HEAD main origin/main origin/<feat>` — the

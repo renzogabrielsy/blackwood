@@ -32,6 +32,11 @@ export type GridMenuItem<T> =
            */
           trailingIcon?: (ref: T) => React.ComponentType<{ className?: string }> | null | undefined;
           /**
+           * Right-aligned TEXT — a keyboard shortcut. Same `justify-between` switch as
+           * `trailingIcon`; supply one or the other, not both.
+           */
+          trailingLabel?: string;
+          /**
            * Keep the menu OPEN after onSelect (default closes). Used by toggle items
            * (bold/italic/underline) so the operator can flip several without the menu
            * dismissing between clicks.
@@ -44,18 +49,42 @@ export interface GridContextMenuProps<T> {
     state: GridContextMenuState<T> | null;
     items: GridMenuItem<T>[];
     onClose: () => void;
+    /**
+     * Nodes rendered ABOVE the declarative items, inside the SAME popover.
+     *
+     * It exists because `BlackwoodTable` now ships a built-in menu (declarative, and the
+     * same on every grid) while its `contextMenuItems` prop has always handed a consumer
+     * an arbitrary `ReactNode`. Two popovers would be two popovers; one with the
+     * consumer's own items on top and the shared ones below is one menu. The separator
+     * between them is drawn here, so a caller cannot forget it.
+     */
+    children?: React.ReactNode;
+    /** Extra attributes for the popover element — `data-*` hooks a host wants on it. */
+    containerProps?: React.HTMLAttributes<HTMLDivElement> & Record<`data-${string}`, unknown>;
 }
 
-export function GridContextMenu<T>({ state, items, onClose }: GridContextMenuProps<T>) {
+export function GridContextMenu<T>({
+    state, items, onClose, children, containerProps,
+}: GridContextMenuProps<T>) {
     if (!state) return null;
     const { ref } = state;
 
     return (
         <div
             data-ctx-menu
-            className="fixed z-[9999] min-w-[188px] rounded-md border bg-popover/95 py-1 shadow-lg backdrop-blur-lg animate-fade-in"
-            style={{ left: state.x, top: state.y }}
+            {...containerProps}
+            className={cn(
+                'fixed z-[9999] min-w-[188px] rounded-md border bg-popover/95 py-1 shadow-lg backdrop-blur-lg animate-fade-in',
+                containerProps?.className,
+            )}
+            style={{ left: state.x, top: state.y, ...containerProps?.style }}
         >
+            {children ? (
+                <>
+                    {children}
+                    {items.length > 0 ? <div className="my-1 border-t border-border/50" /> : null}
+                </>
+            ) : null}
             {items.map((item, i) => {
                 if (item.kind === 'separator') {
                     return <div key={`sep-${i}`} className="my-1 border-t border-border/50" />;
@@ -68,6 +97,7 @@ export function GridContextMenu<T>({ state, items, onClose }: GridContextMenuPro
                 const isDisabled = item.disabled?.(ref) ?? false;
                 const isDestructive = item.variant === 'destructive';
                 const TrailingIcon = item.trailingIcon?.(ref) ?? null;
+                const trailingLabel = item.trailingLabel ?? null;
 
                 return (
                     <button
@@ -76,7 +106,7 @@ export function GridContextMenu<T>({ state, items, onClose }: GridContextMenuPro
                         disabled={isDisabled}
                         className={cn(
                             'flex w-full items-center px-2.5 py-1.5 text-xs transition-colors duration-150',
-                            TrailingIcon ? 'justify-between' : 'gap-2',
+                            TrailingIcon || trailingLabel ? 'justify-between' : 'gap-2',
                             isDisabled
                                 ? 'cursor-not-allowed opacity-40'
                                 : isDestructive
@@ -101,6 +131,11 @@ export function GridContextMenu<T>({ state, items, onClose }: GridContextMenuPro
                             <span>{label}</span>
                         </span>
                         {TrailingIcon && <TrailingIcon className="size-3.5 text-primary" />}
+                        {!TrailingIcon && trailingLabel ? (
+                            <span className="ml-4 font-mono text-[10px] text-muted-foreground">
+                                {trailingLabel}
+                            </span>
+                        ) : null}
                     </button>
                 );
             })}

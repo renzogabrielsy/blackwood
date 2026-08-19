@@ -6,6 +6,7 @@
 - [Gates and shell traps](gates_and_shell_traps.md) — build/test/parity/lint gates before `main`; the zsh `$PIPESTATUS` trap and the NUL-grep trap that flags every file.
 - [Staging exclusions](staging_exclusions.md) — what to unstage after the mandatory `git add .`; triaging untracked source files; content-level secret scan.
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — split one staged changeset into several commits via `git commit -- <pathspec>`, no per-file staging.
+- [Commit-message fidelity](commit_message_fidelity.md) — how much of a SUPPLIED message may change: the three decided cases and the misdescribes-contents test.
 - [Concurrent-session promotions](concurrent_session_promotions.md) — when ANOTHER session shares the tree: the exact-path staging override, and the worktree build gate untracked files defeat.
 - [Two deploy targets](deploy_targets.md) — pushing `main` deploys Vercel ONLY; `workers/sync/**` is inert until an explicit Fly `npm run deploy`.
 

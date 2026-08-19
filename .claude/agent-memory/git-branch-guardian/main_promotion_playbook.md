@@ -864,3 +864,129 @@ Two things worth carrying forward:
   including its prediction of the one stale `.next` tsc error. Matching numbers is real
   corroboration that the brief's author actually ran them; take the 8-minute root build
   from the brief, re-run the 2-minute subset yourself.
+### Promotion 52 (2026-08-17, `c5ad702` → `ff8b583`) — first promotion of `feat/universal-table`
+
+`Merge: universal table module — plan, research pack, and Phase 0 (four defects fixed)`. 23 files /
++2947/−35: the plan of record (`.agents/prompts/universal-table-module.md`), 5 evidence docs under
+`docs/universal-table/`, and Phase 0 fixes for BUG-022/023/024/025. **Zero files under
+`workers/sync/**` and zero migrations ⇒ Vercel alone ships it** (checked with
+`git diff --name-only <oldmain>..<newmain> -- 'workers/**' | wc -l` → 0, same for
+`supabase/migrations/**`; use the promotion RANGE, not the commit list, per promotion 50).
+
+**The numbering gap in this file is real, not an error.** Promotion 51's note (`7662056`) is
+stranded on `feat/cenapro-deliveries-qol` and never reached `main`, so this branch — cut fresh off
+`main` — carries a playbook whose last entry was 50. `git merge-base --is-ancestor <memory-commit>
+main` settles "did that note ship" in one call. Expect this whenever two feature branches are alive
+at once; do NOT cherry-pick the stranded commit across.
+
+- **On a branch cut from `main` that has NEVER been promoted, `git merge-base --is-ancestor main
+  <feat>` (exit 0) is the STRONGEST clean-merge proof available** — main is a strict ancestor, so
+  `--no-ff` is guaranteed conflict-free and `merge-tree` adds nothing. This does not contradict
+  promotion 34's "don't trust `--is-ancestor`": that warning is about LONG-LIVED branches where main
+  has accumulated its own merge commits and the check false-alarms DIVERGED. Ancestor-true is always
+  conclusive; ancestor-false is the reading that means nothing on its own.
+- **New step: a brief may ask you to LEVEL the branch, not merely return to it.** Steps 6–7 here were
+  `git checkout <feat>` → `git merge main` (fast-forwards, since main's tip has the feat tip as
+  parent #2) → `git push origin <feat>`, leaving all four refs at the SAME OID for Phase 1 work. The
+  usual recipe only restores the branch and leaves it behind main. Prove it with
+  `git rev-list --left-right --count <feat>...main` → `0 0`.
+- Gates: `npx tsc --noEmit` exit 0, run ON `main` AFTER the merge and BEFORE the push, exactly as the
+  brief ordered. Secret scan on the promotion range found 2 `/Users/renzosy/…` hits, both markdown
+  PROSE in docs (an approved-plan pointer and a scope note) — benign, unlike promotion 40's hardcoded
+  fixture path in executable test code. Judge a home-path hit by whether code READS it.
+- The two `.claude/agent-memory-local/**` files were **identical on both branches**
+  (`git diff <feat> main -- <paths>` empty), so `git checkout main` carried them across untouched —
+  the branch-to-branch form of the pre-checkout check, per promotion 34. They stayed unstaged
+  throughout, as always.
+- No `chore(memory)` commit rode along this time (the branch's memory commit `c8b4b93` was already
+  in the promoted range), so the merge stat matched the branch diff exactly — 23 files both ways.
+  **38 consecutive clean promotions.**
+
+### A DEV-ONLY ROUTE on a feature branch is a promotion-time question, not a commit-time one
+
+2026-08-17, `9f5bb71` on `feat/universal-table` (commit-only brief, no merge). Stage 1C added
+**`app/dev/table-playground/`** — a public, unauthenticated page so Playwright can drive the shared
+grid with no login and no Supabase — plus the first `middleware.ts` change this branch has carried.
+Committing it is safe; **promoting it is the moment to re-check it**, because merging this branch to
+`main` ships that route to the live Vercel app.
+
+- **Its safety is two INDEPENDENT locks, and either alone suffices.** The page calls `notFound()`
+  when `NODE_ENV === 'production' && !process.env.TABLE_PLAYGROUND`; middleware only pushes
+  `/dev/table-playground` onto `PUBLIC_PATHS` under the negation of the same condition. So the env
+  var `TABLE_PLAYGROUND` must be **absent from Vercel production** for the route to stay dark —
+  that is the one external fact a promotion of this branch should state, since it lives in the Vercel
+  dashboard and nothing in the repo can prove it.
+- **How to verify an auth-boundary diff is additive, in one command:** `git diff --numstat -- middleware.ts`
+  → `15 0 middleware.ts`. A zero in the deletions column is the proof that no existing guard was
+  removed; reading the hunk alone can miss a guard silently relocated. Do this on ANY changeset
+  touching `middleware.ts`, `lib/auth.ts`, or an RLS migration, and quote the numstat in the report.
+- The brief asked for exactly this check. Treat "confirm the diff only ADDS X and removes no guard"
+  as a standing instruction for auth-boundary files even when a brief does not spell it out.
+
+### Promotion 52 — the FIRST non-empty merge-base tree test, and it was still safe
+
+2026-08-19, `feat/universal-table` (`1bd8426`, 20 commits) → `main` (`49dfd70`) = **`8bf43ac`**.
+The universal-table v2 grids, 83 files, +21,110/−667.
+
+**The merge-base tree diff was NOT empty** — 25 files / 2,706 lines, because `main` had moved on
+(the RC IN price-outage promotion) while the branch sat unmerged. Twenty-two promotions of an
+empty result had made that test feel like a safety property; it is not. **It only ever proved
+"`main` has not advanced", which is a different claim from "the merge is clean."**
+
+- **The test that actually answers the question is the FILE-SET INTERSECTION**, and it costs one
+  command: `comm -12 <(git diff --name-only $MB origin/main | sort) <(git diff --name-only $MB <feat> | sort)`.
+  Here it printed exactly one path, and `git merge-tree --write-tree --name-only main <feat>`
+  (exit 1) then named that same single path as the only conflict. Two independent instruments
+  agreeing on the same one file is what makes a non-empty merge-base diff safe to proceed on.
+- **When `main` has advanced, the merged tree is a combination NEITHER SIDE EVER GATED.** Both
+  branches ran their own green gates on their own trees; the union is novel. So re-run a gate on the
+  merge result — and the free moment to do it is **while the merge is still conflicted and
+  uncommitted**, because the working tree already holds the fully merged content. Green → `git
+  commit`; red → `git merge --abort` leaves no trace. Here: `tsc --noEmit` exit 0 plus
+  `verify-table-core` 44 / `verify-rc-deliveries-cells` 129 / `verify-qc-draw-cells` 36, matching the
+  brief's branch-tip numbers exactly.
+- **`git add .` IS WRONG INSIDE A MERGE.** Renzo's blanket-staging rule governs *composing a
+  changeset*; a conflict resolution stages the resolved path and nothing else. A bare `git add .`
+  here would have swept the standing `.claude/agent-memory-local/` exclusion into a **production**
+  merge commit. Stage the resolved file by name, then prove the negative:
+  `git diff --staged --name-only HEAD | grep -E 'agent-memory-local|supabase/.temp|test-results'`
+  must return nothing.
+
+### A "union" resolution does NOT mean re-inlining prose that MOVED to another file
+
+The one conflict was this agent's own `staging_exclusions.md`, and the brief ordered a union so no
+lesson would be lost. `main` still carried two long bullets inline; the branch had **consolidated
+them into `commit_message_fidelity.md`** (`fb8c75b`) and replaced them with a `[[…]]` pointer.
+Re-inlining them would have duplicated the prose and silently reverted a deliberate refactor.
+
+**Take the pointer form — but PROVE the lesson survived before you do.** Audit distinctive phrases
+across *both* files, not by eyeballing the hunk: grep each side's commit hashes (`22eaff5`,
+`b4620a5`), its governing question (`MISDESCRIBE THE COMMIT'S CONTENTS`) and its principle
+(`a commit body that lies is worse`) and require every one to resolve somewhere in the **merged
+tree**. Then union the genuinely branch-exclusive bullet (`main`'s `test-results/` one) back in.
+Net: 3 + 3 conflicting bullets → 4 kept, zero lessons dropped, refactor preserved.
+
+Generalises: **a union is over LESSONS, not over LINES.** When one side moved content into a new
+file that arrives with the same merge, the merged tree is the unit to audit — never the hunk.
+
+### Proving "no force-push" from the push output itself
+
+`git push` prints the ref update in a notation that already answers it:
+`49dfd70..8bf43ac  main -> main` — **two dots and no leading `+` is a fast-forward.** A forced
+update prints `+ 49dfd70...8bf43ac (forced update)`, three dots and a `+`. Quote that line in the
+report and corroborate with `git merge-base --is-ancestor <old-main-tip> <new-main-tip>`.
+
+**`git status -sb` prints a bare `## main` on this repo** — local `main` has **no upstream tracking
+configured** (`git config --get branch.main.merge` is empty), so the usual `## main...origin/main`
+"no ahead/behind" proof is simply unavailable. It is pre-existing, not damage. Prove remote sync
+with `git ls-remote origin refs/heads/main` instead — full SHA straight from origin, no local ref
+cache in the way.
+
+### `TABLE_PLAYGROUND` — verified live at promotion time, not taken on the brief's word
+
+`vercel env ls production` (CLI is installed and authenticated here) listed **nine** production
+variables — `TRELLO_BOARD_ID`, `TRELLO_TOKEN`, `TRELLO_API_KEY`, `SYNC_WORKER_URL`,
+`SYNC_KICK_SECRET`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+`NEXT_PUBLIC_SUPABASE_URL` — and **no `TABLE_PLAYGROUND`**, so `/dev/table-playground` is dark on the
+live site under both locks. The "nothing in the repo can prove it" caveat above is now obsolete:
+**one command proves it.** Re-run it on any promotion that ships a env-gated route.

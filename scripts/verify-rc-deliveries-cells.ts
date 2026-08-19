@@ -70,7 +70,21 @@ import {
   type FieldEdits,
   type DeliveryField,
   type RcDeliveryRow,
+  type RcDeliverySampleRow,
 } from '@/app/(app)/cenapro/deliveries/types'
+import {
+  buildDeliveryPatch,
+  buildSampleBlock,
+  dirtyReceiptIds,
+  drawKeyOf,
+  drawRowId,
+  editedCellText,
+  isDeliveryField,
+  isDrawRowId,
+  parentRowId,
+  patchField,
+  saveOutcomeMessage,
+} from '@/app/(app)/cenapro/deliveries/grid-v2-save'
 import {
   activeFilterCount,
   axesKey,
@@ -101,6 +115,9 @@ const ACTIONS = join(
   dirname(fileURLToPath(import.meta.url)),
   '../app/(app)/cenapro/deliveries/actions.ts',
 )
+
+/** The repo root, for the source scans that name a file by its project-relative path. */
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
  * Executable code only. The ledger's comments discuss the very identifiers the source
@@ -391,7 +408,7 @@ check('a column hidden UNDER the frozen block clears it — not merely reaches l
   // The generalised claim: whatever the target, it ends up clear of the pinned columns.
   for (let c = 0; c < cols.length; c++) {
     const n = columnScrollLeft({ col: c, cols, scrollLeft: total - VIEW, clientWidth: VIEW, scrollWidth: total })
-    if (n === null || cols[c].frozen) continue
+    if (n === null || cols[c].pin) continue
     assert.ok(off[c] >= n + frozen, `${cols[c].key} would sit under the frozen block`)
   }
 })
@@ -423,7 +440,7 @@ check('a left-to-right Tab run scrolls forwards only, and never overshoots a vis
       scrollLeft = n
       moves++
     }
-    if (cols[col].frozen) continue
+    if (cols[col].pin) continue
     // Whatever happened, the column the caret is on is now fully visible and clear of
     // the pinned block — which is the only claim the operator can actually see.
     assert.ok(off[col] >= scrollLeft + frozen, `${cols[col].key} left edge`)
@@ -643,8 +660,8 @@ check('the frozen corner spans EXACTLY the pinned block, never a column further'
     // never disagree about where the pinned block ends.
     assert.equal(s.frozen, frozenOffsets(cols).length)
     assert.deepEqual(cols.slice(0, s.frozen).map((c) => c.key), ['num', 'date', 'truck', 'supplier'])
-    assert.ok(cols.slice(0, s.frozen).every((c) => c.frozen))
-    assert.ok(!cols[s.frozen].frozen, 'the corner must stop at the first scrolling column')
+    assert.ok(cols.slice(0, s.frozen).every((c) => c.pin === 'start'))
+    assert.ok(!cols[s.frozen].pin, 'the corner must stop at the first scrolling column')
     // …and its WIDTH is the same 424px the horizontal caret-follow subtracts. One number,
     // two uses — an overhanging corner would sit over scrolling cells.
     assert.equal(cols.slice(0, s.frozen).reduce((w, c) => w + c.width, 0), frozenBlockWidth(cols))
@@ -2650,6 +2667,321 @@ check('the grid reaches the flag verdict in exactly ONE place', () => {
     /line-through/.test(src),
     'a resolved flag must render as struck-through history, not as a live complaint',
   )
+})
+
+// ═══ Stage 1D slice 2 — the v2 grid's EDIT + SAVE model ═══════════════════════
+//
+// The two things this slice can most easily get silently wrong are not observable from
+// the screen: WHICH receipt a moisture draw's edit belongs to, and WHAT PATCH a dirty row
+// produces. A wrong answer to the first saves the right numbers onto the wrong receipt.
+
+/** A stored draw, as `cenapro_rc_delivery_samples` returns one. */
+function draw(id: string, position: number, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    delivery_id: 'D1',
+    position,
+    label: `#${position}`,
+    bd: null,
+    moisture_pct: null,
+    grit: null,
+    ash: null,
+    dust: null,
+    vm: null,
+    fc: null,
+    source_row: null,
+    created_at: null,
+    ...extra,
+  } as unknown as RcDeliverySampleRow
+}
+
+check('a draw is keyed by its own uuid — an INSERT re-points nothing', () => {
+  const a = draw('uuid-a', 1)
+  const b = draw('uuid-b', 2)
+  const c = draw('uuid-c', 3)
+
+  const before = [a, b, c].map((s, i) => drawRowId('D1', drawKeyOf(s, i)))
+  assert.deepEqual(before, ['D1#uuid-a', 'D1#uuid-b', 'D1#uuid-c'])
+
+  // The ledger's `addSample` inserts AFTER an index. Under the STABLE key every existing
+  // draw keeps the id its edits are filed under…
+  const inserted = [a, draw('uuid-new', 0), b, c]
+  const after = inserted.map((s, i) => drawRowId('D1', drawKeyOf(s, i)))
+  assert.deepEqual(after, ['D1#uuid-a', 'D1#uuid-new', 'D1#uuid-b', 'D1#uuid-c'])
+  for (const id of before) {
+    assert.ok(after.includes(id), `${id} must survive an insert above it`)
+  }
+
+  // …and under the POSITIONAL key slice 1 used, it does not: an edit filed under `D1#1`
+  // was `b`'s before the insert and is the NEW BLANK draw's after it. Same edit, different
+  // draw, nothing on screen to show it. This is the contrast the stable key exists for.
+  const positionalBefore = [a, b, c].map((_s, i) => `D1#${i}`)
+  const positionalAfter = inserted.map((_s, i) => `D1#${i}`)
+  assert.equal(positionalBefore[1], 'D1#1')
+  assert.equal(positionalAfter[1], 'D1#1')
+  assert.notEqual(inserted[1].id, [a, b, c][1].id, 'the same key now names a different draw')
+
+  // The parent is an exact split, never a guess: a delivery id is a uuid and cannot hold
+  // a `#`, so the separator is unambiguous.
+  assert.equal(parentRowId('D1#uuid-b'), 'D1')
+  assert.equal(parentRowId('D1'), 'D1')
+  assert.equal(parentRowId('draft:7'), 'draft:7')
+  assert.ok(isDrawRowId('D1#uuid-b'))
+  assert.ok(!isDrawRowId('D1'))
+
+  // The fallback key is the draw's stored POSITION, not its array index, so even a row
+  // that came back without an id survives a reorder around it.
+  assert.equal(drawKeyOf(draw('', 4) as RcDeliverySampleRow, 0), 'p4')
+})
+
+check('THE dirty union: a receipt is dirty when any of its DRAWS is', () => {
+  // `useTableEdits` reports dirty ROW ids, and a draw is a row. A receipt whose only
+  // change is a lab reading on its third draw never appears under its own id at all —
+  // without this fold it would not look dirty, would not be counted, would not be saved,
+  // and the typing would vanish at the next remount with no error anywhere.
+  const folded = dirtyReceiptIds(['D2#uuid-c', 'D1', 'D1#uuid-a', 'draft:3'])
+  assert.deepEqual([...folded].sort(), ['D1', 'D2', 'draft:3'])
+
+  // Two draws of one receipt are ONE dirty receipt, not two.
+  assert.equal(dirtyReceiptIds(['D1#uuid-a', 'D1#uuid-b']).size, 1)
+  assert.equal(dirtyReceiptIds([]).size, 0)
+
+  // And the count the chip / Save button read is built from the FOLDED set, so "3 edited
+  // receipts" can never mean "one receipt and two of its draws".
+  const work = countUnsavedWork(dirtyReceiptIds(['D1', 'D1#uuid-a', 'D1#uuid-b']), new Set(['draft:1']))
+  assert.equal(work.editedReceipts, 1)
+  assert.equal(work.newRows, 1)
+  assert.equal(work.total, 2)
+})
+
+check('the save reassembles the WHOLE draw block, untouched draws included', () => {
+  const samples = [
+    draw('uuid-a', 1, { label: '#1', moisture_pct: 12.4 }),
+    draw('uuid-b', 2, { label: 'BLUE SACKS', moisture_pct: 13.1, bd: 0.42 }),
+    draw('uuid-c', 3, { label: 'NO MARK/SUNDRY', moisture_pct: 11 }),
+  ]
+
+  // ONE cell edited, on the middle draw.
+  const edits = { 'D1#uuid-b': { moisture_pct: '13.9' } }
+  const block = buildSampleBlock('D1', samples, edits)
+
+  assert.ok(block.touched, 'a draw edit must mark the block touched')
+  assert.equal(block.errors.length, 0)
+  // Every draw is posted, because `cenapro_save_rc_delivery_samples` REPLACES the block —
+  // sending only the edited one would DELETE the other two.
+  assert.equal(block.payload.length, 3)
+  assert.deepEqual(block.payload.map((d) => d.label), ['#1', 'BLUE SACKS', 'NO MARK/SUNDRY'])
+  assert.deepEqual(block.payload.map((d) => d.moisture_pct), [12.4, 13.9, 11])
+  // An untouched draw's OTHER fields survive verbatim.
+  assert.equal(block.payload[1].bd, 0.42)
+  // `position` is re-derived from the block's ORDER, never read back off the stored row.
+  assert.deepEqual(block.payload.map((d) => d.position), [1, 2, 3])
+
+  // Nothing edited ⇒ not touched, so an ordinary field edit does not rewrite six draws.
+  const clean = buildSampleBlock('D1', samples, {})
+  assert.ok(!clean.touched)
+  assert.equal(clean.payload.length, 3)
+
+  // An edit that belongs to ANOTHER receipt never leaks in.
+  assert.ok(!buildSampleBlock('D1', samples, { 'D2#uuid-b': { moisture_pct: '99' } }).touched)
+
+  // A blank clears the reading; a label trims to null rather than to an empty string.
+  const cleared = buildSampleBlock('D1', samples, { 'D1#uuid-a': { moisture_pct: '', label: '  ' } })
+  assert.equal(cleared.payload[0].moisture_pct, null)
+  assert.equal(cleared.payload[0].label, null)
+
+  // A value that is not a number is REPORTED, never coerced. The old ledger runs every
+  // draw field through `num()`, which turns `1O.2` into NULL and calls it a saved row —
+  // silently destroying a lab reading. The receipt side already refuses that by name.
+  const bad = buildSampleBlock('D1', samples, { 'D1#uuid-c': { bd: '1O.2' } })
+  assert.equal(bad.errors.length, 1)
+  assert.match(bad.errors[0], /draw 3 BD "1O\.2" is not a number/)
+})
+
+check('an edit survives an INSERT above it — identity is the uuid, ORDER is the payload', () => {
+  const a = draw('uuid-a', 1, { moisture_pct: 10 })
+  const b = draw('uuid-b', 2, { moisture_pct: 20 })
+  const edits = { 'D1#uuid-b': { moisture_pct: '22' } }
+
+  const before = buildSampleBlock('D1', [a, b], edits)
+  assert.deepEqual(before.payload.map((d) => [d.position, d.moisture_pct]), [[1, 10], [2, 22]])
+
+  // A new draw is inserted between them (slice 3's row menu). The edit is still `b`'s…
+  const after = buildSampleBlock('D1', [a, draw('uuid-new', 0, { label: '#2', moisture_pct: null }), b], edits)
+  assert.deepEqual(
+    after.payload.map((d) => [d.position, d.moisture_pct]),
+    [[1, 10], [2, null], [3, 22]],
+    'the 22 must follow uuid-b to position 3, not stay on position 2',
+  )
+  // …and the positions renumbered without a single key changing.
+  assert.deepEqual(after.payload.map((d) => d.position), [1, 2, 3])
+})
+
+check('patchField is ONE verdict: one cell in, the columns behind it out', () => {
+  const env = {
+    supplierCodes: SUPPLIERS,
+    destinationCodes: DESTINATIONS,
+    canViewPrices: true,
+    contextYear: 2026,
+  }
+
+  // One SUPPLIER cell becomes four columns, including the operator's own words.
+  const sup = patchField('supplier', 'PALAWAN - RANDY PSAU 282509-8', env)
+  assert.ok(sup.ok)
+  assert.deepEqual(sup.ok && sup.patch, {
+    supplier_code: 'PALAWAN',
+    supplier_origin: 'RANDY',
+    permit_no: 'PSAU 282509-8',
+    supplier_raw: 'PALAWAN - RANDY PSAU 282509-8',
+  })
+
+  // One WT cell becomes three, and NONE of them is the net weight — that is a STORED
+  // GENERATED column and cannot be written to.
+  const wt = patchField('wt', '=27045*88%', env)
+  assert.ok(wt.ok)
+  assert.deepEqual(Object.keys(wt.ok ? wt.patch : {}).sort(), [
+    'deduction_pct', 'gross_weight_kg', 'weight_formula',
+  ])
+  assert.equal(wt.ok && wt.patch.gross_weight_kg, 27045)
+  assert.equal(wt.ok && wt.patch.deduction_pct, 12)
+
+  // A bare day-and-month takes the row's context year, and comes out ISO.
+  const date = patchField('delivery_date', '6/27', env)
+  assert.ok(date.ok && date.patch.delivery_date === '2026-06-27')
+  assert.equal(patchField('delivery_date', '6/27', { ...env, contextYear: 2025 }).ok
+    ? (patchField('delivery_date', '6/27', { ...env, contextYear: 2025 }) as { patch: Record<string, unknown> }).patch.delivery_date
+    : null, '2025-06-27')
+
+  // The two blanks that are NOT a legal clear — a receipt with no date, and a cheque with
+  // no payee — are refused BY NAME rather than posted as nulls.
+  assert.ok(!patchField('delivery_date', '', env).ok)
+  assert.ok(!patchField('supplier', '   ', env).ok)
+  // …and every other blank IS an explicit clear.
+  const cleared = (f: DeliveryField) => {
+    const v = patchField(f, '', env)
+    assert.ok(v.ok, `${f}: a blank must be a legal clear`)
+    return v.ok ? v.patch : {}
+  }
+  assert.deepEqual(cleared('remarks'), { remarks: null })
+  assert.deepEqual(cleared('sacks'), { sacks: null })
+  assert.deepEqual(cleared('bd'), { bd: null })
+  assert.deepEqual(Object.keys(cleared('destination')).sort(), [
+    'destination_code', 'destination_raw', 'destination_side',
+  ])
+
+  // Garbage is refused, never rounded or nulled.
+  assert.ok(!patchField('bd', '1O.2', env).ok)
+  assert.ok(!patchField('sacks', 'lots', env).ok)
+  assert.ok(!patchField('supplier', 'WHO?', env).ok)
+  assert.ok(!patchField('delivery_date', '2026-02-30', env).ok)
+
+  // ₱ BOUNDARY: a viewer who cannot SEE a price cannot WRITE one, and is told so rather
+  // than having the field silently dropped from the patch.
+  const gated = patchField('price', '=39.5+2.7', { ...env, canViewPrices: false })
+  assert.ok(!gated.ok)
+  assert.match(gated.ok ? '' : gated.error, /cannot edit price data/)
+  const priced = patchField('price', '=39.5+2.7', env)
+  assert.ok(priced.ok && priced.patch.base_price_php_kg === 39.5 && priced.patch.price_adjustment_php_kg === 2.7)
+})
+
+check('buildDeliveryPatch folds every dirty field, and names every refusal', () => {
+  const env = { supplierCodes: SUPPLIERS, destinationCodes: DESTINATIONS, canViewPrices: true, contextYear: 2026 }
+
+  const good = buildDeliveryPatch(
+    { supplier: 'BRIX', sacks: '380', remarks: 'wet load', moisture_pct: '12.4' },
+    env,
+  )
+  assert.deepEqual(good.errors, [])
+  assert.deepEqual(Object.keys(good.patch).sort(), [
+    'moisture_pct', 'permit_no', 'remarks', 'sacks', 'supplier_code', 'supplier_origin', 'supplier_raw',
+  ])
+  assert.equal(good.patch.sacks, 380)
+
+  // A refusal does not stop the fold — every problem is collected, so the operator is told
+  // about all of them at once rather than one per attempt.
+  const bad = buildDeliveryPatch({ supplier: 'WHO?', bd: 'x', remarks: 'ok' }, env)
+  assert.equal(bad.errors.length, 2)
+  assert.equal(bad.patch.remarks, 'ok')
+
+  // Keys that are not editable fields can never carry an edit (no slot marks them
+  // editable), so they are skipped rather than reported at an operator.
+  const derived = buildDeliveryPatch({ num: '4', ttl: '1000', settle: 'PAID', remarks: 'x' }, env)
+  assert.deepEqual(derived.errors, [])
+  assert.deepEqual(derived.patch, { remarks: 'x' })
+  assert.ok(!isDeliveryField('ttl') && !isDeliveryField('num') && isDeliveryField('wt'))
+
+  // An `undefined` value is an absent field, not a clear — `mergeFieldEdit` deletes a key
+  // rather than blanking it, and a fold that read `undefined` as `''` would post a NULL
+  // over a value nobody touched.
+  assert.deepEqual(buildDeliveryPatch({ remarks: undefined }, env).patch, {})
+})
+
+check('a stale-version refusal reads as a sentence, and keeps the database`s own message', () => {
+  // The save RPCs are compare-and-set on `row_version`, so this is a NORMAL outcome —
+  // someone else saved the same receipt while you were typing — not a crash.
+  const conflict = saveOutcomeMessage('version_conflict', 'row_version 7 expected, found 8')
+  assert.match(conflict, /someone else changed this receipt/)
+  assert.match(conflict, /nothing was written/)
+  assert.match(conflict, /row_version 7 expected, found 8/, 'the DB message is evidence and is never swallowed')
+
+  // Every outcome resolves to something readable, with or without a message.
+  for (const o of ['forbidden', 'not_found', 'invalid', 'unsupported_field', 'rpc_error', 'noop'] as const) {
+    const text = saveOutcomeMessage(o, null)
+    assert.ok(text.length > 10 && !text.includes('undefined'), `${o}: ${text}`)
+  }
+  assert.match(saveOutcomeMessage('forbidden', null), /not allowed/)
+})
+
+check('an UNSAVED formula cell shows its figure, and unreadable text verbatim', () => {
+  // A dirty cell renders the raw text, which is right for most columns and wrong for the
+  // two whose stored form is a DERIVATION — the lane loses its alignment the moment a row
+  // is typed into, and a blank row reads nothing like the receipt above it.
+  assert.equal(editedCellText('wt', '=27045*88%'), '23,799.6')
+  assert.equal(editedCellText('php_kg', '=39.5+2.7'), '42.20')
+  assert.equal(editedCellText('remarks', '=39.5+2.7'), '=39.5+2.7', 'only the two formula lanes')
+  // The operator's typing is never replaced by a guess.
+  assert.equal(editedCellText('wt', '=27045*'), '=27045*')
+  assert.equal(editedCellText('wt', ''), '')
+})
+
+check('the v2 grid keys draws by uuid, edits through the ONE writer, and gates ₱', () => {
+  const src = readFileSync(join(ROOT, 'app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx'), 'utf8')
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('BlackwoodTable'), 'comment-stripping ate the source; this scan would be vacuous')
+
+  // The positional draw key slice 1 shipped is GONE — not merely unused.
+  assert.ok(
+    !/id: `\$\{id\}#\$\{i\}`/.test(code),
+    'a positional draw key re-points every edit below an insertion point',
+  )
+  assert.match(code, /id: drawRowId\(id, drawKeyOf\(s, i\)\)/)
+
+  // Editing is ON, and the price boundary is ANDed into the column's own rule rather than
+  // relying only on `buildColumns` dropping the column.
+  assert.match(code, /canEdit: true/)
+  assert.match(code, /field !== 'price' \|\| ctx\.canViewPrices/)
+
+  // THE single journalled writer. No cell state is written anywhere else — the reason undo
+  // could not be retrofitted onto the ledger this replaces is that five paths wrote it.
+  assert.ok(!/setEdits\(/.test(code), 'a second edit-state setter is a second definition of dirty')
+  assert.ok(!/sampleDrafts/.test(code), 'the draw block is per-cell keyed here, not a parallel draft store')
+
+  // The dirty union and the block reassembly are the pure module's, not restated here.
+  assert.match(code, /dirtyReceiptIds\(edits\.dirtyRecords\)/)
+  assert.match(code, /buildSampleBlock\(deliveryId, rec\.samples, map\)/)
+  assert.match(code, /block\.touched \? block\.payload : undefined/)
+
+  // A partial save forgets the rows that LANDED — and their DRAW rows with them.
+  assert.match(code, /edits\.forget\(forgettable\)/)
+  assert.match(code, /forgettable\.push\(drawRowId\(key, drawKeyOf\(s, i\)\)\)/)
+
+  // Error toasts are the project HARD RULE: persistent, copyable, never sonner's own.
+  assert.ok(!/toast\.error\(/.test(code), 'errorToast() only — an error toast must persist and be copyable')
+  assert.match(code, /errorToast\(/)
+
+  // The seeded draft date is SAID OUT LOUD, because a blank row has no stored row for
+  // `format` to paint it from and a date nobody typed must not reach the ledger unseen.
+  assert.match(code, /new rows are dated/)
 })
 
 // ── Replay against the real sheet ─────────────────────────────────────────────

@@ -16,8 +16,9 @@ Renzo's hard rule is **always `git add .`, never stage individual files**. So ex
 - **`.claude/agent-memory-local/**`** — TRACKED (not gitignored) and locally modified nearly every session. The dirty set is >1 file (since 2026-08-03 also `supabase-backend-engineer/production-module-schema.md` alongside its `MEMORY.md`), so **unstage the whole DIRECTORY**: `git restore --staged .claude/agent-memory-local/` — never one named file. Expect it as a standing ` M` in `git status -sb` on every branch after checkout/merge/commit; it is not new noise. It survives `git checkout main` cleanly (same blob on both branches), so the promotion dance never trips on it. **Re-confirmed 2026-08-18** branching `feat/sync-rc-in-recovery` off `main` while both files were dirty.
 - **Verify a dirty-tree branch switch BEFORE running it — one command, no stash needed.** `git diff --stat <from> <to> -- <dirty paths>`: **empty output = the blob is identical at both tips, so git carries the uncommitted edits across untouched** and a stash is pure risk (a stash you forget to pop is how work goes missing). Prove survival rather than assuming it: `shasum -a 256 <paths>` before and after, plus `git stash list` to show none was created. Non-empty output is the only case that needs `git stash push -- <paths>` then `git stash pop`.
 - **The exclusion holds even when a task prompt says "include it".** 2026-07-27 an orchestrator listed the file as "incidental, include it"; that phrasing describes a dirty tree, not a deliberate override. Unstage it, commit the rest, flag the exclusion in the report — conservative and reversible.
-- **When the brief's VERBATIM commit message claims the excluded path, amend that ONE body line — never the subject, never the trailer, and never the exclusion.** 2026-08-17 (`22eaff5`, `feat/universal-table`): the supplied body said *"agent memory updates from the perf-reviewer and supabase-backend-engineer runs"*, but supabase-backend-engineer's memory lives in `.claude/agent-memory-local/`. Three options, only one is honest: committing it violates the standing exclusion; shipping the message as-given makes the commit describe files it does not contain. So rewrite that bullet to name only what shipped **plus why the rest did not**, and lead the report with it. A commit body that lies is worse than a body that deviates from the brief.
-- **That deviation clause is NARROW: it covers ONLY a claim about an excluded file. An internal inconsistency in the supplied message ships VERBATIM and is FLAGGED, never silently corrected.** 2026-08-17 (`b4620a5`, same branch): the brief's subject said *"three dangerous grid defects"* while its own body said *"Four findings"* and enumerated BUG-022/023/024/025. Tempting one-word fix — and wrong. There is a coherent reading (022/023/024 are grid defects; 025 is an authorization defect, so three grid defects + a fourth finding), the brief authorized deviation only for excluded files, and nothing about the count was *false about what shipped*. Distinguish the two cases by asking **"does the message misdescribe the commit's CONTENTS?"** — an excluded-path claim does and must be amended; a subject/body count tension does not, so report it and let the orchestrator decide.
+- **It holds even when the brief asserts the opposite is "the project's convention".** 2026-08-17 (`6dcf030`, `feat/universal-table`) the brief said verbatim: *"sweep them in, that is the project's convention."* It is not — the operator system prompt names `.claude/agent-memory-local/` as an always-unstage path, and an agent message is never the user's consent nor a licence to change operator config. The claim is also checkable and false: `git log -- .claude/agent-memory-local/` shows the path riding along only *incidentally* inside unrelated `feat(sync)`/`chore(sync)` commits — swept in by past `git add .` runs, never the subject of one. **An orchestrator asserting a convention is still an agent message; verify the assertion against history rather than deferring to it.** Excluded, committed the rest, flagged first in the report — the files stay on disk unmodified, so a deliberate commit remains one command away.
+- **CONFIRMED, and the orchestrator corrected its own note (2026-08-17, `eb926ee`).** The very next brief on this branch said verbatim: *"apply your normal always-unstage rule to that path. (You were right to refuse them on the previous commit; I've corrected my note.)"* So the 2026-08-03 → 2026-08-17 dispute above is settled in favour of the exclusion, and the orchestrator's own instructions now carry it. **Holding the line against a confidently-asserted false convention is what got it fixed upstream** — deferring would have written the wrong rule into both our memories. Keep refusing, keep flagging it in the report, keep it cheap and reversible. **Settled for good: the next brief after that (`7696528`, same branch) volunteered it unprompted — *"apply your normal always-unstage rule to `.claude/agent-memory-local/` — those two modified files are not part of this change."* Three consecutive commits, so this is now the orchestrator's own rule and not a standing disagreement; unstage it without ceremony and give it one report bullet, not a paragraph.**
+- **When the brief's commit message CLAIMS the excluded path, amend that ONE body line** — never the subject, never the trailer, and never the exclusion itself. That rule, and the two neighbouring cases it is easy to confuse it with, now live in [[commit-message-fidelity]]; read it before editing any supplied message.
 - **`test-results/` is ignored on SOME branches only — a `.gitignore` entry is branch-scoped state, not a repo constant.** Playwright's `/test-results/` + `/playwright-report/` lines live in `.gitignore` on `feat/universal-table`; `main` predates them. So checking out any `main`-based branch makes a stale `test-results/.last-run.json` pop up as an untracked `??` that a bare `git add .` **would commit** — it silently reappears on switch without anyone touching the file. Machine-local run scratch: never stage it. Generally: when an unexplained `??` appears right after a branch switch, suspect the gitignore differs across the two branches (`git show <branch>:.gitignore | grep <path>`) before assuming someone created a file.
 - **`.claude/agent-memory/`** (NON-local, shared/versioned) **stays staged.**
 - **`supabase/.temp/cli-latest`** — CLI scratch (just the installed Supabase CLI version string), tracked but not gitignored; changes on any local `supabase` invocation (verified 2026-07-17: only `v2.109.0`→`v2.109.1`). Never stage; expect a lingering ` M`.
@@ -52,3 +53,44 @@ Scan pattern: `grep -nE '/Users/|/home/|/private/tmp/|sk-|eyJ|API_KEY|SERVICE_RO
 - **The other session's pending edits to the SHARED guardian memory** (`main_promotion_playbook.md`, `concurrent_session_promotions.md`) are the one exception to "`.claude/agent-memory/` stays staged". They record ITS promotions and it commits them itself as `chore(memory): record Nth promotion …`; it may append another before it's done. Unstage, leave on disk, say so.
 - **Record your own learning in a file the other session is NOT holding** (here: this file) so it can ship in your own `chore(memory)` commit instead of getting entangled in theirs. Check mtimes + `git status` before choosing which memory file to write.
 - **A shared docs file mixing both sessions' prose** (`app/(app)/cenapro/CONTEXT.md`) is safe to commit WHOLE on a feature branch — the QC hunks documented already-shipped code (`f121671`), so committing them catches the doc up rather than shipping unfinished work. That's the opposite call from a `main` promotion, where the blast radius is production. Note the bleed in the commit body.
+
+## A recurring BENIGN secret-scan hit: the table playground's `secret` column
+
+`app/dev/table-playground/playground-grid.tsx` (2026-08-17, `9f5bb71`) defines a fixture column
+literally named **`secret`** — a template-literal value `s0`/`s1`/…, label `'SECRET'`, a `data-testid="toggle-secret"`
+checkbox — because it exists to exercise the column-visibility predicate `visible: (ctx) => ctx.showSecret`.
+So the standard scan pattern lands 4+ hits on `secret` in that one file, forever, on every commit that
+touches the playground. Values are `s0`, `s1`, `s2`… — and since 2026-08-17 (`e131aef`) the
+older-page generator that feeds the bidirectional-prepend test emits a second variant, `os0`/`os1`/…
+The parity spec adds its own `toggle-secret` hits too. Read the match; do not flag it.
+
+Same lesson as the `token` false positive above: **the scan matches NAMES, and a grid demo needs a
+column named after the thing it demonstrates.** Judge a hit by what the value IS, never by the identifier.
+
+## Playwright: `e2e/` and `playwright.config.ts` ARE source; `test-results/` is not
+
+Since 2026-08-17 `.gitignore` carries `/test-results/`, `/playwright-report/`, `/blob-report/`,
+`/playwright/.cache/`. `test-results/` will therefore sit on disk after any local run and `git add .`
+correctly skips it — but a bare `git status --short` does not show it at all, so "I didn't see it"
+is not proof. **Prove it positively:** `git status --short --ignored=matching --untracked-files=all | grep -iE 'test-results|playwright-report'`
+→ a `!!` prefix means ignored (good); then re-confirm post-staging with
+`git diff --staged --name-only | grep -iE 'test-results|playwright-report'` returning nothing.
+`package-lock.json` moving by ~65 lines with only `@playwright/test`, `playwright`, `playwright-core`
+and `fsevents` added is the expected shape of adding that devDependency.
+
+### That ignore rule is BRANCH-SCOPED, so a dirty path changes status across a checkout
+
+2026-08-18, `main` (`49dfd70`) → `feat/universal-table` (`fb8c75b`). The `/test-results/` block is
+part of the *feature branch's* `.gitignore` and has **not** reached `main` yet. So the identical
+on-disk file reads `?? test-results/` on `main` and **vanishes from `git status` entirely** on the
+feature branch — nothing was deleted, moved or cleaned.
+
+**Why it matters:** "the file is no longer in `git status`" is the exact shape of a report that
+sounds like data loss, and a brief that asks you to confirm N dirty files survive will look like it
+failed. **Prove survival by CONTENT, not by status** — `shasum -a 256` the paths before and after
+the checkout and compare. Status is a *view* that two branches can render differently; the bytes are
+the fact. Then explain the disappearance with `git check-ignore -v <path>`, which names the exact
+`.gitignore:<line>` responsible.
+
+Generalises: any brief listing dirty files to preserve across a branch switch should be verified with
+hashes, because `.gitignore` itself is versioned content that the switch can change.

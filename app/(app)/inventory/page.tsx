@@ -3,18 +3,25 @@ import { createClient } from '@/lib/supabase/server';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
 import { format } from 'date-fns';
 import { InventoryView } from './components/inventory-view';
+import { InventoryViewV2 } from './components/inventory-view-v2';
 import { LogsShell } from './components/logs-shell';
 import { getTableSettings } from '@/lib/actions/table-settings';
 import { canViewPrices } from '@/lib/auth';
 import { fetchAllRows } from '@/lib/supabase/paginate';
+import { GridVersionBar } from '@/components/shared/table';
+import { GRID_V2, parseGrid } from '@/lib/table';
 
 export default async function InventoryPage({
     searchParams
 }: {
-    searchParams: Promise<{ year?: string; search?: string }>;
+    // `grid` is the universal-table side-by-side axis (`lib/table/grid-param.ts`) — an
+    // axis of the CLIENT, never of the data. It picks which component renders the rows
+    // below; it reaches no query, no action and no role gate, and every fetch on this page
+    // runs identically either way.
+    searchParams: Promise<{ year?: string; search?: string; grid?: string }>;
 }) {
     const supabase = await createClient();
-    const { year: rawYear, search } = await searchParams;
+    const { year: rawYear, search, grid } = await searchParams;
     const now = new Date();
     const year = rawYear ? parseInt(rawYear, 10) : now.getFullYear();
 
@@ -81,18 +88,41 @@ export default async function InventoryPage({
 
     const initialSettings = await getTableSettings('rc_in');
 
+    // ONE toggle for BOTH tabs. Deliveries and Usage are two views of the same shell, so
+    // two switches would let the screen sit in a half-migrated state nobody asked for.
+    // `?grid=` absent, misspelt, `V2` or `3` all mean the CURRENT tables.
+    const v2 = parseGrid(grid) === GRID_V2;
+    const gridBar = (
+        <GridVersionBar note="Same rows, same filters — this switches only which table renders them." />
+    );
+
     return (
         // useSearchParams (inside LogsShell's tab provider) needs a Suspense boundary.
         <Suspense fallback={<div className="h-full w-full" />}>
             <LogsShell>
-                <InventoryView
-                    deliveries={deliveries}
-                    batches={activeBatches}
-                    search={search}
-                    allSuppliers={allSuppliers}
-                    allLocations={allLocations}
-                    initialSettings={initialSettings}
-                />
+                {gridBar}
+                {v2 ? (
+                    <InventoryViewV2
+                        deliveries={deliveries}
+                        batches={activeBatches}
+                        search={search}
+                        allSuppliers={allSuppliers}
+                        allLocations={allLocations}
+                        // The gate is resolved ONCE, server-side, above — the same call
+                        // that already stripped `cost_basis` from `deliveries`. Threaded
+                        // down rather than re-derived on the client.
+                        canViewPrices={showPrices}
+                    />
+                ) : (
+                    <InventoryView
+                        deliveries={deliveries}
+                        batches={activeBatches}
+                        search={search}
+                        allSuppliers={allSuppliers}
+                        allLocations={allLocations}
+                        initialSettings={initialSettings}
+                    />
+                )}
             </LogsShell>
         </Suspense>
     );
