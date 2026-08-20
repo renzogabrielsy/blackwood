@@ -905,17 +905,73 @@ diagnosis.*
 
 ---
 
-## QC and Flec Inventory — the `?grid=v2` side-by-side (2026-08-19)
+## QC and Flec Inventory — the `?grid=v2` side-by-side (2026-08-19, half retired 2026-08-20)
 
 Both screens gained a second, **read-only** implementation on the universal table
 module, built beside the existing client and reachable only on `?grid=v2`. The
 existing components are byte-identical and remain the production path; the default is
 unchanged. Recipe and rationale: `lib/table/CONTEXT.md` → "Stage 1D at scale".
 
+**Flec Inventory left the track on 2026-08-20 and its v2 file is deleted** — see the
+retirement note below. Everything in this section that speaks of "both" is historical
+from that date on; only **QC** still has a v2.
+
 | File | Role |
 |---|---|
 | `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. Same fifteen columns, order and widths as `qc-ledger-client.tsx`. |
-| `inventory/flec-inventory-grid-v2.tsx` | The flec movement ledger on `<BlackwoodTable>`. Same nine columns as the existing client's ledger table. |
+| ~~`inventory/flec-inventory-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** See below. |
+
+### RETIRED 2026-08-20 — Flec Inventory (`/cenapro/inventory`) leaves the v2 track
+
+Renzo's call on the live review: *"You can take out the v2 for flec inventory cenapro. I
+don't think it's appropriate and I think it needs customized behavior that is more niche
+than the table we're making."* `inventory/flec-inventory-grid-v2.tsx` is **deleted** and
+`inventory/page.tsx` is back to its pre-v2 shape — no `GridVersionBar`, no `parseGrid`, no
+`grid` search param, `FlecInventoryClient` rendered unconditionally with its props passed
+inline. `?grid=v2` on that route is now **INERT** (an unread query param), never an error.
+
+The bespoke client was never edited for the preview, so this is a straight subtraction —
+the screen renders exactly what it rendered before the preview existed. Nothing shared was
+removed: the preview exercised only public `BlackwoodTable` surface, and its historical
+role in `lib/table/CONTEXT.md` ("Stage 1D at scale") stands as a record of what the
+platform was proven against. Its niche behaviour — the editable STARTING/openings block,
+the append-only opening-balance history dialog, the warehouse + start-date pickers — stays
+on the bespoke component, which is the reason it left the track.
+
+The ICTC twin, `/inventory/flecon-bags`, was retired in the same pass and for the same
+reason (see `app/(app)/inventory/flecon-bags/CONTEXT.md`).
+
+### QC ledger v2 — the 2026-08-20 consumer-side pass
+
+Four changes to `qc/qc-ledger-grid-v2.tsx`, none of them in `lib/table/**` or
+`components/shared/table/**`:
+
+1. **Vertical scrolling works.** `BlackwoodTable`'s focus-scope scroller is
+   `<div class="h-full overflow-auto">` inside its own root `<div class="flex min-h-0
+   flex-col">` — and that root declares **no height**. As a plain block child of this
+   file's `h-full overflow-hidden` wrapper it sized to its CONTENT, so the `flex-1` region
+   under it inherited a content height and the `h-full` scroller resolved to exactly the
+   height of the rows it held. **A scroller as tall as its content has nothing to scroll**;
+   the sheet simply grew past the wrapper, which clips, and every day after the first was
+   unreachable. Fixed by passing `className="h-full"` (the component's public prop) so the
+   root gets a definite height and `min-h-0 flex-1` can finally shrink below content.
+2. **Rows are ordered by SRC within each day** — TNK 1…n numerically, then W6, W7, DVO,
+   FLEC; an unrecognised source ranks last and then sorts alphabetically, so a new source
+   location appears at the bottom of its day rather than vanishing. The unit of ordering is
+   the **GROUP, never the draw**: a lab reading covers a whole sample group and lives on
+   its first draw, so re-ordering draws across a group boundary would separate a reading
+   from the rows it describes. Sorted ONCE into `orderedDays`, which both the flatten and
+   the id index read — two independent sorts are two definitions of the order.
+3. **The per-day HEADING row is gone** (*"having a heading row on the table per day is kind
+   of redundant given you already have a summary per day"*). The `group-header` row family
+   was removed and the date moved into the day total's label:
+   `Σ 2026-08-01 · 9 draws · 6 groups · cov 100%`. No blank spacer row was added — the Σ row
+   is a solid `bg-muted` band now ruled top AND bottom, a harder break between two runs of
+   28px data rows than an empty row would be.
+4. **The width clamp stays, with a `TODO(sizing-fill)` marker.** The clamp leaves dead space
+   on a wide viewport, but unclamped `width:100%` scales every column proportionally while
+   the sticky offsets keep using the DECLARED widths, which pins a frozen column inside its
+   neighbour. The fix is the platform `sizing: 'fill'` prop, not a hand-rolled fill here.
 
 **READ-ONLY is structural, not a promise.** No `ColumnSpec` in either declares a
 `parse`, and `columnAcceptsEdit` falls back to `spec.parse !== undefined` — so the
@@ -934,10 +990,12 @@ So `draw-first` occupies all fifteen columns and `draw` occupies eleven, returni
 it), the paste (it never lands there), the selection pill (it is not totalled) and the
 tint. Getting it wrong is BUG-024.
 
-Day headings and `Σ DAY TOTAL` rule-offs go through `renderChromeRow` (they sit inside
-the body, which `summaryRows` cannot reach); the month rollup is a declared summary
-lane. Chrome keys are a run **ordinal**, never a date — a chrome key is the
-virtualiser's React key and a repeatable value would collide.
+The day rule-off goes through `renderChromeRow` (it sits inside the body, which
+`summaryRows` cannot reach); the month rollup is a declared summary lane. Chrome keys are
+a run **ordinal**, never a date — a chrome key is the virtualiser's React key and a
+repeatable value would collide. *(Until 2026-08-20 there were TWO chrome rows per day, a
+heading above and a total below; the heading was removed as redundant and its date moved
+into the total's label — see the pass note above.)*
 
 **Visibly missing on both, deliberately:** everything that writes or is a different
 shape — the ADD/draw composer, the metric editors and their carry-over, Save/Discard,

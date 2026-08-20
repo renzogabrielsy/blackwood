@@ -972,3 +972,248 @@ test.describe('Blackwood Table — resize, wrapped headers, tinted cells', () =>
         expect(await classesOf(page, 5, 4)).toContain('bg-primary/10');
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// The 2026-08-20 pass: one rectangle, a row copy that is the record, a universal sort
+// and filter, a header that opens something, and a table that fills its container.
+// ─────────────────────────────────────────────────────────────────────────────────
+
+test.describe('Blackwood Table — a selection is exactly ONE rectangle', () => {
+    test('the anchor keeps NO ring inside a swept range, and keeps it on a plain click', async ({ page }) => {
+        await open(page);
+
+        // A plain click: 1×1, no box, so the ring is the whole answer — byte-identical
+        // with the behaviour before the perimeter existed.
+        await clickCell(page, 3, 2);
+        expect(await classesOf(page, 3, 2)).toContain('ring-2');
+
+        // Sweep 3×3. The perimeter is drawn, so the anchor's own ring would be a SECOND
+        // rectangle a pixel inside it — "not intended behavior".
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowDown');
+        await page.keyboard.press('Shift+ArrowRight');
+        await page.keyboard.press('Shift+ArrowRight');
+        await expect(selection(page)).toHaveText('3,2,5,4');
+
+        expect(await classesOf(page, 3, 2)).not.toContain('ring-2');
+        // …and it is still visibly part of the selection, and still on the box's own
+        // top-left corner. Losing the ring may not cost the tint or the perimeter.
+        expect(await classesOf(page, 3, 2)).toContain('bg-primary/10');
+        expect(await boxOf(page, 3, 2)).toEqual({ top: true, right: false, bottom: false, left: true });
+
+        // Collapsing back to one cell brings the ring back.
+        await clickCell(page, 4, 3);
+        await expect(selection(page)).toHaveText('4,3,4,3');
+        expect(await classesOf(page, 4, 3)).toContain('ring-2');
+    });
+});
+
+test.describe('Blackwood Table — Copy row is the RECORD', () => {
+    const menu = (page: Page) => page.locator('[data-table-context-menu]');
+
+    test('a column that opted out of a row copy is absent from it, and present in a sweep', async ({ page, context }) => {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        await open(page);
+
+        // `#` (the row ordinal) and the actions column both declare `rowCopy: false`:
+        // neither is part of the record, and both landed in every pasted row.
+        await cell(page, 3, 2).click({ button: 'right', position: { x: 8, y: 8 } });
+        await menu(page).getByText('Copy row', { exact: true }).click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+            'R-001\tItem 1\t20\t1.75\tnote 1\t35',
+        );
+
+        // SIX fields out of EIGHT columns — the two that opted out are absent, not blank,
+        // so a paste into a spreadsheet lands under the right headers.
+        const payload = await page.evaluate(() => navigator.clipboard.readText());
+        expect(payload.split('\t')).toHaveLength(6);
+        await expect(page.locator('thead th')).toHaveCount(8);
+
+        // A SWEPT rectangle is untouched by the rule — the operator asked for those
+        // columns by dragging over them, and the copy carries exactly what was swept.
+        // (That `tsvOf` never consults `rowCopy` at all is pinned in
+        // `scripts/verify-table-core.ts`, where the column list can be read directly.)
+        await clickCell(page, 3, 1);
+        await page.keyboard.press('Shift+ArrowRight');
+        await page.keyboard.press('Control+c');
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('R-001\tItem 1');
+    });
+});
+
+test.describe('Blackwood Table — the universal sort and filter', () => {
+    /** The affordances, by the attributes `HeaderCell` stamps on them. */
+    const sortBtn = (page: Page, key: string) => page.locator(`[data-sort-toggle="${key}"]`);
+    const filterBtn = (page: Page, key: string) => page.locator(`[data-filter-toggle="${key}"]`);
+
+    async function enableViewTools(page: Page) {
+        await page.getByTestId('toggle-view-tools').check();
+        await expect(sortBtn(page, 'qty')).toHaveCount(1);
+    }
+
+    test('the ENDLESS scope offers neither by default — the window is the server\'s keyset', async ({ page }) => {
+        await open(page);
+        // Not merely hidden: no control is rendered at all. A client-side sort here would
+        // reorder the loaded rows only, and `hasOlder`/`hasNewer` would become claims
+        // about an order that no longer exists.
+        await expect(page.locator('[data-sort-toggle]')).toHaveCount(0);
+        await expect(page.locator('[data-filter-toggle]')).toHaveCount(0);
+        await expect(page.getByTestId('table-view-strip')).toHaveCount(0);
+
+        // A consumer may opt in, accepting the caveat.
+        await enableViewTools(page);
+        await expect(page.locator('[data-sort-toggle]').first()).toBeVisible();
+        // …but a `derived` column still offers nothing: a row ordinal has no order.
+        await expect(sortBtn(page, 'num')).toHaveCount(0);
+        await expect(filterBtn(page, 'num')).toHaveCount(0);
+    });
+
+    test('a sort cycles asc → desc → off, hides the chrome rows, and restores them exactly', async ({ page }) => {
+        await open(page);
+        await enableViewTools(page);
+        const headings = page.locator('[data-group-heading]');
+        expect(await headings.count()).toBeGreaterThan(0);
+
+        // ASC over a column that is already ascending: the row order is unchanged, and the
+        // group headings are gone — a heading is a claim about a RUN, and a sort owns the run.
+        await sortBtn(page, 'qty').click();
+        await expect(page.getByTestId('table-view-sort')).toBeVisible();
+        await expect(headings).toHaveCount(0);
+        await expect(cell(page, 0, 2)).toHaveText('Item 0');
+
+        // DESC.
+        await sortBtn(page, 'qty').click();
+        await expect(cell(page, 0, 2)).toHaveText('Item 119');
+        await expect(cell(page, 0, 3)).toHaveText('1200');
+
+        // OFF — and the consumer's own flatten comes back byte for byte, headings included.
+        await sortBtn(page, 'qty').click();
+        await expect(page.getByTestId('table-view-strip')).toHaveCount(0);
+        await expect(cell(page, 0, 2)).toHaveText('Item 0');
+        expect(await headings.count()).toBeGreaterThan(0);
+    });
+
+    test('a filter REMOVES rows and says how many, and Clear puts them all back', async ({ page }) => {
+        await open(page);
+        await enableViewTools(page);
+
+        await filterBtn(page, 'code').click();
+        // A text column offers no bounds — there is no number to bound.
+        await expect(page.getByTestId('filter-min')).toHaveCount(0);
+        await page.getByTestId('filter-text').fill('R-11');
+        await page.getByTestId('filter-done').click();
+
+        // `R-110`…`R-119`. `R-011` does NOT contain `R-11`, which is the point of a
+        // contains rather than a fuzzy match.
+        await expect(page.getByTestId('table-view-count')).toContainText('10');
+        await expect(page.getByTestId('table-view-count')).toContainText('120');
+        await expect(cell(page, 0, 1)).toHaveText('R-110');
+
+        await page.getByTestId('table-view-clear').click();
+        await expect(page.getByTestId('table-view-strip')).toHaveCount(0);
+        await expect(cell(page, 0, 1)).toHaveText('R-000');
+    });
+
+    test('a numeric column also filters by BOUNDS, and they AND with the text box', async ({ page }) => {
+        await open(page);
+        await enableViewTools(page);
+
+        await filterBtn(page, 'qty').click();
+        await page.getByTestId('filter-min').fill('1190');
+        await page.getByTestId('filter-done').click();
+
+        // qty is `(i + 1) * 10`, so ≥ 1190 is Item 118 and Item 119.
+        await expect(page.getByTestId('table-view-count')).toContainText('2');
+        await expect(cell(page, 0, 2)).toHaveText('Item 118');
+
+        // A second column's filter ANDs with the first.
+        await filterBtn(page, 'label').click();
+        await page.getByTestId('filter-text').fill('119');
+        await page.getByTestId('filter-done').click();
+        await expect(page.getByTestId('table-view-count')).toContainText('1');
+        await expect(cell(page, 0, 2)).toHaveText('Item 119');
+    });
+
+    test('changing the view DROPS the selection rather than leaving it on other rows', async ({ page }) => {
+        await open(page);
+        await enableViewTools(page);
+        await clickCell(page, 3, 2);
+        await page.keyboard.press('Shift+ArrowDown');
+        await expect(selection(page)).toHaveText('3,2,4,2');
+
+        // The rectangle is in NAV-ROW coordinates, and a sort is exactly the operation
+        // that changes which row each coordinate names.
+        await sortBtn(page, 'qty').click();
+        await expect(selection(page)).toHaveText('none');
+        await expect(active(page)).toHaveText('none');
+    });
+});
+
+test.describe('Blackwood Table — a header that opens something, and a header with two lines', () => {
+    test('onHeaderClick replaces the sweep, and the sort caret stays separately clickable', async ({ page }) => {
+        await open(page);
+        await page.getByTestId('toggle-view-tools').check();
+
+        // A column WITHOUT the override still sweeps, which is the unchanged default.
+        await page.locator('th[data-col-key="label"] button').first().click();
+        await expect(selection(page)).toHaveText(`0,2,${LAST_NAV_ROW},2`);
+        await expect(page.getByTestId('header-clicked')).toHaveText('none');
+
+        // The caret on the OVERRIDDEN column sorts, and does NOT fire the override — two
+        // buttons in one cell, each keeping its own gesture.
+        await page.locator('[data-sort-toggle="total"]').click();
+        await expect(page.getByTestId('table-view-sort')).toContainText('TOTAL');
+        await expect(page.getByTestId('header-clicked')).toHaveText('none');
+
+        // The LABEL runs the override — and does not sweep 400 cells behind the drawer it
+        // would have opened.
+        await page.locator('th[data-col-key="total"] button').first().click();
+        await expect(page.getByTestId('header-clicked')).toHaveText('total');
+        await expect(selection(page)).toHaveText('none');
+    });
+
+    test('subLabel renders a real second line, and the header grows to hold it', async ({ page }) => {
+        await open(page);
+        const sub = page.locator('th[data-col-key="code"] [data-sub-label]');
+        await expect(sub).toHaveText('reference');
+
+        // Two lines, measured — not a `title` nobody sees. The comparison is against a
+        // header with neither a sub-label nor `headerWrap`.
+        const withSub = await page.locator('th[data-col-key="code"] button').first().boundingBox();
+        const plain = await page.locator('th[data-col-key="qty"] button').first().boundingBox();
+        expect(withSub!.height).toBeGreaterThan(plain!.height);
+
+        // It is independent of `headerWrap` — this column does not set it.
+        await expect(page.locator('th[data-col-key="code"]')).toHaveAttribute('title', 'CODE');
+    });
+});
+
+test.describe('Blackwood Table — sizing', () => {
+    const headerWidth = async (page: Page, key: string) =>
+        (await page.locator(`th[data-col-key="${key}"]`).boundingBox())!.width;
+
+    test('content STRETCHES the columns (the shipped default); fill renders them as declared', async ({ page }) => {
+        await open(page);
+
+        // `'content'` is `width: 100%` + `<col width>`, and under `table-layout: fixed` a
+        // table wider than its columns scales ALL of them — which is what moved the sticky
+        // offsets out from under the frozen block. Left exactly as it shipped.
+        expect(await headerWidth(page, 'num')).toBeGreaterThan(50);
+
+        await page.getByTestId('toggle-fill').check();
+
+        // Under fill the slack goes to the scrolling columns INSIDE the resolution, so a
+        // `resizable: false` pinned column renders at exactly its declared 48px — the
+        // rendered width and the sticky arithmetic are now one number.
+        await expect
+            .poll(async () => Math.round(await headerWidth(page, 'num')))
+            .toBe(48);
+        expect(await headerWidth(page, 'label')).toBeGreaterThan(180);
+
+        // And the table fits: nothing left for `table-fixed` to scale into.
+        const overflow = await page.evaluate(() => {
+            const s = document.querySelector('[data-blackwood-table] > div') as HTMLElement | null;
+            return s ? s.scrollWidth - s.clientWidth : -1;
+        });
+        expect(overflow).toBeLessThanOrEqual(1);
+    });
+});

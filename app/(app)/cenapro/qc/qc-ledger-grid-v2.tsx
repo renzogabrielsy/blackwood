@@ -57,6 +57,48 @@ import type { QcAggregate } from '@/lib/cenapro/ccc-analysis-view';
 
 import type { QcDraw, QcGroup, QcLedgerDay, QcDrawOptions } from './data';
 
+// ─── SRC ORDER — Renzo's reading order, top to bottom within each day ────────────
+//
+// "TNKs first (TNK 1, TNK 2, … numerically), then W6, then W7, then DVO, then FLEC."
+// The ledger's own read (`data.ts`) sorts a day's groups `src` then `whse`
+// ALPHABETICALLY, which interleaves the sources the operator reads as a sequence
+// (`DVO` lands before `FLEC` there only by accident, and `TNK …` lands dead last).
+//
+// The unit of ordering is the GROUP, never the draw: a lab reading covers a whole
+// sample group and lives on its FIRST draw, so re-ordering draws across a group
+// boundary would separate a reading from the rows it describes. Groups move; the
+// draws inside one keep their stored order.
+//
+// An UNRECOGNISED source ranks last and then sorts alphabetically — a new source
+// location appears at the bottom of its day rather than vanishing into an arbitrary
+// slot or, worse, being dropped.
+const SRC_RANK: ReadonlyMap<string, number> = new Map([
+    ['W6', 100],
+    ['W7', 200],
+    ['DVO', 300],
+    ['FLEC', 400],
+]);
+const TNK_RE = /^TNK\s*(\d+)$/;
+/** Rank tuple: `[tier, ordinal]`. Tier 0 is the TNK family, ordinal is its number. */
+function srcRank(src: string | null | undefined): [number, number] {
+    const key = (src ?? '').trim().toUpperCase();
+    const tnk = TNK_RE.exec(key);
+    if (tnk) return [0, Number(tnk[1])];
+    const rank = SRC_RANK.get(key);
+    if (rank !== undefined) return [rank, 0];
+    return [Number.MAX_SAFE_INTEGER, 0];
+}
+/** Group comparator — rank, then the source's own spelling so unknowns are alphabetical. */
+function compareGroupsBySrc(a: QcGroup, b: QcGroup): number {
+    const [at, ao] = srcRank(a.src);
+    const [bt, bo] = srcRank(b.src);
+    if (at !== bt) return at - bt;
+    if (ao !== bo) return ao - bo;
+    // Same rank: keep the read's own tie-break (src spelling, then warehouse) so two
+    // groups from one source stay in a stable, predictable order.
+    return (a.src ?? '').localeCompare(b.src ?? '') || (a.whse ?? '').localeCompare(b.whse ?? '');
+}
+
 // ─── Props — deliberately identical to QcLedgerClientProps ───────────────────────
 //
 // That interface is module-private and I am not permitted to edit that file to export
@@ -282,7 +324,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
 ];
 
 const METRIC_KEYS: ReadonlySet<string> = new Set<string>(METRICS as readonly string[]);
-/** Date → Mach: the ten columns the day heading and day total rule off across. */
+/** Date → Mach: the ten columns the day total rules off across. */
 const LABEL_SPAN = SPECS.findIndex((c) => c.key === 'wt');
 
 const ROW_H = 28;
@@ -325,15 +367,11 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                         occupies: (colKey) => slotFor(colKey, false),
                     },
                 ],
-                [
-                    'group-header',
-                    {
-                        kind: 'group-header',
-                        height: CHROME_H,
-                        addressable: false,
-                        occupies: () => null,
-                    },
-                ],
+                // No `group-header` family: the per-day HEADING row was removed on
+                // 2026-08-20 (Renzo: "having a heading row on the table per day is kind
+                // of redundant given you already have a summary per day"). The day's
+                // identity moved INTO the `summary` row's label, so a day still names
+                // itself — it just does so once instead of twice.
                 [
                     'summary',
                     {
@@ -347,7 +385,26 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         [],
     );
 
-    // ── The flatten: day heading · each group's draws · day total ────────────────
+    // ── SRC order, applied ONCE, before anything reads a day ─────────────────────
+    //
+    // Sorted here rather than in the flatten so the flatten and the id index below
+    // walk the SAME sequence — two independent sorts are two definitions of the order,
+    // and they drift. `slice()` first: `days[i].groups` is server payload and must not
+    // be mutated in place (React would not see it, and a re-render would re-sort an
+    // already-sorted array).
+    const orderedDays = React.useMemo<QcLedgerDay[]>(
+        () => days.map((day) => ({ ...day, groups: day.groups.slice().sort(compareGroupsBySrc) })),
+        [days],
+    );
+
+    // ── The flatten: each group's draws · day total ──────────────────────────────
+    //
+    // The per-day HEADING row is gone (2026-08-20). The day total carries the date, so
+    // the day is still named — and the Σ row is a solid `bg-muted` band ruled top AND
+    // bottom, which is the day boundary. No blank spacer row was added: an opaque
+    // full-width band between two runs of 28px data rows is already a harder break than
+    // a 24px empty row would be, and a spacer would be a fourth row family carrying no
+    // information.
     //
     // Chrome keys are a run ORDINAL, never a date: a chrome row's key is the
     // virtualiser's React key, and a value that can repeat would collide.
@@ -355,12 +412,10 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         const out: GridRow<QcRow>[] = [];
         const meta = new Map<string, { date: string; agg: QcAggregate; draws: number }>();
         let ord = 0;
-        for (const day of days) {
+        for (const day of orderedDays) {
             ord += 1;
-            const headKey = `day-${ord}`;
             const totalKey = `daytot-${ord}`;
             let drawCount = 0;
-            out.push({ kind: 'group-header', key: headKey });
             for (const group of day.groups) {
                 group.draws.forEach((draw, i) => {
                     drawCount += 1;
@@ -372,15 +427,14 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                 });
             }
             out.push({ kind: 'summary', key: totalKey });
-            meta.set(headKey, { date: day.date, agg: day.agg, draws: drawCount });
             meta.set(totalKey, { date: day.date, agg: day.agg, draws: drawCount });
         }
         return { items: out, dayMeta: meta };
-    }, [days]);
+    }, [orderedDays]);
 
     const byId = React.useMemo(() => {
         const m = new Map<string, QcRow>();
-        for (const day of days) {
+        for (const day of orderedDays) {
             for (const group of day.groups) {
                 group.draws.forEach((draw, i) => {
                     m.set(String(draw.id), { draw, group, isFirstOfGroup: i === 0 });
@@ -388,7 +442,7 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
             }
         }
         return m;
-    }, [days]);
+    }, [orderedDays]);
 
     const storedText = React.useCallback(
         (rowId: string, field: string): string => {
@@ -403,19 +457,22 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
     const noDrafts = React.useCallback(() => false, []);
     const edits = useTableEdits({ canonicalText: storedText, isDraft: noDrafts });
 
-    // ── Day heading and day total, INSIDE the body ───────────────────────────────
+    // ── The day total, INSIDE the body — and the only row that names the day ─────
     //
     // Returns the row's CELLS, never a `<tr>` — the container owns the row element in
     // both scopes, and `TableVirtuoso` measures rows off `<tbody>`'s children, so a
     // renderer emitting its own row would lose measurement. A cell over a pinned
     // column stays OPAQUE (a solid token, never glass) or scrolling rows bleed through.
+    //
+    // The label reads `Σ 2026-08-01 · 9 draws · 6 groups · cov 100%`: the date that used
+    // to sit on a separate heading row above the day now leads its total. Ruled top AND
+    // bottom, so the band separates this day from the next without a spacer row.
     const renderChromeRow = React.useCallback(
         (item: GridRow<QcRow>, api: { colCount: number }) => {
-            if (item.kind !== 'group-header' && item.kind !== 'summary') return null;
+            if (item.kind !== 'summary') return null;
             if (!('key' in item)) return null;
             const info = dayMeta.get(item.key);
             if (!info) return null;
-            const isTotal = item.kind === 'summary';
             const cov = Number.isFinite(info.agg.coverage)
                 ? `${(info.agg.coverage * 100).toFixed(0)}%`
                 : '—';
@@ -424,35 +481,25 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
             return (
                 <>
                     <td
-                        className={
-                            isTotal
-                                ? 'frozen-col frozen-edge h-6 border-t border-border bg-muted px-2 py-1 text-left'
-                                : 'frozen-col frozen-edge h-6 border-b border-border/40 bg-muted px-2 py-1 text-left'
-                        }
+                        className="frozen-col frozen-edge h-6 border-y border-border bg-muted px-2 py-1 text-left"
                         style={{ left: 0 }}
                         colSpan={labelSpan}
                     >
                         <span className="text-[11px] font-semibold tracking-wide">
-                            {isTotal ? 'Σ DAY TOTAL' : info.date}
+                            Σ {info.date}
                         </span>
                         <span className="ml-2 font-mono text-[10px] font-normal text-muted-foreground">
-                            {info.draws} draw{info.draws === 1 ? '' : 's'} ·{' '}
+                            · {info.draws} draw{info.draws === 1 ? '' : 's'} ·{' '}
                             {info.agg.groupCount} group{info.agg.groupCount === 1 ? '' : 's'} ·
                             cov {cov}
                         </span>
                     </td>
                     <td
-                        className={
-                            isTotal
-                                ? 'h-6 border-t border-border bg-muted/60 px-2 py-1 text-right'
-                                : 'h-6 border-b border-border/40 bg-muted/25 px-2 py-1 text-right'
-                        }
+                        className="h-6 border-y border-border bg-muted/60 px-2 py-1 text-right"
                         colSpan={restSpan}
                     >
                         <span className="font-mono text-[10px] text-muted-foreground">
-                            {isTotal
-                                ? `${info.agg.totalKg.toLocaleString('en-US', { maximumFractionDigits: 1 })} kg · sampled ${info.agg.sampledKg.toLocaleString('en-US', { maximumFractionDigits: 1 })} kg`
-                                : ''}
+                            {`${info.agg.totalKg.toLocaleString('en-US', { maximumFractionDigits: 1 })} kg · sampled ${info.agg.sampledKg.toLocaleString('en-US', { maximumFractionDigits: 1 })} kg`}
                         </span>
                     </td>
                 </>
@@ -493,9 +540,37 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                 </span>
             </div>
 
+            {/*
+              * THE HEIGHT CHAIN, and why `h-full` on the table is load-bearing.
+              *
+              * In the focus scope `BlackwoodTable` renders its scroller as
+              * `<div class="h-full overflow-auto">`, nested inside its own root
+              * `<div class="flex min-h-0 flex-col">` — and that ROOT declares no height
+              * of its own. As a plain block child it therefore sized to its CONTENT,
+              * the `flex-1` region under it inherited that content height, and the
+              * `h-full` scroller resolved to the full height of the rows it contained.
+              * A scroller exactly as tall as its content has nothing to scroll: the
+              * sheet simply grew past the wrapper below, which clips (`overflow-hidden`),
+              * and every day after the first was unreachable — no scrollbar, no wheel.
+              *
+              * Passing `h-full` gives that root a DEFINITE height (this wrapper is
+              * `h-full` under a `min-h-0 flex-1` region under an `h-full` column under
+              * the Cenapro layout's `h-full` Card), so `flex-1 min-h-0` can finally
+              * shrink below content and the scroller gets a bounded box. Nothing in
+              * `components/shared/table/**` was touched — `className` is the public prop
+              * for exactly this.
+              *
+              * TODO(sizing-fill): the `maxWidth` clamp below leaves dead space to the
+              * right on a wide viewport. It stays for now because unclamped, `width:100%`
+              * scales every column proportionally while the sticky offsets keep using the
+              * DECLARED widths, which pins a frozen column inside its neighbour. The fix
+              * is the platform `sizing: 'fill'` prop — replace this wrapper's inline
+              * `maxWidth` with that prop; do NOT hand-roll a fill here.
+              */}
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="h-full overflow-hidden" style={{ maxWidth: totalWidth }}>
                     <BlackwoodTable<QcRow, Ctx>
+                        className="h-full"
                         items={items}
                         kinds={kinds}
                         specs={specs}

@@ -4,9 +4,6 @@ import {
     fetchOpeningBalanceHistory,
 } from './actions';
 import { FlecInventoryClient } from './flec-inventory-client';
-import { FlecInventoryGridV2 } from './flec-inventory-grid-v2';
-import { GridVersionBar } from '@/components/shared/table';
-import { GRID_V2, parseGrid } from '@/lib/table';
 import {
     FLEC_WAREHOUSES,
     DEFAULT_FLEC_WAREHOUSE,
@@ -19,6 +16,14 @@ function isIsoDate(v: string | undefined): v is string {
     return !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
 }
 
+// RETIRED 2026-08-20 — the `?grid=v2` universal-table preview of this screen.
+// Renzo's call on the live review: "You can take out the v2 for flec inventory
+// cenapro. I don't think it's appropriate and I think it needs customized
+// behavior that is more niche than the table we're making." The custom behaviour
+// stays on the bespoke `FlecInventoryClient` below, which was never edited for
+// the preview and is once again the ONLY renderer of this route. `?grid=` is now
+// INERT here — an unread search param, never an error.
+
 // Server component — reads warehouse + start-date from URL search params
 // (URL params drive state per project convention), fetches the editable opening
 // balances (STARTING block seed), the current closing balances + movement ledger,
@@ -28,7 +33,7 @@ function isIsoDate(v: string | undefined): v is string {
 export default async function CenaproInventoryPage({
     searchParams,
 }: {
-    searchParams: Promise<{ whse?: string; date?: string; grid?: string }>;
+    searchParams: Promise<{ whse?: string; date?: string }>;
 }) {
     const params = await searchParams;
 
@@ -49,32 +54,15 @@ export default async function CenaproInventoryPage({
         fetchOpeningBalanceHistory(warehouse),
     ]);
 
-    // ── WHICH GRID (`?grid=v2`) ──────────────────────────────────────────────────
-    // `FlecInventoryGridV2` is this same screen rendered through `BlackwoodTable`,
-    // built BESIDE the existing client rather than replacing it. The DEFAULT is
-    // unchanged: no `?grid=v2` means byte-identical behaviour to before it existed.
-    // ONE props object is built and spread into whichever component the flag picks,
-    // so the two sides provably read the identical payload.
-    const v2 = parseGrid(params.grid) === GRID_V2;
-
-    const gridProps = {
-        warehouse,
-        startDate,
-        balances: inventory.balances ?? [],
-        ledger: inventory.ledger ?? [],
-        openings: openings.openings ?? [],
-        history: history.history ?? [],
-        loadError: inventory.error ?? openings.error ?? history.error ?? null,
-    };
-
     return (
-        <>
-            <GridVersionBar note="Same rows, same warehouse and date — this switches only which table renders them." />
-            {v2 ? (
-                <FlecInventoryGridV2 {...gridProps} />
-            ) : (
-                <FlecInventoryClient {...gridProps} />
-            )}
-        </>
+        <FlecInventoryClient
+            warehouse={warehouse}
+            startDate={startDate}
+            balances={inventory.balances ?? []}
+            ledger={inventory.ledger ?? []}
+            openings={openings.openings ?? []}
+            history={history.history ?? []}
+            loadError={inventory.error ?? openings.error ?? history.error ?? null}
+        />
     );
 }

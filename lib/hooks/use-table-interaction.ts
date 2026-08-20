@@ -13,6 +13,7 @@ import {
     planPaste,
     pasteRowTargets,
     rangeRowEdge,
+    rowCopyColumns,
     rowEdge,
     sheetCorner,
     tilePaste,
@@ -236,10 +237,20 @@ export interface TableInteraction {
  */
 export interface TableMenuActions {
     copy(): void;
-    /** The rectangle, with its columns' LABELS as a first TSV line. */
+    /**
+     * The SELECTED RECTANGLE, with its columns' LABELS as a first TSV line.
+     *
+     * Deliberately blind to `ColumnSpec.rowCopy`: its columns are the ones the operator
+     * swept. For the row-shaped version — the one that honours the opt-out — pass
+     * `{ headers: true }` to `copyRow`.
+     */
     copyWithHeaders(): void;
-    /** Every cell of one row, in column order. */
-    copyRow(navRow: number): void;
+    /**
+     * Every cell of one row, in column order, MINUS the columns that declared
+     * `rowCopy: false`. `{ headers: true }` puts those same columns' labels on a first
+     * line — one column list, so the two forms can never disagree.
+     */
+    copyRow(navRow: number, opts?: { headers?: boolean }): void;
     selectRow(navRow: number): void;
     selectColumn(col: number): void;
     clearSelection(): void;
@@ -692,20 +703,37 @@ export function useTableInteraction<Row, Ctx>(
         return { startRow: active.row, startCol: active.col, endRow: active.row, endCol: active.col };
     }, [selectionRange]);
 
-    /** A rectangle to escaped TSV. The one place the grid decides what a copy LOOKS like. */
+    /**
+     * ONE row, over an EXPLICIT list of column indices — the one place the grid decides
+     * what a copied line looks like.
+     *
+     * It takes indices rather than bounds because the two copy gestures disagree about
+     * which columns they cover: a rectangle copy is contiguous by construction, and a ROW
+     * copy skips the columns that opted out of it (`ColumnSpec.rowCopy`). Sharing this
+     * keeps the escaping, and what a cell contributes, defined exactly once.
+     */
+    const tsvLine = React.useCallback(
+        (navRow: number, colIdx: readonly number[]): string =>
+            colIdx.map((c) => tsvEscape(clipboardTextAt(navRow, c))).join('\t'),
+        [clipboardTextAt],
+    );
+
+    /**
+     * A rectangle to escaped TSV.
+     *
+     * Its column list comes from the RANGE ALONE and never consults `rowCopy`: an operator
+     * who swept a column asked for it. Only "copy the whole row", which names no columns
+     * at all, has to decide for itself what the whole row is.
+     */
     const tsvOf = React.useCallback(
         (range: CellRange): string => {
+            const colIdx: number[] = [];
+            for (let c = range.startCol; c <= range.endCol; c++) colIdx.push(c);
             const lines: string[] = [];
-            for (let r = range.startRow; r <= range.endRow; r++) {
-                const cells: string[] = [];
-                for (let c = range.startCol; c <= range.endCol; c++) {
-                    cells.push(tsvEscape(clipboardTextAt(r, c)));
-                }
-                lines.push(cells.join('\t'));
-            }
+            for (let r = range.startRow; r <= range.endRow; r++) lines.push(tsvLine(r, colIdx));
             return lines.join('\n');
         },
-        [clipboardTextAt],
+        [tsvLine],
     );
 
     const copySelection = React.useCallback(() => {
@@ -740,16 +768,27 @@ export function useTableInteraction<Row, Ctx>(
      * One whole row, in column order. A cell the row does not occupy copies as EMPTY
      * rather than being skipped, so two copied rows of different families still line up
      * under the same headers.
+     *
+     * **The columns that opted out of a row copy are absent from it** — a status rail or
+     * an actions cluster is not part of the record, and it landed in front of every pasted
+     * row. `rowCopyColumns` is the ONE definition of that set, so the headers variant
+     * below and the plain one can never cover different columns.
      */
     const copyRowCells = React.useCallback(
-        (navRow: number) => {
+        (navRow: number, opts?: { headers?: boolean }) => {
             if (navRow < 0 || navRow >= rowCount || colCount === 0) return;
-            writeClipboard(
-                tsvOf({ startRow: navRow, startCol: 0, endRow: navRow, endCol: colCount - 1 }),
-                colCount,
-            );
+            const colIdx = rowCopyColumns(cols);
+            if (colIdx.length === 0) {
+                toast.info('Nothing was copied — every column opts out of a row copy.');
+                return;
+            }
+            const body = tsvLine(navRow, colIdx);
+            const payload = opts?.headers
+                ? `${colIdx.map((c) => tsvEscape(cols[c]?.label ?? '')).join('\t')}\n${body}`
+                : body;
+            writeClipboard(payload, colIdx.length);
         },
-        [rowCount, colCount, tsvOf, writeClipboard],
+        [rowCount, colCount, cols, tsvLine, writeClipboard],
     );
 
     /** Sweep a rectangle through the ONE anchor/focus pair, never a second setter. */

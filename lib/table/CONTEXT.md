@@ -32,10 +32,11 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `grouping.ts` | `needsGroupSpacer`. |
 | `selection.ts` | **New.** `rangeRowEdge` / `cellRangeEdges` / `NO_RANGE_EDGES` — which edges of the selection RECTANGLE each cell paints, so a swept block is one box with no inner borders. |
 | `menu.ts` | **New.** `defaultTableMenu` — the built-in right-click menu as DATA, a pure function of "does this cell accept an edit" and "was there a row under the pointer". |
+| `view.ts` | **New (2026-08-20).** The universal SORT and FILTER, as one pure transform. `applyTableView` · `nextSortDirection` · `isColumnFilterActive` · `activeFilterCount` · `columnSortable` / `columnFilterable` · `NO_FILTERS`. It decides the row order and the row set and holds none of the state that drives it. |
 | `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V2` / `parseGrid` / `isGridV2` / `withGrid` / `gridHref` — the `?grid=v2` side-by-side axis, and the ONE definition of it. Temporary: deleted with the last old grid. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **55 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **72 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -475,6 +476,10 @@ not one was predicted by the plan.
 | `CellContext` on `parse` / `normalize` | *"This lane is a trader on a receipt and a free-text label on its child."* A column-level verdict blind to the slot's field locks the operator out of the child cell. |
 | `ColumnSpec.normalize` | *"`6/27` IS `2026-06-27` from the moment you leave the cell."* Every other place it could run misses at least one commit path or costs a second journal step. |
 | `ColumnSpec.formatEdited` | *"This unsaved value is an EXPRESSION; show me the figure."* A dirty cell renders raw text, which breaks a numeric lane's alignment. |
+| `ColumnSpec.rowCopy` *(2026-08-20)* | *"This column is a status rail, not part of the record."* `Copy row` had no way to be told what the row IS. |
+| `ColumnSpec.onHeaderClick` *(2026-08-20)* | *"Clicking this header opens the block, it does not sweep 400 cells."* The label's click was hard-wired to column-selection. |
+| `ColumnSpec.subLabel` *(2026-08-20)* | *"`C-8B`, and under it `JAN-26-BLK22`."* `labelNode` could draw it; nothing declared it, so every consumer would draw it differently. |
+| `BlackwoodTableProps.sizing` *(2026-08-20)* | *"Use the whole monitor without moving my frozen columns."* The stretch bug, closed at the platform layer instead of by N consumer clamps. |
 
 Purely additive — a consumer that passes none of them, and a `RowKind` whose `occupies()`
 never mentions `addressable`, behaves exactly as before.
@@ -515,13 +520,14 @@ None. That is the point — this module imports nothing outside itself.
 
 | File | Role |
 |---|---|
-| `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. |
+| `lib/hooks/use-table-columns.ts` | `resolveColumns` (pure) + `useTableColumns`. Visibility → order → widths → **fill**, then every measurement taken off the result, so the sticky offsets, the caret-follow, the drag wall and a footer corner cannot disagree about where a pinned block ends. **A saved order is re-grouped by pin**, which makes "reorder within a pin group only" structural rather than a rule to remember. `distributeFill` is `sizing: 'fill'`'s half — it runs LAST, over the widths the operator's own layout produced, so a resize wins over the distribution for that column. |
 | `lib/hooks/use-table-rows.ts` | **New.** `resolveRows` (pure) + `useTableRows`, plus `columnAcceptsEdit`, `columnSelectable` and `createTableNavResolver`. The ROW axis: which rows the caret may land on, how tall every rendered row is, and the three predicates the whole module runs on — `cellExists` (render) / `cellAddressable` (the caret) / `cellEditable`. |
 | `lib/hooks/use-table-edits.ts` | **THE single journalled writer.** Every mutation — commit, clear, paste, fill, clear-row, revert, and undo/redo themselves — goes through `applyEdits`. One `setState` per GESTURE, not per cell. Undo re-enters the same writer with `record: false`, so there is no separate inverse implementation to drift. Three doors OUT, and they mean different things: `revertRow` (journalled — discarding an edit is undoable), **`forget(rowIds)`** (the rows a save LANDED, journal cleared) and `reset` (everything). |
 | `lib/hooks/use-table-interaction.ts` | **New.** Every gesture, composed once over `useGridKeyboardNav` × `useGridEditSession` × `useCellSelection` × `useCellAggregation` and the pure helpers. Keyboard, jumps, undo/redo, clipboard in and out, caret-follow, drag auto-scroll, the paste sink and its document fallback. Also the two verdict seams: `commitEdit` applies `ColumnSpec.normalize` before the single write, and `cellContextOf` hands both `normalize` and `parse` the SLOT's own field. |
 | `components/shared/table/cell-classes.ts` | The memoized class table. A cell's classes are a pure function of fourteen enums (ten, plus the selection box's four edges), so they are built once per distinct combination instead of via two `twMerge` calls per cell per render (~8,500 of those per keystroke on a busy month). Bakes in the ONE-background precedence and the opaque-pinned-cell rule. |
 | `components/shared/table/Row.tsx` | `TableCells` (**the memo boundary**, with the `NO_EDITS` / `NO_INVALID` singletons), `TableRowShell` (the `<tr>` and the four handlers, dispatching by `data-col`) and `TableRow` (their composition). Split 2026-08-17 — see below. |
-| `components/shared/table/HeaderCell.tsx` | **New.** Label + `title`, column-selection on the label, a `data-grid-chrome` filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |
+| `components/shared/table/HeaderCell.tsx` | **New.** Label + `title` + `subLabel`, column-selection on the label (or `ColumnSpec.onHeaderClick` instead of it), the built-in sort caret and filter trigger, a `data-grid-chrome` consumer filter slot, and a resize handle that reports a new width on POINTERUP (a per-frame report re-resolves the column table and re-renders every mounted row). Opaque, never glass. |
+| `components/shared/table/HeaderFilterPopover.tsx` | **New (2026-08-20).** The built-in per-column filter panel: a `contains` box, plus MIN/MAX on a column with a `numericValue`. NOT Radix and `position: fixed` — the header lives inside the horizontally scrolling scrollport, so an absolutely-positioned panel is clipped on every column past the fold. |
 | `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules, and the two seams above — `firstItemIndex` (endless only) and `renderChromeRow` + `TableChromeRowApi`. |
 | `components/shared/table/PasteSink.tsx` | The hidden `<textarea>`, `isGridChrome` (with the sink exempted FIRST) and `focusGrid` (always `preventScroll`). Carries the full explanation of why a `paste` handler on a non-editable div can never fire. |
 
@@ -582,8 +588,8 @@ no-op that journals nothing.
 | File | Role |
 |---|---|
 | `app/dev/table-playground/page.tsx` | Dev-only route. `notFound()` in production unless `TABLE_PLAYGROUND` is set. |
-| `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a **group heading through `renderChromeRow`**, a draft pool, a **`Load older` pager** that prepends a page and rebases `firstItemIndex`, and a debug strip the suite asserts against. |
-| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **47 specs, all passing.** `npm run test:e2e`. The last 14 are the platform pass — the selection box, the pill, the built-in menu, unmanaged resize, the wrapped header and the tinted cell. |
+| `app/dev/table-playground/playground-grid.tsx` | The fixture: ~120 deterministic records, every 7th carrying 2 child sub-rows, a 2-column `pin: 'start'` block, a `pin: 'end'` actions column, a numeric column, a column hidden by a `ctx` flag, group spacers, a **group heading through `renderChromeRow`**, a draft pool, a **`Load older` pager** that prepends a page and rebases `firstItemIndex`, and a debug strip the suite asserts against. Since 2026-08-20 it also carries two `rowCopy: false` columns, a `subLabel`, an `onHeaderClick` column, and toggles for `enableSort`/`enableFilter` and `sizing`. |
+| `playwright.config.ts` · `e2e/table/parity.spec.ts` | **57 specs, all passing.** `npm run test:e2e`. Specs 34–47 are the platform pass — the selection box, the pill, the built-in menu, unmanaged resize, the wrapped header and the tinted cell. Specs 48–57 are the 2026-08-20 pass below: the anchor's ring, `rowCopy`, the sort and filter, `onHeaderClick` / `subLabel`, and `sizing: 'fill'`. |
 
 **The playground lives OUTSIDE the `(app)` route group, deliberately.** That group's layout
 calls `supabase.auth.getUser()` and redirects to `/login`, and `middleware.ts` does the same
@@ -851,13 +857,227 @@ the resize handle's `aria-label` and `Copy with headers` read.
 ### What this pass did NOT build
 
 - **The spanning header BAND row** (seam 3's other half) — Trucks still carries its plate
-  in each sub-column's label.
+  in each sub-column's label. *(The two-line label it also wanted is now covered from the
+  other direction by `ColumnSpec.subLabel`, below.)*
 - **`TableSummaryRow.cells?(api)`** (seam 4) and the sticky-summary **`figure`-inside-the-
   pinned-block guard** (seam 5). Both unchanged.
-- **The `width: 100%` + `minWidth` stretch bug** documented above. Still mitigated
-  consumer-side by clamping each wrapper's `maxWidth` to `useTableColumns(...).minWidth`;
-  it still wants `sizing: 'fill' | 'content'` on the component. Note the new session-local
-  resize interacts with it correctly — the local width flows through `resolveColumns`, so
-  `minWidth` and the sticky offsets move together, which is the invariant that mitigation
-  rests on.
+- ~~**The `width: 100%` + `minWidth` stretch bug**~~ — **BUILT, 2026-08-20:
+  `sizing: 'fill'`.** See the section below. The note that mattered stays true: the
+  session-local resize flows through `resolveColumns`, so `minWidth` and the sticky offsets
+  move together — which is now the mechanism the fix is built on rather than the property a
+  mitigation rested on. `'content'` (the default) is unchanged, stretch bug included, and
+  the consumer-side `maxWidth` clamps still work exactly as before.
+
+---
+
+## The review pass (2026-08-20) — five things Renzo found by driving the live grids
+
+One bug, two seams, one feature and one platform decision. Everything is additive except
+the first, which is a correctness fix nobody would want opted out of.
+
+### 1. A multi-cell selection has exactly ONE rectangle
+
+**The defect.** Sweep a range and the perimeter box painted correctly — and the cell the
+sweep started from still carried its own full `ring-2`, so the selection read as **two
+nested boxes a pixel apart**. Renzo: *"not intended behavior."*
+
+**The rule, and it is one statement in two halves:** *there is always exactly one rectangle
+on screen.* A 1×1 selection paints no box (`cellRangeEdges` declines it) and the caret's
+ring is the whole answer; a selection wider or taller than one cell paints the box and the
+anchor's ring is suppressed. Those two clauses are the same test, which is why the row
+derives it from the geometry it already holds rather than from a new prop:
+
+```ts
+const boxedSelection =
+    selectionBand !== null &&
+    !(selectionRowEdge === 'both' && selectionBand[0] === selectionBand[1]);
+```
+
+Three details that are load-bearing:
+
+- **`CellClassKey.boxed` is in the cache key.** It changes the class string, so omitting it
+  would serve the first combination the cache ever saw to every cell after it — the anchor
+  would keep or lose its ring at random. Same reasoning as the four edge flags.
+- **It is `selected && boxedSelection`, never merely "a multi-cell selection exists".** A
+  caret parked OUTSIDE the rectangle — which is what a header click's column sweep leaves
+  behind — keeps its ring, so the operator can still see where the keyboard is.
+- **Suppressing the ring does not cost the tint.** The anchor still reads as selected, and
+  still paints its corner of the perimeter. Asserted in both the unit suite and the browser.
+
+No prop, no opt-out, nothing for a consumer to write.
+
+### 2. `ColumnSpec.rowCopy` — a column that is not part of the record
+
+RC IN's STATE column is a status rail, not data, and it landed in front of every row a
+`Copy row` produced. The seam is one optional field, **defaulting to true**:
+
+```ts
+{ key: 'state', label: 'STATE', width: 64, rowCopy: false, format: (row) => <StateRail row={row} /> }
+```
+
+**It narrows the ROW-COPY path and nothing else.** `lib/table/clipboard.ts::rowCopyColumns`
+is the one definition of the covered set, and `tsvOf` — the rectangle copy behind
+Ctrl/Cmd+C, `Copy` and `Copy with headers` — builds its column list from the selection's
+own bounds and never consults it. If the operator swept the column deliberately, they asked
+for it; only "the whole row", which names no columns at all, has to decide for itself what
+the whole row is. (Asserted both ways.)
+
+`TableMenuActions.copyRow` gained an options bag so the headers form covers the identical
+columns — one list, so the header line can never name different columns than the values
+under it:
+
+```ts
+copyRow(navRow: number, opts?: { headers?: boolean }): void
+```
+
+### 3. The universal sort and filter
+
+Renzo: *"tables don't have a universal filter/sort feature. Would be nice to have this for
+all columns on the universal table."* It is `lib/table/view.ts` — one pure transform — plus
+two affordances in `HeaderCell` and the state in `BlackwoodTable`. **It is VIEW state: it
+never mutates a row, never touches the URL and never reaches a query.** A consumer whose
+filters already live in search params keeps them, and `renderHeaderSlot` still hangs that
+consumer's own control beside the built-in ones.
+
+**THE CHROME-ROWS RULE, as implemented.** *While a sort **or** a filter is active, the
+chrome rows and the group spacers are HIDDEN and the plain data rows render flat. Clearing
+both restores the consumer's own flatten exactly — `applyTableView` returns the ORIGINAL
+ARRAY IDENTITY when neither axis is on.* A group heading, a per-group rule-off and a day
+total are all claims about a RUN of adjacent rows: a sort destroys the run, and a filter can
+empty it. Re-tiling them would need to know what they MEAN, which is precisely the tenant
+knowledge the platform layer may not have. The brief asked for this under sort; it is
+applied to filter too, deliberately, because a heading standing over a group whose every row
+was filtered out is a heading over nothing.
+
+The other four rules:
+
+- **A CHILD is glued to its parent.** The unit of sorting is a data row plus the child rows
+  that follow it, so a receipt and its sub-rows move together and a child is never sorted
+  against its parent's peers. It is `occupies()`'s insight applied to ordering: a child is
+  not a small parent, so it has no sort key of its own to be judged by.
+- **A DRAFT never sorts and never filters out.** A blank row being typed must not jump to
+  the top, and must not vanish because it does not match yet. Drafts pass through untouched
+  and stay at the end. (`draftKind` is how the transform knows.)
+- **Blanks sort LAST in both directions**, and ties keep the consumer's own order — an
+  operator sorting descending is looking for the big numbers, not the empty cells.
+- **The comparison** uses `numericValue` where a column has one, else `clipboardValue` (else
+  `storedText`), with `localeCompare(…, { numeric: true, sensitivity: 'base' })` — which is
+  what puts `R-2` before `R-10`.
+
+**SCOPE DEFAULTS, and why the split is not a preference.**
+
+| scope | sort | filter |
+|---|---|---|
+| `focus` | ON | ON |
+| `endless` | **OFF** | **OFF** |
+
+An endless grid's row order and its window are the SERVER's keyset. A client-side sort
+would reorder only the rows currently loaded, and `hasOlder` / `hasNewer` — which mean
+"there are older/newer rows beyond this window **in the server's order**" — would become
+claims about an order that no longer exists. The Cenapro endless ledger already declined a
+sort for exactly this reason. Two overrides:
+
+```tsx
+<BlackwoodTable enableSort enableFilter … />   // endless, accepting the caveat
+```
+```ts
+{ key: 'num', label: '#', width: 48, sortable: false, filterable: false, … }
+```
+
+`sortable` / `filterable` default to true except on `cellKind: 'derived'` — the same
+default and the same reasoning as `selectable`.
+
+**Selection correctness.** Sorting or filtering is exactly the operation that changes which
+row each nav-row coordinate names, so the selection and the caret are DROPPED on any change
+to either axis. Leaving them would give the operator a rectangle that looks untouched while
+pointing at four different rows — and a Delete or a Fill down aimed at it would land on rows
+nobody chose. Nothing re-derives a row index: the transform hands `useTableRows` a different
+`items` array and the one row axis is resolved from that, as always.
+
+**What it looks like.** A caret button per header (asc → desc → off) and a funnel button
+that opens `HeaderFilterPopover` — a text `contains` box, plus MIN/MAX bounds on any column
+that declares a `numericValue`. Both are faint until the column is actually sorted or
+filtered, on the same `group-hover/th` reveal as the resize handle. A small strip under the
+sheet shows `214 of 991 rows`, what it is sorted by, and one **Clear** for both axes.
+
+The popover is **not Radix** — the same decision `GridContextMenu` records in capitals — and
+it is `position: fixed`, because the header lives inside the horizontally scrolling
+scrollport and an absolutely-positioned panel would be clipped by it on every column past
+the fold.
+
+**One caveat worth stating plainly:** the filter's bounds EXCLUDE a row with no number
+rather than reading it as 0. `min: 0` sweeping in every unpriced row would be the L-008
+placeholder bug in a new costume.
+
+### 4. `ColumnSpec.onHeaderClick` and `ColumnSpec.subLabel`
+
+```ts
+{
+    key: 'C-8B', label: 'C-8B', width: 96,
+    subLabel: 'JAN-26-BLK22',                       // a real second line, muted, always one line
+    onHeaderClick: (spec) => openBlockDrawer(spec.key),  // INSTEAD of sweeping the column
+    format: (row) => fmt0(row.kg),
+}
+```
+
+- **`onHeaderClick` replaces the label's click entirely.** Column-selection is the right
+  default and the wrong behaviour for a header that names a *thing* rather than a lane — RC
+  Movement's block headers open a detail drawer, and sweeping 400 cells behind that drawer
+  is not what was asked for. **The sort caret and the filter trigger beside it stay
+  separately clickable**: they are their own buttons with their own handlers, and both stop
+  propagation, so a column may have an override AND a sort. Proven in the browser.
+- **`subLabel` is rendered whenever present, independent of `headerWrap`.** They answer
+  different questions — `headerWrap` is *"may the NAME take a second line"*, this is *"the
+  name has a subtitle"* — and a column may want either, both or neither. It is **always one
+  truncated line** (`text-[9px] text-muted-foreground/70`), which is what keeps the header
+  row's growth bounded at two: the row grows to its tallest cell, and a subtitle free to
+  wrap would grow it without limit. Measured in the browser, not assumed: the two-line
+  header is taller than a one-line one.
+- Both are plain strings/callbacks on the SPEC, so `label` still stays the required plain
+  string the tooltip, the resize handle's `aria-label` and `Copy with headers` all read.
+
+### 5. `sizing: 'content' | 'fill'` — one number for the layout AND the sticky arithmetic
+
+The bug this closes is the one measured in "Stage 1D at scale": under `table-layout: fixed`
+a table wider than its `<col>`s scales **all** of them proportionally (a declared 76px column
+rendered **94.703px** at a 1600px container) while the sticky `left` offsets came from the
+**declared** widths — so on a wide monitor the frozen block **overlapped itself**, and ten
+consumers clamped their wrapper's `maxWidth` and left dead space to avoid it.
+
+```tsx
+<BlackwoodTable sizing="fill" … />   // default is 'content'
+```
+
+- **`'content'` is byte-identical with what shipped** — `width: 100%` + `minWidth: Σ`,
+  stretch bug included. The existing consumer clamps keep working unchanged.
+- **`'fill'` distributes the container's slack inside `useTableColumns`' resolution**, and
+  the table is then rendered at that exact pixel width. So every offset, drag wall, footer
+  corner and min-width is derived from the widths **actually painted**, and `table-fixed`
+  has no slack left to scale into. The invariant, asserted in `verify-table-core.ts`: **Σ
+  resolved widths === the container width, and every pinned offset is a prefix sum of the
+  resolved widths.**
+- **Three exclusions from the distribution, each a way the naive version is wrong.** A
+  PINNED column never grows (its width is a wall the caret-follow and the drag auto-scroll
+  measure from, and widening it hides *more* of the sheet). A column the operator DRAGGED
+  never grows — a width they dragged is an instruction, and a distribution that overrode it
+  would make the drag look broken. `resizable: false` never grows.
+- **It degrades rather than overlapping.** No candidates (every column pinned or hand-sized)
+  ⇒ nothing is distributed and the table sizes to content, leaving honest dead space. A
+  container NARROWER than the columns distributes nothing at all — "never crush, always
+  scroll" is not negotiable, and a negative slack is a scrollbar rather than a squeeze.
+- **The measurement.** A rAF-throttled `ResizeObserver` on the grid's outer wrapper, reading
+  the SCROLLER's `clientWidth` when it exists (the wrapper's is wider by the vertical
+  scrollbar, which would buy a permanent horizontal one). The width enters `useTableColumns`
+  as a PRIMITIVE, so the column memo compares by `===` and a resize that moved nothing
+  re-resolves nothing.
+
+### Where each of the five is asserted
+
+| # | `verify-table-core.ts` | `e2e/table/parity.spec.ts` |
+|---|---|---|
+| 1 anchor ring | the class table + the row's derivation | ring absent in a 3×3 sweep, present on a click |
+| 2 `rowCopy` | `rowCopyColumns`, and `tsvOf` never mentioning it | six fields out of eight columns |
+| 3 sort / filter | 8 checks over `applyTableView` + the scope defaults | endless offers neither; cycle; chrome; counts; bounds; selection dropped |
+| 4 header click / sub-label | the source's `instead of` branch, the sub-label's own line | override fires, caret still sorts, header measurably taller |
+| 5 `sizing: 'fill'` | Σ widths === container, offsets are prefix sums, the three exclusions | `content` stretches, `fill` renders 48px as 48px and overflows by 0 |
 

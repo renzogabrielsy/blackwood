@@ -110,6 +110,38 @@ export function clipboardNumber(v: number | string | null | undefined): string {
     return Number.isFinite(n) ? String(n) : '';
 }
 
+/** The part of a column a ROW COPY needs to know about. */
+export interface RowCopyColumn {
+    key: string;
+    /** Absent or true ⇒ the column is part of a row copy. */
+    rowCopy?: boolean;
+}
+
+/**
+ * Which columns a **Copy row** covers — every one that has not opted out.
+ *
+ * A sheet carries columns that are not part of the record: a status rail, an actions
+ * cluster, a selection tick. "Copy row" means *give me this record*, so a column that is
+ * decoration has no business in the payload — RC IN's STATE column is the case that found
+ * this, and it landed in front of every pasted row.
+ *
+ * **This narrows the ROW-COPY path and nothing else.** A rectangle copy is built from the
+ * selection's own column bounds and never consults `rowCopy`: if the operator swept the
+ * column deliberately, they asked for it. The distinction is not a nicety — the two
+ * gestures mean different things, and "the whole row" is the only one that has to decide
+ * for itself what "the whole row" is.
+ *
+ * Returns INDICES rather than columns, because the caller addresses cells by index and a
+ * second mapping back would be a second definition of the column axis.
+ */
+export function rowCopyColumns(cols: readonly RowCopyColumn[]): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < cols.length; i++) {
+        if (cols[i].rowCopy !== false) out.push(i);
+    }
+    return out;
+}
+
 // ═══ Where a pasted block GOES ══════════════════════════════════════════════════
 
 export interface PastePlanInput {

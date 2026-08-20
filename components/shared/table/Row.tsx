@@ -163,6 +163,21 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
     const startCount = pinnedLeft.length;
     const endStart = cols.length - pinnedRight.length;
 
+    // ── DOES THE SELECTION ACTUALLY HAVE A BOX? ─────────────────────────────────
+    //
+    // Derived here rather than passed in, because it is decidable from the two pieces of
+    // selection geometry this row already receives and both are primitives — so it costs
+    // nothing and adds no prop the memo would have to compare.
+    //
+    // A 1×1 selection is `rowEdge: 'both'` with a one-column band: exactly the case
+    // `cellRangeEdges` declines to paint, so it is exactly the case where the caret's ring
+    // is the only rectangle. Anything wider or taller HAS a perimeter, and the anchor's
+    // ring inside it would be a second box — which is what Renzo saw and named as "not
+    // intended behavior".
+    const boxedSelection =
+        selectionBand !== null &&
+        !(selectionRowEdge === 'both' && selectionBand[0] === selectionBand[1]);
+
     return (
         <>
             {cols.map((col, i) => {
@@ -203,6 +218,10 @@ function TableCellsInner<Row, Ctx>(props: TableCellsProps<Row, Ctx>) {
                     edgeRight: edges.right,
                     edgeBottom: edges.bottom,
                     edgeLeft: edges.left,
+                    // `selected` is required, not just `boxedSelection`: a caret parked
+                    // OUTSIDE the rectangle (what a header click's column sweep leaves)
+                    // is not inside any box, so it keeps its ring.
+                    boxed: selected && boxedSelection,
                 });
 
                 // The consumer's own paint for this cell — an out-of-band tint, a

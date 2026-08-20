@@ -115,10 +115,43 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
      * Defaults to false — one line, truncated, exactly as before.
      */
     headerWrap?: boolean;
+    /**
+     * A SECOND LINE under the label, smaller and muted.
+     *
+     * The header is one `<th>` with one name in it, so a column that is genuinely two
+     * facts — a block location and the batch code stored in it, a plate and the reading
+     * taken from it — had to spell both into `label` and watch the whole thing truncate.
+     * `labelNode` can render two lines, but it is an escape hatch a consumer has to build:
+     * this is the shape every such column actually wants, declared rather than drawn.
+     *
+     * **Rendered whenever it is present, independently of `headerWrap`.** They answer
+     * different questions — `headerWrap` is "may the NAME take a second line", this is "the
+     * name has a subtitle" — and a column may want either, both or neither. Omit it and
+     * the header is one line, byte-identical with before it existed.
+     *
+     * A plain `string`, like `label` and for the same reason: it is text a tooltip and a
+     * column menu can read. Use `labelNode` for anything richer.
+     */
+    subLabel?: string;
     /** Long form for the header's `title` when the label is an abbreviation. */
     title?: string;
     align?: 'left' | 'right' | 'center';
     cellKind?: CellKind;
+    /**
+     * What a click on the header LABEL does, INSTEAD of sweeping the column.
+     *
+     * Column-selection is the right default and the wrong behaviour for a header that
+     * names a thing rather than a lane: a matrix whose columns are physical blocks opens
+     * that block's detail when its header is clicked, and sweeping 400 cells is not what
+     * the operator asked for. Present ⇒ this runs and the sweep does not happen at all.
+     *
+     * It replaces ONLY the label's own click. The sort caret and the filter trigger beside
+     * it stay separately clickable, because a header that opens a drawer still has to be
+     * sortable — they are different affordances in the same cell, and each keeps its own.
+     *
+     * Absent ⇒ the label sweeps the column, exactly as before.
+     */
+    onHeaderClick?(spec: ColumnSpec<Row, Ctx>): void;
 
     // ── Display / edit round trip ────────────────────────────────────────────────
     /** What the cell shows at rest. */
@@ -192,6 +225,20 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
      * never the on-screen rendering. A spreadsheet wants the fact, not the derivation.
      */
     clipboardValue?(row: Row): string;
+    /**
+     * Is this column part of **Copy row**? Defaults to true.
+     *
+     * "Copy row" means "give me this record", and a sheet may carry columns that are not
+     * part of the record at all — a status rail, an actions cluster, a selection tick. RC
+     * IN's STATE column is the case that found this: pasting a copied row into a
+     * spreadsheet produced a leading cell of decoration nobody wanted, every time.
+     *
+     * **It narrows the ROW-COPY path and nothing else.** An ordinary rectangle copy
+     * (Ctrl/Cmd+C, or Copy / Copy with headers over a swept range) is untouched: if the
+     * operator deliberately sweeps the column, they asked for it and they get it. The rule
+     * is only ever applied to a gesture that says "the whole row" without naming columns.
+     */
+    rowCopy?: boolean;
     /** Strip whatever rendering a spreadsheet copied in with a pasted value. */
     cleanPasted?(raw: string, ctx: Ctx): string;
 
@@ -223,6 +270,17 @@ export interface ColumnSpec<Row, Ctx = unknown> extends ColumnGeometry {
 
     // ── Chrome ───────────────────────────────────────────────────────────────────
     calcType?: CalcType;
+    /**
+     * May the operator SORT by this column from its header? Defaults to true, except on a
+     * `derived` column (a row ordinal, an actions cluster), which has nothing to order by.
+     *
+     * The built-in sort is CLIENT-SIDE, over the rows currently loaded — so a consumer
+     * whose window is a server keyset sets this false, or leaves the whole affordance off
+     * with the table-level `enableSort`. See `lib/table/view.ts`.
+     */
+    sortable?: boolean;
+    /** May the operator FILTER on this column from its header? Same default, same reason. */
+    filterable?: boolean;
     filter?: { kind: FilterKind; column: string };
     summaryLane?: SummaryLane;
     /** Per-user column layout. All default to true. */
