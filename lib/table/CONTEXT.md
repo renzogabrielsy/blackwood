@@ -1029,10 +1029,18 @@ placeholder bug in a new costume.
 - **`subLabel` is rendered whenever present, independent of `headerWrap`.** They answer
   different questions — `headerWrap` is *"may the NAME take a second line"*, this is *"the
   name has a subtitle"* — and a column may want either, both or neither. It is **always one
-  truncated line** (`text-[9px] text-muted-foreground/70`), which is what keeps the header
-  row's growth bounded at two: the row grows to its tallest cell, and a subtitle free to
-  wrap would grow it without limit. Measured in the browser, not assumed: the two-line
-  header is taller than a one-line one.
+  truncated line**, which is what keeps the header row's growth bounded at two: the row
+  grows to its tallest cell, and a subtitle free to wrap would grow it without limit.
+  Measured in the browser, not assumed: the two-line header is taller than a one-line one.
+- **Its TYPE is `text-[10px] leading-tight text-muted-foreground`, matched to the one real
+  usage** *(corrected 2026-08-20; it shipped as `text-[9px] text-muted-foreground/70`)*. The
+  first screen to declare a `subLabel` — RC Movement's block headers — mirrors a live table
+  whose sub-line is `text-[10px] text-muted-foreground`, and against the shipped default it
+  could only have matched by abandoning `subLabel` for a hand-built `labelNode`. **A default
+  every consumer has to work around is the wrong default**: this seam exists so a two-line
+  header is DECLARED rather than drawn differently by each screen, and a size nothing asked
+  for defeats that. Pinned by an assertion in `verify-table-core.ts`, so the type is a
+  decision rather than an accident.
 - Both are plain strings/callbacks on the SPEC, so `label` still stays the required plain
   string the tooltip, the resize handle's `aria-label` and `Copy with headers` all read.
 

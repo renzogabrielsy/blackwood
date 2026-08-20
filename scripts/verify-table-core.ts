@@ -2050,7 +2050,11 @@ check('onHeaderClick replaces the column sweep, and the sort caret stays its own
   // The SUB-LABEL: rendered whenever present, independent of `headerWrap`, and always
   // ONE truncated line so the header row's growth stays bounded at two.
   assert.match(code, /\{spec\.subLabel \? \(/)
-  assert.match(code, /text-\[9px\] leading-tight text-muted-foreground\/70/)
+  // The TYPE is pinned, because it is the reason this seam exists at all: a two-line
+  // header is DECLARED here rather than hand-drawn per screen, so the default has to
+  // match the real usage (RC Movement's block headers, mirroring the live matrix's
+  // `text-[10px] text-muted-foreground` sub-line) or every consumer routes around it.
+  assert.match(code, /text-\[10px\] leading-tight text-muted-foreground"/)
   assert.match(code, /data-sub-label/)
   assert.ok(
     !/headerWrap[\s\S]{0,120}subLabel/.test(code),

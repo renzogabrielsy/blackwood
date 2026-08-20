@@ -249,14 +249,72 @@ and `actions.ts` are byte-identical.
   the sticky `left` offsets computed from the DECLARED widths. The grid clamps its own
   `maxWidth` to `useTableColumns(...).minWidth`, so the stretch is unreachable and the clamp
   follows a column resize and the price gate automatically.
-- **Not reproduced in v2** (left out rather than stubbed): the clickable block header →
-  shared `BlockingDetailPanel` slide-over (and therefore `fetchBlockDataForBatch` /
-  `onNavigateToBatch`), the `OpenBlocksDialog` behind the coverage badge (rendered as an
-  inert pill in v2), the Radix hover info card per footer column (a native multi-line
-  `title` carries the same figures), two-line block headers (`ColumnSpec.label` is a string
-  in a truncating `<th>`), the `sm:hidden` phone summary, and the floating
-  selection-aggregate pill (the module computes the aggregates inside
+- **The block header is the live matrix's two lines, DECLARED (2026-08-20).** Renzo:
+  *"the display and frontend [must be] exactly the same as current rc movement table …
+  wrapping is weird and not behaving like the current version and there is no block
+  location underneath it as a subheading."* The header was `headerWrap: true` at 104px,
+  which wrapped the BATCH CODE across two lines and never showed the block loc at all.
+  It is now `label` (the batch code — still the required plain string the `title`, the
+  resize handle's `aria-label` and `Copy with headers` read) over
+  `subLabel: c.blockLoc ?? '—'`, both one truncated line, and `headerWrap` is GONE.
+  `labelNode` re-styles the name to the live `<th>`'s own
+  `font-mono text-[11px] font-semibold normal-case` in `text-foreground`, because the
+  platform's default header type is uppercase sans in `text-muted-foreground` and a batch
+  code is an identifier, not a lane label. **`W_BLOCK` is back to the live matrix's 92** —
+  with no header chrome on these columns the label's budget is `92 − 16` (the module's
+  `px-2`) = 76px, the same 76px the live `<th>`'s `px-2` gives it, so the truncation point
+  matches. **The sub-line's type now matches too:** `HeaderCell`'s `subLabel` shipped as
+  `text-[9px] text-muted-foreground/70` and was corrected to
+  `text-[10px] leading-tight text-muted-foreground` in the same pass — a platform edit,
+  made deliberately rather than worked around, because these block headers are `subLabel`'s
+  ONLY real consumer (a grep over `app/ components/ lib/` returns this file and the dev
+  playground fixture, nothing else) and a default every consumer has to route around via
+  `labelNode` is the wrong default. See `lib/table/CONTEXT.md` → the review pass, item 4.
+  **No known pixel difference remains between the two headers.**
+- **Clicking a block header opens the shared `BlockingDetailPanel`** — the live matrix's
+  behaviour, on `ColumnSpec.onHeaderClick`, which replaces the column sweep entirely (a
+  header naming a *thing* is not a lane label, and sweeping ~31 cells behind the slide-over
+  that just covered them is not the gesture). State shape is copied from the live matrix
+  field for field: `selectedColumn` both opens the panel and supplies the display key
+  (`blockLoc ?? batchCode` — `parseLocKey` tolerates a FEED column's non-loc key),
+  `panelBlockData` is null while the fetch is in flight so the panel shows its own loading
+  state, and `panelCanViewPrices` comes back from the SAME `fetchBlockDataForBatch` call
+  rather than being re-derived. That action is used rather than a grid-map lookup for the
+  live matrix's reason: a historical column's batch may be CLOSED or its slot reused, so it
+  is absent from `view_blocking_grid` and a map would show today's occupant.
+  `onNavigateToBatch` reproduces `rc-movement-route-view.tsx`'s handler verbatim — this
+  standalone route mounts no `InventoryTabProvider`, and the panel's own fallback push
+  omits `tab=` / `editView=`.
+- **The panel closes back into the grid.** It is a plain `position: fixed` slide-over, NOT
+  Radix, so there is no `onCloseAutoFocus` to preventDefault (the idiom
+  `lib/table/CONTEXT.md` records for the Radix case). `onClose` is the single funnel for
+  every close path — Escape, backdrop, both X buttons — so `handlePanelClose` clears the
+  state and calls `apiRef.current?.focus()` once, covering all of them. **The live matrix
+  has no equivalent**: it is not on the module and holds no handle, so this is the one
+  place v2 does MORE than the screen it mirrors.
+- **The grid stays read-only, and the panel does not change that.** No `ColumnSpec` here
+  declares a `parse`, so `columnAcceptsEdit` is false at every coordinate — a header click
+  is not a cell edit. The panel is a SEPARATE surface and is existing production code,
+  already mounted on `/inventory/blocking` and on the live matrix on this same route; its
+  write paths (`updateBlockNotes`, `EditDeliveryDialog`) gate themselves exactly as they do
+  there, and `canViewPrices` arrives from the server action's own resolution. **Mounting it
+  adds no NEW write path to the application.** The distinction is recorded at the mount
+  site in `rc-movement-grid-v2.tsx`, which is where someone reading the JSX will be
+  standing.
+- **A block column offers NO built-in sort or filter** (`sortable: false`,
+  `filterable: false`). Not a width concession: the row axis here is the CALENDAR, so
+  re-ordering the days by how much came out of one block produces a feeding matrix in no
+  order at all — and the platform hides every chrome row while either axis is active, so
+  one click would delete this grid's entire campaign footer. The date/day/kg lanes keep
+  both affordances (they are lanes), **with the same footer caveat — sorting any of them
+  hides the totals rule-off until the sort is cleared.**
+- **Not reproduced in v2** (left out rather than stubbed): the `OpenBlocksDialog` behind
+  the coverage badge (an inert pill in v2), the Radix hover info card per footer column (a
+  native multi-line `title` carries the same figures), the `sm:hidden` phone summary, and
+  the floating selection-aggregate pill (the module computes the aggregates inside
   `useTableInteraction` and exposes only the RANGE, so the toolbar shows `rows × cols`).
+  *(The block-header detail panel and two-line block headers were on this list until
+  2026-08-20; both are now built — see the two bullets above.)*
 - **What IS live from the module:** cell selection and rectangular ranges, the full keyboard
   (arrows, Tab, Ctrl/Cmd+Arrow, Home/End, Ctrl+Home/End, PageUp/PageDown), Ctrl/Cmd+C as
   TSV, column resize (session-local), the 5-column frozen block with the price column
@@ -272,7 +330,7 @@ and `actions.ts` are byte-identical.
 - `@/components/ui/tooltip` — block-column header tooltip (batch code + block + open date)
 - `@/lib/utils` — `cn()` for the matrix's frozen-cell class composition
 - `lucide-react` — `Loader2` (spinner in the route view)
-- `../_shared/blocking-detail-panel` — `BlockingDetailPanel` + `BlockingDetailNavTarget`, reused for the column-header slide-over. **The panel was hoisted out of `blocking/` into the neutral `_shared/` folder** so it carries no inventory-tab-shell dependency. On this standalone route the matrix forwards an explicit `onNavigateToBatch` (from `rc-movement-route-view.tsx`) to the panel's "Edit All", which `router.push`es to `/inventory?tab=…`. (When the panel is rendered in-shell elsewhere with `onNavigateToBatch` omitted, it falls back to the `INVENTORY_NAVIGATE_EVENT` window event handled by `InventoryTabProvider`.)
+- `../_shared/blocking-detail-panel` — `BlockingDetailPanel` + `BlockingDetailNavTarget`, reused for the column-header slide-over **by BOTH grids since 2026-08-20** (`rc-movement-matrix.tsx` and `rc-movement-grid-v2.tsx`), each with its own `fetchBlockDataForBatch` call and its own `onNavigateToBatch`. The panel itself is untouched by the v2 work. **The panel was hoisted out of `blocking/` into the neutral `_shared/` folder** so it carries no inventory-tab-shell dependency. On this standalone route the matrix forwards an explicit `onNavigateToBatch` (from `rc-movement-route-view.tsx`) to the panel's "Edit All", which `router.push`es to `/inventory?tab=…`. (When the panel is rendered in-shell elsewhere with `onNavigateToBatch` omitted, it falls back to the `INVENTORY_NAVIGATE_EVENT` window event handled by `InventoryTabProvider`.)
 - `../blocking/actions` — `fetchBlockDataForBatch(batchId)` (batch-accurate header summary) — the matrix calls this; detail history is fetched by the panel itself via `fetchBlockingDetail`
 - `../blocking/types` — `BlockData` (panel header-summary shape)
 

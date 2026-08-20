@@ -203,6 +203,13 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         pin: 'start',
         align: 'center',
         cellKind: 'date',
+        // COLLISION (2026-08-20). This column already carries the consumer's own sort
+        // chevron in `renderHeaderSlot`, and the built-in caret is the same gesture drawn
+        // with the same lucide glyph — two identical controls in one header, doing two
+        // different things (this one re-sorts the DAY GROUPS and their carry-down rows;
+        // the built-in re-sorts the flat row list and hides the chrome rows while it is
+        // on). One control per question: the consumer's stays, the built-in is off.
+        sortable: false,
         clipboardValue: (r) => r.date,
         format: (r) => (r._isPrimary ? <Centre><span className="font-mono">{r.date}</span></Centre> : CARRY),
     },
@@ -232,7 +239,11 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         pin: 'start',
         align: 'center',
         cellKind: 'text',
-        clipboardValue: (r) => r.shift_code,
+        // COLLISION (2026-08-20): the consumer's `ColumnFilterSlot` here draws the SAME
+        // `ListFilter` glyph the built-in trigger draws, so the header showed two
+        // identical funnels opening two different panels. It is also what the width
+        // comment above is measured against — a second trigger puts `SHIFT` back to `S…`.
+        filterable: false,
         format: (r) =>
             r._isPrimary ? (
                 <Centre><span className="font-mono font-semibold uppercase">{r.shift_code}</span></Centre>
@@ -250,7 +261,8 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         pin: 'start',
         align: 'center',
         cellKind: 'text',
-        clipboardValue: (r) => r.customer,
+        // COLLISION — same as SHIFT above: a consumer funnel and a built-in funnel.
+        filterable: false,
         format: (r) => (
             <Centre><span className="font-mono font-semibold uppercase">{r.customer}</span></Centre>
         ),
@@ -264,7 +276,8 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         pin: 'start',
         align: 'center',
         cellKind: 'text',
-        clipboardValue: (r) => r.grade,
+        // COLLISION — same as SHIFT above: a consumer funnel and a built-in funnel.
+        filterable: false,
         format: (r) => (
             <Centre><span className="font-mono font-semibold uppercase">{r.grade}</span></Centre>
         ),

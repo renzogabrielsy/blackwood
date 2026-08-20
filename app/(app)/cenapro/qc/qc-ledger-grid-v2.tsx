@@ -27,10 +27,13 @@
 // Getting it wrong is BUG-024, where a paste mapped block rows by arithmetic, wrote a
 // parent's data into its sub-rows, and reported success.
 //
-// Width clamp: see `lib/table/CONTEXT.md` → "Stage 1D at scale" — a table wider than
-// its columns scales all of them proportionally while the sticky offsets keep using
-// the DECLARED widths, so a stretched sheet can pin a frozen column inside its
-// neighbour. Clamping to `useTableColumns(...).minWidth` makes that unreachable.
+// Width: `sizing="fill"`, NOT a `maxWidth` clamp. See `lib/table/CONTEXT.md` → the
+// review pass, item 5. A table wider than its columns scales all of them
+// proportionally while the sticky offsets keep using the DECLARED widths, so a
+// stretched sheet can pin a frozen column inside its neighbour. The clamp made that
+// unreachable at the cost of dead space; `'fill'` removes the slack instead, inside
+// `useTableColumns`, so ONE set of numbers describes both the layout and the sticky
+// arithmetic and DATE stays pinned at any viewport width.
 //
 // ── WIDTHS ARE NOT THE LIVE SHEET'S, AND THE REASON IS ONE NUMBER ───────────────
 // This grid copied `qc-ledger-client.tsx`'s pixel widths column for column, and four of
@@ -50,7 +53,6 @@ import * as React from 'react';
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableSummaryRow } from '@/components/shared/table/BlackwoodTable';
 import type { CellSlot, ColumnSpec, GridRow, RowKind } from '@/lib/table';
-import { useTableColumns } from '@/lib/hooks/use-table-columns';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { METRICS, type MetricKey } from '@/lib/cenapro/ccc-analysis';
 import type { QcAggregate } from '@/lib/cenapro/ccc-analysis-view';
@@ -343,7 +345,6 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
 
     const ctx = React.useMemo<Ctx>(() => ({ month }), [month]);
     const specs = React.useMemo(() => SPECS, []);
-    const totalWidth = useTableColumns(specs, null, undefined).minWidth;
 
     // ── Row families ─────────────────────────────────────────────────────────────
     const kinds = React.useMemo<ReadonlyMap<string, RowKind<QcRow>>>(
@@ -560,15 +561,20 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
               * `components/shared/table/**` was touched — `className` is the public prop
               * for exactly this.
               *
-              * TODO(sizing-fill): the `maxWidth` clamp below leaves dead space to the
-              * right on a wide viewport. It stays for now because unclamped, `width:100%`
-              * scales every column proportionally while the sticky offsets keep using the
-              * DECLARED widths, which pins a frozen column inside its neighbour. The fix
-              * is the platform `sizing: 'fill'` prop — replace this wrapper's inline
-              * `maxWidth` with that prop; do NOT hand-roll a fill here.
+              * SIZING (2026-08-20): the `maxWidth` clamp that used to sit on the wrapper
+              * below is GONE, replaced by the platform `sizing="fill"` prop. The clamp
+              * existed because `width: 100%` under `table-layout: fixed` scales every
+              * `<col>` proportionally while the sticky `left` offsets keep using the
+              * DECLARED widths — so a wide viewport pinned DATE inside its neighbour.
+              * `'fill'` closes that at the source: the slack is distributed inside
+              * `useTableColumns`' own resolution and the table is rendered at exactly the
+              * resulting pixel width, so `table-fixed` has nothing left to scale into and
+              * every offset is a prefix sum of the widths ACTUALLY painted. The frozen
+              * DATE column therefore pins correctly at any width — see the note in the
+              * report — and the dead space to the right is gone.
               */}
             <div className="min-h-0 flex-1 overflow-hidden">
-                <div className="h-full overflow-hidden" style={{ maxWidth: totalWidth }}>
+                <div className="h-full overflow-hidden">
                     <BlackwoodTable<QcRow, Ctx>
                         className="h-full"
                         items={items}
@@ -578,6 +584,7 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                         edits={edits}
                         storedText={storedText}
                         scope="focus"
+                        sizing="fill"
                         childKinds={['draw']}
                         renderChromeRow={renderChromeRow}
                         summaryRows={summaryRows}

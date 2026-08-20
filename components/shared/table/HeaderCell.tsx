@@ -188,11 +188,22 @@ export function HeaderCell<Row, Ctx>({
                         take two lines, and this is a subtitle under whatever the name
                         did. Truncating rather than wrapping is what keeps the header a
                         bounded two lines: the row grows to its tallest cell, and a
-                        subtitle free to wrap would grow it without limit. */}
+                        subtitle free to wrap would grow it without limit.
+
+                        TYPE (2026-08-20): `text-[10px] text-muted-foreground`, matched to
+                        the ONE real usage rather than guessed. It shipped as
+                        `text-[9px] text-muted-foreground/70` — a size and an alpha nothing
+                        in the app actually asked for — and the first consumer to declare a
+                        `subLabel` (RC Movement's block headers, mirroring a live matrix
+                        whose sub-line is `text-[10px] text-muted-foreground`) could only
+                        have matched it by abandoning `subLabel` for a hand-built
+                        `labelNode`. A default that every consumer has to work around is
+                        the wrong default: the seam exists so a two-line header is
+                        DECLARED, not drawn differently by each screen. */}
                     {spec.subLabel ? (
                         <span
                             data-sub-label
-                            className="block truncate text-[9px] leading-tight text-muted-foreground/70"
+                            className="block truncate text-[10px] leading-tight text-muted-foreground"
                         >
                             {spec.subLabel}
                         </span>

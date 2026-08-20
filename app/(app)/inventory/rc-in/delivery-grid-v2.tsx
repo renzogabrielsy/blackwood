@@ -199,6 +199,12 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         cellKind: 'readonly',
         selectable: true,
         visible: hiddenBy('state'),
+        // Renzo: "the state column should never be copied when doing copy row." STATE is
+        // a status rail, not part of the delivery record — `Copy row` names no columns, so
+        // it has to be told what the row IS. It narrows the ROW-COPY path ONLY: a
+        // rectangle the operator swept over this column is still copied verbatim, because
+        // sweeping it is asking for it.
+        rowCopy: false,
         clipboardValue: (row) => row.state || 'STORED',
         format: (row) => {
             const state = row.state || 'STORED';
