@@ -1,9 +1,11 @@
 'use client';
 
 import * as React from 'react';
+import { ArrowDown, ArrowUp, ChevronsUpDown, ListFilter } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import type { ColumnSpec } from '@/lib/table';
+import type { ColumnFilter, ColumnSpec, SortDirection } from '@/lib/table';
+import { HeaderFilterPopover } from './HeaderFilterPopover';
 
 // ─────────────────────────────────────────────────────────────────────────────────
 // HeaderCell — one `<th>`. PLATFORM LAYER.
@@ -44,19 +46,45 @@ export interface HeaderCellProps<Row, Ctx> {
     /** Report a new width for this column. Called ONCE, when the drag ends. */
     onResize?(key: string, width: number): void;
     /**
-     * A filter trigger, a sort caret — anything the consumer hangs off the header.
+     * A filter trigger, a sort caret — anything the CONSUMER hangs off the header.
      *
      * `BlackwoodTable` fills it from its `renderHeaderSlot` prop; absent, no slot element
-     * is rendered at all.
+     * is rendered at all. It renders BESIDE the built-in sort and filter affordances
+     * below, never instead of them: a consumer's own URL-driven filter and the table's
+     * local one are different tools and a screen may legitimately want both.
      */
     filterSlot?: React.ReactNode;
+
+    // ── The BUILT-IN sort / filter affordances ───────────────────────────────────
+    //
+    // Both are `undefined` when the table does not offer them for this column (the scope
+    // has them off, or the spec opted out), and `undefined` renders no control at all —
+    // which is what keeps a header that offers neither byte-identical with before.
+
+    /** This column's current sort direction, or null when the table is sorted by another. */
+    sortDir?: SortDirection | null;
+    /** Cycle this column's sort: asc → desc → off. Absent ⇒ no caret is rendered. */
+    onToggleSort?(key: string): void;
+    /** This column's active filter, if any. */
+    filter?: ColumnFilter;
+    /** Set (or clear, with `undefined`) this column's filter. Absent ⇒ no trigger. */
+    onFilterChange?(key: string, next: ColumnFilter | undefined): void;
+    /** Does the column declare a `numericValue`? Decides whether bounds are offered. */
+    numericFilter?: boolean;
 }
 
 export function HeaderCell<Row, Ctx>({
     spec, index, pin, edge, left, right, onSelectColumn, onResize, filterSlot,
+    sortDir = null, onToggleSort, filter, onFilterChange, numericFilter = false,
 }: HeaderCellProps<Row, Ctx>) {
     const [dragging, setDragging] = React.useState(false);
+    const [filterAnchor, setFilterAnchor] = React.useState<{ left: number; bottom: number } | null>(null);
     const resizable = spec.resizable !== false && onResize !== undefined;
+    const filterActive = filter !== undefined;
+    // A header that OPENS SOMETHING is not a header that sweeps a column. The override
+    // replaces the label's click entirely — see `ColumnSpec.onHeaderClick`.
+    const headerClick = spec.onHeaderClick;
+    const labelClickable = headerClick !== undefined || onSelectColumn !== undefined;
 
     const startResize = React.useCallback(
         (e: React.PointerEvent<HTMLSpanElement>) => {
@@ -120,29 +148,138 @@ export function HeaderCell<Row, Ctx>({
                     type="button"
                     tabIndex={-1}
                     onMouseDown={(e) => {
-                        if (!onSelectColumn) return;
+                        if (!labelClickable) return;
                         e.preventDefault();
                         e.stopPropagation();
-                        onSelectColumn(index);
+                        // The OVERRIDE, and it is `instead of`, not `as well as`: a header
+                        // that opens a detail drawer must not also sweep 400 cells behind
+                        // the drawer. The sort caret and the filter trigger are separate
+                        // buttons and keep working either way.
+                        if (headerClick) headerClick(spec);
+                        else onSelectColumn?.(index);
                     }}
                     className={cn(
-                        'min-w-0 flex-1 text-left text-[11px] uppercase tracking-wide text-muted-foreground',
-                        // WRAP or TRUNCATE — never both, and truncate is the default, so a
-                        // column that says nothing renders exactly as it did before.
-                        // `line-clamp-2` bounds the growth: a header may take two lines,
-                        // not five, because the whole header row grows to the tallest cell.
-                        spec.headerWrap
-                            ? 'whitespace-normal break-words leading-tight line-clamp-2'
-                            : 'truncate',
-                        onSelectColumn && 'cursor-pointer hover:text-foreground',
+                        'min-w-0 flex-1 text-left',
+                        labelClickable && 'cursor-pointer',
                     )}
                 >
-                    {/* The NODE if the column has one, else the name. `label` stays a
-                        string and stays required — `title`, the resize handle's
-                        `aria-label` and any consumer-built column menu all read it as
-                        text, and none of them can render a node. */}
-                    {spec.labelNode ?? spec.label}
+                    <span
+                        className={cn(
+                            'block text-[11px] uppercase tracking-wide text-muted-foreground',
+                            // WRAP or TRUNCATE — never both, and truncate is the default,
+                            // so a column that says nothing renders exactly as it did
+                            // before. `line-clamp-2` bounds the growth: a header may take
+                            // two lines, not five, because the whole header row grows to
+                            // the tallest cell.
+                            spec.headerWrap
+                                ? 'whitespace-normal break-words leading-tight line-clamp-2'
+                                : 'truncate',
+                            labelClickable && 'hover:text-foreground',
+                        )}
+                    >
+                        {/* The NODE if the column has one, else the name. `label` stays a
+                            string and stays required — `title`, the resize handle's
+                            `aria-label` and any consumer-built column menu all read it as
+                            text, and none of them can render a node. */}
+                        {spec.labelNode ?? spec.label}
+                    </span>
+                    {/* The SUB-LABEL: a second line, always one line, always truncated.
+                        Independent of `headerWrap` — that governs whether the NAME may
+                        take two lines, and this is a subtitle under whatever the name
+                        did. Truncating rather than wrapping is what keeps the header a
+                        bounded two lines: the row grows to its tallest cell, and a
+                        subtitle free to wrap would grow it without limit.
+
+                        TYPE (2026-08-20): `text-[10px] text-muted-foreground`, matched to
+                        the ONE real usage rather than guessed. It shipped as
+                        `text-[9px] text-muted-foreground/70` — a size and an alpha nothing
+                        in the app actually asked for — and the first consumer to declare a
+                        `subLabel` (RC Movement's block headers, mirroring a live matrix
+                        whose sub-line is `text-[10px] text-muted-foreground`) could only
+                        have matched it by abandoning `subLabel` for a hand-built
+                        `labelNode`. A default that every consumer has to work around is
+                        the wrong default: the seam exists so a two-line header is
+                        DECLARED, not drawn differently by each screen. */}
+                    {spec.subLabel ? (
+                        <span
+                            data-sub-label
+                            className="block truncate text-[10px] leading-tight text-muted-foreground"
+                        >
+                            {spec.subLabel}
+                        </span>
+                    ) : null}
                 </button>
+
+                {/* SORT — one button, cycling asc → desc → off. Faint until the column is
+                    actually sorted, then permanent, so a header row of eight columns is
+                    not eight competing carets. */}
+                {onToggleSort ? (
+                    <button
+                        type="button"
+                        data-grid-chrome
+                        data-sort-toggle={spec.key}
+                        tabIndex={-1}
+                        aria-label={`Sort by ${spec.label}`}
+                        title={
+                            sortDir === 'asc'
+                                ? `${spec.label} — ascending. Click for descending.`
+                                : sortDir === 'desc'
+                                  ? `${spec.label} — descending. Click to clear.`
+                                  : `Sort by ${spec.label}`
+                        }
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onToggleSort(spec.key);
+                        }}
+                        className={cn(
+                            'shrink-0 rounded-sm p-0.5 transition-colors duration-150 hover:text-foreground',
+                            sortDir
+                                ? 'text-primary opacity-100'
+                                : 'text-muted-foreground opacity-0 group-hover/th:opacity-100',
+                        )}
+                    >
+                        {sortDir === 'asc' ? (
+                            <ArrowUp className="size-3" />
+                        ) : sortDir === 'desc' ? (
+                            <ArrowDown className="size-3" />
+                        ) : (
+                            <ChevronsUpDown className="size-3" />
+                        )}
+                    </button>
+                ) : null}
+
+                {/* FILTER — a trigger and its own panel. Same reveal rule as the sort. */}
+                {onFilterChange ? (
+                    <button
+                        type="button"
+                        data-grid-chrome
+                        data-filter-toggle={spec.key}
+                        data-filter-active={filterActive ? 'true' : 'false'}
+                        tabIndex={-1}
+                        aria-label={`Filter ${spec.label}`}
+                        title={`Filter ${spec.label}`}
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (filterAnchor) {
+                                setFilterAnchor(null);
+                                return;
+                            }
+                            const r = e.currentTarget.getBoundingClientRect();
+                            setFilterAnchor({ left: r.left, bottom: r.bottom });
+                        }}
+                        className={cn(
+                            'shrink-0 rounded-sm p-0.5 transition-colors duration-150 hover:text-foreground',
+                            filterActive || filterAnchor
+                                ? 'text-primary opacity-100'
+                                : 'text-muted-foreground opacity-0 group-hover/th:opacity-100',
+                        )}
+                    >
+                        <ListFilter className="size-3" />
+                    </button>
+                ) : null}
+
                 {filterSlot ? (
                     // Marked as chrome so a keystroke or a paste aimed at it is that
                     // control's business, not a grid gesture.
@@ -151,6 +288,17 @@ export function HeaderCell<Row, Ctx>({
                     </span>
                 ) : null}
             </div>
+
+            {filterAnchor && onFilterChange ? (
+                <HeaderFilterPopover
+                    label={spec.label}
+                    numeric={numericFilter}
+                    value={filter}
+                    onChange={(next) => onFilterChange(spec.key, next)}
+                    anchor={filterAnchor}
+                    onClose={() => setFilterAnchor(null)}
+                />
+            ) : null}
 
             {resizable ? (
                 <span

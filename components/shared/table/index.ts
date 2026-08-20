@@ -20,6 +20,11 @@ export type {
 export { HeaderCell, MIN_COLUMN_WIDTH } from './HeaderCell';
 export type { HeaderCellProps } from './HeaderCell';
 
+// The built-in per-column filter panel. Rendered by `HeaderCell`; exported so a consumer
+// building its own header chrome can reuse the same panel rather than a second one.
+export { HeaderFilterPopover } from './HeaderFilterPopover';
+export type { HeaderFilterPopoverProps } from './HeaderFilterPopover';
+
 export { TableRow, TableRowShell, TableCells, NO_EDITS, NO_INVALID } from './Row';
 export type { TableRowProps, TableRowShellProps, TableCellsProps, RowHandlers } from './Row';
 

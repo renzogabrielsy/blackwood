@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
 import { BlackwoodTable } from '@/components/shared/table';
-import type { TableChromeRowApi } from '@/components/shared/table';
+import type { BlackwoodTableApi, TableChromeRowApi } from '@/components/shared/table';
 import { pinnedOffsets } from '@/lib/table';
 import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
 import { useTableColumns } from '@/lib/hooks/use-table-columns';
@@ -18,6 +18,9 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { BlockingDetailPanel, type BlockingDetailNavTarget } from '../_shared/blocking-detail-panel';
+import { fetchBlockDataForBatch } from '../blocking/actions';
+import type { BlockData } from '../blocking/types';
 import type {
     RcMovementMatrix,
     RcMovementMatrixColumn,
@@ -35,12 +38,19 @@ import type {
 // grid, so the two can be compared cell-for-cell on the same real campaign
 // (`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`).
 //
-// ── READ-ONLY, AND STRUCTURALLY SO ──────────────────────────────────────────────
+// ── THE GRID IS READ-ONLY, AND STRUCTURALLY SO ──────────────────────────────────
 // This screen has no write path in production either — it is a pivot over SQL views.
 // Every column here is `cellKind: 'readonly'` (or `'derived'`), no column carries a
 // `parse`, and no `renderEditor` is passed, so `columnAcceptsEdit` is false at every
-// coordinate and an editor can never open. The only action imported is the READ action
-// the live screen already calls, and it is called from the SERVER page, not from here.
+// coordinate and an editor can never open.
+//
+// That claim is about the GRID's cells and it is unchanged by the block detail panel
+// mounted at the bottom of this file (2026-08-20). The panel is a separate surface, it
+// is existing production code already mounted on two live screens, its own write paths
+// gate themselves, and a header click is not a cell edit — the full reasoning is
+// recorded at the mount site, where someone reading `<BlockingDetailPanel>` here will
+// actually be standing. `fetchBlockDataForBatch` is a READ action, called on click; the
+// campaign payload's own read action is called from the SERVER page, not from here.
 //
 // ── PRICE GATING IS A SECURITY BOUNDARY, AND IT IS NOT DECIDED HERE ─────────────
 // `canViewPrices` arrives inside `data`, resolved server-side by the canonical
@@ -78,26 +88,27 @@ const W_TOTAL = 88;
 const W_PRODUCED = 88;
 const W_GRADE = 80;
 /**
- * 104, not the live matrix's 92 — and paired with `headerWrap` on every block column.
+ * 92 — the live matrix's number, restored (2026-08-20).
  *
- * A block column is NAMED FOR ITS BATCH, and a batch code is the longest string on this
- * sheet: `SEPTEMBER-26-BLK12` is eighteen characters. At 92 with a one-line truncating
- * header the whole column read `JAN-26-B…`, so four adjacent blocks were indistinguishable
- * without hovering each one — Renzo: *"column thickness and width not accommodating for
- * the block/batch names"*, and the reason he called this the dealbreaker.
+ * It was 104 with `headerWrap: true`, on the reasoning that a batch code is the longest
+ * string on this sheet (`SEPTEMBER-26-BLK12`) and a truncating one-line header read
+ * `JAN-26-B…`. That reasoning was right about the problem and wrong about the fix: the
+ * live matrix solves it with a SECOND LINE carrying the BLOCK LOCATION, not by wrapping
+ * the code — Renzo: *"the display and frontend [must be] exactly the same as current rc
+ * movement table … wrapping is weird and not behaving like the current version and there
+ * is no block location underneath it as a subheading."*
  *
- * The header now WRAPS to two lines (`ColumnSpec.headerWrap`, bounded at two by
- * `line-clamp-2`). CSS breaks at the code's own hyphens, so the natural split is
- * `SEPTEMBER-` / `26-BLK12`, and 104 is what fits the longer of those two halves:
- * ten characters at `text-[11px]` uppercase with `tracking-wide` is ~78px against the
- * header's 104 − 17 = 87 usable. The month prefix is the only part that varies in length,
- * so this is measured against the WORST case rather than against the sample in the
- * screenshot.
+ * So the header is now two DECLARED lines — `label` (the batch code, one truncated line,
+ * exactly as the live `<th>` renders it) over `subLabel` (the block loc) — and the wrap
+ * is gone. With `sortable: false` / `filterable: false` on these columns the header cell
+ * carries no chrome buttons either, so the label's usable width is `92 − 16` (the
+ * module's `px-2`) = **76px**, which is the same 76px the live matrix's `px-2` `<th>`
+ * gives it. Same width, same truncation point.
  *
  * The body cells are unaffected — a fed figure is at most `123,456` — and stay right-
- * aligned mono, because the header's wrap is a property of the `<th>` alone.
+ * aligned mono, because the header's shape is a property of the `<th>` alone.
  */
-const W_BLOCK = 104;
+const W_BLOCK = 92;
 
 const ROW_H = 32; // h-8, Excel Standard
 /** The totals rule-off: four stacked lines on a block column, three tricolor bands. */
@@ -196,6 +207,8 @@ type MovementItem = GridRow<RcMovementMatrixRow>;
 function buildColumns(
     columns: readonly RcMovementMatrixColumn[],
     grades: readonly { grade: string; campaignTotal: number | null }[],
+    /** Opens the shared block detail panel. Must be referentially stable. */
+    onBlockHeaderClick: (column: RcMovementMatrixColumn) => void,
 ): ColumnSpec<RcMovementMatrixRow, RcMovementGridCtx>[] {
     const firstBlockKey = columns.length > 0 ? blockKey(columns[0].batchId) : null;
 
@@ -371,16 +384,63 @@ function buildColumns(
         out.push({
             key,
             label: c.batchCode,
-            // The whole point of this column: it is named for its block, so the name has
-            // to be readable without a hover. Two lines, breaking at the code's own
-            // hyphens. `label` deliberately stays the plain string — the `title` below,
-            // the resize handle's `aria-label` and `Copy with headers` all read it as text.
-            headerWrap: true,
+            /**
+             * The header is the live matrix's, line for line: the BATCH CODE on top and
+             * the BLOCK LOCATION under it, both one truncated line, left-aligned.
+             *
+             * `label` stays the plain string — the `title` below, the resize handle's
+             * `aria-label` and `Copy with headers` all read it as TEXT and none of them
+             * can render a node. `labelNode` only re-STYLES it, to the live `<th>`'s own
+             * `font-mono text-[11px] font-semibold`: the platform's default header type is
+             * uppercase sans in `text-muted-foreground`, and a batch code is a mono
+             * identifier the operator reads as a name, not a lane label. `normal-case`
+             * and `tracking-normal` undo the header's own utilities rather than fighting
+             * them, and the code is already uppercase so `normal-case` changes no glyph —
+             * it only stops CSS from claiming to.
+             *
+             * `headerWrap` is deliberately ABSENT (it was `true`): the second line here is
+             * a SUBTITLE, not the name spilling over, and those are different questions.
+             */
+            labelNode: (
+                <span className="block truncate font-mono text-[11px] font-semibold normal-case leading-tight tracking-normal text-foreground">
+                    {c.batchCode}
+                </span>
+            ),
+            subLabel: c.blockLoc ?? '—',
+            /**
+             * CLICKING THE HEADER OPENS THE BLOCK — the live matrix's behaviour, and the
+             * reason `ColumnSpec.onHeaderClick` exists at all.
+             *
+             * It replaces the label's column sweep ENTIRELY rather than running beside it:
+             * a header that names a *thing* is not a lane label, and sweeping ~31 cells
+             * behind a slide-over that just covered them is not what was asked for. The
+             * sort caret and filter trigger would stay separately clickable if this column
+             * offered them (it does not — see `sortable` below).
+             */
+            onHeaderClick: () => onBlockHeaderClick(c),
             title: `${c.batchCode} · ${c.blockLoc ?? '—'} · opened ${c.firstFedDate}`,
             width: W_BLOCK,
             align: 'right',
             cellKind: 'readonly',
             selectable: true,
+            /**
+             * NO built-in sort or filter on a block column, and this is not a width
+             * concession — it is what the affordance would MEAN here.
+             *
+             * A block column is a BLOCK, not a lane of comparable values: the sheet's row
+             * axis is the calendar, and re-ordering the days by how much came out of
+             * `JAN-26-BLK22` produces a feeding matrix in no order at all. Worse, the
+             * platform hides every chrome row while either axis is active — and this
+             * grid's ENTIRE campaign footer (totals, yield, the tricolor bands, every
+             * per-block rollup) is a `renderChromeRow`, so one click on a caret here
+             * would delete the payoff of the screen.
+             *
+             * The other columns keep both. The date/day/kg lanes ARE lanes, and sorting
+             * them is the ordinary spreadsheet gesture — with the same footer caveat,
+             * which is reported rather than decided here.
+             */
+            sortable: false,
+            filterable: false,
             calcType: 'SUM',
             numericValue: (row) => row.fedByBatch[batchId] ?? null,
             clipboardValue: (row) => {
@@ -525,9 +585,83 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
     // and of every cell's `format`.
     const ctx = React.useMemo<RcMovementGridCtx>(() => ({ canViewPrices }), [canViewPrices]);
 
+    // ── The block detail slide-over ──────────────────────────────────────────────
+    //
+    // State shape copied from the live matrix, field for field, because the panel's
+    // contract is the same: `selectedColumn` decides whether it is open AND supplies the
+    // display key, `panelBlockData` is null while the fetch is in flight (the panel owns
+    // its own loading state), and `panelCanViewPrices` comes back from the SAME call
+    // rather than being re-derived here.
+    //
+    // A batch-accurate `blockData` is fetched with `fetchBlockDataForBatch(batchId)` and
+    // NOT read out of any grid map: a historical column's batch may be CLOSED, or its
+    // block slot reused, in which case it is absent from `view_blocking_grid` and a map
+    // lookup would show whoever occupies that loc TODAY.
+    const [selectedColumn, setSelectedColumn] = React.useState<RcMovementMatrixColumn | null>(null);
+    const [panelBlockData, setPanelBlockData] = React.useState<BlockData | null>(null);
+    const [panelCanViewPrices, setPanelCanViewPrices] = React.useState(false);
+
+    // The grid's imperative handle, held for ONE reason: giving the caret back when the
+    // panel closes. See `handlePanelClose`.
+    const apiRef = React.useRef<BlackwoodTableApi>(null);
+
+    const handleHeaderClick = React.useCallback((column: RcMovementMatrixColumn) => {
+        setSelectedColumn(column);
+        setPanelBlockData(null); // the panel shows its loading state until this resolves
+        fetchBlockDataForBatch(column.batchId).then((result) => {
+            setPanelBlockData(result.blockData);
+            setPanelCanViewPrices(result.canViewPrices);
+        });
+    }, []);
+
+    /**
+     * HAND THE CARET BACK. The panel is a plain `position: fixed` slide-over, NOT Radix —
+     * so there is no `onCloseAutoFocus` to preventDefault, which is the idiom
+     * `lib/table/CONTEXT.md` records for the Radix case. `onClose` is the single funnel
+     * for every way it shuts (Escape at `blocking-detail-panel.tsx:348`, the backdrop at
+     * `:530`, both X buttons at `:565` / `:635`), so calling `focus()` here covers all of
+     * them with no per-path handling.
+     *
+     * Without it the underlying hazard is exactly the Radix one: the element that had
+     * focus is inside a subtree that just unmounted, focus lands on `<body>`, and the next
+     * arrow key goes nowhere. The live matrix has no equivalent — it is not on the module
+     * and holds no handle to give focus back to — so this is the one place v2 does MORE
+     * than the screen it mirrors, rather than less.
+     */
+    const handlePanelClose = React.useCallback(() => {
+        setSelectedColumn(null);
+        setPanelBlockData(null);
+        apiRef.current?.focus();
+    }, []);
+
+    /**
+     * "Edit All" from inside the panel. Reproduces `rc-movement-route-view.tsx`'s
+     * `handleNavigateToBatch` VERBATIM — same params, same order — because this is the
+     * same standalone route with the same problem: `/inventory/rc-movement` mounts no
+     * `InventoryTabProvider`, so the panel's own fallback (a window event, then a push
+     * that omits `tab=` and `editView=`) would land on a less precise deep link. Passing
+     * the callback is what the live matrix does here; omitting it is NOT the equivalent.
+     */
+    const handleNavigateToBatch = React.useCallback(
+        (target: BlockingDetailNavTarget) => {
+            const tab = target.view === 'usage' ? 'usage' : 'deliveries';
+            router.push(
+                `/inventory?tab=${tab}&search=${encodeURIComponent(target.batchCode)}&year=all&editBatch=${encodeURIComponent(target.batchCode)}&editView=${tab}`,
+            );
+        },
+        [router],
+    );
+
+    /** Display key for the panel's header badge: the block loc when present, else the
+     *  batch code (a FEED column has no loc). The panel's `parseLocKey` tolerates a
+     *  non-loc key and simply skips the loc sub-line. */
+    const panelLocKey = selectedColumn
+        ? (selectedColumn.blockLoc ?? selectedColumn.batchCode)
+        : null;
+
     const specs = React.useMemo(
-        () => buildColumns(columns, producedGrades),
-        [columns, producedGrades],
+        () => buildColumns(columns, producedGrades, handleHeaderClick),
+        [columns, producedGrades, handleHeaderClick],
     );
 
 
@@ -998,9 +1132,9 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                 </span>
                 <span className="text-[11px] text-muted-foreground">
                     Read-only. Selection, keyboard, copy, the right-click menu, the
-                    selection summary and column resize are live; the block-header detail
-                    panel, the open-blocks dialog, the hover info cards and the
-                    bottom-pinned footer are not.
+                    selection summary, column resize and the block-header detail panel
+                    (click a block column&apos;s header) are live; the open-blocks dialog,
+                    the hover info cards and the bottom-pinned footer are not.
                 </span>
             </div>
 
@@ -1016,6 +1150,7 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                 aria-busy={pending}
             >
                 <BlackwoodTable<RcMovementMatrixRow, RcMovementGridCtx>
+                    apiRef={apiRef}
                     items={items}
                     kinds={kinds}
                     specs={specs}
@@ -1035,6 +1170,39 @@ export function RcMovementGridV2({ data, searchParams }: RcMovementGridV2Props) 
                     className="min-h-0 flex-1"
                 />
             </div>
+
+            {/* ── Block detail slide-over (the SAME component the live matrix and the
+                Blocking grid mount) ───────────────────────────────────────────────────
+                THE DISTINCTION THIS MOUNT RECORDS, because it is easy to read as a
+                contradiction of the file header above:
+
+                  • THE GRID stays read-only, and structurally so. No `ColumnSpec` here
+                    declares a `parse`, so `columnAcceptsEdit` is false at every
+                    coordinate — the editor cannot open, Delete/Backspace refuse, and the
+                    paste loop's per-cell guard refuses. Nothing about this panel changes
+                    that; a header is not a cell.
+                  • THE PANEL is a SEPARATE SURFACE with its own rules, and it is existing
+                    PRODUCTION code — already mounted on `/inventory/blocking` and on the
+                    live matrix on this very route. It does carry write paths (block notes
+                    via `updateBlockNotes`, and `EditDeliveryDialog`), and those gate
+                    THEMSELVES exactly as they do on the two live screens; `canViewPrices`
+                    arrives from `fetchBlockDataForBatch`'s own server-side resolution, not
+                    from anything decided in this file.
+
+                So mounting it adds NO NEW write path to the application — it reuses one
+                that ships today, which is the point: Renzo's stated goal for the module is
+                to "integrate existing functionalities and endpoints directly into the new
+                table features", and he asked for this drawer by name. The overnight
+                "import nothing that writes" rule was a safety bar for unattended building
+                and is explicitly lifted here. Neither this panel nor the live matrix was
+                modified by one character. */}
+            <BlockingDetailPanel
+                locKey={panelLocKey}
+                blockData={panelBlockData}
+                onClose={handlePanelClose}
+                canViewPrices={panelCanViewPrices}
+                onNavigateToBatch={handleNavigateToBatch}
+            />
 
             {pending ? (
                 <div className="pointer-events-none absolute inset-0 flex items-start justify-center pt-24">

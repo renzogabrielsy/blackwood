@@ -55,6 +55,14 @@ import {
   cellRangeEdges,
   NO_RANGE_EDGES,
   defaultTableMenu,
+  rowCopyColumns,
+  applyTableView,
+  nextSortDirection,
+  isColumnFilterActive,
+  activeFilterCount,
+  columnSortable,
+  columnFilterable,
+  NO_FILTERS,
 } from '../lib/table/index'
 import type { ColumnSpec, GridRow, JumpGrid, RowKind, SummaryLaneCol } from '../lib/table/index'
 import { resolveColumns } from '../lib/hooks/use-table-columns'
@@ -625,6 +633,7 @@ const baseKey: CellClassKey = {
   active: false, selected: false, invalid: false, dirty: false,
   numeric: false, editable: true,
   edgeTop: false, edgeRight: false, edgeBottom: false, edgeLeft: false,
+  boxed: false,
 }
 
 check('a cell gets exactly ONE background, by an explicit precedence', () => {
@@ -1227,7 +1236,7 @@ check('a consumer can reach HeaderCell.filterSlot, and omitting it changes nothi
   // popover state would be frozen at the identity it had on first render.
   const memo = code.slice(code.indexOf('const headerRow'), code.indexOf('const fixedHeaderContent'))
   assert.ok(memo.includes('renderHeaderSlot'), 'the header memo must depend on the slot renderer')
-  assert.match(memo, /onResizeColumn, renderHeaderSlot\]/)
+  assert.match(memo, /onResizeColumn, renderHeaderSlot,?[\s\S]{0,200}\],\s*\);/)
 
   // The header cell renders NO slot element at all when it is handed nothing — not an
   // empty wrapper, which would still occupy the gap beside every label.
@@ -1691,6 +1700,468 @@ check('a header may WRAP or carry a NODE, and label stays the string three thing
   assert.match(header, /aria-label=\{`Resize \$\{spec\.label\}`\}/)
   const hook = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
   assert.match(hook, /tsvEscape\(cols\[c\]\?\.label \?\? ''\)/)
+})
+
+// ═══ THE ANCHOR'S RING, INSIDE A BOX ══════════════════════════════════════════
+//
+// Renzo, on a swept range: the perimeter painted correctly and the cell the sweep started
+// from still carried its own full ring — "two nested boxes", "not intended behavior".
+
+check('a multi-cell selection has ONE rectangle: the anchor loses its ring', () => {
+  const t = createCellClassTable()
+
+  // A cell inside a box that is actually drawn: no ring.
+  const boxedAnchor = t.get({ ...baseKey, active: true, selected: true, boxed: true })
+  assert.ok(!/ring-2/.test(boxedAnchor.inner), 'the anchor must not draw a second rectangle')
+  assert.ok(!/z-20/.test(boxedAnchor.inner), 'the ring is gone, so its stacking bump goes with it')
+  // …and it is still visibly SELECTED. Suppressing the ring may not cost the tint.
+  assert.match(boxedAnchor.inner, /bg-primary/)
+
+  // A plain click — 1×1, no box — is byte-identical with before.
+  const lone = t.get({ ...baseKey, active: true, selected: true, boxed: false })
+  assert.match(lone.inner, /ring-2 ring-primary ring-inset/)
+  assert.match(lone.inner, /z-20/)
+
+  // A caret parked OUTSIDE the rectangle (what a header click's column sweep leaves)
+  // keeps its ring — which is why `boxed` is not simply "a multi-cell selection exists".
+  assert.match(t.get({ ...baseKey, active: true, selected: false, boxed: false }).inner, /ring-2/)
+
+  // IN THE CACHE KEY, or the first combination seen would decide the ring for every cell
+  // after it — the same failure the four edge flags were added to the key to prevent.
+  assert.notEqual(
+    cellClassKey({ ...baseKey, active: true, selected: true, boxed: true }),
+    cellClassKey({ ...baseKey, active: true, selected: true, boxed: false }),
+  )
+  assert.notEqual(boxedAnchor, lone)
+})
+
+check('the ROW derives `boxed` from the geometry it already has, not from a new prop', () => {
+  const row = readFileSync(join(ROOT, 'components/shared/table/Row.tsx'), 'utf8')
+  const code = row
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+    .replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('boxedSelection'), 'comment-stripping ate the source')
+
+  // The 1×1 test is the SAME one `cellRangeEdges` uses to decline to paint, so the box
+  // and the ring can never both be absent or both be present.
+  assert.match(code, /selectionRowEdge === 'both' && selectionBand\[0\] === selectionBand\[1\]/)
+  assert.match(code, /boxed: selected && boxedSelection/)
+
+  // And the pure helper still agrees: a 1×1 range paints nothing.
+  assert.equal(cellRangeEdges({ rowEdge: 'both', fromCol: 3, toCol: 3, col: 3 }), NO_RANGE_EDGES)
+  assert.notEqual(cellRangeEdges({ rowEdge: 'both', fromCol: 3, toCol: 5, col: 3 }), NO_RANGE_EDGES)
+})
+
+// ═══ `rowCopy` — a column that is not part of the record ══════════════════════
+
+check('Copy row skips a column that opted out; a swept rectangle does not', () => {
+  const cols = [
+    { key: 'state' as const, rowCopy: false },
+    { key: 'date' as const },
+    { key: 'supplier' as const },
+    { key: 'actions' as const, rowCopy: false },
+  ]
+  assert.deepEqual(rowCopyColumns(cols), [1, 2], 'the opted-out columns are absent, not blank')
+  // ADDITIVE by default: a column list that says nothing copies whole.
+  assert.deepEqual(rowCopyColumns([{ key: 'a' }, { key: 'b' }, { key: 'c' }]), [0, 1, 2])
+  // `rowCopy: true` is the same as omitting it — never `=== false`, always `!== false`.
+  assert.deepEqual(rowCopyColumns([{ key: 'a', rowCopy: true }, { key: 'b', rowCopy: false }]), [0])
+  assert.deepEqual(rowCopyColumns([]), [])
+
+  const hook = readFileSync(join(ROOT, 'lib/hooks/use-table-interaction.ts'), 'utf8')
+  const code = hook.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('copyRowCells'), 'comment-stripping ate the source')
+
+  // The ROW copy consults it…
+  assert.match(code, /const colIdx = rowCopyColumns\(cols\);/)
+  // …and the RECTANGLE copy builds its columns from the range ALONE. If the operator
+  // swept the column deliberately, they asked for it.
+  const tsvOf = code.slice(code.indexOf('const tsvOf'), code.indexOf('const copySelection'))
+  assert.match(tsvOf, /for \(let c = range\.startCol; c <= range\.endCol; c\+\+\) colIdx\.push\(c\);/)
+  assert.ok(!/rowCopy/.test(tsvOf), 'a rectangle copy must never consult rowCopy')
+
+  // ONE column list behind both row-copy forms, so the headers line can never name
+  // different columns than the values under it.
+  assert.match(code, /copyRow\(navRow: number, opts\?: \{ headers\?: boolean \}\): void/)
+  assert.match(code, /colIdx\.map\(\(c\) => tsvEscape\(cols\[c\]\?\.label \?\? ''\)\)/)
+})
+
+// ═══ SORT + FILTER — the view transform ═══════════════════════════════════════
+
+interface VRow {
+  id: string
+  code: string
+  qty: number | null
+}
+
+const V_PARENT: Record<string, { field: string; editable: boolean }> = {
+  code: { field: 'code', editable: true },
+  qty: { field: 'qty', editable: true },
+}
+/** A child is NOT a small parent: it has no figure, so it has no sort key of its own. */
+const V_CHILD: Record<string, { field: string; editable: boolean }> = {
+  code: { field: 'code', editable: true },
+}
+
+const viewKinds: ReadonlyMap<string, RowKind<VRow>> = new Map<string, RowKind<VRow>>([
+  ['record', { kind: 'record', height: 32, addressable: true, occupies: (k) => V_PARENT[k] ?? null }],
+  ['child', { kind: 'child', height: 26, addressable: true, occupies: (k) => V_CHILD[k] ?? null }],
+  ['draft', { kind: 'draft', height: 32, addressable: true, occupies: (k) => V_PARENT[k] ?? null }],
+  ['spacer', { kind: 'spacer', height: 8, addressable: false, occupies: () => null }],
+])
+
+const viewCols: ColumnSpec<VRow, unknown>[] = [
+  {
+    key: 'code', label: 'CODE', width: 100,
+    format: (r) => r.code,
+    clipboardValue: (r) => r.code,
+  },
+  {
+    key: 'qty', label: 'QTY', width: 80, align: 'right',
+    format: (r) => String(r.qty ?? ''),
+    numericValue: (r) => r.qty,
+    clipboardValue: (r) => (r.qty === null ? '' : String(r.qty)),
+  },
+  { key: 'num', label: '#', width: 40, cellKind: 'derived', format: () => null },
+]
+
+const vRec = (id: string, code: string, qty: number | null): GridRow<VRow> => ({
+  kind: 'record', id, data: { id, code, qty },
+})
+const vKid = (id: string, code: string): GridRow<VRow> => ({
+  kind: 'child', id, data: { id, code, qty: null },
+})
+
+/** Spacers, a parent with a child, a blank figure, and a draft at the end. */
+const VIEW_ITEMS: GridRow<VRow>[] = [
+  { kind: 'spacer', key: 'sp1' },
+  vRec('r1', 'B', 20),
+  vKid('r1c0', 'B-a'),
+  vRec('r2', 'A', 30),
+  { kind: 'spacer', key: 'sp2' },
+  vRec('r3', 'C', 10),
+  vRec('r4', 'D', null),
+  { kind: 'draft', id: 'd0' },
+]
+
+const idsOf = (items: readonly GridRow<VRow>[]): string[] =>
+  items.map((i) => ('id' in i ? i.id : `~${i.key}`))
+
+function runView(sort: Parameters<typeof applyTableView>[0]['sort'], filters = NO_FILTERS) {
+  return applyTableView<VRow, unknown>({
+    items: VIEW_ITEMS,
+    kinds: viewKinds,
+    cols: viewCols,
+    sort,
+    filters,
+    childKinds: ['child'],
+    draftKind: 'draft',
+    storedText: () => '',
+  })
+}
+
+check('no sort and no filter returns the SAME ARRAY — the whole feature is free when unused', () => {
+  const v = runView(null)
+  assert.equal(v.items, VIEW_ITEMS, 'the identity must survive, or every memo downstream misses')
+  assert.equal(v.sorted, false)
+  assert.equal(v.filtered, false)
+  assert.equal(v.total, 4, 'four DATA rows: the child, the spacers and the draft are not counted')
+  assert.equal(v.matched, 4)
+
+  // A sort naming a column that is not in the resolved set (hidden for this viewer,
+  // removed from the specs) is simply not a sort. Nothing throws, nothing reorders.
+  assert.equal(runView({ key: 'ghost', dir: 'asc' }).items, VIEW_ITEMS)
+})
+
+check('a sorted view HIDES the chrome rows and renders the data flat', () => {
+  const asc = runView({ key: 'code', dir: 'asc' })
+  assert.equal(asc.sorted, true)
+  // No `~sp1` / `~sp2`: a group heading or a rule-off is a claim about a RUN of adjacent
+  // rows, and a sort destroys the run. There is no honest way to re-tile one without
+  // knowing what it means, which is the tenant knowledge this layer may not have.
+  assert.ok(!idsOf(asc.items).some((id) => id.startsWith('~')), 'chrome rows must not survive a sort')
+  // Clearing restores the consumer's own flatten EXACTLY — same array, spacers included.
+  assert.equal(runView(null).items, VIEW_ITEMS)
+})
+
+check('a sort keeps a CHILD glued to its parent, and never sorts it as a peer', () => {
+  // A → B(+child) → C → D(blank). The child rides with `r1` wherever it lands.
+  assert.deepEqual(idsOf(runView({ key: 'code', dir: 'asc' }).items), ['r2', 'r1', 'r1c0', 'r3', 'r4', 'd0'])
+  assert.deepEqual(idsOf(runView({ key: 'code', dir: 'desc' }).items), ['r4', 'r3', 'r1', 'r1c0', 'r2', 'd0'])
+  // The child immediately FOLLOWS its parent in both directions — it is never emitted
+  // first, and never separated from it.
+  for (const dir of ['asc', 'desc'] as const) {
+    const ids = idsOf(runView({ key: 'code', dir }).items)
+    assert.equal(ids[ids.indexOf('r1') + 1], 'r1c0')
+  }
+})
+
+check('a DRAFT never sorts and never filters out', () => {
+  // Rule 4: a row being typed must not jump to the top, and must not vanish because it
+  // does not match a filter yet.
+  for (const dir of ['asc', 'desc'] as const) {
+    const ids = idsOf(runView({ key: 'qty', dir }).items)
+    assert.equal(ids[ids.length - 1], 'd0', 'the blank-row pool stays at the end')
+  }
+  const filtered = runView(null, { code: { text: 'zzz' } })
+  assert.deepEqual(idsOf(filtered.items), ['d0'])
+  assert.equal(filtered.matched, 0)
+  assert.equal(filtered.total, 4, 'the draft is not counted as a data row either')
+})
+
+check('a numeric column sorts by its NUMBER, and blanks go last in BOTH directions', () => {
+  // 10 · 20 · 30 · (blank). Not `String(10) < String(20) < String(30)` by luck — `qty`
+  // declares a `numericValue`, so the comparator is arithmetic.
+  assert.deepEqual(idsOf(runView({ key: 'qty', dir: 'asc' }).items), ['r3', 'r1', 'r1c0', 'r2', 'r4', 'd0'])
+  // DESC reverses the figures and leaves the blank where it was: an operator sorting
+  // descending is looking for the big numbers, not for the empty cells.
+  assert.deepEqual(idsOf(runView({ key: 'qty', dir: 'desc' }).items), ['r2', 'r1', 'r1c0', 'r3', 'r4', 'd0'])
+})
+
+check('a text sort is locale-aware and NUMERIC-aware, so R-2 comes before R-10', () => {
+  const items: GridRow<VRow>[] = [
+    vRec('a', 'R-10', 1),
+    vRec('b', 'R-2', 2),
+    vRec('c', 'r-1', 3),
+  ]
+  const v = applyTableView<VRow, unknown>({
+    items, kinds: viewKinds, cols: viewCols,
+    sort: { key: 'code', dir: 'asc' }, filters: NO_FILTERS, storedText: () => '',
+  })
+  // `numeric: true` on the collator, and `sensitivity: 'base'` so a lowercase `r-1` is
+  // not exiled to the far end of the sheet.
+  assert.deepEqual(idsOf(v.items), ['c', 'b', 'a'])
+})
+
+check('a text filter is case-insensitive CONTAINS, and two filters AND', () => {
+  const one = runView(null, { code: { text: 'b' } })
+  assert.equal(one.filtered, true)
+  assert.deepEqual(idsOf(one.items), ['r1', 'r1c0', 'd0'], 'the child rides with its parent here too')
+  assert.equal(one.matched, 1)
+  assert.equal(one.total, 4)
+  // Chrome goes under a filter for the same reason as under a sort: a heading over a
+  // group whose every row was filtered out is a heading over nothing.
+  assert.ok(!idsOf(one.items).some((id) => id.startsWith('~')))
+
+  // Bounds over `numericValue`, inclusive.
+  assert.deepEqual(idsOf(runView(null, { qty: { min: 20 } }).items), ['r1', 'r1c0', 'r2', 'd0'])
+  assert.deepEqual(idsOf(runView(null, { qty: { max: 20 } }).items), ['r1', 'r1c0', 'r3', 'd0'])
+  assert.deepEqual(idsOf(runView(null, { qty: { min: 20, max: 20 } }).items), ['r1', 'r1c0', 'd0'])
+
+  // AND across columns.
+  assert.deepEqual(idsOf(runView(null, { code: { text: 'a' }, qty: { min: 25 } }).items), ['r2', 'd0'])
+  assert.deepEqual(idsOf(runView(null, { code: { text: 'a' }, qty: { max: 25 } }).items), ['d0'])
+
+  // A row with NO NUMBER fails a bounds filter rather than counting as 0 — otherwise
+  // `min: 0` would quietly sweep in every unpriced row.
+  assert.ok(!idsOf(runView(null, { qty: { min: 0 } }).items).includes('r4'))
+})
+
+check('an EMPTY filter is not a filter, and the cycle is asc → desc → off', () => {
+  // A box the operator typed into and then cleared has to give every row back — and, with
+  // it, the group headings rule 2 took away.
+  assert.equal(isColumnFilterActive(undefined), false)
+  assert.equal(isColumnFilterActive({}), false)
+  assert.equal(isColumnFilterActive({ text: '' }), false)
+  assert.equal(isColumnFilterActive({ text: '   ' }), false)
+  assert.equal(isColumnFilterActive({ text: 'a' }), true)
+  assert.equal(isColumnFilterActive({ min: 0 }), true, 'a bound of zero IS a bound')
+  assert.equal(isColumnFilterActive({ max: 0 }), true)
+  assert.equal(runView(null, { code: { text: '  ' } }).items, VIEW_ITEMS, 'and the array identity survives')
+
+  assert.equal(activeFilterCount(NO_FILTERS), 0)
+  assert.equal(activeFilterCount({ a: { text: '' }, b: { text: 'x' }, c: { min: 1 } }), 2)
+
+  // OFF is `null`, never a third direction: "not sorted" has to restore the consumer's
+  // own row order rather than being an ordering of its own.
+  assert.equal(nextSortDirection(null), 'asc')
+  assert.equal(nextSortDirection(undefined), 'asc')
+  assert.equal(nextSortDirection('asc'), 'desc')
+  assert.equal(nextSortDirection('desc'), null)
+})
+
+check('which columns OFFER a sort or a filter — declared, with the same default as selectable', () => {
+  const plain = viewCols[0]
+  const derived = viewCols[2]
+  assert.equal(columnSortable(plain), true)
+  assert.equal(columnFilterable(plain), true)
+  // A row ordinal / an actions cluster has nothing to order by and nothing to search.
+  assert.equal(columnSortable(derived), false)
+  assert.equal(columnFilterable(derived), false)
+  // The spec always wins, in both directions.
+  assert.equal(columnSortable({ ...plain, sortable: false }), false)
+  assert.equal(columnFilterable({ ...plain, filterable: false }), false)
+  assert.equal(columnSortable({ ...derived, sortable: true }), true)
+  assert.equal(columnFilterable({ ...derived, filterable: true }), true)
+})
+
+check('the scope decides whether sort and filter are OFFERED, and the selection drops when they move', () => {
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('applyTableView'), 'comment-stripping ate the source')
+
+  // ON in `focus`, OFF in `endless`: an endless grid's order and window are the SERVER's
+  // keyset, and a client sort over the loaded rows would make `hasOlder`/`hasNewer` lie.
+  assert.match(code, /const sortEnabled = props\.enableSort \?\? scope === 'focus';/)
+  assert.match(code, /const filterEnabled = props\.enableFilter \?\? scope === 'focus';/)
+  // A disabled axis is neutralised at the TRANSFORM, not merely hidden in the header —
+  // so flipping the prop off can never leave a stale sort silently applied.
+  assert.match(code, /const activeSort = sortEnabled \? sort : null;/)
+  assert.match(code, /const activeFilters = filterEnabled \? filters : NO_FILTERS;/)
+
+  // The rectangle is in NAV-ROW coordinates and this is exactly the operation that
+  // changes which row each coordinate names.
+  assert.match(code, /clearSelectionCells\(\);\s*\n\s*setActiveCell\(null\);/)
+
+  // Everything downstream reads the TRANSFORMED array — a second row axis here would be
+  // the `firstItemIndex` bug in another costume.
+  assert.match(code, /const rows = useTableRows\(\{ items: viewItems, kinds, cols \}\);/)
+  assert.match(code, /data=\{viewItems as GridRow<Row>\[\]\}/)
+  assert.match(code, /\{viewItems\.map\(\(item, index\) => \{/)
+  assert.match(code, /viewItems\.forEach\(\(it, i\) => m\.set\(it, i\)\)/)
+})
+
+// ═══ The header: a click override, and a real second line ═════════════════════
+
+check('onHeaderClick replaces the column sweep, and the sort caret stays its own button', () => {
+  const types = readFileSync(join(ROOT, 'lib/table/types.ts'), 'utf8')
+  assert.match(types, /onHeaderClick\?\(spec: ColumnSpec<Row, Ctx>\): void;/)
+  assert.match(types, /subLabel\?: string;/)
+
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  const code = header.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('labelClickable'), 'comment-stripping ate the source')
+
+  // INSTEAD OF, not as well as: a header that opens a drawer must not also sweep 400
+  // cells behind the drawer.
+  assert.match(code, /if \(headerClick\) headerClick\(spec\);\s*\n\s*else onSelectColumn\?\.\(index\);/)
+  // A column with NEITHER is not a button that does nothing.
+  assert.match(code, /const labelClickable = headerClick !== undefined \|\| onSelectColumn !== undefined;/)
+
+  // The two affordances are SEPARATE buttons with their own handlers, so both work when
+  // a column has an override AND a sort.
+  assert.match(code, /data-sort-toggle=\{spec\.key\}/)
+  assert.match(code, /data-filter-toggle=\{spec\.key\}/)
+  assert.match(code, /onToggleSort\(spec\.key\)/)
+  // Both stop the event, or the sweep behind them fires too.
+  assert.equal((code.match(/e\.stopPropagation\(\);/g) ?? []).length >= 3, true)
+
+  // The SUB-LABEL: rendered whenever present, independent of `headerWrap`, and always
+  // ONE truncated line so the header row's growth stays bounded at two.
+  assert.match(code, /\{spec\.subLabel \? \(/)
+  // The TYPE is pinned, because it is the reason this seam exists at all: a two-line
+  // header is DECLARED here rather than hand-drawn per screen, so the default has to
+  // match the real usage (RC Movement's block headers, mirroring the live matrix's
+  // `text-[10px] text-muted-foreground` sub-line) or every consumer routes around it.
+  assert.match(code, /text-\[10px\] leading-tight text-muted-foreground"/)
+  assert.match(code, /data-sub-label/)
+  assert.ok(
+    !/headerWrap[\s\S]{0,120}subLabel/.test(code),
+    'the sub-label must not be gated on headerWrap — they answer different questions',
+  )
+})
+
+// ═══ `sizing: 'fill'` — one number for the layout AND the sticky arithmetic ════
+
+check('fill distributes slack INSIDE the resolution, so Σ widths IS the container', () => {
+  const specs: ColumnSpec<unknown, unknown>[] = [
+    { key: 'p1', label: 'P1', width: 60, pin: 'start', format: () => null },
+    { key: 'p2', label: 'P2', width: 100, pin: 'start', format: () => null },
+    { key: 'a', label: 'A', width: 100, format: () => null },
+    { key: 'b', label: 'B', width: 300, format: () => null },
+    { key: 'z', label: 'Z', width: 64, pin: 'end', format: () => null },
+  ]
+  assert.equal(resolveColumns(specs, {}).minWidth, 624)
+
+  const filled = resolveColumns(specs, {}, undefined, { containerWidth: 1000 })
+
+  // THE INVARIANT, first half: the table's own width is the container's.
+  assert.equal(filled.minWidth, 1000)
+
+  // THE INVARIANT, second half: every sticky offset is a PREFIX SUM of the widths that
+  // are actually rendered. This is the whole bug — the offsets used to come from the
+  // declared widths while `table-layout: fixed` scaled the rendered ones, so the frozen
+  // block overlapped itself on a wide monitor.
+  let x = 0
+  filled.cols.forEach((c, i) => {
+    assert.equal(filled.offsets[i], x, `offset ${i} must be the prefix sum`)
+    x += c.width
+  })
+  assert.equal(x, filled.minWidth)
+  assert.deepEqual(filled.pinnedLeft, [0, 60])
+  assert.equal(filled.pinnedWidths.start, 160)
+  assert.equal(filled.pinnedWidths.end, 64)
+
+  // A PINNED column never grows: its width is a wall the caret-follow and the drag
+  // auto-scroll measure from, and widening it hides MORE of the sheet, not less.
+  assert.equal(filled.cols[0].width, 60)
+  assert.equal(filled.cols[1].width, 100)
+  assert.equal(filled.cols[4].width, 64)
+  // The slack lands on the two scrolling columns, proportionally.
+  assert.equal(filled.cols[2].width + filled.cols[3].width, 776)
+  assert.ok(filled.cols[3].width > filled.cols[2].width, 'the wider lane absorbs more')
+})
+
+check('fill yields to the operator, and degrades rather than overlapping', () => {
+  const specs: ColumnSpec<unknown, unknown>[] = [
+    { key: 'p', label: 'P', width: 100, pin: 'start', format: () => null },
+    { key: 'a', label: 'A', width: 100, format: () => null },
+    { key: 'b', label: 'B', width: 100, format: () => null },
+    { key: 'fixed', label: 'F', width: 100, format: () => null, resizable: false },
+  ]
+
+  // A width the operator DRAGGED is an instruction. It is excluded from the
+  // distribution, so the drag never looks like it was ignored — and the slack it left
+  // goes to the columns that did not ask for anything.
+  const withDrag = resolveColumns(specs, {}, { widths: { a: 250 } }, { containerWidth: 800 })
+  assert.equal(withDrag.cols[1].width, 250, 'the dragged width is exactly what was dragged')
+  assert.equal(withDrag.minWidth, 800)
+  assert.equal(withDrag.cols[0].width, 100, 'pinned: untouched')
+  assert.equal(withDrag.cols[3].width, 100, 'resizable: false: untouched')
+  assert.equal(withDrag.cols[2].width, 350, 'the only candidate takes all of the slack')
+
+  // NOTHING to distribute into ⇒ nothing is distributed. The table then sizes to content
+  // and leaves dead space, which is honest; stretching it is what overlapped the frozen
+  // block in the first place.
+  const noCandidates = resolveColumns(
+    [specs[0], specs[3]], {}, undefined, { containerWidth: 900 },
+  )
+  assert.equal(noCandidates.minWidth, 200)
+
+  // A container NARROWER than the columns distributes nothing — "never crush, always
+  // scroll" is not negotiable, and a negative slack is a scrollbar, not a squeeze.
+  assert.equal(resolveColumns(specs, {}, undefined, { containerWidth: 100 }).minWidth, 400)
+  // Unmeasured (0) is the same as not asking.
+  assert.equal(resolveColumns(specs, {}, undefined, { containerWidth: 0 }).minWidth, 400)
+
+  // `'content'` is untouched: no fill argument, no change of any kind.
+  assert.deepEqual(
+    resolveColumns(specs, {}).cols.map((c) => c.width),
+    [100, 100, 100, 100],
+  )
+})
+
+check('the component measures the container and renders at the width it resolved', () => {
+  const table = readFileSync(join(ROOT, 'components/shared/table/BlackwoodTable.tsx'), 'utf8')
+  const code = table.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('ResizeObserver'), 'comment-stripping ate the source')
+
+  // DEFAULT IS TODAY'S BEHAVIOUR, byte for byte.
+  assert.match(code, /emptyMessage, sizing = 'content',/)
+  assert.match(code, /width: '100%',\s*\n\s*minWidth: columns\.minWidth,/)
+
+  // Under fill the table is rendered at the EXACT pixel sum it resolved, so
+  // `table-layout: fixed` has no slack left to scale into.
+  assert.match(code, /width: columns\.minWidth,\s*\n\s*minWidth: columns\.minWidth,/)
+  // A PRIMITIVE into the column memo — a fresh `{ containerWidth }` per render would
+  // re-resolve every sticky offset on every keystroke.
+  assert.match(code, /sizing === 'fill' \? fillWidth : undefined,/)
+  // rAF-throttled, and it prefers the SCROLLER's inner width — the wrapper's is wider by
+  // the vertical scrollbar, which would buy a permanent horizontal one.
+  assert.match(code, /raf = requestAnimationFrame\(measure\)/)
+  assert.match(code, /scrollerEl\(\)\?\.clientWidth \|\| el\.clientWidth/)
+  assert.match(code, /Math\.abs\(prev - w\) < 1 \? prev : w/)
 })
 
 console.log(`\n${passed} assertions passed.`)

@@ -12,10 +12,10 @@ Read-only view of FLECON bag stock — an **Excel-style frozen matrix** that mir
 ## Files
 | File | Role |
 |------|------|
-| `page.tsx` | Async Server Component — calls `fetchFleconBagData()`, passes `balances`/`movements`/`error` to the client view. Thin; navbar owns the title (no header rendered). Also reads **`?grid=v2`** and picks between the live view and the v2 grid (see "The `?grid=v2` rewire" below) — the ONLY file that switch touches. |
+| `page.tsx` | Async Server Component — calls `fetchFleconBagData()`, passes `balances`/`movements`/`error` to the client view. Thin; navbar owns the title (no header rendered). Declares **no search params at all** since the 2026-08-20 v2 retirement, so `?grid=v2` here is INERT — silently ignored, never an error. |
 | `actions.ts` | Read server action `fetchFleconBagData()` (exports `FleconBagMovementRow`) + the ONE mutation `updateFleconBagNickname(bagTypeId, nickname)` — writes the column nickname on `flecon_bag_types` (dimension only, never movement facts). |
 | `components/flecon-bags-view.tsx` | Client view — the **frozen bag-movement matrix** (rebuild of the old card grid). Owns the page container. Includes `BagTypeHeaderCell` — the click-to-edit nickname header. |
-| `components/flecon-bags-grid-v2.tsx` | **NEW (2026-08-19).** The same matrix on the **Blackwood Table** (`lib/table/` + `components/shared/table/`), reachable only at `?grid=v2`. READ-ONLY and built BESIDE the live view, which is not edited by one character. See "The `?grid=v2` rewire". |
+| ~~`components/flecon-bags-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** Added 2026-08-19 as the same matrix on the Blackwood Table at `?grid=v2`. See "The `?grid=v2` rewire" below for what it was and why it left. |
 
 ## Data
 - **View: `view_flecon_bag_balance`** — one row per bag type. Columns (ALL nullable): `bag_type_id`, `code`, `label`, `nickname`, `sort_order`, `opening`, `total_in`, `total_out`, `balance`, `last_movement_date`. **`balance` is SQL-computed — NEVER recomputed in TS** (the `nz()` helper only COALESCEs null → 0 for display). The header display label = `nickname?.trim() || label` (fall back to the internal label; the full `label` stays in the cell `title`). 14 rows. Ordered by `sort_order` ascending server-side.
@@ -44,9 +44,29 @@ Read-only view of FLECON bag stock — an **Excel-style frozen matrix** that mir
 - **Error handling:** on `error`, `errorToast()` fires (persist-until-dismissed + Copy, per the Error Toasts HARD RULE — never `toast.error` directly) AND an inline banner renders with its own Copy button. Matrix still renders whatever arrived.
 - **Date format:** `transaction_date` is already `yyyy-MM-dd`. The frozen DATE cell renders `MM-dd` (via `.slice(5)` — no date-fns) with the full `yyyy-MM-dd` in the native `title`; month separators use the month slice for TZ-safe grouping.
 
-## The `?grid=v2` rewire (universal-table migration, 2026-08-19)
+## The `?grid=v2` rewire (universal-table migration, 2026-08-19) — **RETIRED 2026-08-20**
 
-`components/flecon-bags-grid-v2.tsx` renders the SAME `balances` + `movements` payload on
+> **RETIRED 2026-08-20.** Renzo's call on the live review: *"You can also take out v2 for
+> the flecon bag movement for ictc since it also seems like a much more niche feature than
+> just a regular ol table."* `components/flecon-bags-grid-v2.tsx` is **deleted** and
+> `page.tsx` is back to its pre-v2 shape — no `GridVersionBar`, no `parseGrid`, no `grid`
+> search param, no wrapper column, `FleconBagsView` rendered directly. `?grid=v2` on this
+> route is now **INERT**, never an error.
+>
+> This is a straight subtraction: `flecon-bags-view.tsx` and `actions.ts` were never edited
+> for the preview, so the screen renders exactly what it rendered before it existed. The
+> niche behaviour named in the "Not reproduced in v2" bullet below — the click-to-edit
+> column nicknames, the `sm:hidden` phone summary, the month-separator rules — is precisely
+> why it left the track, and it all stays on the bespoke view.
+>
+> **Nothing shared was removed.** The preview exercised only public `BlackwoodTable`
+> surface, and its role as a platform proof-of-concept (the CHROME-ROW pattern for a
+> balance lane carrying a different figure under every column, and the width-clamp
+> measurement) is recorded in `lib/table/CONTEXT.md` → "Stage 1D at scale". That historical
+> record stands; only this screen's consumer left. The rest of this section is kept **as a
+> historical record of what was built and measured**, not as a description of live code.
+
+`components/flecon-bags-grid-v2.tsx` rendered the SAME `balances` + `movements` payload on
 the platform grid, so the two can be compared row-for-row on the same real data. It is
 reachable only at `/inventory/flecon-bags?grid=v2`; `?grid=` absent, misspelt or `V2` all
 mean the live view. Only `page.tsx` changed — `flecon-bags-view.tsx` and `actions.ts` are

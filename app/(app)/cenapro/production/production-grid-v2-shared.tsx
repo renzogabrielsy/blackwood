@@ -266,6 +266,24 @@ function specFor(col: ProdCol): ColumnSpec<ProductionGridRow, ProductionGridCtx>
         // the platform still renders no filter UI and holds no filter state.
         filter: col.filterColumn ? ({ kind: 'set' as const, column: col.filterColumn }) : undefined,
         /**
+         * COLLISION with the consumer's own header controls (2026-08-20).
+         *
+         * Both v2 grids hang their URL-driven chrome off `renderHeaderSlot`: a
+         * `DateSortSlot` on the two DATE columns and a `ColumnFilterMenu` on the six that
+         * carry a `filterColumn`. Those draw the SAME lucide glyphs the platform's built-in
+         * sort caret and filter trigger draw, so a focus-scope header rendered two
+         * identical carets — or two identical funnels — side by side, opening different
+         * things. Worse, they answer different questions: the consumer's controls re-query
+         * the SERVER through the URL and survive a reload; the built-ins are local view
+         * state over the loaded rows only, and hide every chrome row while active.
+         *
+         * One control per question. The consumer's stays (it is the one that reaches the
+         * data); the built-in is off on exactly the columns that already have one, and
+         * every other column keeps both affordances untouched.
+         */
+        ...(PRODUCTION_DATE_COLUMNS.has(col.key) ? { sortable: false } : {}),
+        ...(col.filterColumn ? { filterable: false } : {}),
+        /**
          * NO `parse`, and NO `editable`. Together those two omissions are what make the
          * sheet read-only: `columnAcceptsEdit` returns `spec.parse !== undefined` when no
          * `editable` is declared, so every cell refuses to open, refuses a paste and can

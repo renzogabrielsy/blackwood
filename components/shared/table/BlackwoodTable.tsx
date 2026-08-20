@@ -5,9 +5,13 @@ import { TableVirtuoso } from 'react-virtuoso';
 import type { ItemProps, TableComponents, TableProps, TableVirtuosoHandle } from 'react-virtuoso';
 
 import { cn } from '@/lib/utils';
-import { clampDraftAdd, defaultTableMenu, DEFAULT_DRAFT_ROWS } from '@/lib/table';
+import {
+    applyTableView, clampDraftAdd, columnFilterable, columnSortable, defaultTableMenu,
+    DEFAULT_DRAFT_ROWS, nextSortDirection, NO_FILTERS,
+} from '@/lib/table';
 import type {
-    CellAddress, ColumnSpec, GridRow, RowKind, SummarySpans, TableMenuAction, TableSettings,
+    CellAddress, ColumnFilter, ColumnSpec, GridRow, RowKind, SummarySpans, TableFilters,
+    TableMenuAction, TableSettings, TableSort,
 } from '@/lib/table';
 import { useOptionalStatusBar } from '@/components/providers/status-bar-context';
 import { GridContextMenu } from '@/components/shared/grid/GridContextMenu';
@@ -262,6 +266,43 @@ export interface BlackwoodTableProps<Row, Ctx> {
     ctx: Ctx;
     settings?: TableSettings;
     onSettingsChange?(next: TableSettings): void;
+    /**
+     * How the table decides its own width. Default `'content'`.
+     *
+     * `'content'` is byte-identical with what shipped: `width: 100%` over a `minWidth` of
+     * Σ declared widths, which a consumer clamps from outside.
+     *
+     * `'fill'` fixes the measured layout bug behind that clamp. Under `table-layout:
+     * fixed` a table wider than its `<col>`s scales **all** of them — a declared 76px
+     * column rendered 94.703px in a 1600px container — while the sticky `left` offsets
+     * come from the DECLARED widths, so on a wide monitor the frozen block **overlaps
+     * itself**. Under `'fill'` the container's slack is distributed into the non-pinned
+     * columns **inside `useTableColumns`' resolution**, and the table is then rendered at
+     * that exact pixel width — so every offset, drag wall and footer corner is derived
+     * from the widths actually painted. One number describes both.
+     *
+     * It needs a container observer, so it costs a `ResizeObserver` (rAF-throttled) and a
+     * re-resolution of the column table on a genuine resize. A column the operator has
+     * dragged, a pinned column and a `resizable: false` column are all excluded from the
+     * distribution — see `distributeFill`.
+     */
+    sizing?: 'content' | 'fill';
+    /**
+     * May the operator SORT from the column headers?
+     *
+     * **Defaults to true in the `focus` scope and false in `endless`**, and that split is
+     * not a preference. An endless grid's row order and its window are the SERVER's keyset:
+     * a client-side sort would reorder only the rows currently loaded, and `hasOlder` /
+     * `hasNewer` — which mean "there are older/newer rows beyond this window" in the
+     * server's order — would become claims about an order that no longer exists. The
+     * Cenapro endless ledger already declined a sort for exactly that reason.
+     *
+     * Set it true in `endless` deliberately, accepting that the sort covers the loaded
+     * window only. A per-column `sortable: false` narrows it further either way.
+     */
+    enableSort?: boolean;
+    /** May the operator FILTER from the column headers? Same default and same reasoning. */
+    enableFilter?: boolean;
     /** THE single writer, from `useTableEdits`. */
     edits: TableEdits;
     /** The same function handed to `useTableEdits` as `canonicalText`. */
@@ -545,8 +586,12 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         contextMenuItems, disableDefaultContextMenu = false,
         rowClassFor, rowRules, onSelectionChange, onStateChange,
         className, startReached, endReached, initialTopMostItemIndex, firstItemIndex,
-        emptyMessage,
+        emptyMessage, sizing = 'content',
     } = props;
+
+    // The scope decides, unless the consumer says otherwise. See the two props.
+    const sortEnabled = props.enableSort ?? scope === 'focus';
+    const filterEnabled = props.enableFilter ?? scope === 'focus';
 
     // ── Column widths, resizable WHETHER OR NOT the consumer persists them ───────
     //
@@ -576,15 +621,11 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
         return { ...settings, widths: effectiveWidths };
     }, [settings, effectiveWidths]);
 
-    const columns = useTableColumns(specs, ctx, effectiveSettings);
-    const cols = columns.cols;
-    const rows = useTableRows({ items, kinds, cols });
-
-    // One class table per column set, so the cache lives exactly as long as what it
-    // describes. A `<td>`'s className is then a Map lookup rather than two `twMerge` calls.
-    const classes = React.useMemo(() => createCellClassTable(rowRules), [rowRules]);
-
     // ── Scrollers ────────────────────────────────────────────────────────────────
+    //
+    // Declared HERE, above the column resolution, because `sizing: 'fill'` measures the
+    // scrollport and the column widths are resolved from that measurement — so the ref
+    // and its reader have to exist before the resolution that consumes them.
     const plainScrollerRef = React.useRef<HTMLDivElement | null>(null);
     const virtuosoScrollerRef = React.useRef<HTMLDivElement | null>(null);
     const virtuosoRef = React.useRef<TableVirtuosoHandle>(null);
@@ -594,6 +635,86 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
             scope === 'endless' ? virtuosoScrollerRef.current : plainScrollerRef.current,
         [scope],
     );
+
+    // ── `sizing: 'fill'` — the container width, measured rather than assumed ─────
+    //
+    // A PRIMITIVE in state, so the column memo compares by `===` and a resize that moved
+    // nothing re-resolves nothing. Zero until it has been measured, and zero distributes
+    // no slack — so the first paint is the declared widths and never a guess.
+    const wrapRef = React.useRef<HTMLDivElement | null>(null);
+    const [fillWidth, setFillWidth] = React.useState(0);
+    // Bumped when the virtualiser hands over its scroller. The scroller does not exist on
+    // the first commit, and its `clientWidth` is the only honest number — the wrapper's is
+    // wider by the vertical scrollbar, which would buy a permanent horizontal one.
+    const [scrollerTick, setScrollerTick] = React.useState(0);
+
+    React.useEffect(() => {
+        if (sizing !== 'fill') return;
+        const el = wrapRef.current;
+        if (!el) return;
+
+        let raf = 0;
+        const measure = () => {
+            raf = 0;
+            const w = scrollerEl()?.clientWidth || el.clientWidth;
+            // Sub-pixel churn is not a resize. Without this guard the distribution and the
+            // scrollbar can trade a pixel back and forth forever.
+            setFillWidth((prev) => (Math.abs(prev - w) < 1 ? prev : w));
+        };
+        // rAF-throttled: a drag of the window edge fires the observer per frame, and each
+        // one would otherwise re-resolve the column table synchronously.
+        const ro = new ResizeObserver(() => {
+            if (raf === 0) raf = requestAnimationFrame(measure);
+        });
+        ro.observe(el);
+        measure();
+        return () => {
+            ro.disconnect();
+            if (raf !== 0) cancelAnimationFrame(raf);
+        };
+        // `scrollerEl` is stable per scope. `scrollerTick` appears here and nowhere in the
+        // body ON PURPOSE: it is the signal that the scroller now EXISTS, which is the one
+        // thing a ResizeObserver on the wrapper cannot notice by itself.
+    }, [sizing, scrollerEl, scrollerTick]);
+
+    const columns = useTableColumns(
+        specs,
+        ctx,
+        effectiveSettings,
+        sizing === 'fill' ? fillWidth : undefined,
+    );
+    const cols = columns.cols;
+
+    // ── SORT + FILTER — view state, and nothing but ──────────────────────────────
+    //
+    // It never mutates a row, never touches the URL and never reaches a query. A consumer
+    // whose filters already live in search params keeps them; this is a second, local
+    // axis, and `renderHeaderSlot` still hangs that consumer's own control beside these.
+    const [sort, setSort] = React.useState<TableSort | null>(null);
+    const [filters, setFilters] = React.useState<TableFilters>(NO_FILTERS);
+
+    const activeSort = sortEnabled ? sort : null;
+    const activeFilters = filterEnabled ? filters : NO_FILTERS;
+
+    const view = React.useMemo(
+        () =>
+            applyTableView({
+                items, kinds, cols,
+                sort: activeSort,
+                filters: activeFilters,
+                childKinds, draftKind, storedText,
+            }),
+        [items, kinds, cols, activeSort, activeFilters, childKinds, draftKind, storedText],
+    );
+
+    // THE row array from here down. Identical to `items` when neither axis is on, so a
+    // grid that never sorts pays one `Map` build and nothing else.
+    const viewItems = view.items;
+    const rows = useTableRows({ items: viewItems, kinds, cols });
+
+    // One class table per column set, so the cache lives exactly as long as what it
+    // describes. A `<td>`'s className is then a Map lookup rather than two `twMerge` calls.
+    const classes = React.useMemo(() => createCellClassTable(rowRules), [rowRules]);
 
     const scrollToIndexFn = React.useCallback((index: number) => {
         // RAW array position — never `firstItemIndex + index`. Virtuoso offsets only the
@@ -682,12 +803,57 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     } = interaction;
     const {
         bandFor, rowEdgeFor, selectColumn, range: selectionRange,
-        size: selectionSize, aggregates,
+        size: selectionSize, aggregates, clear: clearSelectionCells,
     } = interaction.selection;
 
     React.useEffect(() => {
         onStateChange?.({ activeCell, isEditing, selection: selectionRange });
     }, [onStateChange, activeCell, isEditing, selectionRange]);
+
+    // ── A SORT OR A FILTER DROPS THE SELECTION ───────────────────────────────────
+    //
+    // The rectangle is in NAV-ROW coordinates, and re-sorting or filtering is exactly the
+    // operation that changes which row each of those coordinates names. Keeping it would
+    // leave a selection that LOOKS untouched pointing at four different rows — and a
+    // Delete or a Fill down aimed at it would land on rows the operator never chose. So
+    // the axis moving takes the selection with it, and the caret too.
+    //
+    // The first run is skipped: on mount there is nothing selected, and clearing anyway
+    // would be a state write on every grid in the app for no reason.
+    const viewRef = React.useRef<{ sort: TableSort | null; filters: TableFilters } | null>(null);
+    React.useEffect(() => {
+        const prev = viewRef.current;
+        viewRef.current = { sort: activeSort, filters: activeFilters };
+        if (prev === null) return;
+        if (prev.sort === activeSort && prev.filters === activeFilters) return;
+        clearSelectionCells();
+        setActiveCell(null);
+    }, [activeSort, activeFilters, clearSelectionCells, setActiveCell]);
+
+    const toggleSort = React.useCallback((key: string) => {
+        setSort((prev) => {
+            const dir = nextSortDirection(prev?.key === key ? prev.dir : null);
+            return dir === null ? null : { key, dir };
+        });
+    }, []);
+
+    const setColumnFilter = React.useCallback((key: string, next: ColumnFilter | undefined) => {
+        setFilters((prev) => {
+            if (next === undefined) {
+                if (prev[key] === undefined) return prev; // no churn, no re-filter
+                const out = { ...prev };
+                delete out[key];
+                return out;
+            }
+            return { ...prev, [key]: next };
+        });
+    }, []);
+
+    /** Put the sheet back exactly as the consumer built it — one control, both axes. */
+    const clearView = React.useCallback(() => {
+        setSort(null);
+        setFilters(NO_FILTERS);
+    }, []);
 
     // ── The floating summary pill, published by the TABLE itself ─────────────────
     //
@@ -860,16 +1026,31 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                             // ALWAYS supplied — see `onResizeColumn`. `resizable: false`
                             // on the spec is still the way a column opts out.
                             onResize={onResizeColumn}
-                            // The seam the deferred column-filter chrome needs. Omitted ⇒
-                            // `undefined` ⇒ `HeaderCell` renders no slot at all, exactly as
-                            // before this prop existed.
+                            // The BUILT-IN sort and filter. `undefined` renders no control
+                            // at all, which is what a scope with them off, or a column that
+                            // opted out, resolves to — so a header that offers neither is
+                            // byte-identical with before they existed.
+                            sortDir={sort?.key === spec.key ? sort.dir : null}
+                            onToggleSort={sortEnabled && columnSortable(spec) ? toggleSort : undefined}
+                            filter={filters[spec.key]}
+                            onFilterChange={
+                                filterEnabled && columnFilterable(spec) ? setColumnFilter : undefined
+                            }
+                            // Bounds are offered only where there is a number to bound.
+                            numericFilter={spec.numericValue !== undefined}
+                            // The seam the consumer's own column-filter chrome needs. It
+                            // renders BESIDE the two above, never instead of them.
                             filterSlot={renderHeaderSlot ? renderHeaderSlot(spec, i) : undefined}
                         />
                     );
                 })}
             </tr>
         ),
-        [cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart, selectColumn, onResizeColumn, renderHeaderSlot],
+        [
+            cols, columns.pinned, columns.pinnedLeft, columns.pinnedRight, endStart,
+            selectColumn, onResizeColumn, renderHeaderSlot,
+            sort, filters, sortEnabled, filterEnabled, toggleSort, setColumnFilter,
+        ],
     );
 
     const fixedHeaderContent = React.useCallback(() => headerRow, [headerRow]);
@@ -1001,9 +1182,9 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
     // visible row per render is ~30 linear scans of the whole window on every keystroke.
     const indexOfItem = React.useMemo(() => {
         const m = new Map<GridRow<Row>, number>();
-        items.forEach((it, i) => m.set(it, i));
+        viewItems.forEach((it, i) => m.set(it, i));
         return m;
-    }, [items]);
+    }, [viewItems]);
 
     const itemContent = React.useCallback(
         (_index: number, item: GridRow<Row>) => {
@@ -1032,6 +1213,10 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
 
     const onScroller = React.useCallback((el: HTMLDivElement | null) => {
         virtuosoScrollerRef.current = el;
+        // `sizing: 'fill'` measures the SCROLLER, which does not exist on the first
+        // commit. This is the one signal that it now does; the ResizeObserver on the
+        // wrapper cannot notice a child appearing.
+        if (el) setScrollerTick((n) => n + 1);
     }, []);
 
     const virtuosoContext = React.useMemo<VirtuosoCtx>(
@@ -1139,16 +1324,67 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
             </div>
         ) : null;
 
+    // ── The view strip — what a sort or a filter is currently doing ──────────────
+    //
+    // Small, and only present while the view is transformed: a sheet nobody has sorted or
+    // filtered looks exactly as it did. The count is the answer to the only question a
+    // filter raises ("how much am I not looking at?"), and the Clear puts both axes back
+    // in one click — a filter you cannot find the off switch for is a bug report.
+    const sortedLabel = sort ? (cols.find((c) => c.key === sort.key)?.label ?? sort.key) : null;
+    const viewStrip =
+        view.filtered || (sortedLabel !== null && sortEnabled) ? (
+            <div
+                data-grid-chrome
+                data-testid="table-view-strip"
+                className="flex shrink-0 items-center gap-3 border-t border-border bg-background/95 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur supports-backdrop-filter:bg-background/60"
+            >
+                {view.filtered ? (
+                    <span data-testid="table-view-count">
+                        <span className="font-mono tabular-nums">{view.matched}</span> of{' '}
+                        <span className="font-mono tabular-nums">{view.total}</span> rows
+                    </span>
+                ) : null}
+                {sortedLabel !== null && sortEnabled ? (
+                    <span data-testid="table-view-sort">
+                        sorted by {sortedLabel} {sort?.dir === 'asc' ? '↑' : '↓'}
+                    </span>
+                ) : null}
+                <button
+                    type="button"
+                    data-testid="table-view-clear"
+                    onClick={clearView}
+                    className="h-5 rounded border border-input px-1.5 text-[11px] transition-colors duration-150 hover:bg-muted"
+                >
+                    Clear
+                </button>
+            </div>
+        ) : null;
+
     // ── Render ───────────────────────────────────────────────────────────────────
-    const tableStyle: React.CSSProperties = {
-        width: '100%',
-        minWidth: columns.minWidth,
-        borderCollapse: 'separate',
-        borderSpacing: 0,
-    };
+    //
+    // `'content'` is the shipped style, untouched. `'fill'` renders the table at the
+    // EXACT pixel sum of its resolved widths — which, once the slack has been
+    // distributed, is the container's own width. That is what stops `table-layout: fixed`
+    // scaling the columns out from under the sticky offsets: there is no slack left for
+    // it to scale into, and if there was none to distribute (every column pinned or
+    // hand-sized) the table simply sizes to content rather than overlapping itself.
+    const tableStyle: React.CSSProperties =
+        sizing === 'fill'
+            ? {
+                  width: columns.minWidth,
+                  minWidth: columns.minWidth,
+                  borderCollapse: 'separate',
+                  borderSpacing: 0,
+              }
+            : {
+                  width: '100%',
+                  minWidth: columns.minWidth,
+                  borderCollapse: 'separate',
+                  borderSpacing: 0,
+              };
 
     return (
-        <div className={cn('flex min-h-0 flex-col', className)}>
+        <div ref={wrapRef} className={cn('flex min-h-0 flex-col', className)}>
             <div
                 {...interaction.gridProps}
                 data-blackwood-table
@@ -1156,14 +1392,14 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
             >
                 <PasteSink {...interaction.sinkProps} />
 
-                {items.length === 0 && emptyMessage ? (
+                {viewItems.length === 0 && emptyMessage ? (
                     <div className="animate-fade-up flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
                         {emptyMessage}
                     </div>
                 ) : scope === 'endless' ? (
                     <TableVirtuoso
                         ref={virtuosoRef}
-                        data={items as GridRow<Row>[]}
+                        data={viewItems as GridRow<Row>[]}
                         context={virtuosoContext}
                         computeItemKey={computeItemKey}
                         initialTopMostItemIndex={initialTopMostItemIndex}
@@ -1187,7 +1423,7 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                                 {headerRow}
                             </thead>
                             <tbody>
-                                {items.map((item, index) => {
+                                {viewItems.map((item, index) => {
                                     const meta = rowMeta(item as GridRow<unknown>);
                                     return (
                                         <TableRowShell
@@ -1212,6 +1448,7 @@ export function BlackwoodTable<Row, Ctx>(props: BlackwoodTableProps<Row, Ctx>) {
                 )}
             </div>
 
+            {viewStrip}
             {draftControl}
 
             <GridContextMenu

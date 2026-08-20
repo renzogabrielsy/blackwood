@@ -56,6 +56,27 @@ export interface CellClassKey {
     edgeBottom: boolean;
     /** On the LEFT edge of the selection rectangle. */
     edgeLeft: boolean;
+    /**
+     * Is this cell inside a selection rectangle that covers **more than one cell** — i.e.
+     * one that actually has a perimeter box drawn around it?
+     *
+     * It exists to suppress ONE thing: the anchor cell's own ring. Renzo, on a swept
+     * range: *"not intended behavior"* — the perimeter painted correctly and the cell the
+     * sweep started from still carried its full ring, so the selection read as two nested
+     * boxes with the inner one a pixel inside the outer. In a multi-cell selection **the
+     * box IS the selection**; a second rectangle around the anchor says nothing the
+     * operator needs and looks like a rendering fault.
+     *
+     * **A 1×1 selection is untouched.** A plain click paints no box at all
+     * (`cellRangeEdges` returns `NO_RANGE_EDGES` for it), so the ring is the whole answer
+     * there and must stay exactly as it was. The two rules are complementary halves of
+     * one statement: **there is always exactly one rectangle on screen.**
+     *
+     * And it is deliberately not simply `!active`: a caret sitting OUTSIDE the rectangle —
+     * which is what a header click's column sweep leaves behind — is not boxed, so it
+     * keeps its ring and the operator can still see where the keyboard is.
+     */
+    boxed: boolean;
 }
 
 /** The two class strings a cell needs: the `<td>` and the interactive layer inside it. */
@@ -175,7 +196,10 @@ function buildInner(k: CellClassKey): string {
 
     // The ring sits at z-20 so it clears a pinned cell (z-10) — otherwise a pinned cell
     // paints over its own ring. No transition: cell selection is never animated.
-    if (k.active) parts.push('z-20 ring-2 ring-primary ring-inset');
+    //
+    // SUPPRESSED inside a multi-cell selection: the perimeter box is already drawing the
+    // one rectangle, and the anchor's ring inside it is a second one. See `boxed`.
+    if (k.active && !k.boxed) parts.push('z-20 ring-2 ring-primary ring-inset');
 
     parts.push(k.editable ? 'cursor-cell' : 'cursor-default');
     return parts.join(' ');
@@ -204,6 +228,10 @@ export function cellClassKey(k: CellClassKey): string {
         k.edgeRight ? 'R' : '-',
         k.edgeBottom ? 'B' : '-',
         k.edgeLeft ? 'L' : '-',
+        // In the key for the same reason as the four edges: it changes the class string.
+        // Omitted, the first combination the cache ever saw would decide the ring for
+        // every cell after it — the anchor would keep or lose its ring at random.
+        k.boxed ? 'X' : '-',
     ].join('|');
 }
 

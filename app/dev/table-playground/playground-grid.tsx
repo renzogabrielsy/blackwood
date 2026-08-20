@@ -125,14 +125,34 @@ const num = (v: string): { ok: true; patch: Record<string, unknown> } | { ok: fa
 
 const text = (v: string) => ({ ok: true as const, patch: { value: v } });
 
+/**
+ * A module-level emitter, so `onHeaderClick` can live on the module-level column table.
+ *
+ * `specs` is a memo dependency of the whole column resolution, so the array has to keep
+ * its identity — a spec built inside the component would re-resolve every sticky offset
+ * on every render. The fixture therefore publishes the click instead of closing over
+ * state, which is also what a real consumer does (it opens a drawer, it does not re-render
+ * its column table).
+ */
+const headerClickListeners = new Set<(key: string) => void>();
+function emitHeaderClick(key: string) {
+    for (const fn of headerClickListeners) fn(key);
+}
+
 const COLUMNS: ColumnSpec<PlayRow, PlayCtx>[] = [
     {
         key: 'num', label: '#', width: 48, pin: 'start', align: 'right',
         cellKind: 'derived', hideable: false, resizable: false,
+        // A row ORDINAL is not part of the record — "Copy row" must not lead with it.
+        rowCopy: false,
         format: (row) => <span className="text-muted-foreground">{row.id.replace(/\D/g, '')}</span>,
     },
     {
         key: 'code', label: 'CODE', width: 110, pin: 'start',
+        // A SECOND LINE under the name — the shape RC Movement's block headers want
+        // (`C-8B` over `JAN-26-BLK22`). Independent of `headerWrap`, which this column
+        // does not set.
+        subLabel: 'reference',
         cellKind: 'text', parse: text, clipboardValue: (r) => r.code,
         format: (row) => <span className="font-mono">{row.code}</span>,
     },
@@ -184,6 +204,10 @@ const COLUMNS: ColumnSpec<PlayRow, PlayCtx>[] = [
     },
     {
         key: 'total', label: 'TOTAL', width: 110, align: 'right', summaryLane: 'total',
+        // The header OPENS SOMETHING instead of sweeping the column — what RC Movement's
+        // block headers need. The sort caret beside it still works, which is the property
+        // the suite checks.
+        onHeaderClick: (spec) => emitHeaderClick(spec.key),
         // Never editable, but a range MAY cover it — a run of computed totals is the most
         // useful thing on a sheet to add up.
         cellKind: 'readonly', selectable: true, calcType: 'SUM',
@@ -194,6 +218,8 @@ const COLUMNS: ColumnSpec<PlayRow, PlayCtx>[] = [
     {
         key: 'actions', label: '', width: 64, pin: 'end', align: 'center',
         cellKind: 'derived', resizable: false, hideable: false,
+        // Decoration, not data — the second half of the `rowCopy` case.
+        rowCopy: false,
         format: () => <span className="text-muted-foreground">···</span>,
     },
 ];
@@ -319,7 +345,28 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
      * exist. The table now keeps the width itself, and the suite drags one to prove it.
      */
     const [managedWidths, setManagedWidths] = React.useState(true);
+    /**
+     * Whether the table OFFERS its sort and filter here.
+     *
+     * The playground is the `endless` scope, where both default to OFF — a client-side
+     * sort over a server keyset window would make `hasOlder`/`hasNewer` lie. Unchecked is
+     * therefore the scope's own default, and the suite asserts the affordances are simply
+     * absent; checked is a consumer opting in with the caveat, which is the only way to
+     * drive the feature from here.
+     */
+    const [viewTools, setViewTools] = React.useState(false);
+    /** `content` (the shipped stretch) vs `fill` (slack distributed inside the resolution). */
+    const [fill, setFill] = React.useState(false);
+    const [headerClicked, setHeaderClicked] = React.useState('none');
     const [settings, setSettings] = React.useState<TableSettings>({});
+
+    React.useEffect(() => {
+        const fn = (key: string) => setHeaderClicked(key);
+        headerClickListeners.add(fn);
+        return () => {
+            headerClickListeners.delete(fn);
+        };
+    }, []);
     const [state, setState] = React.useState<TableState>({ activeCell: null, isEditing: false, selection: null });
 
     const records = React.useMemo(() => makeRecords(), []);
@@ -491,6 +538,27 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                     />
                     persist widths
                 </label>
+                <label className="flex items-center gap-1" data-grid-chrome>
+                    <input
+                        type="checkbox"
+                        data-testid="toggle-view-tools"
+                        checked={viewTools}
+                        onChange={(e) => setViewTools(e.target.checked)}
+                    />
+                    sort + filter
+                </label>
+                <label className="flex items-center gap-1" data-grid-chrome>
+                    <input
+                        type="checkbox"
+                        data-testid="toggle-fill"
+                        checked={fill}
+                        onChange={(e) => setFill(e.target.checked)}
+                    />
+                    fill the container
+                </label>
+                <span data-testid="header-clicked" className="font-mono">
+                    {headerClicked}
+                </span>
                 <StatusBarReadout />
                 <span data-testid="active-cell" className="font-mono">
                     {a ? `${a.row},${a.col}` : 'none'}
@@ -559,6 +627,12 @@ export function PlaygroundGrid({ scope = 'endless' }: { scope?: 'endless' | 'foc
                 renderChromeRow={renderChromeRow}
                 firstItemIndex={pager.firstItemIndex}
                 onStateChange={setState}
+                // `undefined` is the SCOPE's own answer (off, in endless); `true` is a
+                // consumer opting in. Passing the union rather than a bare boolean is what
+                // lets the suite observe both.
+                enableSort={viewTools ? true : undefined}
+                enableFilter={viewTools ? true : undefined}
+                sizing={fill ? 'fill' : 'content'}
                 className="min-h-0 flex-1"
             />
 

@@ -59,9 +59,11 @@ export {
     planPaste,
     pasteKindsCompatible,
     pasteRowTargets,
+    rowCopyColumns,
     tilePaste,
 } from './clipboard';
 export type {
+    RowCopyColumn,
     PastePlanInput,
     PastePlan,
     PasteRowKind,
@@ -110,6 +112,26 @@ export type { SelectionRowEdge, CellRangeEdges } from './selection';
 // interaction hook's own callback.
 export { defaultTableMenu } from './menu';
 export type { TableMenuAction, TableMenuItemSpec } from './menu';
+
+// SORT + FILTER — the view transform every grid gets for free. Pure: it decides the row
+// order and the row set, and holds none of the state that drives it.
+export {
+    applyTableView,
+    nextSortDirection,
+    isColumnFilterActive,
+    activeFilterCount,
+    columnSortable,
+    columnFilterable,
+    NO_FILTERS,
+} from './view';
+export type {
+    SortDirection,
+    TableSort,
+    ColumnFilter,
+    TableFilters,
+    TableView,
+    TableViewInput,
+} from './view';
 
 export { GRID_PARAM, GRID_V2, parseGrid, isGridV2, withGrid, gridHref } from './grid-param';
 export type { GridParam, QueryEntries } from './grid-param';
