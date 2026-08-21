@@ -20,6 +20,8 @@
 - **`?block=<block_loc>`** — drives the open block on `/inventory/blocking` (Phase 2). Deep-linkable, refresh-safe, browser Back closes the panel. Click a cell to toggle; clicking the open cell or pressing Escape clears it.
 - **`?campaign=<PRODUCTION_BATCH-YEAR>`** — drives the selected campaign on `/inventory/rc-movement` (e.g. `JUNE-2026`). Absent → the server action resolves the most recent campaign. The matrix owns the month/day-range via the campaign.
 - **`?grid=v1|v2`** — which implementation of BOTH tables renders. **On this page the default is `v2`** (the Blackwood Table) and `?grid=v1` reaches the classic tables; every other screen on the toggle still defaults to `v1`. An axis of the CLIENT only — see the flip section below.
+- **`?year=<yyyy>|all`** + **`?month=<1-12>|all`** — the **PERIOD axis** on the v2 grids (`lib/table/period-param.ts`, control `components/shared/table/PeriodPicker.tsx`). ONE pair for BOTH tabs. `year` bounds the server query and always has; `month` is client-side over rows already fetched. **Absent means this page's default** — the current calendar month of the current year, falling back to the year's latest month with data — so `all months` is written out loud as `?month=all` and is never absence. A month outside `1-12` (and `?month=aug`, `?month=0`, `?month=`) resolves to the default rather than half-selecting anything, exactly like `?grid=`. See the period section below.
+  - **Not to be confused with the classic table's `?m=`**, which is ZERO-based (`?m=7` means August) and belongs to `DeliverySheetFooter`. The two params are independent and neither reads the other; `?m=` is untouched by this work.
 
 ## Files
 | File | Role |
@@ -104,11 +106,11 @@ files are not edited by one character.**
 
 | File | Role |
 |------|------|
-| `page.tsx` | **The only file the flip edited.** Reads `?grid=` via `resolveGrid(grid, GRID_V2)` from `@/lib/table`, mounts `<GridVersionBar defaultVersion={GRID_V2} …>` above the sheet, and picks `<InventoryViewV2>` or `<InventoryView>` with the same props. |
-| `components/inventory-view-v2.tsx` | The `?grid=v2` twin of `inventory-view.tsx` — same `InventoryTabProvider`, both panes mounted, inactive one hidden. **No cross-fade** (see below). |
-| `components/rc-out-lazy-tab-v2.tsx` | The twin of `rc-out-lazy-tab.tsx`; calls the SAME read-only `fetchRcOutTabData()` and mounts `RcOutGridV2`. |
-| `rc-in/delivery-grid-v2.tsx` | RC IN on the Blackwood Table. Read-only. |
-| `rc-out/rc-out-grid-v2.tsx` | RC OUT on the Blackwood Table. Read-only. |
+| `page.tsx` | Reads `?grid=` via `resolveGrid(grid, GRID_V2)` from `@/lib/table`, mounts `<GridVersionBar defaultVersion={GRID_V2} …>` above the sheet, and picks `<InventoryViewV2>` or `<InventoryView>` with the same props. **Also resolves the PERIOD** (`?year=` / `?month=`) once and threads it to the picker and both grids. |
+| `components/inventory-view-v2.tsx` | The `?grid=v2` twin of `inventory-view.tsx` — same `InventoryTabProvider`, both panes mounted, inactive one hidden. **No cross-fade** (see below). Passes `periodYear` / `periodMonth` to both panes. |
+| `components/rc-out-lazy-tab-v2.tsx` | The twin of `rc-out-lazy-tab.tsx`; calls the SAME read-only `fetchRcOutTabData()` and mounts `RcOutGridV2`. Forwards the period. |
+| `rc-in/delivery-grid-v2.tsx` | RC IN on the Blackwood Table. **Editable** (inline edits + a blank-row pool, through the existing server actions). Cuts its rows to the selected month. |
+| `rc-out/rc-out-grid-v2.tsx` | RC OUT on the Blackwood Table. Read-only. Cuts its rows to the selected **year AND month** — its fetch is not year-scoped. |
 
 **Five rules this obeys** (the recipe lives in `lib/table/CONTEXT.md` → "The side-by-side toggle"):
 
@@ -116,7 +118,67 @@ files are not edited by one character.**
 2. **The param is an axis of the CLIENT, never of the data.** Every fetch in `page.tsx` runs identically either way; `?grid=` reaches no query, no action and no role gate.
 3. **`?grid=` absent, misspelt, `V2` or `3` all mean this page's DEFAULT — which is now v2.** Only the exact `v1` reaches the classic tables, and only the exact `v2` reaches the new ones on the nine screens that have not flipped. A typo can never half-select anything, on either kind of page.
 4. **The bar carries its own layout.** `GridVersionBar` is `shrink-0`; the page mounts it and never re-types its classes.
-5. **BOTH v2 grids are READ-ONLY** — no editor, no save, no delete, no draft rows, no context menu, and no server action that writes is imported by either file. Column resize is session-local state, deliberately NOT persisted, because persisting it would be a write.
+5. **RC OUT v2 is READ-ONLY** — every column `cellKind: 'readonly'`, no `parse`, no draft pool, and no server action that writes is imported by that file. **RC IN v2 edits and saves** (2026-08-21) through the existing `bulkUpdateDeliveries` / `submitBulkDeliveries`, with no new SQL. Column resize is session-local state on both, deliberately NOT persisted.
+
+## The PERIOD picker — one Year + Month pair for both tabs (2026-08-21)
+
+Renzo: *"both deliveries and usage need to be filtered using the dropdowns of year and month,
+im sure this is a pattern for most tables we're using"* — and it is, which is why the control
+is **platform chrome**, not a pair of selects on this page. `components/shared/table/PeriodPicker.tsx`
+knows no module, no column and no currency; `lib/table/period-param.ts` owns what its URL
+means. This is the `PeriodPicker` that Stage 1B listed as deferred chrome.
+
+**Where it sits:** the RIGHT-HAND slot of the existing `GridVersionBar` (`trailing`), so the
+grid toggle and the period controls are ONE strip above the sheet rather than two — a second
+bar costs a row of the sheet. It renders on the **v2 branch only**; the classic table keeps
+its own footer strip and popovers, untouched.
+
+| URL | The period in force |
+|---|---|
+| `/inventory` | **the current month of the current year** — or that year's latest month with data if the current one is empty |
+| `/inventory?month=3` | March of the current year |
+| `/inventory?year=2025&month=3` | March 2025 |
+| `/inventory?month=all` | every month of the current year |
+| `/inventory?year=all` | every year — the month select goes inert, because one calendar month spread across nine years is not a period anybody reads |
+| `/inventory?search=…` | **`all` / `all`, and the picker is inert** — the search query deliberately drops the date bound and spans every year, so narrowing it would throw away most of the hits. The `?year=` in the URL is untouched and returns when the search clears. |
+
+**The rules, and why each is not optional**
+
+1. **ONE pair for BOTH tabs**, for the same reason there is one grid toggle for both. Two
+   period controls would let the screen sit showing August on Deliveries and March on Usage.
+   Flipping the tab is therefore a period NON-event.
+2. **Every other param survives, in both directions.** `withPeriod` copies the query
+   exhaustively (`tab`, `grid`, `search`, filters) and touches only its own two keys; the
+   toggle's `withGrid` does the same for the period. Verified as a round trip on a URL
+   carrying all five.
+3. **The year bounds the QUERY; the month does not.** The year's rows are already in hand,
+   so the month is a cut of a payload that arrived either way — the same model the live
+   footer strip has always used, and why flipping between two months is instant rather than
+   a server round trip. RC OUT is the exception in one direction only: `fetchRcOutTabData()`
+   returns every row there has ever been, so its grid cuts the **year too**.
+4. **The cut happens in `flatten`, upstream of every accumulator**, so the sticky Σ rule-off,
+   each month heading and RC OUT's blended ₱/kg all describe the **filtered** set. `inPeriod`
+   is the one definition both grids call — string slicing on `yyyy-MM-dd`, never a `Date`,
+   because parsing a stored date back to ask its month is where a timezone moves a row to the
+   previous day.
+5. **A single month renders NO month headings and NO spacers.** A heading naming the only
+   month present carries no information, and its totals would repeat the pinned Σ rule-off
+   digit for digit. The totals are said ONCE, at the foot; the headings return the moment the
+   sheet spans more than one month. Each sheet also names its period beside its row count and
+   in its empty state — *"No deliveries in July 2026"* is an answer, *"No deliveries"* looks
+   like missing data.
+6. **The year list is DERIVED, not hard-coded.** The classic footer offers `currentYear + 1`
+   down to `2010` — sixteen years the ledger has never held. `page.tsx` reads the earliest and
+   latest `transaction_date` (two `limit(1)` queries, folded into the existing `Promise.all`)
+   and lists exactly that span, extended to the current year. It is deliberately NOT stretched
+   to reach whatever `?year=` says: `?year=9999` parses, and folding it in would build an
+   eight-thousand-item dropdown. A year the URL names but the list does not hold is prepended
+   by the control itself.
+7. **A typed year is what a blank row's date means.** `DeliveryGridV2`'s `fallbackYear` used to
+   be the newest dated row in view, with a note that the real answer was the `?year=` param
+   `page.tsx` did not thread down. It does now — so an operator looking at 2025 who types
+   `3/14` lands in March 2025. The data derivation survives underneath for `?year=all` and for
+   a search, where the period names no single year.
 
 **Deliberate difference from the live view:** `inventory-view-v2.tsx` swaps tabs instantly instead of cross-fading. The live 150ms fade is driven by a `setTransitioning(true)` inside a `useEffect`, which is one of the repo's 28 pre-existing `react-hooks` lint errors (`inventory-view.tsx:26:9`); copying it would have added a 29th.
 

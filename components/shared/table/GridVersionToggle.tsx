@@ -233,6 +233,17 @@ export interface GridVersionBarProps {
     label?: string;
     /** Optional sentence to the right of the control — a note, a count, a caveat. */
     note?: React.ReactNode;
+    /**
+     * Chrome pinned to the FAR RIGHT of the same strip — a period picker, a scope toggle,
+     * a count. It exists so a page does not have to stack a second bar under this one to
+     * put one more control on screen: two strips of chrome above a dense sheet is two
+     * rows of the sheet the operator no longer sees, and the strip already owns its own
+     * layout for exactly this reason (see the note on the component below).
+     *
+     * Rendered inside an `ml-auto` group, so it is right-aligned when the note is short
+     * and wraps beneath rather than crushing it when the note is long.
+     */
+    trailing?: React.ReactNode;
     /** Which grid this page shows when the URL says nothing. Defaults to `'v1'`. */
     defaultVersion?: GridVersion;
     /** Label on the OLD grid's segment. `'Current'` unless the page has flipped. */
@@ -260,6 +271,7 @@ export interface GridVersionBarProps {
 export function GridVersionBar({
     label,
     note,
+    trailing,
     defaultVersion,
     currentLabel,
     newLabel,
@@ -279,6 +291,7 @@ export function GridVersionBar({
                 newLabel={newLabel}
             />
             {note ? <span className="min-w-0">{note}</span> : null}
+            {trailing ? <div className="ml-auto flex items-center gap-2">{trailing}</div> : null}
         </div>
     );
 }

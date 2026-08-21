@@ -5,15 +5,26 @@ import { useRouter } from 'next/navigation';
 import { Loader2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { BlackwoodTable } from '@/components/shared/table';
+import { BlackwoodTable, formatPeriodLabel } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
-import { DEFAULT_DRAFT_ROWS, countUnsavedWork, describeUnsavedWork, needsGroupSpacer, pinnedOffsets } from '@/lib/table';
+import {
+    DEFAULT_DRAFT_ROWS,
+    PERIOD_ALL,
+    countUnsavedWork,
+    describeUnsavedWork,
+    inPeriod,
+    isSinglePeriod,
+    needsGroupSpacer,
+    pinnedOffsets,
+} from '@/lib/table';
 import type {
     CellContext,
     CellSlot,
     ColumnParseResult,
     ColumnSpec,
     GridRow,
+    PeriodMonth,
+    PeriodYear,
     RowKind,
     TableSettings,
 } from '@/lib/table';
@@ -141,13 +152,15 @@ export interface DeliveryGridCtx {
     /** The operator's lab thresholds, from the shared table-settings provider. */
     labHighlights: Record<LabMetric, LabHighlightSpec>;
     /**
-     * The year a bare `8/21` means when the ROW itself cannot say — the newest dated
-     * delivery in view, else the current year.
+     * The year a bare `8/21` means when the ROW itself cannot say.
      *
-     * **A gap, deliberately left open:** `/inventory` is year-scoped by a `?year=` search
-     * param that `page.tsx` does not thread into either table's props. Reading it here
-     * would mean editing `page.tsx`, which this pass may not touch. Derived from the data
-     * instead, which is right in every view where the two agree.
+     * **The gap is CLOSED (2026-08-21).** This used to be derived from the newest dated
+     * delivery in view, with a note saying the real answer was the `?year=` search param
+     * that `page.tsx` did not thread down. It does now: the resolved period year is the
+     * fallback, so a date typed into a blank row lands in the year the operator is
+     * LOOKING AT rather than in whatever year the topmost row happens to carry. The data
+     * derivation survives as the fallback's fallback, for `?year=all` and for a search,
+     * where the period genuinely names no single year.
      */
     fallbackYear: number;
     /** The date a blank row starts on, so a draft's DATE cell has a canonical value. */
@@ -630,10 +643,24 @@ interface Flattened {
 }
 
 /**
- * The ONE place the shape of this sheet is decided: month headings, a blank spacer at each
- * month boundary, the rows in the order the server sent them (transaction_date DESC,
- * created_at DESC — the sort is the server's and is not re-done here), and the blank-row
- * pool at the very bottom.
+ * The ONE place the shape of this sheet is decided: the PERIOD cut, month headings, a
+ * blank spacer at each month boundary, the rows in the order the server sent them
+ * (transaction_date DESC, created_at DESC — the sort is the server's and is not re-done
+ * here), and the blank-row pool at the very bottom.
+ *
+ * **The month cut happens HERE, before anything is counted.** `page.tsx` scopes the fetch
+ * to a YEAR and stops there — the year's rows are already in hand, so narrowing to one of
+ * its months is a cut of a payload that arrived either way (the live footer strip has
+ * always worked this way, and it is why flipping between two months is instant). Because
+ * the cut is upstream of the two accumulators, **the Σ rule-off and every month heading
+ * describe the FILTERED set** and cannot drift from what is on screen.
+ *
+ * **A SINGLE month renders NO headings and NO spacers.** A heading that says AUGUST 2026
+ * above every row of a sheet that contains nothing but August is a row of chrome carrying
+ * no information — and its month totals would repeat, digit for digit, the sticky Σ
+ * rule-off already pinned to the bottom. So in single-month view the totals are said ONCE,
+ * at the foot, where the live table also puts them; the heading rows come back the moment
+ * the sheet spans more than one month.
  *
  * **The chrome keys carry a RUN ORDINAL, not just the month.** `computeItemKey` is the
  * virtualiser's React key, so two items sharing one is a real defect — and a month CAN
@@ -641,33 +668,45 @@ interface Flattened {
  * search spans every year). Keying by run rather than by value makes that unrepresentable
  * instead of merely unlikely, and it costs one integer.
  */
-function flatten(rows: readonly DeliveryHistoryRow[], draftIds: readonly string[]): Flattened {
+function flatten(
+    rows: readonly DeliveryHistoryRow[],
+    draftIds: readonly string[],
+    year: PeriodYear,
+    month: PeriodMonth,
+): Flattened {
     const items: DeliveryItem[] = [];
     const months = new Map<string, MonthBlock>();
     const grand: MonthBlock = { label: 'ALL', count: 0, kg: 0, php: 0 };
+    const grouped = !isSinglePeriod(year, month);
 
     let prev: string | undefined;
     let run = 0;
     let chromeKey = '';
     for (const row of rows) {
+        if (!inPeriod(row.transaction_date, year, month)) continue;
+
         // A row with no date is normalised to '' rather than left undefined — two such
         // rows then compare equal and get no spacer between them, like any other group.
         const key = (row.transaction_date ?? '').slice(0, 7);
-        if (needsGroupSpacer(prev, key)) items.push({ kind: 'spacer', key: `sp:${run}` });
-        if (prev !== key) {
-            run += 1;
-            chromeKey = `mh:${run}:${key}`;
-            items.push({ kind: 'group-header', key: chromeKey });
-            months.set(chromeKey, { label: key ? formatMonthHeading(key) : 'NO DATE', count: 0, kg: 0, php: 0 });
+        if (grouped) {
+            if (needsGroupSpacer(prev, key)) items.push({ kind: 'spacer', key: `sp:${run}` });
+            if (prev !== key) {
+                run += 1;
+                chromeKey = `mh:${run}:${key}`;
+                items.push({ kind: 'group-header', key: chromeKey });
+                months.set(chromeKey, { label: key ? formatMonthHeading(key) : 'NO DATE', count: 0, kg: 0, php: 0 });
+            }
+            prev = key;
         }
-        prev = key;
 
-        const block = months.get(chromeKey)!;
         const kg = num(row.weight_kg);
         const php = phpTotalOf(row);
-        block.count += 1;
-        block.kg += kg;
-        block.php += php;
+        if (grouped) {
+            const block = months.get(chromeKey)!;
+            block.count += 1;
+            block.kg += kg;
+            block.php += php;
+        }
         grand.count += 1;
         grand.kg += kg;
         grand.php += php;
@@ -699,6 +738,13 @@ export interface DeliveryGridV2Props {
     allSuppliers: string[];
     allLocations: string[];
     canViewPrices: boolean;
+    /**
+     * The RESOLVED period the whole screen is showing, from `page.tsx` — the SAME pair the
+     * `PeriodPicker` in the grid bar displays and the Usage tab narrows by. The year also
+     * bounded the server fetch; the month narrows here, over rows already in hand.
+     */
+    periodYear: PeriodYear;
+    periodMonth: PeriodMonth;
 }
 
 /** What the reason dialog is holding while it waits for an answer. */
@@ -714,7 +760,7 @@ interface PendingSave {
 // ─── The component ───────────────────────────────────────────────────────────────
 
 export function DeliveryGridV2(props: DeliveryGridV2Props) {
-    const { data, canViewPrices } = props;
+    const { data, canViewPrices, periodYear, periodMonth } = props;
 
     const router = useRouter();
     const [isPending, startTransition] = React.useTransition();
@@ -740,14 +786,23 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
      */
     const draftDefaultDate = React.useMemo(() => new Date().toISOString().split('T')[0], []);
 
-    /** The year a bare `8/21` means when the row itself cannot say. */
+    /**
+     * The year a bare `8/21` means when the row itself cannot say.
+     *
+     * **The SELECTED year wins.** An operator looking at 2025 who types `3/14` into a
+     * blank row means March 2025 — the period is the context they are working in, and it
+     * is the one fact on this screen that says so out loud. The old data derivation
+     * survives underneath it for `?year=all` and for a search, where the period names no
+     * single year and the newest row in view is the best available guess.
+     */
     const fallbackYear = React.useMemo(() => {
+        if (periodYear !== PERIOD_ALL) return periodYear;
         for (const row of data) {
             const y = Number((row.transaction_date ?? '').slice(0, 4));
             if (Number.isFinite(y) && y > 1900) return y;
         }
         return new Date().getFullYear();
-    }, [data]);
+    }, [data, periodYear]);
 
     // `ctx` MUST be referentially stable — it is a dependency of the column resolution, of
     // every editability verdict and of every cell's `format`.
@@ -774,8 +829,8 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
     const [draftIds, setDraftIds] = React.useState<string[]>(() => makeDraftIds(DEFAULT_DRAFT_ROWS));
 
     const { items, months, grand } = React.useMemo(
-        () => flatten(data, showDrafts ? draftIds : []),
-        [data, showDrafts, draftIds],
+        () => flatten(data, showDrafts ? draftIds : [], periodYear, periodMonth),
+        [data, showDrafts, draftIds, periodYear, periodMonth],
     );
 
     const byId = React.useMemo(() => {
@@ -1078,6 +1133,13 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
     /** Saving, or the post-save `router.refresh()` still in flight. */
     const busy = saving || isPending;
 
+    // The period, said in words beside the row count — the picker names it too, but the
+    // sheet's own count has to say WHAT it counted or a total is a number with no subject.
+    const periodLabel = React.useMemo(
+        () => formatPeriodLabel(periodYear, periodMonth),
+        [periodYear, periodMonth],
+    );
+
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* A solid token, not glass: this strip is a `shrink-0` flex child, not a
@@ -1088,13 +1150,13 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                     grid=v2
                 </span>
                 <span>
-                    RC IN on the Blackwood Table — typing, saving, new rows, the right-click menu, the selection
-                    summary and column resize are live; the toolbar, filters, the month strip, the row menu,
-                    delete and cell autocomplete are not built yet.{' '}
-                    <strong className="font-semibold">Current</strong> above returns to the live table.
+                    RC IN on the Blackwood Table — typing, saving, new rows, the Year + Month picker above, the
+                    right-click menu, the selection summary and column resize are live; the toolbar, filters,
+                    the row menu, delete and cell autocomplete are not built yet.{' '}
+                    <strong className="font-semibold">Classic</strong> above returns to the live table.
                 </span>
                 <span className="font-mono tabular-nums">
-                    {grand.count} row{grand.count === 1 ? '' : 's'}
+                    {periodLabel} · {grand.count} row{grand.count === 1 ? '' : 's'}
                 </span>
 
                 {/* The blank rows' seeded date, SAID OUT LOUD. A `format` runs against the
@@ -1164,7 +1226,10 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 rowClassFor={rowClassFor}
                 renderChromeRow={renderChromeRow}
                 summaryRows={summaryRows}
-                emptyMessage="No deliveries in this view."
+                // The period is NAMED in the empty state. "No deliveries" over a sheet
+                // that is empty only because a month was picked reads as missing data;
+                // "No deliveries in July 2026" reads as an answer.
+                emptyMessage={`No deliveries in ${periodLabel}.`}
                 className="min-h-0 flex-1"
             />
 

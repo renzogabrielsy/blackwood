@@ -144,3 +144,27 @@ export {
     gridHref,
 } from './grid-param';
 export type { GridParam, GridVersion, QueryEntries } from './grid-param';
+
+// The PERIOD axis — `?year=` + `?month=`, and the ONE definition of whether a dated row
+// falls inside the selected period.
+export {
+    PERIOD_YEAR_PARAM,
+    PERIOD_MONTH_PARAM,
+    PERIOD_ALL,
+    parsePeriodYear,
+    parsePeriodMonth,
+    resolvePeriodYear,
+    resolvePeriodMonth,
+    periodKeyOf,
+    inPeriod,
+    isSinglePeriod,
+    withPeriod,
+    periodHref,
+} from './period-param';
+export type {
+    PeriodParam,
+    PeriodYear,
+    PeriodMonth,
+    PeriodSelection,
+    PeriodQueryEntries,
+} from './period-param';

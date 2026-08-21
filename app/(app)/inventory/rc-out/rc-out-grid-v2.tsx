@@ -2,10 +2,17 @@
 
 import * as React from 'react';
 
-import { BlackwoodTable } from '@/components/shared/table';
+import { BlackwoodTable, formatPeriodLabel } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
-import { needsGroupSpacer, pinnedOffsets } from '@/lib/table';
-import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
+import { inPeriod, isSinglePeriod, needsGroupSpacer, pinnedOffsets } from '@/lib/table';
+import type {
+    ColumnSpec,
+    GridRow,
+    PeriodMonth,
+    PeriodYear,
+    RowKind,
+    TableSettings,
+} from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import type { RcOutRow } from '@/types/rc-out';
 import { cn } from '@/lib/utils';
@@ -396,40 +403,60 @@ interface Flattened {
 }
 
 /**
- * The ONE place the shape of this sheet is decided: month headings, a blank spacer at each
- * month boundary, and the rows in the order the server sent them (transaction_date DESC).
- * The sort is the server's and is not re-done here.
+ * The ONE place the shape of this sheet is decided: the PERIOD cut, month headings, a
+ * blank spacer at each month boundary, and the rows in the order the server sent them
+ * (transaction_date DESC). The sort is the server's and is not re-done here.
+ *
+ * **The period cut is BOTH axes here, not just the month.** RC IN's fetch is year-scoped
+ * by `page.tsx`, so its grid only has to narrow the month; `fetchRcOutTabData()` returns
+ * every `rc_out` row there has ever been (that is how it derives its own `yearOptions`),
+ * so the year is cut here too. `inPeriod` is the shared definition, so the two tabs answer
+ * "is this row in the selected period" identically.
+ *
+ * Because the cut is upstream of the two accumulators, **the Σ rule-off — including its
+ * blended ₱/kg — describes the FILTERED set** and cannot drift from what is on screen.
+ *
+ * **A SINGLE month renders NO headings and NO spacers**: a heading naming the only month
+ * present carries no information, and its totals would repeat the sticky Σ rule-off
+ * digit for digit. The headings come back the moment the sheet spans more than one month.
  *
  * **The chrome keys carry a RUN ORDINAL, not just the month.** `computeItemKey` is the
  * virtualiser's React key, so two items sharing one is a real defect — and a month CAN
  * appear twice if the rows ever arrive out of order. Keying by run rather than by value
  * makes that unrepresentable instead of merely unlikely.
  */
-function flatten(rows: readonly RcOutRow[]): Flattened {
+function flatten(rows: readonly RcOutRow[], year: PeriodYear, month: PeriodMonth): Flattened {
     const items: RcOutItem[] = [];
     const months = new Map<string, MonthBlock>();
     const grand: MonthBlock = { label: 'ALL', count: 0, kg: 0, php: 0 };
+    const grouped = !isSinglePeriod(year, month);
 
     let prev: string | undefined;
     let run = 0;
     let chromeKey = '';
     for (const row of rows) {
-        const key = (row.transaction_date ?? '').slice(0, 7);
-        if (needsGroupSpacer(prev, key)) items.push({ kind: 'spacer', key: `sp:${run}` });
-        if (prev !== key) {
-            run += 1;
-            chromeKey = `mh:${run}:${key}`;
-            items.push({ kind: 'group-header', key: chromeKey });
-            months.set(chromeKey, { label: key ? formatMonthHeading(key) : 'NO DATE', count: 0, kg: 0, php: 0 });
-        }
-        prev = key;
+        if (!inPeriod(row.transaction_date, year, month)) continue;
 
-        const block = months.get(chromeKey)!;
+        const key = (row.transaction_date ?? '').slice(0, 7);
+        if (grouped) {
+            if (needsGroupSpacer(prev, key)) items.push({ kind: 'spacer', key: `sp:${run}` });
+            if (prev !== key) {
+                run += 1;
+                chromeKey = `mh:${run}:${key}`;
+                items.push({ kind: 'group-header', key: chromeKey });
+                months.set(chromeKey, { label: key ? formatMonthHeading(key) : 'NO DATE', count: 0, kg: 0, php: 0 });
+            }
+            prev = key;
+        }
+
         const kg = num(row.weight_kg);
         const php = num(row.avg_wtd_value);
-        block.count += 1;
-        block.kg += kg;
-        block.php += php;
+        if (grouped) {
+            const block = months.get(chromeKey)!;
+            block.count += 1;
+            block.kg += kg;
+            block.php += php;
+        }
         grand.count += 1;
         grand.kg += kg;
         grand.php += php;
@@ -483,18 +510,37 @@ export interface RcOutGridV2Props {
     blockLocs: string[];
     canViewPrices: boolean;
     onRefresh?: () => Promise<void>;
+    /**
+     * The RESOLVED period the whole screen is showing, from `page.tsx` — the SAME pair the
+     * `PeriodPicker` in the grid bar displays and the Deliveries tab narrows by. Note
+     * `yearOptions` above is this tab's OWN year list, built by `fetchRcOutTabData()` for
+     * the live table's year popover; the picker's list is the ledger's, and nothing here
+     * reads either of them.
+     */
+    periodYear: PeriodYear;
+    periodMonth: PeriodMonth;
 }
 
 // ─── The component ───────────────────────────────────────────────────────────────
 
 export function RcOutGridV2(props: RcOutGridV2Props) {
-    const { data, canViewPrices } = props;
+    const { data, canViewPrices, periodYear, periodMonth } = props;
 
     // `ctx` MUST be referentially stable — it is a dependency of the column resolution and
     // of every cell's `format`.
     const ctx = React.useMemo<RcOutGridCtx>(() => ({ canViewPrices }), [canViewPrices]);
 
-    const { items, months, grand } = React.useMemo(() => flatten(data), [data]);
+    const { items, months, grand } = React.useMemo(
+        () => flatten(data, periodYear, periodMonth),
+        [data, periodYear, periodMonth],
+    );
+
+    // The period, said in words beside the row count — the picker names it too, but the
+    // sheet's own count has to say WHAT it counted.
+    const periodLabel = React.useMemo(
+        () => formatPeriodLabel(periodYear, periodMonth),
+        [periodYear, periodMonth],
+    );
 
     const byId = React.useMemo(() => {
         const m = new Map<string, RcOutRow>();
@@ -627,12 +673,13 @@ export function RcOutGridV2(props: RcOutGridV2Props) {
                 </span>
                 <span>
                     RC OUT on the Blackwood Table — <strong className="font-semibold">read-only</strong>. Selection,
-                    keyboard, copy, the right-click menu, the selection summary and column resize are live; the five
-                    filters, search, the Closed Blocks summary, the row menu and every editing path are not built yet.{' '}
-                    <strong className="font-semibold">Current</strong> above returns to the live table.
+                    keyboard, copy, the Year + Month picker above, the right-click menu, the selection summary and
+                    column resize are live; the batch/destination/block filters, search, the Closed Blocks summary,
+                    the row menu and every editing path are not built yet.{' '}
+                    <strong className="font-semibold">Classic</strong> above returns to the live table.
                 </span>
                 <span className="ml-auto font-mono tabular-nums">
-                    {grand.count} row{grand.count === 1 ? '' : 's'}
+                    {periodLabel} · {grand.count} row{grand.count === 1 ? '' : 's'}
                 </span>
             </div>
 
@@ -650,7 +697,9 @@ export function RcOutGridV2(props: RcOutGridV2Props) {
                 rowClassFor={rowClassFor}
                 renderChromeRow={renderChromeRow}
                 summaryRows={summaryRows}
-                emptyMessage="No usage records in this view."
+                // The period is NAMED in the empty state: "No usage records" over a sheet
+                // that is empty only because a month was picked reads as missing data.
+                emptyMessage={`No usage records in ${periodLabel}.`}
                 className="min-h-0 flex-1"
             />
         </div>
