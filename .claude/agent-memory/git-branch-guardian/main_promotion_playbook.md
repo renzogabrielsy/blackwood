@@ -93,6 +93,15 @@ files; all three hashes identical across the switch, no stash created. Beware `g
 --short <a> <b> <c>` in one call — it errored `fatal: Needed a single revision` here while
 each ref resolved fine alone; resolve refs one at a time.
 
+**`feat/<screen>-v2-default` is a SERIES, one branch per screen — confirmed 2026-08-21.** The
+table migration (v2 default flip + inline editing + Year/Month picker) is being rolled out
+screen by screen, and Renzo's approved convention is a fresh branch per screen rather than one
+long-lived branch accumulating them: `feat/rc-in-out-v2-default` (promoted), then
+`feat/qc-ledger-v2-default` (Cenapro QC ledger, cut off `3328874`). So when the next screen's
+v2 migration arrives, **cut a new branch off current `main` — never reopen or pile onto a
+v2-default branch that already promoted.** Each cut is the degenerate case above (already
+standing on `main`, three standing dirty files carried, no stash); it has now run clean twice.
+
 **A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
 23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
 belonged to the same module, so it committed straight onto `feat/cenapro-deliveries-qol` and

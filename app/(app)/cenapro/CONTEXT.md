@@ -918,7 +918,8 @@ from that date on; only **QC** still has a v2.
 
 | File | Role |
 |---|---|
-| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. Same fifteen columns, order and widths as `qc-ledger-client.tsx`. |
+| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. Same fifteen columns and order as `qc-ledger-client.tsx` (four widths differ — see the `px-2` note below). **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". |
+| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences. Asserted by `scripts/verify-qc-grid.ts` (**45 assertions**) with no browser and no database. |
 | ~~`inventory/flec-inventory-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** See below. |
 
 ### RETIRED 2026-08-20 — Flec Inventory (`/cenapro/inventory`) leaves the v2 track
@@ -991,13 +992,15 @@ Four changes to `qc/qc-ledger-grid-v2.tsx`, none of them in `lib/table/**` or
    renders a declared 48px column as 48px under `fill` — **not** by driving `/cenapro/qc`
    itself, which needs a real login.
 
-**READ-ONLY is structural, not a promise.** No `ColumnSpec` in either declares a
-`parse`, and `columnAcceptsEdit` falls back to `spec.parse !== undefined` — so the
-editor, Delete/Backspace and the paste loop's per-cell guard all refuse at every
-coordinate. Neither imports a writing action, so `cenapro_save_ccc_analysis` and the
-APPEND-ONLY `cenapro_set_opening_balance` are unreachable from both files. The row
-families still declare each slot's honest `editable` flag — the ROW's half of the
-verdict, ANDed with the column's, and what a later editing pass builds on.
+~~**READ-ONLY is structural, not a promise.**~~ **SUPERSEDED 2026-08-21 for QC — see
+the editing pass below.** It read: *no `ColumnSpec` in either declares a `parse`, and
+`columnAcceptsEdit` falls back to `spec.parse !== undefined`, so the editor,
+Delete/Backspace and the paste loop's per-cell guard all refuse at every coordinate.*
+That is still exactly how it worked, and the sentence it ended on — *the row families
+still declare each slot's honest `editable` flag, the ROW's half of the verdict, ANDed
+with the column's, and what a later editing pass builds on* — is precisely what the
+editing pass did build on: the `draw` family's `editable: false` on the four metric
+lanes needed no change at all.
 
 **QC is the module's clearest two-family case.** The sheet is one row per DRAW (a
 weight belongs to a single draw), but a LAB READING covers a whole sample group and
@@ -1021,3 +1024,133 @@ the month picker, the openings (STARTING) block, the opening-balance history dia
 the warehouse/date pickers, and the metric charts. Nothing is stubbed. The selection
 shows a cell count rather than a SUM, because the module computes its aggregates
 internally and does not hand them out (seam 2 in the module CONTEXT).
+
+---
+
+## QC ledger v2 — the EDITING pass (2026-08-21)
+
+The v2 grid types and saves. `qc-ledger-client.tsx`, `draw-entry-rows.tsx`, `actions.ts`
+and `data.ts` are **untouched**; no server action was written and no SQL was run. Two new
+files — `qc/qc-grid-v2-save.ts` (pure) and `scripts/verify-qc-grid.ts` (45 assertions).
+
+### The editing surface, per lane
+
+| Lane | On a SAVED draw | On a BLANK row |
+|---|---|---|
+| `WT KG` | **editable** — per DRAW, `cenapro_update_event_weight`, compare-and-set on the weight the operator was looking at | editable |
+| `BD` · `ASH` · `GRIT` · `MC` | **editable on the group's FIRST draw only** — a save to the SAMPLE GROUP, `cenapro_save_analysis_sample`, compare-and-set on `sample_row_version`. The `draw` family returns `null` for these lanes, so on a `〃` sibling there is no cell, no coordinate and no paste target | editable |
+| `DATE` · `PROD` · `SH` · `GRADE` · `PLANT` · `WHSE` · `SIDE` · `BAGS` · `SRC` · `MACH` | **reference-only, and not by taste** — the database offers exactly two doors into a stored draw and neither of them moves these columns. A stored-row edit that somehow reached one is REFUSED BY NAME rather than silently dropped | **all editable** — `cenapro_add_partner_draw` takes every one of them |
+
+`storedRowFieldIsEditable` is the ONE definition of that split, read by the column's own
+`editable` AND by `RowKind.occupies()`, so the two halves of the module's edit verdict
+cannot disagree.
+
+### Group vs draw — the routing, and why it is a separate function
+
+`routeQcEdits` splits a dirty row's cells by WHERE they are written: a metric edit is
+filed under `row.group.key` **whatever row it arrived on**, a WT edit under
+`row.draw.id`. Two draws of one group typing different metrics therefore merge into ONE
+reading and ONE save. Filing a metric against the draw would post the reading with a
+weight RPC's arguments; filing a weight against the group would restate every sibling.
+Both directions are asserted.
+
+### The metric MERGE decision
+
+**`cenapro_save_analysis_sample` REPLACES the reading** — every metric parameter is
+`DEFAULT NULL` and `actions.ts::buildArgs` OMITS a null one, which on the UPDATE path
+CLEARS it (its own comment says so). So a partial edit is merged against the STORED
+reading first (`overlayMetrics(group.sample, edits)`) and all four values are sent. Typing
+an ASH onto a group that already carries a BD must not delete the BD. Same rule as RC IN's
+lab panel (a shallow jsonb merge) and Cenapro Deliveries' draw block (an RPC that replaces
+the block): three mechanisms, one rule — *reassemble the whole thing, always*.
+
+The merge uses `parseMetricValue`, the RPC's shared twin, so `1O.2` is refused by name
+rather than read as `1`. Clearing every metric is refused client-side (`no_metrics` is a
+DELETE, which this screen does not do). A value retyped in a different spelling
+(`12.50` over a stored `12.5`) produces no payload at all — an edit that undoes itself is
+not an edit.
+
+### Drafts reuse the composer's rules verbatim
+
+`draftFromEdits` maps this grid's fifteen COLUMN KEYS onto `DraftDraw`, and everything
+downstream is `draw-entry-rows.tsx`'s own `draftBlocker` / `draftToInput` /
+`draftMetrics` / `isSendableDraft` / `findDraftReadingConflicts`, called unchanged. So the
+FLEC rules (warehouse + bag count required; refused on any other source), the date parse
+against the focused month's year, the PLANT override (`''` = follow SRC, `p_plant` sent
+only on a real override) and the two-drafts-one-group reading conflict all behave exactly
+as they do in the classic composer, and `scripts/verify-qc-draw-cells.ts` still guards
+them. The one difference is LAYOUT: the blank rows are the platform's bottom pool
+(`drafts` + `draftKind="draft"`, ten at a time — the live `BLANK_BATCH`), not a per-day
+`anchorDate` block. A new draw's day comes from its DATE cell in both surfaces.
+
+### What the RPCs return, and how failure renders
+
+**All three answer PER ROW**, each with its own compare-and-set, so nothing is
+all-or-nothing on the way back and the grid says exactly which rows landed and which
+refused. `nothing is written unless every dirty row builds a legal payload` governs what
+LEAVES (`plan.problems` → one persistent `errorToast`, no action called); what comes back
+is rendered row by row, and only the rows that landed are forgotten.
+
+`forgettableRowIds` is finer than `TableEdits.forget`'s whole-row grain demands: one QC
+row can carry a group reading AND its own weight with two independent verdicts, so a row
+is forgotten only when EVERY change on it is settled — landed, or never posted at all.
+Forgetting a row because its group saved would throw away a WT edit that came back
+`conflict`.
+
+**One deliberate asymmetry, stated out loud:** a blank row whose DRAW landed is retired
+even when the reading typed beside it was refused. Keeping it would let the next Save file
+the receipt a SECOND time, which is not undoable; retyping a reading on the saved row is.
+The refused numbers are named in the persistent toast, which carries Copy. (The classic
+ledger keeps such a row on screen instead, marked `drawSaved` so `isSendableDraft` can
+never re-send it — a state this grid's draft model has nowhere to store.)
+
+`duplicate_warning` is likewise NOT confirmed silently: the grid stops and points at the
+classic ledger, which owns the re-send-with-`allowDuplicate` affordance.
+
+### No save-time reason dialog
+
+RC IN has one because `bulkUpdateDeliveries` takes a `comment` the RPC glues onto the
+row's latest `audit_logs` entry. **Neither QC edit path takes anything of the kind** —
+`cenapro_save_analysis_sample` and `cenapro_update_event_weight` carry the key, the
+values, and the version, and nothing else. (`p_notes` exists on `cenapro_add_partner_draw`
+alone and is a COLUMN ON THE NEW ROW, not an explanation of a change; the classic composer
+does not offer it either.) A dialog collecting a sentence with nowhere to put it would be
+a lie about what was recorded, so there is none — and `verify-qc-grid.ts` fails the day an
+edit path grows one.
+
+### What the module could not express
+
+Nothing blocked the pass. Two things were shaped around rather than fought:
+
+1. **`TableEdits.forget` is per ROW, not per FIELD.** Correct for every other consumer;
+   here it needed `forgettableRowIds` to compensate, because one row answers to two RPCs.
+   A per-field forget would remove that helper, and would be a platform change.
+2. **A draft row is an id plus an edit map, with nowhere to hang per-row server state.**
+   That is what forces the retire-on-draw-landed asymmetry above. The classic ledger keeps
+   `status` / `message` / `notice` / `drawSaved` on its own `DraftDraw` objects; the module
+   has no equivalent, so the same information lives in a persistent toast instead.
+
+Verified by `npx tsc --noEmit`, `npm run build`, `npm run lint` (167/28, unchanged),
+`verify-table-core` · `verify-qc-draw-cells` · `verify-rc-in-grid` · `verify-qc-grid`, and
+`npm run test:e2e` (57). **Not driven in a browser** — `/cenapro/qc` needs a real login,
+the same limitation recorded for the 2026-08-20 pass above.
+
+### QC Ledger — v2 by default, and one period control (2026-08-21)
+
+`/cenapro/qc` now lands on `QcLedgerGridV2`; the Classic `QcLedgerClient` is `?grid=v1`, still
+mounted and still fully functional, and the bar reads `Classic` · `Table (new)`. The v2 branch
+carries the platform `PeriodPicker` in the grid bar's trailing slot, so the screen answers to
+**two** spellings of one axis: the legacy `?m=YYYY-MM` that `MonthYearPicker` writes and
+`/cenapro/qc/breakdown` shares, and the canonical `?year=` + `?month=`. **`?year=`/`?month=`
+win, and `?m=` supplies the base they are read against** — a legacy link opens on exactly the
+month it always did. QC has no *all*: `loadQcLedgerData` takes a single `YYYY-MM`, so both
+dropdowns hide their `all` entry (`allowAllYears` / `allowAllMonths`, additive props defaulting
+to true so `/inventory` is byte-identical) and a hand-typed `?year=all` resolves to the page's
+default. Because both controls preserve every other param and `month-year-picker.tsx` is not
+editable by this migration, **entering the Classic branch with the canonical pair present
+triggers a one-hop redirect that rewrites it as `?m=` and drops the pair** — that branch's own
+picker is then the only writer of the only period param present. The reverse needs no redirect:
+a stale `?m=` on the v2 branch is inert. The period therefore survives a grid flip in both
+directions. Year options come from `monthKeys` plus the current year; all twelve months stay
+selectable, empty ones included, because an empty month is where a new month's first draw has
+to land.
