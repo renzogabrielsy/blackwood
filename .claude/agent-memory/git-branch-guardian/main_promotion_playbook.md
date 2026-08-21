@@ -1001,3 +1001,22 @@ variables — `TRELLO_BOARD_ID`, `TRELLO_TOKEN`, `TRELLO_API_KEY`, `SYNC_WORKER_
 `NEXT_PUBLIC_SUPABASE_URL` — and **no `TABLE_PLAYGROUND`**, so `/dev/table-playground` is dark on the
 live site under both locks. The "nothing in the repo can prove it" caveat above is now obsolete:
 **one command proves it.** Re-run it on any promotion that ships a env-gated route.
+
+### The TRIVIAL promotion shape, and the one command that proves it up front
+
+When the brief says *"branch was fast-forwarded to `main` before the work, so expect trivial"*,
+**verify it in one line instead of trusting it**: `git merge-base main <branch>` equal to
+`git rev-parse main` means the branch tip's only ancestor-gap is its own new commits, so the
+`--no-ff` merge cannot conflict. Corroborate with `git merge-tree --write-tree main <branch>`
+(exit 0 = clean) BEFORE `git checkout main` — it is a pure index-level test, touches no working
+tree, and needs no stash. Confirmed 2026-08-21 (`ccbff91` → merge `36bc677`, the shared Year +
+Month period filter): merge-base == `main` tip == `74db0d5`, merge-tree exit 0, merge produced
+zero conflicts exactly as predicted.
+
+Two things worth re-confirming on that same promotion, both already documented above and both
+still true: the dirty standing-exclusion paths (`.claude/agent-memory-local/**`,
+`supabase/.temp/cli-latest`) had **identical blobs at both tips** (`git diff --stat main <branch>
+-- <paths>` empty), so `git checkout main` carried the uncommitted edits across untouched —
+`shasum -a 256 -c` passed on all three afterwards and `git stash list` stayed empty. And a brief
+that supplies exact gate NUMBERS (`verify-table-core` 78, `verify-rc-in-grid` 33) is worth re-running
+on the MERGED tree specifically: matching counts prove the merge added nothing and dropped nothing.
