@@ -53,6 +53,16 @@ import { cn } from '@/lib/utils';
 // control that reads the param are two answers to one question, and the day they disagree
 // the picker says July while the sheet shows August. One answer, resolved once, server
 // side, passed down.
+//
+// ── `all` is OFFERED, not assumed (2026-08-21) ──────────────────────────────────
+// `allowAllYears` / `allowAllMonths` default to TRUE, so every caller that predates them
+// renders byte-identically. A screen passes `false` when its server read is scoped to one
+// period and structurally cannot widen — the QC ledger loads ONE `YYYY-MM` — because a
+// dropdown entry that resolves back to the period you were already on is a control lying
+// about what it can do. They are two props rather than one for the same reason `disabled`
+// and `monthsDisabled` are two: a screen can genuinely have one axis and not the other.
+// Hiding an option is not refusing the VALUE — `?year=all` still parses, and the page that
+// hid it owns what that URL means.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -106,6 +116,28 @@ export interface PeriodPickerProps {
      * nothing to narrow" are different sentences.
      */
     monthsDisabled?: boolean;
+    /**
+     * Whether `All years` is OFFERED. Default `true` — every existing caller is
+     * byte-identical.
+     *
+     * Pass `false` on a screen whose server read is scoped to ONE period and cannot
+     * widen: the QC ledger's `loadQcLedgerData(month)` takes a single `YYYY-MM`, so
+     * `all` there is not a period the sheet can render. An option that silently does
+     * nothing is worse than no option, which is the whole reason this is a prop rather
+     * than the caller quietly resolving `all` back to a real year.
+     *
+     * Hiding an option is NOT the same as refusing the value: `PERIOD_ALL` is still a
+     * legal parse, so a page that hides it owns what a hand-typed `?year=all` means (on
+     * the QC ledger: the page's own default, the same answer any unrecognised value
+     * gets).
+     */
+    allowAllYears?: boolean;
+    /**
+     * Whether `All months` is OFFERED. Default `true`. Same argument as `allowAllYears`,
+     * split per axis for the same reason `monthsDisabled` is split from `disabled` — a
+     * screen can genuinely have one and not the other.
+     */
+    allowAllMonths?: boolean;
     /** Optional caption in front of the two selects (e.g. `"Period"`). */
     label?: string;
     className?: string;
@@ -138,6 +170,8 @@ function PeriodPickerInner({
     defaults,
     disabled = false,
     monthsDisabled = false,
+    allowAllYears = true,
+    allowAllMonths = true,
     label,
     className,
 }: PeriodPickerProps) {
@@ -204,8 +238,10 @@ function PeriodPickerInner({
                     <SelectValue placeholder="Year">{yearText(year)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent className="font-mono text-xs">
-                    <SelectItem value={PERIOD_ALL} className="text-[11px]">All years</SelectItem>
-                    {yearOptions.length > 0 ? <SelectSeparator /> : null}
+                    {allowAllYears ? (
+                        <SelectItem value={PERIOD_ALL} className="text-[11px]">All years</SelectItem>
+                    ) : null}
+                    {allowAllYears && yearOptions.length > 0 ? <SelectSeparator /> : null}
                     {yearOptions.map((y) => (
                         <SelectItem key={y} value={String(y)} className="text-[11px]">
                             {y}
@@ -230,8 +266,12 @@ function PeriodPickerInner({
                     <SelectValue placeholder="Month">{monthText(month)}</SelectValue>
                 </SelectTrigger>
                 <SelectContent className="font-mono text-xs">
-                    <SelectItem value={PERIOD_ALL} className="text-[11px]">All months</SelectItem>
-                    <SelectSeparator />
+                    {allowAllMonths ? (
+                        <>
+                            <SelectItem value={PERIOD_ALL} className="text-[11px]">All months</SelectItem>
+                            <SelectSeparator />
+                        </>
+                    ) : null}
                     {PERIOD_MONTH_LABELS.map((name, i) => (
                         <SelectItem key={name} value={String(i + 1)} className="text-[11px]">
                             {name}

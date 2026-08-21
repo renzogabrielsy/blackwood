@@ -435,17 +435,18 @@ one — hence `gridBar` as a variable rather than the element inline.
    components read the identical server payload, and nothing here reaches a query, an
    action or a role gate.
 
-### When a screen FLIPS its default (2026-08-21) — RC IN / RC OUT
+### When a screen FLIPS its default (2026-08-21) — RC IN / RC OUT, then the QC ledger
 
 The migration's second phase does not delete the old table; it stops landing on it. Renzo,
 having driven the two ICTC ledgers for days: *"I'm satisfied with ICTC Deliveries and Usage
-table so we can start to make grid v2 as our current table now for those 2."*
+table so we can start to make grid v2 as our current table now for those 2."* The Cenapro
+QC ledger (`/cenapro/qc`) flipped the same day, on the same three edits.
 
 **One axis, a per-page default — NOT a second param.** An operator comparing two screens in
 two tabs still has one spelling to remember. What changes is which side is the paramless
 URL.
 
-| `?grid=` | on a v1-default page (nine screens) | on a v2-default page (`/inventory`) |
+| `?grid=` | on a v1-default page (eight screens) | on a v2-default page (`/inventory`, `/cenapro/qc`) |
 |---|---|---|
 | absent | **v1** — the classic table | **v2** — the Blackwood Table |
 | `v2` | v2 | v2 (the default, spelt out) |
@@ -486,6 +487,13 @@ v1-default case over every input, a round-trip that proves a flip preserves ever
 param under both defaults, and a scan of every `page.tsx` mounting the bar asserting that
 only the flipped screens pass a default.
 
+**`FLIPPED_PAGES` in that file is THE registry**, and the scan reads it in both directions:
+a screen that flips without being listed fails, and a screen listed without flipping fails
+too. So "which screens have flipped" is one array rather than a sentence in a doc that
+nobody re-reads. The branch assertion pins the DEFAULT ARGUMENT (`resolveGrid(…, GRID_V2)`)
+rather than a spelling of the param read, because the two flipped pages read `?grid=`
+differently — one destructures it, one indexes the whole `searchParams` bag.
+
 ### Where the control goes when the new grid has its own toolbar
 
 Prefer the page-level bar — one mount, both sides, neither component edited. Drop the bare
@@ -511,7 +519,8 @@ goes with the bar at cutover; whatever was in it moves into the new grid's own t
 ## The period axis (`?year=` + `?month=`) — the first PERMANENT chrome
 
 `period-param.ts` (pure) + `components/shared/table/PeriodPicker.tsx` (the control). Built
-2026-08-21 for `/inventory`'s two v2 grids, from the deferred-chrome list above.
+2026-08-21 for `/inventory`'s two v2 grids, from the deferred-chrome list above; the
+Cenapro QC ledger picked it up the same day (see the consumer note below).
 
 **Why it is in the platform layer.** Every dense sheet is read one period at a time, and
 every module that needed that had built its own: a twelve-button footer strip with a sliding
@@ -524,7 +533,7 @@ disagree about what a URL means — the same argument `grid-param.ts` makes, so 
 ?month=8     a calendar month, 1-12 ?month=all   every month
 ```
 
-**Six decisions worth keeping**
+**Seven decisions worth keeping**
 
 1. **ONE-BASED months.** `?m=7` on the classic table means August, because a
    `Date.getMonth()` leaked into a URL. `?month=8` means August. The two params are
@@ -552,6 +561,30 @@ disagree about what a URL means — the same argument `grid-param.ts` makes, so 
    answers to one question, and the day they disagree the picker says July while the sheet
    shows August. The Suspense boundary ships inside the component, as `GridVersionToggle`'s
    does, so `useSearchParams` never fails a caller's production build.
+
+7. **`all` is an OFFERED option, not an assumed one (2026-08-21).** `allowAllYears` /
+   `allowAllMonths` both default to TRUE, so every caller that predates them is
+   byte-identical — `/inventory` passes neither. A screen passes `false` when its SERVER
+   read is scoped to one period and structurally cannot widen: the QC ledger's
+   `loadQcLedgerData(month)` takes a single `YYYY-MM`, so an `All months` entry there would
+   resolve straight back to the month the operator was already on, which is a control lying
+   about what it can do. Two props rather than one, for the same reason `disabled` and
+   `monthsDisabled` are two — a screen can genuinely have one axis and not the other.
+   **Hiding an option is not refusing the VALUE:** `PERIOD_ALL` still parses, and the page
+   that hid it owns what a hand-typed `?year=all` means (on QC: the page's own default,
+   the same answer any unrecognised value gets).
+
+**Consumer note — a screen that already had a period param (`/cenapro/qc`, 2026-08-21).**
+QC's Classic picker writes `?m=YYYY-MM` and is not editable by this migration, so the page
+answers to BOTH spellings: **`?year=`/`?month=` win, and `?m=` supplies the base they are
+read against** — a legacy link opens on exactly the month it always did, and moving one
+axis stays a one-param edit. The trap is that both controls preserve every other param, so
+a period picked in the new table would out-rank every later pick made in the old one. The
+fix is a **one-hop canonicalising redirect on the v1 branch only**: entering Classic with
+the canonical pair present rewrites it as `?m=` and drops the pair, so that branch's own
+control is the only writer of the only period param present. The reverse needs no redirect
+— a stale `?m=` on the v2 branch is inert, because it only ever supplies the base. Prefer
+this shape over teaching the picker a second param name, which would fork the axis.
 
 `formatPeriodLabel(year, month)` is exported beside the control so a sheet naming its own
 period elsewhere — a row count, an empty state, an export filename — prints the same words

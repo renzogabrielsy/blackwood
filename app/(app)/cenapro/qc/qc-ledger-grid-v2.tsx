@@ -2,14 +2,25 @@
 
 // ─────────────────────────────────────────────────────────────────────────────────
 // qc-ledger-grid-v2.tsx — the Cenapro QC ledger on the universal table module,
-// built BESIDE `qc-ledger-client.tsx` and reachable only on `?grid=v2`. That file is
-// untouched and remains the production path.
+// built BESIDE `qc-ledger-client.tsx`. That file is untouched and stays fully
+// reachable at `?grid=v1`.
 //
-// READ-ONLY, AND STRUCTURALLY SO. No `ColumnSpec` below declares a `parse`, and
-// `columnAcceptsEdit` falls back to `spec.parse !== undefined` — so the editor,
-// Delete/Backspace and the paste loop's per-cell guard all refuse at every
-// coordinate. Nothing here imports a writing action; `cenapro_save_*` is
-// unreachable from this file.
+// ── IT TYPES AND SAVES (2026-08-21, slice 2) ───────────────────────────────────
+//
+// The grid was READ-ONLY BY CONSTRUCTION until now — no `ColumnSpec` declared a
+// `parse`, so `columnAcceptsEdit`'s fallback refused every coordinate. It now
+// declares them, and the whole of "what a cell means and what Save actually posts"
+// lives in the PURE sibling `qc-grid-v2-save.ts`, asserted by
+// `scripts/verify-qc-grid.ts` with no browser and no database. This file is the
+// React adapter: rows, columns, families, the toolbar and the three round trips.
+//
+// **The one thing to hold in your head reading it: an edit's lane decides WHICH ROW
+// it is a save to.** WT is per DRAW; BD / ASH / GRIT / MC are per SAMPLE GROUP and
+// are merely DISPLAYED on the group's first draw. `routeQcEdits` is where that
+// split happens and `qc-grid-v2-save.ts`'s header is where it is argued.
+//
+// **No save-time reason dialog**, unlike RC IN's: none of the three QC RPCs accepts
+// a comment or a note, so there is nothing for one to collect. See the save module.
 //
 // THE ROW MODEL, and why `occupies()` is load-bearing here.
 //
@@ -20,6 +31,11 @@
 //
 //   • `draw-first` occupies all fifteen columns.
 //   • `draw`       occupies eleven, and returns NULL for BD / ASH / GRIT / MC.
+//   • `draft`      (2026-08-21) occupies all fifteen, and every one is EDITABLE —
+//                  a new draw carries its own date, source, machine, grade, shift,
+//                  plant, warehouse, side and bags, because that is exactly what
+//                  `cenapro_add_partner_draw` takes. On a STORED row those nine are
+//                  reference-only, and not by taste: no RPC moves them.
 //
 // `null` means "this row has no cell there" — not "an empty one". That single answer
 // drives the keyboard (a vertical run steps over it), the paste (it never lands
@@ -49,15 +65,43 @@
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2, Save } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableSummaryRow } from '@/components/shared/table/BlackwoodTable';
-import type { CellSlot, ColumnSpec, GridRow, RowKind } from '@/lib/table';
+import type { CellSlot, ColumnParseResult, ColumnSpec, GridRow, RowKind } from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
+import { errorToast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 import { METRICS, type MetricKey } from '@/lib/cenapro/ccc-analysis';
 import type { QcAggregate } from '@/lib/cenapro/ccc-analysis-view';
 
-import type { QcDraw, QcGroup, QcLedgerDay, QcDrawOptions } from './data';
+import { addQcDraws, saveQcSamples, saveQcWeights } from './actions';
+import type { QcGroup, QcLedgerDay, QcDrawOptions } from './data';
+import {
+    buildQcSavePlan,
+    cleanPastedQcCell,
+    countQcUnsaved,
+    describeQcUnsaved,
+    drawInputLabel,
+    drawLabel,
+    forgettableRowIds,
+    groupLabel,
+    isDraftKey,
+    isMetricField,
+    makeDraftIds,
+    normalizeQcField,
+    parseQcField,
+    qcDrawFailureMessage,
+    qcSampleFailureMessage,
+    qcWeightFailureMessage,
+    storedRowFieldIsEditable,
+    type QcField,
+    type QcFieldEnv,
+    type QcSaveRow,
+} from './qc-grid-v2-save';
 
 // ─── SRC ORDER — Renzo's reading order, top to bottom within each day ────────────
 //
@@ -115,16 +159,72 @@ export interface QcLedgerGridV2Props {
     previousWtd: Record<MetricKey, number | null> | null;
     previousLabel: string | null;
     drawOptions: QcDrawOptions;
+    /**
+     * OPTIONAL, and defaulted to `true`.
+     *
+     * `page.tsx` does not pass it today and this grid does not ask it to: QC carries no
+     * ₱ column anywhere, and the live ledger has never gated entry by role — anyone who
+     * can reach the screen can log a reading. It is declared so a later role pass has a
+     * prop to fill rather than a component to reshape, and it is OPTIONAL so the page
+     * (owned by another pass) keeps spreading exactly the props object it builds today.
+     */
+    canEdit?: boolean;
 }
 
 /** One rendered row: a draw, the group it belongs to, and whether it leads that group. */
-interface QcRow {
-    draw: QcDraw;
-    group: QcGroup;
-    isFirstOfGroup: boolean;
+type QcRow = QcSaveRow;
+
+interface Ctx {
+    readonly month: string;
+    /** May anything on this sheet be typed into at all? */
+    readonly canEdit: boolean;
+    /** The verdict env — the DB-read dimension lists and what a bare `6/27` means. */
+    readonly env: QcFieldEnv;
 }
 
-type Ctx = { readonly month: string };
+/** A verdict that refuses nothing. The module reads only `ok`; the patch is never used. */
+const PARSE_OK: ColumnParseResult = { ok: true, patch: {} };
+
+/**
+ * THE commit verdict for a column, and it is `parseQcField` — the same function the SAVE
+ * runs. A value typed and the same value refused at save can never disagree, because
+ * there is only one of them.
+ *
+ * `cell` is accepted and deliberately unused: the two row families that share this
+ * column table mean the same thing by every lane they both occupy (a metric cell is the
+ * group's reading whichever draw it is drawn on), so the field name alone is the whole
+ * question. It stays in the signature because `CellContext` is the seam a later
+ * per-family verdict would arrive through, and a `parse` written without it behaves
+ * identically.
+ */
+function makeParse(field: QcField) {
+    return (text: string, ctx: Ctx): ColumnParseResult => {
+        if (text.trim() === '') return PARSE_OK;
+        const verdict = parseQcField(field, text, ctx.env);
+        return verdict.ok ? PARSE_OK : verdict;
+    };
+}
+
+/**
+ * The four seams every editable column shares.
+ *
+ * `editable` is the COLUMN's half of the verdict; `RowKind.occupies().editable` is the
+ * row family's, and the module ANDs them in exactly one place. Both are declared, and
+ * they agree by construction because both read `storedRowFieldIsEditable`: a stored draw
+ * exposes its own WT and its group's four metrics and nothing else, because
+ * `cenapro_update_event_weight` and `cenapro_save_analysis_sample` are the only two doors
+ * the database offers into it. `row === null` is a blank row, where every lane is live —
+ * `cenapro_add_partner_draw` takes all of them.
+ */
+function editSeams(field: QcField): Partial<ColumnSpec<QcRow, Ctx>> {
+    return {
+        editable: (row: QcRow | null, ctx: Ctx) =>
+            ctx.canEdit && (row === null || storedRowFieldIsEditable(field)),
+        parse: makeParse(field),
+        normalize: (text: string, ctx: Ctx) => normalizeQcField(field, text, ctx.env),
+        cleanPasted: (raw: string, ctx: Ctx) => cleanPastedQcCell(field, raw, ctx.env),
+    };
+}
 
 const dash = <span className="text-muted-foreground/40">—</span>;
 
@@ -191,8 +291,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         width: 92,
         pin: 'start',
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'date',
         title: 'Receipt date at CCC',
+        ...editSeams('date'),
         // Sliced from the stored string, never through `new Date()` — that round trip
         // is where a timezone silently moves a receipt to the previous day.
         format: (r) => txt(r.draw.recvDate ? String(r.draw.recvDate).slice(0, 10) : null),
@@ -204,8 +305,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         // Same value, same measurement, same width as DATE — see above.
         width: 92,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'date',
         title: 'Production date of the material drawn',
+        ...editSeams('prod'),
         format: (r) => txt(r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : null),
         clipboardValue: (r) => (r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : ''),
     },
@@ -214,8 +316,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'SH',
         width: 40,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Shift',
+        ...editSeams('shift'),
         format: (r) => txt(r.draw.shift),
         clipboardValue: (r) => r.draw.shift ?? '',
     },
@@ -224,7 +327,8 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'GRADE',
         width: 62,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
+        ...editSeams('grade'),
         format: (r) => txt(r.draw.grade),
         clipboardValue: (r) => r.draw.grade ?? '',
     },
@@ -233,8 +337,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'PLANT',
         width: 88,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Plant — derived from SRC, overridable when the partner slip says otherwise',
+        ...editSeams('plant'),
         format: (r) => txt(r.draw.plant),
         clipboardValue: (r) => r.draw.plant ?? '',
     },
@@ -247,8 +352,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         // inside a 28px row before the platform pass made cells clip.
         width: 76,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Warehouse (or plant, when unplaced)',
+        ...editSeams('whse'),
         format: (r) => txt(r.group.whse),
         clipboardValue: (r) => r.group.whse ?? '',
     },
@@ -259,8 +365,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         // with `tracking-wide` is ~31px, and the header's `px-2` leaves 44 − 17 = 27.
         width: 52,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Warehouse side (LS / RS) — FLEC draws only',
+        ...editSeams('side'),
         format: (r) => txt(r.draw.side),
         clipboardValue: (r) => r.draw.side ?? '',
     },
@@ -269,8 +376,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'BAGS',
         width: 52,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         title: 'Flec bag count — FLEC draws only',
+        ...editSeams('bags'),
         format: (r) => intText(r.draw.flecCount),
         numericValue: (r) => num(r.draw.flecCount),
         clipboardValue: (r) => rawNum(r.draw.flecCount),
@@ -281,8 +389,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'SRC',
         width: 62,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Source location',
+        ...editSeams('src'),
         format: (r) => txt(r.group.src),
         clipboardValue: (r) => r.group.src ?? '',
     },
@@ -291,8 +400,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'MACH',
         width: 58,
         align: 'left',
-        cellKind: 'readonly',
+        cellKind: 'select',
         title: 'Partner machine — C1–C4 (crusher) or RK1–RK4 (kiln)',
+        ...editSeams('mach'),
         format: (r) => txt(r.draw.equip),
         clipboardValue: (r) => r.draw.equip ?? '',
     },
@@ -301,8 +411,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: 'WT KG',
         width: 88,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         title: 'Weight (kg) — per individual draw; a weight never carries to the group',
+        ...editSeams('wt'),
         format: (r) => wtText(r.draw.weightKg),
         numericValue: (r) => num(r.draw.weightKg),
         clipboardValue: (r) => rawNum(r.draw.weightKg),
@@ -316,8 +427,9 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         label: metric.toUpperCase(),
         width: 124,
         align: 'right' as const,
-        cellKind: 'readonly' as const,
+        cellKind: 'number' as const,
         title: `${metric.toUpperCase()} — one reading per sample group, shown on its first draw`,
+        ...(editSeams(metric) as Partial<ColumnSpec<QcRow, Ctx>>),
         format: (r: QcRow) => metricText(r.group.sample?.[metric] ?? null),
         numericValue: (r: QcRow) => num(r.group.sample?.[metric] ?? null),
         clipboardValue: (r: QcRow) => rawNum(r.group.sample?.[metric] ?? null),
@@ -325,25 +437,58 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     })),
 ];
 
-const METRIC_KEYS: ReadonlySet<string> = new Set<string>(METRICS as readonly string[]);
 /** Date → Mach: the ten columns the day total rules off across. */
 const LABEL_SPAN = SPECS.findIndex((c) => c.key === 'wt');
 
 const ROW_H = 28;
 const CHROME_H = 24;
 
-// A draw row's slots. The metric lanes are ABSENT (not empty) on a non-leading draw.
+/**
+ * How many blank rows "Add draw" hands you. Renzo's number for THIS sheet — the live
+ * ledger's `BLANK_BATCH`, kept rather than the platform's `DEFAULT_DRAFT_ROWS` (20),
+ * because a partner's slip is about ten lines long and the two surfaces should offer the
+ * same run of blanks.
+ */
+const BLANK_BATCH = 10;
+
+/**
+ * A STORED draw row's slots. The metric lanes are ABSENT (not empty) on a non-leading
+ * draw, and only WT + the four metrics are editable — `storedRowFieldIsEditable` is the
+ * one definition, shared with the column's own `editable` and with the save.
+ */
 function slotFor(colKey: string, isFirst: boolean): CellSlot | null {
-    if (METRIC_KEYS.has(colKey)) {
+    if (isMetricField(colKey)) {
         return isFirst ? { field: colKey, editable: true } : null;
     }
-    return { field: colKey, editable: colKey === 'wt' };
+    return { field: colKey, editable: storedRowFieldIsEditable(colKey) };
+}
+
+/** A BLANK row's slots — all fifteen, all live. See the header note. */
+function draftSlotFor(colKey: string): CellSlot | null {
+    return { field: colKey, editable: true };
 }
 
 export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
-    const { month, days, monthAgg } = props;
+    const { month, days, monthAgg, drawOptions } = props;
+    const canEdit = props.canEdit ?? true;
+    const router = useRouter();
 
-    const ctx = React.useMemo<Ctx>(() => ({ month }), [month]);
+    /**
+     * What a bare `6/27` typed into a date cell means.
+     *
+     * The ledger is month-scoped — the rows on screen are one month — so the month being
+     * looked at IS the context, and a slip transcribed in June takes June's year without
+     * anyone saying so. Identical to `qc-ledger-client.tsx`'s `contextYear`.
+     */
+    const contextYear = React.useMemo(() => {
+        const year = Number(month.slice(0, 4));
+        return Number.isFinite(year) && year > 1900 ? year : new Date().getFullYear();
+    }, [month]);
+
+    const ctx = React.useMemo<Ctx>(
+        () => ({ month, canEdit, env: { options: drawOptions, contextYear } }),
+        [month, canEdit, drawOptions, contextYear],
+    );
     const specs = React.useMemo(() => SPECS, []);
 
     // ── Row families ─────────────────────────────────────────────────────────────
@@ -366,6 +511,15 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                         height: ROW_H,
                         addressable: true,
                         occupies: (colKey) => slotFor(colKey, false),
+                    },
+                ],
+                [
+                    'draft',
+                    {
+                        kind: 'draft',
+                        height: ROW_H,
+                        addressable: true,
+                        occupies: (colKey) => draftSlotFor(colKey),
                     },
                 ],
                 // No `group-header` family: the per-day HEADING row was removed on
@@ -409,6 +563,17 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
     //
     // Chrome keys are a run ORDINAL, never a date: a chrome row's key is the
     // virtualiser's React key, and a value that can repeat would collide.
+    // ── The blank-row pool ───────────────────────────────────────────────────────
+    //
+    // At the VERY BOTTOM, in one run under the last day, rather than inside a day block.
+    // The live ledger anchors its drafts to a day (`anchorDate`) because it renders each
+    // day as its own table; here the sheet is one continuous grid and the module's draft
+    // model is a bottom pool. It is layout only either way — a new draw's day comes from
+    // the DATE cell someone types, never from where the blank row sits, in both surfaces.
+    const [draftIds, setDraftIds] = React.useState<string[]>(() =>
+        canEdit ? makeDraftIds(BLANK_BATCH) : [],
+    );
+
     const { items, dayMeta } = React.useMemo(() => {
         const out: GridRow<QcRow>[] = [];
         const meta = new Map<string, { date: string; agg: QcAggregate; draws: number }>();
@@ -430,8 +595,9 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
             out.push({ kind: 'summary', key: totalKey });
             meta.set(totalKey, { date: day.date, agg: day.agg, draws: drawCount });
         }
+        for (const draftId of draftIds) out.push({ kind: 'draft', id: draftId });
         return { items: out, dayMeta: meta };
-    }, [orderedDays]);
+    }, [orderedDays, draftIds]);
 
     const byId = React.useMemo(() => {
         const m = new Map<string, QcRow>();
@@ -445,6 +611,36 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         return m;
     }, [orderedDays]);
 
+    /**
+     * Every sample group on screen — the `sample_row_version` map a NEW draw needs.
+     *
+     * A typed row that joins an EXISTING group whose reading is already logged must
+     * update that reading against its version, exactly as an inline edit would; without
+     * it the RPC (rightly) answers `already_exists` on a group the operator is looking at.
+     * `addQcDraws` takes the whole map and picks the key its own insert reported.
+     */
+    const allGroups = React.useMemo(() => {
+        const out: QcGroup[] = [];
+        for (const day of orderedDays) for (const group of day.groups) out.push(group);
+        return out;
+    }, [orderedDays]);
+
+    /**
+     * What a cell HOLDS as text.
+     *
+     * Three consumers, and they must agree or the sheet misbehaves in ways nothing on
+     * screen explains: the editor's opening value, the jump keys' "is this cell filled"
+     * probe, and — through `useTableEdits`' `canonicalText` — the value an edit must
+     * return to in order to stop counting as unsaved.
+     *
+     * It goes through each column's own `clipboardValue`, which is the STORED fact and
+     * never the rendering: a weight opens as `9583.5`, not `9,583.5`, so committing a
+     * cell you merely tabbed through cannot round it. (`formatKgExact` exists in the live
+     * ledger for exactly this reason; here the clipboard lane already answers it.)
+     *
+     * A BLANK row holds nothing — every one of its cells starts empty, which is what
+     * makes an untouched blank cost nothing on Save.
+     */
     const storedText = React.useCallback(
         (rowId: string, field: string): string => {
             const row = byId.get(rowId);
@@ -455,8 +651,9 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         [byId, specs],
     );
 
-    const noDrafts = React.useCallback(() => false, []);
-    const edits = useTableEdits({ canonicalText: storedText, isDraft: noDrafts });
+    // THE single journalled writer. Every mutation in this grid — an inline commit, a
+    // Delete, a paste, an Escape revert, undo and redo — goes through `edits.applyEdits`.
+    const edits = useTableEdits({ canonicalText: storedText, isDraft: isDraftKey });
 
     // ── The day total, INSIDE the body — and the only row that names the day ─────
     //
@@ -527,6 +724,198 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         ];
     }, [month, monthAgg]);
 
+    // ── The blank-row pool's controls ────────────────────────────────────────────
+    //
+    // `onAddDrafts` returns the ids it created SYNCHRONOUSLY, because a paste running
+    // past the last blank row needs them inside the same gesture — and those ids ride on
+    // the journal step, so one Ctrl+Z takes back the paste AND the rows it grew.
+    const onAddDrafts = React.useCallback((count: number) => {
+        const ids = makeDraftIds(count);
+        setDraftIds((prev) => [...prev, ...ids]);
+        return ids;
+    }, []);
+
+    const onRemoveDrafts = React.useCallback((ids: readonly string[]) => {
+        const gone = new Set(ids);
+        setDraftIds((prev) => prev.filter((id) => !gone.has(id)));
+    }, []);
+
+    const onRestoreDrafts = React.useCallback((ids: readonly string[]) => {
+        setDraftIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    }, []);
+
+    // ── Unsaved work ─────────────────────────────────────────────────────────────
+    const unsaved = React.useMemo(
+        () => countQcUnsaved(edits.edits, edits.dirtyRecords, edits.dirtyDrafts, byId),
+        [edits.edits, edits.dirtyRecords, edits.dirtyDrafts, byId],
+    );
+
+    const [saving, setSaving] = React.useState(false);
+    const [refreshing, startTransition] = React.useTransition();
+    const busy = saving || refreshing;
+
+    /**
+     * ONE Save, three round trips, and every one of them answers PER ROW.
+     *
+     * Order — new draws, then weights, then readings — is the live ledger's, and only the
+     * first third of it is a correctness requirement: a typed row's lab cells are applied
+     * by the SERVER to whichever sample group its insert actually landed in, so the draws
+     * have to go first for a slip transcribed and analysed in one sitting to save in one
+     * press. Weights before readings is a reading convenience: fix what the number IS
+     * before recording what was measured about it.
+     *
+     * **Nothing is written unless every dirty row builds a legal payload** — that is the
+     * plan builder's rule and it is about what LEAVES. What comes BACK is per row, with
+     * its own compare-and-set, so a conflict on one group genuinely leaves the others
+     * written, and the toast below says which is which rather than pretending either way.
+     */
+    const handleSave = React.useCallback(async () => {
+        if (unsaved.total === 0 || busy) return;
+
+        const plan = buildQcSavePlan({
+            edits: edits.edits,
+            dirtyRecords: edits.dirtyRecords,
+            dirtyDrafts: edits.dirtyDrafts,
+            draftIds,
+            rowsById: byId,
+            groups: allGroups,
+            env: ctx.env,
+        });
+
+        if (plan.problems.length > 0) {
+            errorToast(
+                `${plan.problems.length} change${plan.problems.length === 1 ? '' : 's'} could not be saved — nothing was written.`,
+                { description: plan.problems.join('\n\n') },
+            );
+            return;
+        }
+        if (plan.samples.length === 0 && plan.weights.length === 0 && plan.draws.length === 0) {
+            toast.info('Nothing to save.');
+            return;
+        }
+
+        setSaving(true);
+        try {
+            const failures: string[] = [];
+            let landed = 0;
+
+            // ── New draws ────────────────────────────────────────────────────────
+            const savedDraftIds: string[] = [];
+            if (plan.draws.length > 0) {
+                const run = await addQcDraws(plan.draws, plan.groupVersions);
+                const sentByRow = new Map(plan.draws.map((d) => [d.rowId, d]));
+                for (const row of run) {
+                    // Labelled off the payload that was actually SENT, so a verdict names
+                    // the row the way a pre-flight refusal would have.
+                    const sent = sentByRow.get(row.rowId);
+                    const label = sent ? drawInputLabel(sent.input) : `new draw (${row.rowId})`;
+                    if (row.result.ok && row.result.outcome === 'inserted') {
+                        landed += 1;
+                        // **The blank row is retired the moment the DRAW lands, even when
+                        // the reading typed beside it was refused.** Keeping it would let
+                        // the next Save file the receipt a SECOND time, which is not
+                        // undoable; retyping a reading on the saved row is. The numbers
+                        // are named in the persistent toast below, which carries Copy.
+                        savedDraftIds.push(row.rowId);
+                        if (row.reading && !row.reading.ok) {
+                            failures.push(
+                                `${label} — the draw was added, but its reading was not: ${row.reading.message ?? 'the sample was refused.'} Type it on the saved row.`,
+                            );
+                        }
+                        continue;
+                    }
+                    failures.push(
+                        `${label} — ${qcDrawFailureMessage(row.result.outcome, row.result.message)}`,
+                    );
+                }
+            }
+
+            // ── Per-draw weights ─────────────────────────────────────────────────
+            const savedDrawIds = new Set<string>();
+            if (plan.weights.length > 0) {
+                const run = await saveQcWeights(plan.weights);
+                for (const result of run.results) {
+                    const row = byId.get(result.id);
+                    const label = row ? `${drawLabel(row)} · WT` : 'Unknown receipt row · WT';
+                    if (result.ok) {
+                        savedDrawIds.add(result.id);
+                        landed += 1;
+                        continue;
+                    }
+                    failures.push(`${label} — ${qcWeightFailureMessage(result.outcome, result.message)}`);
+                }
+            }
+
+            // ── Sample-group readings ────────────────────────────────────────────
+            const savedGroupKeys = new Set<string>();
+            if (plan.samples.length > 0) {
+                const run = await saveQcSamples(plan.samples);
+                const groupByKey = new Map(allGroups.map((g) => [g.key, g]));
+                for (const result of run.results) {
+                    const group = groupByKey.get(result.key);
+                    const label = group ? groupLabel(group) : result.key;
+                    if (result.ok) {
+                        savedGroupKeys.add(result.key);
+                        landed += 1;
+                        continue;
+                    }
+                    failures.push(`${label} — ${qcSampleFailureMessage(result.outcome, result.message)}`);
+                }
+            }
+
+            // ── Forget only what LANDED ──────────────────────────────────────────
+            const forgettable = forgettableRowIds({
+                edits: edits.edits,
+                dirtyRecords: edits.dirtyRecords,
+                rowsById: byId,
+                sentGroupKeys: new Set(plan.samples.map((s) => s.key)),
+                savedGroupKeys,
+                sentDrawIds: new Set(plan.weights.map((w) => w.id)),
+                savedDrawIds,
+            });
+            if (forgettable.length > 0 || savedDraftIds.length > 0) {
+                edits.forget([...forgettable, ...savedDraftIds]);
+            }
+            if (savedDraftIds.length > 0) {
+                // The blank rows became real draws: drop them, then top the pool back up
+                // so the run under the sheet stays the same length (Sheets never shrinks
+                // it either).
+                const consumed = new Set(savedDraftIds);
+                setDraftIds((prev) => [
+                    ...prev.filter((id) => !consumed.has(id)),
+                    ...makeDraftIds(savedDraftIds.length),
+                ]);
+            }
+
+            if (failures.length > 0) {
+                errorToast(
+                    `${failures.length} change${failures.length === 1 ? '' : 's'} did not save.`,
+                    { description: failures.join('\n\n') },
+                );
+            }
+            if (landed > 0) {
+                toast.success(`Saved ${landed} change${landed === 1 ? '' : 's'}`);
+                // The server page refetches and hands down fresh `days`. This component is
+                // not keyed on anything, so it does NOT remount: the rows flow in as
+                // props, the flatten and the id index re-derive, and the rows that landed
+                // have already been forgotten — so nothing is left lit and no keystroke of
+                // a REFUSED row is disturbed.
+                startTransition(() => router.refresh());
+            }
+        } catch (cause) {
+            errorToast('Saving the QC ledger failed', {
+                description: cause instanceof Error ? cause.message : String(cause),
+            });
+        } finally {
+            setSaving(false);
+        }
+    }, [unsaved.total, busy, edits, draftIds, byId, allGroups, ctx.env, router]);
+
+    const rowClassFor = React.useCallback((item: GridRow<QcRow>) => {
+        if (item.kind === 'draft') return 'group bg-muted/10 transition-all duration-150 hover:bg-muted/30';
+        return undefined;
+    }, []);
+
     return (
         <div className="flex h-full min-h-0 flex-col">
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-muted/30 px-3 py-1.5">
@@ -535,10 +924,39 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                     {items.filter((i) => i.kind === 'draw' || i.kind === 'draw-first').length}{' '}
                     draws · {days.length} day{days.length === 1 ? '' : 's'}
                 </span>
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                    Read-only preview — selection, the right-click menu, the selection summary and
-                    column resize are live. Use Current to log a reading or change month.
-                </span>
+                {canEdit ? (
+                    <span className="text-[10px] text-muted-foreground">
+                        · a saved row takes a new WT and its group&apos;s BD / ASH / GRIT / MC; the
+                        blank rows at the bottom take a whole new draw
+                    </span>
+                ) : null}
+                <div className="ml-auto flex items-center gap-2">
+                    {unsaved.total > 0 ? (
+                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-700 dark:text-amber-300">
+                            {describeQcUnsaved(unsaved)} unsaved
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        data-testid="save-qc-ledger"
+                        onClick={() => void handleSave()}
+                        disabled={unsaved.total === 0 || busy || !canEdit}
+                        className={cn(
+                            'inline-flex h-6 items-center gap-1 rounded border px-2 text-[11px] font-semibold transition-all duration-150',
+                            unsaved.total > 0 && !busy && canEdit
+                                ? 'border-primary bg-primary text-primary-foreground hover:opacity-90'
+                                : 'border-border bg-muted text-muted-foreground',
+                            (unsaved.total === 0 || busy || !canEdit) && 'cursor-not-allowed opacity-60',
+                        )}
+                    >
+                        {busy ? (
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                        ) : (
+                            <Save className="size-3" aria-hidden="true" />
+                        )}
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
             </div>
 
             {/*
@@ -586,6 +1004,12 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
                         scope="focus"
                         sizing="fill"
                         childKinds={['draw']}
+                        draftKind="draft"
+                        drafts={{ enabled: canEdit, defaultCount: BLANK_BATCH }}
+                        onAddDrafts={onAddDrafts}
+                        onRemoveDrafts={onRemoveDrafts}
+                        onRestoreDrafts={onRestoreDrafts}
+                        rowClassFor={rowClassFor}
                         renderChromeRow={renderChromeRow}
                         summaryRows={summaryRows}
                         emptyMessage={

@@ -2303,18 +2303,30 @@ check('the toggle reads the page default and never hard-codes a version', () => 
   )
 })
 
-check('the flipped page states its default ONCE, and only /inventory is flipped', () => {
-  const page = readFileSync(join(ROOT, 'app/(app)/inventory/page.tsx'), 'utf8')
-  const code = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-  assert.ok(code.includes('export default async function'), 'comment-stripping ate the source')
+// THE REGISTRY of flipped screens. A page belongs here the day its default becomes v2 and
+// nowhere else — the scan below reads it BOTH ways, so adding a flip without listing it
+// fails, and listing a screen that has not flipped fails too.
+const FLIPPED_PAGES = [
+  join('app', '(app)', 'inventory', 'page.tsx'), // RC IN / RC OUT, 2026-08-21
+  join('app', '(app)', 'cenapro', 'qc', 'page.tsx'), // QC ledger, 2026-08-21
+]
 
-  // The page's branch and the control it mounts must agree about the default, or the
-  // toggle lights the side the page did not render.
-  assert.match(code, /resolveGrid\(grid, GRID_V2\) === GRID_V2/)
-  assert.match(code, /defaultVersion=\{GRID_V2\}/)
+check('a flipped page states its default ONCE, and only the registered ones are flipped', () => {
+  for (const rel of FLIPPED_PAGES) {
+    const page = readFileSync(join(ROOT, rel), 'utf8')
+    const code = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    assert.ok(code.includes('export default async function'), `comment-stripping ate ${rel}`)
+
+    // The page's branch and the control it mounts must agree about the default, or the
+    // toggle lights the side the page did not render. The expression that reads the param
+    // differs per page (one destructures `grid`, one indexes the whole bag), so this pins
+    // the DEFAULT ARGUMENT rather than a spelling of the read.
+    assert.match(code, /resolveGrid\([^;]*?,\s*GRID_V2\)\s*===\s*GRID_V2/, `${rel} branch`)
+    assert.match(code, /defaultVersion=\{GRID_V2\}/, `${rel} control`)
+  }
 
   // Every OTHER page carrying the toggle must still pass no default. This is the scan
-  // that makes "the other nine are unchanged" a test rather than a claim.
+  // that makes "the unflipped screens are unchanged" a test rather than a claim.
   const pages: string[] = []
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -2326,8 +2338,14 @@ check('the flipped page states its default ONCE, and only /inventory is flipped'
   walk(join(ROOT, 'app'))
   const withBar = pages.filter((p) => readFileSync(p, 'utf8').includes('GridVersionBar'))
   assert.ok(withBar.length >= 5, 'no toggle call sites found — this scan would be vacuous')
+  for (const rel of FLIPPED_PAGES) {
+    assert.ok(
+      withBar.some((p) => p.endsWith(rel)),
+      `${rel} is registered as flipped but mounts no GridVersionBar`,
+    )
+  }
   for (const p of withBar) {
-    if (p.endsWith(join('app', '(app)', 'inventory', 'page.tsx'))) continue
+    if (FLIPPED_PAGES.some((rel) => p.endsWith(rel))) continue
     const other = readFileSync(p, 'utf8')
     assert.ok(
       !other.includes('defaultVersion'),
@@ -2338,6 +2356,33 @@ check('the flipped page states its default ONCE, and only /inventory is flipped'
       `${p} resolves its default to v2 — an unflipped screen defaults to the live table`,
     )
   }
+})
+
+check('`all` is an OFFERED option, and hiding it cannot touch an existing caller', () => {
+  const picker = readFileSync(join(ROOT, 'components/shared/table/PeriodPicker.tsx'), 'utf8')
+
+  // Default TRUE on both axes — the clause that makes the prop additive rather than a
+  // migration. `/inventory` passes neither and must keep both entries.
+  assert.match(picker, /allowAllYears = true/)
+  assert.match(picker, /allowAllMonths = true/)
+
+  // Both entries are behind their own flag. A hard-coded `All years` / `All months` item
+  // would render on a screen whose server read cannot widen to one.
+  assert.match(picker, /\{allowAllYears \?[\s\S]*?All years/)
+  assert.match(picker, /\{allowAllMonths \?[\s\S]*?All months/)
+
+  const inventory = readFileSync(join(ROOT, 'app/(app)/inventory/page.tsx'), 'utf8')
+  assert.ok(
+    !inventory.includes('allowAll'),
+    '/inventory must pass neither flag — its period axis genuinely spans every year',
+  )
+
+  // The QC ledger is the first screen that cannot widen: `loadQcLedgerData` takes ONE
+  // `YYYY-MM`, so both entries are hidden there rather than resolving back to the month
+  // the operator was already on.
+  const qc = readFileSync(join(ROOT, 'app/(app)/cenapro/qc/page.tsx'), 'utf8')
+  assert.match(qc, /allowAllYears=\{false\}/)
+  assert.match(qc, /allowAllMonths=\{false\}/)
 })
 
 console.log(`\n${passed} assertions passed.`)
