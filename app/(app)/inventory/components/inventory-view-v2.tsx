@@ -4,6 +4,7 @@ import { useInventoryTab, type InventoryTab } from './inventory-tab-context';
 import { DeliveryGridV2 } from '../rc-in/delivery-grid-v2';
 import { RcOutLazyTabV2 } from './rc-out-lazy-tab-v2';
 import type { DeliveryHistoryRow } from '@/types/rc-in';
+import type { PeriodMonth, PeriodYear } from '@/lib/table';
 
 // ─────────────────────────────────────────────────────────────────────────────────
 // The `?grid=v2` twin of `inventory-view.tsx` — the same two tabs, hosting the two
@@ -38,6 +39,17 @@ interface InventoryViewV2Props {
      * payload.
      */
     canViewPrices: boolean;
+    /**
+     * The RESOLVED period both tabs show — `page.tsx` read `?year=` / `?month=` once and
+     * handed the answer to the picker and to both grids together.
+     *
+     * **ONE pair for both tabs**, exactly as there is one grid toggle for both: they are
+     * two views of one shell, and two period controls would let the screen sit showing
+     * August on Deliveries and March on Usage. Flipping the tab is therefore a period
+     * NON-event — the same rows stay narrowed the same way.
+     */
+    periodYear: PeriodYear;
+    periodMonth: PeriodMonth;
 }
 
 export function InventoryViewV2({
@@ -47,6 +59,8 @@ export function InventoryViewV2({
     allSuppliers,
     allLocations,
     canViewPrices,
+    periodYear,
+    periodMonth,
 }: InventoryViewV2Props) {
     const { activeTab } = useInventoryTab();
 
@@ -65,10 +79,12 @@ export function InventoryViewV2({
                     allSuppliers={allSuppliers}
                     allLocations={allLocations}
                     canViewPrices={canViewPrices}
+                    periodYear={periodYear}
+                    periodMonth={periodMonth}
                 />
             </div>
             <div className={getTabClass('usage')}>
-                <RcOutLazyTabV2 />
+                <RcOutLazyTabV2 periodYear={periodYear} periodMonth={periodMonth} />
             </div>
         </>
     );

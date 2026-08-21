@@ -34,6 +34,7 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `menu.ts` | **New.** `defaultTableMenu` — the built-in right-click menu as DATA, a pure function of "does this cell accept an edit" and "was there a row under the pointer". |
 | `view.ts` | **New (2026-08-20).** The universal SORT and FILTER, as one pure transform. `applyTableView` · `nextSortDirection` · `isColumnFilterActive` · `activeFilterCount` · `columnSortable` / `columnFilterable` · `NO_FILTERS`. It decides the row order and the row set and holds none of the state that drives it. |
 | `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V1` / `GRID_V2` / `parseGrid` / **`resolveGrid`** / `isGridV2` / `withGrid` / `gridHref` — the `?grid=` side-by-side axis, and the ONE definition of it. One axis with a **per-page default** since 2026-08-21. Temporary: deleted with the last old grid. |
+| `period-param.ts` | **New (2026-08-21).** `PERIOD_YEAR_PARAM` / `PERIOD_MONTH_PARAM` / `PERIOD_ALL` / `parsePeriodYear` / `parsePeriodMonth` / **`resolvePeriodYear`** / **`resolvePeriodMonth`** / `periodKeyOf` / **`inPeriod`** / `isSinglePeriod` / `withPeriod` / `periodHref` — the `?year=` + `?month=` PERIOD axis, and the ONE definition of whether a dated row falls inside the selected period. **Permanent**, unlike `grid-param.ts` beside it. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
 | `../../scripts/verify-table-core.ts` | **78 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
@@ -498,6 +499,70 @@ Blackwood Table toolbar: Enter/Space activate the button instead of opening the 
 The param, `grid-param.ts`, `GridVersionToggle.tsx` and the page's three edits are deleted
 together with the last old grid. A permanent escape hatch is a second grid nobody maintains.
 
+**`GridVersionBar` gained a `trailing` slot (2026-08-21)** — chrome pinned to the far right of
+the same strip, so a page can put a period picker beside the toggle instead of stacking a
+second bar under it (two strips of chrome above a dense sheet is two rows of the sheet the
+operator no longer sees). It is rendered inside an `ml-auto` group, so it right-aligns when
+the note is short and wraps beneath rather than crushing it when the note is long. The slot
+goes with the bar at cutover; whatever was in it moves into the new grid's own toolbar.
+
+---
+
+## The period axis (`?year=` + `?month=`) — the first PERMANENT chrome
+
+`period-param.ts` (pure) + `components/shared/table/PeriodPicker.tsx` (the control). Built
+2026-08-21 for `/inventory`'s two v2 grids, from the deferred-chrome list above.
+
+**Why it is in the platform layer.** Every dense sheet is read one period at a time, and
+every module that needed that had built its own: a twelve-button footer strip with a sliding
+indicator on RC IN, two popovers on RC OUT, a `?m=` param counted from ZERO in one place and
+a month NAME in another. Three spellings of one question is three chances for two screens to
+disagree about what a URL means — the same argument `grid-param.ts` makes, so the same answer.
+
+```
+?year=2026   a calendar year        ?year=all    every year
+?month=8     a calendar month, 1-12 ?month=all   every month
+```
+
+**Six decisions worth keeping**
+
+1. **ONE-BASED months.** `?m=7` on the classic table means August, because a
+   `Date.getMonth()` leaked into a URL. `?month=8` means August. The two params are
+   independent; nothing here reads or writes `?m=`.
+2. **An unrecognised value means the PAGE'S DEFAULT** — `?month=`, `?month=13`, `?month=aug`
+   and absence are one answer, exactly as `resolveGrid` treats `?grid=3`. There is no way to
+   type a URL that half-selects a period, and a page states its default once, at the single
+   place it reads the param.
+3. **A page's default may be DATA-DERIVED, so "every month" has to be written out loud.**
+   `/inventory` opens on the current month, falling back to the year's latest month with
+   data — so `all months` is `?month=all` and is never the absence of a param. `withPeriod`
+   still omits a value equal to the page's default, which keeps the default state the
+   screen's clean URL.
+4. **EVERY OTHER PARAM SURVIVES.** `withPeriod` copies the query exhaustively and `append`s,
+   touching only its own two keys — the same clause that is the whole point of `withGrid`,
+   and for the same reason: a control that changed two things at once lands the operator
+   somewhere they did not ask to be.
+5. **`inPeriod` compares TEXT, never a `Date`.** It slices `yyyy-MM-dd` and compares digits.
+   Parsing a stored date back into a `Date` to ask which month it is in is the classic place
+   a timezone quietly moves a row to the previous day. A row with NO DATE is excluded from
+   any narrowed period and included in `all`/`all` — filing it under whichever month happens
+   to be selected would make a total that cannot be reproduced by reading the rows.
+6. **The control is CONTROLLED, and the server controls it.** The resolved year and month
+   arrive as props. A page that reads the param and a control that reads the param are two
+   answers to one question, and the day they disagree the picker says July while the sheet
+   shows August. The Suspense boundary ships inside the component, as `GridVersionToggle`'s
+   does, so `useSearchParams` never fails a caller's production build.
+
+`formatPeriodLabel(year, month)` is exported beside the control so a sheet naming its own
+period elsewhere — a row count, an empty state, an export filename — prints the same words
+the dropdown shows instead of assembling its own.
+
+**Consumer note:** the year axis may or may not bound the server query — that is the page's
+business, not this module's. On `/inventory` it does for RC IN (the fetch is year-scoped) and
+does not for RC OUT (`fetchRcOutTabData()` returns every row), so the RC OUT grid cuts both
+axes client-side while RC IN cuts only the month. `inPeriod` takes both either way, so
+neither consumer needs a second code path.
+
 ---
 
 ## Status
@@ -582,6 +647,7 @@ None. That is the point — this module imports nothing outside itself.
 | `components/shared/table/HeaderFilterPopover.tsx` | **New (2026-08-20).** The built-in per-column filter panel: a `contains` box, plus MIN/MAX on a column with a `numericValue`. NOT Radix and `position: fixed` — the header lives inside the horizontally scrolling scrollport, so an absolutely-positioned panel is clipped on every column past the fold. |
 | `components/shared/table/BlackwoodTable.tsx` | **New.** The container: `<colgroup>`, sticky header, `TableVirtuoso` (endless) or a plain `<table>` (focus), summary rows on declared lanes, the draft pool's `Add N more rows` control, the context menu, the paste sink. Owns the four performance rules, and the two seams above — `firstItemIndex` (endless only) and `renderChromeRow` + `TableChromeRowApi`. |
 | `components/shared/table/PasteSink.tsx` | The hidden `<textarea>`, `isGridChrome` (with the sink exempted FIRST) and `focusGrid` (always `preventScroll`). Carries the full explanation of why a `paste` handler on a non-editable div can never fire. |
+| `components/shared/table/PeriodPicker.tsx` | **New (2026-08-21).** The Year + Month dropdowns over `?year=` / `?month=`, plus `PERIOD_MONTH_LABELS` and `formatPeriodLabel`. Controlled by its caller, carries its own Suspense boundary, marked `data-grid-chrome` so Enter/Space works the select rather than opening a cell. See "The period axis" above. |
 
 ### Three defects found in the pieces 1B inherited
 
@@ -628,7 +694,13 @@ no-op that journals nothing.
   *while editing* still commits and moves, which is what keeps the Tab-run → Enter lane
   return working.
 
-**Not built (chrome, deferred with Stage 1D):** `PeriodPicker`, `ScopeToggle`, `AxisGuard`,
+**BUILT since 2026-08-21: `PeriodPicker`** — see "The period axis" below. It was the first of
+the deferred chrome to be asked for by name (*"both deliveries and usage need to be filtered
+using the dropdowns of year and month, im sure this is a pattern for most tables we're
+using"*), and it is the first piece of this list that is **permanent** rather than temporary:
+unlike `GridVersionToggle` it does not go away at cutover.
+
+**Not built (chrome, still deferred):** `ScopeToggle`, `AxisGuard`,
 `ColumnFilterPopover`, `TableSettingsMenu`. `BlackwoodTable` exposes the seams they need —
 `onSettingsChange`, `onStateChange`, `onSelectionChange`, `apiRef`, and (since 2026-08-17)
 `renderHeaderSlot`, which is the wire to `HeaderCell.filterSlot` that was missing.

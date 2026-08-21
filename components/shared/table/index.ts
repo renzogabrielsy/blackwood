@@ -36,6 +36,11 @@ export type { PasteSinkProps } from './PasteSink';
 export { GridVersionToggle, GridVersionBar } from './GridVersionToggle';
 export type { GridVersionToggleProps, GridVersionBarProps } from './GridVersionToggle';
 
+// The PERIOD control — a Year dropdown and a Month dropdown over `?year=` + `?month=`.
+// Permanent chrome, unlike the toggle above: see `lib/table/period-param.ts`.
+export { PeriodPicker, PERIOD_MONTH_LABELS, formatPeriodLabel } from './PeriodPicker';
+export type { PeriodPickerProps } from './PeriodPicker';
+
 export {
     createCellClassTable,
     cellClassKey,

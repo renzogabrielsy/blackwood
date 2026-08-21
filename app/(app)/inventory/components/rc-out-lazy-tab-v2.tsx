@@ -6,6 +6,7 @@ import { RcOutGridV2 } from '../rc-out/rc-out-grid-v2';
 import { fetchRcOutTabData } from '../rc-out/actions';
 import { errorToast } from '@/lib/toast';
 import type { RcOutRow } from '@/types/rc-out';
+import type { PeriodMonth, PeriodYear } from '@/lib/table';
 
 // ─────────────────────────────────────────────────────────────────────────────────
 // The `?grid=v2` twin of `rc-out-lazy-tab.tsx`, mounting `RcOutGridV2`.
@@ -42,7 +43,21 @@ interface RcOutTabData {
     canViewPrices: boolean;
 }
 
-export function RcOutLazyTabV2() {
+export interface RcOutLazyTabV2Props {
+    /**
+     * The RESOLVED period the whole screen is showing, handed down from `page.tsx`.
+     *
+     * **This tab's fetch is NOT year-scoped** — `fetchRcOutTabData()` paginates every
+     * `rc_out` row there has ever been, which is how it derives its own `yearOptions` —
+     * so unlike RC IN, the year narrows here on the CLIENT too, not just the month. It is
+     * a cut of a payload that was fetched either way, so picking a period costs no round
+     * trip and the tab keeps loading exactly once.
+     */
+    periodYear: PeriodYear;
+    periodMonth: PeriodMonth;
+}
+
+export function RcOutLazyTabV2({ periodYear, periodMonth }: RcOutLazyTabV2Props) {
     const [data, setData] = useState<RcOutTabData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
@@ -103,6 +118,8 @@ export function RcOutLazyTabV2() {
             yearOptions={data.yearOptions}
             blockLocs={data.blockLocs}
             canViewPrices={data.canViewPrices}
+            periodYear={periodYear}
+            periodMonth={periodMonth}
         />
     );
 }
