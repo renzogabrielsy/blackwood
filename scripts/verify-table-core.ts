@@ -63,6 +63,14 @@ import {
   columnSortable,
   columnFilterable,
   NO_FILTERS,
+  GRID_PARAM,
+  GRID_V1,
+  GRID_V2,
+  parseGrid,
+  resolveGrid,
+  isGridV2,
+  withGrid,
+  gridHref,
 } from '../lib/table/index'
 import type { ColumnSpec, GridRow, JumpGrid, RowKind, SummaryLaneCol } from '../lib/table/index'
 import { resolveColumns } from '../lib/hooks/use-table-columns'
@@ -2162,6 +2170,174 @@ check('the component measures the container and renders at the width it resolved
   assert.match(code, /raf = requestAnimationFrame\(measure\)/)
   assert.match(code, /scrollerEl\(\)\?\.clientWidth \|\| el\.clientWidth/)
   assert.match(code, /Math\.abs\(prev - w\) < 1 \? prev : w/)
+})
+
+// ═══ `?grid=` — ONE axis, a per-page DEFAULT ═══════════════════════════════════
+//
+// RC IN / RC OUT flipped to v2-by-default on 2026-08-21 while nine other screens stayed
+// on the old default. What has to be true for that to be safe is not "the flipped page
+// works" — it is that the OTHER nine did not change meaning, and that is exactly what a
+// pure test can pin: every helper is a function over plain strings, and the v1-default
+// path is asserted here as an explicit case rather than as an absence of complaints.
+
+check('parseGrid reports what the URL SAID; resolveGrid answers with a version', () => {
+  // Both versions are now readable. `v1` used to parse as `null` and, on a v1-default
+  // page, resolved to the old grid either way — so this widening cannot move any
+  // existing screen (the case below proves it at the resolve layer too).
+  assert.equal(parseGrid('v2'), GRID_V2)
+  assert.equal(parseGrid('v1'), GRID_V1)
+
+  // "The URL did not say" is NOT a version. Junk, case, emptiness and absence all land
+  // here, so a typo can never half-select anything.
+  for (const junk of [undefined, null, '', 'V2', 'V1', '3', 'v3', 'new', ' v2']) {
+    assert.equal(parseGrid(junk), null, `${JSON.stringify(junk)} must not parse`)
+  }
+
+  // A repeated param takes the first, the way every axis in this module does.
+  assert.equal(parseGrid(['v1', 'v2']), GRID_V1)
+  assert.equal(parseGrid(['v2', 'v1']), GRID_V2)
+
+  // THE DEFAULT-FLIP RULE, both directions: what the URL did not say, the page does.
+  assert.equal(resolveGrid(undefined, GRID_V1), GRID_V1)
+  assert.equal(resolveGrid(undefined, GRID_V2), GRID_V2)
+  assert.equal(resolveGrid('junk', GRID_V1), GRID_V1)
+  assert.equal(resolveGrid('junk', GRID_V2), GRID_V2)
+  // An EXPLICIT value always wins over the default, on either kind of page — that is
+  // the whole reachability guarantee for the classic table on a flipped screen.
+  assert.equal(resolveGrid('v1', GRID_V2), GRID_V1)
+  assert.equal(resolveGrid('v2', GRID_V1), GRID_V2)
+})
+
+check('the V1-DEFAULT path is unchanged — the nine unflipped screens, asserted', () => {
+  // Every one of them reads `parseGrid(params.grid) === GRID_V2`, which is
+  // `resolveGrid(raw, GRID_V1) === GRID_V2` by another name. Both spellings, every input.
+  for (const raw of [undefined, null, '', 'v1', 'V2', '3', 'junk']) {
+    assert.equal(parseGrid(raw) === GRID_V2, false, `${JSON.stringify(raw)} ⇒ old grid`)
+    assert.equal(resolveGrid(raw, GRID_V1) === GRID_V2, false)
+    assert.equal(isGridV2(raw), false)
+  }
+  assert.equal(parseGrid('v2') === GRID_V2, true)
+  assert.equal(isGridV2('v2'), true)
+
+  // The URL builders, with no default argument, must behave EXACTLY as they did before
+  // `defaultVersion` existed: v2 writes the param, v1 writes nothing at all.
+  assert.equal(withGrid([], true), 'grid=v2')
+  assert.equal(withGrid([], false), '')
+  assert.equal(gridHref('/x', [], true), '/x?grid=v2')
+  assert.equal(gridHref('/x', [], false), '/x')
+  // …and passing the default explicitly is the same thing, so a caller adding it while
+  // reading this file changes nothing.
+  assert.equal(withGrid([], true, GRID_V1), 'grid=v2')
+  assert.equal(withGrid([], false, GRID_V1), '')
+})
+
+check('on a V2-DEFAULT page the paramless URL is v2 and the way back is ?grid=v1', () => {
+  // The inverse, and the reason `defaultVersion` reaches the builders at all: the default
+  // side of the toggle must be the CLEAN url, or every existing link into `/inventory`
+  // would read as the non-default state.
+  assert.equal(withGrid([], true, GRID_V2), '')
+  assert.equal(withGrid([], false, GRID_V2), 'grid=v1')
+  assert.equal(gridHref('/inventory', [], true, GRID_V2), '/inventory')
+  assert.equal(gridHref('/inventory', [], false, GRID_V2), '/inventory?grid=v1')
+
+  // Neither builder can ever emit an empty `?grid=`, on either kind of page.
+  for (const def of [GRID_V1, GRID_V2] as const) {
+    for (const v2 of [true, false]) {
+      assert.ok(!withGrid([], v2, def).includes(`${GRID_PARAM}=&`))
+      assert.notEqual(withGrid([], v2, def), `${GRID_PARAM}=`)
+    }
+  }
+})
+
+check('EVERY OTHER PARAM SURVIVES THE FLIP, on a flipped page too', () => {
+  // The rule the whole side-by-side method rests on. A stale `grid` already in the query
+  // is dropped and re-decided; everything else is carried across in order, repeats
+  // included, in both directions and under both defaults.
+  const query: [string, string][] = [
+    ['tab', 'usage'],
+    ['year', '2026'],
+    ['grid', 'v2'],
+    ['search', 'KCA 378'],
+    ['f_supplier', 'a'],
+    ['f_supplier', 'b'],
+  ]
+  const kept = 'tab=usage&year=2026&search=KCA+378&f_supplier=a&f_supplier=b'
+
+  assert.equal(withGrid(query, true, GRID_V2), kept)
+  assert.equal(withGrid(query, false, GRID_V2), `${kept}&grid=v1`)
+  assert.equal(withGrid(query, true, GRID_V1), `${kept}&grid=v2`)
+  assert.equal(withGrid(query, false, GRID_V1), kept)
+
+  // A round trip through the toggle in either direction returns the URL it started from
+  // — a flip is an involution, so comparing the two grids can never drift the filters.
+  for (const def of [GRID_V1, GRID_V2] as const) {
+    const away = withGrid(query, false, def)
+    const back = withGrid(new URLSearchParams(away), true, def)
+    assert.equal(back, withGrid(query, true, def), `round trip under ${def}`)
+  }
+})
+
+check('the toggle reads the page default and never hard-codes a version', () => {
+  const src = readFileSync(
+    join(ROOT, 'components/shared/table/GridVersionToggle.tsx'),
+    'utf8',
+  )
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('export function GridVersionToggle'), 'comment-stripping ate the source')
+
+  // The default is `'v1'`, so a caller that passes nothing is byte-identical with the
+  // behaviour before this prop existed — the nine unflipped screens pass nothing.
+  assert.match(code, /defaultVersion = GRID_V1/)
+  // Which side is lit, and which URL each side writes, both come from the SAME resolved
+  // answer. Two sources would let the control light one side and navigate to the other.
+  assert.match(code, /resolveGrid\(params\.get\(GRID_PARAM\), defaultVersion\) === GRID_V2/)
+  assert.match(code, /gridHref\(pathname, params\.entries\(\), next, defaultVersion\)/)
+  // The labels are PROPS: "Current" is a claim about one page's state, not a fact about
+  // the module, so a flipped page can say something honest without this file learning
+  // what any screen is.
+  assert.match(code, /currentLabel = DEFAULT_CURRENT_LABEL/)
+  assert.match(code, /newLabel = DEFAULT_NEW_LABEL/)
+  assert.ok(
+    !/>\s*Current\s*</.test(code) && !/>\s*New\s*</.test(code),
+    'a hard-coded segment label would ignore the props',
+  )
+})
+
+check('the flipped page states its default ONCE, and only /inventory is flipped', () => {
+  const page = readFileSync(join(ROOT, 'app/(app)/inventory/page.tsx'), 'utf8')
+  const code = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(code.includes('export default async function'), 'comment-stripping ate the source')
+
+  // The page's branch and the control it mounts must agree about the default, or the
+  // toggle lights the side the page did not render.
+  assert.match(code, /resolveGrid\(grid, GRID_V2\) === GRID_V2/)
+  assert.match(code, /defaultVersion=\{GRID_V2\}/)
+
+  // Every OTHER page carrying the toggle must still pass no default. This is the scan
+  // that makes "the other nine are unchanged" a test rather than a claim.
+  const pages: string[] = []
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) walk(p)
+      else if (entry.name === 'page.tsx') pages.push(p)
+    }
+  }
+  walk(join(ROOT, 'app'))
+  const withBar = pages.filter((p) => readFileSync(p, 'utf8').includes('GridVersionBar'))
+  assert.ok(withBar.length >= 5, 'no toggle call sites found — this scan would be vacuous')
+  for (const p of withBar) {
+    if (p.endsWith(join('app', '(app)', 'inventory', 'page.tsx'))) continue
+    const other = readFileSync(p, 'utf8')
+    assert.ok(
+      !other.includes('defaultVersion'),
+      `${p} passes a grid default — only the flipped screens may`,
+    )
+    assert.ok(
+      !/resolveGrid\([^)]*GRID_V2\s*\)/.test(other),
+      `${p} resolves its default to v2 — an unflipped screen defaults to the live table`,
+    )
+  }
 })
 
 console.log(`\n${passed} assertions passed.`)

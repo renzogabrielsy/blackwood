@@ -1,11 +1,22 @@
 'use client';
 
 import * as React from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2, Save } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableChromeRowApi, TableSummaryRow } from '@/components/shared/table';
-import { needsGroupSpacer, pinnedOffsets } from '@/lib/table';
-import type { ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
+import { DEFAULT_DRAFT_ROWS, countUnsavedWork, describeUnsavedWork, needsGroupSpacer, pinnedOffsets } from '@/lib/table';
+import type {
+    CellContext,
+    CellSlot,
+    ColumnParseResult,
+    ColumnSpec,
+    GridRow,
+    RowKind,
+    TableSettings,
+} from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { useTableSettings } from '@/components/providers/table-settings';
 import {
@@ -14,60 +25,73 @@ import {
     type LabHighlightSpec,
     type LabMetric,
 } from '@/types/table-settings';
-import type { DeliveryHistoryRow } from '@/types/rc-in';
+import type { DeliveryHistoryRow, DeliveryRow } from '@/types/rc-in';
+import { errorToast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
+import { bulkUpdateDeliveries, submitBulkDeliveries } from './actions';
+import {
+    LAB_DECIMALS,
+    LAB_FIELDS,
+    buildDeliveryInsert,
+    buildDeliveryUpdate,
+    cleanPastedRcInCell,
+    draftLabel,
+    isDraftKey,
+    isRcInEditField,
+    labTextOf,
+    labValueOf,
+    makeDraftIds,
+    normalizeRcInField,
+    parseRcInField,
+    phpTotalOf,
+    rowLabel,
+    saveFailureMessage,
+    storedFieldText,
+    type LabField,
+    type PatchEnv,
+    type RcInField,
+} from './rc-in-grid-v2-save';
+
 // ═════════════════════════════════════════════════════════════════════════════════
-// RC IN on the Blackwood Table — `?grid=v2`, READ-ONLY, built BESIDE the live table.
+// RC IN on the Blackwood Table — `?grid=v2`, now EDITABLE, built BESIDE the live table.
 //
-// `delivery-master-table.tsx` is production and is not edited by one character. This file
-// renders the SAME `DeliveryHistoryRow[]` the server already fetched for that table, on
-// the universal grid, so the two can be compared row-for-row on the same real data
+// `delivery-master-table.tsx` and `bulk-delivery-input.tsx` are production and are not
+// edited by one character. This file renders the SAME `DeliveryHistoryRow[]` the server
+// already fetched for that table, on the universal grid, so the two can be compared
+// row-for-row on the same real data
 // (`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`).
 //
-// ── READ-ONLY, AND STRUCTURALLY SO ──────────────────────────────────────────────
-// There is no write path here at all, and that is a property of the SHAPE rather than a
-// promise: every column is `cellKind: 'readonly'`, no column carries a `parse`, and no
-// `renderEditor` is passed — so `columnAcceptsEdit` is false at every coordinate and an
-// editor can never open. No server action is imported. No draft-row pool. No context menu.
-// Nothing in this file can change a byte in the database.
+// ── WHAT CHANGED IN THIS PASS ───────────────────────────────────────────────────
+// The grid was READ-ONLY and structurally so: every column `readonly`, no `parse`, no
+// write path. It now types and saves — the first EDITABLE ICTC table on the universal
+// module — through the EXISTING server actions, unchanged, with no new SQL:
 //
-// `RowKind.occupies()` still reports the TRUTH about which fields would be editable (see
-// `EDITABLE_FIELD` below), because that is the answer the module needs to keep and the
-// answer the later edit pass will build on — it is simply inert while the column half of
-// the verdict says no.
+//   • Inline editing on the sixteen fields the bulk-input dialog lets an operator set,
+//     with a commit verdict per column (`parse`) and Excel-style canonicalisation of the
+//     DATE and BLOCK/LOC lanes (`normalize`).
+//   • A blank-row pool at the bottom, saved through `submitBulkDeliveries` — the same
+//     door the Add dialog uses, so batch upsert-by-`batch_code` stays the server's job.
+//   • A Save button, an unsaved chip, and an optional save-time EDIT REASON that becomes
+//     the per-row audit comment `bulkUpdateDeliveries` already carries.
 //
-// ── WHAT IT DOES DO ─────────────────────────────────────────────────────────────
-// Everything a spreadsheet does short of typing: cell selection and rectangular ranges,
-// the full keyboard including Ctrl/Cmd+Arrow · Home/End · Ctrl+Home/End · PageUp/PageDown,
-// Ctrl/Cmd+C to the clipboard as TSV, the floating selection-aggregate pill, the built-in
-// right-click menu, column resize, a frozen STATE+DATE block at the left edge, month group
-// headings inside the body (`renderChromeRow`) and a sticky totals rule-off.
-//
-// The pill and the menu are the TABLE's now, not this file's: `BlackwoodTable` publishes
-// the selection's SUM/AVERAGE/COUNT/MIN/MAX to the app's status bar itself and ships a
-// default Copy / Copy row / Select column menu, so there is nothing here to wire and —
-// more to the point — nothing here that could disagree with the other nine sheets.
-//
-// ── AN OUT-OF-BAND LAB READING TINTS THE WHOLE CELL ─────────────────────────────
-// Through `ColumnSpec.cellClass`, using `getLabHighlightBg` — the SAME predicate and the
-// same operator-configured colour the live table applies to its `<td>`. It used to be a
-// small rounded pill drawn inside `format`, because before that seam existed `format` was
-// the only place a consumer could paint; see the lab column block below.
-//
-// ── COLUMN ORDER IS CLAUDE.md's, NOT the live table's ───────────────────────────
-// Project `CLAUDE.md` → "RC IN Column Config" is the canonical left-to-right order and
-// this grid obeys it exactly: Date · Supplier · Batch Code · Block/Loc · Truck Plate ·
-// Sacks · Weight · MC, Grit, VM, Ash, FC · BD ASTM, BD JIS · PHP/KG · PHP Total · Remarks.
-// The live table predates that config and differs in three places (labs interleaved as
-// MC/GRIT/BD·BD/VM/ASH/FC, Weight before Sacks, Remarks before the ₱ columns), so a
-// side-by-side flip visibly REORDERS the sheet. That is the intended reading of the two
-// sides, not a defect in either.
-//
-// STATE leads the row, ahead of Date. It is not one of the 17 columns `CLAUDE.md` lists —
-// it is the live table's first column and the thing an operator scans for, so dropping it
-// would make the comparison poorer for no gain. It is one entry in `COLUMNS` and removing
-// it is a one-line change.
+// ── THE PAYLOAD IS A WHOLE ROW, AND THAT IS THE SERVER'S RULE ───────────────────
+// `toDeliveryPayload` in `actions.ts` rebuilds a fixed object from whatever it is handed,
+// so a partial patch does NOT leave the other columns alone — it clears `block_loc`,
+// nulls `weight_kg`/`sacks` and writes **₱0 over the price**. `rc-in-grid-v2-save.ts` owns
+// the consequence: every payload is a complete `DeliveryRow` assembled as *stored value
+// unless the operator typed over it*, and the seven-key lab panel is reassembled from the
+// stored JSONB because the RPC's `to_jsonb(d) || data` merge is SHALLOW.
 //
 // ── PRICE GATING IS A SECURITY BOUNDARY, AND IT IS NOT DECIDED HERE ─────────────
 // `canViewPrices` arrives as a PROP, resolved server-side in `page.tsx` by the canonical
@@ -75,8 +99,30 @@ import { cn } from '@/lib/utils';
 // payload. This file never calls `hasPermission`, never re-derives the role and never sees
 // a ₱ value a gated viewer was not sent. The two ₱ columns simply do not EXIST for such a
 // viewer (`ColumnSpec.visible`), so they are absent from the coordinate space rather than
-// blanked — the keyboard has no hole, a copy cannot address them, and the totals lane
-// collapses on its own.
+// blanked.
+//
+// **And for such a viewer the sheet stays read-only entirely.** Not squeamishness: the
+// only available write action forcibly writes `cost_basis` on every row it touches, and a
+// price-blind payload carries no price, so a Production operator correcting a REMARK would
+// silently overwrite the delivered ₱/kg of every row they touched with the L-008 unpriced
+// placeholder. Closing the door is the honest answer until a partial-patch action exists
+// (see `rc-in-grid-v2-save.ts` and the module CONTEXT for the seam that would open it).
+//
+// ── WHAT IS STILL NOT BUILT ─────────────────────────────────────────────────────
+// No toolbar, no header filters, no month strip, no row context menu, no delete, no
+// history dialog — and no AUTOCOMPLETE on SUPPLIER / BATCH / LOC (the live grid's
+// `AutocompletePopover`). Those cells are plain text for this pass; a typo lands as typed
+// and is refused only where the server refuses it. Where a behaviour is not built this
+// file renders NOTHING rather than a control that looks alive and does nothing.
+//
+// ── COLUMN ORDER IS CLAUDE.md's, NOT the live table's ───────────────────────────
+// Project `CLAUDE.md` → "RC IN Column Config" is the canonical left-to-right order and
+// this grid obeys it exactly: Date · Supplier · Batch Code · Block/Loc · Truck Plate ·
+// Sacks · Weight · MC, Grit, VM, Ash, FC · BD ASTM, BD JIS · PHP/KG · PHP Total · Remarks.
+// STATE leads the row, ahead of Date — it is the live table's first column and the thing
+// an operator scans for. STATE and PHP TOTAL are the only two lanes with no `parse`: one
+// reads the joined batch, the other is arithmetic over two other cells, and neither is a
+// field anybody could ever type into.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 // ─── Ctx — referentially stable, or the whole sheet re-renders ───────────────────
@@ -84,10 +130,46 @@ import { cn } from '@/lib/utils';
 export interface DeliveryGridCtx {
     /** Server-resolved. Never re-derived on the client. */
     canViewPrices: boolean;
+    /**
+     * The grid-wide edit gate. Every editable column ANDs its own rule with this, so
+     * "nothing in this sheet can be typed into" stays ONE fact in ONE place. It is
+     * `canViewPrices` today — see the price note in the header.
+     */
+    canEdit: boolean;
     /** Column ids the operator hid in the live table's Columns popover. Read-only here. */
     hidden: ReadonlySet<string>;
     /** The operator's lab thresholds, from the shared table-settings provider. */
     labHighlights: Record<LabMetric, LabHighlightSpec>;
+    /**
+     * The year a bare `8/21` means when the ROW itself cannot say — the newest dated
+     * delivery in view, else the current year.
+     *
+     * **A gap, deliberately left open:** `/inventory` is year-scoped by a `?year=` search
+     * param that `page.tsx` does not thread into either table's props. Reading it here
+     * would mean editing `page.tsx`, which this pass may not touch. Derived from the data
+     * instead, which is right in every view where the two agree.
+     */
+    fallbackYear: number;
+    /** The date a blank row starts on, so a draft's DATE cell has a canonical value. */
+    draftDefaultDate: string;
+}
+
+/**
+ * What a bare `8/21` means in THIS cell — the row's own year, because an operator
+ * correcting a 2025 delivery means 2025. A blank row has no year of its own and falls
+ * through to the sheet's.
+ */
+function contextYearOf(ctx: DeliveryGridCtx, cell?: CellContext<DeliveryHistoryRow>): number {
+    const stored = cell?.row?.transaction_date;
+    if (stored) {
+        const y = Number(stored.slice(0, 4));
+        if (Number.isFinite(y) && y > 1900) return y;
+    }
+    return ctx.fallbackYear;
+}
+
+function patchEnv(ctx: DeliveryGridCtx, contextYear: number): PatchEnv {
+    return { canViewPrices: ctx.canViewPrices, contextYear };
 }
 
 type DeliveryItem = GridRow<DeliveryHistoryRow>;
@@ -124,11 +206,6 @@ const num = (v: unknown): number => {
     return Number.isFinite(n) ? n : 0;
 };
 
-/** The ₱ a row is worth. The one definition, so the cell, the pill and the totals agree. */
-function phpTotalOf(row: DeliveryHistoryRow): number {
-    return num(row.weight_kg) * num(row.cost_basis);
-}
-
 /** An accounting cell: ₱ pinned left, figure pinned right (Excel Standard). */
 function pesoCell(value: number) {
     return (
@@ -139,48 +216,76 @@ function pesoCell(value: number) {
     );
 }
 
+// ─── The commit verdict ──────────────────────────────────────────────────────────
+
+/** A verdict that refuses nothing. The module reads only `ok`; the patch is never used. */
+const PARSE_OK: ColumnParseResult = { ok: true, patch: {} };
+
+/**
+ * THE commit verdict for a column, and it is `parseRcInField` — the same function the SAVE
+ * runs. A value typed and the same value refused at save can never disagree, because there
+ * is only one of them.
+ *
+ * **A BLANK cell commits without complaint.** `buildDeliveryUpdate` refuses a cleared DATE
+ * and a cleared BATCH — correctly, at SAVE, where a delivery without either cannot exist.
+ * At COMMIT it would mean clearing a cell you are about to retype raises a toast that
+ * stays until you dismiss it. The live grid draws the line in exactly the same place, and
+ * `parseRcInField` therefore treats a blank as CLEARED rather than as an error.
+ */
+function makeParse(field: RcInField) {
+    return (
+        text: string,
+        ctx: DeliveryGridCtx,
+        cell?: CellContext<DeliveryHistoryRow>,
+    ): ColumnParseResult => {
+        if (text.trim() === '') return PARSE_OK;
+        const verdict = parseRcInField(field, text, patchEnv(ctx, contextYearOf(ctx, cell)));
+        return verdict.ok ? { ok: true, patch: { [field]: verdict.value } } : verdict;
+    };
+}
+
+/**
+ * The three seams every editable column shares.
+ *
+ * `editable` ANDs the grid gate with the column's own rule. PHP/KG carries a second clause
+ * on purpose: `visible` already drops it entirely for a gated viewer, so there is no
+ * coordinate to type into — but "the column is absent" and "the cell refuses to be typed
+ * into" are two different guarantees, and the price boundary is the one thing here that
+ * must not depend on a single mechanism. `parseRcInField` refuses the ₱ a third time at
+ * save, and `buildDeliveryUpdate` refuses the whole row a fourth.
+ */
+function editSeams(field: RcInField): Partial<ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>> {
+    return {
+        editable: (_row, ctx) => ctx.canEdit && (field !== 'cost_basis' || ctx.canViewPrices),
+        parse: makeParse(field),
+        normalize: (text, ctx, cell) => normalizeRcInField(field, text, patchEnv(ctx, contextYearOf(ctx, cell))),
+        cleanPasted: (raw, ctx) => cleanPastedRcInCell(field, raw, patchEnv(ctx, ctx.fallbackYear)),
+    };
+}
+
 // ─── Lab columns ─────────────────────────────────────────────────────────────────
 //
 // CLAUDE.md order and CLAUDE.md precision: MC · Grit · VM · Ash · FC to 2 places, then
-// BD ASTM · BD JIS to 3. The decimals live here so the cell, the clipboard and a future
-// editor can never disagree about how many a lane has.
+// BD ASTM · BD JIS to 3. `LAB_DECIMALS` lives in the save model so the cell, the clipboard
+// and the payload can never disagree about how many a lane has.
 
-const LAB_COLUMNS: { key: LabMetric; label: string; title: string; decimals: number }[] = [
-    { key: 'mc', label: 'MC', title: 'Moisture content (%)', decimals: 2 },
-    { key: 'grit', label: 'GRIT', title: 'Grit (%)', decimals: 2 },
-    { key: 'vm', label: 'VM', title: 'Volatile matter (%)', decimals: 2 },
-    { key: 'ash', label: 'ASH', title: 'Ash (%)', decimals: 2 },
-    { key: 'fc', label: 'FC', title: 'Fixed carbon (%)', decimals: 2 },
-    { key: 'bd_astm', label: 'BD ASTM', title: 'Bulk density — ASTM', decimals: 3 },
-    { key: 'bd_jis', label: 'BD JIS', title: 'Bulk density — JIS', decimals: 3 },
-];
-
-const LAB_DECIMALS: Record<string, number> = Object.fromEntries(
-    LAB_COLUMNS.map((c) => [c.key, c.decimals]),
-);
-
-/**
- * `lab_results` is TYPED as seven required numbers and is not one at runtime: it is a
- * JSONB blob, and a panel that has not been filled in yet arrives with the key missing,
- * null, or an empty string. Hence the widening — the type is the optimistic reading and
- * the values are what the database actually holds.
- */
-function labValue(row: DeliveryHistoryRow, key: LabMetric): number | null {
-    const raw: unknown = row.lab_results?.[key];
-    if (raw === null || raw === undefined || raw === '') return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-}
-
-function labText(row: DeliveryHistoryRow, key: LabMetric): string {
-    const v = labValue(row, key);
-    return v === null ? '' : v.toFixed(LAB_DECIMALS[key] ?? 2);
-}
+const LAB_COLUMNS: { key: LabField; label: string; title: string; decimals: number }[] =
+    LAB_FIELDS.map((key) => ({
+        key,
+        label: { mc: 'MC', grit: 'GRIT', vm: 'VM', ash: 'ASH', fc: 'FC', bd_astm: 'BD ASTM', bd_jis: 'BD JIS' }[key],
+        title: {
+            mc: 'Moisture content (%)',
+            grit: 'Grit (%)',
+            vm: 'Volatile matter (%)',
+            ash: 'Ash (%)',
+            fc: 'Fixed carbon (%)',
+            bd_astm: 'Bulk density — ASTM',
+            bd_jis: 'Bulk density — JIS',
+        }[key],
+        decimals: LAB_DECIMALS[key],
+    }));
 
 // ─── Columns ─────────────────────────────────────────────────────────────────────
-//
-// Every one is `readonly` + `selectable`: a run of any lane on this sheet is worth
-// sweeping and adding up, and none of them may be typed into.
 
 function hiddenBy(key: string) {
     return (ctx: DeliveryGridCtx) => !ctx.hidden.has(key);
@@ -196,6 +301,8 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         // chrome). 84 left it a pixel or two short; 92 is the honest minimum.
         width: 92,
         pin: 'start',
+        // The joined batch's status, never a field. No `parse`, so no editor can open on
+        // it — the column half of the verdict refuses every cell whatever a row says.
         cellKind: 'readonly',
         selectable: true,
         visible: hiddenBy('state'),
@@ -226,17 +333,18 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         // classic place a timezone quietly moves a delivery to the previous day.
         width: 98,
         pin: 'start',
-        cellKind: 'readonly',
+        cellKind: 'date',
         selectable: true,
         visible: hiddenBy('transaction_date'),
         clipboardValue: (row) => row.transaction_date,
         format: (row) => <span className="font-mono tabular-nums">{row.transaction_date}</span>,
+        ...editSeams('transaction_date'),
     },
     {
         key: 'supplier',
         label: 'SUPPLIER',
         width: 150,
-        cellKind: 'readonly',
+        cellKind: 'text',
         selectable: true,
         visible: hiddenBy('supplier'),
         clipboardValue: (row) => row.supplier ?? '',
@@ -244,6 +352,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
             row.supplier ? (
                 <span className="block truncate" title={row.supplier}>{row.supplier}</span>
             ) : dash,
+        ...editSeams('supplier'),
     },
     {
         key: 'batch_code',
@@ -255,7 +364,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         // every long-month block truncated — and a batch code cut in the middle is exactly
         // the value an operator is scanning this column for.
         width: 152,
-        cellKind: 'readonly',
+        cellKind: 'text',
         selectable: true,
         visible: hiddenBy('batch_code'),
         clipboardValue: (row) => row.batch_code ?? '',
@@ -263,29 +372,31 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
             row.batch_code ? (
                 <span className="block truncate font-mono" title={row.batch_code}>{row.batch_code}</span>
             ) : dash,
+        ...editSeams('batch_code'),
     },
     {
         key: 'block_loc',
         label: 'LOC',
         title: 'Block / location',
         width: 62,
-        cellKind: 'readonly',
+        cellKind: 'text',
         selectable: true,
         visible: hiddenBy('block_loc'),
         // Same fallback the live table uses: the batch's `location_ref` when the delivery
-        // carries none of its own.
+        // carries none of its own. It is a DISPLAY fallback only — see `savedFieldText`.
         clipboardValue: (row) => row.block_loc || row.batches?.location_ref || '',
         format: (row) => {
             const v = row.block_loc || row.batches?.location_ref || '';
             return v ? <span className="font-mono">{v}</span> : dash;
         },
+        ...editSeams('block_loc'),
     },
     {
         key: 'truck_plate',
         label: 'TRUCK',
         title: 'Truck plate',
         width: 90,
-        cellKind: 'readonly',
+        cellKind: 'text',
         selectable: true,
         visible: hiddenBy('truck_plate'),
         clipboardValue: (row) => row.truck_plate ?? '',
@@ -293,6 +404,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
             row.truck_plate ? (
                 <span className="block truncate font-mono" title={row.truck_plate}>{row.truck_plate}</span>
             ) : dash,
+        ...editSeams('truck_plate'),
     },
     {
         key: 'sacks',
@@ -300,7 +412,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         title: 'Sacks',
         width: 58,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         selectable: true,
         calcType: 'SUM',
         visible: hiddenBy('sacks'),
@@ -310,6 +422,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
             row.sacks === null || row.sacks === undefined
                 ? dash
                 : <span className="font-mono tabular-nums">{formatInt(num(row.sacks))}</span>,
+        ...editSeams('sacks'),
     },
     {
         key: 'weight_kg',
@@ -317,7 +430,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         title: 'Weight (kg)',
         width: 96,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         selectable: true,
         calcType: 'SUM',
         summaryLane: 'figure',
@@ -325,6 +438,7 @@ const COLUMNS: ColumnSpec<DeliveryHistoryRow, DeliveryGridCtx>[] = [
         numericValue: (row) => num(row.weight_kg),
         clipboardValue: (row) => String(row.weight_kg ?? ''),
         format: (row) => <span className="font-mono tabular-nums">{formatInt(num(row.weight_kg))}</span>,
+        ...editSeams('weight_kg'),
     },
     // Lab columns are appended below, in CLAUDE.md's order.
 ];
@@ -338,14 +452,14 @@ for (const lab of LAB_COLUMNS) {
         // `text-[11px]` uppercase ≈ 54px against 68 − 17 = 51 usable), not by `0.352`.
         width: lab.decimals === 3 ? 76 : 58,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         selectable: true,
         calcType: 'AVERAGE',
         visible: hiddenBy(lab.key),
-        numericValue: (row) => labValue(row, lab.key),
-        clipboardValue: (row) => labText(row, lab.key),
+        numericValue: (row) => labValueOf(row, lab.key),
+        clipboardValue: (row) => labTextOf(row, lab.key),
         format: (row) => {
-            const v = labValue(row, lab.key);
+            const v = labValueOf(row, lab.key);
             if (v === null) return dash;
             return (
                 <span className="block w-full text-right font-mono tabular-nums">
@@ -363,21 +477,17 @@ for (const lab of LAB_COLUMNS) {
          * the `?grid=v2` toggle at once. (The live table has ONE level, not two — a single
          * threshold per metric, default red — so there is no warn tier to match.)
          *
-         * Before this seam existed the only place a consumer could paint was INSIDE
-         * `format`, which is why this rendered as a small rounded pill hugging the digits
-         * with the rest of the cell plain. That is what the screenshot shows and it is not
-         * how a spreadsheet marks a bad reading.
-         *
          * The classes merge UNDER the cached class string, so `selected` / `active` /
          * `dirty` / `invalid` all win — an out-of-band cell the operator has swept still
-         * reads as swept.
+         * reads as swept, and a cell being typed into still reads as unsaved.
          */
         cellClass: (row, ctx) => {
             if (row === null) return undefined;
-            const v = labValue(row, lab.key);
+            const v = labValueOf(row, lab.key);
             if (v === null) return undefined;
             return getLabHighlightBg(lab.key, v, ctx.labHighlights) || undefined;
         },
+        ...editSeams(lab.key),
     });
 }
 
@@ -388,7 +498,7 @@ COLUMNS.push(
         title: 'Delivered price per kilogram',
         width: 92,
         align: 'right',
-        cellKind: 'readonly',
+        cellKind: 'number',
         selectable: true,
         calcType: 'AVERAGE',
         // The SERVER decided; this only obeys. A hidden column is ABSENT from the
@@ -398,6 +508,7 @@ COLUMNS.push(
         clipboardValue: (row) => (row.cost_basis === null || row.cost_basis === undefined ? '' : String(row.cost_basis)),
         format: (row) =>
             row.cost_basis === null || row.cost_basis === undefined ? dash : pesoCell(num(row.cost_basis)),
+        ...editSeams('cost_basis'),
     },
     {
         key: 'php_total',
@@ -409,6 +520,8 @@ COLUMNS.push(
         // against a declared 118. One peso more and it clipped.
         width: 128,
         align: 'right',
+        // DERIVED — weight × price. Never editable, but a range MAY cover it: a run of
+        // delivery totals is the most useful thing on this sheet to sweep and add up.
         cellKind: 'readonly',
         selectable: true,
         calcType: 'SUM',
@@ -422,7 +535,7 @@ COLUMNS.push(
         key: 'remarks',
         label: 'REMARKS',
         width: 220,
-        cellKind: 'readonly',
+        cellKind: 'text',
         selectable: true,
         visible: hiddenBy('remarks'),
         clipboardValue: (row) => row.remarks ?? '',
@@ -439,48 +552,38 @@ COLUMNS.push(
                     {row.remarks}
                 </span>
             ) : null,
+        ...editSeams('remarks'),
     },
 );
 
 // ─── Row families ────────────────────────────────────────────────────────────────
 //
-// One data family and two chrome families. The chrome ones are NOT addressable, so they
+// Two data families and two chrome families. The chrome ones are NOT addressable, so they
 // never enter `navRows` and the keyboard coordinate space is byte-identical with and
 // without them.
 
 /**
- * Which fields a human may type into once the edit pass lands — the TRUTH, recorded now
- * so the later slice inherits it rather than re-deriving it. It is inert today: every
- * `ColumnSpec` above is `cellKind: 'readonly'` and carries no `parse`, so the column half
- * of the verdict refuses every cell whatever this says.
+ * The slot tables, built FROM the column table so a column added above is covered with no
+ * edit here — and `isRcInEditField` is the single source of "may a human type into this",
+ * shared with the save.
  *
- * `state` reads the joined batch, `php_total` is arithmetic over two other cells: neither
- * is a field anybody could ever type into, here or later.
+ * **A BLANK ROW carries the same lanes as a delivery minus the two derived ones.** A row
+ * that exists nowhere has no batch status and no computed total; returning a slot there
+ * would paint an empty cell the caret can sit in and a range can total, over a row with
+ * nothing behind it.
  */
-const EDITABLE_FIELD: Record<string, boolean> = {
-    state: false,
-    php_total: false,
-    transaction_date: true,
-    supplier: true,
-    batch_code: true,
-    block_loc: true,
-    truck_plate: true,
-    sacks: true,
-    weight_kg: true,
-    mc: true,
-    grit: true,
-    vm: true,
-    ash: true,
-    fc: true,
-    bd_astm: true,
-    bd_jis: true,
-    cost_basis: true,
-    remarks: true,
-};
+function buildSlots() {
+    const delivery = new Map<string, CellSlot>();
+    const draft = new Map<string, CellSlot>();
+    for (const c of COLUMNS) {
+        const editable = isRcInEditField(c.key);
+        delivery.set(c.key, { field: c.key, editable });
+        if (editable) draft.set(c.key, { field: c.key, editable: true });
+    }
+    return { delivery, draft };
+}
 
-const DELIVERY_SLOTS: ReadonlyMap<string, { field: string; editable: boolean }> = new Map(
-    COLUMNS.map((c) => [c.key, { field: c.key, editable: EDITABLE_FIELD[c.key] ?? false }]),
-);
+const SLOTS = buildSlots();
 
 const MONTH_HEADER_H = 24;
 const SPACER_H = 18;
@@ -491,7 +594,13 @@ function buildKinds(rowHeight: number): ReadonlyMap<string, RowKind<DeliveryHist
             kind: 'delivery',
             height: rowHeight,
             addressable: true,
-            occupies: (colKey) => DELIVERY_SLOTS.get(colKey) ?? null,
+            occupies: (colKey) => SLOTS.delivery.get(colKey) ?? null,
+        }],
+        ['draft', {
+            kind: 'draft',
+            height: rowHeight,
+            addressable: true,
+            occupies: (colKey) => SLOTS.draft.get(colKey) ?? null,
         }],
         ['group-header', { kind: 'group-header', height: MONTH_HEADER_H, addressable: false, occupies: () => null }],
         ['spacer', { kind: 'spacer', height: SPACER_H, addressable: false, occupies: () => null }],
@@ -500,6 +609,7 @@ function buildKinds(rowHeight: number): ReadonlyMap<string, RowKind<DeliveryHist
 
 const ROW_RULES: Record<string, string> = {
     delivery: 'border-b border-b-border/30',
+    draft: 'border-b border-b-border/30',
     spacer: 'border-b border-b-border',
 };
 
@@ -521,8 +631,9 @@ interface Flattened {
 
 /**
  * The ONE place the shape of this sheet is decided: month headings, a blank spacer at each
- * month boundary, and the rows in the order the server sent them (transaction_date DESC,
- * created_at DESC — the sort is the server's and is not re-done here).
+ * month boundary, the rows in the order the server sent them (transaction_date DESC,
+ * created_at DESC — the sort is the server's and is not re-done here), and the blank-row
+ * pool at the very bottom.
  *
  * **The chrome keys carry a RUN ORDINAL, not just the month.** `computeItemKey` is the
  * virtualiser's React key, so two items sharing one is a real defect — and a month CAN
@@ -530,7 +641,7 @@ interface Flattened {
  * search spans every year). Keying by run rather than by value makes that unrepresentable
  * instead of merely unlikely, and it costs one integer.
  */
-function flatten(rows: readonly DeliveryHistoryRow[]): Flattened {
+function flatten(rows: readonly DeliveryHistoryRow[], draftIds: readonly string[]): Flattened {
     const items: DeliveryItem[] = [];
     const months = new Map<string, MonthBlock>();
     const grand: MonthBlock = { label: 'ALL', count: 0, kg: 0, php: 0 };
@@ -564,26 +675,11 @@ function flatten(rows: readonly DeliveryHistoryRow[]): Flattened {
         items.push({ kind: 'delivery', id: row.id, data: row });
     }
 
-    return { items, months, grand };
-}
+    // The blank rows, always at the very bottom — they belong to no month until the
+    // operator gives one a date, so they sit below the last heading rather than inside it.
+    for (const draftId of draftIds) items.push({ kind: 'draft', id: draftId });
 
-/** What a cell HOLDS as text — the jump keys' `filled` probe and the clipboard's source. */
-function fieldText(row: DeliveryHistoryRow, field: string): string {
-    switch (field) {
-        case 'state': return row.state || 'STORED';
-        case 'transaction_date': return row.transaction_date ?? '';
-        case 'supplier': return row.supplier ?? '';
-        case 'batch_code': return row.batch_code ?? '';
-        case 'block_loc': return row.block_loc || row.batches?.location_ref || '';
-        case 'truck_plate': return row.truck_plate ?? '';
-        case 'sacks': return row.sacks === null || row.sacks === undefined ? '' : String(row.sacks);
-        case 'weight_kg': return row.weight_kg === null || row.weight_kg === undefined ? '' : String(row.weight_kg);
-        case 'cost_basis': return row.cost_basis === null || row.cost_basis === undefined ? '' : String(row.cost_basis);
-        case 'php_total': return String(phpTotalOf(row));
-        case 'remarks': return row.remarks ?? '';
-        default:
-            return LAB_DECIMALS[field] !== undefined ? labText(row, field as LabMetric) : '';
-    }
+    return { items, months, grand };
 }
 
 // ─── Props ───────────────────────────────────────────────────────────────────────
@@ -592,9 +688,9 @@ function fieldText(row: DeliveryHistoryRow, field: string): string {
  * The SAME props `DeliveryMasterTable` receives, plus the server-resolved price gate.
  *
  * `batches`, `search`, `allSuppliers` and `allLocations` feed the live table's Add dialog
- * and its three header filters, none of which a read-only grid has. They are accepted
- * anyway so the two components remain swappable on one prop object, and so the edit pass
- * has nothing to rewire.
+ * and its three header filters. This grid accepts them so the two components remain
+ * swappable on one prop object; `batches` and `allSuppliers` are what a later autocomplete
+ * pass will read, and nothing consumes them yet.
  */
 export interface DeliveryGridV2Props {
     data: DeliveryHistoryRow[];
@@ -605,10 +701,23 @@ export interface DeliveryGridV2Props {
     canViewPrices: boolean;
 }
 
+/** What the reason dialog is holding while it waits for an answer. */
+interface PendingSave {
+    updates: { id: string; data: DeliveryRow }[];
+    inserts: DeliveryRow[];
+    /** Row ids to `forget` once the updates land — stored deliveries only. */
+    updatedRowIds: string[];
+    /** Draft ids to retire once the inserts land. */
+    insertedDraftIds: string[];
+}
+
 // ─── The component ───────────────────────────────────────────────────────────────
 
 export function DeliveryGridV2(props: DeliveryGridV2Props) {
     const { data, canViewPrices } = props;
+
+    const router = useRouter();
+    const [isPending, startTransition] = React.useTransition();
 
     // READ ONLY from the shared provider — density, lab thresholds and the operator's
     // hidden-column set, so the two sides of the toggle agree about what to show and how
@@ -621,17 +730,53 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
         [settings.hiddenColumns],
     );
 
-    // `ctx` MUST be referentially stable — it is a dependency of the column resolution and
-    // of every cell's `format`.
+    /**
+     * The date a blank row starts on.
+     *
+     * The bulk-input dialog's own seed, verbatim (`createEmptyRow`), so a delivery entered
+     * from either surface on the same day is dated identically. It is a DEFAULT, not an
+     * edit — it never makes a row dirty — and the strip above the sheet says it out loud,
+     * because a date nobody typed must not reach the ledger unseen.
+     */
+    const draftDefaultDate = React.useMemo(() => new Date().toISOString().split('T')[0], []);
+
+    /** The year a bare `8/21` means when the row itself cannot say. */
+    const fallbackYear = React.useMemo(() => {
+        for (const row of data) {
+            const y = Number((row.transaction_date ?? '').slice(0, 4));
+            if (Number.isFinite(y) && y > 1900) return y;
+        }
+        return new Date().getFullYear();
+    }, [data]);
+
+    // `ctx` MUST be referentially stable — it is a dependency of the column resolution, of
+    // every editability verdict and of every cell's `format`.
     const ctx = React.useMemo<DeliveryGridCtx>(
-        () => ({ canViewPrices, hidden, labHighlights: settings.labHighlights }),
-        [canViewPrices, hidden, settings.labHighlights],
+        () => ({
+            canViewPrices,
+            // See the header: the only available write action rewrites `cost_basis` on
+            // every row, and a price-blind payload carries no price.
+            canEdit: canViewPrices,
+            hidden,
+            labHighlights: settings.labHighlights,
+            fallbackYear,
+            draftDefaultDate,
+        }),
+        [canViewPrices, hidden, settings.labHighlights, fallbackYear, draftDefaultDate],
     );
 
     const rowHeight = settings.densityMode === 'expanded' ? 48 : 32;
     const kinds = React.useMemo(() => buildKinds(rowHeight), [rowHeight]);
 
-    const { items, months, grand } = React.useMemo(() => flatten(data), [data]);
+    // The blank rows exist only where a blank row MEANS something. A search is a CUT of
+    // history and a new delivery does not belong at the end of a cut.
+    const showDrafts = ctx.canEdit && !(props.search ?? '').trim();
+    const [draftIds, setDraftIds] = React.useState<string[]>(() => makeDraftIds(DEFAULT_DRAFT_ROWS));
+
+    const { items, months, grand } = React.useMemo(
+        () => flatten(data, showDrafts ? draftIds : []),
+        [data, showDrafts, draftIds],
+    );
 
     const byId = React.useMemo(() => {
         const m = new Map<string, DeliveryHistoryRow>();
@@ -639,23 +784,205 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
         return m;
     }, [data]);
 
+    /**
+     * What a cell HOLDS, as text — the editor's opening value, the jump keys' `filled`
+     * probe, and the value an edit must return to in order to stop counting as unsaved.
+     *
+     * `storedFieldText` lives in the save model, so the text a cell compares itself against
+     * and the text the save reads for an untouched field are produced by ONE function. A
+     * BLANK ROW has no stored row, so its canonical text is empty everywhere except the
+     * DATE — which carries the sheet's default, which is what makes typing that date by
+     * hand a NON-edit instead of a row that can never be made clean again.
+     */
     const storedText = React.useCallback(
         (rowId: string, field: string): string => {
-            const row = byId.get(rowId);
-            return row ? fieldText(row, field) : '';
+            if (isDraftKey(rowId)) return field === 'transaction_date' ? draftDefaultDate : '';
+            return storedFieldText(byId.get(rowId) ?? null, field);
         },
-        [byId],
+        [byId, draftDefaultDate],
     );
 
-    // The module's single writer. Nothing in this grid ever calls `applyEdits`, so it
-    // holds an empty map for the life of the component — but `BlackwoodTable` requires the
-    // port, and handing it a real (idle) instance is honest where a stub would not be.
-    const noDrafts = React.useCallback(() => false, []);
-    const edits = useTableEdits({ canonicalText: storedText, isDraft: noDrafts });
+    // THE single journalled writer. Every mutation in this grid — an inline commit, a
+    // Delete, a paste, an Escape revert, undo and redo — goes through `edits.applyEdits`.
+    const edits = useTableEdits({ canonicalText: storedText, isDraft: isDraftKey });
 
     // Column widths the operator drags. LOCAL state, deliberately: persisting them would
-    // mean calling `saveTableSettings`, and this grid has no write path of any kind.
+    // mean calling `saveTableSettings`, and this grid does not own that surface.
     const [tableSettings, setTableSettings] = React.useState<TableSettings>({});
+
+    // ── The blank-row pool ───────────────────────────────────────────────────────
+    //
+    // `onAddDrafts` returns the ids it created SYNCHRONOUSLY, because a paste that runs
+    // past the last blank row needs them inside the same gesture — and those ids ride on
+    // the journal step, so one Ctrl+Z takes back the paste AND the rows it grew.
+    const onAddDrafts = React.useCallback((count: number) => {
+        const ids = makeDraftIds(count);
+        setDraftIds((prev) => [...prev, ...ids]);
+        return ids;
+    }, []);
+
+    const onRemoveDrafts = React.useCallback((ids: readonly string[]) => {
+        const gone = new Set(ids);
+        setDraftIds((prev) => prev.filter((id) => !gone.has(id)));
+    }, []);
+
+    const onRestoreDrafts = React.useCallback((ids: readonly string[]) => {
+        setDraftIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    }, []);
+
+    // ── Unsaved work ─────────────────────────────────────────────────────────────
+    const unsaved = React.useMemo(
+        () => countUnsavedWork(edits.dirtyRecords, edits.dirtyDrafts),
+        [edits.dirtyRecords, edits.dirtyDrafts],
+    );
+    const dirtyCount = unsaved.total;
+
+    const [saving, setSaving] = React.useState(false);
+    const [pending, setPending] = React.useState<PendingSave | null>(null);
+    const [reason, setReason] = React.useState('');
+
+    // ── COMMIT — the two server actions, in order ────────────────────────────────
+    //
+    // **What the actions actually return, so nothing here pretends otherwise:** both
+    // `bulkUpdateDeliveries` and `submitBulkDeliveries` answer with a single
+    // `{ success, message? }` for the WHOLE batch — never one verdict per row.
+    // `fn_bulk_update_deliveries` is transactional, so a refusal genuinely means nothing
+    // was written, and that is exactly what the refusal says. There is no partial-success
+    // state to render and none is invented.
+    //
+    // The updates go FIRST and a failure stops the run: an insert that landed beside a
+    // rolled-back batch of edits would leave the operator with half a save and no way to
+    // tell which half.
+    const commit = React.useCallback(
+        async (plan: PendingSave, editReason: string) => {
+            setSaving(true);
+            try {
+                if (plan.updates.length > 0) {
+                    const note = editReason.trim();
+                    const res = await bulkUpdateDeliveries(
+                        plan.updates.map((u) => ({ id: u.id, data: u.data, comment: note || undefined })),
+                    );
+                    if (!res.success) {
+                        errorToast(saveFailureMessage('update', plan.updates.length, res.message));
+                        return;
+                    }
+                    edits.forget(plan.updatedRowIds);
+                }
+
+                if (plan.inserts.length > 0) {
+                    const res = await submitBulkDeliveries(plan.inserts);
+                    if (!res.success) {
+                        errorToast(saveFailureMessage('insert', plan.inserts.length, res.message), {
+                            description:
+                                plan.updates.length > 0
+                                    ? `The ${plan.updates.length} edited row${plan.updates.length === 1 ? '' : 's'} above DID save. Only the new rows were refused, and they are still on screen.`
+                                    : undefined,
+                        });
+                        // The edits that landed stay forgotten; the drafts keep every
+                        // character so the operator can fix and retry.
+                        if (plan.updates.length > 0) startTransition(() => router.refresh());
+                        return;
+                    }
+                    // The drafts became real deliveries: drop their blank rows, then top
+                    // the pool back up so the run of blanks stays the same length (Sheets
+                    // never shrinks it either).
+                    edits.forget(plan.insertedDraftIds);
+                    const consumed = new Set(plan.insertedDraftIds);
+                    setDraftIds((prev) => [
+                        ...prev.filter((k) => !consumed.has(k)),
+                        ...makeDraftIds(plan.insertedDraftIds.length),
+                    ]);
+                }
+
+                const total = plan.updates.length + plan.inserts.length;
+                toast.success(
+                    `Saved ${total} deliver${total === 1 ? 'y' : 'ies'}` +
+                        (plan.inserts.length > 0 && plan.updates.length > 0
+                            ? ` (${plan.updates.length} edited, ${plan.inserts.length} new)`
+                            : ''),
+                );
+                // The server page refetches and hands down fresh `data`. This component is
+                // not keyed on anything, so it does NOT remount: the new rows flow in as
+                // props, `flatten` / `byId` / `storedText` re-derive, and the saved rows
+                // have already been forgotten — so nothing is left lit and no keystroke of
+                // a REFUSED row is disturbed.
+                startTransition(() => router.refresh());
+            } finally {
+                setSaving(false);
+            }
+        },
+        [edits, router],
+    );
+
+    // ── SAVE ─────────────────────────────────────────────────────────────────────
+    //
+    // One rule above everything: **nothing is written unless every dirty row builds a
+    // legal payload.** A batch that posted the good rows and reported the rest would leave
+    // the sheet half-saved with the refusals still on screen, and the operator with no way
+    // to tell which half landed.
+    const handleSave = React.useCallback(() => {
+        if (dirtyCount === 0 || saving) return;
+
+        const map = edits.edits;
+        const updates: PendingSave['updates'] = [];
+        const updatedRowIds: string[] = [];
+        const inserts: DeliveryRow[] = [];
+        const insertedDraftIds: string[] = [];
+        const problems: string[] = [];
+
+        for (const id of edits.dirtyRecords) {
+            const stored = byId.get(id);
+            // Filtered out from under the edit between the typing and the Save. Its text is
+            // gone with it, so there is nothing to post and nothing to warn about.
+            if (!stored) continue;
+            const built = buildDeliveryUpdate(stored, map[id] ?? {}, patchEnv(ctx, ctx.fallbackYear));
+            if (built.errors.length > 0) {
+                for (const e of built.errors) problems.push(`${rowLabel(stored)}: ${e}`);
+                continue;
+            }
+            if (!built.row) continue;
+            updates.push({ id, data: built.row });
+            updatedRowIds.push(id);
+        }
+
+        for (const draftId of draftIds) {
+            if (!edits.dirtyDrafts.has(draftId)) continue;
+            const e = map[draftId] ?? {};
+            const built = buildDeliveryInsert(e, draftDefaultDate, patchEnv(ctx, ctx.fallbackYear));
+            if (built.errors.length > 0) {
+                for (const err of built.errors) problems.push(`${draftLabel(e, draftDefaultDate)}: ${err}`);
+                continue;
+            }
+            if (!built.row) continue;
+            inserts.push(built.row);
+            insertedDraftIds.push(draftId);
+        }
+
+        if (problems.length > 0) {
+            errorToast(
+                `${problems.length} change${problems.length === 1 ? '' : 's'} could not be saved — nothing was written.`,
+                { description: problems.join('\n') },
+            );
+            return;
+        }
+        if (updates.length === 0 && inserts.length === 0) {
+            toast.info('Nothing to save.');
+            return;
+        }
+
+        const plan: PendingSave = { updates, inserts, updatedRowIds, insertedDraftIds };
+
+        // The REASON step, and it exists only where a reason means something: an UPDATE
+        // carries an edit remark onto the row's latest `audit_logs` entry (the RPC's own
+        // glue), an INSERT has no prior state to explain. A save that is purely new rows
+        // therefore goes straight through rather than asking a question with no answer.
+        if (updates.length === 0) {
+            void commit(plan, '');
+            return;
+        }
+        setReason('');
+        setPending(plan);
+    }, [dirtyCount, saving, edits, byId, ctx, draftIds, draftDefaultDate, commit]);
 
     // ── Month headings, inside the body ──────────────────────────────────────────
     const renderChromeRow = React.useCallback(
@@ -742,8 +1069,14 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
 
     const rowClassFor = React.useCallback((item: DeliveryItem): string | undefined => {
         if (item.kind === 'delivery') return 'group transition-all duration-150 hover:bg-muted/50';
+        // A blank row reads as a blank row, so the end of history is visible without a
+        // heading announcing it.
+        if (item.kind === 'draft') return 'group bg-muted/10 transition-all duration-150 hover:bg-muted/30';
         return undefined;
     }, []);
+
+    /** Saving, or the post-save `router.refresh()` still in flight. */
+    const busy = saving || isPending;
 
     return (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -755,14 +1088,58 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                     grid=v2
                 </span>
                 <span>
-                    RC IN on the Blackwood Table — <strong className="font-semibold">read-only</strong>. Selection,
-                    keyboard, copy, the right-click menu, the selection summary and column resize are live; the
-                    toolbar, filters, the month strip, the row menu and every editing path are not built yet.{' '}
+                    RC IN on the Blackwood Table — typing, saving, new rows, the right-click menu, the selection
+                    summary and column resize are live; the toolbar, filters, the month strip, the row menu,
+                    delete and cell autocomplete are not built yet.{' '}
                     <strong className="font-semibold">Current</strong> above returns to the live table.
                 </span>
-                <span className="ml-auto font-mono tabular-nums">
+                <span className="font-mono tabular-nums">
                     {grand.count} row{grand.count === 1 ? '' : 's'}
                 </span>
+
+                {/* The blank rows' seeded date, SAID OUT LOUD. A `format` runs against the
+                    stored row and a blank row has none, so a muted per-row default has
+                    nowhere to render — and a date nobody typed must not reach the ledger
+                    unseen. One sheet, one default, one sentence. */}
+                {showDrafts ? (
+                    <span className="font-mono">
+                        · new rows are dated <span className="font-bold">{draftDefaultDate}</span> unless you type one
+                    </span>
+                ) : null}
+
+                {!ctx.canEdit ? (
+                    <span className="rounded-sm border border-border px-1">
+                        read-only for your role — this save path rewrites PHP/KG, which is withheld from your view
+                    </span>
+                ) : null}
+
+                <div className="ml-auto flex items-center gap-2" data-grid-chrome>
+                    {dirtyCount > 0 ? (
+                        <span className="animate-fade-in rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">
+                            {describeUnsavedWork(unsaved, { record: 'edited delivery', draft: 'new delivery' })} unsaved
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        data-testid="save-rc-in"
+                        onClick={handleSave}
+                        disabled={dirtyCount === 0 || busy}
+                        className={cn(
+                            'inline-flex h-6 items-center gap-1 rounded border px-2 font-medium transition-colors duration-150',
+                            dirtyCount > 0 && !busy
+                                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                                : 'border-input text-muted-foreground',
+                            (dirtyCount === 0 || busy) && 'cursor-not-allowed opacity-60',
+                        )}
+                    >
+                        {busy ? (
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                        ) : (
+                            <Save className="size-3" aria-hidden="true" />
+                        )}
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
             </div>
 
             <BlackwoodTable<DeliveryHistoryRow, DeliveryGridCtx>
@@ -775,6 +1152,14 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 edits={edits}
                 storedText={storedText}
                 scope="endless"
+                // The blank-row pool and its `Add N more rows` control. `enabled` is what
+                // also lets a paste taller than the sheet GROW into new rows, so it is off
+                // under a search for exactly the same reason the rows are.
+                draftKind="draft"
+                drafts={{ enabled: showDrafts, defaultCount: DEFAULT_DRAFT_ROWS }}
+                onAddDrafts={onAddDrafts}
+                onRemoveDrafts={onRemoveDrafts}
+                onRestoreDrafts={onRestoreDrafts}
                 rowRules={ROW_RULES}
                 rowClassFor={rowClassFor}
                 renderChromeRow={renderChromeRow}
@@ -782,6 +1167,65 @@ export function DeliveryGridV2(props: DeliveryGridV2Props) {
                 emptyMessage="No deliveries in this view."
                 className="min-h-0 flex-1"
             />
+
+            {/* ── The save-time EDIT REASON ───────────────────────────────────────
+                One reason for the whole save, attached to every edited row's latest
+                `audit_logs` entry by the RPC's own glue — the same field the live edit
+                dialog's per-row remark uses. **Optional and never blocking:** the primary
+                button saves whatever is in the box, including nothing, and Escape or the
+                overlay cancels the save without losing a keystroke. */}
+            <Dialog
+                open={pending !== null}
+                onOpenChange={(open) => {
+                    if (!open && !saving) setPending(null);
+                }}
+            >
+                <DialogContent className="max-w-md bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/80 animate-modal-enter">
+                    <DialogHeader>
+                        <DialogTitle className="text-sm">Why did these change?</DialogTitle>
+                        <DialogDescription className="text-xs">
+                            {pending
+                                ? `Optional. One note, attached to the audit trail of all ${pending.updates.length} edited deliver${pending.updates.length === 1 ? 'y' : 'ies'}` +
+                                  (pending.inserts.length > 0
+                                      ? ` — the ${pending.inserts.length} new row${pending.inserts.length === 1 ? '' : 's'} save without one.`
+                                      : '.')
+                                : null}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <Textarea
+                        autoFocus
+                        rows={3}
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        placeholder="e.g. corrected the weight from the weighbridge slip"
+                        className="text-xs"
+                    />
+                    <DialogFooter className="gap-2 sm:gap-2">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={saving}
+                            onClick={() => setPending(null)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            size="sm"
+                            disabled={saving}
+                            onClick={() => {
+                                const plan = pending;
+                                if (!plan) return;
+                                setPending(null);
+                                void commit(plan, reason);
+                            }}
+                        >
+                            {reason.trim() ? 'Save with note' : 'Save without a note'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

@@ -19,12 +19,13 @@
 - **`?tab=deliveries|usage`** — drives the logs tab (Phase 1). The URL is the source of truth (`useSearchParams` + `router.replace`, the project house style — NOT the nuqs library). localStorage (`inventory_active_tab`) is a **fallback only**: it seeds the tab on first load when no `?tab=` is present (written into the URL once, post-hydration). Default `deliveries`. Deep-linkable / shareable.
 - **`?block=<block_loc>`** — drives the open block on `/inventory/blocking` (Phase 2). Deep-linkable, refresh-safe, browser Back closes the panel. Click a cell to toggle; clicking the open cell or pressing Escape clears it.
 - **`?campaign=<PRODUCTION_BATCH-YEAR>`** — drives the selected campaign on `/inventory/rc-movement` (e.g. `JUNE-2026`). Absent → the server action resolves the most recent campaign. The matrix owns the month/day-range via the campaign.
+- **`?grid=v1|v2`** — which implementation of BOTH tables renders. **On this page the default is `v2`** (the Blackwood Table) and `?grid=v1` reaches the classic tables; every other screen on the toggle still defaults to `v1`. An axis of the CLIENT only — see the flip section below.
 
 ## Files
 | File | Role |
 |------|------|
 | `layout.tsx` | **THIN** shared chrome for ALL `/inventory/*` routes — just the `bg-muted/20` full-bleed container + padded content area. It deliberately does NOT own the tab shell anymore (so the standalone routes don't inherit the Deliveries/Usage tab bar). |
-| `page.tsx` | Server component (the logs page). Fetches deliveries (year-scoped + paginated), batches, suppliers, locations; resolves `canViewPrices`. Wraps `<InventoryView>` in `<LogsShell>` inside a `<Suspense>` (the tab provider uses `useSearchParams`). |
+| `page.tsx` | Server component (the logs page). Fetches deliveries (year-scoped + paginated), batches, suppliers, locations; resolves `canViewPrices`. Wraps `<InventoryViewV2>` — or `<InventoryView>` at `?grid=v1` — in `<LogsShell>` inside a `<Suspense>` (the tab provider uses `useSearchParams`). Both branches get the identical payload. |
 | `loading.tsx` | Route-level skeleton (toolbar + header + 14 rows). Covers `/inventory` AND — by inheritance — `blocking` / `rc-movement` / `flecon-bags`, which have no loading file of their own (all dense grid surfaces, so one shape fits). Static pulses only — no row animation. |
 | `components/logs-shell.tsx` | **NEW.** Client wrapper that owns the tab shell for the logs page ONLY: `InventoryTabProvider` + `Card` frame + `<InventorySheetTabs>` footer. Moved out of `layout.tsx` so the layout stays tab-shell-agnostic. |
 | `components/inventory-tab-context.tsx` | React context — `activeTab`/`setActiveTab`. **URL-driven (`?tab=`)** via `useSearchParams` + `router.replace`; localStorage fallback only. Tab union narrowed to `'deliveries' \| 'usage'`. **Hosts the navigation-event bridge:** a `window` listener for `INVENTORY_NAVIGATE_EVENT` (from the shared detail panel's "Edit All" when rendered in-shell) that flips the tab. The standalone routes wire `onNavigateToBatch` directly instead, so they don't depend on this bridge. |
@@ -68,13 +69,42 @@ These routes are dynamic, so **every** `?param=` write costs a server round-trip
 | Movement (`/inventory/rc-movement`) | `rc-movement/` | [RC Movement](./rc-movement/CONTEXT.md) — Daily Feed Matrix |
 | Bag Inventory (`/inventory/flecon-bags`) | `flecon-bags/` | [FLECON Bags](./flecon-bags/CONTEXT.md) — packaging-material stock |
 
-## The `?grid=v2` side-by-side (universal-table migration, 2026-08-18)
+## The Blackwood Table is this screen's DEFAULT (2026-08-21) — `?grid=v1` is the way back
 
-`/inventory?grid=v2` renders BOTH tabs on the **Blackwood Table** (`components/shared/table`) instead of the live tables. It is the strangler-fig method from `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`: the new grids are built BESIDE the production ones, and **`delivery-master-table.tsx`, `rc-out-table.tsx`, `bulk-delivery-input.tsx`, `bulk-usage-input.tsx`, both `actions.ts` and both mobile-card files are not edited by one character.**
+**This page flipped.** `/inventory` — both tabs — now renders on the **Blackwood Table**
+(`components/shared/table`), and the classic tables are reached at **`?grid=v1`**. Renzo
+authorised exactly these two screens: *"I'm satisfied with ICTC Deliveries and Usage table
+so we can start to make grid v2 as our current table now for those 2."*
+
+**It is a DEFAULT FLIP, not a cutover.** Nothing was deleted, nothing was migrated, and the
+classic tables stay **fully reachable and fully functional** — they are the editing fallback
+Renzo tests against for as long as he wants. The only change is which one you land on.
+
+| URL | What renders |
+|---|---|
+| `/inventory` (and any unrecognised `?grid=`) | **v2** — the Blackwood Table, both tabs |
+| `/inventory?grid=v2` | v2, the default spelt out loud |
+| `/inventory?grid=v1` | **the classic tables** — `DeliveryMasterTable` / `RcOutTable`, untouched |
+
+The toggle in the bar reads **`Classic` · `Table (new)`** here rather than `Current` · `New`
+(the labels are props on `GridVersionBar`), because "Current" would be a lie on a page whose
+current table is the new one. The amber accent stays on the v2 side, as on every other
+screen, so a screenshot still says which grid produced it.
+
+**The other nine toggle screens are untouched** — RC Movement, Production Daily /
+Electricity / Trucks, Flecon Bags, Cenapro Production / QC / Deliveries all still default to
+their live tables and still switch on `?grid=v2`. The default is a per-page argument
+(`resolveGrid(grid, GRID_V2)` / `defaultVersion={GRID_V2}`), not a change to the param.
+
+It remains the strangler-fig method from
+`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`: the new grids
+were built BESIDE the production ones, and **`delivery-master-table.tsx`, `rc-out-table.tsx`,
+`bulk-delivery-input.tsx`, `bulk-usage-input.tsx`, both `actions.ts` and both mobile-card
+files are not edited by one character.**
 
 | File | Role |
 |------|------|
-| `page.tsx` | **The only edited file.** Reads `?grid=` via `parseGrid` from `@/lib/table`, mounts `<GridVersionBar>` above the sheet, and picks `<InventoryViewV2>` or `<InventoryView>` with the same props. |
+| `page.tsx` | **The only file the flip edited.** Reads `?grid=` via `resolveGrid(grid, GRID_V2)` from `@/lib/table`, mounts `<GridVersionBar defaultVersion={GRID_V2} …>` above the sheet, and picks `<InventoryViewV2>` or `<InventoryView>` with the same props. |
 | `components/inventory-view-v2.tsx` | The `?grid=v2` twin of `inventory-view.tsx` — same `InventoryTabProvider`, both panes mounted, inactive one hidden. **No cross-fade** (see below). |
 | `components/rc-out-lazy-tab-v2.tsx` | The twin of `rc-out-lazy-tab.tsx`; calls the SAME read-only `fetchRcOutTabData()` and mounts `RcOutGridV2`. |
 | `rc-in/delivery-grid-v2.tsx` | RC IN on the Blackwood Table. Read-only. |
@@ -84,13 +114,13 @@ These routes are dynamic, so **every** `?param=` write costs a server round-trip
 
 1. **ONE toggle governs BOTH tabs.** Deliveries and Usage are two views of one shell; two switches would let the screen sit half-migrated. `?tab=` and `?grid=` are independent axes — flipping either never disturbs the other.
 2. **The param is an axis of the CLIENT, never of the data.** Every fetch in `page.tsx` runs identically either way; `?grid=` reaches no query, no action and no role gate.
-3. **`?grid=` absent, misspelt, `V2` or `3` all mean the CURRENT tables.** Only the exact `v2` switches.
+3. **`?grid=` absent, misspelt, `V2` or `3` all mean this page's DEFAULT — which is now v2.** Only the exact `v1` reaches the classic tables, and only the exact `v2` reaches the new ones on the nine screens that have not flipped. A typo can never half-select anything, on either kind of page.
 4. **The bar carries its own layout.** `GridVersionBar` is `shrink-0`; the page mounts it and never re-types its classes.
 5. **BOTH v2 grids are READ-ONLY** — no editor, no save, no delete, no draft rows, no context menu, and no server action that writes is imported by either file. Column resize is session-local state, deliberately NOT persisted, because persisting it would be a write.
 
 **Deliberate difference from the live view:** `inventory-view-v2.tsx` swaps tabs instantly instead of cross-fading. The live 150ms fade is driven by a `setTransitioning(true)` inside a `useEffect`, which is one of the repo's 28 pre-existing `react-hooks` lint errors (`inventory-view.tsx:26:9`); copying it would have added a 29th.
 
-At cutover the bar, the param and all four v2 files either replace the live tables or are deleted with them. A permanent escape hatch is a second grid nobody maintains.
+At cutover — which is a SEPARATE, later decision from this flip — the bar, the param and the classic tables go together. Until then the fallback is deliberate and supported. A permanent escape hatch is a second grid nobody maintains; a fallback with a stated end is how a migration is tested in production.
 
 ## Dependencies
 - Submodules share `@/components/providers/auth-context` / `lib/auth` for permission gating (cost visibility).

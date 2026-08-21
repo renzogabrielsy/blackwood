@@ -33,10 +33,10 @@ Plan of record: `.agents/prompts/universal-table-module.md`. Audits behind it:
 | `selection.ts` | **New.** `rangeRowEdge` / `cellRangeEdges` / `NO_RANGE_EDGES` — which edges of the selection RECTANGLE each cell paints, so a swept block is one box with no inner borders. |
 | `menu.ts` | **New.** `defaultTableMenu` — the built-in right-click menu as DATA, a pure function of "does this cell accept an edit" and "was there a row under the pointer". |
 | `view.ts` | **New (2026-08-20).** The universal SORT and FILTER, as one pure transform. `applyTableView` · `nextSortDirection` · `isColumnFilterActive` · `activeFilterCount` · `columnSortable` / `columnFilterable` · `NO_FILTERS`. It decides the row order and the row set and holds none of the state that drives it. |
-| `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V2` / `parseGrid` / `isGridV2` / `withGrid` / `gridHref` — the `?grid=v2` side-by-side axis, and the ONE definition of it. Temporary: deleted with the last old grid. |
+| `grid-param.ts` | **New.** `GRID_PARAM` / `GRID_V1` / `GRID_V2` / `parseGrid` / **`resolveGrid`** / `isGridV2` / `withGrid` / `gridHref` — the `?grid=` side-by-side axis, and the ONE definition of it. One axis with a **per-page default** since 2026-08-21. Temporary: deleted with the last old grid. |
 | `paging.ts` | **New.** `shiftFirstItemIndex` + `DEFAULT_FIRST_ITEM_INDEX` — the bidirectional pager's PUBLIC index base, and the arithmetic that keeps a prepend from moving the viewport. |
 | `index.ts` | Barrel. Import from `@/lib/table`, never from a file inside it. |
-| `../../scripts/verify-table-core.ts` | **72 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
+| `../../scripts/verify-table-core.ts` | **78 assertions, must stay green.** Covers what the first consumer structurally cannot produce: end-pinned columns, tiling paste, the journal, the jump keys, the row axis and its **three** predicates, the per-cell nav resolver, the chrome row, the pager's index base, the imperative handle, the per-cell `addressable` seam, the header slot, and slice 2's four (the partial-save projection, the journal-clearing `forget`, the per-cell verdict context, the canonical commit and the edited-value formatter) — plus the purity scan above and its counterpart over the React half. |
 
 ---
 
@@ -358,7 +358,7 @@ there, so a key that owes nothing is a no-op rather than a re-render. `pageJump`
 
 ---
 
-## The side-by-side toggle (`?grid=v2`) — how a screen gets one
+## The side-by-side toggle (`?grid=`) — how a screen gets one
 
 Every screen migrated onto this module builds its new grid **beside** the existing one and
 picks between them on a query param, so the rewire can land half-finished and be compared
@@ -370,8 +370,8 @@ is the recipe for making that switch a **button** instead of an edit to the addr
 
 | Piece | Path | What it is |
 |---|---|---|
-| The param | `lib/table/grid-param.ts` (barrelled from `@/lib/table`) | Pure. `GRID_PARAM` (`'grid'`), `GRID_V2` (`'v2'`), `parseGrid`, `isGridV2`, `withGrid`, `gridHref`. |
-| The control | `components/shared/table/GridVersionToggle.tsx` (barrelled from `@/components/shared/table`) | `GridVersionToggle` (the segmented control) and `GridVersionBar` (a `shrink-0` strip that carries it). |
+| The param | `lib/table/grid-param.ts` (barrelled from `@/lib/table`) | Pure. `GRID_PARAM` (`'grid'`), `GRID_V2` (`'v2'`), `GRID_V1` (`'v1'`), `parseGrid`, `resolveGrid`, `isGridV2`, `withGrid`, `gridHref`. |
+| The control | `components/shared/table/GridVersionToggle.tsx` (barrelled from `@/components/shared/table`) | `GridVersionToggle` (the segmented control) and `GridVersionBar` (a `shrink-0` strip that carries it). Both take `defaultVersion` / `currentLabel` / `newLabel`. |
 
 ### The recipe — three edits to one file, and neither table is touched
 
@@ -428,10 +428,62 @@ one — hence `gridBar` as a variable rather than the element inline.
    out of static prerendering and fails the production build on any page that has not
    opted out itself. `GridVersionToggle` wraps its own internals, so the recipe works on a
    `force-dynamic` page and a static one alike and no caller has to remember.
-5. **The default is untouched.** `?grid=` absent — and `?grid=V2`, `?grid=3`, `?grid=`
-   — all mean the CURRENT table. The param is an axis of the CLIENT, never of the data:
-   both components read the identical server payload, and nothing here reaches a query, an
+5. **An unrecognised value always means the page's DEFAULT.** `?grid=V2`, `?grid=3`,
+   `?grid=` and absence are all the same answer, so there is no way to type a URL that
+   half-selects a version. The param is an axis of the CLIENT, never of the data: both
+   components read the identical server payload, and nothing here reaches a query, an
    action or a role gate.
+
+### When a screen FLIPS its default (2026-08-21) — RC IN / RC OUT
+
+The migration's second phase does not delete the old table; it stops landing on it. Renzo,
+having driven the two ICTC ledgers for days: *"I'm satisfied with ICTC Deliveries and Usage
+table so we can start to make grid v2 as our current table now for those 2."*
+
+**One axis, a per-page default — NOT a second param.** An operator comparing two screens in
+two tabs still has one spelling to remember. What changes is which side is the paramless
+URL.
+
+| `?grid=` | on a v1-default page (nine screens) | on a v2-default page (`/inventory`) |
+|---|---|---|
+| absent | **v1** — the classic table | **v2** — the Blackwood Table |
+| `v2` | v2 | v2 (the default, spelt out) |
+| `v1` | v1 (the default, spelt out) | **v1** — the classic table |
+| `V2` · `3` · `` · junk | v1 (the default) | v2 (the default) |
+
+**Three edits, and the shape of each is the point:**
+
+```tsx
+// the page states its default ONCE, where it reads the param
+const v2 = resolveGrid(params.grid, GRID_V2) === GRID_V2;
+
+// and the control is told the same thing, so it lights the side the page rendered
+<GridVersionBar defaultVersion={GRID_V2} currentLabel="Classic" newLabel="Table (new)" note="…" />
+```
+
+- **`resolveGrid(value, default)` is the ONE place the two halves of the question are
+  combined.** `parseGrid` now reports only what the URL *said* (`'v1' | 'v2' | null`) —
+  `null` stopped meaning "the current grid" the moment two pages disagreed about which grid
+  that is. A page that does not flip keeps `parseGrid(...) === GRID_V2` and is unchanged.
+- **The default reaches `withGrid` / `gridHref` too, or the URL stops being canonical.** The
+  param is written only when it says something the page does not already say, so the default
+  side of the toggle is always the CLEAN url. Without it every plain link into `/inventory`
+  would read as the non-default state. `defaultVersion` is the third argument and defaults
+  to `GRID_V1`, so every existing caller is byte-identical.
+- **The labels are PROPS, not a branch on the version.** "Current" is a claim about one
+  page's state, not a fact about the module: on a flipped screen the current table IS the
+  new one, so `/inventory` reads **`Classic` · `Table (new)`**. The control never learns what
+  any screen is. The **segment order and the amber accent do not move** — an operator with
+  two tabs open should not find the buttons swapped, and a screenshot must still say which
+  grid produced it without anyone reading the URL.
+- **Flipping the default is not cutting over.** The old table stays mounted, reachable and
+  fully functional; on `/inventory` it is where Add/Edit lives until the v2 editing pass
+  lands, and the bar's note says so. Deletion is a separate, later decision.
+
+Six assertions in `scripts/verify-table-core.ts` pin all of it — including an explicit
+v1-default case over every input, a round-trip that proves a flip preserves every other
+param under both defaults, and a scan of every `page.tsx` mounting the bar asserting that
+only the flipped screens pass a default.
 
 ### Where the control goes when the new grid has its own toolbar
 

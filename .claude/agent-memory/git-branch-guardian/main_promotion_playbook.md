@@ -82,6 +82,17 @@ commit is left behind on the source branch is intended, never cherry-pick it acr
 **Commit-only brief: do not merge, do not touch the source branch, push with
 `git push -u origin feat/<slug>`.**
 
+**Degenerate (and commonest) case: you are ALREADY standing on the base.** When `HEAD ==
+main == origin/main`, `git checkout -b feat/<slug> main` cannot touch a single tracked file —
+the diff between the two tips is empty *by construction*, so the stash question never arises.
+Still prove it rather than asserting it: `git hash-object <dirty paths>` before and after the
+checkout must match byte-for-byte (`git rev-parse main:<path>` vs `origin/main:<path>` covers
+the tips). Git prints the carried ` M` paths on switch — expected, not damage. Verified
+2026-08-21 cutting `feat/rc-in-out-v2-default` off `ebb06d2` with the three standing dirty
+files; all three hashes identical across the switch, no stash created. Beware `git rev-parse
+--short <a> <b> <c>` in one call — it errored `fatal: Needed a single revision` here while
+each ref resolved fine alone; resolve refs one at a time.
+
 **A follow-up fix on an already-promoted branch needs no new branch.** 2026-08-04 promotion
 23 (`9ee70d5` → main): Renzo hit a bug in the live app an hour after `c8ffc53`, the fix
 belonged to the same module, so it committed straight onto `feat/cenapro-deliveries-qol` and
