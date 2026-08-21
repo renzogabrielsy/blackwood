@@ -9,7 +9,7 @@ import { getTableSettings } from '@/lib/actions/table-settings';
 import { canViewPrices } from '@/lib/auth';
 import { fetchAllRows } from '@/lib/supabase/paginate';
 import { GridVersionBar } from '@/components/shared/table';
-import { GRID_V2, parseGrid } from '@/lib/table';
+import { GRID_V2, resolveGrid } from '@/lib/table';
 
 export default async function InventoryPage({
     searchParams
@@ -90,10 +90,24 @@ export default async function InventoryPage({
 
     // ONE toggle for BOTH tabs. Deliveries and Usage are two views of the same shell, so
     // two switches would let the screen sit in a half-migrated state nobody asked for.
-    // `?grid=` absent, misspelt, `V2` or `3` all mean the CURRENT tables.
-    const v2 = parseGrid(grid) === GRID_V2;
+    //
+    // ── This screen's DEFAULT is v2 (2026-08-21) ────────────────────────────────
+    // Renzo authorised the flip for RC IN and RC OUT specifically ("I'm satisfied with
+    // ICTC Deliveries and Usage table so we can start to make grid v2 as our current
+    // table now for those 2"). So `?grid=` absent, misspelt, `V2` or `3` all mean the NEW
+    // tables here, and the classic ones are `?grid=v1` — a DEFAULT FLIP, not a cutover:
+    // nothing is deleted, the old tables stay fully reachable and fully functional, and
+    // they remain where Add/Edit lives until the v2 editing pass lands.
+    //
+    // Every other screen still on the toggle passes no default and is unchanged.
+    const v2 = resolveGrid(grid, GRID_V2) === GRID_V2;
     const gridBar = (
-        <GridVersionBar note="Same rows, same filters — this switches only which table renders them." />
+        <GridVersionBar
+            defaultVersion={GRID_V2}
+            currentLabel="Classic"
+            newLabel="Table (new)"
+            note="Same rows, same filters — this switches only which table renders them. Adding and editing rows still happens in the Classic table for now."
+        />
     );
 
     return (

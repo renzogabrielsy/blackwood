@@ -133,5 +133,14 @@ export type {
     TableViewInput,
 } from './view';
 
-export { GRID_PARAM, GRID_V2, parseGrid, isGridV2, withGrid, gridHref } from './grid-param';
-export type { GridParam, QueryEntries } from './grid-param';
+export {
+    GRID_PARAM,
+    GRID_V1,
+    GRID_V2,
+    parseGrid,
+    resolveGrid,
+    isGridV2,
+    withGrid,
+    gridHref,
+} from './grid-param';
+export type { GridParam, GridVersion, QueryEntries } from './grid-param';

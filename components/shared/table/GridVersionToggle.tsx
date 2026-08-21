@@ -4,7 +4,8 @@ import * as React from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Sparkles, Table2 } from 'lucide-react';
 
-import { GRID_PARAM, GRID_V2, gridHref, isGridV2 } from '@/lib/table';
+import { GRID_PARAM, GRID_V1, GRID_V2, gridHref, resolveGrid } from '@/lib/table';
+import type { GridVersion } from '@/lib/table';
 import { cn } from '@/lib/utils';
 
 // ─────────────────────────────────────────────────────────────────────────────────
@@ -37,6 +38,19 @@ import { cn } from '@/lib/utils';
 // caller has to remember. The fallback renders the same two segments, inert, so nothing
 // moves when it resolves.
 //
+// ── A flipped page (2026-08-21) ─────────────────────────────────────────────────
+// A screen whose default is now the NEW grid (`defaultVersion="v2"`) still gets the same
+// two segments — what changes is which side is the paramless URL, so the control keeps
+// writing the shortest URL that means what it says. The labels are props rather than a
+// branch on the version, because "Current" is a claim about a particular page's state,
+// not a fact about the module, and a flipped page has to be able to say something honest
+// ("Classic") without this component learning what any screen is.
+//
+// The SEGMENT ORDER never changes, deliberately: an operator comparing two screens in two
+// browser tabs should not find the buttons swapped between them. The amber accent stays
+// on the v2 side on every page, so a screenshot still says which grid produced it without
+// anyone reading the URL.
+//
 // TEMPORARY BY DESIGN — it is deleted with the param when the last screen cuts over.
 // ─────────────────────────────────────────────────────────────────────────────────
 
@@ -46,6 +60,15 @@ export interface GridVersionToggleProps {
      * in a toolbar that already reads as chrome, two words is one word too many.
      */
     label?: string;
+    /**
+     * Which grid this page shows when the URL says nothing. Defaults to `'v1'` — today's
+     * behaviour on every screen that does not pass it, byte for byte.
+     */
+    defaultVersion?: GridVersion;
+    /** Label on the OLD grid's segment. `'Current'` unless the page has flipped. */
+    currentLabel?: string;
+    /** Label on the NEW grid's segment. `'New'` unless the page has flipped. */
+    newLabel?: string;
     className?: string;
 }
 
@@ -56,6 +79,13 @@ const SEG =
 const IDLE = 'text-muted-foreground hover:text-foreground';
 
 /**
+ * The wording a screen that has NOT flipped uses. Kept as constants so the control and
+ * its Suspense shell cannot drift apart, and so "the default labels" is one edit.
+ */
+const DEFAULT_CURRENT_LABEL = 'Current';
+const DEFAULT_NEW_LABEL = 'New';
+
+/**
  * The segmented control. Two states, and the NEW one is deliberately louder: a
  * screenshot of a bug has to say which grid produced it without anyone having to read
  * the URL, so the accent is the same amber every v2 surface already uses to announce
@@ -63,36 +93,45 @@ const IDLE = 'text-muted-foreground hover:text-foreground';
  * segmented controls use, because "nothing unusual is happening" is the honest reading
  * of the production path.
  */
-export function GridVersionToggle({ label, className }: GridVersionToggleProps) {
+export function GridVersionToggle(props: GridVersionToggleProps) {
     return (
-        <React.Suspense fallback={<ToggleShell label={label} className={className} />}>
-            <GridVersionToggleInner label={label} className={className} />
+        <React.Suspense fallback={<ToggleShell {...props} />}>
+            <GridVersionToggleInner {...props} />
         </React.Suspense>
     );
 }
 
-function GridVersionToggleInner({ label, className }: GridVersionToggleProps) {
+function GridVersionToggleInner({
+    label,
+    defaultVersion = GRID_V1,
+    currentLabel = DEFAULT_CURRENT_LABEL,
+    newLabel = DEFAULT_NEW_LABEL,
+    className,
+}: GridVersionToggleProps) {
     const router = useRouter();
     const pathname = usePathname();
     const params = useSearchParams();
     const [pending, startTransition] = React.useTransition();
 
-    const v2 = isGridV2(params.get(GRID_PARAM));
+    const v2 = resolveGrid(params.get(GRID_PARAM), defaultVersion) === GRID_V2;
 
     const go = React.useCallback(
         (next: boolean) => {
             if (next === v2) return;
             // `params` is a `ReadonlyURLSearchParams`, which is iterable — `withGrid`
-            // takes the entries and carries every one of them across.
-            const href = gridHref(pathname, params.entries(), next);
+            // takes the entries and carries every one of them across. The default is
+            // passed so the paramless URL always means this page's default.
+            const href = gridHref(pathname, params.entries(), next, defaultVersion);
             startTransition(() => {
                 // `scroll: false` — the two grids show the same rows, so the compare is
                 // only useful if the sheet does not jump back to the top on every flip.
                 router.push(href, { scroll: false });
             });
         },
-        [params, pathname, router, v2],
+        [defaultVersion, params, pathname, router, v2],
     );
+
+    const flipped = defaultVersion === GRID_V2;
 
     return (
         // Marks the control as chrome the GRID does not own, so if it is ever mounted
@@ -114,11 +153,15 @@ function GridVersionToggleInner({ label, className }: GridVersionToggleProps) {
                     data-testid="grid-version-current"
                     aria-selected={!v2}
                     onClick={() => go(false)}
-                    title="Current — the table that is live today"
+                    title={
+                        flipped
+                            ? `${currentLabel} — the previous table, still fully working (?${GRID_PARAM}=${GRID_V1})`
+                            : `${currentLabel} — the table that is live today`
+                    }
                     className={cn(SEG, !v2 ? 'bg-primary text-primary-foreground' : IDLE)}
                 >
                     <Table2 className="size-3" aria-hidden="true" />
-                    Current
+                    {currentLabel}
                 </button>
                 <button
                     type="button"
@@ -126,7 +169,11 @@ function GridVersionToggleInner({ label, className }: GridVersionToggleProps) {
                     data-testid="grid-version-new"
                     aria-selected={v2}
                     onClick={() => go(true)}
-                    title={`New — the same data on the Blackwood Table (?${GRID_PARAM}=${GRID_V2})`}
+                    title={
+                        flipped
+                            ? `${newLabel} — the Blackwood Table, this page's default`
+                            : `${newLabel} — the same data on the Blackwood Table (?${GRID_PARAM}=${GRID_V2})`
+                    }
                     className={cn(
                         SEG,
                         v2
@@ -135,7 +182,7 @@ function GridVersionToggleInner({ label, className }: GridVersionToggleProps) {
                     )}
                 >
                     <Sparkles className="size-3" aria-hidden="true" />
-                    New
+                    {newLabel}
                 </button>
             </div>
             {pending ? (
@@ -154,7 +201,12 @@ function GridVersionToggleInner({ label, className }: GridVersionToggleProps) {
  * selected on purpose: guessing "Current" would be right on nearly every load and
  * momentarily WRONG on a `?grid=v2` one, which is the one load where the answer matters.
  */
-function ToggleShell({ label, className }: GridVersionToggleProps) {
+function ToggleShell({
+    label,
+    currentLabel = DEFAULT_CURRENT_LABEL,
+    newLabel = DEFAULT_NEW_LABEL,
+    className,
+}: GridVersionToggleProps) {
     return (
         <div className={cn('flex items-center gap-1.5', className)} aria-hidden="true">
             {label ? (
@@ -165,11 +217,11 @@ function ToggleShell({ label, className }: GridVersionToggleProps) {
             <div className={cn(WRAP, 'opacity-60')}>
                 <span className={cn(SEG, IDLE)}>
                     <Table2 className="size-3" />
-                    Current
+                    {currentLabel}
                 </span>
                 <span className={cn(SEG, IDLE)}>
                     <Sparkles className="size-3" />
-                    New
+                    {newLabel}
                 </span>
             </div>
         </div>
@@ -181,6 +233,12 @@ export interface GridVersionBarProps {
     label?: string;
     /** Optional sentence to the right of the control — a note, a count, a caveat. */
     note?: React.ReactNode;
+    /** Which grid this page shows when the URL says nothing. Defaults to `'v1'`. */
+    defaultVersion?: GridVersion;
+    /** Label on the OLD grid's segment. `'Current'` unless the page has flipped. */
+    currentLabel?: string;
+    /** Label on the NEW grid's segment. `'New'` unless the page has flipped. */
+    newLabel?: string;
     className?: string;
 }
 
@@ -199,7 +257,14 @@ export interface GridVersionBarProps {
  * a `backdrop-filter` over an opaque page paints nothing while still costing a
  * compositor layer.
  */
-export function GridVersionBar({ label, note, className }: GridVersionBarProps) {
+export function GridVersionBar({
+    label,
+    note,
+    defaultVersion,
+    currentLabel,
+    newLabel,
+    className,
+}: GridVersionBarProps) {
     return (
         <div
             className={cn(
@@ -207,7 +272,12 @@ export function GridVersionBar({ label, note, className }: GridVersionBarProps) 
                 className,
             )}
         >
-            <GridVersionToggle label={label} />
+            <GridVersionToggle
+                label={label}
+                defaultVersion={defaultVersion}
+                currentLabel={currentLabel}
+                newLabel={newLabel}
+            />
             {note ? <span className="min-w-0">{note}</span> : null}
         </div>
     );
