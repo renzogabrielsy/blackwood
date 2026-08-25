@@ -27,6 +27,11 @@ import type { ProgressEmitter } from "../../lib/progress.js";
 import type { FieldDiff } from "./classify.js";
 import type { ProposedRow } from "./extract.js";
 import { type HeldRow, type HeldKind, rcOutKey } from "../held.js";
+import { operatorError } from "../../lib/operatorError.js";
+import {
+  batchLocationConflictDetail,
+  batchLocationConflictRow,
+} from "../../lib/batchLocationConflict.js";
 import {
   ensureBatch,
   isPatternValidBatchCode,
@@ -144,6 +149,22 @@ function rcOutHeldRow(r: ProposedRow): Record<string, unknown> {
     production_batch: r.production_batch ?? null,
     block_loc: r.block_loc ?? null,
   };
+}
+
+/**
+ * A short "which feeding" phrase for an operator-facing error headline — date, pile and
+ * destination, the three things a person uses to find the row in the day sheet. NEVER a
+ * ₱/cost field (`errors[]` is not price-gated).
+ */
+function describeFeeding(r: ProposedRow): string {
+  const parts = [
+    r.transaction_date,
+    r.batch_code_resolved ?? r.batch_code_primary ?? null,
+    r.destination ?? null,
+  ]
+    .map((p) => (p == null ? "" : String(p).trim()))
+    .filter((s) => s.length > 0);
+  return parts.length ? parts.join(" · ") : "no date or pile on the row";
 }
 
 function prov(runTs: string, index: unknown, extra = ""): string {
@@ -318,7 +339,14 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
         );
       }
     } catch (exc) {
-      errors.push(`insert row ${item.index}: ${errMsg(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't save the feeding on row ${item.index} of the Proposed Daily Report ` +
+            `(${describeFeeding(r)}) — the database refused it. That feeding was not saved; ` +
+            `the email stays unprocessed so the next run tries it again.`,
+          errMsg(exc),
+        ),
+      );
     }
   }
 
@@ -361,7 +389,15 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
         diff: diffJson,
       });
     } catch (exc) {
-      errors.push(`update ${c.index}: ${errMsg(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't update the feeding on row ${c.index} of the Proposed Daily Report ` +
+            `(${describeFeeding(c.row)}) — the database refused the change. That feeding ` +
+            `still holds its old numbers; the email stays unprocessed so the next run ` +
+            `tries again.`,
+          errMsg(exc),
+        ),
+      );
     }
   }
 
@@ -410,6 +446,21 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
 
     if (row && !(quarantined && quarantined.length) && isPatternValidBatchCode(primaryCode)) {
       const outcome = await ensureBatch(db, primaryCode, row.block_loc, batchLookup);
+      // BUG-027 (2026-08-25) — the block is still held by an ACTIVE batch. This used to
+      // throw straight out of applyRcOut; it is an arbitration between two batches, so it
+      // holds THIS ROW ONLY and the loop carries on (held rows never block the watermark;
+      // `errors` does — unchanged).
+      if (outcome.status === "location_conflict") {
+        held.push({
+          reason: "batch_location_conflict",
+          natural_key: rcOutKey(row),
+          detail: batchLocationConflictDetail(outcome.conflict, "feeding"),
+          kind: "batch_location_conflict",
+          row: { ...rcOutHeldRow(row), ...batchLocationConflictRow(outcome.conflict) },
+          source_index: item.index as string | number,
+        });
+        continue;
+      }
       if (outcome.status !== "invalid_pattern") {
         row.batch_id = outcome.batchId;
         row.batch_code_resolved = outcome.resolvedCode;
@@ -461,7 +512,15 @@ export async function applyRcOut(compact: RcOutCompact, deps: ApplyDeps): Promis
             source_index: item.index as string | number,
           });
         } else {
-          errors.push(`insert row ${item.index}: ${writeRes.message}`);
+          errors.push(
+            operatorError(
+              `Batch ${outcome.resolvedCode} was created for row ${item.index} of the ` +
+                `Proposed Daily Report, but the feeding itself (${describeFeeding(row)}) ` +
+                `could not be saved — the database refused it. The batch now exists and is ` +
+                `empty; the next run will try the feeding again.`,
+              writeRes.message,
+            ),
+          );
         }
         continue;
       }

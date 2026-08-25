@@ -159,6 +159,7 @@ const HELD_KIND_LABEL: Record<string, string> = {
   cross_batch_reassignment: 'Batch moved blocks',
   sub_watermark_suspected_dup: 'Possible duplicate (older than last sync)',
   location_occupied: 'Block already occupied',
+  batch_location_conflict: 'Two batches want the same block',
   malformed: 'Row could not be read',
   low_confidence: 'Low-confidence extraction',
   already_exists: 'Already in the database',
@@ -232,6 +233,7 @@ function heldSeverity(kind: string | undefined): FindingSeverity {
     case 'unmapped_batch_code':
     case 'unmapped_bag_type_code':
     case 'location_occupied':
+    case 'batch_location_conflict':
     case 'unresolved_shift':
     case 'unresolved_batch_id':
     case 'cross_batch_reassignment':
@@ -266,9 +268,21 @@ function fromHeld(reportType: SyncReportType, held: HeldRow): RunFinding {
   const block = str(row.block_loc)
   const weight = row.weight_kg
 
+  // BUG-027 (2026-08-25) — a block two batches both claim. The worker already wrote the
+  // whole sentence (one definition, in `lib/batchLocationConflict.ts`), so nothing is
+  // re-derived here: `detail` IS the reason. Both codes and the block go in the title
+  // because that is what a person scanning the panel needs to recognise the problem.
+  const attempted = str(row.attempted_batch_code)
+  const occupant = str(row.occupying_batch_code)
+  const conflictBlock = str(row.location_ref) ?? block
+
   // A one-line title: prefer a batch/weight sentence, fall back to the reason.
   let title: string
-  if (kind === 'unmapped_batch_code' && batchCode) {
+  if (kind === 'batch_location_conflict' && attempted) {
+    title = occupant
+      ? `${attempted} can't take block ${conflictBlock ?? '—'} — ${occupant} is still active there`
+      : `${attempted} can't take block ${conflictBlock ?? '—'} — another batch is still active there`
+  } else if (kind === 'unmapped_batch_code' && batchCode) {
     title = `New batch "${batchCode}" isn't in the database yet`
   } else if (batchCode) {
     title = `${heldKindLabel(kind)} — batch ${batchCode}`
@@ -287,6 +301,24 @@ function fromHeld(reportType: SyncReportType, held: HeldRow): RunFinding {
   if (weight != null) data.weight_kg = num(weight)
   if (held.detail) data.detail = held.detail
 
+  // Both sides of a block clash ride in `data` so the panel, the Copy button and the
+  // Excel report all get the actual figures — including `db_error`, the verbatim Postgres
+  // refusal, which belongs HERE and never in the headline (that is the whole of BUG-027
+  // part 2). None of these keys is cost-ish, so `formatFindingData` emits them all.
+  if (kind === 'batch_location_conflict') {
+    if (attempted) data.attempted_batch_code = attempted
+    if (conflictBlock) data.location_ref = conflictBlock
+    if (occupant) data.occupying_batch_code = occupant
+    const occStatus = str(row.occupying_status)
+    if (occStatus) data.occupying_status = occStatus
+    const occBal = num(row.occupying_balance_kg)
+    if (occBal != null) data.occupying_balance_kg = occBal
+    const occFed = str(row.occupying_last_fed)
+    if (occFed) data.occupying_last_fed = occFed
+    const dbError = str(row.db_error)
+    if (dbError) data.db_error = dbError
+  }
+
   return {
     key: `held:${reportType}:${held.natural_key}`,
     kind,
@@ -295,7 +327,13 @@ function fromHeld(reportType: SyncReportType, held: HeldRow): RunFinding {
     title,
     location,
     data,
-    reason: held.reason || held.detail || heldKindLabel(kind),
+    // `reason` is what the operator reads under the title. For a block clash the worker's
+    // `detail` is the plain-language sentence with the action in it, so it wins over
+    // `held.reason` (which is the machine kind string for this hold).
+    reason:
+      kind === 'batch_location_conflict'
+        ? held.detail || held.reason || heldKindLabel(kind)
+        : held.reason || held.detail || heldKindLabel(kind),
     severity: heldSeverity(kind),
     section: reportType,
   }
@@ -1975,6 +2013,7 @@ const SHORT_KIND: Record<string, string> = {
   gate_failure: 'totals off',
   cross_batch_reassignment: 'batch moved',
   location_occupied: 'slot occupied',
+  batch_location_conflict: 'block clash',
   malformed: 'bad row',
   already_exists: 'already saved',
   low_confidence: 'low confidence',
