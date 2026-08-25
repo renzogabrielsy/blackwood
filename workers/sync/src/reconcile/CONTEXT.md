@@ -496,8 +496,10 @@ re-resolves each gsheet `unmapped_batch_code` hold (primary + regenerated `batch
   so `ensureCasesForRun` never opens a case.
 - **resolves but no record** → KEEP, reclassify `reason`/`detail` + a `row.batch_now_exists`
   marker (never auto-write — a policy call). `kind` STAYS `unmapped_batch_code` (the frontend
-  `KIND_LABEL` is an exhaustive `Record<HeldKind,…>` in components/, so a new kind would break
-  its build; `natural_key` is unchanged → the case fingerprint is stable).
+  `KIND_LABEL` is an exhaustive `Record<HeldKind,…>` in components/, so a new kind costs an edit
+  to every such map — legal, and BUG-027 did exactly that for `batch_location_conflict` on
+  2026-08-25, but it would buy nothing here: this is the same problem seen a moment later, and
+  keeping the kind leaves `natural_key` unchanged → the case fingerprint is stable).
 - **still unresolved** → keep as `unmapped_batch_code` (the real human case).
 
 READ-ONLY (no operational writes), never mutates its input, guarded end-to-end (any failure →

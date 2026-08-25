@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto'
 import {
   findingIdentity,
   flattenRunFindings,
+  isCostKey,
   serializeCaseForClaude,
   serializeCasesForClaude,
   serializeFindingsForClaude,
@@ -986,7 +987,7 @@ check('cross_batch_reassignment fingerprint IS the durable case fingerprint (not
 })
 
 check('every held kind reuses its case fingerprint (exhaustive over the fixture kinds)', () => {
-  const kinds: HeldRow['kind'][] = ['unmapped_batch_code', 'location_occupied', 'malformed', 'already_exists']
+  const kinds: HeldRow['kind'][] = ['unmapped_batch_code', 'location_occupied', 'batch_location_conflict', 'malformed', 'already_exists']
   for (const kind of kinds) {
     const held: HeldRow = {
       reason: 'r',
@@ -1293,5 +1294,90 @@ check('every finding in every fixture yields two 64-hex strings, and no two coll
   // collision would silently make one acknowledgement answer two unrelated problems.
   assert.equal(fps.size, findings.length, 'unexpected fingerprint collision')
 })
+
+// ── BUG-027 — the block clash a person can act on (2026-08-25). ──────────────
+//
+// The whole point of the new kind is that the finding READS like a person wrote it and
+// the raw Postgres refusal is data, not a headline. Both halves are asserted here, plus
+// the ack-ledger contract every held row must satisfy.
+function blockClashHeld(over: Partial<HeldRow> = {}): HeldRow {
+  return {
+    reason: 'batch_location_conflict',
+    natural_key: '2026-08-21 · AUG-26-BLK11 · D-20D · 16,840 kg · TEMP138003',
+    detail:
+      'New batch AUG-26-BLK11 wants block D-20D, but JUNE-26-BLK6 is still marked active ' +
+      'there with 4,680 kg left (last fed 2026-08-21). If that block is finished, close ' +
+      'JUNE-26-BLK6 and the next run will file this delivery.',
+    kind: 'batch_location_conflict',
+    row: {
+      transaction_date: '2026-08-21',
+      batch_code: 'AUG-26-BLK11',
+      block_loc: 'D-20D',
+      truck_plate: 'TEMP138003',
+      weight_kg: 16_840,
+      attempted_batch_code: 'AUG-26-BLK11',
+      location_ref: 'D-20D',
+      occupying_batch_code: 'JUNE-26-BLK6',
+      occupying_status: 'IN-USE',
+      occupying_balance_kg: 4_680,
+      occupying_last_fed: '2026-08-21',
+      db_error:
+        'upsert_batch_if_absent batches failed 23505: duplicate key value violates unique ' +
+        'constraint "idx_unique_active_batch_per_location"',
+    },
+    ...over,
+  }
+}
+
+check('batch_location_conflict: the headline names both batches and carries no SQLSTATE', () => {
+  const f = flattenRunFindings(heldRun('gsheet', blockClashHeld()))[0]
+  assert.equal(f.kind, 'batch_location_conflict')
+  assert.equal(f.kindLabel, 'Two batches want the same block')
+  assert.equal(f.severity, 'attention')
+  for (const line of [f.title, f.kindLabel, f.reason]) {
+    assert.ok(!line.includes('23505'), `a SQLSTATE reached an operator-facing line: ${line}`)
+    assert.ok(
+      !line.includes('idx_unique_active_batch_per_location'),
+      `a constraint name reached an operator-facing line: ${line}`,
+    )
+  }
+  assert.ok(f.title.includes('AUG-26-BLK11'), 'the title must name the batch that wanted the block')
+  assert.ok(f.title.includes('JUNE-26-BLK6'), 'the title must name the batch that holds it')
+  assert.ok(f.title.includes('D-20D'), 'the title must name the block')
+  // The reason is the worker's ONE sentence, verbatim — never a re-derivation.
+  assert.equal(f.reason, blockClashHeld().detail)
+  assert.ok(f.reason.includes('close JUNE-26-BLK6'), 'the reason must state the action')
+})
+
+check('batch_location_conflict: the raw refusal rides in data, for the Copy button', () => {
+  const f = flattenRunFindings(heldRun('gsheet', blockClashHeld()))[0]
+  assert.ok(String(f.data.db_error).includes('23505'), 'the raw error must be preserved somewhere')
+  assert.equal(f.data.occupying_batch_code, 'JUNE-26-BLK6')
+  assert.equal(f.data.occupying_balance_kg, 4_680)
+  assert.equal(f.data.occupying_last_fed, '2026-08-21')
+  // Still no PHP anywhere in the payload.
+  for (const k of Object.keys(f.data)) assert.ok(!isCostKey(k), `cost-ish key on a held finding: ${k}`)
+})
+
+check('batch_location_conflict: fingerprint IS the durable case fingerprint, and is run-stable', () => {
+  const held = blockClashHeld()
+  const f = flattenRunFindings(heldRun('gsheet', held))[0]
+  const id = findingIdentity(f)
+  assert.match(id.fingerprint, HEX64)
+  assert.equal(
+    id.fingerprint,
+    caseFingerprint('gsheet', held),
+    'the ack fingerprint must EQUAL sync_held_cases.fingerprint — one identity, never two',
+  )
+  // Run two: the occupant has been fed again, so the numbers moved. Same discrepancy,
+  // so the SAME fingerprint — and a different contentHash, which is what re-surfaces it.
+  const later = flattenRunFindings(
+    heldRun('gsheet', blockClashHeld({ row: { ...blockClashHeld().row, occupying_balance_kg: 3_100, occupying_last_fed: '2026-08-24' } })),
+  )[0]
+  const laterId = findingIdentity(later)
+  assert.equal(laterId.fingerprint, id.fingerprint, 'the identity must survive the numbers moving')
+  assert.notEqual(laterId.contentHash, id.contentHash, 'a changed balance IS a changed situation')
+})
+
 
 console.log(`\nAll ${passed} findings checks passed.`)

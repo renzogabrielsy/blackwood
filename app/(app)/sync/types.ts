@@ -155,6 +155,14 @@ export type HeldKind =
   | 'unmapped_batch_code'
   | 'unmapped_bag_type_code'
   | 'location_occupied'
+  /**
+   * BUG-027 (2026-08-25) — a new batch wanted a block another ACTIVE batch still holds.
+   * The same physical clash as `location_occupied`, but raised with BOTH sides named
+   * (which batch wanted it, which batch holds it, its balance, when it was last fed), so
+   * the operator can act on the sentence. Every writer raises this one now; the old kind
+   * stays in the enum because old runs and old cases still carry it.
+   */
+  | 'batch_location_conflict'
   | 'malformed'
   | 'low_confidence'
   | 'already_exists'

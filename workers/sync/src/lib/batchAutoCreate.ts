@@ -42,9 +42,26 @@
  * (deliveries + rc_out both feeding a brand-new batch in the same run) can't create
  * a duplicate or crash on the race; the loser re-selects the winner's row and gets
  * `status: "race_lost_to_sibling"` (no duplicate audit log — see callers).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * BLOCK ALREADY TAKEN → `location_conflict`, NEVER A THROW (2026-08-25, BUG-027)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The derived `location_ref` can collide with a batch that is still active in that
+ * block (partial unique index `idx_unique_active_batch_per_location`). Until 2026-08-25
+ * the resulting 23505 propagated out of `ensureBatch`, out of the apply loop, and killed
+ * the WHOLE report's write — run afac05bd reported `inserts: 0, updates: 0`, left the
+ * watermark where it was, and re-failed identically on every run after it. Two batches
+ * claiming one block is a human arbitration, not a fatal error, so it now returns a
+ * `location_conflict` outcome carrying BOTH sides and the caller holds THAT ROW ONLY.
+ * See lib/batchLocationConflict.ts for the message and the occupant lookup.
  */
 import type { DbClient } from "./db.js";
 import { batchCodeFallbacks } from "../reports/gsheet/extract.js";
+import {
+  type BatchLocationConflict,
+  describeBatchLocationConflict,
+  isLocationCollision,
+} from "./batchLocationConflict.js";
 
 // Mirrors gsheet/extract.ts::MONTH_PREFIX_ALIASES' KEYS (+ "MAY", which has no
 // alias there so it never appears as a key). Kept LOCAL — same "mirror, don't
@@ -162,7 +179,8 @@ export type EnsureBatchOutcome =
   | { status: "invalid_pattern" }
   | { status: "existing_alias"; batchId: string; resolvedCode: string }
   | { status: "created"; batchId: string; resolvedCode: string; fields: DerivedBatchFields }
-  | { status: "race_lost_to_sibling"; batchId: string; resolvedCode: string; fields: DerivedBatchFields };
+  | { status: "race_lost_to_sibling"; batchId: string; resolvedCode: string; fields: DerivedBatchFields }
+  | { status: "location_conflict"; attemptedCode: string; conflict: BatchLocationConflict };
 
 /**
  * Ensure a batch exists for `primaryCode`, auto-creating it from the template when
@@ -178,6 +196,10 @@ export type EnsureBatchOutcome =
  *   - `race_lost_to_sibling` → the code existed by the time the upsert ran (a
  *     PARALLEL writer lane created it a moment earlier this same run) — the batch
  *     is there; this call was not the creator (no duplicate audit entry).
+ *   - `location_conflict`    → the block is still held by another ACTIVE batch, so
+ *     nothing was created and the caller must HOLD this row for a human (2026-08-25).
+ *     Never throws out of here; `lookup` is left untouched so no later row in the same
+ *     pass resolves to a batch that does not exist.
  */
 export async function ensureBatch(
   db: DbClient,
@@ -196,7 +218,23 @@ export async function ensureBatch(
   if (!isPatternValidBatchCode(primaryCode)) return { status: "invalid_pattern" };
 
   const fields = deriveBatchFields(primaryCode, blockLoc);
-  const res = await db.upsertBatchIfAbsent(fields as unknown as Record<string, unknown>);
+  let res: { id: string; batch_code: string; created: boolean };
+  try {
+    res = await db.upsertBatchIfAbsent(fields as unknown as Record<string, unknown>);
+  } catch (exc) {
+    // BUG-027 (2026-08-25) — the block is already held by an ACTIVE batch. This used to
+    // escape and take the whole report's apply down with it (run afac05bd: 13 updates
+    // lost, watermark stuck, every later run re-failing the same way). It is an
+    // arbitration between two batches, so it comes back as an outcome the caller holds.
+    if (isLocationCollision(exc)) {
+      return {
+        status: "location_conflict",
+        attemptedCode: primaryCode,
+        conflict: await describeBatchLocationConflict(db, primaryCode, fields.location_ref, exc),
+      };
+    }
+    throw exc;
+  }
 
   // Seed the lookup with EVERY alias (primary + regenerated fallbacks) so a sibling
   // row referencing the same batch under a different month-prefix convention

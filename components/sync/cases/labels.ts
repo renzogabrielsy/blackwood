@@ -32,6 +32,7 @@ export const KIND_LABEL: Record<HeldKind, string> = {
   unmapped_batch_code: 'Unknown batch code',
   unmapped_bag_type_code: 'Unknown bag type',
   location_occupied: 'Slot already occupied',
+  batch_location_conflict: 'Two batches, one block',
   malformed: 'Missing / bad data',
   low_confidence: 'Needs a second look',
   already_exists: 'Already saved',

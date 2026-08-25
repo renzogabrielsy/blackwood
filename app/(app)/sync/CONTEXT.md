@@ -1427,6 +1427,65 @@ Documented in the root `.env.example`. The worker's own env is in `workers/sync/
   are not in the worker's Mail Clerk yet — their cards stay idle until M3.
 - Applying held rows (single-row write) is intentionally not implemented.
 
+## Two batches, one block — `batch_location_conflict` (2026-08-25, BUG-027)
+
+**The incident.** Run `afac05bd`: the Sheet's one new RC IN row (2026-08-21, Ornales, 16,840 kg,
+`TEMP138003`, block **D-20D**) named the brand-new batch **`AUG-26-BLK11`**. The 2026-07-11
+auto-create policy tried to create it at D-20D, where **`JUNE-26-BLK6` is still IN-USE with
+4,680 kg** (last fed the same day — the yard finished the pile and reused the block). The DB
+refused with 23505 on `idx_unique_active_batch_per_location`, the throw escaped the worker's apply
+loop, and the WHOLE RC IN write was discarded: `applied: {inserts: 0, updates: 0}`, watermark
+unmoved, 13 other updates lost, every later run re-failing identically. And the panel's headline
+was the raw Postgres string.
+
+**What the panel shows now.** The clash is a **held row**, kind `batch_location_conflict` —
+severity `attention`, one decision card with **[Acknowledge]**, built by `buildGenericCard` like
+every other single-finding kind. Its "why" line is the worker's own sentence, verbatim, from
+`workers/sync/src/lib/batchLocationConflict.ts` (nothing is re-derived app-side):
+
+> New batch AUG-26-BLK11 wants block D-20D, but JUNE-26-BLK6 is still marked active there with
+> 4,680 kg left (last fed 2026-08-21). If that block is finished, close JUNE-26-BLK6 and the next
+> run will file this delivery.
+
+**Where each piece lives.**
+- `lib/sync/findings.ts::fromHeld` has a `batch_location_conflict` branch: the TITLE names both
+  batches and the block, the REASON is the worker's `detail`, and `data` carries
+  `attempted_batch_code` / `location_ref` / `occupying_batch_code` / `occupying_status` /
+  `occupying_balance_kg` / `occupying_last_fed` / **`db_error`**. The raw Postgres refusal lives in
+  `data.db_error` — for the Copy button and the Excel report's `Details` cell — and **never** in a
+  title, a label or a reason. Asserted by `scripts/verify-findings.ts`.
+- `HELD_KIND_LABEL` → *"Two batches want the same block"*; `heldSeverity` → `attention` (beside
+  `location_occupied`); `SHORT_KIND` → *"block clash"* (both copies: `findings.ts` and
+  `HeldRows.tsx`).
+- `components/sync/cases/labels.ts::KIND_LABEL` → *"Two batches, one block"*.
+- `adjudication.ts::KIND_MEANING` explains the rule (one block, one active batch; close the holder
+  or fix the block — never force a second batch in), and `lookupEvidence` handles the kind
+  alongside `location_occupied`, preferring the row's `location_ref` and **re-reading the block**,
+  because the useful answer is what is true NOW (a block the operator has since closed is exactly
+  what the adjudicator needs to see).
+- The Excel report puts the two sides in **Side A / Side B** (`wants D-20D: AUG-26-BLK11` vs
+  `already there: JUNE-26-BLK6, 4,680 kg left, last fed 2026-08-21`) and leaves `db_error` in
+  `Details`.
+
+**Why a NEW kind and not a re-worded `location_occupied`.** A case fingerprint is
+`(reportType, kind, natural_key)`, so re-wording in place would let an old acknowledgement of the
+vague hold silently answer the specific one. `location_occupied` stays in `HeldKind` because old
+runs and old cases carry it; nothing raises it any more. `HeldKind` is frontend-locked (exhaustive
+`Record<HeldKind, …>` maps), so every map moved in the same changeset.
+
+**Watermark + ack semantics are the ordinary held-row ones** — `held` never blocked a bump,
+`errors` did, so the watermark advances again and the rest of the report writes normally. The hold
+is rebuilt from the source every run, so it re-raises until a human closes the occupying batch, and
+acknowledging it hides the card **until its content changes** (a moved balance IS a changed
+situation — pinned in `verify-findings.ts`).
+
+**And the general rule the second half of BUG-027 established:** `apply.errors[]` is joined
+verbatim into the employee card's inline error block by `lib/sync/reducer.ts::gateErrorFrom`, so it
+is operator-facing UI, not a log. Every push in the worker now goes through
+`workers/sync/src/lib/operatorError.ts` and reads `<plain-language headline>\nTechnical detail:
+<raw error>` — the raw string is preserved for the Copy button, one line down, never as the
+headline. Full spec: `workers/sync/specs/deliveries.md` §12.
+
 ## Dependencies
 
 - `lib/supabase/client.ts` — browser client (Realtime subscription)

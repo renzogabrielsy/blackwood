@@ -3,7 +3,10 @@
  * Behavioral law: specs/deliveries.md §5.
  *
  *   1. NEW → defensive batch upsert (only if the resolved batch_code doesn't already
- *      exist), catching a location collision → held(reason:"location_occupied"),
+ *      exist), catching a location collision → held(kind:"batch_location_conflict",
+ *      BUG-027 2026-08-25 — was the vaguer "location_occupied"; the message now names the
+ *      batch that holds the block, its balance and its last-fed date, and is built once in
+ *      lib/batchLocationConflict.ts so the Sheet path says the identical thing),
  *      NEVER auto-creating a batch beyond the already-resolved code (L-006: the trigger
  *      owns current_weight — we insert current_weight=0 and never `+=`).
  *   2. deliveries INSERT via insert_if_absent, natural key
@@ -29,6 +32,13 @@ import type { DeliveryRow, LabResults } from "./extract.js";
 import type { FieldDiff } from "./classify.js";
 import type { PriceNote } from "./enrich.js";
 import { type HeldRow, type HeldKind, deliveriesKey } from "../held.js";
+import { operatorError } from "../../lib/operatorError.js";
+import {
+  batchLocationConflictDetail,
+  batchLocationConflictRow,
+  describeBatchLocationConflict,
+  isLocationCollision,
+} from "../../lib/batchLocationConflict.js";
 
 /**
  * One delivery still carrying the L-008 unpriced placeholder more than a day after it
@@ -185,6 +195,18 @@ function deliveriesHeldRow(r: DeliveryRow): Record<string, unknown> {
   };
 }
 
+/**
+ * A short "which truckload" phrase for an operator-facing error headline — date, truck
+ * and pile, exactly the three things a person uses to find the row in the workbook.
+ * NEVER a ₱/cost field (`errors[]` is not price-gated).
+ */
+function describeRow(r: DeliveryRow): string {
+  const parts = [r.transaction_date, r.truck_plate ?? null, r.batch_code ?? null]
+    .map((p) => (p == null ? "" : String(p).trim()))
+    .filter((s) => s.length > 0);
+  return parts.length ? parts.join(" · ") : "no date or truck on the row";
+}
+
 /** Map a deliveries flagged classifier `kind` → the normalized HeldKind. */
 function deliveriesFlaggedKind(kind: string): HeldKind {
   if (kind === "L033_cross_batch_loc_mismatch") return "cross_batch_reassignment";
@@ -201,16 +223,6 @@ function prov(runTs: string, index: unknown, extra = ""): string {
     `provenance=deliveries-sync | Ingested by sync_deliveries.py (lean orchestrator) ` +
     `row ${index} on ${runTs}.`;
   return base + (extra ? ` ${extra}` : "");
-}
-
-/** Local is_location_collision (orchestrator_common.is_location_collision parity):
- *  a unique-violation (23505) on the active-batch-per-location index. */
-function isLocationCollision(e: unknown): boolean {
-  const s = e instanceof Error ? e.message : String(e);
-  return (
-    s.includes("23505") &&
-    (s.includes("idx_unique_active_batch_per_location") || s.includes("location_ref"))
-  );
 }
 
 /** Port of phase_apply. ok:false iff any errors. */
@@ -255,17 +267,19 @@ export async function applyDeliveries(
               },
             ]);
           } catch (bexc) {
+            // BUG-027 (2026-08-25): the block is already held by an ACTIVE batch. Same
+            // clash the Sheet path hits, same held row, same sentence — built once in
+            // lib/batchLocationConflict.ts so the two writers cannot describe it
+            // differently. The old wording named only the block; this names the batch
+            // that holds it, what is left in it, and when it was last fed.
             if (isLocationCollision(bexc)) {
+              const conflict = await describeBatchLocationConflict(db, bc, r.block_loc, bexc);
               held.push({
-                reason: "location_occupied",
+                reason: "batch_location_conflict",
                 natural_key: deliveriesKey(r),
-                detail:
-                  `block_loc ${r.block_loc ?? null} already holds an active batch; ` +
-                  `new batch ${bc} not created and this delivery was not written. ` +
-                  `Resolve which batch owns this slot (close the prior batch or fix the ` +
-                  `location) via the sync employee, then re-run.`,
-                kind: "location_occupied",
-                row: deliveriesHeldRow(r),
+                detail: batchLocationConflictDetail(conflict, "delivery"),
+                kind: "batch_location_conflict",
+                row: { ...deliveriesHeldRow(r), ...batchLocationConflictRow(conflict) },
                 source_index: item.index as string | number,
               });
               continue;
@@ -329,7 +343,14 @@ export async function applyDeliveries(
         );
       }
     } catch (exc) {
-      errors.push(`insert row ${item.index}: ${errMsg(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't save the delivery on row ${item.index} of the RC DELIVERIES report ` +
+            `(${describeRow(r)}) — the database refused it. That row was not saved; the ` +
+            `email stays unprocessed so the next run tries it again.`,
+          errMsg(exc),
+        ),
+      );
     }
   }
 
@@ -364,7 +385,14 @@ export async function applyDeliveries(
     try {
       outcomes = await db.applyDeliveryUpstream(ops);
     } catch (exc) {
-      errors.push(`deliveries conditional update failed: ${errMsg(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't update ${ops.length} deliver${ops.length === 1 ? "y" : "ies"} the RC ` +
+            `DELIVERIES report changed — the database refused the whole batch of updates. ` +
+            `Nothing was changed; the email stays unprocessed so the next run tries again.`,
+          `deliveries conditional update failed: ${errMsg(exc)}`,
+        ),
+      );
     }
     for (const res of outcomes) {
       const meta = opMeta.get(res.id);
@@ -387,7 +415,14 @@ export async function applyDeliveries(
         // missing / empty_patch / unsupported_field / not_applied — nothing was written and
         // it is NOT a human-arbitration case, so it must surface as a real problem
         // (errors[] also blocks the watermark bump + the Gmail label).
-        errors.push(`update ${meta.index}: not applied (${res.outcome})`);
+        errors.push(
+          operatorError(
+            `The delivery on row ${meta.index} of the RC DELIVERIES report was not updated — ` +
+              `the database would not accept the change. Everything else this run saved is ` +
+              `fine; the email stays unprocessed so the next run tries this row again.`,
+            `update ${meta.index}: not applied (${res.outcome})`,
+          ),
+        );
         continue;
       }
       try {
@@ -417,7 +452,14 @@ export async function applyDeliveries(
           });
         }
       } catch (exc) {
-        errors.push(`update ${meta.index}: ${errMsg(exc)}`);
+        errors.push(
+          operatorError(
+            `The delivery on row ${meta.index} of the RC DELIVERIES report was updated, but ` +
+              `recording WHY in the history trail failed. The delivery itself is saved; the ` +
+              `email stays unprocessed so the next run re-checks it.`,
+            errMsg(exc),
+          ),
+        );
       }
     }
   }

@@ -76,7 +76,7 @@ File: `.claude/skills/sync-ictc/scripts/fetch_gmail.py` (573 lines).
 - **Startup jitter**: once per process, before the FIRST Gmail fetch, sleeps `random.Random(os.getpid()).uniform(0.0, 2.5)` seconds (orchestrator_common.py:252-261, `_gmail_startup_jitter`) — deterministic per-PID, meant to de-sync 4 parallel orchestrators hammering Gmail simultaneously. **Porting trap**: this uses `os.getpid()` as a seed, which a TS port cannot reproduce identically — the intent (spread out concurrent starts) matters more than exact reproducibility; a TS port should use an equivalent per-process random delay, not try to match Python's `Random(pid)` stream.
 - `_run_json_gmail` vs plain `run_json` (orchestrator_common.py:200-217): non-Gmail child scripts (extract_*/classify_*/reconcile_*) use the plain `run_json` with NO retry — only Gmail fetch/mark-processed go through the retry wrapper.
 
-### 1.8 ONE IMAP SESSION PER RUN — the enforced worker rule (2026-07-28, BUG-019)
+### 1.8 ONE IMAP SESSION PER RUN — the enforced worker rule (2026-07-28, BUG-027)
 
 > **This is a WORKER rule, not a Python-parity rule.** The Python oracle ran four
 > separate orchestrator processes, each with its own IMAP login (which is exactly why
@@ -92,7 +92,7 @@ Wave 4A, but nothing checked it, and three call sites quietly violated it — th
 (`makeLabeler`, a NEW session on every label application, ×4 writers), the flecon
 workbook fetcher (`makeFleconFetcher`) and the production-schedule fetcher
 (`prodSchedule/josephEmail.ts`). A single run reached **7+ sessions** and every run
-started failing in 3–5s. See `docs/BUG_LEDGER.md` BUG-019 for the full post-mortem,
+started failing in 3–5s. See `docs/BUG_LEDGER.md` BUG-027 for the full post-mortem,
 including the day-long misdiagnosis it caused.
 
 **How it is enforced.** `src/lib/gmailSession.ts` — a process-scoped, reference-counted
@@ -112,7 +112,7 @@ runs as its own DBOS child workflow whose params must be serializable (a live so
 cannot cross a crash boundary), and the clerk's session is a checkpointed step that has
 already returned by the time the writers label.
 
-### 1.9 IMAP error classification (2026-07-28, BUG-019)
+### 1.9 IMAP error classification (2026-07-28, BUG-027)
 
 imapflow throws a bare `new Error("Command failed")` for every tagged `NO`/`BAD`; the
 diagnosis lives on **fields**, not the message (`imap-flow.js:805-822`):
@@ -280,6 +280,8 @@ Every `label` string passed to `progress()` must read like a plant-manager statu
 ### 3.4 `is_location_collision(exc)` (orchestrator_common.py:114-126)
 
 `True` iff `"23505" in str(exc)` AND (`"idx_unique_active_batch_per_location" in str(exc)` OR `"location_ref" in str(exc)`). Used by `sync_deliveries.py` and `sync_gsheet.py` to catch a batch-INSERT failure caused by "1 block_loc = 1 active batch" and route the affected row to `held` (`reason: "location_occupied"`) instead of crashing the whole run (L-032).
+
+**TS DIVERGENCE (2026-08-25, BUG-027 — apply-phase, so parity is unaffected).** The predicate itself is ported verbatim, but it now lives in ONE place — `workers/sync/src/lib/batchLocationConflict.ts` — and three things changed around it. (1) The Python catches this only at the two defensive batch-INSERT sites; the TS **also** catches it inside `lib/batchAutoCreate.ts::ensureBatch`, which the 2026-07-11 auto-create policy introduced *after* the Python was written and which is where run `afac05bd` actually crashed. `ensureBatch` returns a `location_conflict` outcome instead of throwing. (2) The held row's `reason`/`kind` is **`batch_location_conflict`**, not `location_occupied`, and it carries both batches, the occupant's balance, its last-fed date and the verbatim refusal (`row.db_error`). (3) The message is built once, in that module, in plain language with the action in it. Full rationale: `specs/deliveries.md` §12.
 
 ### 3.5 Watermark functions
 

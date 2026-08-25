@@ -61,6 +61,7 @@ const SHORT_KIND: Record<string, string> = {
   gate_failure: 'totals off',
   cross_batch_reassignment: 'batch moved',
   location_occupied: 'slot occupied',
+  batch_location_conflict: 'block clash',
   malformed: 'bad row',
   already_exists: 'already saved',
   low_confidence: 'low confidence',

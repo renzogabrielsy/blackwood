@@ -32,6 +32,7 @@
 import type { DbClient, Row } from "../../lib/db.js";
 import type { ProgressEmitter } from "../../lib/progress.js";
 import { type HeldRow, label } from "../held.js";
+import { operatorError, errText } from "../../lib/operatorError.js";
 
 const WASTE_STREAMS = ["rs1a_kg", "rs1b_kg", "bf_kg", "rs23_kg", "rs5_kg", "trml1_kg", "trml2_kg", "grit_kg"] as const;
 const GENERATED_COLS = ["diff_kwh", "consumption_kwh", "ttl_km"] as const;
@@ -226,6 +227,34 @@ function normUpper(s: unknown): string | null | undefined {
   return s !== null && s !== undefined ? String(s).trim().toUpperCase() : (s as null | undefined);
 }
 
+/**
+ * Turn the internal shift key `"<date>|<batch>|<shift>"` back into the words on the day
+ * sheet, for an operator-facing error headline (2026-08-25, BUG-027 part 2).
+ */
+function shiftLabel(key: string): string {
+  const [date, batch, shift] = key.split("|").map((p) => (p === "null" ? "" : p));
+  return label([date, batch, shift]) || "an unnamed shift";
+}
+
+/** Plain word per production child section, for an operator-facing headline. */
+function sectionWord(section: string): string {
+  if (section === "runs") return "production output";
+  if (section === "downtime") return "downtime";
+  if (section === "waste") return "waste";
+  return section;
+}
+
+/** Plain word per production table, for an operator-facing headline. */
+function tableWord(table: string): string {
+  if (table === "electricity_readings") return "electricity";
+  if (table === "truck_readings") return "truck";
+  if (table === "production_runs") return "production output";
+  if (table === "production_downtime") return "downtime";
+  if (table === "production_waste") return "waste";
+  if (table === "production_shifts") return "shift";
+  return table;
+}
+
 function prov(table: string, runTs: string, extra = ""): string {
   const base = `provenance=production-sync | Ingested by sync_production.py (lean orchestrator) into ${table} on ${runTs}.`;
   return base + (extra ? ` ${extra}` : "");
@@ -290,7 +319,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
       }
       if (sid) shiftMap.set(key, sid);
     } catch (exc) {
-      errors.push(`shift upsert ${key}: ${exc instanceof Error ? exc.message : String(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't record the shift for ${shiftLabel(key)} — the database refused it. That ` +
+            `shift and everything under it (output, downtime, waste) was not saved; the ` +
+            `email stays unprocessed so the next run tries again.`,
+          errText(exc),
+        ),
+      );
     }
   }
 
@@ -353,7 +389,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
         });
       }
     } catch (exc) {
-      errors.push(`run insert ${payload.customer}/${payload.grade}: ${exc instanceof Error ? exc.message : String(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't save one production line (${payload.customer ?? "no customer"} · ` +
+            `${payload.grade ?? "no grade"}) — the database refused it. That line was not ` +
+            `saved; the email stays unprocessed so the next run tries again.`,
+          errText(exc),
+        ),
+      );
     }
   }
 
@@ -399,7 +442,14 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
           });
         }
       } catch (exc) {
-        errors.push(`${secName} insert shift ${sid}: ${exc instanceof Error ? exc.message : String(exc)}`);
+        errors.push(
+          operatorError(
+            `Couldn't save the ${sectionWord(secName)} for one shift — the database refused ` +
+              `it. That entry was not saved; the email stays unprocessed so the next run ` +
+              `tries again.`,
+            `${secName} insert shift ${sid}: ${errText(exc)}`,
+          ),
+        );
       }
     }
   }
@@ -436,7 +486,13 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
           });
         }
       } catch (exc) {
-        errors.push(`${table} insert: ${exc instanceof Error ? exc.message : String(exc)}`);
+        errors.push(
+          operatorError(
+            `Couldn't save one ${tableWord(table)} reading — the database refused it. That ` +
+              `reading was not saved; the email stays unprocessed so the next run tries again.`,
+            `${table} insert: ${errText(exc)}`,
+          ),
+        );
       }
     }
   }
@@ -526,12 +582,24 @@ export async function applyProduction(compact: ProductionCompact, deps: ApplyDep
           // missing / empty_patch / unsupported_field / not_applied — nothing was written
           // and it is NOT a human-arbitration case, so it must surface as a real problem
           // (errors[] also blocks the watermark bump + the Gmail label).
-          errors.push(`${meta.table} update ${res.id}: not applied (${res.outcome})`);
+          errors.push(
+            operatorError(
+              `One ${tableWord(meta.table)} row the report changed was not updated — the ` +
+                `database would not accept the change. Everything else this run saved is ` +
+                `fine; the email stays unprocessed so the next run tries this row again.`,
+              `${meta.table} update ${res.id}: not applied (${res.outcome})`,
+            ),
+          );
         }
       }
     } catch (exc) {
       errors.push(
-        `production conditional update failed: ${exc instanceof Error ? exc.message : String(exc)}`,
+        operatorError(
+          `Couldn't apply the production changes this report asked for — the database ` +
+            `refused the whole batch of updates. Nothing was changed; the email stays ` +
+            `unprocessed so the next run tries again.`,
+          `production conditional update failed: ${errText(exc)}`,
+        ),
       );
     }
   }

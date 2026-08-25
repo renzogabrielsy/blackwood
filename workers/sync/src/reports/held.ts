@@ -42,6 +42,16 @@ export type HeldKind =
   | "unmapped_batch_code" // rc_out/gsheet/deliveries — no batch_id for the code
   | "unmapped_bag_type_code" // flecon — a bag-type code with no dimension row
   | "location_occupied" // deliveries/gsheet — block_loc already holds an active batch
+  /**
+   * BUG-027 (2026-08-25) — the SAME physical clash as `location_occupied`, but raised
+   * with BOTH sides named: which batch wanted the block, which batch already holds it,
+   * its balance, and when it was last fed. `location_occupied` says only "the slot is
+   * taken"; every writer now raises this instead, because a person cannot act on the
+   * first sentence and can act on the second. Kept as a SEPARATE kind rather than
+   * re-worded in place so an old acknowledgement of the vague hold does not silently
+   * answer the specific one (the fingerprint is (reportType, kind, natural_key)).
+   */
+  | "batch_location_conflict"
   | "malformed" // any — required field missing / unparseable
   | "low_confidence" // gsheet — NEW row below the confidence floor
   | "already_exists" // any — idempotent skip (natural key already in DB)
