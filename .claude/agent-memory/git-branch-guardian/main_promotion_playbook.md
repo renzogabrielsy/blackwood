@@ -1055,3 +1055,47 @@ nothing. Re-running just those three costs ~2 min; take the 8-minute build from 
 - Standing exclusions unstaged as always; all three dirty paths survived both checkouts
   (`shasum -a 256 -c` OK ×3, `git stash list` empty). Push notation `3328874..d63fdbb` —
   two dots, no `+`, so a fast-forward, corroborated by `git merge-base --is-ancestor`.
+
+### The v2-default series' THIRD promotion (2026-08-25, `b9aab8a` → merge `163207a`)
+
+Same branch **REOPENED** — `feat/qc-ledger-v2-default` took a follow-up on the screen it already
+promoted (the QC v2 columns adopting the production ledger's arrangement). This does **not**
+contradict the "cut a new branch per screen" rule above: that rule is per SCREEN, and this was a
+second changeset on the *same* screen, so the promotion-23 "a follow-up fix on an already-promoted
+branch needs no new branch" precedent governs. The branch had been levelled first — the brief
+named `main` = `7edd55b` and the branch's own `Merge branch 'main'` commit `97c7f3f`, and
+**verifying that supplied base was one command**: `git merge-base main HEAD` == `git rev-parse main`
+== `7edd55b`, the trivial-promotion shape for the third time on this series.
+
+- **A brief that names BOTH the main tip and the branch's merge-in commit is handing you the
+  base check, not asking you to trust it.** Resolve both refs before staging; it also tells you
+  up front that the `--no-ff` merge cannot conflict.
+- **Protected-file claims are a cheap grep, and they are a real gate.** The brief listed five
+  files as "verified byte-identical" (`qc-ledger-client.tsx`, `production-ledger-grid.tsx`,
+  `production-grid-v2-shared.tsx`, `qc/actions.ts`, `qc/data.ts`). `git diff --staged --name-only
+  | grep -E '(…)'` → none. Worth running precisely BECAUSE the changeset's headline claim is
+  "the QC grid now mirrors the production grid" — the plausible failure is editing the model you
+  were supposed to mirror.
+- **When a changeset claims an assertion enforces cross-file alignment, verify the assertion
+  reads the OTHER file off disk.** `grep -n 'readFileSync\|COLS' scripts/verify-qc-grid.ts` showed
+  a `/const COLS: readonly ProdCol\[\] = \[([\s\S]*?)\n\];/` regex over `production-grid-v2-shared.tsx`
+  — that is what makes "a column moved over there fails the script here" true rather than aspirational.
+  Two greps also confirmed `QC_COLUMNS`' 17-key order matched the brief's stated order exactly and
+  `QC_IMPORTED_COLUMNS` == `['num','batch']`.
+- **NO memory/feature split this time — the tree held only feature files.** The pending
+  `chore(memory)` commit `c8a4808` was already committed AND pushed from the previous session, so
+  it rode into `main` inside the merge without any staging step. That is why the merge stat read
+  **5 files / +622** against the commit's own **4 files / +596**: the +26 delta is
+  `main_promotion_playbook.md`. Reconcile that gap out loud every time (promotion 44's rule); an
+  unexplained extra file in a `main` merge stat is what a mistake looks like. Fifteenth time a
+  pending memory commit has ridden along.
+- Gates: brief stated `tsc` clean / build clean / lint 167/28 / `verify-qc-grid` **50** (up from
+  45) / `verify-qc-draw-cells` 36 / `verify-table-core` 79 / e2e 57. Re-ran the cheap pair on the
+  branch tip AND again on the MERGED tree — `tsc` exit 0 both times, `verify-qc-grid` **50** both
+  times. Took the build from the brief per promotion 30's rule. **`main` push read
+  `7edd55b..163207a`** — two dots, no `+`, fast-forward, corroborated by `git merge-base
+  --is-ancestor 7edd55b main`.
+- Deploy scope proved on the RANGE, not the commit list: `git diff --name-only 7edd55b..163207a --
+  'workers/**' 'supabase/migrations/**' | wc -l` → **0**. Vercel-only, no Fly deploy — see
+  [[deploy-targets]]. Standing exclusions unstaged as always; all three dirty paths survived both
+  checkouts (`shasum -a 256 -c` OK ×3, `git stash list` empty). **40 consecutive clean promotions.**
