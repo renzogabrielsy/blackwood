@@ -34,6 +34,7 @@ import type { FleconFlaggedRow } from "./extract.js";
 import { correctedDate } from "./settlement.js";
 import { roundHalfToEven } from "../../lib/norm.js";
 import { type HeldRow, fleconKey } from "../held.js";
+import { operatorError, errText } from "../../lib/operatorError.js";
 
 export interface FleconApplyDeps {
   db: {
@@ -573,7 +574,14 @@ export async function applyFlecon(
         );
       }
     } catch (exc) {
-      errors.push(`replace date ${d}: ${exc instanceof Error ? exc.message : String(exc)}`);
+      errors.push(
+        operatorError(
+          `Couldn't rewrite the bag movements for ${d} — the database refused it. That day ` +
+            `was left exactly as it was (nothing was deleted and nothing was added); the ` +
+            `email stays unprocessed so the next run tries again.`,
+          errText(exc),
+        ),
+      );
     }
   }
 

@@ -35,7 +35,10 @@
  *
  * The `kind` of a reclassified row stays `unmapped_batch_code` ON PURPOSE: the frontend
  * `KIND_LABEL` map is an EXHAUSTIVE `Record<HeldKind, string>` living in components/, so
- * a brand-new kind would break its build. The reclassification is carried in
+ * a brand-new kind means editing every one of those maps in the same changeset (which is
+ * exactly what BUG-027 did for `batch_location_conflict`, 2026-08-25 — so it is allowed,
+ * just never free). Here it would buy nothing: this is the SAME problem seen a moment
+ * later, not a different one. The reclassification is carried in
  * `reason`/`detail` + a `row.batch_now_exists` marker instead (neither participates in
  * the case fingerprint, which is (reportType, kind, natural_key) — so the case identity
  * is stable across the reclassify).

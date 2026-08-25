@@ -1354,3 +1354,72 @@ three pieces already in place: read `view_production_schedule_state`, call
   `workers/sync/test/workflows/mailClerkSlowSearch.test.ts`.
 - **Deploy:** touches `workers/sync/**` — needs `cd workers/sync && npm run deploy` on top
   of the merge to `main`.
+
+---
+
+## BUG-027 — A block two batches both claim killed the whole RC IN write, and showed the operator a Postgres constraint name ✅ FIXED (2026-08-25, uncommitted)
+**Status:** ✅ FIXED · **Effort:** M · **Severity:** high (a full report's write silently discarded, every run, until a human noticed)
+
+- **Symptom (run `afac05bd`, 2026-08-25).** The Google Sheet's ONE new RC IN row was not
+  saved — and neither were the **13 updates** that ran beside it. The panel reported
+  `applied: {inserts: 0, updates: 0}`, the watermark did not move, and every subsequent run
+  failed identically. The employee card's error box read, verbatim:
+  `rc_in apply: upsert_batch_if_absent batches failed 23505: duplicate key value violates`
+  `unique constraint "idx_unique_active_batch_per_location"`.
+  Renzo: *"bruh, these errors in the sync panel have to be way more understandable to a
+  normal user."*
+
+- **Root cause (two defects, one incident).** The row (2026-08-21, Ornales, 16,840 kg, truck
+  `TEMP138003`, block **D-20D**) named the brand-new pattern-valid batch **`AUG-26-BLK11`**.
+  The 2026-07-11 auto-create policy derived `location_ref = 'D-20D'` and
+  `lib/batchAutoCreate.ts::ensureBatch` → `lib/db.ts::upsertBatchIfAbsent` INSERTed it. The
+  DB refused: **`JUNE-26-BLK6` is still IN-USE at D-20D with 4,680 kg** (last fed the same
+  day — the yard finished the pile and reused the block; the Sheet's own Blocking tab reads
+  `ERROR` at D-20D).
+  1. **The 23505 escaped the apply.** `reports/gsheet/apply.ts` had a location-collision
+     `catch` on its NEW-rows path (`isLocationCollision`, `location_occupied`) but the
+     UNMAPPED auto-create lane added in 2026-07 had none, so the throw propagated out of
+     `applyFromCompact` and was caught only at the mode boundary in `applyGsheet`, which
+     discards the mode's whole result. A block two batches both claim is a **human
+     arbitration** — the founding rule of the sync — not a fatal error.
+  2. **The raw error was the headline.** `apply.errors[]` is joined verbatim into the
+     employee card's inline error block (`lib/sync/reducer.ts::gateErrorFrom`), i.e. it is
+     operator-facing UI, and every push in the worker wrote a developer's sentence.
+
+- **Fix.**
+  1. **ONE module, four call sites:** `workers/sync/src/lib/batchLocationConflict.ts` owns
+     `isLocationCollision` (previously duplicated byte-for-byte in the gsheet and deliveries
+     applies), the read-only occupant lookup (the ACTIVE batch at that `location_ref`, its
+     `current_weight`, its newest `rc_out.transaction_date`), the message, and the
+     structured held-row payload. `ensureBatch` — which BOTH the gsheet and rc_out UNMAPPED
+     lanes call — returns a new `location_conflict` outcome instead of throwing; the two
+     defensive `db.insert("batches")` sites build the identical held row from the identical
+     module. A test asserts the email path's sentence is **byte-identical** to the Sheet's.
+  2. **A NEW `HeldKind`, `batch_location_conflict`** (not a re-worded `location_occupied`,
+     because the case fingerprint is `(reportType, kind, natural_key)` and re-wording would
+     let an old acknowledgement of the vague hold silently answer the specific one). Held
+     rows never blocked the watermark, so **the rest of the apply runs and the watermark
+     advances** — the `cross_batch_reassignment` semantics, unchanged.
+  3. **The message a person can act on**, built once:
+     *"New batch AUG-26-BLK11 wants block D-20D, but JUNE-26-BLK6 is still marked active
+     there with 4,680 kg left (last fed 2026-08-21). If that block is finished, close
+     JUNE-26-BLK6 and the next run will file this delivery."* No SQLSTATE, no constraint
+     name, no ₱ — asserted. The raw refusal rides in `row.db_error` → the finding's
+     `data.db_error` → the Copy button and the Excel report's `Details` cell.
+  4. **The general rule:** `workers/sync/src/lib/operatorError.ts` is now the ONE shape for
+     every `apply.errors[]` push — `<plain-language headline>` then
+     `Technical detail: <raw error>` on the next line. All **16** push sites across the five
+     apply files were rewritten; the raw string is preserved, one line down.
+- **Frontend:** the kind was added to every exhaustive `Record<HeldKind, …>` map in the same
+  changeset (`app/(app)/sync/types.ts`, `adjudication.ts::KIND_MEANING` + its evidence
+  lookup, `components/sync/cases/labels.ts`, `components/sync/HeldRows.tsx`,
+  `lib/sync/findings.ts`), and it renders as a generic decision card with **[Acknowledge]**.
+- **No migration.** The occupant lookup uses existing tables and is read-only.
+- **Spec:** `workers/sync/specs/deliveries.md` §12 (+ `SHARED.md` §3.4's TS divergence);
+  `app/(app)/sync/CONTEXT.md` → "Two batches, one block".
+- **Tests:** `workers/sync/test/reports/batch-location-conflict.test.ts` (18 cases) ·
+  `scripts/verify-findings.ts` 51 → **54** · `scripts/verify-decision-cards.ts` 22 → **23** ·
+  worker suite 55/831 → **56/849** · `npm run parity` clean, **no new expected deviation**
+  (apply-phase only; the parity gate is classify-only).
+- **Deploy:** touches `workers/sync/**` — needs `cd workers/sync && npm run deploy` on top
+  of the merge to `main`, or the fix is inert in production.

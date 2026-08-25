@@ -821,3 +821,124 @@ proof that the alias equality does not over-collapse.
 Tests: `workers/sync/test/reports/deliveries-feeding-label.test.ts` (17 cases, every row read out of
 the live DB) and `scripts/verify-awaiting-batch-assignment-fold.ts` (8 checks, the pure app-side
 fold).
+
+---
+
+## 12. A block two batches both claim is a HELD ROW, not a crash (2026-08-25, BUG-027)
+
+This section is filed here because `deliveries` is one of the writers, but it governs **every
+writer that creates a `batches` row**: `reports/deliveries/apply.ts`, `reports/gsheet/apply.ts`
+(both its NEW rc_in lane and its UNMAPPED auto-create lane) and `reports/rc_out/apply.ts`.
+
+### 12.1 The incident, measured
+
+Run `afac05bd` (2026-08-25). The Google Sheet's one NEW RC IN row — 2026-08-21, Ornales,
+16,840 kg, truck `TEMP138003`, block **D-20D**, brand-new pattern-valid batch **`AUG-26-BLK11`** —
+went through the 2026-07-11 auto-create policy. `deriveBatchFields` produced
+`location_ref = 'D-20D'`, and the DB refused the INSERT with **23505** on the partial unique index
+`idx_unique_active_batch_per_location`, because **`JUNE-26-BLK6` is still IN-USE at D-20D with
+4,680 kg** (last fed the same day — the yard finished the pile and reused the block; the Sheet's own
+Blocking tab shows `ERROR` at D-20D).
+
+Two defects, one incident:
+
+1. **The throw escaped `ensureBatch`, escaped `applyFromCompact`, and was caught only at the mode
+   boundary in `applyGsheet`.** So the whole RC IN write was discarded: `applied: {inserts: 0,
+   updates: 0}`, the watermark did not move, the other **13** updates were lost from the run result,
+   and every subsequent run re-failed identically. A block two batches both claim is a *human
+   arbitration* — the founding rule of this whole pipeline — and this codebase has exactly one
+   shape for that: a **held row**. It is never a fatal error.
+2. **The raw Postgres string was the sentence the operator read.** `apply.errors[]` is joined
+   verbatim into the employee card's inline error block (`lib/sync/reducer.ts::gateErrorFrom`), so
+   the panel said `rc_in apply: upsert_batch_if_absent batches failed 23505: duplicate key value
+   violates unique constraint "idx_unique_active_batch_per_location"` — naming neither batch,
+   neither block, nor any action. Renzo, verbatim: *"bruh, these errors in the sync panel have to be
+   way more understandable to a normal user."*
+
+### 12.2 The seam — one module, four call sites
+
+`workers/sync/src/lib/batchLocationConflict.ts` owns **all four** of: the predicate
+(`isLocationCollision` — previously duplicated byte-for-byte in two apply files), the occupant
+lookup, the sentence, and the structured held-row payload.
+
+`ensureBatch` (which BOTH the gsheet UNMAPPED lane and the rc_out UNMAPPED lane call) now catches
+the 23505 and returns a new outcome **`location_conflict`** carrying both sides; the two defensive
+`db.insert("batches", …)` sites keep their own `catch` but build the identical held row from the
+identical module. That is why the two writers cannot describe one clash two different ways — a
+worker test asserts the email path's sentence is **byte-identical** to the Sheet path's.
+
+`ensureBatch` deliberately **does not seed `lookup`** on a conflict: the batch does not exist, so a
+later row in the same pass must never resolve to an id that was never created.
+
+### 12.3 What the held row says
+
+- **kind** `batch_location_conflict` (a NEW `HeldKind` — see 12.5).
+- **detail** — THE message, built once by `batchLocationConflictDetail`:
+  > New batch AUG-26-BLK11 wants block D-20D, but JUNE-26-BLK6 is still marked active there with
+  > 4,680 kg left (last fed 2026-08-21). If that block is finished, close JUNE-26-BLK6 and the next
+  > run will file this delivery.
+
+  Both batch codes, the block, the balance, the last-fed date, the action. **No SQLSTATE, no
+  constraint name, no ₱** — asserted. It degrades honestly: no occupant found → *"another batch is
+  still marked active there"*; never fed → the `(last fed …)` clause is simply absent; `feeding`
+  replaces `delivery` on the rc_out lane.
+- **row** — the report's own key fields PLUS `attempted_batch_code`, `location_ref`,
+  `occupying_batch_code`, `occupying_status`, `occupying_balance_kg`, `occupying_last_fed`, and
+  **`db_error`** (the verbatim refusal). The raw error lives HERE, for the Copy button and the Excel
+  report's `Details` cell — never in a headline. No cost-ish key appears, by assertion.
+
+The occupant lookup is two indexed read-only selects (the ACTIVE batch at that `location_ref` —
+`STORED | IN-USE | SUNDRYING | SUNDRIED`, i.e. exactly what the index covers — then its newest
+`rc_out.transaction_date`). It **never throws**: a hold must not become the crash this section
+exists to prevent, so a failed lookup yields `null` and the message falls back to naming the block.
+
+### 12.4 Watermark semantics — unchanged, and that is the point
+
+`held` has never blocked a watermark bump; `errors` has. The clash moves from `errors` to `held`, so
+**the watermark now advances** and the rest of the report writes normally — exactly the semantics
+`cross_batch_reassignment` and `already_exists` already have. The hold is rebuilt from the source
+every run (nothing is parked), so it re-raises until a human closes the occupying batch or corrects
+the block, and then stops on its own.
+
+### 12.5 A NEW kind, not a re-wording
+
+`HeldKind` gained `batch_location_conflict` rather than re-wording `location_occupied` in place. The
+case fingerprint is `(reportType, kind, natural_key)`, so re-wording would have let an old
+acknowledgement of the vague hold silently answer the specific one. `location_occupied` stays in the
+enum because old runs and old `sync_held_cases` rows still carry it; nothing raises it any more.
+Because the enum is frontend-locked (exhaustive `Record<HeldKind, …>` maps live in `components/`),
+the kind was added to every one of them in the same changeset: `app/(app)/sync/types.ts`,
+`adjudication.ts::KIND_MEANING` (+ its evidence lookup, which now re-reads the block so the
+adjudicator sees what is true *now*), `components/sync/cases/labels.ts::KIND_LABEL`,
+`components/sync/HeldRows.tsx::SHORT_KIND`, and `lib/sync/findings.ts`
+(`HELD_KIND_LABEL` / `heldSeverity` → `attention` / `SHORT_KIND`).
+
+### 12.6 No raw DB error is ever a panel headline (the general rule)
+
+`workers/sync/src/lib/operatorError.ts` is the ONE shape for every `apply.errors[]` push:
+
+```
+<plain-language headline: what failed, what was and was not saved, what happens next>
+Technical detail: <the raw error, verbatim>
+```
+
+All 16 push sites across the five apply files were rewritten. The raw string is never lost — it
+moves one line down, under a label — so the Copy button still gives a developer everything.
+
+### 12.7 Parity
+
+**Apply-phase only.** The parity gate is CLASSIFY-only and nothing in extract/classify moved, so
+`npm run parity` is green with **no new `expected-deviations.json` entry**. `SHARED.md` §3.4 records
+the TS divergence from the Python oracle's `location_occupied`.
+
+### 12.8 Tests
+
+`workers/sync/test/reports/batch-location-conflict.test.ts` — 18 cases: the predicate (including
+what it must NOT swallow), the sentence and its degradations, the lookup's never-throws contract,
+`ensureBatch` returning the outcome (and still rethrowing a non-clash), the apply holding one row
+while the other rows still apply and the watermark still advances, the raw string being absent from
+`errors[]`, and the two writers producing the identical sentence. App-side:
+`scripts/verify-findings.ts` (3 new checks — headline carries no SQLSTATE, the raw error rides in
+`data`, the fingerprint equals the durable case fingerprint and survives the numbers moving) and
+`scripts/verify-decision-cards.ts` (1 new check — the card renders with `[Acknowledge]` and hides
+when acknowledged).

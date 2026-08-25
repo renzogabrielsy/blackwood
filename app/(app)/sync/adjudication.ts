@@ -113,6 +113,8 @@ export const KIND_MEANING: Record<HeldKind, string> = {
     'A bag-type code with no match in the system. Never invent a bag type — it probably matches an existing one or needs to be added.',
   location_occupied:
     'This slot already has an active batch in it. One slot holds one active batch — the old batch has to be closed or the location fixed before this can be saved.',
+  batch_location_conflict:
+    'A NEW batch was going to be created in a block that another batch is still marked active in, so nothing was created and this row was not saved. One block holds one active batch. This is normally the yard finishing a pile and reusing the block the same day — the fix is to close the batch that still holds the block (or correct the block on this row), never to force a second batch into it. The held row already names both batches, what is still left in the block, and when it was last fed.',
   malformed: 'A required field is missing or unreadable — usually a mistake in the source sheet to fix first.',
   low_confidence: 'The reader was not confident about this new row — read the row and decide.',
   already_exists: 'This exact record is already saved (nothing changed). Almost always safe to skip unless a value genuinely changed.',
@@ -340,8 +342,15 @@ export async function lookupEvidence(
         if (!codes.length) return `No existing batch codes start with "${prefix}" — the batch may need creating (by a human).`
         return `Candidate existing batches near "${code}": ${codes.join(', ')}. Never auto-create — pick the intended one or create it manually.`
       }
+      case 'batch_location_conflict':
       case 'location_occupied': {
-        const loc = (row.block_loc as string | undefined) ?? null
+        // BUG-027 (2026-08-25): a `batch_location_conflict` row already CARRIES both
+        // sides (the worker looked them up at the moment of the refusal). Re-read the
+        // block anyway — the point of the lookup is what is true NOW, and a block the
+        // operator has since closed is exactly the answer the adjudicator needs. Prefer
+        // the conflict row's own `location_ref`, falling back to the row's block.
+        const loc =
+          (row.location_ref as string | undefined) ?? (row.block_loc as string | undefined) ?? null
         if (!loc) return 'No block_loc on the held row.'
         // Which batch currently occupies that block_loc + its status/balance (no ₱).
         const { data, error } = await admin

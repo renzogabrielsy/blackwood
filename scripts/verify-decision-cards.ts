@@ -480,4 +480,58 @@ check('a human-edit finding with NO record_id is kept, as a generic card', () =>
   assert.deepEqual(card.actions, ['acknowledge'], 'nothing to release, so no release button')
 })
 
+check('a block clash (BUG-027) renders as a generic card with [Acknowledge]', () => {
+  // The panel must handle the kind PROPERLY, not merely "not crash": one card, the
+  // worker's plain sentence as the reason, an Acknowledge button, and no raw SQLSTATE
+  // anywhere a person reads.
+  const clashRun = {
+    reports: {
+      gsheet: {
+        apply: {
+          held: [
+            {
+              reason: 'batch_location_conflict',
+              natural_key: '2026-08-21 · AUG-26-BLK11 · D-20D · 16,840 kg · TEMP138003',
+              detail:
+                'New batch AUG-26-BLK11 wants block D-20D, but JUNE-26-BLK6 is still marked ' +
+                'active there with 4,680 kg left (last fed 2026-08-21). If that block is ' +
+                'finished, close JUNE-26-BLK6 and the next run will file this delivery.',
+              kind: 'batch_location_conflict',
+              row: {
+                transaction_date: '2026-08-21',
+                batch_code: 'AUG-26-BLK11',
+                block_loc: 'D-20D',
+                attempted_batch_code: 'AUG-26-BLK11',
+                location_ref: 'D-20D',
+                occupying_batch_code: 'JUNE-26-BLK6',
+                occupying_balance_kg: 4_680,
+                occupying_last_fed: '2026-08-21',
+                db_error:
+                  'upsert_batch_if_absent batches failed 23505: duplicate key value violates ' +
+                  'unique constraint "idx_unique_active_batch_per_location"',
+              },
+            },
+          ],
+        },
+      },
+    },
+  } as unknown as SyncRunResult
+
+  const findings = flattenRunFindings(clashRun)
+  assert.equal(findings.length, 1)
+  const r = buildDecisionCards(findings)
+  assert.equal(r.visibleCount, 1)
+  const card = r.groups[0].cards[0]
+  assert.equal(card.cardKind, 'other')
+  assert.deepEqual(card.actions, ['acknowledge'])
+  assert.equal(card.kindLabel, 'Two batches want the same block')
+  assert.ok(card.reason.includes('close JUNE-26-BLK6'), 'the "why" sentence carries the action')
+  for (const line of [card.title, card.kindLabel, card.reason, card.location]) {
+    assert.ok(!line.includes('23505'), `a SQLSTATE reached a card line: ${line}`)
+  }
+  // Acknowledging it hides it — the durable held-row rule, unchanged.
+  const acked = buildDecisionCards(findings, ackCard(card))
+  assert.equal(acked.visibleCount, 0)
+})
+
 console.log(`\nAll ${passed} decision-card checks passed.`)

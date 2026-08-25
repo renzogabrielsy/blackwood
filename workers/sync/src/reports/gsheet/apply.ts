@@ -54,6 +54,14 @@ import { rcOutReconcileCutover } from "../../lib/env.js";
 import { deliveriesInsertGuardColumns } from "../../lib/deliveryIdentity.js";
 import { type DeliveryHumanEdit, deliveryHumanEditNote } from "../deliveryHumanEdit.js";
 import { type HeldRow, type HeldKind, rcOutKey, deliveriesKey } from "../held.js";
+import { operatorError, errText } from "../../lib/operatorError.js";
+import {
+  type BatchLocationConflict,
+  batchLocationConflictDetail,
+  batchLocationConflictRow,
+  describeBatchLocationConflict,
+  isLocationCollision,
+} from "../../lib/batchLocationConflict.js";
 import {
   ensureBatch,
   isPatternValidBatchCode,
@@ -282,6 +290,11 @@ export const GSHEET_RC_OUT_NATURAL_KEY = [
 /** The shared detail string for a guard hit — same wording as the email writers'. */
 const ALREADY_EXISTS_DETAIL = "idempotent skip (natural key already in DB)";
 
+/** "RC IN" / "RC OUT" — the tab an operator actually looks at. */
+function modeLabel(mode: "rc_in" | "rc_out"): string {
+  return mode === "rc_in" ? "RC IN" : "RC OUT";
+}
+
 function provenanceComment(mode: string, index: unknown, runTs: string, noteExtra = ""): string {
   const tab = mode === "rc_in" ? "RC IN" : "RC OUT";
   const base =
@@ -337,6 +350,20 @@ function enrichedNew(
       block_loc: nr.block_loc,
     },
   };
+}
+
+/**
+ * Build the enriched held payload for a gsheet row blocked by a BLOCK CLASH (BUG-027).
+ * The row's own key fields PLUS both sides of the clash (and the raw DB refusal, which
+ * lives in `row.db_error` and never in a headline). No ₱/cost.
+ */
+function enrichedConflict(
+  mode: "rc_in" | "rc_out",
+  r: CompactNewRcIn | CompactNewRcOut,
+  conflict: BatchLocationConflict,
+): EnrichedHeld {
+  const base = enrichedNew(mode, r, "batch_location_conflict");
+  return { ...base, row: { ...(base.row ?? {}), ...batchLocationConflictRow(conflict) } };
 }
 
 /** Build the enriched held payload for a gsheet FLAGGED (cross-batch) row. No ₱/cost. */
@@ -527,13 +554,16 @@ export async function applyFromCompact(
           ]);
           newBatches.push(bc);
         } catch (bexc) {
+          // BUG-027 (2026-08-25): the block is already held. Name BOTH batches, the
+          // balance and the last-fed date — one message, built in the shared module the
+          // auto-create lane and the email path also use.
           if (isLocationCollision(bexc)) {
+            const conflict = await describeBatchLocationConflict(db, bc, nr.block_loc, bexc);
             skipped.push({
               index: nr.index,
-              why:
-                `location_occupied: block_loc ${nr.block_loc} already holds an active batch; ` +
-                `new batch ${bc} not created — resolve the slot`,
-              held: enrichedNew(mode, nr, "location_occupied"),
+              why: batchLocationConflictDetail(conflict, "delivery"),
+              reason: "batch_location_conflict",
+              held: enrichedConflict(mode, nr, conflict),
             });
             continue;
           }
@@ -785,6 +815,25 @@ export async function applyFromCompact(
 
     if (decision === "skip" && r.full && isPatternValidBatchCode(r.batch_code)) {
       const outcome = await ensureBatch(db, r.batch_code ?? null, r.block_loc ?? null, batchLookup);
+      // BUG-027 (2026-08-25) — THE CRASH SITE. A block already held by an active batch
+      // used to throw out of here, out of applyFromCompact, and be caught only at the
+      // mode boundary, discarding the whole mode's result (run afac05bd: 13 updates lost
+      // from `applied`, the watermark never advanced, every later run re-failed). Now it
+      // holds THIS ROW ONLY and the loop keeps going — the same watermark semantics every
+      // other held row already has (`held` never blocks the bump; `errors` does).
+      if (outcome.status === "location_conflict") {
+        skipped.push({
+          index: r.index,
+          why: batchLocationConflictDetail(outcome.conflict, mode === "rc_in" ? "delivery" : "feeding"),
+          reason: "batch_location_conflict",
+          held: {
+            kind: "batch_location_conflict",
+            natural_key: enriched.natural_key,
+            row: { ...enrichedRow, ...batchLocationConflictRow(outcome.conflict) },
+          },
+        });
+        continue;
+      }
       if (outcome.status !== "invalid_pattern") {
         if (outcome.status === "created") {
           await db.writeIngestionAudit({
@@ -944,7 +993,14 @@ export async function applyGsheet(
       deliveryHumanEdits.push(...res.delivery_human_edits);
       if (res.gate_failure) {
         // PD-2: nothing applied for this mode; record the gate, do NOT crash.
-        errors.push(`${mode} apply gate: ${res.gate_failure.gate} — ${res.gate_failure.detail}`);
+        errors.push(
+          operatorError(
+            `A safety check stopped the Google Sheet's ${modeLabel(mode)} rows before anything ` +
+              `was saved. Nothing from ${modeLabel(mode)} was written this run and the sync will ` +
+              `not move its bookmark, so the next run sees the same rows again.`,
+            `${mode} apply gate: ${res.gate_failure.gate} — ${res.gate_failure.detail}`,
+          ),
+        );
         held.push({
           reason: "gate_failure",
           natural_key: `${mode === "rc_in" ? "RC IN" : "RC OUT"} — ${res.gate_failure.gate}`,
@@ -978,7 +1034,18 @@ export async function applyGsheet(
         });
       }
     } catch (exc) {
-      errors.push(`${mode} apply: ${exc instanceof Error ? exc.message : String(exc)}`);
+      // The mode-boundary catch. Everything the sync KNOWS how to explain is handled
+      // deeper (a block clash is a held row since BUG-027, a human-owned delivery has its
+      // own note) — so anything arriving here is genuinely unexpected, and the honest
+      // headline says what it cost rather than quoting a constraint name at the operator.
+      errors.push(
+        operatorError(
+          `Couldn't finish saving the Google Sheet's ${modeLabel(mode)} rows — the database ` +
+            `refused a write. The sync will not move its bookmark, so nothing is lost: the ` +
+            `next run picks these rows up again.`,
+          `${mode} apply: ${errText(exc)}`,
+        ),
+      );
     }
   }
 
@@ -1011,11 +1078,3 @@ export async function applyGsheet(
   };
 }
 
-/** orchestrator_common.is_location_collision (SHARED.md §3.4). */
-function isLocationCollision(exc: unknown): boolean {
-  const s = exc instanceof Error ? exc.message : String(exc);
-  return (
-    s.includes("23505") &&
-    (s.includes("idx_unique_active_batch_per_location") || s.includes("location_ref"))
-  );
-}

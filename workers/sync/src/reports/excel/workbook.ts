@@ -362,6 +362,12 @@ const PROMOTED_KEYS = new Set([
   "tabs_found",
   "candidates",
   "looked_for",
+  // BUG-027 — consumed by Side A / Side B. `db_error` is deliberately NOT promoted: the
+  // raw Postgres refusal belongs in `Details`, which is exactly where a developer looks.
+  "attempted_batch_code",
+  "occupying_batch_code",
+  "occupying_balance_kg",
+  "occupying_last_fed",
 ]);
 
 interface Sides {
@@ -430,6 +436,26 @@ export function sidesForFinding(f: RunFinding): Sides {
     return {
       a: through ? `data through: ${through}` : "data through: (never reported)",
       b: opDate ? `operating day: ${opDate}` : "",
+    };
+  }
+
+  // Two batches, one block (BUG-027): who wanted it against who already has it. The
+  // verbatim Postgres refusal deliberately stays in `Details` — this pair is the FACT,
+  // the constraint name is only the evidence.
+  if (f.kind === "batch_location_conflict") {
+    const wanted = str(d.attempted_batch_code) ?? "the new batch";
+    const block = str(d.location_ref);
+    const holder = str(d.occupying_batch_code);
+    const bal = num(d.occupying_balance_kg);
+    const fed = str(d.occupying_last_fed);
+    const holderBits = [
+      holder ?? "another active batch",
+      bal == null ? null : `${Math.round(bal).toLocaleString("en-US")} kg left`,
+      fed ? `last fed ${fed}` : null,
+    ].filter(Boolean);
+    return {
+      a: `wants ${block ? `${block}: ` : ""}${wanted}`,
+      b: `already there: ${holderBits.join(", ")}`,
     };
   }
 
