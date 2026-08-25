@@ -1029,3 +1029,31 @@ still true: the dirty standing-exclusion paths (`.claude/agent-memory-local/**`,
 `shasum -a 256 -c` passed on all three afterwards and `git stash list` stayed empty. And a brief
 that supplies exact gate NUMBERS (`verify-table-core` 78, `verify-rc-in-grid` 33) is worth re-running
 on the MERGED tree specifically: matching counts prove the merge added nothing and dropped nothing.
+
+### Promotion 56 (2026-08-25, `2e99253` → merge `7edd55b`) — BUG-027, and the gate numbers earned their keep
+
+`feat/sync-rc-in-recovery` → `main` directly, `--no-ff`, no `dev`, no PR. The TRIVIAL shape again
+and predicted by the brief: `git rev-list --left-right --count main...HEAD` read `0 0` before the
+commit (branch tip WAS `main` at `d63fdbb`, which also equalled `origin/main`), merge-base tree
+diff empty, `git merge-tree --write-tree --name-only main <branch>` a bare OID at exit 0. Merge
+clean, post-merge `git diff --stat main <branch>` empty.
+
+- **Standing exclusions held for the twenty-somethingth time**: `.claude/agent-memory-local/`
+  (2 files, unstage the DIRECTORY) + `supabase/.temp/cli-latest`. Identical blobs at both tips,
+  so `git checkout main` and back carried them untouched — `shasum -a 256` matched afterwards,
+  `git stash list` empty. The brief said "standing exclusions" without naming them, which is now
+  the normal phrasing; no argument, one report bullet.
+- **A brief supplying gate COUNTS is a real check, not decoration.** This one said `verify-findings`
+  **54** (was 51). Re-run on the MERGED tree it printed exactly `All 54 findings checks passed`,
+  and three of the new lines were visibly the BUG-027 ones (`batch_location_conflict:` headline /
+  raw refusal in data / fingerprint IS the durable case fingerprint). Matching counts prove the
+  merge added nothing and dropped nothing — cheaper and stronger than reading a diff. Worker
+  `npm run typecheck` exit 0 on the same tree.
+- **`workers/sync/**` was in the promoted range — 15 files** (`git diff --name-only <old-main>..<merge>
+  -- 'workers/sync/**'`). Report that as a POSITIVE fact when the brief says a Fly deploy follows;
+  see [[deploy-targets]]. Pushing `main` shipped the app half only.
+- **zsh trap, again:** `npm run typecheck 2>&1 | tail` then `${PIPESTATUS[0]}` printed EMPTY here.
+  Use `cmd > /tmp/x.log 2>&1; echo $?` when the exit code is the thing you are reporting.
+- **cwd quirk confirmed:** this session launched from `workers/sync`, so a bare `npm run typecheck`
+  IS the worker's. Anything root-level (`npx tsx scripts/verify-findings.ts`) needs an explicit
+  `cd /Users/renzosy/blackwood` in the same command — Bash-tool cwd resets between calls.
