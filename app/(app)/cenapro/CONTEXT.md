@@ -918,8 +918,8 @@ from that date on; only **QC** still has a v2.
 
 | File | Role |
 |---|---|
-| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. Same fifteen columns and order as `qc-ledger-client.tsx` (four widths differ — see the `px-2` note below). **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". |
-| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences. Asserted by `scripts/verify-qc-grid.ts` (**45 assertions**) with no browser and no database. |
+| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. **SEVENTEEN columns since 2026-08-25, in the Cenapro PRODUCTION ledger's arrangement** — see "QC ledger v2 — the production arrangement" below. (It carried the live `qc-ledger-client.tsx`'s own fifteen, in that file's order, until then; four widths always differed — see the `px-2` note.) **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". |
+| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences — **plus, since 2026-08-25, `QC_COLUMNS` (THE column arrangement, which the grid renders by mapping), `QC_IMPORTED_COLUMNS` and `isImportedColumn`.** Asserted by `scripts/verify-qc-grid.ts` (**50 assertions**) with no browser and no database. |
 | ~~`inventory/flec-inventory-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** See below. |
 
 ### RETIRED 2026-08-20 — Flec Inventory (`/cenapro/inventory`) leaves the v2 track
@@ -981,12 +981,15 @@ Four changes to `qc/qc-ledger-grid-v2.tsx`, none of them in `lib/table/**` or
    painted. `useTableColumns` is no longer imported here at all — the consumer computes no
    width of its own.
 
-   **Why the frozen DATE column still pins correctly, by construction.** QC has exactly ONE
-   pinned column. `distributeFill` skips every column with a `pin` (a pinned width is a wall
+   **Why the frozen DATE column still pins correctly, by construction.** QC had exactly ONE
+   pinned column when this was written (it has FOUR since 2026-08-25 — the reasoning below
+   is unchanged and covers any number of them, because
+   `distributeFill` skips every column with a `pin` (a pinned width is a wall
    the caret-follow and the drag auto-scroll measure from), so DATE keeps its declared width
    verbatim; and `pinnedOffsets` is computed from the column table **after** the fill, so the
-   offsets are prefix sums of the rendered widths either way. With one pinned column the
-   offset is `0` in both modes. Verified by reasoning through `use-table-columns.ts` plus the
+   offsets are prefix sums of the rendered widths either way.) With one pinned column the
+   offset is `0` in both modes; with the four of them it is `0 · 36 · 128 · 220`, the same
+   prefix sums under both sizings. Verified by reasoning through `use-table-columns.ts` plus the
    two `verify-table-core.ts` assertions that pin *Σ resolved widths === the container* and
    *every pinned offset is a prefix sum of the resolved widths*, and the browser spec that
    renders a declared 48px column as 48px under `fill` — **not** by driving `/cenapro/qc`
@@ -1154,3 +1157,81 @@ a stale `?m=` on the v2 branch is inert. The period therefore survives a grid fl
 directions. Year options come from `monthKeys` plus the current year; all twelve months stay
 selectable, empty ones included, because an empty month is where a new month's first draw has
 to land.
+
+### QC ledger v2 — the PRODUCTION arrangement (2026-08-25)
+
+Renzo: *"I'd like for the new table columns to be exact the same arrangement as the current
+prod ledger for cenapro as well. This way, it's the same tab feel and flow inputting in qc
+ledger rather than prod ledger. The goal is to eventually just type everything in qc ledger
+anyway so importing some of the columns that don't exist in qc ledger from prod ledger would
+also work."*
+
+**The point is MUSCLE MEMORY, so what was aligned is the Tab run, not the paint.** The QC v2
+sheet's columns are now `production-grid-v2-shared.tsx`'s `COLS`, column for column, with QC's
+four lab lanes appended where the production ledger's columns run out:
+
+`#` · `DATE` · `PROD` · `BATCH` · `SH` · `GRADE` · `PLANT` · `WHSE` · `SRC` · `WT KG` ·
+`MACH` · `BAGS` · `SIDE` ‖ `BD` · `ASH` · `GRIT` · `MC`
+
+Only `qc/qc-ledger-grid-v2.tsx`, `qc/qc-grid-v2-save.ts` and `scripts/verify-qc-grid.ts`
+changed. **Classic QC (`?grid=v1`) keeps its own order**, and `production-ledger-grid.tsx` /
+`production-grid-v2-shared.tsx` / `qc/actions.ts` / `qc/data.ts` / `qc/draw-entry-rows.tsx` were
+not edited by one character. No server action, no SQL, no new RPC.
+
+**The four lanes the two screens spell differently and mean identically** — this is the whole
+of the mapping, and getting it wrong would have looked like a working sheet:
+
+| production ledger | QC ledger | what it is |
+|---|---|---|
+| `recv` | `date` | the receipt date at CCC |
+| `source` | `src` | the source location |
+| `ccc` (`CCC/FLEC`) | `mach` | the partner machine — it ALONE decides the disposition, which is why production's merged label and QC's machine code are one column |
+| `flec` | `bags` | the flec bag count |
+
+**TWO COLUMNS WERE IMPORTED, AND NEITHER CAN BE TYPED INTO.** `#` is the row's 1-based
+position in the current view — derived here, painted, the production ledger's own treatment.
+`BATCH` is the production label: `data.ts`'s `EVENT_COLUMNS` does not select it (and that file
+is not the migration's to change), and `cenapro_add_partner_draw` resolves the batch
+SERVER-SIDE from `recv_date`, so a draft has nothing to type into it either. Both keep their
+visual slot with `addressable: false` — **Tab steps straight over them**, and a block copied
+out of the production ledger still lands column-for-column, because the paste maps positionally
+and drops a cell with no editable slot IN PLACE rather than shifting the rest of the row left.
+Neither is a `QcField`, so no `parse` can exist for them: typing into one is *impossible*
+rather than merely unsaved — the rule that a value which silently vanishes is worse than a
+skipped column, made structural.
+
+**`QC_COLUMNS` lives in the PURE save module and the grid renders BY MAPPING IT** (`SPECS =
+QC_COLUMNS.map(key => SPEC_BY_KEY[key])`, with `Record<QcColumnKey, …>` making a missing or
+surplus spec a compile error). So the arrangement is a fact a test can read rather than a shape
+only the screen knows, and `scripts/verify-qc-grid.ts` reads the production ledger's `COLS`
+**off disk** — never a copied snapshot, or a column moved over there would keep passing.
+
+**Geometry.** The frozen identity block is now the production ledger's four (`#` · DATE · PROD
+· BATCH, offsets `0 · 36 · 128 · 220`) rather than DATE alone; `distributeFill` skips a pinned
+column, so all four keep their declared widths and every sticky offset stays a prefix sum of
+what is painted. `#` takes production's 36px verbatim; `BATCH` is narrowed to **72** rather
+than production's 120, because the lane renders a dash forever and frozen dead space is a real
+cost on a narrow viewport. **`SIDE` is deliberately NOT `pin: 'end'`** the way the production
+ledger's is — an end-pinned run must be the table's trailing columns, and QC's four lab lanes
+sit to its right. Σ declared width 1,366px (was 1,258); `sizing="fill"` is unchanged.
+
+**The Tab run, side by side** (a stored QC row and a production row; `#` and `BATCH` are
+skipped on the QC side because nothing there can be entered):
+
+```
+production  Recv → Prod → Batch → Shift → Grade → Plant → Whse → Source → Weight → CCC/FLEC → Flec → Side
+QC v2       DATE → PROD →   ·    →  SH   → GRADE → PLANT → WHSE →  SRC   → WT KG  →   MACH   → BAGS → SIDE → BD → ASH → GRIT → MC
+```
+
+**Nothing about the save moved.** Metrics still route to the sample GROUP, WT to the draw,
+drafts through `cenapro_add_partner_draw`; `routeQcEdits` keys on the FIELD NAME, never on a
+column position. That is now asserted rather than assumed — *"the REORDER cannot change what an
+edit saves to"* builds the identical plan twice, with the fields presented in the pre-2026-08-25
+order and in the new one, and requires the payloads to be deep-equal. `scripts/verify-qc-grid.ts`
+is **50 assertions** (was 45): the five new ones are the arrangement-vs-production check, the
+imported-column rules, the reorder-invariance proof, the draft field mapping, and the source
+scan that keeps `QC_COLUMNS` load-bearing (`SPECS` must be it, mapped) and the pin counts equal.
+
+**Gates:** `tsc --noEmit` clean · `npm run build` clean · `npm run lint` 167/28 (unchanged) ·
+`verify-qc-grid` 50 · `verify-qc-draw-cells` 36 · `verify-table-core` 79 · `npm run test:e2e`
+57 passed.
