@@ -1029,3 +1029,29 @@ still true: the dirty standing-exclusion paths (`.claude/agent-memory-local/**`,
 `shasum -a 256 -c` passed on all three afterwards and `git stash list` stayed empty. And a brief
 that supplies exact gate NUMBERS (`verify-table-core` 78, `verify-rc-in-grid` 33) is worth re-running
 on the MERGED tree specifically: matching counts prove the merge added nothing and dropped nothing.
+
+### The v2-default series' SECOND promotion (2026-08-21, `ec731ac` → merge `d63fdbb`)
+
+`feat/qc-ledger-v2-default` — the Cenapro QC ledger table migration. The trivial-promotion
+shape held for the second time in one day and for the same reason: merge-base ==
+`main` tip == `origin/main` == `3328874`, `git merge-tree --write-tree` exit 0 before any
+checkout, merge exit 0, 9 files / +2693/−79. **The brief's gate NUMBERS matched exactly on
+the MERGED tree** — `verify-table-core` **79**, `verify-qc-grid` **45**, `tsc` clean — which
+is the corroboration worth buying: identical counts prove the merge added nothing and dropped
+nothing. Re-running just those three costs ~2 min; take the 8-minute build from the brief.
+
+- **The `chore(memory)` + feature SPLIT fired again and is now reflexive.** The tree held my
+  own pending playbook edit (the branch-series note, written at the branch cut earlier the same
+  evening) alongside 8 feature files. `git commit -F <msg> -- <the one memory path>` first
+  (`aeb2983`), then a bare `git commit -F <msg>` for the rest (`ec731ac`) — feature stays the
+  tip. A `feat(qc):` body cannot honestly describe a git-guardian process note.
+- **A memory note written on a branch rides to `main` with that branch's own promotion.** No
+  reason to commit it on `main` directly, and rule 4 forbids that anyway without explicit
+  authorization. Note `3328874` (the previous session's memory commit) *did* land directly on
+  `main`; do not copy that shape — the branch route reached the same place with no exception.
+- **A supplied subject over 72 chars ships VERBATIM.** The brief dictated the subject in
+  backticks (88 chars). Per [[commit-message-fidelity]] case 3, "along the lines of" is
+  latitude and a backticked dictation is not — trim only what was suggested.
+- Standing exclusions unstaged as always; all three dirty paths survived both checkouts
+  (`shasum -a 256 -c` OK ×3, `git stash list` empty). Push notation `3328874..d63fdbb` —
+  two dots, no `+`, so a fast-forward, corroborated by `git merge-base --is-ancestor`.

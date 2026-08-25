@@ -13,7 +13,7 @@
 //
 // ═══ THE SHEET HAS TWO LANES, AND THEY SAVE TO DIFFERENT ROWS ═══════════════════
 //
-// One rendered row is one DRAW (`cenapro.production_event`). But of the fifteen
+// One rendered row is one DRAW (`cenapro.production_event`). But of the seventeen
 // columns, only two lanes are writable at all, and they do not write to the same
 // thing:
 //
@@ -61,7 +61,7 @@
 // keyed off the table module's edit map would be a second definition of "is this row
 // legal" that could drift from the one the operator has been using since 2026-08-04.
 //
-// So `draftFromEdits` is the ONLY new code on this path: it maps this grid's fifteen
+// So `draftFromEdits` is the ONLY new code on this path: it maps this grid's typeable
 // COLUMN KEYS onto that interface's field names, and everything downstream is the
 // composer's own functions, called verbatim. That file is not edited.
 //
@@ -140,20 +140,92 @@ export function isDraftKey(rowId: string): boolean {
 
 // ═══ The fields ═════════════════════════════════════════════════════════════════
 
-/** The eleven identity/dimension lanes, in the sheet's own column order. */
+/**
+ * The eleven identity/dimension lanes, in the sheet's column order — which is the
+ * PRODUCTION ledger's order since 2026-08-25 (see `QC_COLUMNS` below). The order here is
+ * documentation only: nothing reads this array positionally.
+ */
 export const QC_ROW_FIELDS = [
-    'date', 'prod', 'shift', 'grade', 'plant', 'whse', 'side', 'bags', 'src', 'mach', 'wt',
+    'date', 'prod', 'shift', 'grade', 'plant', 'whse', 'src', 'wt', 'mach', 'bags', 'side',
 ] as const;
 export type QcRowField = (typeof QC_ROW_FIELDS)[number];
 
 /** Every field an operator may type into anywhere on this sheet. */
 export type QcField = QcRowField | MetricKey;
 
+// ═══ THE ARRANGEMENT — the production ledger's, column for column ════════════════
+//
+// Renzo, 2026-08-25: *"I'd like for the new table columns to be exact the same
+// arrangement as the current prod ledger for cenapro as well. This way, it's the same tab
+// feel and flow inputting in qc ledger rather than prod ledger… importing some of the
+// columns that don't exist in qc ledger from prod ledger would also work."*
+//
+// So the order below is NOT this sheet's own taste — it is
+// `production-grid-v2-shared.tsx`'s `COLS`, mapped onto QC's nouns, with QC's four lab
+// lanes appended where the production ledger's columns run out. The two screens name four
+// of the shared lanes differently and mean the same thing by them:
+//
+//   production `recv`   ⇄ QC `date`   — the receipt date at CCC
+//   production `source` ⇄ QC `src`    — the source location
+//   production `ccc`    ⇄ QC `mach`   — the partner machine (which alone decides the
+//                                       disposition; production shows the merged
+//                                       `CCC/FLEC` label, QC shows the machine code)
+//   production `flec`   ⇄ QC `bags`   — the flec bag count
+//
+// **It lives here, in the pure module, because the grid RENDERS from it** — the React
+// adapter builds one spec per key and then maps this array, so this is the arrangement
+// rather than a description of one. `scripts/verify-qc-grid.ts` reads the production
+// ledger's own column table off disk and asserts the two still line up, so a column added
+// there is a failing assertion here rather than a silent divergence.
+//
+// `num` and `batch` carry no `QcField`: they are IMPORTED lanes with no QC write path
+// (see `QC_IMPORTED_COLUMNS`), which is why `isQcField` still answers false for both.
+export const QC_COLUMNS = [
+    'num', 'date', 'prod', 'batch',
+    'shift', 'grade', 'plant', 'whse', 'src', 'wt', 'mach', 'bags', 'side',
+    'bd', 'ash', 'grit', 'mc',
+] as const;
+export type QcColumnKey = (typeof QC_COLUMNS)[number];
+
+/**
+ * The two columns imported from the production ledger that QC can never SAVE.
+ *
+ * `num` is the row's 1-based position in the current view — derived, and painted; `batch`
+ * is the production label, which QC's read does not select (`data.ts`'s `EVENT_COLUMNS`)
+ * and which `cenapro_add_partner_draw` derives SERVER-SIDE from `recv_date`, so there is
+ * nothing for an operator to type into it on a draft either.
+ *
+ * Both keep their visual slot, and both are `addressable: false` in every row family — so
+ * Tab steps straight over them while a block pasted out of the production ledger still
+ * lines up column for column (the paste maps positionally and drops a cell with no
+ * editable slot IN PLACE, rather than shifting the rest of the row left).
+ *
+ * **Neither is a `QcField`**, which is what makes "it must not accept text" structural: no
+ * `parse` can be built for a key `parseQcField` has no case for, so nothing typed into
+ * either could ever be silently discarded at save.
+ */
+export const QC_IMPORTED_COLUMNS = ['num', 'batch'] as const;
+export type QcImportedColumn = (typeof QC_IMPORTED_COLUMNS)[number];
+
 const METRIC_SET: ReadonlySet<string> = new Set<string>(METRICS as readonly string[]);
 const ROW_FIELD_SET: ReadonlySet<string> = new Set<string>(QC_ROW_FIELDS);
 
 export function isMetricField(key: string): key is MetricKey {
     return METRIC_SET.has(key);
+}
+
+const IMPORTED_SET: ReadonlySet<string> = new Set<string>(QC_IMPORTED_COLUMNS);
+
+/**
+ * Is this column one of the two imported from the production ledger?
+ *
+ * THE one definition, so the column table, both row families and the verify script all
+ * answer it the same way. An imported column is painted and skipped: it has a slot (so
+ * `format` runs and the lane is not blank scaffolding) that is `editable: false` and
+ * `addressable: false`.
+ */
+export function isImportedColumn(key: string): key is QcImportedColumn {
+    return IMPORTED_SET.has(key);
 }
 
 export function isQcField(key: string): key is QcField {

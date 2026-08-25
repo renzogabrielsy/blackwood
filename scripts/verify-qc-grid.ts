@@ -34,6 +34,8 @@ import { METRICS } from '@/lib/cenapro/ccc-analysis'
 import type { MetricValues } from '@/lib/cenapro/ccc-analysis-view'
 import {
   DRAFT_PREFIX,
+  QC_COLUMNS,
+  QC_IMPORTED_COLUMNS,
   QC_ROW_FIELDS,
   buildQcSavePlan,
   cleanPastedQcCell,
@@ -46,6 +48,7 @@ import {
   groupLabel,
   hasAnyReading,
   isDraftKey,
+  isImportedColumn,
   isMetricField,
   isQcField,
   machineCodes,
@@ -68,6 +71,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const GRID = join(ROOT, 'app/(app)/cenapro/qc/qc-ledger-grid-v2.tsx')
 const SAVE = join(ROOT, 'app/(app)/cenapro/qc/qc-grid-v2-save.ts')
 const ACTIONS = join(ROOT, 'app/(app)/cenapro/qc/actions.ts')
+/**
+ * The production ledger's own column table — READ, never edited, and never re-typed here.
+ *
+ * The QC sheet's arrangement is supposed to BE this one (Renzo, 2026-08-25: *"exact the
+ * same arrangement as the current prod ledger"*). Copying its keys into this file would
+ * make the assertion agree with a snapshot instead of with the ledger, so a column added
+ * or moved over there would keep passing.
+ */
+const PROD_SHARED = join(ROOT, 'app/(app)/cenapro/production/production-grid-v2-shared.tsx')
 
 /**
  * Executable code only. These files' comments discuss the very identifiers the source
@@ -801,6 +813,150 @@ check('draft ids are prefixed, unique and recognisable', () => {
   assert.equal(isMetricField('wt'), false)
 })
 
+// ═══ 8b · The ARRANGEMENT (2026-08-25) ═════════════════════════════════════════
+//
+// Renzo asked for the QC sheet's columns to be laid out exactly like the Cenapro
+// PRODUCTION ledger's, so an operator who types production rows all day can type a QC row
+// without re-learning the order — and for the production columns QC lacks to be imported
+// rather than dropped, so the shape stays recognisable.
+//
+// Two things could go silently wrong, and neither is visible from the save model alone:
+// the two arrangements drifting apart (a column moved on the production side would never
+// be noticed here), and the reorder quietly changing WHAT AN EDIT SAVES TO. The first is
+// answered by reading the production ledger's own column table off disk; the second by
+// running the same edits through the router twice, with the fields presented in the OLD
+// order and the NEW one, and requiring identical payloads.
+
+/** The production ledger's column keys, left to right, parsed from its own `COLS`. */
+function productionColumnKeys(): string[] {
+  const src = readFileSync(PROD_SHARED, 'utf8')
+  const block = /const COLS: readonly ProdCol\[\] = \[([\s\S]*?)\n\];/.exec(src)
+  assert.ok(block, 'the production ledger column table must still be findable')
+  const keys = [...block[1].matchAll(/\{\s*key: '([^']+)'/g)].map((m) => m[1])
+  assert.ok(keys.length >= 10, 'an empty extraction is a FAILURE, never a vacuous pass')
+  return keys
+}
+
+/**
+ * The four lanes the two screens spell differently and mean identically.
+ *
+ * `recv` is the receipt date; `source` is the source location; `ccc` is the production
+ * ledger's merged `CCC/FLEC` label, whose content is the partner machine QC calls `mach`
+ * (the machine ALONE decides the disposition — `actions.ts` says so); `flec` is the bag
+ * count QC calls `bags`.
+ */
+const PROD_TO_QC: Readonly<Record<string, string>> = {
+  recv: 'date',
+  source: 'src',
+  ccc: 'mach',
+  flec: 'bags',
+}
+
+check('the QC arrangement IS the production ledger\'s, column for column', () => {
+  const prod = productionColumnKeys()
+  const expected = prod.map((k) => PROD_TO_QC[k] ?? k)
+  assert.deepEqual(
+    [...QC_COLUMNS].slice(0, expected.length),
+    expected,
+    'QC_COLUMNS must open with the production ledger\'s own order, under QC\'s names',
+  )
+  // And the four lab lanes are what QC adds where the production ledger runs out.
+  assert.deepEqual([...QC_COLUMNS].slice(expected.length), [...METRICS])
+})
+
+check('every QC column is either a typeable field or one of the two IMPORTED lanes', () => {
+  for (const key of QC_COLUMNS) {
+    if (isImportedColumn(key)) {
+      // THE rule for an imported lane: it must not accept text, and the way that is made
+      // structural is that no field of that name exists for a `parse` to be built from.
+      assert.equal(isQcField(key), false, `${key} must never be a QcField`)
+      continue
+    }
+    assert.equal(isQcField(key), true, `${key} must be a field the save model knows`)
+  }
+  assert.deepEqual([...QC_IMPORTED_COLUMNS], ['num', 'batch'])
+  // The arrangement carries every typeable field exactly once — nothing was dropped in
+  // the reorder, and nothing was added that the save model cannot answer for.
+  const typeable = QC_COLUMNS.filter((k) => !isImportedColumn(k))
+  assert.equal(typeable.length, QC_ROW_FIELDS.length + METRICS.length)
+  assert.deepEqual([...typeable].sort(), [...QC_ROW_FIELDS, ...METRICS].sort())
+})
+
+check('the REORDER cannot change what an edit saves to', () => {
+  const { g, lead, sibling } = twoDrawGroup()
+  const rows = rowIndex(lead, sibling)
+
+  // The SAME edits, with the fields presented in the order the sheet used BEFORE the
+  // 2026-08-25 rearrangement and in the order it uses now. A payload that depended on
+  // column order would differ; one routed by field name cannot.
+  const OLD_ORDER = ['date', 'prod', 'shift', 'grade', 'plant', 'whse', 'side', 'bags', 'src', 'mach', 'wt']
+  const NEW_ORDER = [...QC_ROW_FIELDS]
+  assert.notDeepEqual(OLD_ORDER, NEW_ORDER, 'the two orders must actually differ, or this proves nothing')
+
+  const typed: Record<string, string> = { wt: '4321', ash: '3.14' }
+  const inOrder = (order: readonly string[]) => {
+    const out: Record<string, string> = {}
+    for (const field of [...order, ...METRICS]) {
+      if (typed[field] !== undefined) out[field] = typed[field]
+    }
+    return out
+  }
+
+  const build = (order: readonly string[]) =>
+    buildQcSavePlan({
+      edits: { 'draw-a': inOrder(order) } as RowEditMap,
+      dirtyRecords: ['draw-a'],
+      dirtyDrafts: new Set<string>(),
+      draftIds: [],
+      rowsById: rows,
+      groups: [g],
+      env: ENV,
+    })
+
+  const before = build(OLD_ORDER)
+  const after = build(NEW_ORDER)
+  assert.deepEqual(after.samples, before.samples)
+  assert.deepEqual(after.weights, before.weights)
+  assert.deepEqual(after.draws, before.draws)
+  assert.deepEqual(after.problems, before.problems)
+  // …and it is not vacuous: both really did build the two payloads.
+  assert.equal(after.problems.length, 0)
+  assert.equal(after.weights.length, 1)
+  assert.equal(after.weights[0].id, 'draw-a')
+  assert.equal(after.samples.length, 1)
+  assert.equal(after.samples[0].key, g.key)
+  assert.equal(after.samples[0].bd, 0.52, 'the untouched stored BD still rides back')
+})
+
+check('a draft still maps every typeable lane onto the composer\'s own interface', () => {
+  // The reorder moved SIDE / BAGS to the end of the row lanes and pulled SRC / WT
+  // forward. `draftFromEdits` reads by NAME, so the mapping is unchanged — asserted
+  // rather than assumed, because a positional mapping would have broken silently here.
+  const d = draftFromEdits('qcdraft:9', {
+    date: '2026-08-01',
+    prod: '2026-07-31',
+    shift: 'M',
+    grade: '3X50',
+    plant: 'W6',
+    whse: 'WHSE 1',
+    src: 'FLEC',
+    wt: '9583.5',
+    mach: 'C1',
+    bags: '12',
+    side: 'LS',
+    bd: '0.52',
+  })
+  assert.equal(d.recvDate, '2026-08-01')
+  assert.equal(d.prodDate, '2026-07-31')
+  assert.equal(d.src, 'FLEC')
+  assert.equal(d.mach, 'C1')
+  assert.equal(d.wt, '9583.5')
+  assert.equal(d.bags, '12')
+  assert.equal(d.side, 'LS')
+  assert.equal(d.whse, 'WHSE 1')
+  assert.equal(d.metrics.bd, '0.52')
+})
+
 // ═══ 9 · Source scans ══════════════════════════════════════════════════════════
 
 check('the grid holds no second definition of a cell verdict', () => {
@@ -811,6 +967,32 @@ check('the grid holds no second definition of a cell verdict', () => {
   assert.equal(src.includes('parseMetricValue'), false, 'the grid never parses a metric itself')
   assert.equal(src.includes('parseWeightKg'), false, 'the grid never parses a weight itself')
   assert.equal(src.includes('parseQcDate'), false, 'the grid never parses a date itself')
+})
+
+check('the grid RENDERS from QC_COLUMNS — the arrangement is not a description', () => {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  assert.ok(src.includes('QC_COLUMNS'), 'the scan target must still exist')
+  // The column table is ONE spec per key, laid out by the shared constant. A second
+  // literal ordering in this file would make `QC_COLUMNS` — and every assertion above
+  // that reads it — a comment about the sheet rather than the sheet itself.
+  assert.match(
+    src,
+    /const SPECS: readonly ColumnSpec<QcRow, Ctx>\[\] = QC_COLUMNS\.map\(/,
+    'SPECS must be QC_COLUMNS mapped through the per-key table',
+  )
+  assert.match(src, /const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>>/)
+
+  // The frozen identity block is the production ledger's: four start-pinned columns.
+  // (`SIDE` is deliberately NOT end-pinned here — an end-pinned run must be the table's
+  // trailing columns, and QC's four lab lanes sit to its right.)
+  const prodSrc = readFileSync(PROD_SHARED, 'utf8')
+  const prodBlock = /const COLS: readonly ProdCol\[\] = \[([\s\S]*?)\n\];/.exec(prodSrc)
+  assert.ok(prodBlock, 'the production ledger column table must still be findable')
+  const prodStartPins = [...prodBlock[1].matchAll(/pin: 'start'/g)].length
+  const qcStartPins = [...src.matchAll(/pin: 'start'/g)].length
+  assert.equal(prodStartPins, 4, 'the production ledger pins # · Recv · Prod · Batch')
+  assert.equal(qcStartPins, prodStartPins, 'QC must freeze the same identity block')
+  assert.equal(src.includes("pin: 'end'"), false, 'nothing may be end-pinned ahead of the lab lanes')
 })
 
 check('the grid refuses the WHOLE batch when any dirty row is illegal', () => {

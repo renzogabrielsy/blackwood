@@ -22,6 +22,43 @@
 // **No save-time reason dialog**, unlike RC IN's: none of the three QC RPCs accepts
 // a comment or a note, so there is nothing for one to collect. See the save module.
 //
+// ── THE ARRANGEMENT IS THE PRODUCTION LEDGER'S (2026-08-25) ────────────────────
+//
+// Renzo: *"I'd like for the new table columns to be exact the same arrangement as the
+// current prod ledger for cenapro as well. This way, it's the same tab feel and flow
+// inputting in qc ledger rather than prod ledger. The goal is to eventually just type
+// everything in qc ledger anyway so importing some of the columns that don't exist in
+// qc ledger from prod ledger would also work."*
+//
+// So the order is no longer this sheet's own ("when · what · where it came out of ·
+// what source · into which machine · how much · what the lab said") — it is
+// `production-grid-v2-shared.tsx`'s `COLS`, column for column, with QC's four lab
+// lanes appended where the production ledger runs out:
+//
+//   #  ·  DATE  ·  PROD  ·  BATCH  ·  SH  ·  GRADE  ·  PLANT  ·  WHSE  ·  SRC  ·
+//   WT KG  ·  MACH  ·  BAGS  ·  SIDE   ‖   BD  ·  ASH  ·  GRIT  ·  MC
+//
+// **The order lives in `QC_COLUMNS` (the pure save module) and this file MAPS it**, so
+// the arrangement is a fact a test can read rather than a shape only the screen knows.
+// `scripts/verify-qc-grid.ts` reads the production ledger's own column table off disk
+// and asserts the two still line up under the four names the screens spell differently
+// (`recv`⇄`date`, `source`⇄`src`, `ccc`⇄`mach`, `flec`⇄`bags`).
+//
+// TWO COLUMNS ARE IMPORTED AND CANNOT BE TYPED. `#` is the row's position in the view
+// (derived here, painted, never a coordinate — the production ledger's own treatment);
+// `BATCH` is the production label, which QC's read does not select and which
+// `cenapro_add_partner_draw` derives SERVER-SIDE from the receipt date. Both keep their
+// visual slot with `addressable: false`, so **Tab steps over them** while a block copied
+// out of the production ledger still lands column-for-column (the paste maps positionally
+// and drops a cell with no editable slot IN PLACE). Neither is a `QcField`, so no `parse`
+// exists for them: typing into one is impossible rather than merely unsaved.
+//
+// The four lab lanes go at the END, after SIDE, because the production arrangement has
+// nothing to interleave them with and a trailing lane is where this sheet's own eye
+// already expects them. SIDE is therefore NOT `pin: 'end'` the way the production
+// ledger's is — an end-pinned run must be the table's trailing columns, and here the
+// metrics sit to its right.
+//
 // THE ROW MODEL, and why `occupies()` is load-bearing here.
 //
 // The sheet is ONE ROW PER DRAW, not per sample group — a weight belongs to a single
@@ -29,13 +66,13 @@
 // four metric cells on the group's FIRST draw only. So two row families share the
 // column table and disagree about four of its columns:
 //
-//   • `draw-first` occupies all fifteen columns.
-//   • `draw`       occupies eleven, and returns NULL for BD / ASH / GRIT / MC.
-//   • `draft`      (2026-08-21) occupies all fifteen, and every one is EDITABLE —
-//                  a new draw carries its own date, source, machine, grade, shift,
-//                  plant, warehouse, side and bags, because that is exactly what
-//                  `cenapro_add_partner_draw` takes. On a STORED row those nine are
-//                  reference-only, and not by taste: no RPC moves them.
+//   • `draw-first` occupies all seventeen (`#` and BATCH un-addressable).
+//   • `draw`       occupies thirteen, and returns NULL for BD / ASH / GRIT / MC.
+//   • `draft`      (2026-08-21) occupies all seventeen, and the fifteen typeable ones
+//                  are EDITABLE — a new draw carries its own date, source, machine,
+//                  grade, shift, plant, warehouse, side and bags, because that is
+//                  exactly what `cenapro_add_partner_draw` takes. On a STORED row those
+//                  nine are reference-only, and not by taste: no RPC moves them.
 //
 // `null` means "this row has no cell there" — not "an empty one". That single answer
 // drives the keyboard (a vertical run steps over it), the paste (it never lands
@@ -49,7 +86,10 @@
 // stretched sheet can pin a frozen column inside its neighbour. The clamp made that
 // unreachable at the cost of dead space; `'fill'` removes the slack instead, inside
 // `useTableColumns`, so ONE set of numbers describes both the layout and the sticky
-// arithmetic and DATE stays pinned at any viewport width.
+// arithmetic and the frozen block stays pinned at any viewport width. That still holds
+// with FOUR pinned columns rather than one: `distributeFill` skips every column carrying
+// a `pin`, so all four keep their declared widths, and `pinnedOffsets` is a prefix sum of
+// the widths ACTUALLY rendered either way (0 · 36 · 128 · 220).
 //
 // ── WIDTHS ARE NOT THE LIVE SHEET'S, AND THE REASON IS ONE NUMBER ───────────────
 // This grid copied `qc-ledger-client.tsx`'s pixel widths column for column, and four of
@@ -75,7 +115,7 @@ import type { CellSlot, ColumnParseResult, ColumnSpec, GridRow, RowKind } from '
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { METRICS, type MetricKey } from '@/lib/cenapro/ccc-analysis';
+import type { MetricKey } from '@/lib/cenapro/ccc-analysis';
 import type { QcAggregate } from '@/lib/cenapro/ccc-analysis-view';
 
 import { addQcDraws, saveQcSamples, saveQcWeights } from './actions';
@@ -90,6 +130,7 @@ import {
     forgettableRowIds,
     groupLabel,
     isDraftKey,
+    isImportedColumn,
     isMetricField,
     makeDraftIds,
     normalizeQcField,
@@ -98,6 +139,8 @@ import {
     qcSampleFailureMessage,
     qcWeightFailureMessage,
     storedRowFieldIsEditable,
+    QC_COLUMNS,
+    type QcColumnKey,
     type QcField,
     type QcFieldEnv,
     type QcSaveRow,
@@ -171,8 +214,15 @@ export interface QcLedgerGridV2Props {
     canEdit?: boolean;
 }
 
-/** One rendered row: a draw, the group it belongs to, and whether it leads that group. */
-type QcRow = QcSaveRow;
+/**
+ * One rendered row: a draw, the group it belongs to, whether it leads that group — and
+ * its position in the view, which is what the imported `#` column paints.
+ *
+ * `num` is added HERE rather than in `QcSaveRow`, because it is a fact about the sheet and
+ * not about the database: nothing in the save model may ever read it, and the save model's
+ * own type staying free of it is what guarantees that.
+ */
+type QcRow = QcSaveRow & { num: number };
 
 interface Ctx {
     readonly month: string;
@@ -272,12 +322,70 @@ function rawNum(v: number | null | undefined): string {
     return n === null ? '' : String(n);
 }
 
-// ─── Column table — the existing ledger's fifteen, same order, same widths ───────
+/**
+ * A lab metric's column. The four are identical but for the key, so they are built rather
+ * than written out four times.
+ */
+function metricSpec(metric: MetricKey): ColumnSpec<QcRow, Ctx> {
+    return {
+        key: metric,
+        label: metric.toUpperCase(),
+        width: 124,
+        align: 'right',
+        cellKind: 'number',
+        title: `${metric.toUpperCase()} — one reading per sample group, shown on its first draw`,
+        ...(editSeams(metric) as Partial<ColumnSpec<QcRow, Ctx>>),
+        format: (r) => metricText(r.group.sample?.[metric] ?? null),
+        numericValue: (r) => num(r.group.sample?.[metric] ?? null),
+        clipboardValue: (r) => rawNum(r.group.sample?.[metric] ?? null),
+        calcType: 'AVERAGE',
+    };
+}
+
+// ─── Column table — ONE spec per key, laid out by `QC_COLUMNS` ───────────────────
 //
-// "when · what · WHERE it came out of (whse · side · bags) · what source · into WHICH
-// machine · how much · what the lab said" — the sentence the row already tells.
-const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
-    {
+// The ORDER is not written here: `QC_COLUMNS` (the pure save module) holds it, and the
+// map at the bottom of this block is what produces the rendered table. See the file
+// header — the arrangement is the production ledger's, and a test reads both.
+//
+// Widths are QC's own and stay as measured: this module's cell is `px-2` with a 1px
+// selection gutter each side, so a cell's usable width is `declared − 18` and four of the
+// live sheet's numbers were a character short here. The two IMPORTED columns take the
+// production ledger's `#` width verbatim (36) and a narrowed BATCH (72 rather than its
+// 120), because QC's BATCH renders a dash forever and 120px of frozen dead space is a real
+// cost on a narrow viewport while the header still needs ~58.
+const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
+    /**
+     * IMPORTED — the row's 1-based position in the CURRENT VIEW, exactly as the production
+     * ledger paints it. It RENDERS and the caret steps over it (`addressable: false` on
+     * every family), and it is not selectable: a row ordinal has no arithmetic meaning and
+     * is not a coordinate at all.
+     */
+    num: {
+        key: 'num',
+        label: '#',
+        width: 36,
+        pin: 'start',
+        align: 'left',
+        cellKind: 'derived',
+        title: 'Row number in this view',
+        resizable: false,
+        hideable: false,
+        selectable: false,
+        // Not part of "Copy row": a row ordinal is a fact about the SHEET, not about the
+        // record, and pasting a copied row into Excel with a leading `7` is precisely the
+        // decoration `rowCopy` was added for (RC IN's STATE column). `clipboardValue` is
+        // still declared so `storedText` answers the ordinal rather than a blank, which is
+        // what the production ledger's `productionStoredText` does for the same column.
+        rowCopy: false,
+        format: (r) => (
+            <span className="w-full text-center font-mono text-[10px] font-bold text-muted-foreground">
+                {r.num}
+            </span>
+        ),
+        clipboardValue: (r) => String(r.num),
+    },
+    date: {
         key: 'date',
         label: 'DATE',
         // 92, not the live ledger's 62. The live sheet pads its cells `px-1`; the module
@@ -299,11 +407,16 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.recvDate ? String(r.draw.recvDate).slice(0, 10) : null),
         clipboardValue: (r) => (r.draw.recvDate ? String(r.draw.recvDate).slice(0, 10) : ''),
     },
-    {
+    prod: {
         key: 'prod',
         label: 'PROD',
         // Same value, same measurement, same width as DATE — see above.
         width: 92,
+        // PINNED since 2026-08-25, with `#` and BATCH: the production ledger's identity
+        // block is `# · Recv · Prod · Batch`, and matching it is the whole point of the
+        // rearrangement. `distributeFill` skips a pinned column, so all four keep their
+        // declared widths and every sticky offset stays a prefix sum of what is painted.
+        pin: 'start',
         align: 'left',
         cellKind: 'date',
         title: 'Production date of the material drawn',
@@ -311,7 +424,38 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : null),
         clipboardValue: (r) => (r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : ''),
     },
-    {
+    /**
+     * IMPORTED — the production label, and QC can neither read nor write it.
+     *
+     * `data.ts`'s `EVENT_COLUMNS` does not select `batch`, so a stored draw has nothing to
+     * show; and `cenapro_add_partner_draw` resolves the batch SERVER-SIDE from the receipt
+     * date — *"`batch` from whichever label was actually running at `recv_date`"* — so a
+     * draft has nothing to type. A stored row therefore renders the dash and a blank row
+     * renders nothing at all (the renderer calls `format` only where there is row data),
+     * and the caret steps over both.
+     *
+     * It is here for the two things the arrangement is for: the operator's eye finds the
+     * identity block ending where the production ledger's does, and a block copied out of
+     * that sheet still lands column-for-column, because the paste drops a cell with no
+     * editable slot IN PLACE rather than shifting the rest of the row left.
+     */
+    batch: {
+        key: 'batch',
+        label: 'BATCH',
+        // 72, not the production ledger's 120. The lane is a dash forever and it is
+        // FROZEN, so its width is dead space on a narrow viewport; 72 still clears the
+        // `BATCH` header (~58 with its `px-2`).
+        width: 72,
+        pin: 'start',
+        align: 'left',
+        cellKind: 'derived',
+        title: 'Production batch — resolved by the database from the receipt date; not entered here',
+        selectable: false,
+        // A lane that is empty by construction has nothing to contribute to "Copy row".
+        rowCopy: false,
+        format: () => dash,
+    },
+    shift: {
         key: 'shift',
         label: 'SH',
         width: 40,
@@ -322,7 +466,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.shift),
         clipboardValue: (r) => r.draw.shift ?? '',
     },
-    {
+    grade: {
         key: 'grade',
         label: 'GRADE',
         width: 62,
@@ -332,7 +476,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.grade),
         clipboardValue: (r) => r.draw.grade ?? '',
     },
-    {
+    plant: {
         key: 'plant',
         label: 'PLANT',
         width: 88,
@@ -343,7 +487,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.plant),
         clipboardValue: (r) => r.draw.plant ?? '',
     },
-    {
+    whse: {
         key: 'whse',
         label: 'WHSE',
         // The values are `WHSE 1` / `WHSE 2` / `WHSE 5` / `WHSE 7` — and `WHSE 3`, the DVO
@@ -358,7 +502,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.group.whse),
         clipboardValue: (r) => r.group.whse ?? '',
     },
-    {
+    side: {
         key: 'side',
         label: 'SIDE',
         // Floored by its own HEADER, not by `LS`/`RS`: `SIDE` at `text-[11px]` uppercase
@@ -371,7 +515,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.side),
         clipboardValue: (r) => r.draw.side ?? '',
     },
-    {
+    bags: {
         key: 'bags',
         label: 'BAGS',
         width: 52,
@@ -384,7 +528,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         clipboardValue: (r) => rawNum(r.draw.flecCount),
         calcType: 'SUM',
     },
-    {
+    src: {
         key: 'src',
         label: 'SRC',
         width: 62,
@@ -395,7 +539,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.group.src),
         clipboardValue: (r) => r.group.src ?? '',
     },
-    {
+    mach: {
         key: 'mach',
         label: 'MACH',
         width: 58,
@@ -406,7 +550,7 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
         format: (r) => txt(r.draw.equip),
         clipboardValue: (r) => r.draw.equip ?? '',
     },
-    {
+    wt: {
         key: 'wt',
         label: 'WT KG',
         width: 88,
@@ -422,22 +566,22 @@ const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = [
     },
     // ── The four lab metrics. A group's reading lives on its FIRST draw only, so
     // these are precisely the columns the `draw` family does not occupy.
-    ...METRICS.map<ColumnSpec<QcRow, Ctx>>((metric: MetricKey) => ({
-        key: metric,
-        label: metric.toUpperCase(),
-        width: 124,
-        align: 'right' as const,
-        cellKind: 'number' as const,
-        title: `${metric.toUpperCase()} — one reading per sample group, shown on its first draw`,
-        ...(editSeams(metric) as Partial<ColumnSpec<QcRow, Ctx>>),
-        format: (r: QcRow) => metricText(r.group.sample?.[metric] ?? null),
-        numericValue: (r: QcRow) => num(r.group.sample?.[metric] ?? null),
-        clipboardValue: (r: QcRow) => rawNum(r.group.sample?.[metric] ?? null),
-        calcType: 'AVERAGE' as const,
-    })),
-];
+    bd: metricSpec('bd'),
+    ash: metricSpec('ash'),
+    grit: metricSpec('grit'),
+    mc: metricSpec('mc'),
+};
 
-/** Date → Mach: the ten columns the day total rules off across. */
+/**
+ * The rendered column table — `QC_COLUMNS` laid out, never a second order written here.
+ *
+ * `Record<QcColumnKey, …>` above is what makes that safe: a key added to `QC_COLUMNS`
+ * without a spec is a compile error rather than an `undefined` column, and a spec written
+ * for a key the arrangement does not carry is one too.
+ */
+const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = QC_COLUMNS.map((key) => SPEC_BY_KEY[key]);
+
+/** `#` → SRC: the columns the day total rules off across, before the WT figure. */
 const LABEL_SPAN = SPECS.findIndex((c) => c.key === 'wt');
 
 const ROW_H = 28;
@@ -452,19 +596,43 @@ const CHROME_H = 24;
 const BLANK_BATCH = 10;
 
 /**
+ * The two IMPORTED columns' slot, and it is the same on every family.
+ *
+ * A slot, not `null`, because these lanes RENDER (the ordinal, the dash) and the renderer
+ * only calls `format` where a slot exists. `addressable: false` is the middle answer
+ * `CellSlot` was split for: the cell paints and copies, and the keyboard walks straight
+ * past it — which is exactly what keeps the Tab run through the shared lanes identical to
+ * the production ledger's while neither column can be typed into.
+ */
+const IMPORTED_SLOT: CellSlot = { field: '', editable: false, addressable: false };
+
+function importedSlot(colKey: string): CellSlot {
+    return { ...IMPORTED_SLOT, field: colKey };
+}
+
+/**
  * A STORED draw row's slots. The metric lanes are ABSENT (not empty) on a non-leading
  * draw, and only WT + the four metrics are editable — `storedRowFieldIsEditable` is the
  * one definition, shared with the column's own `editable` and with the save.
  */
 function slotFor(colKey: string, isFirst: boolean): CellSlot | null {
+    if (isImportedColumn(colKey)) return importedSlot(colKey);
     if (isMetricField(colKey)) {
         return isFirst ? { field: colKey, editable: true } : null;
     }
     return { field: colKey, editable: storedRowFieldIsEditable(colKey) };
 }
 
-/** A BLANK row's slots — all fifteen, all live. See the header note. */
+/**
+ * A BLANK row's slots — the fifteen typeable lanes live, the two imported ones inert.
+ *
+ * BATCH is inert on a draft for the same reason it is blank on a stored row: the RPC
+ * resolves it server-side from the receipt date, so there is nothing an operator could
+ * type that would be kept. A cell that accepts text and then discards it is worse than a
+ * cell the caret never stops on.
+ */
 function draftSlotFor(colKey: string): CellSlot | null {
+    if (isImportedColumn(colKey)) return importedSlot(colKey);
     return { field: colKey, editable: true };
 }
 
@@ -574,42 +742,56 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
         canEdit ? makeDraftIds(BLANK_BATCH) : [],
     );
 
+    /**
+     * The draws, built ONCE — numbered, and indexed by id off the SAME objects.
+     *
+     * The `#` column paints `row.num`, so the ordinal has to be assigned somewhere; doing
+     * it here rather than inside the flatten keeps a single walk producing both the row
+     * objects and the id index, so the number a cell shows and the row a save resolves can
+     * never come from two different traversals. It also means `items[i].data` and
+     * `byId.get(id)` are the same reference, which is what the cell memo compares.
+     *
+     * It depends on `orderedDays` alone — adding a blank row must not renumber the sheet.
+     */
+    const { dayBlocks, byId } = React.useMemo(() => {
+        const blocks: { date: string; agg: QcAggregate; rows: QcRow[] }[] = [];
+        const index = new Map<string, QcRow>();
+        let ordinal = 0;
+        for (const day of orderedDays) {
+            const rows: QcRow[] = [];
+            for (const group of day.groups) {
+                group.draws.forEach((draw, i) => {
+                    ordinal += 1;
+                    const row: QcRow = { draw, group, isFirstOfGroup: i === 0, num: ordinal };
+                    rows.push(row);
+                    index.set(String(draw.id), row);
+                });
+            }
+            blocks.push({ date: day.date, agg: day.agg, rows });
+        }
+        return { dayBlocks: blocks, byId: index };
+    }, [orderedDays]);
+
     const { items, dayMeta } = React.useMemo(() => {
         const out: GridRow<QcRow>[] = [];
         const meta = new Map<string, { date: string; agg: QcAggregate; draws: number }>();
         let ord = 0;
-        for (const day of orderedDays) {
+        for (const block of dayBlocks) {
             ord += 1;
             const totalKey = `daytot-${ord}`;
-            let drawCount = 0;
-            for (const group of day.groups) {
-                group.draws.forEach((draw, i) => {
-                    drawCount += 1;
-                    out.push({
-                        kind: i === 0 ? 'draw-first' : 'draw',
-                        id: String(draw.id),
-                        data: { draw, group, isFirstOfGroup: i === 0 },
-                    });
+            for (const row of block.rows) {
+                out.push({
+                    kind: row.isFirstOfGroup ? 'draw-first' : 'draw',
+                    id: String(row.draw.id),
+                    data: row,
                 });
             }
             out.push({ kind: 'summary', key: totalKey });
-            meta.set(totalKey, { date: day.date, agg: day.agg, draws: drawCount });
+            meta.set(totalKey, { date: block.date, agg: block.agg, draws: block.rows.length });
         }
         for (const draftId of draftIds) out.push({ kind: 'draft', id: draftId });
         return { items: out, dayMeta: meta };
-    }, [orderedDays, draftIds]);
-
-    const byId = React.useMemo(() => {
-        const m = new Map<string, QcRow>();
-        for (const day of orderedDays) {
-            for (const group of day.groups) {
-                group.draws.forEach((draw, i) => {
-                    m.set(String(draw.id), { draw, group, isFirstOfGroup: i === 0 });
-                });
-            }
-        }
-        return m;
-    }, [orderedDays]);
+    }, [dayBlocks, draftIds]);
 
     /**
      * Every sample group on screen — the `sample_row_version` map a NEW draw needs.
@@ -988,8 +1170,9 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
               * `useTableColumns`' own resolution and the table is rendered at exactly the
               * resulting pixel width, so `table-fixed` has nothing left to scale into and
               * every offset is a prefix sum of the widths ACTUALLY painted. The frozen
-              * DATE column therefore pins correctly at any width — see the note in the
-              * report — and the dead space to the right is gone.
+              * identity block therefore pins correctly at any width — `# · DATE · PROD ·
+              * BATCH` since 2026-08-25, and `distributeFill` skips a pinned column, so
+              * the same reasoning covers four of them — and the dead space is gone.
               */}
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="h-full overflow-hidden">
