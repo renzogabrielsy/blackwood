@@ -35,9 +35,10 @@ the receipt side"** below.
 
 | File | Role |
 |---|---|
-| `deliveries-grid-v2.tsx` | **Client — the Stage 1D rewire, built BESIDE the live ledger.** The same screen rendered through the platform's **`BlackwoodTable`** (`components/shared/table/`), reachable only at `?grid=v2`. Slices 1 + 2: the read-only render, then editing, undo/redo, paste, the blank-row pool and the save. See "The `?grid=v2` rewire" below for what it does and does not do yet. |
+| `deliveries-grid-v2.tsx` | **Client — the Stage 1D rewire, and since 2026-08-26 THIS SCREEN'S DEFAULT.** The same screen rendered through the platform's **`BlackwoodTable`** (`components/shared/table/`); the Classic ledger is now the one that needs a param (`?grid=v1`). Slices 1 + 2: the read-only render, then editing, undo/redo, paste, the blank-row pool and the save. See "The `?grid=v2` rewire" below for what it does and does not do yet. |
+| `scope-toggle.tsx` | **Client — the v2 branch's SCOPE control** (`DeliveriesScopeToggle`). Two segments, endless ⇄ focus, over `?scope=`: `endless` DELETES the param (the default, and the clean URL), `focus` sets it, every other param is copied across verbatim. Tenant code, because "the whole history vs one month" is a fact about a receipt ledger, not a platform axis. It exists because `deliveries-ledger.tsx`'s own `ScopeToggle` is module-private and wired to that component's unsaved-work guard, and this migration does not edit that file — so the page mounts this one into `<GridVersionBar trailing>` instead. Ships its own Suspense boundary (`useSearchParams`), takes the RESOLVED scope as a prop rather than re-reading the URL, and — like `PeriodPicker` and `GridVersionToggle` beside it — does **not** guard unsaved work. |
 | `grid-v2-save.ts` | **PURE module** (no React, no Supabase) — v2's EDIT + SAVE model, split out so the two things this slice can most easily get silently wrong are asserted without a browser: **which receipt a moisture draw's edit belongs to**, and **what patch a dirty row produces**. Owns the draw-row identity (`drawKeyOf` / `drawRowId` / `parentRowId`), **`dirtyReceiptIds`** (THE dirty union), **`buildSampleBlock`** (the whole draw block reassembled, `position` re-derived from ORDER), **`patchField`** (the ONE per-field verdict, shared by every column's `parse` and by the save) and `buildDeliveryPatch`, the draft-row identity (`makeDraftIds` / `isDraftKey`), `rowLabel` / `draftLabel`, `saveOutcomeMessage` and `editedCellText`. At cutover it absorbs the ledger's module-private `buildPatch` / `canonicalEditText` and becomes the only copy. |
-| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Also picks between the two grids on `?grid=v2` (defaulting to `DeliveriesLedger`), with an IDENTICAL prop set in both branches, and mounts the platform `<GridVersionBar>` above whichever one renders. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
+| `page.tsx` | **Server component.** Resolves the URL axes, fetches, hands off. Also picks between the two grids on `?grid=` — **defaulting to `DeliveriesGridV2` since 2026-08-26**, `?grid=v1` for the Classic ledger — with an IDENTICAL prop set in both branches, and mounts the platform `<GridVersionBar>` above whichever one renders, carrying the v2 branch's `DeliveriesScopeToggle` + `PeriodPicker` in its `trailing` slot. Runs `fetchDeliveryMonthKeys()` + `fetchDeliveryDimensions()` in parallel, then either `fetchDeliveryMonth()` (focus) or `fetchDeliveryPage({mode:'anchor'})` (endless). Keys the client by `axesKey(...)` so a scope / lens / search change remounts with the server-prefetched window for the NEW axes — one deterministic seeding path, and it resets `firstItemIndex` by construction. **Renders no title** (the navbar owns titles). `export const dynamic = 'force-dynamic'`. |
 | `types.ts` | **PURE module** (no `'use client'`, no server tag) — the shared vocabulary, imported by the server page, the server actions, the client grid AND the verify script. Owns: the generated-type-derived row shapes; **`PRICE_FIELDS` + `stripPrices()` + `redactAuditJson()`** (the ONE ₱ boundary — one list, two consumers: named fields on a row shape, and keys inside the audit trail's jsonb); **the audit vocabulary** (`RcDeliveryAuditRow`, `DeliveryHistoryEntry`, `AUDIT_TRAIL_START`, `readAuditChanges` / `auditColumnLabel` / `formatAuditValue` / `auditHeadline` / `auditSnapshotColumns`); the column table + `buildColumns` / `frozenOffsets` / `minTableWidth` / `isSelectableColumn` / `columnCalcType`; **`parseSupplierCell` / `formatSupplierCell`** and **`parseDestinationCell` / `formatDestinationCell`** (the single-column ⇄ multi-field pairs); `weightEditText` / `priceEditText` (the formula round-trip); **`parseDeliveryDate` / `isIsoDate`** (the DATE cell's free-text ⇄ `yyyy-MM-dd` verdict); **`mergeFieldEdit` / `isDirtyFieldEdits`** (when unsaved text stops being unsaved) and **`countUnsavedWork` / `hasUnsavedWork` / `describeUnsavedWork`** (the ONE number the unsaved chip, the Save button and the axis guard all read); `sampleFieldFor` (which columns a sub-row occupies); **`columnOffsets` / `frozenBlockWidth` / `columnScrollLeft`** (where the caret-follow may scroll sideways to, given the pinned block) and **`dragAutoScrollDelta`** (the same frozen-block correction, for a click-drag at the edge); **`summarySpans`** (the `Σ DAY TOTAL` / month-footer `colSpan`s, read off the column table); **`needsDaySpacer` / `DAY_SPACER_ROW_H`** (the endless scope's blank between-days row); **the clipboard exchange** (`parseClipboardTable` / `tsvEscape` / `clipboardNumber` / `cleanPastedCell` / `planPaste` — TSV in and out, and the geometry of where a pasted block lands); the draft-row constants (`DEFAULT_DRAFT_ROWS`, `MAX_DRAFT_ADD`, `clampDraftAdd`); the display formatters; `rowIssues` / `readImportFlags` and **`flagSummary`** (the ONE verdict on whether an import flag still describes a live problem — see "Flag resolution" below); and the save-payload contracts. |
 | `ledger-url.ts` | **PURE module** — the URL axes: `parseScope`, `resolvePeriod` / `periodBounds` / `periodLabel`, `parseIssueLens` (+ `ISSUE_LABELS` / `ISSUE_HINTS`), `parseQuery`, `axesKey`, **and the per-column filter grammar** (`parseColumnFilters` / `serializeColumnFilter` / `withColumnFilter` / `filtersKey` / `describeFilter` / `buildFilterPredicates` / `dateFilterMissesPeriod`). No React, no Next imports, so the server page and the client toolbar share one contract without a boundary hazard (same discipline as `production/ledger-url.ts`). It imports the column table from `types.ts` — column metadata lives with the columns, URL/SQL translation lives here. |
 | `actions.ts` | **`'use server'`** — reads AND writes. `fetchDeliveryPage` (bidirectional keyset pager, plus the duplicate worklist branch), `fetchDeliveryMonth` (focus), `fetchDeliveryDimensions`, `fetchDeliveryMonthKeys`, **`getDeliveryHistory`** (one receipt's audit trail, ₱-redacted server-side), `saveDeliveries`, `deleteDelivery`. Enforces the ₱ gate on every read and every write, applies the issue lens + per-column filters + search in **one** `buildRowQuery`, and sequences a combined field+samples save. |
@@ -939,13 +940,25 @@ production path and **is not edited by one character** while both are alive. The
 and why the earlier atomic attempts could never land, is in
 `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`.
 
-- **`page.tsx` picks on `?grid=v2`, defaulting to the OLD grid.** Both branches hand the
-  two components the identical prop set — v2 imports `DeliveriesLedgerProps` from the
-  ledger rather than re-declaring it, so the two can never drift — and both read the same
-  server data. No action, RPC or query changes with the flag.
-- **`?grid=v2` joins `axesKey(...)`** (`ledger-url.ts`, `parseGrid` / `GRID_V2`) so a
-  switch REMOUNTS rather than reconciling one component's tree into the other's. The field
-  is optional and contributes nothing when absent, so every existing key is unchanged.
+- **`page.tsx` picks on `?grid=`.** Both branches hand the two components the identical
+  prop set — v2 imports `DeliveriesLedgerProps` from the ledger rather than re-declaring
+  it, so the two can never drift — and both read the same server data. No action, RPC or
+  query changes with the flag.
+- **THE DEFAULT IS v2 (2026-08-26).** `?grid=` absent, misspelt, `V2` or `3` all mean the
+  NEW table; the Classic ledger is `?grid=v1`. A **DEFAULT FLIP, not a cutover**: nothing
+  is deleted, `DeliveriesLedger` stays mounted, fully reachable and fully functional, and
+  it remains where **search, the issue lenses, the per-column filter popovers, the row
+  context menu and the three dialogs** (history / assign cheque / delete) live until those
+  land on v2 — which is what the grid bar's note says out loud rather than leaving the
+  operator to discover it. The default is stated ONCE, in the page's single
+  `resolveGrid(params.grid, GRID_V2) === GRID_V2`, and repeated to the control as
+  `defaultVersion={GRID_V2}` so the toggle cannot light the side the page did not render.
+  `scripts/verify-table-core.ts` holds the registry of flipped pages and reads it BOTH
+  ways — flipping without registering fails, and registering without flipping fails.
+- **The RESOLVED version joins `axesKey(...)`**, not the raw param, so a switch REMOUNTS
+  rather than reconciling one component's tree into the other's. Keying on the raw param
+  was right while absence meant v1; on a flipped page it would give `?grid=v1` and a typo
+  the same key, which is the one collision that matters.
 - **The param is PLATFORM now, and there is a visible switch (2026-08-18).** `GRID_V2` /
   `parseGrid` moved to `lib/table/grid-param.ts` and `ledger-url.ts` **re-exports them**,
   so every importer here is unchanged and the definition is shared with the other screens
@@ -970,10 +983,39 @@ and why the earlier atomic attempts could never land, is in
   never had), the blank **draft-row pool** with `Add N more rows`, and **the save** — for
   receipts AND their moisture draws — behind an unsaved-work chip and a Save button, with
   every refusal on a persistent, copyable `errorToast`. `ctx.canEdit` is now TRUE.
-  **Still not built (slice 3):** the scope toggle, the month picker, the issue lenses, the
-  search box, the per-column filter popovers, the row context menu, and the history /
-  assign-cheque / delete dialogs. Adding or removing a moisture draw lives on that menu, so
-  it is not reachable here yet either.
+- **The PERIOD CONTROLS landed with the flip (2026-08-26)**, because a default you cannot
+  navigate out of is not a default. They ride in the grid bar's `trailing` slot — ONE
+  strip of chrome above the sheet, not two, since a second bar costs a row of the sheet —
+  and they are **v2-ONLY**: the Classic ledger keeps its own toggle and month dropdown, and
+  two controls over one param is two things that can disagree.
+  - **endless — the scope toggle ALONE.** Its period is the keyset window, not a month.
+    `?year=`/`?month=` are still carried across (so a flip back to focus lands on the month
+    you left) but they select nothing here, and a picker that selected nothing would be a
+    control lying about what it does.
+  - **focus — the toggle plus the shared `PeriodPicker`**, mapped onto this screen's
+    EXISTING `?year=` + `?month=` params (no new axis, no legacy `?m=` to canonicalise —
+    unlike the QC ledger, this screen already spoke the platform spelling). Its years come
+    from `fetchDeliveryMonthKeys()`, the index the server already fetches. `defaults` is
+    `resolvePeriod(monthKeys, undefined, undefined)` — the SAME resolver with nothing to
+    resolve, so "what a paramless URL means" has one definition and the default state stays
+    a clean URL. `all` is offered on NEITHER axis (`allowAllYears`/`allowAllMonths` false):
+    `fetchDeliveryMonth` takes ONE period and `resolvePeriod` cannot produce `all`, so a
+    hand-typed `?year=all` resolves to the page default, the same answer any unrecognised
+    value gets.
+  - **A month the index does not hold snaps back to the newest one.** That is
+    `resolvePeriod`'s pre-existing rule, shared with the Classic branch and unchanged here
+    — the control shows the RESOLVED period, so it can never disagree with the sheet, but
+    it does offer all twelve months whether or not they carry receipts (`PeriodPicker` takes
+    no month list, and inventing one for a single consumer would put tenant knowledge in
+    the platform layer).
+  - **None of the three controls guards unsaved work.** The Classic ledger's own toggle
+    does, because it lives inside the component holding the edits; chrome mounted in the
+    page above the grid cannot see them. Already true of `GridVersionBar` and `PeriodPicker`
+    on every migrated screen — save before changing the view.
+- **Still not built (slice 3):** the issue lenses, the search box, the per-column filter
+  popovers, the row context menu, and the history / assign-cheque / delete dialogs. Adding
+  or removing a moisture draw lives on that menu, so it is not reachable here yet either —
+  all of it is one `?grid=v1` away.
 
 ### The draw block — why slice 2 is not just "turn on `canEdit`"
 
@@ -1076,6 +1118,12 @@ Typing that exact date is still a NON-edit: it is the draft's `canonicalText`, s
 
 Column filters and the search work in BOTH scopes; the duplicate lens is the one view
 that pages in neither (see "Duplicate pairing" above).
+
+**Who renders the switch.** Classic keeps its own `ScopeToggle` + month dropdown in its own
+toolbar; the v2 branch gets `scope-toggle.tsx` + the shared `PeriodPicker`, mounted from
+`page.tsx` into the grid bar (see "The `?grid=v2` rewire" → the period controls). Both write
+the same params by the same rule — `endless` deletes `?scope=`, `focus` sets it — so a link
+copied from either side means the same thing on the other.
 
 ### Frozen panes
 
