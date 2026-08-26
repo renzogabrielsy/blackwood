@@ -1,11 +1,22 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronDown, ChevronUp, ListFilter } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ChevronDown, ChevronUp, ListFilter, Loader2, Save } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { BlackwoodTable } from '@/components/shared/table';
 import type { TableState, TableSummaryRow } from '@/components/shared/table';
-import type { CellSlot, ColumnSpec, GridRow, RowKind, TableSettings } from '@/lib/table';
+import { DEFAULT_DRAFT_ROWS } from '@/lib/table';
+import type {
+    CellContext,
+    CellSlot,
+    ColumnParseResult,
+    ColumnSpec,
+    GridRow,
+    RowKind,
+    TableSettings,
+} from '@/lib/table';
 import { useTableEdits } from '@/lib/hooks/use-table-edits';
 import {
     DropdownMenu,
@@ -16,6 +27,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { errorToast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 // The ROW MODEL is imported, never restated. `buildGridRows` is the ONE definition of how
@@ -27,6 +39,34 @@ import { buildGridRows, type GridRow as LedgerRow } from './daily-ledger-grid';
 // The same discipline one level down: DT TTL / PROD HRS / TTL WASTE / PROD LOSS come from
 // the pure helper the mobile card already shares with the live grid.
 import { deriveDailyMetrics } from './ledger-derive';
+// …and the same discipline for the WRITE side: which row an edit saves to, what a cell's
+// text is allowed to be, and what a payload has to carry all live in ONE pure module that
+// `scripts/verify-daily-grid.ts` asserts without a browser or a database.
+import {
+    DEFAULT_CUSTOMER,
+    SAVEABLE_GRADES,
+    SHIFT_CODES,
+    buildDailySavePlan,
+    cleanPastedDailyCell,
+    countDailyUnsaved,
+    dailySaveFailureMessage,
+    dailySaveSuccessMessage,
+    describeDailyUnsaved,
+    draftFieldText,
+    isDailyEditField,
+    isDraftKey,
+    makeDraftIds,
+    normalizeDailyField,
+    parseDailyField,
+    savedFieldText,
+    storedRowFieldIsEditable,
+    type DailyField,
+    type DailyFieldEnv,
+    type DailySavePlan,
+    type DraftDefaults,
+    type RouteDailyInput,
+} from './daily-grid-v2-save';
+import { saveBulkDailyLedger } from './actions';
 import type {
     ProductionShiftRow,
     ProductionRunRow,
@@ -35,47 +75,45 @@ import type {
 } from './actions';
 
 // ═════════════════════════════════════════════════════════════════════════════════
-// Daily ledger — the SAME rows, on the platform's Blackwood Table.
+// Daily ledger — the SAME rows, on the platform's Blackwood Table, now EDITABLE.
 //
-// Universal-table migration, built BESIDE `daily-ledger-grid.tsx` and reachable only at
-// `/production?grid=v2` (the strangler-fig method —
+// Universal-table migration, built BESIDE `daily-ledger-grid.tsx` and reachable through
+// the `?grid=` switch (the strangler-fig method —
 // `handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`). The live
 // ledger is production and is not edited by one character; this file can be deleted to
 // revert.
 //
-// ── READ-ONLY, AND STRUCTURALLY SO ──────────────────────────────────────────────
-// **No `ColumnSpec` here declares `parse` or `editable`.** `columnAcceptsEdit` therefore
-// answers false for every column, and `isEditable` — the ONE place the row's answer and
-// the column's are combined — can never be true. That takes out the whole write surface
-// in one fact: nothing opens an editor, Delete clears nothing, a paste lands nowhere.
-// There is no `renderEditor`, no draft pool, no context menu, and `./actions` is imported
-// for its TYPES only (`import type`, erased at compile time).
+// ── WHAT CHANGED IN THIS PASS ───────────────────────────────────────────────────
+// The grid was READ-ONLY and structurally so: no `ColumnSpec` declared `parse`, so
+// `columnAcceptsEdit` answered false at every coordinate. It now types and saves through
+// the EXISTING `saveBulkDailyLedger`, unchanged, with no new action and no SQL:
 //
-// The row families still declare each slot's HONEST `editable`, because that is the ROW's
-// half of the verdict and it is what a later editing pass builds on. The two halves are
-// ANDed, never ORed, so an honest `true` here stays inert while the column says no.
+//   • Inline editing on the eighteen fields the live ledger lets an operator set, with
+//     ONE commit verdict per lane (`parseDailyField`, shared with the save) and Excel-style
+//     canonicalisation of DATE / BATCH / SHIFT / CUSTOMER / GRADE (`normalizeDailyField`).
+//   • A blank-row pool at the bottom for new runs — the live grid's trailing empty row,
+//     in the shape the platform module already has.
+//   • A Save button, an unsaved chip counted in this sheet's own nouns, and honest
+//     per-lane refusals BEFORE anything is posted.
 //
-// ── THE TWO ROW FAMILIES, AND WHY THEY ARE TWO ──────────────────────────────────
-// A shift can have several runs (grades). Downtime and waste are 1:1 with the SHIFT, so
-// the live grid puts them on the shift's PRIMARY run row and leaves them blank on the
-// others. That is not "an empty cell" — the secondary row HAS NO CELL THERE, which is
-// exactly the question `occupies()` exists to answer and exactly the granularity whose
-// absence was BUG-024. So:
-//
-//   • `run-primary`   occupies all 23 columns.
-//   • `run-secondary` occupies the identity + production columns and returns **null** for
-//     every downtime and waste column — so the keyboard steps over them, a rectangle does
-//     not total them, and no tint is painted on them.
-//
-// The identity lanes (DATE / BATCH / SHIFT) are the middle answer: a secondary row RENDERS
-// the live grid's `↑` there and the caret never stops on it (`addressable: false`).
+// ── THE FOUR LANES SAVE TO THREE DIFFERENT ROWS ─────────────────────────────────
+// A shift owns its downtime and its waste 1:1 and the ledger paints them on the shift's
+// PRIMARY run row, so a waste figure typed there is a save to the SHIFT, not to the run
+// the caret is on. `daily-grid-v2-save.ts` owns that routing (`routeDailyEdits`) and the
+// three whole-block payloads it implies — the action rebuilds a fixed object per table, so
+// a payload built only from the typed cells would blank the rest.
 //
 // ── WHAT IS DELIBERATELY NOT HERE ───────────────────────────────────────────────
-// The trailing blank input row, Save / Discard, the right-click row menu (insert /
-// duplicate / add grade row / delete), the date-picker cell, the remarks + downtime-reason
-// popover editors, and the footer's Σ↔x̄ toggle pills. Every one is a write path or the
-// chrome of one; the pills are display state the four-lane summary row cannot carry
-// separately. Nothing is stubbed: what is not built is not rendered.
+// **DATE / BATCH / SHIFT are read-only on a SAVED row.** The action's UPDATE branch does
+// not write `shift_id`, so a stored run cannot be moved between shifts through it — the
+// write would leave the run where it is and create an empty shift beside it. Refused by
+// name rather than typed and quietly mangled. All three stay typeable on a blank row.
+//
+// No row context menu, no delete, no Discard, no date-picker cell, no remark/reason
+// popover editors (both are plain text lanes here), no autocomplete on CUSTOMER / GRADE /
+// SHIFT (the live grid's `datalist` typeahead) and no Σ↔x̄ footer pills. Where a behaviour
+// is not built this file renders NOTHING rather than a control that looks alive and does
+// nothing.
 // ═════════════════════════════════════════════════════════════════════════════════
 
 /** Row height, and the module measures nothing — the live grid's 28px. */
@@ -102,9 +140,35 @@ interface DailyRow extends LedgerRow {
 interface DailyCtx {
     /** Reserved for a future density switch; present so `Ctx` is never `unknown`. */
     readonly dense: boolean;
+    /**
+     * The grid-wide edit gate. Every editable column ANDs its own rule with this, so
+     * "nothing in this sheet can be typed into" stays ONE fact in ONE place.
+     *
+     * It is `true` for everyone today, and that is not an oversight: this sheet carries no
+     * ₱ column, so `canViewPrices` — the project's one price boundary — has nothing to say
+     * about it, and the live ledger gates nobody either. The field exists so a future gate
+     * has exactly one place to land.
+     */
+    readonly canEdit: boolean;
+    /** What a bare `8/21` means when the ROW itself cannot say. */
+    readonly fallbackYear: number;
+    /** What a blank row starts with — said out loud in the strip above the sheet. */
+    readonly draftDefaults: DraftDefaults;
 }
 
-const CTX: DailyCtx = { dense: true };
+/**
+ * What a bare `8/21` means in THIS cell — the row's own year, because an operator
+ * correcting a June shift means June's year. A blank row has no year of its own and falls
+ * through to the sheet's.
+ */
+function envOf(ctx: DailyCtx, cell?: CellContext<DailyRow>): DailyFieldEnv {
+    const stored = cell?.row?.date;
+    if (stored) {
+        const y = Number(stored.slice(0, 4));
+        if (Number.isFinite(y) && y > 1900) return { contextYear: y };
+    }
+    return { contextYear: ctx.fallbackYear };
+}
 
 // ═══ Formatters — the live grid's own, so the two sides read identically ════════
 
@@ -126,9 +190,36 @@ function Centre({ children }: { children: React.ReactNode }) {
 /** The live grid's `↑` — "this row's identity is the row above". */
 const CARRY = <span className="block w-full text-center font-mono text-[10px] text-muted-foreground/40">↑</span>;
 
+// ═══ The commit verdict ═════════════════════════════════════════════════════════
+
+/** A verdict that refuses nothing. The module reads only `ok`; the patch is never used. */
+const PARSE_OK: ColumnParseResult = { ok: true, patch: {} };
+
+/**
+ * The four seams every editable column shares.
+ *
+ * `parse` IS `parseDailyField` — the same function the SAVE runs — so a value typed and
+ * the same value refused at save can never disagree, because there is only one of them.
+ * A BLANK cell commits without complaint: what a blank MEANS is a ROW-level question
+ * (`buildDailySavePlan` refuses a run with no GRADE), and refusing it at commit would put
+ * a persistent toast on screen every time somebody clears a cell they are about to retype.
+ */
+function editSeams(field: DailyField): Partial<ColumnSpec<DailyRow, DailyCtx>> {
+    return {
+        editable: (_row, ctx) => ctx.canEdit,
+        parse: (text, ctx, cell): ColumnParseResult => {
+            if (text.trim() === '') return PARSE_OK;
+            const verdict = parseDailyField(field, text, envOf(ctx, cell));
+            return verdict.ok ? PARSE_OK : verdict;
+        },
+        normalize: (text, ctx, cell) => normalizeDailyField(field, text, envOf(ctx, cell)),
+        cleanPasted: (raw, ctx) => cleanPastedDailyCell(field, raw, { contextYear: ctx.fallbackYear }),
+    };
+}
+
 /** A waste / downtime figure lane: same formatter, same blank-on-zero rule, ten times. */
 function numberCol(
-    key: string,
+    key: DailyField,
     label: string,
     field: keyof LedgerRow,
     width: number,
@@ -153,12 +244,13 @@ function numberCol(
         },
         clipboardValue: (r) => String(r[field] ?? ''),
         format: (r) => formatKg(String(r[field] ?? ''), opts.decimals ?? 0),
+        ...editSeams(key),
     };
 }
 
 /** The same lane, but showing the stored text verbatim — see DT HRS / DT MIN below. */
 function rawNumberCol(
-    key: string,
+    key: DailyField,
     label: string,
     field: keyof LedgerRow,
     width: number,
@@ -212,6 +304,10 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         sortable: false,
         clipboardValue: (r) => r.date,
         format: (r) => (r._isPrimary ? <Centre><span className="font-mono">{r.date}</span></Centre> : CARRY),
+        // Typeable on a BLANK row only — the row families are what say so. The seams are
+        // declared here because the column half of the verdict has to exist for the draft
+        // family's `editable: true` to mean anything at all.
+        ...editSeams('date'),
     },
     {
         key: 'batch',
@@ -227,6 +323,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
             ) : (
                 CARRY
             ),
+        ...editSeams('batch'),
     },
     {
         key: 'shift_code',
@@ -250,6 +347,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
             ) : (
                 CARRY
             ),
+        ...editSeams('shift_code'),
     },
     {
         key: 'customer',
@@ -266,6 +364,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         format: (r) => (
             <Centre><span className="font-mono font-semibold uppercase">{r.customer}</span></Centre>
         ),
+        ...editSeams('customer'),
     },
     {
         key: 'grade',
@@ -281,6 +380,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         format: (r) => (
             <Centre><span className="font-mono font-semibold uppercase">{r.grade}</span></Centre>
         ),
+        ...editSeams('grade'),
     },
     {
         key: 'ttl_kg',
@@ -298,6 +398,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         },
         clipboardValue: (r) => r.ttl_kg,
         format: (r) => <span className="font-semibold">{formatKg(r.ttl_kg)}</span>,
+        ...editSeams('ttl_kg'),
     },
     {
         key: 'run_remarks',
@@ -308,15 +409,17 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
         align: 'left',
         cellKind: 'text',
         clipboardValue: (r) => r.run_remarks,
-        // The live grid hides this behind a message icon and a popover. A popover is an
-        // editor, so the 200px lane shows the remark ITSELF, truncated, with the full text
-        // on the browser's own tooltip. Nothing is hidden — only uneditable.
+        // The live grid hides this behind a message icon and a popover. A popover editor is
+        // a separate affordance this pass has not built, so the 200px lane shows the remark
+        // ITSELF, truncated, with the full text on the browser's own tooltip — and it is
+        // typed in place like every other text cell.
         format: (r) =>
             r.run_remarks ? (
                 <span title={r.run_remarks} className="block w-full truncate">
                     {r.run_remarks}
                 </span>
             ) : null,
+        ...editSeams('run_remarks'),
     },
 
     // ── Downtime ────────────────────────────────────────────────────────────────
@@ -386,6 +489,7 @@ const COLUMNS: ColumnSpec<DailyRow, DailyCtx>[] = [
                     {r.dt_reason}
                 </span>
             ) : null,
+        ...editSeams('dt_reason'),
     },
 
     // ── Waste ───────────────────────────────────────────────────────────────────
@@ -476,32 +580,34 @@ const COMPUTED = new Set(['dt_ttl', 'prod_hrs', 'prod_loss', 'ttl_waste']);
 /** The identity lanes a secondary row shows as `↑`. */
 const IDENTITY = new Set(['date', 'batch', 'shift_code']);
 
-const EDITABLE_FIELDS = new Set([
-    'date',
-    'batch',
-    'shift_code',
-    'customer',
-    'grade',
-    'ttl_kg',
-    'run_remarks',
-    'dt_hrs',
-    'dt_mins',
-    'dt_reason',
-    'rs1a',
-    'rs1b',
-    'bf',
-    'rs23',
-    'rs5',
-    'trml1',
-    'trml2',
-    'grit',
-]);
-
 /** A Set, not an array: `occupies()` is asked once per column per rendered row. */
 const COLUMN_KEYS = new Set(COLUMNS.map((c) => c.key));
 
-function slotFor(colKey: string, primary: boolean): CellSlot | null {
+/**
+ * THE per-cell answer, for all three families.
+ *
+ * Three questions, three answers, and the reason `CellSlot` has three members:
+ *
+ *   • **A secondary run row has NO CELL under downtime or waste** — not an empty one.
+ *     That is what the live grid's muted block means and it is what keeps the keyboard
+ *     from stopping there, a rectangle from totalling it and a paste from landing on it.
+ *   • **A computed lane RENDERS and the caret steps over it** (`addressable: false`).
+ *   • **DATE / BATCH / SHIFT are painted and NOT editable on a stored row.** The save
+ *     cannot move a run between shifts (see the header), so a cell that accepted the
+ *     typing would be a cell whose value is silently discarded. They stay fully typeable
+ *     on a BLANK row, where the insert path does set the shift.
+ */
+function slotFor(colKey: string, family: 'primary' | 'secondary' | 'draft'): CellSlot | null {
     if (!COLUMN_KEYS.has(colKey)) return null;
+
+    if (family === 'draft') {
+        // A row that exists nowhere has no ordinal and no computed metrics — returning a
+        // slot there would paint an empty cell the caret can sit in over nothing.
+        if (colKey === 'num' || COMPUTED.has(colKey)) return null;
+        return isDailyEditField(colKey) ? { field: colKey, editable: true } : null;
+    }
+
+    const primary = family === 'primary';
     // The row ordinal: content, no keyboard business.
     if (colKey === 'num') return { field: 'num', editable: false, addressable: false };
     // A secondary row has NO CELL at all under downtime / waste.
@@ -512,7 +618,13 @@ function slotFor(colKey: string, primary: boolean): CellSlot | null {
         // stands for belongs to the row above.
         return { field: colKey, editable: false, addressable: false };
     }
-    return { field: colKey, editable: EDITABLE_FIELDS.has(colKey) };
+    return {
+        field: colKey,
+        // `storedRowFieldIsEditable` is the ONE definition of "may a saved row be typed
+        // into here", shared with the save's own routing, so the cell and the payload
+        // cannot disagree about which lanes a stored run owns.
+        editable: isDailyEditField(colKey) && storedRowFieldIsEditable(colKey),
+    };
 }
 
 const KINDS: ReadonlyMap<string, RowKind<DailyRow>> = new Map<string, RowKind<DailyRow>>([
@@ -522,7 +634,7 @@ const KINDS: ReadonlyMap<string, RowKind<DailyRow>> = new Map<string, RowKind<Da
             kind: 'run-primary',
             height: ROW_H,
             addressable: true,
-            occupies: (colKey) => slotFor(colKey, true),
+            occupies: (colKey) => slotFor(colKey, 'primary'),
         },
     ],
     [
@@ -531,7 +643,16 @@ const KINDS: ReadonlyMap<string, RowKind<DailyRow>> = new Map<string, RowKind<Da
             kind: 'run-secondary',
             height: ROW_H,
             addressable: true,
-            occupies: (colKey) => slotFor(colKey, false),
+            occupies: (colKey) => slotFor(colKey, 'secondary'),
+        },
+    ],
+    [
+        'draft',
+        {
+            kind: 'draft',
+            height: ROW_H,
+            addressable: true,
+            occupies: (colKey) => slotFor(colKey, 'draft'),
         },
     ],
 ]);
@@ -539,10 +660,19 @@ const KINDS: ReadonlyMap<string, RowKind<DailyRow>> = new Map<string, RowKind<Da
 const ROW_RULES: Record<string, string> = {
     'run-primary': 'border-b border-b-border/30',
     'run-secondary': 'border-b border-b-border/20',
+    draft: 'border-b border-b-border/30',
 };
 
 // ═══ Stored text — the copy fallback and the jump keys' `filled` probe ══════════
 
+/**
+ * What a STORED cell holds, as text.
+ *
+ * The four computed lanes are answered here (they are derivations, not fields); everything
+ * else delegates to `savedFieldText` in the save model — the same function every payload
+ * reads for a field the operator did NOT touch, so "this edit is back to the stored value"
+ * and "this is what will be saved" are one answer.
+ */
 function fieldText(r: DailyRow, field: string): string {
     switch (field) {
         case 'num':
@@ -561,10 +691,8 @@ function fieldText(r: DailyRow, field: string): string {
             const w = deriveDailyMetrics(r).totalWaste;
             return w > 0 ? w.toFixed(2) : '';
         }
-        default: {
-            const v = (r as unknown as Record<string, unknown>)[field];
-            return v === null || v === undefined ? '' : String(v);
-        }
+        default:
+            return savedFieldText(r, field);
     }
 }
 
@@ -637,7 +765,17 @@ export interface DailyGridV2Props {
     initialRuns: ProductionRunRow[];
     initialDowntime: ProductionDowntimeRow[];
     initialWaste: ProductionWasteRow[];
-    /** Accepted for prop parity with the live ledger. Nothing here can save, so nothing calls it. */
+    /**
+     * Re-fetch the tab's data after a successful save.
+     *
+     * **OPTIONAL here and REQUIRED in practice.** This tab's rows are fetched on the
+     * CLIENT (`daily-lazy-tab.tsx` calls `fetchDailyTabData` in an effect and passes the
+     * result down), so `router.refresh()` cannot reach them — this callback is the only
+     * door. `daily-view.tsx` passes it to the live ledger and does not yet pass it here;
+     * until it does, a save lands in the database and the sheet keeps showing the values it
+     * had, which the success toast says out loud. It is declared optional because this
+     * pass may not edit that file.
+     */
     onSaveSuccess?: () => void;
 }
 
@@ -646,21 +784,19 @@ export function DailyGridV2({
     initialRuns,
     initialDowntime,
     initialWaste,
+    onSaveSuccess,
 }: DailyGridV2Props) {
     // No status-bar wiring, and no local selection count.
     //
     // This grid used to hold `selectionCount`, push it into the shared status bar on a
     // 50ms timer, and push `setCellAggregates(null)` beside it — because the module
     // computed SUM/AVERAGE/COUNT/MIN/MAX over the selected rectangle and then discarded
-    // them, and a consumer CANNOT recompute them: the range is in nav-row coordinates
-    // resolved inside `useTableRows`, so totalling it against `items` would be a second
-    // definition of the row axis. So the honest thing was a cell COUNT and an explicit
-    // `null` where the live grid shows a total.
-    //
-    // `BlackwoodTable` now publishes the real aggregates to the status bar ITSELF, through
-    // an optional provider. Every line of that workaround is deleted rather than left to
-    // race the table for the same slot — two writers to one pill is a flicker, and the one
-    // that wins is whichever effect happens to run last.
+    // them. `BlackwoodTable` now publishes the real aggregates to the status bar ITSELF,
+    // through an optional provider, so every line of that workaround is deleted rather
+    // than left to race the table for the same slot.
+
+    const router = useRouter();
+    const [isPending, startTransition] = React.useTransition();
 
     const [settings, setSettings] = React.useState<TableSettings>({});
     const [state, setState] = React.useState<TableState>({
@@ -682,6 +818,21 @@ export function DailyGridV2({
         [initialShifts, initialRuns, initialDowntime, initialWaste, dateSortDir],
     );
 
+    /**
+     * `production_downtime.shift_hrs`, by shift.
+     *
+     * The one column a downtime save MUST carry and this sheet does not display: it is NOT
+     * NULL, the action gates the whole downtime write on it, and no stored row holds the 8
+     * the PROD HRS lane assumes (measured: 158 rows say 9, 72 say 12). It never comes from
+     * `buildGridRows`, which drops it — so it is read straight off the fetched rows and
+     * ridden back out unchanged.
+     */
+    const shiftHrsByShiftId = React.useMemo(() => {
+        const m = new Map<string, number>();
+        for (const d of initialDowntime) m.set(d.shift_id, d.shift_hrs);
+        return m;
+    }, [initialDowntime]);
+
     const distinct = React.useMemo(() => {
         const shifts = new Set<string>();
         const customers = new Set<string>();
@@ -702,12 +853,50 @@ export function DailyGridV2({
     }, [ledgerRows]);
 
     /**
+     * What a blank row starts with — the live grid's `createEmptyRow`, field for field,
+     * except the BATCH.
+     *
+     * `createEmptyRow` leaves the batch blank and the operator types it. Here it is
+     * seeded from the data, but **only when every row on the sheet agrees on one batch**
+     * — which is the normal case, since the module's period picker filters by batch. When
+     * the sheet spans two, no batch is guessed: a run booked against the wrong batch is
+     * exactly the kind of silent wrong this migration exists not to introduce. Whatever
+     * the answer is, the strip above the sheet says it out loud.
+     */
+    const draftDefaults = React.useMemo<DraftDefaults>(() => {
+        const batches = new Set(ledgerRows.map((r) => r.batch).filter(Boolean));
+        return {
+            date: new Date().toISOString().split('T')[0],
+            batch: batches.size === 1 ? [...batches][0] : '',
+            shift: 'M',
+            customer: DEFAULT_CUSTOMER,
+        };
+    }, [ledgerRows]);
+
+    /** The year a bare `8/21` means when the row itself cannot say — the newest in view. */
+    const fallbackYear = React.useMemo(() => {
+        for (let i = ledgerRows.length - 1; i >= 0; i -= 1) {
+            const y = Number((ledgerRows[i].date ?? '').slice(0, 4));
+            if (Number.isFinite(y) && y > 1900) return y;
+        }
+        return new Date().getFullYear();
+    }, [ledgerRows]);
+
+    // `ctx` MUST be referentially stable — it is a dependency of the column resolution, of
+    // every editability verdict and of every cell's `format`.
+    const ctx = React.useMemo<DailyCtx>(
+        () => ({ dense: true, canEdit: true, fallbackYear, draftDefaults }),
+        [fallbackYear, draftDefaults],
+    );
+
+    /**
      * The visible rows, and the ordinal they carry.
      *
      * The live grid keeps hidden rows in the array with `display:none` so its cell
-     * selection, paste and context-menu INDICES stay aligned with the full array. There is
-     * no save, no paste target and no row menu here, so a hidden row is simply absent —
-     * which is also what keeps the coordinate space free of holes the caret would fall in.
+     * selection, paste and context-menu INDICES stay aligned with the full array. Here a
+     * hidden row is simply absent — the coordinate space has no holes for the caret to
+     * fall into, and every row is addressed by ID rather than by index, so a filter can
+     * never re-point one row's unsaved text at another.
      */
     const rows = React.useMemo<DailyRow[]>(() => {
         const out: DailyRow[] = [];
@@ -722,37 +911,188 @@ export function DailyGridV2({
         return out;
     }, [ledgerRows, shiftFilter, customerFilter, gradeFilter]);
 
+    /**
+     * A row's id, and it must be STABLE under filtering and re-sorting.
+     *
+     * It used to fall back to `${_shiftKey}#${index}` — fine for a read-only sheet, a
+     * hazard the moment the id is what unsaved text is filed under, because a filter would
+     * re-point one row's typing at another. A run has its `run_id`; the only rows without
+     * one are the placeholder rows `buildGridRows` emits for a shift that has no runs at
+     * all, and there is exactly one of those per shift.
+     */
     const rowIdOf = React.useCallback(
-        (r: DailyRow, index: number): string => r._ids.run_id ?? `${r._shiftKey}#${index}`,
+        (r: LedgerRow): string => r._ids.run_id ?? `${r._shiftKey}#norun`,
         [],
     );
 
     const byId = React.useMemo(() => {
         const m = new Map<string, DailyRow>();
-        rows.forEach((r, i) => m.set(rowIdOf(r, i), r));
+        for (const r of rows) m.set(rowIdOf(r), r);
         return m;
     }, [rows, rowIdOf]);
 
-    const items = React.useMemo<GridRow<DailyRow>[]>(
-        () =>
-            rows.map((r, i) => ({
-                kind: r._isPrimary ? 'run-primary' : 'run-secondary',
-                id: rowIdOf(r, i),
-                data: r,
-            })),
-        [rows, rowIdOf],
-    );
+    // ── The blank-row pool ───────────────────────────────────────────────────────
+    const [draftIds, setDraftIds] = React.useState<string[]>(() => makeDraftIds(DEFAULT_DRAFT_ROWS));
 
+    const items = React.useMemo<GridRow<DailyRow>[]>(() => {
+        const out: GridRow<DailyRow>[] = rows.map((r) => ({
+            kind: r._isPrimary ? 'run-primary' : 'run-secondary',
+            id: rowIdOf(r),
+            data: r,
+        }));
+        // The blank rows sit at the very bottom, below the last shift — they belong to no
+        // day until the operator gives one a date.
+        for (const id of draftIds) out.push({ kind: 'draft', id });
+        return out;
+    }, [rows, rowIdOf, draftIds]);
+
+    /**
+     * What a cell HOLDS as text — the editor's opening value, the jump keys' `filled`
+     * probe, and the value an edit must return to in order to stop counting as unsaved.
+     *
+     * A BLANK ROW carries the four seeded defaults, which is what makes typing one of them
+     * by hand a NON-edit instead of a row that can never be made clean again.
+     */
     const storedText = React.useCallback(
         (rowId: string, field: string): string => {
+            if (isDraftKey(rowId)) return draftFieldText(field, draftDefaults);
             const r = byId.get(rowId);
             return r ? fieldText(r, field) : '';
         },
-        [byId],
+        [byId, draftDefaults],
     );
 
-    const isDraft = React.useCallback(() => false, []);
-    const edits = useTableEdits({ canonicalText: storedText, isDraft });
+    // THE single journalled writer. Every mutation in this grid — an inline commit, a
+    // Delete, a paste, an Escape revert, undo and redo — goes through `edits.applyEdits`.
+    const edits = useTableEdits({ canonicalText: storedText, isDraft: isDraftKey });
+
+    const onAddDrafts = React.useCallback((count: number) => {
+        // The ids are returned SYNCHRONOUSLY: a paste that runs past the last blank row
+        // needs them inside the same gesture, and they ride on the journal step so one
+        // Ctrl+Z takes back the paste AND the rows it grew.
+        const ids = makeDraftIds(count);
+        setDraftIds((prev) => [...prev, ...ids]);
+        return ids;
+    }, []);
+
+    const onRemoveDrafts = React.useCallback((ids: readonly string[]) => {
+        const gone = new Set(ids);
+        setDraftIds((prev) => prev.filter((id) => !gone.has(id)));
+    }, []);
+
+    const onRestoreDrafts = React.useCallback((ids: readonly string[]) => {
+        setDraftIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+    }, []);
+
+    // ── Unsaved work, counted the way it will be SAVED ───────────────────────────
+    const routeInput = React.useMemo<RouteDailyInput>(
+        () => ({
+            edits: edits.edits,
+            dirtyRecords: edits.dirtyRecords,
+            dirtyDrafts: edits.dirtyDrafts,
+            draftIds,
+            rowsById: byId,
+            defaults: draftDefaults,
+        }),
+        [edits.edits, edits.dirtyRecords, edits.dirtyDrafts, draftIds, byId, draftDefaults],
+    );
+
+    const unsaved = React.useMemo(() => countDailyUnsaved(routeInput), [routeInput]);
+    const [saving, setSaving] = React.useState(false);
+    const busy = saving || isPending;
+
+    // ── COMMIT ───────────────────────────────────────────────────────────────────
+    //
+    // **What the action actually returns, so nothing here pretends otherwise:**
+    // `saveBulkDailyLedger` answers with ONE `{ ok }` for the whole batch, never a verdict
+    // per row — and it is NOT transactional. It walks its shift groups with a sequential
+    // await and returns on the first failure, so the groups before it ARE written. The
+    // refusal therefore says "reload to see what landed" rather than RC IN's "nothing was
+    // written", which would be false here.
+    const commit = React.useCallback(
+        async (plan: DailySavePlan) => {
+            setSaving(true);
+            try {
+                const res = await saveBulkDailyLedger(plan.payload);
+                if (!res.ok) {
+                    errorToast(dailySaveFailureMessage(plan.counts, res.error));
+                    return;
+                }
+
+                // Every row whose typing is settled — including the rows whose downtime or
+                // waste text rode into another row's payload block. Forgetting the carrier
+                // alone would leave their cells lit forever over values that are stored.
+                edits.forget([...plan.savedRowIds, ...plan.savedDraftIds]);
+
+                if (plan.savedDraftIds.length > 0) {
+                    // The drafts became runs: drop their blank rows, then top the pool back
+                    // up so the run of blanks stays the same length (Sheets never shrinks
+                    // it either).
+                    const consumed = new Set(plan.savedDraftIds);
+                    setDraftIds((prev) => [
+                        ...prev.filter((id) => !consumed.has(id)),
+                        ...makeDraftIds(plan.savedDraftIds.length),
+                    ]);
+                }
+
+                toast.success(
+                    dailySaveSuccessMessage(plan.counts),
+                    onSaveSuccess
+                        ? undefined
+                        : {
+                              description:
+                                  'This preview was mounted without a refresh callback, so the rows on screen are still the pre-save ones. Reload the tab to see what is stored.',
+                          },
+                );
+                onSaveSuccess?.();
+                // This tab's data is fetched on the CLIENT, so this reaches the server
+                // components around the sheet and not the sheet itself — the callback above
+                // is the door that matters.
+                startTransition(() => router.refresh());
+            } catch (err) {
+                errorToast(`Unexpected error while saving: ${err instanceof Error ? err.message : String(err)}`);
+            } finally {
+                setSaving(false);
+            }
+        },
+        [edits, onSaveSuccess, router],
+    );
+
+    // ── SAVE ─────────────────────────────────────────────────────────────────────
+    //
+    // One rule above everything: **nothing is written unless every dirty row builds a
+    // legal payload.** A batch that posted the good rows and reported the rest would leave
+    // the sheet half-saved with the refusals still on screen.
+    const handleSave = React.useCallback(() => {
+        if (unsaved.total === 0 || busy) return;
+
+        const plan = buildDailySavePlan({
+            ...routeInput,
+            rows,
+            shiftHrsByShiftId,
+            env: { contextYear: fallbackYear },
+        });
+
+        if (plan.problems.length > 0) {
+            errorToast(
+                `${plan.problems.length} change${plan.problems.length === 1 ? '' : 's'} could not be saved — nothing was written.`,
+                { description: plan.problems.join('\n') },
+            );
+            return;
+        }
+
+        if (plan.payload.length === 0) {
+            // Everything typed merged back to what is stored. Nothing to post, and the
+            // rows are settled — so their text is forgotten rather than left lit.
+            if (plan.savedRowIds.length > 0 || plan.savedDraftIds.length > 0) {
+                edits.forget([...plan.savedRowIds, ...plan.savedDraftIds]);
+            }
+            toast.info('Nothing to save — every edit is back to the stored value.');
+            return;
+        }
+
+        void commit(plan);
+    }, [unsaved.total, busy, routeInput, rows, shiftHrsByShiftId, fallbackYear, edits, commit]);
 
     // ── Footer totals ───────────────────────────────────────────────────────────
     // The live grid's four aggregates, over the same eligible sets: TTL KG sums every
@@ -786,7 +1126,7 @@ export function DailyGridV2({
      * · TTL WASTE). `TableSummaryRow` offers `label | figure | note | total`, so DT TTL
      * takes `figure` and TTL WASTE takes `total` — both land under their own column — while
      * TTL KG rides in the pinned `label` lane and PROD HRS at the head of the `note` lane,
-     * each NAMED so no figure is ambiguous. The seam this wants is in the report.
+     * each NAMED so no figure is ambiguous.
      *
      * `figure` on DT TTL rather than on TTL KG is not cosmetic: `summarySpans`' sticky form
      * is `frozen + spacer + weight + note + total + trailing`, and a figure lane INSIDE the
@@ -833,13 +1173,17 @@ export function DailyGridV2({
         [totals],
     );
 
-    const rowClassFor = React.useCallback(
-        (item: GridRow<DailyRow>): string | undefined =>
-            item.kind === 'run-secondary'
-                ? 'group bg-muted/20 transition-colors duration-150 hover:bg-muted/40'
-                : 'group transition-colors duration-150 hover:bg-muted/50',
-        [],
-    );
+    const rowClassFor = React.useCallback((item: GridRow<DailyRow>): string | undefined => {
+        if (item.kind === 'run-secondary') {
+            return 'group bg-muted/20 transition-colors duration-150 hover:bg-muted/40';
+        }
+        // A blank row reads as a blank row, so the end of the ledger is visible without a
+        // heading announcing it.
+        if (item.kind === 'draft') {
+            return 'group bg-muted/10 transition-colors duration-150 hover:bg-muted/30';
+        }
+        return 'group transition-colors duration-150 hover:bg-muted/50';
+    }, []);
 
     /**
      * The header's own chrome. Must be referentially stable — it is a dependency of every
@@ -904,6 +1248,9 @@ export function DailyGridV2({
 
     return (
         <div className="flex min-h-0 flex-col">
+            {/* A solid token, not glass: this strip is a `shrink-0` flex child, not a
+                sticky surface, and a `backdrop-filter` over an opaque page paints nothing
+                while still costing a compositor layer. */}
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-muted/20 px-2 py-1 text-[10px] text-muted-foreground">
                 <span className="uppercase tracking-wide">
                     {totals.shiftCount} shift{totals.shiftCount !== 1 ? 's' : ''} · {totals.runs} run
@@ -912,29 +1259,88 @@ export function DailyGridV2({
                 <span className="font-mono">
                     {state.activeCell ? `r${state.activeCell.row + 1}·c${state.activeCell.col + 1}` : '—'}
                 </span>
-                <span className="ml-auto">
-                    Read-only preview — selection, the right-click menu, the selection summary and column
-                    resize are live. The <strong className="font-semibold">Current</strong> switch above
-                    returns to the editable ledger.
+                <span>
+                    Typing, saving and new rows are live. DATE · BATCH · SHIFT can only be set on a
+                    blank row — this ledger&apos;s save cannot move a saved run to another shift. Grades
+                    it accepts: {SAVEABLE_GRADES.join(' · ')}. The row menu, delete and the
+                    remark popovers are not built yet.
                 </span>
+
+                {/* The blank rows' seeded values, SAID OUT LOUD. A `format` runs against the
+                    stored row and a blank row has none, so a muted per-row default has
+                    nowhere to render — and a value nobody typed must not reach the ledger
+                    unseen. */}
+                <span className="font-mono">
+                    · new rows start{' '}
+                    <span className="font-bold">{draftDefaults.date}</span> ·{' '}
+                    <span className="font-bold">{draftDefaults.batch || 'no batch — type one'}</span> ·{' '}
+                    <span className="font-bold">{draftDefaults.shift}</span> ·{' '}
+                    <span className="font-bold">{draftDefaults.customer}</span>
+                </span>
+
+                {/* The refresh gap, said BEFORE the save rather than after it. This tab's
+                    rows are fetched on the client, so without the callback a save lands in
+                    the database and the sheet keeps showing the values it had — which looks
+                    exactly like a save that did nothing. One line in `daily-view.tsx`
+                    (`onSaveSuccess={onRefresh}`) closes it; that file is not this pass's. */}
+                {!onSaveSuccess ? (
+                    <span className="rounded-sm border border-amber-500/40 px-1 text-amber-700 dark:text-amber-400">
+                        saves land, but this view cannot refetch — reload after saving
+                    </span>
+                ) : null}
+
+                <div className="ml-auto flex items-center gap-2" data-grid-chrome>
+                    {unsaved.total > 0 ? (
+                        <span className="animate-fade-in rounded-sm border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-400">
+                            {describeDailyUnsaved(unsaved)} unsaved
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        data-testid="save-production-daily"
+                        onClick={handleSave}
+                        disabled={unsaved.total === 0 || busy}
+                        className={cn(
+                            'inline-flex h-6 items-center gap-1 rounded border px-2 font-medium transition-colors duration-150',
+                            unsaved.total > 0 && !busy
+                                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                                : 'border-input text-muted-foreground',
+                            (unsaved.total === 0 || busy) && 'cursor-not-allowed opacity-60',
+                        )}
+                    >
+                        {busy ? (
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                        ) : (
+                            <Save className="size-3" aria-hidden="true" />
+                        )}
+                        {busy ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
             </div>
 
             <BlackwoodTable<DailyRow, DailyCtx>
                 items={items}
                 kinds={KINDS}
                 specs={COLUMNS}
-                ctx={CTX}
+                ctx={ctx}
                 settings={settings}
                 onSettingsChange={setSettings}
                 edits={edits}
                 storedText={storedText}
                 scope="focus"
+                draftKind="draft"
+                // The blank-row pool and its `Add N more rows` control. `enabled` is also
+                // what lets a paste taller than the sheet GROW into new rows.
+                drafts={{ enabled: ctx.canEdit, defaultCount: DEFAULT_DRAFT_ROWS }}
+                onAddDrafts={onAddDrafts}
+                onRemoveDrafts={onRemoveDrafts}
+                onRestoreDrafts={onRestoreDrafts}
                 rowRules={ROW_RULES}
                 rowClassFor={rowClassFor}
                 renderHeaderSlot={renderHeaderSlot}
                 summaryRows={summaryRows}
                 onStateChange={setState}
-                emptyMessage="Awaiting Production Manager sync — no shifts for this period."
+                emptyMessage={`Awaiting Production Manager sync — no shifts for this period. Shifts are ${SHIFT_CODES.join(' / ')}.`}
                 className={GRID_HEIGHT}
             />
         </div>

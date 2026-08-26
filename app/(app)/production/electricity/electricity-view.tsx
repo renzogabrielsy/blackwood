@@ -15,11 +15,15 @@ interface ElectricityViewProps {
     month: number | null;
     onRefresh: () => Promise<void>;
     /**
-     * `?grid=v2` — render the READ-ONLY Blackwood Table rewire instead of the live grid.
-     * Desktop only: the phone card list below is untouched on both sides.
-     * See `app/(app)/production/(tabs)/page.tsx`.
+     * `?grid=` — render the Blackwood Table rewire (**this tab's default since
+     * 2026-08-26**) instead of the Classic grid, which stays reachable at `?grid=v1`.
+     *
+     * REQUIRED: the server page states the default once and threads the answer down
+     * (see `app/(app)/production/(tabs)/page.tsx`).
+     *
+     * DESKTOP ONLY: the phone card list below renders identically on both sides.
      */
-    v2?: boolean;
+    v2: boolean;
 }
 
 const MONTH_NAMES = [
@@ -35,7 +39,7 @@ function describeScope(year: number | null, month: number | null): string {
     return `${MONTH_NAMES[month]} ${year}`;
 }
 
-export function ElectricityView({ readings, year, month, onRefresh, v2 = false }: ElectricityViewProps) {
+export function ElectricityView({ readings, year, month, onRefresh, v2 }: ElectricityViewProps) {
     return (
         <div className="flex flex-col gap-0 min-h-0">
             <div className="flex-none flex items-center gap-2 px-2 py-1 border-b bg-muted/20">
@@ -48,7 +52,16 @@ export function ElectricityView({ readings, year, month, onRefresh, v2 = false }
             {/* Tablet / desktop — the dense inline-editable grid (unchanged). */}
             <div className="hidden sm:block">
                 {v2 ? (
-                    <ElectricityGridV2 initialData={readings} />
+                    // `onSaveSuccess` is load-bearing, not polish: this tab holds its rows
+                    // in CLIENT state (the lazy tab's useState), so `router.refresh()`
+                    // cannot bring a saved row back — the host's `onRefresh` is the only
+                    // path. Without it a save succeeds, the toast says so, and the sheet
+                    // keeps showing the pre-save values, which reads as a lost save.
+                    <ElectricityGridV2
+                        initialData={readings}
+                        onSaveSuccess={onRefresh}
+                        periodYear={year}
+                    />
                 ) : (
                     <ElectricityGrid
                         initialData={readings}

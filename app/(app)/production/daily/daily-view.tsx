@@ -22,12 +22,17 @@ interface DailyViewProps {
     loading: boolean;
     onRefresh: () => Promise<void>;
     /**
-     * `?grid=v2` — render the READ-ONLY Blackwood Table rewire instead of the live ledger.
+     * `?grid=` — render the Blackwood Table rewire (**this tab's default since
+     * 2026-08-26**) instead of the Classic ledger, which stays reachable at `?grid=v1`.
+     *
+     * REQUIRED: the server page states the default once, in the one expression that reads
+     * the param, and threads the answer down (see `app/(app)/production/(tabs)/page.tsx`).
+     *
      * The switch lives here rather than in the lazy tab so the phone card list below is
-     * untouched by it: v2 is the desktop grid only, and `DailyCardsMobile` keeps serving
-     * the phone on both sides. See `app/(app)/production/(tabs)/page.tsx`.
+     * untouched by it: this flag is the DESKTOP grid only, and `DailyCardsMobile` keeps
+     * serving the phone identically on both sides.
      */
-    v2?: boolean;
+    v2: boolean;
 }
 
 export function DailyView({
@@ -38,7 +43,7 @@ export function DailyView({
     dataYear,
     dataBatch,
     onRefresh,
-    v2 = false,
+    v2,
 }: DailyViewProps) {
     return (
         <div className="flex flex-col gap-0 min-h-0 flex-1">
@@ -56,6 +61,12 @@ export function DailyView({
                             initialRuns={runs}
                             initialDowntime={downtime}
                             initialWaste={waste}
+                            // Load-bearing, not polish: this tab's rows are CLIENT state
+                            // (the lazy tab's fetch), so `router.refresh()` cannot bring a
+                            // saved row back — the host's `onRefresh` is the only path.
+                            // Without it a save lands but the sheet keeps its pre-save
+                            // values, which reads as a lost save.
+                            onSaveSuccess={onRefresh}
                         />
                     ) : (
                         <DailyLedgerGrid

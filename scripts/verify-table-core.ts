@@ -2309,6 +2309,7 @@ check('the toggle reads the page default and never hard-codes a version', () => 
 const FLIPPED_PAGES = [
   join('app', '(app)', 'inventory', 'page.tsx'), // RC IN / RC OUT, 2026-08-21
   join('app', '(app)', 'cenapro', 'qc', 'page.tsx'), // QC ledger, 2026-08-21
+  join('app', '(app)', 'production', '(tabs)', 'page.tsx'), // Daily · Electricity · Trucks, 2026-08-26
 ]
 
 check('a flipped page states its default ONCE, and only the registered ones are flipped', () => {
@@ -2355,6 +2356,57 @@ check('a flipped page states its default ONCE, and only the registered ones are 
       !/resolveGrid\([^)]*GRID_V2\s*\)/.test(other),
       `${p} resolves its default to v2 — an unflipped screen defaults to the live table`,
     )
+  }
+})
+
+check('the production tabs read the flag ONCE and thread it as a REQUIRED prop', () => {
+  // The first flipped screen whose grids are not reachable from its server page.
+  //
+  // Daily · Electricity · Trucks are client tabs of ONE page — the operator moves between
+  // them with localStorage and no navigation — so the flag is read in `(tabs)/page.tsx`
+  // and handed down through six files. On a v1-default screen a `v2 = false` fallback in
+  // any of them was harmless (it agreed with the page). After the flip it does not, and it
+  // is invisible: the prop is threaded correctly today, so a fallback would only ever fire
+  // the day someone forgot it — which is exactly when the tab would silently serve Classic
+  // while the toggle above it said "Table (new)".
+  //
+  // So the rule is structural: the DEFAULT is stated in the page and the prop is required
+  // everywhere below it. TypeScript enforces the threading; this pins the shape, because
+  // re-adding `= false` type-checks perfectly.
+  const PROD = join(ROOT, 'app', '(app)', 'production')
+  const page = readFileSync(join(PROD, '(tabs)', 'page.tsx'), 'utf8')
+  const pageCode = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(pageCode.includes('export default async function'), 'comment-stripping ate the page')
+
+  // ONE read of the param, for all three tabs. Two reads is how one tab ends up on the
+  // other side of the toggle from its siblings while the URL says one thing.
+  assert.equal(
+    (pageCode.match(/resolveGrid\(/g) ?? []).length,
+    1,
+    'the production page must read `?grid=` exactly once',
+  )
+  assert.ok(!pageCode.includes('parseGrid'), 'the flipped page resolves, it does not parse')
+
+  const THREADED = [
+    join('components', 'production-view.tsx'),
+    join('components', 'daily-lazy-tab.tsx'),
+    join('components', 'electricity-lazy-tab.tsx'),
+    join('components', 'trucks-lazy-tab.tsx'),
+    join('daily', 'daily-view.tsx'),
+    join('electricity', 'electricity-view.tsx'),
+    join('trucks', 'trucks-view.tsx'),
+  ]
+  for (const rel of THREADED) {
+    const src = readFileSync(join(PROD, rel), 'utf8')
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    assert.match(code, /\bv2: boolean;/, `${rel} must declare v2 as REQUIRED`)
+    assert.ok(!/\bv2\?: boolean/.test(code), `${rel} makes v2 optional`)
+    assert.ok(!/\bv2 = (true|false)\b/.test(code), `${rel} restates the page's default`)
+    // …and none of them may go around the page and read the URL itself. That read is what
+    // the prop exists to avoid — it would need its own Suspense boundary here, and it
+    // would be a second place the default could be spelt.
+    assert.ok(!code.includes('useSearchParams'), `${rel} reads the URL directly`)
+    assert.ok(!/\b(parseGrid|resolveGrid|isGridV2)\b/.test(code), `${rel} re-reads the grid param`)
   }
 })
 

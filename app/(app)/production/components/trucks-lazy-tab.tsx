@@ -22,12 +22,16 @@ function periodKey(year: number | null, batch: string | null): string {
     return `${year ?? 'all'}|${batch ?? 'all'}`;
 }
 
-/** `?grid=v2` — passed straight through to the view, which owns the switch. */
+/**
+ * `?grid=` — passed straight through to the view, which owns the switch. REQUIRED: the
+ * page states this module's default once (see `app/(app)/production/(tabs)/page.tsx`),
+ * and a fallback here would be a second copy of it that could go stale unnoticed.
+ */
 export interface TrucksLazyTabProps {
-    v2?: boolean;
+    v2: boolean;
 }
 
-export function TrucksLazyTab({ v2 = false }: TrucksLazyTabProps) {
+export function TrucksLazyTab({ v2 }: TrucksLazyTabProps) {
     const { activeTab } = useProductionTab();
     const { year, batch, periodsLoading } = useProductionPeriod();
 

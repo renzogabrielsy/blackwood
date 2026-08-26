@@ -9,6 +9,7 @@
 - [Commit-message fidelity](commit_message_fidelity.md) — how much of a SUPPLIED message may change: the three decided cases and the misdescribes-contents test.
 - [Concurrent-session promotions](concurrent_session_promotions.md) — when ANOTHER session shares the tree: the exact-path staging override, and the worktree build gate untracked files defeat.
 - [Two deploy targets](deploy_targets.md) — pushing `main` deploys Vercel ONLY; `workers/sync/**` is inert until an explicit Fly `npm run deploy`.
+- [Table-migration branch shape](table_migration_branch_shape.md) — one `feat/<screen>-v2-default` per screen, but screens sharing a `page.tsx` share ONE branch; worktree branches are pushed un-checked-out.
 
 ## Role
 

@@ -14,13 +14,18 @@ interface TrucksViewProps {
     month: number | null;
     onRefresh: () => Promise<void>;
     /**
-     * `?grid=v2` — render the READ-ONLY Blackwood Table rewire instead of the live grid.
+     * `?grid=` — render the Blackwood Table rewire (**this tab's default since
+     * 2026-08-26**) instead of the Classic grid, which stays reachable at `?grid=v1`.
+     *
+     * REQUIRED: the server page states the default once and threads the answer down
+     * (see `app/(app)/production/(tabs)/page.tsx`).
+     *
      * DESKTOP ONLY, and that is the reason this switch is here: `TrucksGrid` carries its
-     * own `sm:hidden` phone summary inside itself, so on a phone the live component must
+     * own `sm:hidden` phone summary inside itself, so on a phone the Classic component must
      * keep rendering on BOTH sides — hence the `hidden sm:block` wrapper below the v2
-     * branch, and the live grid left whole. See `app/(app)/production/(tabs)/page.tsx`.
+     * branch, and the Classic grid left whole.
      */
-    v2?: boolean;
+    v2: boolean;
 }
 
 const MONTH_NAMES = [
@@ -36,7 +41,7 @@ function describeScope(year: number | null, month: number | null): string {
     return `${MONTH_NAMES[month]} ${year}`;
 }
 
-export function TrucksView({ readings, year, month, onRefresh, v2 = false }: TrucksViewProps) {
+export function TrucksView({ readings, year, month, onRefresh, v2 }: TrucksViewProps) {
     return (
         <div className="flex flex-col gap-0 min-h-0">
             <div className="flex-none flex items-center gap-2 px-2 py-1 border-b bg-muted/20">
@@ -49,7 +54,14 @@ export function TrucksView({ readings, year, month, onRefresh, v2 = false }: Tru
             {v2 ? (
                 <>
                     <div className="hidden sm:block">
-                        <TrucksGridV2 initialData={readings} />
+                        {/* `onSaveSuccess` is load-bearing, not polish: this tab holds its
+                            rows in CLIENT state, so `router.refresh()` cannot bring a saved
+                            row back — the host's `onRefresh` is the only path. */}
+                        <TrucksGridV2
+                            initialData={readings}
+                            onSaveSuccess={onRefresh}
+                            periodYear={year}
+                        />
                     </div>
                     {/* The phone summary lives INSIDE `TrucksGrid` (its `sm:hidden`
                         companion), and v2 is the desktop grid only — so on a phone the live
