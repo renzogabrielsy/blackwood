@@ -8,7 +8,7 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 ## Files
 | File | Role |
 |------|------|
-| `page.tsx` | Server entry point — renders `<ProductionView />`. **Also the ONE place `?grid=v2` is read** for all three tabs (`parseGrid` from `@/lib/table`), mounting `<GridVersionBar />` and threading `v2` down. See "The `?grid=v2` side-by-side" below. |
+| `page.tsx` | Server entry point — renders `<ProductionView />`. **Also the ONE place `?grid=` is read** for all three tabs (`resolveGrid(params.grid, GRID_V2)` from `@/lib/table`), mounting `<GridVersionBar defaultVersion={GRID_V2} />` and threading `v2` down. **These tabs DEFAULT to v2 since 2026-08-26**; Classic is `?grid=v1`. See "The `?grid=` side-by-side" below. |
 | `actions.ts` | **The human-edit latch, app side** (2026-08-03). `fetchHumanEditedProductionRows()` reads `view_production_human_edited` (every production fact a human currently owns, across all six tables). `releaseProductionRows({table, ids})` calls `fn_release_production_rows` — the ONLY sanctioned way to hand a row back to the sync, since the DB trigger re-stamps any ordinary write that tries to clear the stamp. Exports `ProductionFactTable`, `ReleaseResult`, `HumanEditedProductionRow`. No ₱ data anywhere in production, so no `canViewPrices()`. See "Human-edit latch" below. |
 | `daily/daily-cards-mobile.tsx` | **Phone read layer** for the Daily ledger (`sm:hidden`; desktop grid is `hidden sm:block`). Archetype C `MobileCardList` — one card per run row, fed the grid's OWN exported `buildGridRows()`; tap → section-grouped detail sheet (Identity / Production / Downtime / Waste). Read-only. |
 | `daily/ledger-derive.ts` | Pure helper `deriveDailyMetrics(row: GridRow)` — captures the grid's inline DT TTL / PROD HRS / PROD LOSS / TTL WASTE compute in ONE place so the mobile card shows identical derived values (never recomputed differently). |
@@ -25,47 +25,80 @@ Top-level route `/production` for charcoal plant operations data: daily producti
 | `components/production-period-context.tsx` | **Shared period context** — `year` / `batch` / `availablePeriods` / `periodsLoading` / `setPeriod`. Owns the universal period state for ALL 3 tabs, syncs URL `?y=&b=`, fetches `fetchAvailablePeriods()` once + resolves default. |
 | `components/period-picker.tsx` | The universal Year + Batch `<Select>` UI. Reads/writes the period context. **Never disabled** by any tab's loading state. |
 | `components/sheet-tabs.tsx` | Bottom tab bar with sliding indicator (Daily · Electricity · Trucks) |
-| `components/production-view.tsx` | Crossfade wrapper for 3 tabs (150ms opacity transition). Takes optional `v2` and passes it to each lazy tab. |
-| `components/daily-lazy-tab.tsx` | Lazy loader for Daily tab — consumes period context, refetches on activation-if-stale. Passes `v2` through to `DailyView`. |
-| `components/electricity-lazy-tab.tsx` | Lazy loader for Electricity tab — consumes period context, derives month via `batchToMonth()`. Passes `v2` through. |
-| `components/trucks-lazy-tab.tsx` | Lazy loader for Trucks tab — consumes period context, derives month via `batchToMonth()`. Passes `v2` through. |
-| `daily/daily-grid-v2.tsx` · `electricity/electricity-grid-v2.tsx` · `trucks/trucks-grid-v2.tsx` | **READ-ONLY Blackwood Table renderings** of the three sheets, reachable only at `?grid=v2`. Built beside the live grids, which are unchanged. See "The `?grid=v2` side-by-side" below. |
+| `components/production-view.tsx` | Crossfade wrapper for 3 tabs (150ms opacity transition). Takes **required** `v2` and passes it to each lazy tab. |
+| `components/daily-lazy-tab.tsx` | Lazy loader for Daily tab — consumes period context, refetches on activation-if-stale. Passes `v2` through to `DailyView` (**required**). |
+| `components/electricity-lazy-tab.tsx` | Lazy loader for Electricity tab — consumes period context, derives month via `batchToMonth()`. Passes `v2` through (**required**). |
+| `components/trucks-lazy-tab.tsx` | Lazy loader for Trucks tab — consumes period context, derives month via `batchToMonth()`. Passes `v2` through (**required**). |
+| `daily/daily-grid-v2.tsx` · `electricity/electricity-grid-v2.tsx` · `trucks/trucks-grid-v2.tsx` | **Blackwood Table renderings** of the three sheets — **the DEFAULT since 2026-08-26**. Built beside the Classic grids, which are unchanged and reachable at `?grid=v1`. See "The `?grid=` side-by-side" below. |
 | `lib/batch-month.ts` | `batchToMonth(batch)` — maps month-name batches (abbreviated + full forms) → 0-indexed month. Returns null for null/unrecognized. Used by Electricity/Trucks tabs to translate the shared batch into a date filter. |
 
 
-## The `?grid=v2` side-by-side (universal-table migration, 2026-08-18)
+## The `?grid=` side-by-side (universal-table migration, 2026-08-18 · **flipped 2026-08-26**)
 
-Each of the three tab sheets now has a **second, READ-ONLY rendering** built on the platform's
-Blackwood Table (`components/shared/table/` + `lib/table/`), sitting BESIDE the live grid and
-selected by one query param. The strangler-fig method from
-`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`: the live grids are
-**not edited by one character** and the whole rewire reverts by deleting three files.
+Each of the three tab sheets has a **second rendering** built on the platform's Blackwood Table
+(`components/shared/table/` + `lib/table/`), sitting BESIDE the Classic grid and selected by one
+query param. The strangler-fig method from
+`handoffs/2026-08-17-universal-table-phase-1-and-the-side-by-side-method.md`: the Classic grids are
+**not edited by one character**.
 
-| Live grid (unchanged) | v2 (read-only) |
+| Classic grid (unchanged) | v2 — the default |
 |---|---|
 | `daily/daily-ledger-grid.tsx` | `daily/daily-grid-v2.tsx` |
 | `electricity/electricity-grid.tsx` | `electricity/electricity-grid-v2.tsx` |
 | `trucks/trucks-grid.tsx` | `trucks/trucks-grid-v2.tsx` |
 
-**Where the flag is read, and why it is a PROP rather than `useSearchParams()`.** Daily /
+**THE DEFAULT IS v2 (2026-08-26).** `?grid=` absent, misspelt, `V2` or `3` all mean the NEW tables;
+the Classic ones are `?grid=v1`. A **DEFAULT FLIP, not a cutover** — nothing is deleted, all three
+Classic grids stay mounted, fully reachable and fully functional, and the whole rewire reverts by
+changing one default argument back. The bar reads `defaultVersion={GRID_V2}` with labels
+`Classic` / `Table (new)`, so the paramless URL is the default side and every existing link into
+`/production` keeps meaning what it says.
+
+**ONE flag for all three tabs**, exactly as before the flip. The operator moves between Daily,
+Electricity and Trucks with localStorage and no navigation, so a per-tab default would be a state
+the URL cannot express and the toggle above could not honestly describe.
+
+**Where the flag is read, and why it is a REQUIRED PROP rather than `useSearchParams()`.** Daily /
 Electricity / Trucks are **client tabs of ONE server page**, not sibling routes — `(tabs)/page.tsx`
-renders `<ProductionView />`, which mounts all three lazy tabs at once and switches with
-localStorage, no URL involved. So the recipe's "edit only the server `page.tsx`" cannot be followed
-literally: the page reads `parseGrid(params.grid)` once, mounts `<GridVersionBar />` above the tab
-area, and threads `v2` down through `ProductionView` → each `*-lazy-tab.tsx` → each `*-view.tsx`,
-which owns the switch. A prop cannot fail static prerendering the way `useSearchParams()` in a
-view would, and one bar governs whichever tab is on screen.
+renders `<ProductionView />`, which mounts all three lazy tabs at once. So the recipe's "edit only
+the server `page.tsx`" cannot be followed literally: the page resolves
+`resolveGrid(params.grid, GRID_V2)` once, mounts `<GridVersionBar />` above the tab area, and
+threads `v2` down through `ProductionView` → each `*-lazy-tab.tsx` → each `*-view.tsx`, which owns
+the switch. A prop cannot fail static prerendering the way `useSearchParams()` in a view would, and
+one bar governs whichever tab is on screen.
+
+The prop is **required at every hop, and the `v2 = false` fallbacks were removed with the flip**.
+While the default was v1 a fallback agreed with the page and was harmless; now it would contradict
+it, and only ever fire the day someone forgot the prop — the tab would silently serve Classic while
+the toggle above it read "Table (new)". The default is therefore stated exactly ONCE, in the
+expression that reads the param. `scripts/verify-table-core.ts` pins both halves: this page is in
+its `FLIPPED_PAGES` registry, and a dedicated check refuses an optional `v2`, a re-added `= false`,
+and any second read of the param (`useSearchParams` / `parseGrid` / `resolveGrid`) in the six
+files below the page.
 
 **The switch lives in `*-view.tsx`, never in the lazy tab**, so the phone layer is untouched: the
 view keeps `hidden sm:block` around the desktop grid and `sm:hidden` around its card list, and v2
-only ever replaces the desktop half. `trucks-view.tsx` is the special case — `TrucksGrid` carries
-its own `sm:hidden` phone summary *inside itself*, so under `?grid=v2` the live component is still
-rendered inside a `sm:hidden` wrapper and the phone sees exactly what it always did.
+only ever replaces the desktop half. **The flip did not change that** — `DailyCardsMobile` and
+`ElectricityCardsMobile` still serve the phone on both sides, and `trucks-view.tsx` is the special
+case: `TrucksGrid` carries its own `sm:hidden` phone summary *inside itself*, so on the v2 branch
+the Classic component is still rendered inside a `sm:hidden` wrapper and the phone sees exactly
+what it always did, default or not.
+
+**THE PERIOD AXIS HERE IS YEAR + BATCH, not Year + Month.** These three tabs keep the module's own
+universal `<PeriodPicker />` (`components/period-picker.tsx` + `production-period-context.tsx`,
+`?y=` / `?b=`), mounted in `(tabs)/layout.tsx` above BOTH sides of the toggle. The platform's
+shared Year/Month `PeriodPicker` (`components/shared/table/`, used by `/inventory` and
+`/cenapro/qc`) **does not apply**: a production batch is a named campaign, not a calendar month,
+and the Daily tab's whole scope is one batch. So nothing rides in the grid bar's `trailing` slot
+here, and the bar carries the toggle and its note only.
 
 **Both params survive each other.** `production-period-context.tsx`'s `syncUrl` copies
-`window.location.search` and only `set`s `y` / `b`, so `grid` rides along through every period
-change; the toggle's `withGrid` copies the query exhaustively, so `y` / `b` ride along through
-every flip. Neither file was touched to make that true. A tab change writes no URL at all.
+`window.location.search` and only `set`s `y` / `b`, so `grid=v1` rides along through every period
+change (and it uses `history.replaceState`, so the server page does not re-render and the resolved
+branch cannot flip underneath the operator); the toggle's `withGrid` copies the query exhaustively,
+so `y` / `b` ride along through every flip. Neither file was touched to make that true, at build
+time or at the flip. A tab change writes no URL at all — it is React state + localStorage — so
+`?grid=v1` is untouched by switching tabs, and the flag it carries governs whichever tab lands.
 
 **READ-ONLY is structural, not a promise.** No `ColumnSpec` in any of the three v2 files declares
 `parse` or `editable`, so `columnAcceptsEdit` answers false for every column and the combined

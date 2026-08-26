@@ -7,7 +7,8 @@ Excel-parity view for daily production output, downtime, and waste. ONE unified 
 | File | Role |
 |------|------|
 | `actions.ts` | Server actions: `fetchAvailablePeriods`, `fetchDailyTabData`, `saveBulkDailyLedger`. Exports row types and `LedgerRowPayload`. `fetchAvailablePeriods` is consumed by the **module-level** `ProductionPeriodProvider`, not just this tab. **Human-edit latch (2026-08-03):** every shift upsert, run insert/update, downtime upsert and waste upsert also passes `human_edited_at` via the local `claim()` helper, so the row is marked as yours and the sync will not overwrite it. The DB trigger `fn_stamp_human_edit` is the actual guarantee (it also fills `human_edited_by` from `auth.uid()`); hand a row back with `releaseProductionRows` in `app/(app)/production/actions.ts`. See the module CONTEXT → "Human-edit latch". |
-| `daily-grid-v2.tsx` | **READ-ONLY Blackwood Table rendering of the same ledger** (`?grid=v2`, 2026-08-18). Built beside `daily-ledger-grid.tsx`, which is unchanged. It IMPORTS `buildGridRows` and `deriveDailyMetrics` rather than restating them, so the two sides cannot disagree about which run is PRIMARY or what DT TTL / PROD HRS / PROD LOSS / TTL WASTE are. Same 23 columns, same widths (Σ 1604px), same 8-column pinned block. **Two row families** — `run-primary` occupies all 23 columns; `run-secondary` returns `null` from `occupies()` for every downtime/waste column (the secondary row HAS NO CELL there, which is what the live grid's muted block means) and renders the `↑` carry mark on DATE/BATCH/SHIFT as `addressable: false`. The four computed lanes are `addressable: false` + `selectable: true` — they render, they sweep into a rectangle, the caret steps over them. Read-only STRUCTURALLY: no spec declares `parse` or `editable`, so `columnAcceptsEdit` is false everywhere. Keeps the DATE sort toggle and the SHIFT/CUSTOMER/GRADE filters (pure view state) through `renderHeaderSlot`. **Those four columns therefore opt OUT of the platform's built-in sort/filter** (`sortable: false` on `date`; `filterable: false` on `shift_code` / `customer` / `grade`, added 2026-08-20): the built-ins arrived default-ON for `scope="focus"` and draw the SAME lucide glyphs this file's own controls draw, so each of those headers rendered two identical carets — or two identical funnels — opening different things. They also answer different questions: this file's date sort re-orders the DAY GROUPS with their carry-down `↑` rows intact, while the built-in sorts the flat row list and hides every chrome row while active. One control per question; every other column keeps both built-in affordances. It is also what the three width comments are measured against — a second trigger in the cell puts `SHIFT` back to `S…`. See the module CONTEXT → "The `?grid=v2` side-by-side". |
+| `daily-grid-v2.tsx` | **EDITABLE Blackwood Table rendering of the same ledger** (`?grid=v2`; read-only 2026-08-18, typing + saving + new rows since 2026-08-26 — see "The `?grid=v2` editing model" below). Built beside `daily-ledger-grid.tsx`, which is unchanged. It IMPORTS `buildGridRows` and `deriveDailyMetrics` rather than restating them, so the two sides cannot disagree about which run is PRIMARY or what DT TTL / PROD HRS / PROD LOSS / TTL WASTE are. Same 23 columns, same widths (Σ 1604px), same 8-column pinned block. **Two row families** — `run-primary` occupies all 23 columns; `run-secondary` returns `null` from `occupies()` for every downtime/waste column (the secondary row HAS NO CELL there, which is what the live grid's muted block means) and renders the `↑` carry mark on DATE/BATCH/SHIFT as `addressable: false`. The four computed lanes are `addressable: false` + `selectable: true` — they render, they sweep into a rectangle, the caret steps over them. A THIRD family, `draft`, is the blank-row pool: no `#`, no computed lanes, all eighteen typeable fields editable — including DATE / BATCH / SHIFT, which are `editable: false` on a saved row (the save cannot move a run between shifts). Every editable column declares the four seams (`editable` / `parse` / `normalize` / `cleanPasted`) over `daily-grid-v2-save.ts`, so the cell's verdict and the save's are ONE function. Keeps the DATE sort toggle and the SHIFT/CUSTOMER/GRADE filters (pure view state) through `renderHeaderSlot`. **Those four columns therefore opt OUT of the platform's built-in sort/filter** (`sortable: false` on `date`; `filterable: false` on `shift_code` / `customer` / `grade`, added 2026-08-20): the built-ins arrived default-ON for `scope="focus"` and draw the SAME lucide glyphs this file's own controls draw, so each of those headers rendered two identical carets — or two identical funnels — opening different things. They also answer different questions: this file's date sort re-orders the DAY GROUPS with their carry-down `↑` rows intact, while the built-in sorts the flat row list and hides every chrome row while active. One control per question; every other column keeps both built-in affordances. It is also what the three width comments are measured against — a second trigger in the cell puts `SHIFT` back to `S…`. See the module CONTEXT → "The `?grid=v2` side-by-side". |
+| `daily-grid-v2-save.ts` | **PURE** (no React, no Supabase — both its imports are `import type`). The v2 grid's EDIT + SAVE model: the field vocabulary and `laneOf` (the ONE routing definition), `parseDailyField` / `normalizeDailyField` / `cleanPastedDailyCell` (one verdict, shared by cell and save), `routeDailyEdits`, the three whole-block builders, `buildDailySavePlan`, the unsaved counters and every refusal sentence. Asserted by `scripts/verify-daily-grid.ts` (**62 assertions**, `npx tsx scripts/verify-daily-grid.ts`) with no browser and no database. |
 | `daily-view.tsx` | Thin wrapper — passes `{shifts, runs, downtime, waste}` + `dataYear`/`dataBatch` (grid remount key) to `<DailyLedgerGrid>`. **No longer passes period-picker props** (the picker lives in the production layout now). No DeliverySheetFooter. |
 | `daily-ledger-grid.tsx` | The single unified inline-editable ledger (~2200 lines). All production/downtime/waste columns in one wide table. Toolbar keeps only the shift/run count + Save/Discard — the Year+Batch picker was moved to the module-level layout. SHIFT/CUSTOMER/GRADE headers carry single-select filter menus (`ColumnFilterMenu`). **Now exports `buildGridRows()` + the `GridRow` type** for the mobile card view (desktop render unchanged). |
 | `ledger-derive.ts` | Pure `deriveDailyMetrics(row: GridRow)` — now shared by THREE surfaces (the live grid's inline compute, the mobile card, and `daily-grid-v2.tsx`) — the DT TTL / PROD HRS / PROD LOSS / TTL WASTE formula (shift default 8h) in ONE place, mirroring the grid's inline compute. Consumed by the mobile card so both surfaces show identical derived values. |
@@ -64,6 +65,95 @@ The `+` button in the delete column of a primary row inserts a new secondary gra
 5. Per shift (from primary row): UPSERT `production_waste` by `shift_id` if any waste column is non-null
 6. Handles run deletes by run_id
 7. Returns `{ ok, insertedShifts, upsertedRuns, upsertedDowntime, upsertedWaste, deletedRuns }`
+
+## The `?grid=v2` editing model (2026-08-26)
+
+The v2 sheet types and saves through **`saveBulkDailyLedger`, unchanged** — no new server
+action, no SQL. `daily-grid-v2-save.ts` is the whole write model and it is pure, so the one
+thing this sheet can most easily get silently wrong (**which row an edit is a save to**) is
+asserted without a browser.
+
+### Four lanes, three rows
+
+| Lane | Columns | Saves to |
+|---|---|---|
+| identity | DATE · BATCH · SHIFT | the shift's natural key — **blank rows only** |
+| run | CUSTOMER · GRADE · TTL KG · REM | `production_runs`, the row the caret is on |
+| downtime | DT HRS · DT MIN · DT REASON | `production_downtime` — **one row per SHIFT** |
+| waste | RS1A · RS1B · BF · RS2/3 · RS5 · TRML1 · TRML2 · GRIT | `production_waste` — **one row per SHIFT** |
+
+A shift-lane edit is filed under the row's `_shiftKey`, whatever row it arrived on — the
+row families already make it impossible for one to arrive on a secondary run (`occupies()`
+returns `null` there), but routing by the shift means that is not the only thing standing
+between a waste figure and the wrong shift. Two rows of one shift disagreeing about a shift
+field is **refused, never guessed**. One payload row per shift carries the block (the stored
+PRIMARY run, else the first blank row of a brand-new shift), and every row whose text rode
+into that block is named in `savedRowIds` so `edits.forget` clears all of them together.
+
+### Every payload is a WHOLE block, and three columns the sheet never shows ride back
+
+The action rebuilds a fixed object per table, so a payload built only from the typed cells
+BLANKS the rest. Each block is therefore *stored value unless the operator typed over it* —
+and three columns are carried that this grid does not render, each measured on 2026-08-26:
+
+- **`production_downtime.shift_hrs`** — NOT NULL, and the action gates the entire downtime
+  write on it (`hasDowntimeData = dt.shift_hrs !== null`). The live grid sends `null`, so
+  **the live ledger has never written a downtime edit at all**. Sending the sheet's
+  displayed 8 would be worse: **no stored row holds 8** (158 rows say 9, 72 say 12). The
+  stored value rides back from `initialDowntime` (`shiftHrsByShiftId`); 8 is used only where
+  there is no downtime row yet, which is what PROD HRS already assumes.
+- **`production_runs.sacks_bags`** (102 stored rows carry one) and
+  **`production_waste.remarks`** (63 rows) — dropped from the UI in 2026-05-28 and
+  hard-coded to `null` in every live save since. Preserved here.
+
+### What is refused, and why it is refused rather than typed
+
+- **DATE / BATCH / SHIFT on a SAVED row.** The action's UPDATE branch does not write
+  `shift_id`, so a stored run cannot be moved between shifts: the write would upsert a new
+  shift, leave the run on the old one and push the downtime/waste onto the new empty one.
+  The live grid lets that be typed; this one refuses by name. Typeable on a blank row, where
+  the INSERT branch does set the shift.
+- **Grade `4X8`.** `production_runs_grade_check` allows it and `saveBulkDailyLedger`'s
+  `VALID_GRADES` does not — and it validates every row in the payload. **19 stored runs are
+  `4X8`**, so a row that has been on the ledger for months cannot be saved through this door;
+  it is refused at the cell and again pre-flight, naming the row. (This is also why the v2
+  save posts **only the rows that need writing**: the live grid posts every row on the sheet,
+  so one `4X8` run makes the whole period unsaveable there.)
+- **A shift with no run row** (3 such shifts exist): its waste cannot be saved, because the
+  payload row would take the action's INSERT branch and fabricate a run.
+- **A blank row with no BATCH / GRADE / TTL KG.** None is defaulted into existence; a new
+  row's date, shift and customer ARE seeded (the live `createEmptyRow`'s own values) and the
+  batch is seeded only when every row on the sheet agrees on one. All four are printed in
+  the strip above the sheet.
+
+### The plan is all-or-nothing, and the failure message says what is actually true
+
+`buildDailySavePlan` returns an **empty payload whenever `problems` is non-empty**, so
+"nothing is written unless every dirty row builds a legal payload" is a property of the plan
+rather than a rule each caller remembers. `saveBulkDailyLedger` answers with ONE verdict for
+the whole batch and **is not transactional** — it walks its shift groups with a sequential
+`await` and returns on the first failure — so a refusal says *"any shift processed before
+the failure IS already stored, reload before you retry"* rather than borrowing RC IN's
+"nothing was written", which would be false here.
+
+### Simplifications (not built in this pass)
+
+Plain typed text with the same validation replaces the live grid's **date-picker cell**, its
+**`datalist` typeahead** on SHIFT / CUSTOMER / GRADE, and its **message-icon popovers** on
+REM and DT REASON (both lanes show the text itself, truncated, with the full value on the
+native tooltip). No row context menu, no **delete** (the action deletes a run for a
+`_state: 'deleted'` row, but the only affordance that reaches it is the right-click menu,
+which is not built), no Discard, no Σ↔x̄ footer pills, no save-time reason dialog (the action
+takes no comment in any form).
+
+### The refresh gap
+
+`DailyGridV2` accepts `onSaveSuccess?` and **`daily-view.tsx` does not pass it** (it passes
+it to the live ledger only). This tab's rows are fetched on the CLIENT
+(`daily-lazy-tab.tsx` → `fetchDailyTabData`), so `router.refresh()` cannot reach them and
+that callback is the only door. Until the view threads `onSaveSuccess={onRefresh}` through to
+the v2 branch, a save lands in the database and the sheet keeps showing its pre-save values —
+which the success toast says out loud. One line, in a file this pass may not edit.
 
 ## Data Fetch (`fetchDailyTabData`)
 

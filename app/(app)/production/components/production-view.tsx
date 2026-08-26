@@ -8,13 +8,20 @@ import { DailyLazyTab } from './daily-lazy-tab';
 import { ElectricityLazyTab } from './electricity-lazy-tab';
 import { TrucksLazyTab } from './trucks-lazy-tab';
 
-/** `?grid=v2` — which implementation of each tab's grid renders. Read once by the
- *  server page and threaded down; see `app/(app)/production/(tabs)/page.tsx`. */
+/**
+ * `?grid=` — which implementation of each tab's grid renders. Read once by the server
+ * page and threaded down; see `app/(app)/production/(tabs)/page.tsx`.
+ *
+ * **REQUIRED, and that is the point.** These tabs default to v2 (2026-08-26), and the
+ * page states that default in the one expression that reads the param. A `v2 = false`
+ * fallback here would be a second, contradicting statement of it — silent whenever a
+ * caller forgot the prop, which is exactly the case a default is supposed to cover.
+ */
 export interface ProductionViewProps {
-    v2?: boolean;
+    v2: boolean;
 }
 
-export function ProductionView({ v2 = false }: ProductionViewProps) {
+export function ProductionView({ v2 }: ProductionViewProps) {
     const { activeTab } = useProductionTab();
     const [displayTab, setDisplayTab] = useState<ProductionTab>(activeTab);
     const [transitioning, setTransitioning] = useState(false);
