@@ -1471,12 +1471,47 @@ export function useTableInteraction<Row, Ctx>(
                     focus();
                     return;
                 }
+                // ── A CELL THAT IS DEAD IN EVERY SENSE TAKES NO CARET ────────────
+                //
+                // The asymmetry above (mouse reads `cellExists`, keyboard reads
+                // `cellAddressable`) is deliberate and stays: a drag has to be able to
+                // START on a content-bearing, caret-free cell, because a run of computed
+                // totals is the most useful thing on a sheet to sweep. That argument is
+                // entirely about SELECTION — it presumes the cell is one a rectangle may
+                // cover.
+                //
+                // A cell that is **neither addressable NOR selectable** has no such
+                // argument behind it. Nothing can be typed there, no rectangle may cover
+                // it, nothing totals it. Parking the caret on one gave the operator a ring
+                // and then silence — every keystroke, Delete and paste doing nothing — and
+                // it BROKE the module's own invariant that there is exactly one rectangle
+                // on screen: `useCellSelection.handleCellMouseDown` refuses a
+                // non-selectable column, so the caret moved and the selection tint stayed
+                // on the previously clicked cell, which is where Delete and Ctrl/Cmd+C
+                // kept acting. Measured on the Cenapro QC sheet, whose imported `#` and
+                // `BATCH` lanes are exactly this combination and render NOTHING at all on
+                // a blank draft row — four identical-looking empty cells of which two
+                // silently refuse everything.
+                //
+                // `selectable: true, addressable: false` (RC Deliveries' `TTL PRICE`) is
+                // untouched: it still takes the caret and still starts a drag.
+                if (!rows.cellAddressable(navRow, col) && !selectableCol(col)) {
+                    focus();
+                    return;
+                }
                 // UNCONDITIONAL. Setting the active cell to null on a read-only cell is
                 // BUG-023: `useGridKeyboardNav` returns on its first line with no active
                 // cell, so the whole sheet lost its arrows, Tab, Escape, Delete and copy
                 // until another cell was clicked.
                 setActiveCell({ row: navRow, col });
-                handleCellMouseDown(navRow, col, e);
+                // The caret takes its 1×1 selection with it — the same rule `onAfterMove`
+                // obeys for every keyboard move. `handleCellMouseDown` declines a column a
+                // rectangle may not cover, so on one of those the selection would otherwise
+                // stay lit where it was: two rectangles on screen, and Delete / Ctrl+C /
+                // paste still aimed at the old one. Clearing is the honest answer — the
+                // ring is then the only rectangle, and the gestures fall back to the caret.
+                if (selectableCol(col)) handleCellMouseDown(navRow, col, e);
+                else clearSelection();
                 scrollToCol(col);
                 focus();
             },
@@ -1491,13 +1526,20 @@ export function useTableInteraction<Row, Ctx>(
                 startEdit(cell);
             },
             onCellContextMenu(navRow, col, e) {
-                if (rows.cellExists(navRow, col)) setActiveCell({ row: navRow, col });
+                // Same rule as the mousedown: a cell nothing can be done to is not a
+                // place to leave the caret. The MENU still opens on it — `Copy row` and
+                // `Select row` are about the ROW, and the target carries its own cell.
+                if (rows.cellExists(navRow, col) &&
+                    (rows.cellAddressable(navRow, col) || selectableCol(col))) {
+                    setActiveCell({ row: navRow, col });
+                }
                 onContextMenu?.({ row: navRow, col }, e);
             },
         }),
         [
             rows, handleCellMouseDown, handleCellMouseEnter, scrollToCol, focus,
             isEditable, setActiveCell, startEdit, commitEdit, onContextMenu,
+            selectableCol, clearSelection,
         ],
     );
 

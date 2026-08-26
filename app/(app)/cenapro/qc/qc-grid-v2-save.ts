@@ -79,6 +79,7 @@
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import {
+    BAGGING_MACHINE_CODE,
     METRICS,
     METRIC_SHORT,
     canonToken,
@@ -261,9 +262,26 @@ export type QcFieldVerdict = { ok: true } | { ok: false; error: string };
 
 const OK: QcFieldVerdict = { ok: true };
 
-/** The legal machines — crushers and kilns share one column. */
+/**
+ * The legal machines — crushers, kilns, and the bagging token, all in one column.
+ *
+ * **`BAGGING_MACHINE_CODE` is here because this list is a VALIDATOR, not a menu.**
+ * `parseQcField('mach', …)` runs it through `inDomain`, so a code absent from it is
+ * refused BY NAME with a persistent toast — and since 2026-08-26 `FLEC` in this cell is a
+ * legal row that the RPC accepts and files as a bagging entry. Leaving it out would have
+ * meant the database accepting a row the sheet would not let anyone type, which is the
+ * same shape of bug as a newly added grade being refused by the cell that should offer it.
+ *
+ * Only the ONE canonical spelling is added, matching the composer's dropdown. The other
+ * four aliases (`BAG`, `BAGGING`, `FLEC BAGGING`, `FLEC_BAGGING`) are deliberately NOT
+ * here: `inDomain` compares through `canonToken`, so a pasted `flec bagging` still fails
+ * this cell and is refused by name rather than being silently rewritten — and a refusal
+ * naming the one spelling this sheet uses is better than five synonyms in an error
+ * message. `actions.ts` still accepts all five for anything that reaches it by another
+ * route, which is what `BAGGING_MACHINE_CODES` is for.
+ */
 export function machineCodes(options: QcDrawOptions): string[] {
-    return [...options.crushers, ...options.kilns];
+    return [...options.crushers, ...options.kilns, BAGGING_MACHINE_CODE];
 }
 
 /**

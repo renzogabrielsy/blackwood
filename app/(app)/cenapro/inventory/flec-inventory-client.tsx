@@ -15,6 +15,8 @@ import {
     Save,
     RotateCcw,
     Pencil,
+    Plus,
+    TriangleAlert,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -44,18 +46,16 @@ import {
 } from '@/components/ui/collapsible';
 import {
     FLEC_WAREHOUSES,
-    GRADE_CODES,
     WHSE_SIDES,
     type FlecBalanceRow,
     type FlecLedgerRow,
     type OpeningBalanceRow,
     type OpeningBalanceHistoryRow,
     type OpeningBalanceCellChange,
-    type GradeCode,
     type WhseSide,
     formatDisposition,
 } from '../types';
-import { saveOpeningBalances } from './actions';
+import { addGrade, saveOpeningBalances } from './actions';
 
 // ─── Display helpers ─────────────────────────────────────────────────────────────
 function fmtDate(iso: string | null): string {
@@ -151,6 +151,37 @@ function ErrorBanner({ message }: { message: string }) {
     );
 }
 
+// ─── Degraded-read banner (non-fatal, still persistent + Copy) ───────────────────
+// The grade list failing is not a broken page: the screen falls back to the seeded
+// `GRADE_CODES` and every pre-existing grade still renders. What it CAN hide is a grade
+// added recently, so it says so rather than looking complete. Amber, not destructive —
+// the distinction the operator needs is "this page is wrong" vs "this page may be one
+// row short". Carries Copy like every other inline error surface.
+function DegradedBanner({ message }: { message: string }) {
+    return (
+        <div
+            role="alert"
+            className="mx-3 mt-3 flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs"
+        >
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="min-w-0 flex-1 break-words text-amber-700 dark:text-amber-300">{message}</p>
+            <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 shrink-0 px-2 text-xs text-amber-700 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-300"
+                onClick={() => {
+                    void navigator.clipboard.writeText(message).then(() => {
+                        toast.success('Message copied to clipboard', { duration: 2000 });
+                    });
+                }}
+            >
+                <Copy className="mr-1 h-3 w-3" />
+                Copy
+            </Button>
+        </div>
+    );
+}
+
 // ─── Props ───────────────────────────────────────────────────────────────────────
 interface FlecInventoryClientProps {
     warehouse: string;
@@ -159,7 +190,17 @@ interface FlecInventoryClientProps {
     ledger: FlecLedgerRow[];
     openings: OpeningBalanceRow[];
     history: OpeningBalanceHistoryRow[];
+    /**
+     * The grade dimension, in `public.cenapro_grades` order (`sort_order, code`) — the
+     * rows of the STARTING block and of the opening-balance history, and no longer the
+     * `GRADE_CODES` constant. Never re-sorted here: the accessor's order IS canonical.
+     * The server falls back to the seeded constant on a read failure, so this is never
+     * empty.
+     */
+    gradeCodes: string[];
     loadError: string | null;
+    /** Non-fatal: the grade read fell back to the seeded list. See `DegradedBanner`. */
+    gradesError: string | null;
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────────
@@ -170,7 +211,9 @@ export function FlecInventoryClient({
     ledger,
     openings,
     history,
+    gradeCodes,
     loadError,
+    gradesError,
 }: FlecInventoryClientProps) {
     const router = useRouter();
     const pathname = usePathname();
@@ -314,6 +357,7 @@ export function FlecInventoryClient({
             </div>
 
             {loadError && <ErrorBanner message={loadError} />}
+            {gradesError && <DegradedBanner message={gradesError} />}
 
             <div className="min-h-0 flex-1 overflow-auto">
                 <div className={cn('flex flex-col gap-4 p-3 md:p-4', isPending && 'opacity-60 transition-opacity')}>
@@ -321,6 +365,7 @@ export function FlecInventoryClient({
                     <StartingBlock
                         warehouse={warehouse}
                         startDate={startDate}
+                        gradeCodes={gradeCodes}
                         openingByCell={openingByCell}
                         closingByCell={closingByCell}
                         historyByCell={historyByCell}
@@ -357,7 +402,11 @@ export function FlecInventoryClient({
                     </section>
 
                     {/* ─── Opening-balance history (backtracking) ─────────────────────── */}
-                    <OpeningHistoryPanel warehouse={warehouse} historyByCell={historyByCell} />
+                    <OpeningHistoryPanel
+                        warehouse={warehouse}
+                        gradeCodes={gradeCodes}
+                        historyByCell={historyByCell}
+                    />
 
                     {/* ─── Movement ledger (show-your-math) ───────────────────────────── */}
                     <section className="min-h-0">
@@ -452,6 +501,7 @@ export function FlecInventoryClient({
 function StartingBlock({
     warehouse,
     startDate,
+    gradeCodes,
     openingByCell,
     closingByCell,
     historyByCell,
@@ -459,6 +509,7 @@ function StartingBlock({
 }: {
     warehouse: string;
     startDate: string;
+    gradeCodes: string[];
     openingByCell: Map<string, OpeningBalanceRow>;
     closingByCell: Map<string, FlecBalanceRow>;
     historyByCell: Map<string, OpeningBalanceHistoryRow[]>;
@@ -472,14 +523,14 @@ function StartingBlock({
     // start-date switch, or a post-save revalidate).
     const seededDrafts = React.useMemo(() => {
         const m = new Map<string, string>();
-        for (const grade of GRADE_CODES) {
+        for (const grade of gradeCodes) {
             for (const side of WHSE_SIDES) {
                 const opening = openingByCell.get(cellKey(grade, side));
                 m.set(cellKey(grade, side), opening ? String(opening.opening_flec_count) : '');
             }
         }
         return m;
-    }, [openingByCell]);
+    }, [openingByCell, gradeCodes]);
 
     // Local edit buffer. Reset to the seed whenever the seed changes (i.e. new
     // server data). A cell is "dirty" when its draft differs from the seed.
@@ -501,7 +552,7 @@ function StartingBlock({
     // Which cells changed vs the seed → the payload for the append-only save.
     const changedCells = React.useMemo<OpeningBalanceCellChange[]>(() => {
         const out: OpeningBalanceCellChange[] = [];
-        for (const grade of GRADE_CODES) {
+        for (const grade of gradeCodes) {
             for (const side of WHSE_SIDES) {
                 const key = cellKey(grade, side);
                 const draft = drafts.get(key) ?? '';
@@ -518,7 +569,7 @@ function StartingBlock({
             }
         }
         return out;
-    }, [drafts, seededDrafts, warehouse, startDate]);
+    }, [drafts, seededDrafts, warehouse, startDate, gradeCodes]);
 
     const dirtyCount = changedCells.length;
 
@@ -565,6 +616,11 @@ function StartingBlock({
                             {dirtyCount} unsaved
                         </span>
                     )}
+                    {/* A grade is a ROW of this grid, so the control that adds one sits
+                        on the grid's own header — not in the page chrome, where it would
+                        read as a page-level action. */}
+                    <AddGradePopover disabled={busy} knownCodes={gradeCodes} />
+                    <span className="h-4 w-px bg-border" aria-hidden />
                     <Button
                         variant="ghost"
                         size="sm"
@@ -623,7 +679,7 @@ function StartingBlock({
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {GRADE_CODES.map((grade) => (
+                        {gradeCodes.map((grade) => (
                             <TableRow key={grade} className="h-9 border-b hover:bg-muted/30">
                                 <TableCell className="px-2 py-1 font-mono text-xs font-semibold">{grade}</TableCell>
                                 {WHSE_SIDES.map((side) => {
@@ -664,6 +720,184 @@ function StartingBlock({
     );
 }
 
+// ─── AddGradePopover ─────────────────────────────────────────────────────────────
+// Adding a grade, from the screen whose rows ARE the grades (2026-08-26).
+//
+// A POPOVER, not a dialog: this is a two-field append that the operator does while
+// looking at the grid it changes, and dimming the page to collect a four-character code
+// would cost more attention than the act is worth. Same reasoning — and the same dense
+// paint — as the per-cell history popover above.
+//
+// WHAT IS NOT OFFERED, and why. `public.cenapro_add_grade` is INSERT-ONLY: there is no
+// update RPC and no delete RPC, because `grade_code` is a TEXT foreign key carried by
+// every production event, so a rename needs a cascade nobody has reasoned about and a
+// delete would succeed on a fresh mistake and be refused by the FK later. So this form
+// adds and does nothing else — no edit pencil, no ×. `sort_order` is not offered either
+// (it defaults to "append to the end", nothing keys on it).
+//
+// THE CLIENT IS A COURTESY, NEVER THE AUTHORITY. The code is canonicalized SERVER-side
+// (`cenapro.fn_canon_token` — trim / collapse whitespace / uppercase), so `3x50` is
+// refused as a duplicate of `3X50` in the RPC's own words. `canonGrade` below mirrors
+// that only to WARN before the round trip; it never blocks, because the list it compares
+// against may itself have fallen back to the seeded constant, and a client that refuses
+// what the database would accept is worse than one extra request.
+function canonGrade(raw: string): string {
+    return raw.trim().replace(/\s+/g, ' ').toUpperCase();
+}
+
+function AddGradePopover({ disabled, knownCodes }: { disabled: boolean; knownCodes: string[] }) {
+    const router = useRouter();
+    const [open, setOpen] = React.useState(false);
+    const [code, setCode] = React.useState('');
+    const [displayName, setDisplayName] = React.useState('');
+    const [saving, setSaving] = React.useState(false);
+
+    const canonical = canonGrade(code);
+    const known = React.useMemo(() => new Set(knownCodes.map(canonGrade)), [knownCodes]);
+    const clashes = canonical !== '' && known.has(canonical);
+
+    const reset = React.useCallback(() => {
+        setCode('');
+        setDisplayName('');
+    }, []);
+
+    const onSubmit = React.useCallback(async () => {
+        if (saving || canonical === '') return;
+        setSaving(true);
+        try {
+            const res = await addGrade({ code, displayName });
+            if (!res.ok) {
+                // The RPC's own sentence, verbatim — it names the offending value and,
+                // on a duplicate, the spelling the row is actually stored under. The
+                // popover stays open holding what was typed, because every refusal here
+                // is something the operator answers by retyping.
+                errorToast(res.message ?? 'That grade could not be added.');
+                return;
+            }
+            toast.success(
+                res.code && res.displayName && res.displayName !== res.code
+                    ? `Grade ${res.code} (${res.displayName}) added`
+                    : `Grade ${res.code ?? canonical} added`,
+            );
+            reset();
+            setOpen(false);
+            // revalidatePath already ran server-side; refresh so the new grade appears
+            // as a row of the grid behind this popover.
+            router.refresh();
+        } catch (e) {
+            errorToast(e instanceof Error ? e.message : 'Failed to add the grade');
+        } finally {
+            setSaving(false);
+        }
+    }, [saving, canonical, code, displayName, reset, router]);
+
+    return (
+        <Popover
+            open={open}
+            onOpenChange={(next) => {
+                setOpen(next);
+                if (!next) reset();
+            }}
+        >
+            <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={disabled}>
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    Add grade
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-72 p-0">
+                <div className="border-b px-3 py-2">
+                    <p className="text-xs font-semibold">Add a grade</p>
+                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
+                        A grade is shared by production rows, partner draws and bagging entries. It can be added but
+                        never renamed or removed.
+                    </p>
+                </div>
+
+                <form
+                    className="space-y-2.5 p-3"
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        void onSubmit();
+                    }}
+                >
+                    <div>
+                        <label
+                            htmlFor="cenapro-add-grade-code"
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                        >
+                            Code
+                        </label>
+                        <input
+                            id="cenapro-add-grade-code"
+                            autoFocus
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                            maxLength={24}
+                            placeholder="5X10"
+                            disabled={saving}
+                            className="h-7 w-full rounded-md border border-input bg-transparent px-2 font-mono text-xs uppercase outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60"
+                        />
+                        {canonical !== '' && canonical !== code.trim() && (
+                            <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                                saved as {canonical}
+                            </p>
+                        )}
+                        {clashes && (
+                            <p className="mt-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                                {canonical} is already on the list — grade codes are matched without regard to case or
+                                spacing.
+                            </p>
+                        )}
+                    </div>
+
+                    <div>
+                        <label
+                            htmlFor="cenapro-add-grade-name"
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+                        >
+                            Display name{' '}
+                            <span className="font-normal normal-case tracking-normal text-muted-foreground/60">
+                                optional
+                            </span>
+                        </label>
+                        <input
+                            id="cenapro-add-grade-name"
+                            value={displayName}
+                            onChange={(e) => setDisplayName(e.target.value)}
+                            maxLength={64}
+                            placeholder={canonical || 'defaults to the code'}
+                            disabled={saving}
+                            className="h-7 w-full rounded-md border border-input bg-transparent px-2 text-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60"
+                        />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setOpen(false)}
+                            disabled={saving}
+                        >
+                            Cancel
+                        </Button>
+                        <Button type="submit" size="sm" className="h-7 px-2.5 text-xs" disabled={saving || canonical === ''}>
+                            {saving ? (
+                                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <Plus className="mr-1 h-3.5 w-3.5" />
+                            )}
+                            Add grade
+                        </Button>
+                    </div>
+                </form>
+            </PopoverContent>
+        </Popover>
+    );
+}
+
 // ─── StartingCell ────────────────────────────────────────────────────────────────
 // One (grade × side) cell pair: an editable STARTING input + the read-only "Now"
 // closing, with a per-cell history popover trigger nested next to the input.
@@ -677,7 +911,10 @@ function StartingCell({
     disabled,
     onChange,
 }: {
-    grade: GradeCode;
+    // A plain `string`, not the `GradeCode` union: the rows come from the live
+    // `cenapro_grades` dimension now, so a grade added today is a code the seed-mirror
+    // constant has never heard of.
+    grade: string;
     side: WhseSide;
     value: string;
     dirty: boolean;
@@ -741,7 +978,7 @@ function CellHistoryPopover({
     side,
     history,
 }: {
-    grade: GradeCode;
+    grade: string;
     side: WhseSide;
     history: OpeningBalanceHistoryRow[];
 }) {
@@ -799,17 +1036,20 @@ function CellHistoryPopover({
 // was on any past effective date at a glance.
 function OpeningHistoryPanel({
     warehouse,
+    gradeCodes,
     historyByCell,
 }: {
     warehouse: string;
+    gradeCodes: string[];
     historyByCell: Map<string, OpeningBalanceHistoryRow[]>;
 }) {
     const [open, setOpen] = React.useState(false);
 
-    // Stable group order: grade asc, then side (LS before RS), only cells with entries.
+    // Stable group order: the grade dimension's own order, then side (LS before RS),
+    // only cells with entries.
     const groups = React.useMemo(() => {
-        const out: { grade: GradeCode; side: WhseSide; entries: OpeningBalanceHistoryRow[] }[] = [];
-        for (const grade of GRADE_CODES) {
+        const out: { grade: string; side: WhseSide; entries: OpeningBalanceHistoryRow[] }[] = [];
+        for (const grade of gradeCodes) {
             for (const side of WHSE_SIDES) {
                 const entries = historyByCell.get(cellKey(grade, side));
                 if (entries && entries.length > 0) out.push({ grade, side, entries });
@@ -818,7 +1058,7 @@ function OpeningHistoryPanel({
         // LS before RS within a grade (WHSE_SIDES is [LS, RS] already, so the nested
         // loop yields LS first — kept explicit for clarity if WHSE_SIDES reorders).
         return out;
-    }, [historyByCell]);
+    }, [historyByCell, gradeCodes]);
 
     const totalEntries = React.useMemo(
         () => groups.reduce((sum, g) => sum + g.entries.length, 0),

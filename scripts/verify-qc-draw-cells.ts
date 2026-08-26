@@ -27,13 +27,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  BAGGING_MACHINE_CODE,
+  BAGGING_MACHINE_CODES,
   METRICS,
+  isBaggingMachine,
   isIsoDate,
   parseMetricValue,
   parseQcDate,
   sampleGroupKey,
   type AddPartnerDrawResult,
 } from '@/lib/cenapro/ccc-analysis'
+import { parseCccFlec } from '@/app/(app)/cenapro/types'
 import {
   COL_COUNT,
   derivedPlant,
@@ -50,10 +54,33 @@ import {
   plantOverride,
   type DraftDraw,
 } from '@/app/(app)/cenapro/qc/draw-entry-rows'
+// The v2 sheet's half of the same contract. Imported so the assertions below prove the
+// TWO surfaces agree about a bagging row, rather than each being checked in isolation.
+import {
+  draftFromEdits,
+  machineCodes,
+  parseQcField,
+  type QcFieldEnv,
+} from '@/app/(app)/cenapro/qc/qc-grid-v2-save'
+import type { QcDrawOptions } from '@/app/(app)/cenapro/qc/data'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROWS = join(HERE, '../app/(app)/cenapro/qc/draw-entry-rows.tsx')
 const LEDGER = join(HERE, '../app/(app)/cenapro/qc/qc-ledger-client.tsx')
+const ROOT = join(HERE, '..')
+
+/** The dimension lists a real page hands down. Mirrors `loadQcDrawOptions`' shape. */
+const OPTIONS: QcDrawOptions = {
+  sources: ['TNK 1', 'TNK 2', 'W6', 'W7', 'FLEC'],
+  crushers: ['C1', 'C2', 'C3', 'C4'],
+  kilns: ['RK1', 'RK2', 'RK3', 'RK4'],
+  grades: ['A', '3X50'],
+  shifts: ['D', 'N'],
+  warehouses: ['WHSE 1', 'WHSE 2', 'WHSE 5', 'WHSE 7'],
+  sides: ['LS', 'RS'],
+  error: null,
+}
+const ENV: QcFieldEnv = { options: OPTIONS, contextYear: 2026 }
 const ACTIONS = join(HERE, '../app/(app)/cenapro/qc/actions.ts')
 
 /**
@@ -592,6 +619,230 @@ check('no animation was added to a row, a cell or a selection', () => {
 
 check('every metric key the ledger knows is covered above', () => {
   assert.deepEqual([...METRICS], ['bd', 'ash', 'grit', 'mc'])
+})
+
+// ── The bagging alias list, pinned across its two copies (2026-08-26) ──────────
+//
+// `BAGGING_MACHINE_CODES` in lib/ and `parseCccFlec` in app/ must agree about which
+// machine-cell values mean "flec bagging", or a value the Production ledger accepts
+// is refused by the QC Ledger (or vice versa). They are separate copies on purpose —
+// lib/ may not import from app/ — so this is what keeps them equal. The version this
+// replaced was a hand-typed `Set` in actions.ts that had silently dropped
+// `'FLEC BAGGING'`, which is exactly the drift being pinned.
+
+check('every bagging alias maps to flec_bagging in parseCccFlec, and nothing else does', () => {
+  for (const code of BAGGING_MACHINE_CODES) {
+    assert.deepEqual(
+      parseCccFlec(code),
+      { disposition_kind: 'flec_bagging', partner_equipment_code: null },
+      `${code} must parse as flec bagging in the Production ledger too`,
+    )
+    assert.equal(isBaggingMachine(code), true, `${code} must be a bagging machine`)
+  }
+  // The reverse direction: a machine that files a DRAW is never mistaken for bagging.
+  for (const machine of ['C1', 'C2', 'C3', 'C4', 'RK1', 'RK2', 'RK3', 'RK4']) {
+    assert.equal(isBaggingMachine(machine), false, `${machine} is a draw, not bagging`)
+    assert.notEqual(parseCccFlec(machine)?.partner_equipment_code, null)
+  }
+})
+
+check('a BLANK machine cell is not bagging — it is a refusal', () => {
+  // The two cases must stay separate: blank is `wrong_surface` ("this row describes no
+  // event"), bagging is a legal entry kind. Collapsing them is how FLEC used to be
+  // refused as if it were nothing at all.
+  for (const blank of ['', '   ', null, undefined]) {
+    assert.equal(isBaggingMachine(blank), false, `${JSON.stringify(blank)} is not bagging`)
+  }
+})
+
+check('the bagging predicate canonicalizes, so spacing and case cannot refuse a real row', () => {
+  assert.equal(isBaggingMachine(' flec bagging '), true)
+  assert.equal(isBaggingMachine('flec   bagging'), true) // canonToken collapses runs
+  assert.equal(isBaggingMachine('Bagging'), true)
+  assert.equal(isBaggingMachine('FLECON'), false) // near miss, deliberately not accepted
+})
+
+check('actions.ts branches on ONE predicate, not a per-site source test', () => {
+  // The bug this pins: three separate `source === 'FLEC'` tests, where fixing the
+  // first two and missing the third sends a bagging entry with p_warehouse_code and
+  // p_flec_count OMITTED — refused by the database for fields the app threw away.
+  const src = stripComments(readFileSync(ACTIONS, 'utf8'))
+  assert.ok(
+    !/const\s+isFlec\s*=/.test(src),
+    'the old per-site `isFlec` is gone; bag fields follow the DIRECTION',
+  )
+  assert.ok(
+    /const\s+needsBagFields\s*=\s*isBagging\s*\|\|\s*source === 'FLEC'/.test(src),
+    'one predicate: bagging OR a FLEC source',
+  )
+  assert.equal(
+    (src.match(/\bneedsBagFields\b/g) ?? []).length,
+    3,
+    'needsBagFields is defined once and read at BOTH the validation and the args site',
+  )
+  assert.ok(
+    !/BAGGING_CODES/.test(src),
+    'the hand-typed alias Set is gone — the shared list is the only definition',
+  )
+})
+
+
+// ── The CLIENT half of flec bagging (2026-08-26) ──────────────────────────────
+//
+// The server half is pinned above. These cover what the OPERATOR meets: the courtesy
+// validator, the one spelling the picker offers, and the v2 sheet's cell verdict — the
+// three places a bagging row could still be refused by the app on a row the database
+// would happily take.
+
+/** A bagging row: bags going INTO a warehouse, drawn from a tank. */
+function goodBaggingDraft(patch: Partial<DraftDraw> = {}): DraftDraw {
+  return goodTankDraft({
+    mach: BAGGING_MACHINE_CODE,
+    whse: 'WHSE 1',
+    bags: '40',
+    ...patch,
+  })
+}
+
+check('a bagging row passes the courtesy validator, and needs its bag fields', () => {
+  // The happy path first, or every negative below could be passing for the wrong reason.
+  assert.equal(draftBlocker(goodBaggingDraft(), YEAR), null)
+
+  // Bag fields follow the DIRECTION. A bagging row needs them even though its SOURCE is
+  // a tank — which is exactly what the pre-2026-08-26 `src === 'FLEC'` test got wrong.
+  assert.match(
+    String(draftBlocker(goodBaggingDraft({ whse: '' }), YEAR)),
+    /bagging entry needs the warehouse/,
+  )
+  assert.match(
+    String(draftBlocker(goodBaggingDraft({ bags: '' }), YEAR)),
+    /bagging entry needs a bag count/,
+  )
+
+  // SIDE stays OPTIONAL in both directions. 183 of the 372 historic bagging rows carry
+  // none, so requiring one would refuse a shape the ledger has always had; the server
+  // returns a non-blocking notice instead. This assertion is the guard against someone
+  // "tightening" it later.
+  assert.equal(draftBlocker(goodBaggingDraft({ side: '' }), YEAR), null)
+  assert.equal(draftBlocker(goodBaggingDraft({ side: 'LS' }), YEAR), null)
+
+  // A DRAW out of FLEC still needs them, unchanged — the other half of the mirror.
+  assert.match(
+    String(draftBlocker(goodTankDraft({ src: 'FLEC', whse: '', bags: '' }), YEAR)),
+    /FLEC draw needs a warehouse/,
+  )
+  // And an ordinary tank draw still refuses them.
+  assert.match(
+    String(draftBlocker(goodTankDraft({ whse: 'WHSE 1' }), YEAR)),
+    /carries no warehouse, bags or side/,
+  )
+})
+
+check('out of FLEC and into FLEC at once is refused before the round trip', () => {
+  // The RPC refuses this `invalid` (a self-loop); the client says so in fewer words so
+  // the operator is not made to wait for it. Every alias must trip it, not just `FLEC` —
+  // which is why the check runs through `isBaggingMachine` rather than a string compare.
+  for (const alias of BAGGING_MACHINE_CODES) {
+    assert.match(
+      String(draftBlocker(goodBaggingDraft({ src: 'FLEC', mach: alias }), YEAR)),
+      /cannot also come out of FLEC/,
+      `${alias} out of FLEC must be refused as a self-loop`,
+    )
+  }
+  // A bagging row from any OTHER source is fine — the refusal is the pair, not the machine.
+  assert.equal(draftBlocker(goodBaggingDraft({ src: 'W6' }), YEAR), null)
+})
+
+check('the picker OFFERS one bagging spelling, and the accept list holds five', () => {
+  // The two constants answer different questions and must not be collapsed: one is what a
+  // menu writes, the other is what a parser tolerates.
+  assert.equal(isBaggingMachine(BAGGING_MACHINE_CODE), true)
+  assert.ok(
+    BAGGING_MACHINE_CODES.includes(BAGGING_MACHINE_CODE),
+    'the offered spelling must be one the server accepts',
+  )
+  assert.ok(BAGGING_MACHINE_CODES.length > 1, 'the accept list is wider than the menu')
+
+  // The composer's dropdown is crushers + kilns + exactly ONE bagging token.
+  const rows = readFileSync(join(ROOT, 'app/(app)/cenapro/qc/draw-entry-rows.tsx'), 'utf8')
+  assert.ok(rows.includes('BAGGING_MACHINE_CODE'), 'the scan target must still exist')
+  assert.match(
+    rows,
+    /\[\.\.\.options\.crushers, \.\.\.options\.kilns, BAGGING_MACHINE_CODE\]/,
+    'the MACH picker offers the bagging token alongside the machines',
+  )
+  assert.ok(
+    !/\[\.\.\.options\.crushers, \.\.\.options\.kilns\]/.test(rows),
+    'no machine list may still omit it',
+  )
+})
+
+check('the v2 sheet ACCEPTS a bagging machine in its MACH cell', () => {
+  // `parseQcField` runs `machineCodes` through `inDomain`, so a token missing from that
+  // list is refused BY NAME with a persistent toast. Before 2026-08-26 that list was
+  // crushers + kilns, so the database would have accepted a row the sheet refused to let
+  // anyone type — the same shape as a newly added grade being refused by its own cell.
+  const codes = machineCodes(OPTIONS)
+  assert.ok(codes.includes(BAGGING_MACHINE_CODE), 'the validator must know the bagging token')
+  assert.deepEqual(parseQcField('mach', BAGGING_MACHINE_CODE, ENV), { ok: true })
+  assert.deepEqual(parseQcField('mach', 'flec', ENV), { ok: true }, 'canonicalized, not case-sensitive')
+  // Still a CLOSED domain: a near miss is refused rather than waved through.
+  const bad = parseQcField('mach', 'FLECON', ENV)
+  assert.equal(bad.ok, false)
+  // …and the crushers and kilns are untouched.
+  assert.deepEqual(parseQcField('mach', 'C1', ENV), { ok: true })
+  assert.deepEqual(parseQcField('mach', 'RK2', ENV), { ok: true })
+})
+
+check('a v2 DRAFT carrying MACH=FLEC reaches the composer rules intact', () => {
+  // The v2 sheet's blank rows go `draftFromEdits` -> the SAME `draftBlocker` /
+  // `draftToInput` the composer uses, so this proves the two surfaces agree about a
+  // bagging row rather than each having their own opinion.
+  const d = draftFromEdits('qcdraft:1', {
+    date: '2026-06-27',
+    src: 'TNK 1',
+    mach: BAGGING_MACHINE_CODE,
+    grade: 'A',
+    shift: 'D',
+    wt: '12500',
+    whse: 'WHSE 1',
+    bags: '40',
+  })
+  assert.equal(d.mach, BAGGING_MACHINE_CODE)
+  assert.equal(draftBlocker(d, YEAR), null, 'a typed bagging row is sendable from the v2 sheet')
+
+  // And the payload carries the bag fields — `actions.ts` is what decides to forward
+  // them, but it can only forward what the draft handed over.
+  const input = draftToInput(d, YEAR)
+  assert.equal(input.partnerEquipmentCode, BAGGING_MACHINE_CODE)
+  assert.equal(input.warehouseCode, 'WHSE 1')
+  assert.equal(input.flecCountRaw, '40')
+})
+
+check('the grade list keeps its seeded FLOOR under the live dimension read', () => {
+  // `loadQcDrawOptions` reads `public.cenapro_grades` for the canonical grade list, and
+  // that list is a VALIDATOR before it is a picker (`parseQcField('grade', …)` refuses a
+  // grade missing from it, by name, with a persistent toast). So the failure mode must be
+  // MONOTONE: a failed, truncated or empty accessor read may leave the list exactly as
+  // permissive as the seeded constant — never stricter. The floor is `GRADE_CODES`
+  // merged UNDERNEATH the dimension rows (adds nothing on a healthy read), with the
+  // bare-constant fallback when the dimension returns no usable code at all. Replacing
+  // either shape with a plain `dimensionGrades` would make a one-request outage read as
+  // "grade refused by its own cell" — the exact bug class this file pins twice already
+  // (the mach token above, the grade merge here).
+  const data = stripComments(readFileSync(join(ROOT, 'app/(app)/cenapro/qc/data.ts'), 'utf8'))
+  assert.ok(
+    /mergeCodes\(\s*dimensionGrades\s*,\s*GRADE_CODES\s*\)/.test(data),
+    'GRADE_CODES must be merged UNDER the dimension read (the floor), not replaced by it',
+  )
+  assert.ok(
+    /\[\s*\.\.\.GRADE_CODES\s*\]/.test(data),
+    'an empty/failed dimension read must fall back to the full seeded constant',
+  )
+  assert.ok(
+    /grades:\s*mergeCodes\(\s*canonicalGrades\s*,\s*grades\s*\)/.test(data),
+    'the grades OPTION (the validator list) must be built on the floored canonical list',
+  )
 })
 
 

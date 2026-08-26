@@ -106,6 +106,18 @@ Common, EXPECTED `partial` causes (not bugs):
   a watchdog. Investigate the day it flagged.
 - **gsheet** carries **flagged conflicts** (e.g. a NEW row that collides with a different
   batch on the same date/slot/weight). These are held for a human, never auto-written.
+- **flecon** reports the `stale_workbook` gate when the FLECON BAGGED attachment is an
+  OLDER copy of the cumulative workbook than what the app already holds. It writes nothing
+  (applying it would blank out the days the older copy is missing). Since 2026-08-26 that
+  email is **marked processed on the run that refuses it**, so you see this once and the
+  next run stops re-reading the same dead attachment — before that fix one stale email of
+  2026-08-24 turned every run `partial` indefinitely. Nothing to do unless it recurs with a
+  *new* email, which means Ivy is sending an out-of-date file.
+- **flecon** reports `settlement_ledger_unreadable` when `flecon_bag_date_settlements`
+  could not be read. flecon rewrites a whole day at a time, and that table is the list of
+  days it must leave alone, so it refuses to run rather than risk erasing a hand-corrected
+  day. This one IS a real problem — read the error (a permissions or connectivity failure)
+  and fix it; the report resumes by itself once the table is readable.
 
 A `partial` from these is the system working as designed. A `partial` with an `error`
 string on a report is a real problem — read the error (it's copyable in the modal).

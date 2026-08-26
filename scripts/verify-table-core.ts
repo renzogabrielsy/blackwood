@@ -1209,21 +1209,56 @@ check('every CARET path reads cellAddressable; every RENDER path still reads cel
   // The keyboard: the resolver, and the four jump gestures (which all end in `placeCaret`).
   assert.match(code, /addressable:\s*rows\.cellAddressable/, 'the nav resolver takes the caret predicate')
   assert.match(code, /exists:\s*rows\.cellAddressable/, 'the jump grid takes it too')
+  // Two for PageUp/PageDown's landing site (`snapToExisting`, on both of its passes), and
+  // two for the mouse's DEAD-CELL clause below — never fewer, and never as the mouse's
+  // only gate.
   assert.equal(
     (code.match(/rows\.cellAddressable\(/g) ?? []).length,
-    2,
+    4,
     "PageUp/PageDown's landing site (`snapToExisting`) must snap to an addressable cell, on both of its passes",
   )
 
-  // …and the MOUSE deliberately does not. A drag has to be able to start on a
+  // …and the MOUSE deliberately does not GATE on it. A drag has to be able to start on a
   // content-bearing, caret-free cell — a run of computed totals is the most useful thing on
-  // a sheet to sweep — so `onCellMouseDown` and the context menu keep the render predicate.
-  // This is the one place the two are meant to disagree, so it is asserted rather than left
-  // to be re-litigated.
+  // a sheet to sweep — so `onCellMouseDown` and the context menu keep the render predicate
+  // as their first question. This is the one place the two are meant to disagree, so it is
+  // asserted rather than left to be re-litigated.
   assert.equal(
     (code.match(/rows\.cellExists\(navRow, col\)/g) ?? []).length,
     2,
     'the mousedown gate and the context-menu gate both stay on cellExists',
+  )
+
+  // ── The DEAD-CELL clause (2026-08-26) ─────────────────────────────────────────
+  //
+  // A cell that is neither addressable NOR selectable has no argument behind it at all:
+  // nothing can be typed there, no rectangle may cover it, nothing totals it. Parking the
+  // caret on one handed the operator a ring and then silence, AND broke the module's own
+  // "exactly one rectangle on screen" invariant — `useCellSelection.handleCellMouseDown`
+  // refuses a non-selectable column, so the caret moved while the selection tint stayed
+  // where it was, which is where Delete and Ctrl/Cmd+C kept acting. Measured on the
+  // Cenapro QC sheet, whose imported `#` and `BATCH` lanes are exactly that combination
+  // and render NOTHING on a blank draft row.
+  //
+  // It is asserted as a CONJUNCTION, and that is the whole point: `cellAddressable` alone
+  // would take the drag-start away from `selectable: true, addressable: false` (RC
+  // Deliveries' `TTL PRICE`), which is the case the asymmetry above exists for.
+  assert.match(
+    code,
+    /if \(!rows\.cellAddressable\(navRow, col\) && !selectableCol\(col\)\) \{\s*\n\s*focus\(\);\s*\n\s*return;/,
+    'the mousedown refuses a cell that is neither addressable nor selectable — as a conjunction',
+  )
+  assert.match(
+    code,
+    /rows\.cellExists\(navRow, col\) &&\s*\n?\s*\(rows\.cellAddressable\(navRow, col\) \|\| selectableCol\(col\)\)/,
+    'the context menu applies the same rule before it moves the caret',
+  )
+  // And the caret never moves without its 1×1 selection: a column a rectangle may not
+  // cover CLEARS the selection instead of leaving it lit on another cell.
+  assert.match(
+    code,
+    /if \(selectableCol\(col\)\) handleCellMouseDown\(navRow, col, e\);\s*\n\s*else clearSelection\(\);/,
+    'a non-selectable column clears the selection rather than stranding it',
   )
 })
 

@@ -95,7 +95,7 @@ The categorical production-event columns are FK-constrained to the seeded `cenap
 | Column | Options (constant) | Nullable |
 |---|---|---|
 | `shift_code` | `M` `E` `N` (`SHIFT_CODES`) | no |
-| `grade_code` | `3X50` `2X6` `3.5` `4X8` (`GRADE_CODES`) | no |
+| `grade_code` | `3X50` `2X6` `3.5` `4X8` (`GRADE_CODES`) — **and since 2026-08-26 whatever `public.cenapro_grades` says**, because grades are addable from the app (see "Grades are addable" below). The constant stays the seed mirror; a screen that can ADD one must read the accessor or the new grade is invisible. | no |
 | `plant_code` | `W6` `W7` `W6/W7` `DVO` (`PLANT_CODES`) | **yes** |
 | `warehouse_code` | `WHSE 1/2/3/5/7` (`WAREHOUSE_CODES`) | **yes** (null = unplaced) |
 | `source_location_code` | `TNK 1–4` `W6` `W7` `FLEC` `DVO` (`SOURCE_LOCATION_CODES`) | no |
@@ -732,7 +732,9 @@ One row per `(sample_date, source_location_code, whse_key)`. `bd` / `ash` / `gri
 
 ### Adding a partner draw — `public.cenapro_add_partner_draw` (2026-08-03)
 
-**Why the QC Ledger gains an ADD, and why only this one kind of row.** Renzo: *"Partner sends their totals on a piece of paper and we log those in. Everything they give us is how much they're reporting. Whatever we put into inventory (flecon bagged inventory) is reported on a separate sheet."* Two source documents, two entry surfaces. **Partner draws are added here; flec bagging stays in the Production ledger** — and that boundary is enforced by the RPC, not by the UI, so a hand-rolled client call cannot cross it.
+> **SUPERSEDED 2026-08-26 — the flec-bagging half of this section is no longer true.** The RPC now files BOTH kinds; read "FLEC BAGGING is now addable here too" below before relying on any sentence here that says bagging belongs elsewhere. Everything else in this section still holds.
+
+**Why the QC Ledger gains an ADD, and why only this one kind of row.** Renzo: *"Partner sends their totals on a piece of paper and we log those in. Everything they give us is how much they're reporting. Whatever we put into inventory (flecon bagged inventory) is reported on a separate sheet."* Two source documents, two entry surfaces. **Partner draws are added here; flec bagging stays in the Production ledger** — and that boundary is enforced by the RPC, not by the UI, so a hand-rolled client call cannot cross it. *(Reversed 2026-08-26: the QC Ledger files bagging entries too.)*
 
 **Why an RPC and not a plain INSERT through the auto-updatable view.** `authenticated` already *can* insert an event by hand; what it cannot do by hand is keep the four invariants below. Each one is silent when it fails, which is why none of them may live in the caller:
 
@@ -776,6 +778,37 @@ One row per `(sample_date, source_location_code, whse_key)`. `bd` / `ash` / `gri
 **Proven live, then rolled back (2026-08-04), as `authenticated` with a real `auth.uid()`:** the omitted / explicit-`null` / blank paths all return `plant_code W6`, `plant_source derived`, `plant_notice null`, `whse_key W6` on a `TNK 3` draw (identical to the old function); `p_plant := 'W6'` on the same source → `plant_source supplied`, no notice; `p_plant := 'W7'` → stored `W7`, `plant_derived W6`, notice naming both, `whse_key W7`; `p_plant := ' w6/w7 '` canonicalizes to `W6/W7`; `'W9'` and `'PLANT B'` refuse `invalid_key` with the source-appropriate tail; a valid plant does **not** rescue a DVO source (`unsupported_source` still wins); `p_plant := 'W6'` on a `FLEC` draw (derived NULL) inserts with the FLEC-flavoured notice while `whse_key` stays `WHSE 1`; re-sending the `W7` row hits `already_exists`. After `ROLLBACK`: **1,140 rows, 0 `qc_ledger`-provenance rows, 0 audit rows** — no residue. Prod's `prosrc` md5 matches the migration file's body exactly (27,078 chars).
 
 **Frontend half — DONE (2026-08-04, same day).** `lib/cenapro/ccc-analysis.ts` carries `plant_source` / `plant_derived` / `plant_notice` on `AddPartnerDrawResult` (`AddPartnerDrawArgs` picked `p_plant?: string` up from the regenerated `types/supabase.ts` for free); `qc/actions.ts` takes an `AddQcDrawInput.plant` override, forwards it as `if (plant) args.p_plant = plant` (**omitted when blank, never an explicit null** — the file's idiom for every optional arg, and the exact shape the derive path was proven live with) and narrows the three keys back out of the `jsonb`; the QC draft row renders the column as the Production ledger's own `SelectCell` + `plantBadgeClass`. **The UI's contract, stated once:** `DraftDraw.plant` is the OVERRIDE ALONE (`''` = follow SRC), the cell shows `effectivePlant()` with a derived value **ghosted** and a typed one solid, `— follow SRC` clears back to derived, and `p_plant` is sent **iff** `plantOverride()` is non-empty — so `plant_source` keeps its meaning and `plant_notice` fires only on a disagreement the operator actually authored. `plant_notice` surfaces **on the row's own status line**, non-blocking, with no confirm round trip. The two `scripts/verify-qc-draw-cells.ts` assertions that pinned "PLANT is never typed and no `p_plant` is ever sent" are **INVERTED** — they now assert that an override IS sent, that a derived value is NOT, and that blank means derive.
+
+### FLEC BAGGING is now addable here too (2026-08-26, migration `20260826071705_cenapro_qc_ledger_flec_bagging.sql`)
+
+**The 2026-08-03 boundary is REVERSED, by the same argument that made PLANT typable.** Renzo: *"make sure that qc ledger allows us to add entries pertaining to flecon bags (as in adding into our inventory, not just partner draws)."* The original rule — *"partner draws are added here; flec bagging stays in the Production ledger"* — rested on the two arriving on two different pieces of paper. But `cenapro_add_partner_draw` INSERTs into `cenapro.production_event`, **the same table the Production ledger writes** through the auto-updatable `public.cenapro_production_events` view, where a `CCC/FLEC = FLEC` cell files a bagging row freely. Same column, same table, allowed on one screen and refused on the other: the identical asymmetry `p_plant` had, and it has the same answer. The QC Ledger is becoming the one place operators type everything.
+
+**The machine cell decides the ENTRY KIND, using `parseCccFlec`'s own aliases.** `C1`–`C4` / `RK1`–`RK4` → a partner draw (`partner_crusher` / `partner_kiln`, machine stored). **`FLEC` — or `BAG`, `BAGGING`, `FLEC BAGGING`, `FLEC_BAGGING`, the exact list `parseCccFlec` in `../types.ts` forgives** → `disposition_kind = 'flec_bagging'`, `partner_equipment_code = NULL`, which is the only shape `production_event_partner_equipment_presence` permits and byte-for-byte the row the Production ledger writes. A value typed into either screen therefore means the same thing. A **blank** machine is still `wrong_surface` (outcome name unchanged — `qc-grid-v2-save.ts` switches on it); only its sentence changed, because "name the crusher or kiln" is no longer the whole truth.
+
+**Bag fields follow the DIRECTION, not the machine.** `cenapro.flec_ledger` counts a row only when `warehouse_code IS NOT NULL`, the warehouse's `default_unit` is `flec_count`, and `whse_side IS NOT NULL` — so the rule the RPC already applied to a FLEC-**sourced** draw (bags OUT) now applies identically when the **machine** is FLEC (bags IN): `warehouse_code` REQUIRED and flec-count only (WHSE 1/2/5/7; **WHSE 3 refused by name** — it is counted in kilograms), `flec_count` REQUIRED and positive, `whse_side` OPTIONAL with the existing non-blocking `notice` reworded for the IN direction. Everything else refuses all three, unchanged. **This is deliberately stricter than history:** of the 372 stored `flec_bagging` rows, **183 carry no warehouse and 183 no side** (measured 2026-08-26), so they are invisible to every warehouse balance. Those rows are untouched — but an entry typed today, whose whole purpose is *adding into our inventory*, must reach the inventory it claims to add to.
+
+**`SRC = FLEC` together with `MACH = FLEC` is REFUSED BY NAME (`invalid`).** FLEC as the source means bagged stock leaving a warehouse; FLEC as the machine means fresh charcoal being bagged into one. Together it is a self-loop, and not merely redundant: `cenapro.flec_ledger` branches on `disposition_kind` FIRST, so the row would count as `flec_in` and its outflow half would never be counted at all — **the warehouse would gain bags that had just been taken out of it.** The refusal names both readings and offers the two legal ways out. `invalid` rather than a new outcome name, because that is exactly what `invalid` already means here (two supplied values that cannot both be true) and because `readAddOutcome` in `qc/actions.ts` narrows an unrecognised outcome to `rpc_error`, which would turn a readable refusal into *"it failed"*.
+
+**Everything else is byte-for-byte:** batch resolution, plant derivation/override, the date guards, the weight rules, the `duplicate_warning` / `already_exists` pair, the audit provenance (`qc_ledger` via `tr_cenapro_pe_audit`), and the `sample_group` echo. DVO stays `unsupported_source` whichever kind is asked for. The two duplicate probes now read `partner_equipment_code IS NOT DISTINCT FROM …`, which is **exact, not approximate**: the presence CHECK makes "equipment IS NULL" and "disposition is `flec_bagging`" the same set of rows, and `cenapro.compute_unique_tag` writes the literal `FLEC` into the tag for them. **One wording fix rode along:** `plant_notice` gained a third branch, because the sentence names the SAMPLE GROUP and a bagging entry always carries a warehouse — so it is grouped by the WAREHOUSE, and telling its author that a typed plant moved the group would state a false fact.
+
+**Verdict shape:** unchanged except that **`disposition_kind` now also carries `'flec_bagging'`** — the only key that says which kind was filed. No `entry_kind` key was invented: the disposition IS the entry kind, and a second field saying the same thing is a second place for it to drift. Signature unchanged (15 args), so every call site, positional or named, is unaffected; DROP + CREATE with the grants re-issued per the house idiom, verified back to exactly one function with `{authenticated=X, service_role=X}` and no PUBLIC.
+
+**Proven live, then rolled back (2026-08-26), as `authenticated` with a real `auth.uid()`:** a bagging entry (TNK 3 → WHSE 5, 20 bags, LS) inserts with `disposition_kind flec_bagging`, `partner_equipment_code null`, `plant W6`, `sample_group whse_key WHSE 5`, and **`cenapro_flec_ledger('WHSE 5', …)` reads it as `flec_in = 20`** (running balance 338); the lowercase alias `bagging` with no side inserts carrying the IN-flavoured notice; re-sending an identical entry → `already_exists`; missing warehouse, missing count, WHSE 3 and `WHSE 9` all refuse with the IN-flavoured sentences; `SRC=FLEC + MACH=FLEC` → `invalid` (the self-loop); a blank machine → `wrong_surface`; `DVO` + FLEC → `unsupported_source`; `C9` → `invalid_key` naming FLEC as a third option. The OLD paths are intact: C1 crusher, RK2 kiln and a FLEC-sourced C2 draw all insert exactly as before, and *"FLEC draw, no count"* / *"tank draw with warehouse"* / *"…with flec_count"* / *"…with side"* / plant override + `plant_notice` / `W9 invalid_key` / 4-dp weight / a 2016 date all return their ORIGINAL messages verbatim. Six inserts wrote **six** `production_event_audit` rows, `operation INSERT`, `source qc_ledger`, `changed_by_role authenticated`, one actor. `anon` denied `42501`. After `ROLLBACK` the table is byte-identical — **1,311 rows / 18,662,002.0 kg / `unique_tag` md5 `afbdf8a0e2918420bdbdbe85515b3e73` / 4 `qc_ledger`-provenance rows**, and zero rows or audit entries created in the last 30 minutes. Prod's `prosrc` md5 matches the migration file's body exactly (`465d8752028fc5d1419f1d712d5b68c9`, 32,764 chars).
+
+**FRONTEND IS DONE (2026-08-26) — see "The client half of flec bagging" below.** This paragraph previously read *"FRONTEND IS NOT DONE — one guard still blocks this end-to-end"* and named two sites in `addPartnerDraw`. There were **three**, and all three are now lifted.
+
+### Grades are addable (2026-08-26, migration `20260826072202_cenapro_grades_accessor_and_add.sql`)
+
+`cenapro.grade` is ONE dimension shared by production rows, partner draws, bagging entries and the flec ledger's per-grade running balance — four seeded rows (`3X50` / `2X6` / `3.5` / `4X8`), reachable from nowhere in the app, because the `cenapro` schema is invisible to PostgREST and every UI list is the hardcoded `GRADE_CODES` constant in `../types.ts`. Adding a grade meant a migration. Two objects open it:
+
+- **`public.cenapro_grades`** — `security_invoker` read accessor, all five columns (`code`, `display_name`, `sort_order`, `expected_kg_per_bag_min`, `expected_kg_per_bag_max`), ordered by `sort_order, code`. **SELECT only, on purpose:** `authenticated` holds `arwd` on the base table (the `cenapro` DEFAULT-ACL trap below), and a single-table view over it is auto-updatable — so granting anything beyond SELECT would hand the app a write path that bypasses the RPC entirely. SELECT to `authenticated` + `service_role`; `anon` nothing. Verified live: an `authenticated` INSERT through the view is denied `42501`, and so is every `anon` read.
+- **`public.cenapro_add_grade(p_code, p_display_name default null, p_sort_order default null)`** — **INSERT-ONLY. There is no update RPC and no delete RPC**, and that is a decision, not an omission: `grade_code` is a TEXT foreign key carried by all 1,311 `production_event` rows, so renaming one needs a cascade nobody has reasoned about, and deleting one would *succeed* on a grade added by mistake five minutes ago and be refused by the FK later — succeeding and failing for reasons the operator cannot see. Adding is monotone and safe. Same posture as `cenapro_set_rc_supplier_opening_balance` (append, never amend) and the supplier dimension ("retire with `active = false`, there is no delete RPC").
+
+**The duplicate rule is case- and whitespace-insensitive, and it names BOTH spellings.** Both sides go through `cenapro.fn_canon_token` — the schema's ONE normalization definition — and the code is **stored canonicalized**, so the table can never hold two spellings of one grade. A typed `3x50` comes back `already_exists` saying *"'3x50' already exists as '3X50' — grade codes are matched without regard to case or spacing, so there is only one of it"*, because telling an operator it already exists **without saying as what** leaves them hunting for a row they think is missing. `display_name` defaults to the code (what all four seeded rows do); `sort_order` defaults to `max+1` and is ordering only — not unique, nothing keys on it, a tie is broken by `code` in the view. `expected_kg_per_bag_min/max` are deliberately not settable: they are a QC tolerance, not part of naming a grade, and two of the four seeded rows carry neither. Refusals (`invalid`): a blank code, a code over 24 characters (so a pasted cell cannot become a permanent, undeletable dimension row), a display name over 64, a `sort_order` outside 0–10000.
+
+**Proven live, then rolled back (2026-08-26), as `authenticated`:** `5x10` inserts as **`5X10`**, `sort_order 5`, and appears in `public.cenapro_grades` in order; re-sending `5X10` and `  5x10 ` both refuse `already_exists` with the right sentence each; `3x50` refuses against the seeded row and returns its real `expected_kg_per_bag` bounds; a blank code, a NULL code, a 25-character code and `sort_order 99999` all refuse `invalid`; `('6x12','Six by Twelve',0)` lands first in the list; and **the new grade is immediately usable by `cenapro_add_partner_draw`** (a `5X10` bagging entry inserts, tag `…-5X10-…`). After `ROLLBACK`: **4 grades, `3X50,2X6,3.5,4X8`**, and `production_event` unchanged at 1,311 rows / `afbdf8a0e2918420bdbdbe85515b3e73`. `prosrc` md5 matches the file body (`1c7058a66c8b5d851345a8268dba7ff8`, 5,763 chars).
+
+**Frontend follow-up (not this pass):** `GRADE_CODES` in `../types.ts` stays as the canonical seed mirror, but a screen that lets a grade be ADDED must read `public.cenapro_grades` rather than the constant, or a newly added grade is invisible until someone edits the file. That is the same merge `loadQcDrawOptions()` already does for the other dimensions, only now with a real accessor behind it.
 
 ### Adding a draw — SPREADSHEET ROWS (2026-08-04, supersedes the panel below)
 
@@ -832,6 +865,8 @@ The composer's pickers must not hide a machine the partner's slip names, so the 
 **PLANT is the one list NOT read this way (2026-08-04).** Its four codes come straight from `PLANT_CODES` in `../types.ts` — the same constant the Production ledger's plant dropdown renders — because `cenapro.plant` is the RPC's own validation dimension and the two must offer exactly the same set or the UI would let an operator pick a value the server refuses. There is nothing to discover: a plant is not a code that arrives with new data the way a machine or a warehouse does.
 
 **Why the merge is needed and not belt-and-braces:** the fact table alone is missing **C3, C4, 4X8 and WHSE 2** today — four options an operator would have had no way to pick. **What the merge still cannot fix:** a code seeded into a dimension table that neither the constants nor any event knows. That needs the accessor:
+
+> **PARTLY ANSWERED 2026-08-26 — `public.cenapro_grades` exists.** One of the five dimensions now has a real read accessor, built because grades became addable from the app (see "Grades are addable" below); a grade added there is otherwise invisible to every list. The other four (`source_location`, `partner_equipment`, `shift`, `warehouse`) are still unexposed, so the union view below is still the right shape for them — and a grade added today still will not appear in `loadQcDrawOptions()` until that function reads the accessor. Deliberately **not** widened into the union view in the same change: nothing yet needs the other four, and a grade accessor is a dimension the WRITE path also depends on, which the union view is not.
 
 ```
 ## Backend Request: expose the cenapro dimension tables read-only
@@ -918,8 +953,8 @@ from that date on; only **QC** still has a v2.
 
 | File | Role |
 |---|---|
-| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. **SEVENTEEN columns since 2026-08-25, in the Cenapro PRODUCTION ledger's arrangement** — see "QC ledger v2 — the production arrangement" below. (It carried the live `qc-ledger-client.tsx`'s own fifteen, in that file's order, until then; four widths always differed — see the `px-2` note.) **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". |
-| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences — **plus, since 2026-08-25, `QC_COLUMNS` (THE column arrangement, which the grid renders by mapping), `QC_IMPORTED_COLUMNS` and `isImportedColumn`.** Asserted by `scripts/verify-qc-grid.ts` (**50 assertions**) with no browser and no database. |
+| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. **SEVENTEEN columns since 2026-08-25, in the Cenapro PRODUCTION ledger's arrangement** — see "QC ledger v2 — the production arrangement" below. (It carried the live `qc-ledger-client.tsx`'s own fifteen, in that file's order, until then; four widths always differed — see the `px-2` note.) **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". Since 2026-08-26 it also carries the production ledger's own CELL PAINT (`../badges`) and the imported lanes' blank-row affordance — see "QC ledger v2 — the blank rows, and the paint" below. |
+| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences — **plus, since 2026-08-25, `QC_COLUMNS` (THE column arrangement, which the grid renders by mapping), `QC_IMPORTED_COLUMNS` and `isImportedColumn`.** Asserted by `scripts/verify-qc-grid.ts` (**54 assertions**) with no browser and no database. |
 | ~~`inventory/flec-inventory-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** See below. |
 
 ### RETIRED 2026-08-20 — Flec Inventory (`/cenapro/inventory`) leaves the v2 track
@@ -1235,3 +1270,203 @@ scan that keeps `QC_COLUMNS` load-bearing (`SPECS` must be it, mapped) and the p
 **Gates:** `tsc --noEmit` clean · `npm run build` clean · `npm run lint` 167/28 (unchanged) ·
 `verify-qc-grid` 50 · `verify-qc-draw-cells` 36 · `verify-table-core` 79 · `npm run test:e2e`
 57 passed.
+
+### QC ledger v2 — the blank rows, and the paint (2026-08-26)
+
+Two things Renzo reported after a day of live use on the rearranged sheet. They are
+unrelated symptoms of the SAME omission: the 2026-08-25 pass moved the columns and left
+everything about how a cell LOOKS behind.
+
+#### 1. *"There are some columns I can't seem to manipulate/edit (specifically the empty ones below where we add entries)"*
+
+**The two columns are `#` and `BATCH`, and the verdict was never wrong — the RENDERING
+was.** Driven in a browser against the real component, all fifteen typeable lanes open an
+editor on a blank draft row and the two imported ones refuse, which is exactly the
+contract. What made them read as broken is one line in the platform:
+`components/shared/table/Row.tsx` renders `exists && data !== null ? col.format(data, ctx)
+: null`, and **a draft row has no data**. So on a STORED row those two paint an ordinal and
+a dash and obviously mean *"not yours to type"*; on a BLANK row they paint **nothing at
+all** and are pixel-identical to the fifteen empty cells beside them — two of which sit
+first and fourth, exactly where a new line is started.
+
+Two fixes, at two layers, and neither weakens the un-typeable rule:
+
+- **Consumer.** `importedCellClass` paints the two lanes on a blank row only — a muted
+  wash plus a `—` drawn as a pseudo-element. `cellClass` is the ONE seam the module gives a
+  consumer on a draft row (its contract says it receives `row === null` there) and it is
+  merged UNDER the cached class string, so `selected` / `active` / `invalid` / `dirty` all
+  still win. It is gated on the draft row deliberately: on a stored row the content already
+  carries the message, and the `—` would double the one `format` renders.
+- **Platform** (`lib/hooks/use-table-interaction.ts`, a genuine bug — see
+  `lib/table/CONTEXT.md` → `CellSlot.addressable`). A click parked the caret on those cells
+  and then every keystroke, Delete and paste did nothing; worse,
+  `useCellSelection.handleCellMouseDown` refuses a non-selectable column, so the caret moved
+  while the selection tint stayed on the cell clicked BEFORE it — two rectangles on screen,
+  with Delete and Ctrl+C still aimed at the old one (measured). **A cell that is neither
+  addressable nor selectable now takes no caret at all**, and a click on any other
+  non-selectable column clears the selection rather than stranding it. The refusal is a
+  CONJUNCTION on purpose: `addressable` alone would take the drag-start away from
+  `selectable: true, addressable: false`, which is the case the mouse/keyboard asymmetry
+  exists for.
+
+#### 2. The paint is the production ledger's, lane for lane
+
+The two screens had the same columns in the same order and did not look remotely alike,
+because the arrangement pass aligned the **Tab run** and not the **eye** — and the eye finds
+a machine code by its colour long before it reads it, which is the same muscle-memory
+argument the arrangement was for. So the display treatment is now
+`production-grid-v2-shared.tsx`'s, taken through the lane mapping that pass already
+established (`recv`⇄`date`, `source`⇄`src`, `ccc`⇄`mach`, `flec`⇄`bags`):
+
+| lane | treatment |
+|---|---|
+| `PLANT` | `plantBadgeClass` badge — W6 blue · W7 teal · W6/W7 indigo · DVO slate |
+| `MACH` (production's `CCC/FLEC`) | `cccFlecBadgeClass` badge — FLEC emerald · C1–C4 amber · RK1–RK4 rose |
+| `DATE` · `SH` · `GRADE` · `WHSE` · `SRC` · `SIDE` · `WT KG` · the four lab lanes | `font-mono text-xs font-bold` |
+| `PROD` · `BAGS` | the same, muted — exactly as the production ledger mutes `prod` and `flec` |
+
+**The colour maps are IMPORTED from `../badges`, never re-typed** — that pure module exists
+precisely so a second consumer can have the same colours without dragging a 1,500-line
+client component in behind it, and the QC PLANT dropdown has read it since 2026-08-04. The
+verify script reads the production ledger's `case` blocks **off disk** and asserts that the
+two screens badge exactly the same lanes, so a badge added or removed over there fails here
+rather than diverging silently. **Display only** — the module's own `<input>` is never
+wrapped, so typing and paste are untouched (the idiom `badges.ts` documents in its header),
+and a blank value gets the dash and never an empty chip.
+
+Only `qc/qc-ledger-grid-v2.tsx`, `scripts/verify-qc-grid.ts`,
+`lib/hooks/use-table-interaction.ts` and `scripts/verify-table-core.ts` changed. `qc/actions.ts`,
+`qc/data.ts`, `qc/draw-entry-rows.tsx`, `qc/qc-ledger-client.tsx`, `qc/qc-grid-v2-save.ts` and
+every production ledger file are byte-identical. No SQL, no server action.
+
+**Gates:** `tsc --noEmit` clean · `npm run build` clean · `npm run lint` 167/28 (unchanged) ·
+`verify-qc-grid` **54** · `verify-table-core` 80 · `npm run test:e2e` 57 passed.
+
+### The client half of flec bagging (2026-08-26)
+
+The server half is the section above; this is what the OPERATOR meets. Three surfaces had
+to move together, and the third is the one that would have been missed.
+
+**1. `qc/actions.ts` — three guard sites, ONE predicate.** The pre-flight `BAGGING_CODES`
+set is gone (blank machine is the only `wrong_surface` left), the bag-field rule is
+`needsBagFields = isBagging || source === 'FLEC'`, and — the site that is easy to miss —
+**the arg-forwarding gate reads the same predicate**. Fixing only the first two would have
+sent a bagging entry with `p_warehouse_code` and `p_flec_count` OMITTED, so the operator
+fills them in, the app silently drops them, and the DATABASE refuses the row for fields
+that were never sent. A refusal in the app's own voice is recoverable; a refusal for a
+field the app threw away is not. `scripts/verify-qc-draw-cells.ts` asserts the identifier
+appears **exactly three times** — one definition, two reads — so a fourth site added and
+not wired fails the check rather than shipping.
+
+**2. TWO constants, and they answer different questions.**
+`BAGGING_MACHINE_CODES` (five spellings) is the **accept** list — what a parser tolerates,
+including a `FLEC BAGGING` pasted out of the production ledger. `BAGGING_MACHINE_CODE`
+(`'FLEC'`) is the **offer** — the one spelling a picker writes and the one this sheet
+validates against. A dropdown listing all five would ask the operator to choose between
+synonyms; a screen hard-coding a sixth would be the drift the pair exists to end. Both live
+in `lib/cenapro/ccc-analysis.ts`, so the composer, the v2 sheet and the server action share
+them.
+
+**3. `qc/draw-entry-rows.tsx` — the composer.** MACH offers crushers + kilns + `FLEC`, with
+the bagging token **last**: it is the rarer entry and every operator's muscle memory reaches
+for C1–C4 / RK1–RK4, so prepending it would shift the whole list under them. `draftBlocker`
+now branches on the direction, names the self-loop before the round trip, and — deliberately
+— **still does not require SIDE**. 183 of the 372 historic bagging rows carry none, so
+demanding one would refuse a shape the ledger has always had; the server returns a
+non-blocking `notice` instead, which the row's status line already renders. Note the
+mechanism is stronger than "not counted": `cenapro.flec_ledger` has `whse_side IS NOT NULL`
+in its WHERE, so a sideless row is **excluded entirely**. Surfaced, never gated.
+
+**4. THE ONE THAT WOULD HAVE BEEN MISSED — `qc-grid-v2-save.ts::machineCodes`.** That list
+is a **validator, not a menu**: `parseQcField('mach', …)` runs it through `inDomain`, so a
+token absent from it is refused BY NAME with a persistent toast. It was crushers + kilns, so
+**the database would have accepted a bagging row that the v2 sheet refused to let anyone
+type** — the same shape as a newly added grade being refused by the cell that should offer
+it. It now carries `BAGGING_MACHINE_CODE`. Only the one canonical spelling: `inDomain`
+compares through `canonToken`, so a pasted `flec bagging` still fails and is refused by
+name rather than silently rewritten.
+
+**The two surfaces are proven to agree**, rather than each checked alone: the v2 sheet's
+blank rows go `draftFromEdits` → the composer's own `draftBlocker` / `draftToInput`, and
+`verify-qc-draw-cells.ts` drives a `MACH=FLEC` draft through that path and asserts the bag
+fields survive into the payload.
+
+**Server rules mirrored, and one NOT to build.** Warehouse: flec-count only (WHSE 1/2/5/7,
+never WHSE 3) — **identical in both directions**, so there is deliberately no
+direction-specific allowlist; `options.warehouses` already excludes WHSE 3. DVO stays
+`unsupported_source` whichever kind is asked for, and is already absent from
+`options.sources`. **Do not offer a confirm affordance on `already_exists`:**
+`cenapro.compute_unique_tag` excludes weight and `flec_count`, so two bagging entries
+differing only in bag count collide, and `p_allow_duplicate` cannot help — only
+`duplicate_warning` is confirmable. No new outcome names; the self-loop is `invalid`.
+
+**Gates:** `tsc --noEmit` clean · `npm run build` clean · `npm run lint` 167/28 (unchanged) ·
+`verify-qc-draw-cells` **45** · `verify-qc-grid` **54** · `verify-table-core` 80.
+
+### Grades are DATA — the frontend half (2026-08-26)
+
+The consumer side of `public.cenapro_grades` + `public.cenapro_add_grade` (see "Grades are
+addable" above, which ends by naming exactly this as the follow-up). Two screens change and
+one constant is demoted. **No SQL, no migration, no new RPC**, and nothing under
+`qc/actions.ts` / `draw-entry-rows.tsx` / `qc-grid-v2-save.ts` was touched.
+
+**`GRADE_CODES` stops being the list and becomes the FLOOR.** It stays in `../types.ts`
+exactly as documented — an exact mirror of the seed — but no screen treats it as the set of
+grades any more. It is merged in *underneath* the live dimension, so a failed or partial read
+leaves every list at least as complete as it was before this change and never shorter.
+
+**Flec Inventory (`/cenapro/inventory`) — the rows come from the dimension.**
+`fetchGradeCodes()` in `inventory/actions.ts` reads the accessor (already ordered by
+`sort_order, code`; **that order IS canonical and is never re-sorted client-side**), drops
+null/blank codes because every column on the view is nullable, and **falls back to
+`GRADE_CODES` on a read error or an empty result** — an empty grade dimension cannot be right
+and would render a STARTING block with no rows at all. `page.tsx` fetches it in the existing
+parallel batch (warehouse- and date-independent) and threads `gradeCodes` into
+`StartingBlock` and `OpeningHistoryPanel`, which no longer import the constant.
+
+**The fallback reason is deliberately kept OUT of `loadError`.** It travels as its own
+`gradesError` prop into a new amber `DegradedBanner`, because folding it into the fatal
+banner would flip the balance and ledger empty-states to *"No data to display."* — claiming
+the page is broken when only the grade list is one row short. Amber, not destructive, and it
+carries **Copy** like every other inline error surface (error HARD RULE).
+
+**Adding one is a POPOVER on the grid's own header**, beside Discard / Save — a grade is a
+ROW of that grid, so the control that adds one belongs to the grid, not the page chrome.
+Two fields: **code** (required) and **display name** (optional; the RPC defaults it to the
+code, which is what all four seeded rows do). `sort_order` is deliberately not offered —
+it defaults to `max + 1`, nothing keys on it, and a spinner would imply it means something.
+There is **no edit pencil and no ×**, because `cenapro_add_grade` is INSERT-only by design.
+On success: `router.refresh()` + a success toast naming the STORED spelling. On refusal: the
+RPC's own sentence through `errorToast()` (persistent + Copy), with the popover left **open
+holding what was typed** — every refusal here is answered by retyping.
+
+**The client canonicalizer WARNS and never blocks.** `canonGrade` (trim / collapse
+whitespace / uppercase) mirrors `cenapro.fn_canon_token` only to render *"saved as 3X50"* and
+an amber *"already on the list"* hint before the round trip. It does **not** disable the
+button on a clash, because the list it compares against may itself have fallen back to the
+seed — a client that refuses what the database would accept is worse than one extra request.
+Same "courtesy, never the authority" discipline as `draftBlocker`.
+
+**`OpeningBalanceCellChange.grade` widened `GradeCode` → `string`** (`../types.ts`). Only the
+inventory module consumes that interface, and `cenapro_set_opening_balance` takes a plain
+text `p_grade_code` it FK-checks — so the narrowing bought nothing at the write boundary and
+would have made a newly added grade **unsaveable**. `StartingCell` / `CellHistoryPopover`
+widened the same way for the same reason.
+
+**`loadQcDrawOptions` reads the accessor — and this one is a VALIDATOR, not a dropdown.**
+The QC v2 sheet runs typed text through `parseQcField('grade', …)` → `inDomain` against
+`options.grades`, so a grade the database had just accepted would have been **REFUSED BY
+NAME with a persistent toast** the moment an operator typed it — strictly worse than a short
+picker, and on a screen this pass does not edit. `qc/data.ts` now issues the fact-table read
+and the grade read **in parallel** (either may fail without taking the other down), builds
+`canonicalGrades` from the accessor with `GRADE_CODES` merged underneath, and passes that
+where the bare constant used to go. The observed-event merge on top is unchanged. Grade is
+now the ONE of the five dimensions read properly; the other four still have no accessor, so
+the `public.cenapro_dimensions` union view above is still the right shape for them.
+The non-fatal `error` names the fact-table failure first (it costs four dimensions) and the
+grade failure only otherwise (it costs one that still has a seeded floor).
+
+**Gates:** `tsc --noEmit` clean · `npm run build` clean · `npm run lint` **167/28**
+(unchanged) · `verify-table-core` 80 · `verify-qc-grid` 54 · `verify-qc-draw-cells` 45.
+**Not driven in a browser** — `/cenapro/inventory` needs a real login, the same limitation
+recorded for every QC pass above.

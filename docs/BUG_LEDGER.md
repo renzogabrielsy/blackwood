@@ -1012,6 +1012,7 @@ analysis is the most useful record — this section is the index:
 | BUG-017 — `fn_update_blackwood_state` moved BEFORE → AFTER; batch-code moves and in-place weight/cost edits now recompute truthfully | 2026-08-04 | migration `20260804060000` (applied live) |
 | BUG-018 — `batches.avg_cost` unified on the delivery-weighted definition; all 693 batches recomputed | 2026-08-04 | migration `20260804060000` (applied live) |
 | BUG-026 — Stop did not stop an in-flight Gmail search; the cancelled run kept downloading for 2 min 49 s and a re-click opened a second IMAP session | 2026-08-19 | _(uncommitted)_ |
+| BUG-028 — one stale FLECON email re-refused on every run (`partial` forever), its message named "(no dated rows)", and the settled-dates read failed OPEN | 2026-08-26 | _(uncommitted)_ |
 
 **BUG-005 verified end-to-end:** picker now shows ONE `JULY` campaign with 14 feed days
 (was `Jul 8d` + `July 6d`); 2,057 `rc_out` rows before → 2,057 after (re-labelled, none
@@ -1423,3 +1424,74 @@ three pieces already in place: read `view_production_schedule_state`, call
   (apply-phase only; the parity gate is classify-only).
 - **Deploy:** touches `workers/sync/**` — needs `cd workers/sync && npm run deploy` on top
   of the merge to `main`, or the fix is inert in production.
+
+---
+
+## BUG-028 — One stale FLECON email jammed the sync `partial` forever, described itself with a date that doesn't exist, and the ledger protecting hand-fixed days failed OPEN ✅ FIXED (2026-08-26, uncommitted)
+**Status:** ✅ FIXED (uncommitted) · **Effort:** S · **Severity:** MEDIUM (a permanent false alarm) + HIGH-latent (a protection that fails open)
+
+Three defects in the flecon pipeline, found while asking why every run since 2026-08-25 was
+`partial` when the bag DATA is perfectly in sync — every bag column's balance matches Ivy's
+freshest workbook exactly. Nothing was mis-written; the pipeline was stuck telling the truth
+about a dead email, in a sentence that named no date, while a guard sat quietly disarmed.
+
+- **Symptom.** Runs `4a8602ac` (08-25 01:42), `7f23dd88` (08-26 01:11) and `a67e9c4a`
+  (08-26 02:11) all finished `partial`, all with the same flecon `stale_workbook` gate
+  failure, all having stored the same attachment.
+- **Root cause 1 — a refusal that can never change its mind was never retired.** Ivy's
+  FLECON BAGGED email of 2026-08-24 00:58 (uid 126413, `FLECON BAG MOVEMENT 2026 .xlsx`,
+  387,515 bytes) carries a workbook whose last dated row is **2026-08-21** while
+  `MAX(flecon_bag_movements.transaction_date)` is **2026-08-25**. The `stale_workbook` gate
+  (BUG-015 defect C1) correctly refused to apply it — an older copy of a CUMULATIVE workbook
+  would blank out the days it is missing. But flecon labels an email processed only on a
+  clean apply, so `labelProcessed` was never called (`labeled: false`), the Gmail query
+  (`-label:"Blackwood-Processed"`) kept returning it, and the identical refusal re-fired on
+  every future run — **forever**, because the attachment is a fixed file.
+- **Root cause 2 — the message named a date that does not exist.** The gate detail read
+  *"only carries bag movements up to **(no dated rows)**"* about a workbook full of dated
+  rows. `index.ts` fed `extract.summary.date_max`, which is computed over the rows that
+  SURVIVED the `since` window; with `since` = `2026-08-25 − 3d` = `2026-08-22` and the file
+  ending on `2026-08-21`, every row was dropped and the max was null.
+- **Root cause 3 — the settled-dates read failed OPEN.** `index.ts` wrapped the
+  `flecon_bag_date_settlements` read in `catch { settledDates = new Set() }`. flecon's write
+  model is REPLACE-BY-DATE, and that table is the only thing that stops it deleting a day a
+  human arbitrated by hand (the 2026-01-31 backfill, BUG-020, exists nowhere in the sheet).
+  A failed read therefore meant "nothing is settled" and the run carried on with the
+  protection silently switched off — **L-044's shape** (a read that fails quietly and renders
+  as "nothing to report"), except the cost here is deletion, not a missing alarm.
+
+- **Fix.**
+  1. **Unjam (`apply.ts`, the `staleWorkbook` early return).** A **STRICTLY older** workbook
+     (a real `workbookMaxDate < dbWatermark`) is labeled processed on the run that refuses it,
+     and says so in the held detail + `row.email_labeled_processed`. **The refusal to WRITE is
+     untouched** — no replace, no watermark, `ok:false`, same gate failure — so that run is
+     still `partial` and the operator sees it **exactly once**; the next run never sees the
+     email again. A `workbookMaxDate === null` workbook (a broken attachment, not a provably
+     superseded one) is NOT labeled, a `noLabel` dry run never labels, and a Gmail labeling
+     throw degrades to `labeled:false` rather than crashing a clean refusal.
+  2. **A date that exists (`index.ts::wholeSheetMaxDate`).** The comparison AND the sentence
+     now use the max over `extract.rows` ∪ `extract.flagged_rows`, **excluding out-of-year
+     rows** (a `2027-…` typo must not make a stale workbook look fresh and disarm the gate).
+     The VERDICT was verified unchanged in every real case first — `since` is a floor derived
+     from the watermark, so it can only empty the set, never lower a real maximum, and an
+     emptied set means genuinely stale. The old comparison was right by coincidence; it is now
+     right by construction. `apply.ts` needed no change: both sentences render the one value
+     `index.ts` builds.
+  3. **Fail closed (`index.ts`).** `readFleconSettledDates()` moved to the very top (right
+     after the email is found, before the workbook is opened) and its failure returns
+     `ok:false` + a `settlement_ledger_unreadable` gate failure naming the read error, with
+     **no extract-compare, no classify, no write, no watermark and no label**. Reading the
+     ledger is fail-closed; ADDING a settlement stays best-effort and degrades to the
+     already-known set — never to an empty one.
+- **No migration, no app change, no DB write.** Worker orchestration/labeling only.
+- **Spec:** `workers/sync/specs/flecon.md` §4, §5a, **§5b** (the label exception), **§5c**
+  (the whole-sheet max), §6a (the fail-closed read) + 4 new rule-checklist rows ·
+  `workers/sync/RUNBOOK.md` → "A run finished as `partial`".
+- **Tests:** `workers/sync/test/reports/flecon-stale-unjam.test.ts` (**12** new, incl. an
+  end-to-end `runReport` on the real fixture workbook that reproduces the null-max jam) ·
+  `flecon-guards.test.ts`'s stale case updated to pin the new label behaviour · worker suite
+  **57 files / 861 tests** green · `npm run parity` clean, **no new expected deviation**
+  (all three changes are orchestration/labeling; the parity gate is classify-only and
+  `classifyCase` is untouched) · `npm run verify:container-build` OK.
+- **Deploy:** touches `workers/sync/**` — needs `cd workers/sync && npm run deploy` on top of
+  the merge to `main`, or the fix is inert in production and the jam continues.

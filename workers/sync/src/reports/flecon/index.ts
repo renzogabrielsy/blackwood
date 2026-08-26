@@ -24,7 +24,7 @@ import type {
   DbWindow,
 } from "../types.js";
 import { loadFleconWorkbook } from "./sheet.js";
-import { extractFlecon, type BagTypeRegistryRow } from "./extract.js";
+import { extractFlecon, type BagTypeRegistryRow, type FleconExtract } from "./extract.js";
 import {
   classifyFlecon,
   type DbMovementRow,
@@ -33,6 +33,7 @@ import {
   type FleconClassified,
 } from "./classify.js";
 import { applyFlecon, type FleconApplyDeps, type FleconApplyResult } from "./apply.js";
+import { errText } from "../../lib/operatorError.js";
 import {
   computeFleconSettlements,
   correctedDate,
@@ -187,6 +188,10 @@ export interface RunReportResult {
    * previously never emitted any — its classify was always `ok:true`. The stale-workbook
    * refusal is the first, and it must reach the panel card as a gate failure, not as a
    * silent zero-row apply. Empty array = no gate tripped (the normal case).
+   *
+   * Two gates today: `stale_workbook` (the attachment is an older copy than the DB) and
+   * `settlement_ledger_unreadable` (2026-08-26 — the protection that says which dates must
+   * not be rewritten could not be read, so the report refuses to run at all).
    */
   gate_failures: Array<{ gate: string; detail: string }>;
 }
@@ -233,6 +238,53 @@ export async function runReport(
     };
   }
   await deps.progress("fetch", `Found the report: ${wbMeta.subject ?? "FLECON BAGGED"}`, 18);
+
+  // ── THE DATE-SETTLEMENT LEDGER IS READ FIRST, AND IT FAILS CLOSED (2026-08-26). ──
+  // flecon's write model is REPLACE-BY-DATE: for every date in scope it DELETEs the day
+  // and re-INSERTs the sheet's version of it. `flecon_bag_date_settlements` is the ONLY
+  // thing standing between that and a date a human deliberately arbitrated — the
+  // hand-backfilled 2026-01-31 movements (§6a) exist nowhere in the sheet, so a run that
+  // believes NOTHING is settled will delete them.
+  //
+  // This read used to sit inside a `catch { settledDates = new Set() }` alongside the
+  // compute/insert, i.e. an unreadable ledger degraded to "nothing is settled" and the run
+  // carried on with the protection silently switched off. That is L-044's shape exactly: a
+  // read that fails quietly and renders as "nothing to report". A protection that cannot be
+  // read is a protection that is not in force, so the report REFUSES to run: no
+  // extract-compare, no classify, no writes, no watermark, no label.
+  //
+  // The COMPUTE/INSERT half below stays best-effort on purpose — failing to record a NEW
+  // settlement loses nothing that was already protected, so it must not stop the run.
+  let knownSettled: ReadonlySet<string>;
+  try {
+    knownSettled = await deps.db.readFleconSettledDates();
+  } catch (exc) {
+    await deps.progress(
+      "finalize",
+      "Stopped — the list of locked bag dates could not be read, so nothing was touched.",
+      100,
+      undefined,
+      "warn",
+    );
+    return {
+      ok: false,
+      classified: null,
+      apply: null,
+      note: "Settlement ledger unreadable — flecon refused to run.",
+      gate_failures: [
+        {
+          gate: "settlement_ledger_unreadable",
+          detail:
+            `The list of bag dates that are locked (already sorted out by hand) could not be ` +
+            `read from the database, so this run does not know which days it must leave alone. ` +
+            `Bag movements are saved by rewriting a whole day at a time, so continuing could ` +
+            `erase a day someone deliberately corrected. NOTHING was read, written or marked ` +
+            `as processed — the report will try again on the next run.\n` +
+            `Technical detail: ${errText(exc)}`,
+        },
+      ],
+    };
+  }
 
   await deps.progress("extract", "Reading the bag inventory spreadsheet…", 30);
   const buf = await readFile(wbMeta.path);
@@ -292,18 +344,21 @@ export async function runReport(
   // pair, adapted to flecon's single-source reality: the ONLY thing settled automatically
   // is an out-of-year sheet-row group whose movements ALREADY EXIST in the DB under the
   // tab's own year (the 2026-01-31 hand-backfill shape). Everything else is settled by a
-  // human seeding the ledger. Guarded end to end — settlement is protection, and a failure
-  // here must degrade to the previous behavior, never fail the run.
-  let settledDates: ReadonlySet<string> = new Set<string>();
+  // human seeding the ledger.
+  //
+  // The ledger itself was already READ (and its failure already refused the run) above —
+  // ADDING a new settlement is what is guarded here. A failure to record a new one leaves
+  // every date that was already settled just as protected as it was, so it degrades to
+  // `knownSettled` rather than failing the run. It must NEVER degrade to an empty set.
+  let settledDates: ReadonlySet<string> = knownSettled;
   try {
-    const known = await deps.db.readFleconSettledDates();
     const qualifying = computeFleconSettlements(
       extract.flagged_rows,
       extract.sheet_year,
       dbAllMovements,
-      known,
+      knownSettled,
     );
-    const mutable = new Set(known);
+    const mutable = new Set(knownSettled);
     if (qualifying.length) {
       const res = await deps.db.insertFleconSettlements(
         qualifying.map((q) => ({ ...q, settled_by_run_id: runId })),
@@ -319,7 +374,7 @@ export async function runReport(
     }
     settledDates = mutable;
   } catch {
-    settledDates = new Set<string>(); // ledger unreadable → behave exactly as before
+    settledDates = knownSettled; // could not ADD one → keep every date already protected
   }
 
   // Settled dates are dropped from BOTH sides before classify — sheet rows AND the DB
@@ -376,7 +431,14 @@ export async function runReport(
   // older REVISION of the cumulative workbook. Its missing days classify DATE_CHANGED
   // with an empty movement list, which REPLACE-BY-DATE used to honour by wiping the day
   // (confirmed 3x in production — see docs/BUG_LEDGER.md BUG-015).
-  const workbookMaxDate = extract.summary.date_max;
+  //
+  // 2026-08-26: this used to read `extract.summary.date_max`, which is computed over the
+  // rows that SURVIVED the `since` window. In the jam this fix unblocked, EVERY row in
+  // Ivy's workbook was older than `since` (= watermark − 3 days), so `date_max` was null
+  // and the operator was told the file "only carries bag movements up to (no dated rows)"
+  // — about a workbook whose last row is plainly 2026-08-21. It now uses the WHOLE-SHEET
+  // max (`wholeSheetMaxDate`), which names a date that actually exists.
+  const workbookMaxDate = wholeSheetMaxDate(extract);
   const stale =
     watermark !== null && (workbookMaxDate === null || workbookMaxDate < watermark)
       ? { workbookMaxDate, dbWatermark: watermark }
@@ -421,11 +483,54 @@ export async function runReport(
             detail:
               `The FLECON BAGGED attachment only carries bag movements up to ` +
               `${stale.workbookMaxDate ?? "(no dated rows)"}, but the app already has them through ` +
-              `${stale.dbWatermark}. This is an older copy of the workbook — nothing was written.`,
+              `${stale.dbWatermark}. This is an older copy of the workbook — nothing was written.` +
+              (applyResult.labeled
+                ? ` This older copy was marked as processed so it stops re-firing on every run; ` +
+                  `nothing was written and the watermark did not move. Send the current FLECON ` +
+                  `BAGGED file when there is one.`
+                : ``),
           },
         ]
       : [],
   };
+}
+
+/**
+ * The workbook's OWN latest bag-movement date, across the WHOLE SHEET (2026-08-26).
+ *
+ * NOT `extract.summary.date_max`: that is computed over `extract.rows`, which the `since`
+ * floor has already filtered, so it answers "the newest day IN THIS RUN'S WINDOW". For the
+ * staleness question — "is this attachment an older copy than what we already loaded?" —
+ * the honest input is the newest day the FILE contains, window or no window. When every
+ * row in the file is below the floor (exactly the 2026-08-24 jam: watermark 2026-08-25,
+ * floor 2026-08-22, last sheet row 2026-08-21) `summary.date_max` is null and the message
+ * degenerates to "(no dated rows)" about a workbook that is full of dated rows.
+ *
+ * The verdict is unchanged in every case that mattered — `since` is a FLOOR derived from
+ * the watermark, so dropping rows below it can never lower the maximum unless it empties
+ * the set, and an emptied set means every row was below `watermark − 3` and the workbook
+ * was genuinely stale anyway. What changes is that the comparison no longer depends on
+ * that coincidence, and the sentence names a real date.
+ *
+ * OUT-OF-YEAR rows are excluded. A date whose year is not the tab's own year is an operator
+ * TYPO (§2a) and never evidence of how fresh the file is — a `2027-01-31` slip would
+ * otherwise make a genuinely stale workbook look newer than the database and disarm this
+ * gate entirely. The predicate is the same one `extract.ts` uses to set `out_of_year`.
+ *
+ * Returns null only when the file carries no usable dated movement row at all.
+ */
+export function wholeSheetMaxDate(extract: FleconExtract): string | null {
+  const sheetYear = extract.sheet_year;
+  let max: string | null = null;
+  const consider = (raw: unknown): void => {
+    const d = String(raw ?? "").slice(0, 10);
+    if (!d) return;
+    if (sheetYear !== null && Number(d.slice(0, 4)) !== sheetYear) return; // out-of-year typo
+    if (max === null || d > max) max = d;
+  };
+  for (const r of extract.rows) consider(r.transaction_date);
+  for (const f of extract.flagged_rows) consider(f.transaction_date);
+  return max;
 }
 
 /** YYYY-MM-DD minus N days (UTC), mirroring date.fromisoformat(...) - timedelta(days=N). */

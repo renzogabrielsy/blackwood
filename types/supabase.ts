@@ -10,7 +10,7 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.17"
   }
   graphql_public: {
     Tables: {
@@ -2036,6 +2036,30 @@ export type Database = {
           source_location_code: string | null
           total_kg: number | null
           whse_key: string | null
+        }
+        Relationships: []
+      }
+      cenapro_grades: {
+        Row: {
+          code: string | null
+          display_name: string | null
+          expected_kg_per_bag_max: number | null
+          expected_kg_per_bag_min: number | null
+          sort_order: number | null
+        }
+        Insert: {
+          code?: string | null
+          display_name?: string | null
+          expected_kg_per_bag_max?: number | null
+          expected_kg_per_bag_min?: number | null
+          sort_order?: number | null
+        }
+        Update: {
+          code?: string | null
+          display_name?: string | null
+          expected_kg_per_bag_max?: number | null
+          expected_kg_per_bag_min?: number | null
+          sort_order?: number | null
         }
         Relationships: []
       }
@@ -4193,6 +4217,10 @@ export type Database = {
         Returns: undefined
       }
       canonical_supplier: { Args: { p_supplier: string }; Returns: string }
+      cenapro_add_grade: {
+        Args: { p_code: string; p_display_name?: string; p_sort_order?: number }
+        Returns: Json
+      }
       cenapro_add_partner_draw: {
         Args: {
           p_allow_duplicate?: boolean
