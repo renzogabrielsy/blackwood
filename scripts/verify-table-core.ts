@@ -2310,6 +2310,7 @@ const FLIPPED_PAGES = [
   join('app', '(app)', 'inventory', 'page.tsx'), // RC IN / RC OUT, 2026-08-21
   join('app', '(app)', 'cenapro', 'qc', 'page.tsx'), // QC ledger, 2026-08-21
   join('app', '(app)', 'production', '(tabs)', 'page.tsx'), // Daily · Electricity · Trucks, 2026-08-26
+  join('app', '(app)', 'cenapro', 'deliveries', 'page.tsx'), // RC Deliveries, 2026-08-26
 ]
 
 check('a flipped page states its default ONCE, and only the registered ones are flipped', () => {
