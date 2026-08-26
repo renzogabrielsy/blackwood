@@ -23,6 +23,20 @@ Run the gates BEFORE merging to `main`, and never trust a gate whose exit code y
 - **A red build is not automatically yours.** Judge by "no errors outside <the other session's dir>". 2026-08-04 `npx tsc --noEmit` exited 2 with exactly one error, in `app/(app)/cenapro/deliveries/actions.ts:140` — not ours, not to be fixed, not a blocker. **That error is GONE as of promotion 23** (same day, `tsc --noEmit` exit 0) — the other session finished and shipped it. Don't carry the expectation forward; a red tsc on that file now IS worth a second look.
 - **`npx tsc --noEmit` is the cheap stand-in when a brief pre-ran the build.** ~1 min vs ~8, and it catches the class of error a type-heavy TSX changeset actually risks. Used on promotion 23 (`9ee70d5`): brief reported `npm run build` exit 0, so the build was waived per [[main-promotion-playbook]] but tsc was re-run independently. Same for the repo's `scripts/verify-*.ts` — seconds each, and they re-confirm the brief's assertion counts firsthand.
 
+## A DOCS-ONLY promotion needs NO build gate — but prove it is docs-only
+
+2026-08-26, promotion `b1dde47` (the mandated session handoff + a TIMELINE row). Nothing compiled
+changed, so `npm run build` / `tsc` / the worker suite would re-verify a tree the merge did not
+touch. **Prove the claim before waiving the gate, don't assert it:**
+`git diff --staged --name-only` (and `git log --oneline origin/main..<branch>` + `git show --stat`
+for the commits riding along) must show **only `.md` / `TIMELINE.md` / `handoffs/**`** — a single
+`.ts`/`.tsx`/`.sql`/`workers/sync/**` path anywhere in the promoted range re-arms every gate.
+Note the range, not just your own commit: a docs commit promoted alongside an unreviewed source
+commit is a source promotion wearing a docs subject.
+
+The handoff itself belongs on `main` (CLAUDE.md makes it the project's session record, and the next
+session reads it there), so "docs only" is never a reason to hold it on the feature branch.
+
 **The "Compiled successfully" string is unreliable in BOTH directions.** Some runs print it (2026-07-30 "✓ Compiled successfully in 17.0s"; 2026-08-04 "✓ Compiled successfully in 7.4s"), some don't. Verify via **exit code 0 + the emitted route manifest**, never the string.
 
 ## SHELL TRAP — `${PIPESTATUS[0]}` is silently EMPTY in zsh
