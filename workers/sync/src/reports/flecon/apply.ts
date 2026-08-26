@@ -22,6 +22,10 @@
  *   no held entry with reason unmapped_bag_type_code / unmapped_or_missing_columns —
  *   STRICTER than other pipelines (flecon.md §5). Gmail labeling is an INJECTED
  *   callback so this module never imports gmail (deps wired by the workflow layer).
+ *   ONE EXCEPTION (2026-08-26, flecon.md §5b): a STRICTLY-older stale workbook is
+ *   labeled processed on the run that refuses it — the refusal to WRITE is unchanged;
+ *   an older copy of a cumulative workbook can never become applicable, so re-reading
+ *   it can only reproduce the identical refusal, forever.
  *
  * PORTING TRAP #1: the Python reaches into db._session.delete(...) raw. The port first
  * surfaced an explicit `deleteByDate` method on the deps' db; since BUG-015 the pair is
@@ -96,10 +100,20 @@ export interface FleconApplyDeps {
  * Set when the fetched workbook is an OLDER revision than what the DB already holds
  * (BUG-015 defect C1). A stale workbook's missing days classify DATE_CHANGED with an
  * empty movement list, which used to DELETE a real day down to nothing. When present,
- * the apply refuses outright: no writes, no watermark, no Gmail label.
+ * the apply refuses outright: no writes, no watermark.
+ *
+ * The Gmail LABEL is the one thing that changed on 2026-08-26: a STRICTLY-older workbook
+ * (a real `workbookMaxDate` below `dbWatermark`) is labeled processed on the run that
+ * refuses it, because it can never become applicable and was otherwise re-refused forever.
+ * A NULL `workbookMaxDate` is still left unlabeled — see the apply body.
  */
 export interface FleconStaleWorkbook {
-  /** MAX(transaction_date) the workbook itself carries (null = it carried none). */
+  /**
+   * MAX(transaction_date) the workbook itself carries, over the WHOLE SHEET (null = it
+   * carried no usable dated row at all). Built by `index.ts::wholeSheetMaxDate` — NOT
+   * `extract.summary.date_max`, which is window-scoped and reads null whenever every row
+   * in the file is older than this run's `since` floor.
+   */
   workbookMaxDate: string | null;
   /** MAX(flecon_bag_movements.transaction_date) already in the DB. */
   dbWatermark: string;
@@ -392,12 +406,50 @@ export async function applyFlecon(
   // ── Defect C1: a STALE workbook is refused outright, before anything is written. ──
   if (opts.staleWorkbook) {
     const s = opts.staleWorkbook;
+
+    // ── UNJAM (2026-08-26): a DETERMINISTICALLY stale attachment is marked processed. ──
+    // The refusal to WRITE is untouched — only the LABEL decision changes. flecon's normal
+    // rule is "label only on a clean apply", which is right for every failure that a later
+    // run could resolve. This one cannot: an attachment is a fixed file, an older copy of a
+    // CUMULATIVE workbook can never become newer, so re-reading it tomorrow can only
+    // produce the identical refusal. Left unlabeled it is re-fetched forever — Ivy's
+    // 2026-08-24 00:58 email (uid 126413, last sheet row 2026-08-21 vs a 2026-08-25
+    // watermark) failed this gate on EVERY run from 08-25 onward and turned every one of
+    // them `partial`.
+    //
+    // STRICTLY older only. A workbook with NO dated rows at all (`workbookMaxDate === null`)
+    // is a different, rarer failure — a broken or unreadable attachment, not a provably
+    // superseded one — so it keeps re-firing until a human looks at it.
+    //
+    // This run still reports `ok: false` and still emits the `stale_workbook` gate failure,
+    // so the run settles `partial` and the operator sees it ONCE. That is the point: seen
+    // once, then silent, instead of unseen-because-always-there.
+    const deterministicallyStale =
+      s.workbookMaxDate !== null && s.workbookMaxDate < s.dbWatermark;
+    let staleLabeled = false;
+    if (deterministicallyStale && !opts.noLabel && opts.emailUid) {
+      await deps.progress(
+        "apply",
+        "Marking this older copy as processed so it stops coming back…",
+        95,
+      );
+      try {
+        staleLabeled = await deps.labelProcessed(opts.emailUid);
+      } catch {
+        staleLabeled = false; // a labeling failure must never turn a clean refusal into a crash
+      }
+    }
+
     const detail =
       `The bag report we just read only goes up to ${s.workbookMaxDate ?? "(no dated rows)"}, ` +
       `but the database already has bag movements through ${s.dbWatermark}. That means this ` +
       `attachment is an OLDER copy of the workbook than the one we already loaded. Applying it ` +
       `would blank out the days it is missing, so NOTHING was written. Ask for the current ` +
-      `FLECON BAGGED file, or re-send today's report.`;
+      `FLECON BAGGED file, or re-send today's report.` +
+      (staleLabeled
+        ? ` This older copy was marked as processed so it stops re-firing on every run — ` +
+          `nothing was written and the watermark did not move.`
+        : ``);
     held.push({
       reason: "stale_workbook",
       natural_key: `FLECON workbook is older than the database (${s.workbookMaxDate ?? "no dates"} < ${s.dbWatermark})`,
@@ -407,11 +459,15 @@ export async function applyFlecon(
         workbook_max_date: s.workbookMaxDate,
         db_watermark: s.dbWatermark,
         days_in_workbook: perDate.length,
+        email_labeled_processed: staleLabeled,
       },
     });
     await deps.progress(
       "finalize",
-      "Stopped — the bag report is an older copy than what we already have. Nothing written.",
+      staleLabeled
+        ? "Stopped — the bag report is an older copy than what we already have. Nothing written; " +
+          "that email won't be read again."
+        : "Stopped — the bag report is an older copy than what we already have. Nothing written.",
       100,
       undefined,
       "warn",
@@ -421,7 +477,7 @@ export async function applyFlecon(
       inserts: 0,
       replaced_dates: 0,
       held,
-      labeled: false,
+      labeled: staleLabeled,
       watermark_updated: false,
       errors: [],
       settled_dates_skipped: 0,

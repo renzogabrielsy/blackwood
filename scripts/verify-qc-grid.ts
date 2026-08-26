@@ -431,13 +431,20 @@ check('a BLANK cell commits without complaint in every lane', () => {
 check('a closed-domain cell refuses an unknown code and LISTS the legal ones', () => {
   const bad = parseQcField('mach', 'C9', ENV)
   assert.equal(bad.ok, false)
-  assert.match((bad as { error: string }).error, /MACH "C9" is not one of: C1, C2, C3, C4, RK1, RK2, RK3, RK4\./)
+  // The list ends in FLEC since 2026-08-26: the MACH cell now also names a BAGGING entry,
+  // and a refusal that did not offer it would be telling the operator a legal row is not.
+  assert.match(
+    (bad as { error: string }).error,
+    /MACH "C9" is not one of: C1, C2, C3, C4, RK1, RK2, RK3, RK4, FLEC\./,
+  )
   // Case and spacing are the operator's business, not the matcher's.
   assert.equal(parseQcField('mach', ' c1 ', ENV).ok, true)
   assert.equal(parseQcField('src', 'tnk 1', ENV).ok, true)
   assert.equal(parseQcField('src', 'TNK  1', ENV).ok, true, 'internal whitespace collapses')
   assert.equal(parseQcField('src', 'DVO', ENV).ok, false, 'DVO is not offered — the RPC refuses it')
-  assert.deepEqual(machineCodes(OPTIONS), ['C1', 'C2', 'C3', 'C4', 'RK1', 'RK2', 'RK3', 'RK4'])
+  assert.deepEqual(machineCodes(OPTIONS), ['C1', 'C2', 'C3', 'C4', 'RK1', 'RK2', 'RK3', 'RK4', 'FLEC'])
+  // The bagging token is a LEGAL machine here, not a near-miss like `C9`.
+  assert.equal(parseQcField('mach', 'FLEC', ENV).ok, true)
 })
 
 check('DATE speaks every form the operators use, and refuses a non-date', () => {
@@ -1070,6 +1077,139 @@ check('there is no save-time reason dialog, because no EDIT path takes a comment
 
   const grid = stripComments(readFileSync(GRID, 'utf8'))
   assert.equal(grid.includes('DialogContent'), false, 'no dialog collects a sentence with nowhere to go')
+})
+
+// ═══ 10 · A BLANK ROW'S EVERY TYPEABLE LANE (2026-08-26 regression) ════════════
+//
+// Renzo, driving the rearranged sheet: *"there are some columns I can't seem to
+// manipulate/edit (specifically the empty ones below where we add entries)."*
+//
+// Measured in a browser against the real component: the fifteen typeable lanes all open
+// an editor on a blank row, and the two IMPORTED ones refuse — which is the contract. The
+// two that read as broken are `#` and `BATCH`, and the reason is a RENDERING rule rather
+// than a verdict one: the module calls `format` only where there is row data, so on a
+// blank row those two paint NOTHING and are pixel-identical to the empty cells beside
+// them, while a click parked a caret on them and every keystroke then did nothing.
+//
+// Three things are pinned here, because each of them is a way the fix silently rots.
+
+check('a BLANK row is editable in every lane except the two imported ones', () => {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  assert.ok(src.includes('draftSlotFor'), 'the scan target must still exist')
+
+  // THE draft-row verdict, both halves. The column's half must branch on `row === null`
+  // FIRST — a draft consulting `storedRowFieldIsEditable` would refuse every dimension
+  // lane on a blank row and leave only WT + the four metrics, which is exactly the shape
+  // of the bug this section exists to prevent.
+  assert.match(
+    src,
+    /editable: \(row: QcRow \| null, ctx: Ctx\) =>\s*\n?\s*ctx\.canEdit && \(row === null \|\| storedRowFieldIsEditable\(field\)\)/,
+    'the column half must let a draft (row === null) through before it asks about a stored row',
+  )
+  // The row family's half: every non-imported lane, live.
+  assert.match(
+    src,
+    /function draftSlotFor\(colKey: string\): CellSlot \| null \{\s*\n\s*if \(isImportedColumn\(colKey\)\) return importedSlot\(colKey\);\s*\n\s*return \{ field: colKey, editable: true \};/,
+    'the draft family must return an editable slot for every column that is not imported',
+  )
+
+  // The two halves are ANDed by the module, so this is the whole set of typeable lanes on
+  // a blank row — asserted against the arrangement rather than against a list typed here.
+  const typeable = QC_COLUMNS.filter((key) => !isImportedColumn(key))
+  assert.equal(typeable.length, 15, 'fifteen lanes are typeable on a blank row')
+  for (const key of typeable) {
+    assert.ok(isQcField(key), `${key} must be a QcField, or nothing could parse or save it`)
+  }
+  // …and `draftFromEdits` must actually carry every one of them onto the RPC's input. A
+  // lane that is typeable and unmapped accepts text and then discards it, which is the
+  // one behaviour worse than a lane that refuses.
+  const draft = draftFromEdits('qcdraft:1', Object.fromEntries(typeable.map((k) => [k, 'x'])))
+  const carried = new Set<string>([
+    ...Object.entries(draft)
+      .filter(([k, v]) => v === 'x' && k !== 'id' && k !== 'status')
+      .map(([k]) => k),
+    ...Object.entries(draft.metrics).filter(([, v]) => v === 'x').map(([k]) => k),
+  ])
+  assert.equal(carried.size, 15, 'every typeable lane reaches DraftDraw')
+})
+
+check('the two IMPORTED lanes SAY they are not inputs, on a blank row too', () => {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  assert.ok(src.includes('importedCellClass'), 'the scan target must still exist')
+
+  // `format` cannot run on a draft (the module passes it a non-null row by type), so the
+  // ONLY seam that can paint a blank row is `cellClass` — which the module documents as
+  // receiving `row === null` there. Both imported columns must use it.
+  assert.equal(
+    (src.match(/cellClass: importedCellClass/g) ?? []).length,
+    QC_IMPORTED_COLUMNS.length,
+    'every imported column declares the reference-lane paint',
+  )
+  // Gated on the DRAFT row, deliberately: on a stored row the ordinal and the dash already
+  // carry the message, and the `—` here would double the one `format` renders.
+  assert.match(
+    src,
+    /function importedCellClass\(row: QcRow \| null\): string \| undefined \{\s*\n\s*return row === null/,
+    'the wash is applied to a blank row only',
+  )
+
+  // And the un-typeable rule itself is UNWEAKENED — no parse can exist for either key.
+  for (const key of QC_IMPORTED_COLUMNS) {
+    assert.equal(isQcField(key), false, `${key} must never become a QcField`)
+  }
+  assert.match(src, /const IMPORTED_SLOT: CellSlot = \{ field: '', editable: false, addressable: false \}/)
+})
+
+// ═══ 11 · The paint is the PRODUCTION ledger's, and there is one copy of it ═════
+
+check('PLANT and MACH are the production ledger badges, imported not re-typed', () => {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  assert.ok(src.includes('BADGE_BASE'), 'the scan target must still exist')
+
+  // ONE definition of each colour scheme lives in the pure `../badges` module. The QC
+  // PLANT dropdown has read it since 2026-08-04; the sheet now reads the same one.
+  assert.match(src, /import \{ BADGE_BASE, cccFlecBadgeClass, plantBadgeClass \} from '\.\.\/badges';/)
+  assert.match(src, /format: \(r\) => badge\(r\.draw\.plant, plantBadgeClass\)/)
+  assert.match(src, /format: \(r\) => badge\(r\.draw\.equip, cccFlecBadgeClass\)/)
+
+  // A second colour map in this file is the failure the shared module exists to prevent.
+  for (const colour of ['emerald', 'amber-500/2', 'rose-500', 'teal-500', 'indigo-500', 'slate-500']) {
+    assert.equal(src.includes(colour), false, `${colour} must come from ../badges, never from here`)
+  }
+
+  // DISPLAY ONLY. The module's own `<input>` is never wrapped, so typing and paste are
+  // untouched — the idiom `badges.ts` documents in its own header.
+  assert.equal(src.includes('renderEditor'), false, 'the grid declares no editor of its own')
+
+  // And a blank value gets the dash, never an empty chip.
+  assert.match(
+    src,
+    /function badge\(v: string \| null \| undefined, classOf: \(raw: string\) => string\): React\.ReactNode \{\s*\n\s*return v \? /,
+    'a badge is rendered only when there is a value',
+  )
+})
+
+check('QC badges exactly the lanes the production ledger badges', () => {
+  // Read off disk, never a snapshot: a lane that gains or loses a badge over there is a
+  // failing assertion here rather than a silent divergence — the same discipline the
+  // ARRANGEMENT check above uses on the same file.
+  const prod = stripComments(readFileSync(PROD_SHARED, 'utf8'))
+  assert.ok(prod.includes('cccFlecBadgeClass'), 'the scan target must still exist')
+
+  // Which production `case` blocks paint a badge.
+  const badged = new Set<string>()
+  for (const m of prod.matchAll(/case '([a-z]+)':([\s\S]*?)(?=\n        case '|\n        \/\/ Shift)/g)) {
+    if (m[2].includes('BADGE_BASE')) badged.add(m[1])
+  }
+  assert.deepEqual([...badged].sort(), ['ccc', 'plant'], 'the production ledger badges exactly PLANT and CCC/FLEC')
+
+  // …under the lane mapping the 2026-08-25 arrangement established.
+  const LANE: Record<string, string> = { ccc: 'mach', plant: 'plant' }
+  const qc = stripComments(readFileSync(GRID, 'utf8'))
+  const qcBadged = new Set([...qc.matchAll(/format: \(r\) => badge\(r\.draw\.(\w+),/g)].map((m) => m[1]))
+  // `equip` is what QC's row model calls the partner machine; `mach` is its column key.
+  assert.deepEqual([...qcBadged].sort(), ['equip', 'plant'])
+  assert.deepEqual([...badged].map((k) => LANE[k]).sort(), ['mach', 'plant'])
 })
 
 check('every metric key the sheet knows is covered above', () => {

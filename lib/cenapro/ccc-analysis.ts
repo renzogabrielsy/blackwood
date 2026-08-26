@@ -18,6 +18,8 @@
 //   cenapro_ccc_analysis_daily     scope='all' | 'ex_dvo'
 //   cenapro_ccc_analysis_monthly   scope='all' | 'ex_dvo'
 //   cenapro_save_analysis_sample() the save RPC (optimistic concurrency)
+//   cenapro_grades                 the grade dimension, read-only (2026-08-26)
+//   cenapro_add_grade()            the grade dimension's INSERT-only write path
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { normalizeTypedDate } from '@/lib/paste-utils';
@@ -188,20 +190,100 @@ export interface UpdateWeightResult {
 export type UpdateWeightArgs =
     Database['public']['Functions']['cenapro_update_event_weight']['Args'];
 
-// ─── The partner-draw ADD path ───────────────────────────────────────────────
+// ─── The QC-ledger ADD path ──────────────────────────────────────────────────
 //
 // One new row on `cenapro.production_event`, through
-// `public.cenapro_add_partner_draw`. PARTNER DRAWS ONLY — the partner reports its
-// daily totals on a piece of paper and every line on it is a pull into one of its
-// four crushers or four rotary kilns. What CI puts INTO inventory (flec bagging)
-// arrives on a separate sheet and is entered in the Production ledger; the RPC
-// refuses it here by name rather than leaving the boundary to the UI.
+// `public.cenapro_add_partner_draw`. **TWO ENTRY KINDS since 2026-08-26**, told
+// apart by the machine cell alone — the same cell, and the same aliases, that
+// `parseCccFlec` reads in the Production ledger:
+//
+//   • `C1`–`C4` / `RK1`–`RK4` → a PARTNER DRAW. The partner reports its daily
+//     totals on a piece of paper and every line is a pull into one of its four
+//     crushers or four rotary kilns. `disposition_kind` is `partner_crusher` /
+//     `partner_kiln`.
+//   • `FLEC` (or `BAG` / `BAGGING` / `FLEC BAGGING` / `FLEC_BAGGING`) → a FLEC
+//     BAGGING entry, an inventory IN: charcoal CI put INTO a warehouse.
+//     `disposition_kind` is `flec_bagging` and `partner_equipment_code` is NULL —
+//     exactly the row the Production ledger's `CCC/FLEC = FLEC` cell writes.
+//
+// This REVERSES the 2026-08-03 boundary ("bagging stays in the Production
+// ledger"): the QC Ledger is now the one place operators type everything, the same
+// reversal `p_plant` got on 2026-08-04. A BLANK machine is still `wrong_surface`.
+//
+// BAG FIELDS FOLLOW THE DIRECTION, NOT THE MACHINE. A FLEC-SOURCED draw (bags out)
+// and a FLEC-MACHINE entry (bags in) both REQUIRE `warehouse_code` — a flec-count
+// warehouse, WHSE 1/2/5/7, never WHSE 3 — and `flec_count`, and both treat
+// `whse_side` as optional with the sideless `notice`, because `cenapro.flec_ledger`
+// counts a row only when the warehouse is set and a side is present. Every other
+// row refuses all three. **`SRC = FLEC` together with `MACH = FLEC` is refused**
+// (`invalid`): it is a self-loop the flec ledger would count as an IN only, so the
+// warehouse would gain bags that had just been taken out of it.
 //
 // The RPC — not the caller — derives `disposition_kind` from the machine and
 // `plant_code` from the source, and resolves the running `batch` label. Those are
 // not conveniences: `plant_code` IS the QC ledger's `whse_key` for a tank draw
 // (`coalesce(warehouse_code, plant_code)`), and `batch` straddles month boundaries
 // (JULY first appears 2026-06-27), so neither can be inferred client-side.
+
+/**
+ * THE machine-cell values that mean "this is a FLEC BAGGING entry, not a draw".
+ *
+ * Byte-for-byte the list `cenapro_add_partner_draw` tests
+ * (`v_equip_in IN ('FLEC','BAG','BAGGING','FLEC BAGGING','FLEC_BAGGING')`), which is
+ * itself `parseCccFlec`'s list in `app/(app)/cenapro/types.ts` — so a value typed into
+ * the Production ledger's CCC/FLEC cell and the same value typed into the QC Ledger
+ * mean the same thing in all three places.
+ *
+ * It lives HERE rather than being imported from `types.ts` because this module is
+ * `lib/` and that one is `app/` — importing upward would invert the layering. The
+ * copies are pinned equal by an assertion in `scripts/verify-qc-draw-cells.ts`, the
+ * same discipline `TRIAGE_KIND` uses (CLAUDE.md → "Client/server module boundary
+ * trap"): duplicate the constant, then make a script fail if the copies drift.
+ *
+ * NOTE the space in `FLEC BAGGING`. `canonToken` collapses runs of whitespace, so a
+ * caller that normalizes first will match it; a `Set` built from a hand-typed list
+ * that omits it will not — which is exactly the drift this constant exists to end.
+ */
+export const BAGGING_MACHINE_CODES: readonly string[] = [
+    'FLEC',
+    'BAG',
+    'BAGGING',
+    'FLEC BAGGING',
+    'FLEC_BAGGING',
+] as const;
+
+const BAGGING_MACHINE_SET = new Set<string>(BAGGING_MACHINE_CODES);
+
+/**
+ * Does this machine cell name a bagging entry? Canonicalizes first (`canonToken`,
+ * the JS twin of `cenapro.fn_canon_token`), so ` flec bagging ` answers the same as
+ * `FLEC BAGGING` — exactly as the RPC does.
+ *
+ * A BLANK cell is NOT bagging: it names no event at all, and the RPC answers it
+ * `wrong_surface`. Callers must keep those two cases separate.
+ */
+export function isBaggingMachine(machine: string | null | undefined): boolean {
+    return BAGGING_MACHINE_SET.has(canonToken(machine));
+}
+
+/**
+ * The ONE spelling a MACH picker OFFERS for a bagging entry.
+ *
+ * `BAGGING_MACHINE_CODES` is the ACCEPT list — five spellings a human might already have
+ * typed, and the RPC takes all of them. This is the one to WRITE, and the distinction
+ * matters: a dropdown that offered all five would ask the operator to choose between
+ * synonyms, and a screen that hard-coded its own sixth spelling would be the drift this
+ * pair of constants exists to end.
+ *
+ * `FLEC` rather than `FLEC BAGGING` because that is what the Production ledger's
+ * `CCC/FLEC` column already shows for the same event, and because `cccFlecBadgeClass`
+ * paints exactly that token emerald — one word, one colour, both ledgers.
+ *
+ * Nothing is stored under it: the RPC files a bagging entry with `partner_equipment_code`
+ * NULL and `disposition_kind: 'flec_bagging'`. It is a UI token that means "this row is an
+ * IN, not a draw", and `scripts/verify-qc-draw-cells.ts` pins it inside the accept list.
+ */
+export const BAGGING_MACHINE_CODE = 'FLEC';
 
 /**
  * Outcome of `cenapro_add_partner_draw`.
@@ -215,15 +297,18 @@ export type UpdateWeightArgs =
  * `already_exists`     — an IDENTICAL row is already stored (same `unique_tag`).
  *                        Hard: the database cannot hold two, whatever the intent.
  *                        `id` is the row that is already there. Not confirmable.
- * `wrong_surface`      — no machine named, or flec bagging asked for. Point the
- *                        operator at the Production ledger.
+ * `wrong_surface`      — NO MACHINE NAMED. Since 2026-08-26 that is the whole of
+ *                        it: `FLEC` is no longer refused here, it files a bagging
+ *                        entry. A row naming neither a crusher/kiln nor FLEC
+ *                        describes no event at all.
  * `unsupported_source` — DVO. Container vans into WHSE 3 are a different document
  *                        and are still deferred; existing DVO rows stay editable.
  * `invalid_key`        — a dimension code is missing or unknown (machine, source,
  *                        grade, shift, warehouse, side).
- * `invalid`            — a value is out of bounds, or a bag field was supplied on
- *                        a source that consumes no bags (or omitted on one that
- *                        does). Nothing was written.
+ * `invalid`            — a value is out of bounds, a bag field was supplied on a
+ *                        row that touches no bag inventory (or omitted on one that
+ *                        does), or the row asked for `SRC = FLEC` **and**
+ *                        `MACH = FLEC` at once — the self-loop. Nothing was written.
  */
 export type AddPartnerDrawOutcome =
     | 'inserted'
@@ -288,7 +373,14 @@ export interface AddPartnerDrawResult {
      * Independent of `notice` below: a FLEC draw can carry both.
      */
     plant_notice?: string | null;
-    disposition_kind?: 'partner_crusher' | 'partner_kiln';
+    /**
+     * WHAT KIND OF ROW WAS FILED — and the only key that says so (2026-08-26).
+     * `flec_bagging` means the machine cell said FLEC and this is an inventory IN;
+     * the two partner values mean a draw. No separate `entry_kind` key is returned:
+     * the disposition IS the entry kind, and a second field saying the same thing
+     * would be a second place for it to drift.
+     */
+    disposition_kind?: 'partner_crusher' | 'partner_kiln' | 'flec_bagging';
     /** Exactly the `cenapro_ccc_sample_groups` key the new row now belongs to. */
     sample_group?: {
         sample_date: string;
@@ -297,8 +389,10 @@ export interface AddPartnerDrawResult {
     };
     /**
      * Non-blocking remark on an otherwise successful write. Today the only one:
-     * a FLEC draw saved without an LS/RS side, which `cenapro.flec_ledger` does
-     * not count, so the warehouse balance will not move until a side is set.
+     * a bag-bearing row — a FLEC-sourced draw (bags out) or a FLEC-machine bagging
+     * entry (bags in) — saved without an LS/RS side, which `cenapro.flec_ledger`
+     * does not count, so the warehouse balance will not move until a side is set.
+     * The sentence is worded for whichever direction the row is.
      */
     notice?: string | null;
 
@@ -312,6 +406,65 @@ export interface AddPartnerDrawResult {
 /** Arguments for `supabase.rpc('cenapro_add_partner_draw', …)`. */
 export type AddPartnerDrawArgs =
     Database['public']['Functions']['cenapro_add_partner_draw']['Args'];
+
+// ─── The grade dimension (2026-08-26) ────────────────────────────────────────
+//
+// `cenapro.grade` is ONE dimension shared by production rows, partner draws,
+// bagging entries and the flec ledger's per-grade balance — and until now it could
+// only be extended by a migration, because the `cenapro` schema is invisible to
+// PostgREST and every UI list was the hardcoded `GRADE_CODES` constant in
+// `app/(app)/cenapro/types.ts`. Two objects open it: `public.cenapro_grades`
+// (read, SELECT only) and `public.cenapro_add_grade` (write, INSERT ONLY).
+//
+// THERE IS NO UPDATE RPC AND NO DELETE RPC, and that is a decision rather than an
+// omission: `grade_code` is a TEXT foreign key carried by every `production_event`
+// row, so renaming one would need a cascade nobody has reasoned about, and deleting
+// one would succeed on a grade added by mistake five minutes ago and be refused by
+// the FK later — succeeding and failing for reasons the operator cannot see.
+// Adding is monotone and safe; the other two deserve their own migration when
+// somebody actually needs them.
+
+/** One row of `public.cenapro_grades`, straight from the generated DB types. */
+export type CenaproGradeRow = Views['cenapro_grades']['Row'];
+
+/**
+ * Outcome of `cenapro_add_grade`.
+ *
+ * `inserted`       — written. The returned fields are the row as STORED (the code
+ *                    canonicalized, the display name defaulted to it when blank,
+ *                    the sort order defaulted to the end of the list).
+ * `already_exists` — a grade with that code is on file. Matching is
+ *                    CASE- and WHITESPACE-INSENSITIVE (`cenapro.fn_canon_token`),
+ *                    so a typed `3x50` can never open a second grade beside
+ *                    `3X50`; the returned fields are the row that IS stored and
+ *                    `message` names both spellings when they differ. Not
+ *                    confirmable — there is only ever one of a grade.
+ * `invalid`        — a blank code, a code over 24 characters, a display name over
+ *                    64, or a sort order outside 0–10000. Nothing was written.
+ */
+export type AddGradeOutcome = 'inserted' | 'already_exists' | 'invalid';
+
+export interface AddGradeResult {
+    ok: boolean;
+    outcome: AddGradeOutcome;
+    message?: string;
+
+    // ── Present on `inserted` (the row as stored) and on `already_exists` (the
+    //    row that is already there). Absent on `invalid`. ──────────────────────
+    code?: string;
+    display_name?: string;
+    sort_order?: number;
+    /**
+     * The QC bag-weight tolerance. NOT settable through `cenapro_add_grade` — it
+     * is a tolerance, not part of naming a grade, and two of the four seeded rows
+     * carry neither, so NULL is the normal state rather than a gap.
+     */
+    expected_kg_per_bag_min?: number | null;
+    expected_kg_per_bag_max?: number | null;
+}
+
+/** Arguments for `supabase.rpc('cenapro_add_grade', …)`. */
+export type AddGradeArgs = Database['public']['Functions']['cenapro_add_grade']['Args'];
 
 /**
  * The ONE place a typed weight becomes a number, shared by the client's live preview

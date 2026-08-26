@@ -88,6 +88,23 @@ against a ledger whose caret lands on none of them.
   is the most useful thing on a sheet to sweep and add up — and gating the mousedown would
   take the whole selection with it. It also matches the ledger this came from, which parks
   the caret on `TTL PRICE` on click and never targets it from the keyboard.
+- **…except on a cell that is DEAD IN EVERY SENSE (2026-08-26).** The argument above is
+  entirely about SELECTION: it presumes the cell is one a rectangle may cover. A cell that
+  is **neither addressable NOR selectable** has no argument behind it — nothing can be
+  typed there, no rectangle may cover it, nothing totals it — and parking the caret on one
+  handed the operator a ring and then silence. It also broke the module's own *"there is
+  always exactly one rectangle on screen"* rule: `useCellSelection.handleCellMouseDown`
+  refuses a non-selectable column, so the caret moved while the selection tint stayed where
+  it was, and Delete / Ctrl+C / paste kept acting on the OLD cell. `onCellMouseDown` and
+  the context menu now refuse the caret on that combination, and a click on any other
+  non-selectable column **clears** the selection instead of stranding it, so the caret
+  still takes its 1×1 rectangle with it exactly as `onAfterMove` does. The refusal is a
+  **conjunction** and must stay one: `cellAddressable` alone would take the drag-start away
+  from `selectable: true, addressable: false`, which is the case the asymmetry exists for.
+  Found on the Cenapro QC sheet, whose imported `#` and `BATCH` lanes are precisely this
+  combination — and which render NOTHING at all on a blank draft row, so they were
+  pixel-identical to the empty cells beside them (see the consumer note below). Pinned by
+  three source assertions in `scripts/verify-table-core.ts`.
 - **It is the per-CELL member of a family of three, and they are different questions.**
   `RowKind.addressable` is per-ROW (a heading is not a coordinate at all),
   `ColumnSpec.selectable` is per-COLUMN (may a rectangle cover it), and this is per-CELL.
@@ -633,6 +650,16 @@ not one was predicted by the plan.
 
 Purely additive — a consumer that passes none of them, and a `RowKind` whose `occupies()`
 never mentions `addressable`, behaves exactly as before.
+
+**One seam is missing and is worth knowing about (2026-08-26): a column cannot render
+ANYTHING on a draft row.** `Row.tsx` renders `exists && data !== null ? col.format(data,
+ctx) : null`, and `format(row: Row, ctx)` takes a non-null row by type, so the platform
+cannot call it for a blank row. A lane that is `editable: false` on a draft therefore
+paints nothing and is pixel-identical to the empty, typeable cells beside it — which is
+exactly how the QC sheet's imported `#` and `BATCH` lanes came to read as broken. The
+consumer's escape hatch is **`cellClass`**, which IS called with `row === null` on a draft
+and can paint the lane; that is what the QC grid uses, and it is why no `formatDraft` seam
+was added for a case one existing prop already covers.
 
 **Stage 1D — migrating the Cenapro RC Deliveries ledger onto the module — is UNDER WAY.**
 It lives at `app/(app)/cenapro/deliveries/deliveries-grid-v2.tsx`, reachable only at

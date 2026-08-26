@@ -2,6 +2,7 @@ import {
     fetchFlecInventory,
     fetchOpeningBalances,
     fetchOpeningBalanceHistory,
+    fetchGradeCodes,
 } from './actions';
 import { FlecInventoryClient } from './flec-inventory-client';
 import {
@@ -44,14 +45,20 @@ export default async function CenaproInventoryPage({
 
     const startDate = isIsoDate(params.date) ? params.date : DEFAULT_FLEC_START_DATE;
 
-    // All four reads are independent — fetch in parallel. The START date is the
-    // "as of" date for both the openings seed and the ledger seed (Renzo's rule:
-    // the starting count is always relative to the chosen start date). History is
-    // warehouse-scoped (date-independent) — it's the full backtracking trail.
-    const [inventory, openings, history] = await Promise.all([
+    // All reads are independent — fetch in parallel. The START date is the "as of"
+    // date for both the openings seed and the ledger seed (Renzo's rule: the starting
+    // count is always relative to the chosen start date). History is warehouse-scoped
+    // (date-independent) — it's the full backtracking trail.
+    //
+    // The GRADE list (2026-08-26) is read from `public.cenapro_grades` rather than the
+    // `GRADE_CODES` constant, because grades are addable from this screen now and a
+    // grade added there must appear without anyone editing a file. It is warehouse- and
+    // date-independent, so it joins the same parallel batch.
+    const [inventory, openings, history, grades] = await Promise.all([
         fetchFlecInventory(warehouse, startDate),
         fetchOpeningBalances(warehouse, startDate),
         fetchOpeningBalanceHistory(warehouse),
+        fetchGradeCodes(),
     ]);
 
     return (
@@ -62,7 +69,12 @@ export default async function CenaproInventoryPage({
             ledger={inventory.ledger ?? []}
             openings={openings.openings ?? []}
             history={history.history ?? []}
+            gradeCodes={grades.codes}
             loadError={inventory.error ?? openings.error ?? history.error ?? null}
+            // Kept OUT of `loadError` on purpose: a grade read that fell back to the
+            // seeded list is a caption, not a broken page, and folding it in would flip
+            // the balance/ledger empty-states to "No data to display."
+            gradesError={grades.error ?? null}
         />
     );
 }

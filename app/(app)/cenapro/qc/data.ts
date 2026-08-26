@@ -343,23 +343,35 @@ export async function loadQcLedgerData(
 // the partner's slip actually names, which is why the list is read from the database
 // rather than typed out here.
 //
-// WHERE IT READS FROM, AND WHY IT IS NOT THE DIMENSION TABLES. `cenapro.source_location`
-// / `partner_equipment` / `grade` / `shift` / `warehouse` are the real lists, but the
-// `cenapro` schema is NOT exposed to PostgREST (`Only the following schemas are exposed:
-// public, graphql_public`) and no `public` accessor for them exists yet — so the app,
-// server-side included, cannot reach them. The reachable evidence is the fact table:
-// `public.cenapro_production_events` carries the five code columns, FK-constrained, so
-// every distinct value in it is by definition a live dimension row.
+// WHERE IT READS FROM, AND WHY IT IS MOSTLY NOT THE DIMENSION TABLES.
+// `cenapro.source_location` / `partner_equipment` / `shift` / `warehouse` are the real
+// lists, but the `cenapro` schema is NOT exposed to PostgREST (`Only the following
+// schemas are exposed: public, graphql_public`) and no `public` accessor for those four
+// exists — so the app, server-side included, cannot reach them. The reachable evidence
+// is the fact table: `public.cenapro_production_events` carries the five code columns,
+// FK-constrained, so every distinct value in it is by definition a live dimension row.
 //
 // That read alone is INCOMPLETE — a seeded code no event has used yet is invisible to
-// it (today: C3, C4, 4X8, WHSE 2). So the observed values are merged over the module's
+// it (today: C3, C4, WHSE 2). So the observed values are merged over the module's
 // canonical code constants in `../types.ts`, which that file already documents as an
 // exact mirror of the seed. Canonical order first (TNK 1…4 · W6 · W7 · FLEC reads the
 // way the slip does), then anything the data knows that the constants do not — so a
 // code added to the seed later surfaces on its first row instead of silently missing.
 //
-// Replace the whole body with one read the day a `public.cenapro_dimensions` accessor
-// lands; the shape below is what the UI consumes and would not change.
+// GRADE IS THE EXCEPTION, AND IT IS READ PROPERLY (2026-08-26). `public.cenapro_grades`
+// is a real `security_invoker` accessor over `cenapro.grade`, built the day grades
+// became addable in-app from `/cenapro/inventory` (`public.cenapro_add_grade`). Merging
+// only the constant and the observed events would leave a freshly added grade invisible
+// until its first event — and that is not merely a short dropdown here. THIS LIST IS THE
+// QC v2 SHEET'S CELL VALIDATOR: `parseQcField('grade', …)` checks typed text against
+// `options.grades`, so a grade the database just accepted would be REFUSED BY NAME when
+// an operator types it, with a persistent error toast. The accessor's own order
+// (`sort_order, code`) is the canonical one and is never re-sorted here; the constant is
+// merged in UNDER it purely as a floor, so a failed or partial read can only ever leave
+// the list as complete as it was before this change.
+//
+// Replace the OTHER four the day a `public.cenapro_dimensions` accessor lands; the shape
+// below is what the UI consumes and would not change.
 
 /** The picker lists the composer renders. Every list is already RPC-legal. */
 export interface QcDrawOptions {
@@ -408,10 +420,13 @@ const OPTION_COLUMNS =
  */
 export async function loadQcDrawOptions(): Promise<QcDrawOptions> {
     const supabase = await createClient();
-    const { data, error } = await supabase
-        .from('cenapro_production_events')
-        .select(OPTION_COLUMNS)
-        .limit(20000);
+
+    // Two independent reads — the fact table for the four unexposed dimensions, and the
+    // real grade accessor. Either can fail without taking the other down.
+    const [{ data, error }, gradeDimension] = await Promise.all([
+        supabase.from('cenapro_production_events').select(OPTION_COLUMNS).limit(20000),
+        supabase.from('cenapro_grades').select('code, sort_order'),
+    ]);
 
     const sources = new Set<string>();
     const machines = new Set<string>();
@@ -438,18 +453,40 @@ export async function loadQcDrawOptions(): Promise<QcDrawOptions> {
         (code) => !kilnLike.includes(code) && !KILN_CODES.includes(code as (typeof KILN_CODES)[number]),
     );
 
+    // The grade dimension, in the accessor's own `sort_order, code` order (the rows come
+    // back ordered — nothing here re-sorts them). Blank/null codes are dropped: every
+    // column on the view is nullable, and an empty option is one nobody can type.
+    const dimensionGrades: string[] = [];
+    for (const row of gradeDimension.data ?? []) {
+        const code = (row.code ?? '').trim();
+        if (code) dimensionGrades.push(code);
+    }
+    // The seeded constant is merged in UNDERNEATH rather than replaced. On a healthy
+    // read it adds nothing (all four seeded grades are in the dimension); on a failed or
+    // truncated one it is the floor that keeps this list at least as complete as it was
+    // before the accessor existed — which matters because the QC sheet REFUSES a typed
+    // grade that is missing from it.
+    const canonicalGrades =
+        dimensionGrades.length > 0 ? mergeCodes(dimensionGrades, GRADE_CODES) : [...GRADE_CODES];
+
     return {
         // DVO is a container van into WHSE 3 under its own batch code — a different
         // document, deferred, and refused by name.
         sources: mergeCodes(SOURCE_LOCATION_CODES, sources, ['DVO']),
         crushers: mergeCodes(CRUSHER_CODES, crusherLike),
         kilns: mergeCodes(KILN_CODES, kilnLike),
-        grades: mergeCodes(GRADE_CODES, grades),
+        grades: mergeCodes(canonicalGrades, grades),
         shifts: mergeCodes(SHIFT_CODES, shifts),
         // WHSE 3 is the kg/DVO warehouse; the RPC requires a flec-count one.
         warehouses: mergeCodes(FLEC_WAREHOUSES, warehouses, ['WHSE 3']),
         sides: [...WHSE_SIDES],
-        error: error ? describe('the draw entry options', error.message) : null,
+        // Non-fatal, and the fact-table failure is named first: it costs four dimensions
+        // while the grade accessor costs one that still has a seeded floor beneath it.
+        error: error
+            ? describe('the draw entry options', error.message)
+            : gradeDimension.error
+              ? describe('the grade list', gradeDimension.error.message)
+              : null,
     };
 }
 

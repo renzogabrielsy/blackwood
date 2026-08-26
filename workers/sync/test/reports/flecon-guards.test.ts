@@ -322,14 +322,18 @@ describe("defect C — no silent day-wipe", () => {
     expect(res.ok).toBe(false);
     expect(replaceFleconDate).not.toHaveBeenCalled();
     expect(upsertIngestionWatermark).not.toHaveBeenCalled();
-    expect(labelProcessed).not.toHaveBeenCalled();
     expect(res.watermark_updated).toBe(false);
-    expect(res.labeled).toBe(false);
+    // 2026-08-26 UNJAM: the WRITE refusal is unchanged, but a strictly-older attachment
+    // IS labeled processed so the same dead email stops re-firing every run. See
+    // flecon-stale-unjam.test.ts for the full split (strictly-older vs no-dated-rows).
+    expect(labelProcessed).toHaveBeenCalledWith("42");
+    expect(res.labeled).toBe(true);
     const h = res.held.find((x) => x.reason === "stale_workbook");
     expect(h).toBeDefined();
     expect(h!.kind).toBe("gate_failure");
     expect(h!.row?.workbook_max_date).toBe("2026-07-21");
     expect(h!.row?.db_watermark).toBe("2026-07-22");
+    expect(h!.row?.email_labeled_processed).toBe(true);
   });
 
   it("writes the audit row for EVERY replace, with a deleted-row id as the fallback marker", async () => {

@@ -197,6 +197,7 @@ convention classify uses.
 ## 4. Gates & reconciliation
 
 - **No HARD gate** — `sync_flecon.py`'s classify phase always emits `ok: true`. Column-mapping issues are surfaced as `counts.flagged` but do not set `ok: false`.
+- **TS-ONLY, two `gate_failures`** (the Python has none): `stale_workbook` (§5a/§5b/§5c — the attachment is an older copy than the DB) and `settlement_ledger_unreadable` (§6a — the list of dates that must not be rewritten could not be read, so the report refuses to run at all). Both settle the panel card to *gate-failed* and the run to `partial`.
 - **Balance cross-check is informational only**, as documented above.
 - **The `below_since_floor` bounded-apply check is the closest thing to a gate** — but it operates at APPLY time (not classify time) and only ever produces a `held` entry for a defensive edge case (a date somehow present in `per_date` below the `since` floor, which shouldn't happen given the classifier only walks `all_dates = sorted(set(ex_by_date) | set(db_by_date))` where BOTH sides are already filtered to `>= since` at the point of construction — `db_by_date` is built with `if d >= since: db_by_date[d].append(m)` explicitly, classify_flecon_bags.py:204-205).
 
@@ -244,7 +245,7 @@ and `app/(app)/sync/adjudication.ts`). Reclassify via `reason`/`detail`/`row`, n
 | `dropped_before_since_unrecorded` | `below_since_floor` | An in-year row below the floor whose DATE the DB has **never** recorded. Ordinary settled history (a dropped date the DB already holds) is silent — that is the benign every-run case. Requires the `dbDates` opt. |
 | `balance_crosscheck_drift` | `flagged` | Any non-zero per-code drift (defect B). Never gates. |
 | `delete_to_empty_blocked` | `gate_failure` | A `NEW`/`DATE_CHANGED` date that resolves to ZERO rows (defect C2). The date is NOT deleted. A day is never wiped on the strength of an absent section. |
-| `stale_workbook` | `gate_failure` | The workbook's own `date_max` is older than `MAX(flecon_bag_movements.transaction_date)` (defect C1). The WHOLE apply refuses: no writes, no watermark, no Gmail label, and `runReport` also returns a `gate_failures` entry so the panel card settles to *gate-failed* rather than a silent zero-row success. |
+| `stale_workbook` | `gate_failure` | The workbook's own latest date is older than `MAX(flecon_bag_movements.transaction_date)` (defect C1). The WHOLE apply refuses: no writes, no watermark, and `runReport` also returns a `gate_failures` entry so the panel card settles to *gate-failed* rather than a silent zero-row success. **The Gmail label is the ONE exception — see §5b.** |
 
 **Atomic replace (defect C3).** The DELETE + INSERT pair is now ONE transaction via the
 `fn_flecon_replace_date(p_date date, p_rows jsonb)` RPC (migration
@@ -254,6 +255,66 @@ written on **every** replace, falling back to a DELETED row's id when the insert
 previously the audit was skipped whenever `ins.length === 0`, which is exactly the wipe case.
 The dry-run write-blocking proxy (`reportDeps.makeDryRunDb`) MUST list this method: the proxy
 is `Object.create(DbClient.prototype)`, so an unlisted method falls through to the real client.
+
+### §5b. TS-ONLY — a REFUSAL THAT CAN NEVER CHANGE ITS MIND MUST STOP RE-FIRING (2026-08-26)
+
+**What happened.** Ivy's FLECON BAGGED email of 2026-08-24 00:58 (uid 126413, attachment
+`FLECON BAG MOVEMENT 2026 .xlsx`, 387,515 bytes) carries a workbook whose last dated row is
+**2026-08-21**, while `MAX(flecon_bag_movements.transaction_date)` is **2026-08-25**. The
+`stale_workbook` gate refused it — correctly, and the data was already fully in sync. But
+because the gate failed, `labelProcessed` was never called, so the same dead email was
+re-fetched and re-refused on **every** subsequent run, and every one of those runs settled
+`partial`: `4a8602ac` (08-25 01:42), `7f23dd88` (08-26 01:11), `a67e9c4a` (08-26 02:11).
+
+**The rule.** flecon's normal discipline is "label only on a clean apply" (§5), which is right
+for every failure a later run could resolve — an unmapped column can be registered, a database
+refusal can succeed on retry. This one cannot. **An attachment is a fixed file, and an older
+copy of a CUMULATIVE workbook can never become newer**, so re-reading it tomorrow can only
+reproduce the identical refusal. So a **STRICTLY older** stale workbook (a real
+`workbookMaxDate` that is `< dbWatermark`) is labeled processed on the run that refuses it.
+
+Three boundaries make that safe:
+
+1. **The refusal to WRITE is untouched.** No replace, no DELETE, no INSERT, no watermark move,
+   `ok: false`, and the `stale_workbook` held row + `gate_failures` entry exactly as before.
+   Only the LABEL decision changed. The held detail and `row.email_labeled_processed` say so.
+2. **`ok` stays FALSE on the labeling run**, so that run is still `partial` and the operator
+   sees the problem **exactly once** — which is the whole point. A jam that reports itself on
+   every run is not "loud", it is background noise; the fix is *seen once, then silent*, never
+   *never reported*. (`reportWorkflow.ts` sets `classify.ok = r.ok && !gate_failures.length`
+   and `runSync.ts::reportFailed` turns either into `partial` — nothing there changed.)
+3. **STRICTLY older only.** A workbook with **no dated rows at all** (`workbookMaxDate === null`)
+   is a different, rarer failure — a broken or unreadable attachment, not a provably superseded
+   one — so it is NOT labeled and keeps firing until a human looks at it. A dry run (`noLabel`)
+   never labels, and a Gmail labeling error is swallowed (`labeled: false`) rather than turned
+   into an apply error: a mail failure must not convert a clean refusal into a crash.
+
+### §5c. TS-ONLY — the stale message must name a date that EXISTS (2026-08-26)
+
+The gate detail read *"only carries bag movements up to **(no dated rows)**"* about a workbook
+visibly full of dated rows. `extract.summary.date_max` is computed over `extract.rows`, which
+the `since` floor has **already filtered** — it answers "the newest day IN THIS RUN'S WINDOW".
+In the jam above, `since` = `2026-08-25 − 3d` = `2026-08-22` and the file's last row is
+`2026-08-21`, so *every* row was dropped and `date_max` was null.
+
+`index.ts::wholeSheetMaxDate(extract)` is now the input to both the comparison and the
+sentence: the max `transaction_date` over `extract.rows` **∪** `extract.flagged_rows`,
+**excluding out-of-year rows**. Two notes:
+
+- **The verdict did not change in any real case, and that was verified before the change.**
+  `since` is a FLOOR derived from the watermark, so dropping rows below it can never *lower*
+  a maximum unless it empties the set — and an emptied set means every row was below
+  `watermark − 3`, i.e. the workbook was genuinely stale anyway. The old comparison was
+  therefore correct by coincidence; it is now correct by construction, and no longer depends
+  on `since` being derived from the watermark.
+- **Out-of-year rows are excluded on purpose.** A date whose year is not the tab's own year is
+  an operator TYPO (§2a) and is never evidence of how fresh the file is. Including one would
+  let a single `2027-…` slip make a genuinely stale workbook look newer than the database and
+  **disarm this gate entirely**. The predicate is the same one `extract.ts` uses to set
+  `out_of_year`.
+
+`apply.ts` needs no change for this: it renders `opts.staleWorkbook.workbookMaxDate`, which is
+built once in `index.ts` and passed in — one value, both sentences.
 
 ---
 
@@ -293,9 +354,26 @@ row, or a changed quantity does NOT settle — silence is never agreement. Pure 
 `workflows/settlement.ts` pure/IO split). Everything else is settled by a human seeding the
 ledger directly.
 
+**THE READ FAILS CLOSED — an unreadable ledger REFUSES the run (2026-08-26).** The read and
+the write used to share one `try { … } catch { settledDates = new Set() }`, so a failure to
+read `flecon_bag_date_settlements` degraded to *"nothing is settled"* and the run carried on
+with the protection silently switched off. That is exactly **L-044's** shape: a read that fails
+quietly and renders as "nothing to report" — except here the consequence is not a missing
+alarm, it is REPLACE-BY-DATE deleting a day a human deliberately arbitrated (the 2026-01-31
+backfill exists nowhere in the sheet). **A protection that cannot be read is a protection that
+is not in force.** So `deps.db.readFleconSettledDates()` now runs FIRST — immediately after the
+email is found, before the workbook is even opened — and on failure `runReport` returns
+`ok: false` with a `settlement_ledger_unreadable` gate failure naming the read error, having
+done **no extract-compare, no classify, no write, no watermark move and no Gmail label**. The
+next run tries again.
+
+The split is deliberate: **reading** the ledger is fail-closed, **adding** a new settlement to
+it stays best-effort. Failing to record a NEW settlement loses nothing that was already
+protected, so it degrades to `knownSettled` — never to an empty set — and must not stop the run.
+
 **Where it's written.** Inside `reports/flecon/index.ts::runReport`, right after extract and
-before classify, guarded end to end (any failure is a silent no-op — settlement is protection,
-and its absence degrades to the previous behavior, never to a wrong write). Writer:
+before classify (the READ is earlier still — see above), with the compute/insert half guarded
+so its failure degrades to the already-known settled set, never to a wrong write. Writer:
 `DbClient.insertFleconSettlements` (service role; upsert on the `transaction_date` PK with
 `ignoreDuplicates`, and `.select()` returns only the rows actually inserted — the same id-less
 table trap `insertSettlements` hit, since this table has NO `id` column). Because it runs
@@ -323,7 +401,9 @@ un-arbitrated out-of-year date still fires at full volume.
 **One-way ratchet** — same accepted edge case as `rc_out_date_settlements`: a later correction
 to a settled date needs a manual `DELETE FROM flecon_bag_date_settlements`.
 
-**Tests:** `test/reports/flecon-settlement.test.ts` (19) — the pure criterion and its refusals,
+**Tests:** `test/reports/flecon-stale-unjam.test.ts` (12) — the fail-closed read, its readable
+control, and the "could not RECORD a settlement" degrade (plus §5b/§5c). And
+`test/reports/flecon-settlement.test.ts` (19) — the pure criterion and its refusals,
 the apply-level "settled ⇒ never replaced" with a control proving the delete path is live
 without the ledger, the end-to-end January-floor `runReport` (SETTLED / AUTO-SETTLE / CONTROL),
 the cross-check timing fix, and the out-of-year suppress-vs-fire split.
@@ -341,7 +421,10 @@ the cross-check timing fix, and the out-of-year suppress-vs-fire split.
 | never-auto-create-bag-type | sync_flecon.py apply (no bag-type INSERT logic exists anywhere in this file) | Confirm the TS port has NO code path that creates a `flecon_bag_types` row from an unmapped column — it must remain a pure hold. |
 | REPLACE audit operation | lib/db.py `insert_manual_audit`, migration 20260703043000 | An audit_logs row with `operation='REPLACE'` inserts successfully (requires the widened CHECK constraint in the target schema). |
 | never-wipe-a-day (BUG-015 C2) | TS apply.ts `delete_to_empty_blocked` | A `DATE_CHANGED` date whose movement list is EMPTY is HELD — `replaceFleconDate` is never called for it. |
-| refuse-a-stale-workbook (BUG-015 C1) | TS index.ts + apply.ts `stale_workbook` | A workbook whose `date_max` < the DB watermark writes NOTHING, updates no watermark, applies no label, and reports a classify `gate_failure`. |
+| refuse-a-stale-workbook (BUG-015 C1) | TS index.ts + apply.ts `stale_workbook` | A workbook whose latest date < the DB watermark writes NOTHING, updates no watermark, and reports a classify `gate_failure`. |
+| a-dead-email-is-labeled-once (§5b) | TS apply.ts stale early-return | A STRICTLY-older stale workbook IS labeled processed (so it stops re-firing) while still writing nothing and still returning `ok:false`; a `workbookMaxDate === null` workbook and a `noLabel` dry run are NOT labeled; a labeling throw yields `labeled:false` and no apply error. |
+| stale-message-names-a-real-date (§5c) | TS index.ts `wholeSheetMaxDate` | With every sheet row below the `since` floor, `summary.date_max` is null but the gate detail still names the workbook's own last date; an out-of-year (typo) date never raises that maximum. |
+| settled-read-fails-closed (§6a) | TS index.ts `readFleconSettledDates` | A throwing ledger read produces `ok:false` + a `settlement_ledger_unreadable` gate failure, a null `classified`/`apply`, and ZERO calls to `replaceFleconDate` / `upsertIngestionWatermark` / `labelProcessed`. A throwing `insertFleconSettlements` does NOT fail the run and every already-settled date is still skipped. |
 | mis-dated-rows-are-loud (BUG-015 A) | TS extract.ts `flagged_rows` + apply.ts `out_of_year_date` | The real `flecon_real_latest` fixture (A75 = `2025-01-31` inside the `JANUARY 2026` tab) yields exactly 5 out-of-year flagged rows (75–79) and ONE held row — and still emits ZERO movements for that date. |
 | settled-date-is-never-deleted (BUG-020, §6a) | TS index.ts skip filter + apply.ts `opts.settledDates` | A re-run scoped back to `2026-01-01` with `2026-01-31` settled never calls `replaceFleconDate` for it and produces no `per_date` entry; the same run without the ledger DOES (control). |
 | settled-date-suppresses-out-of-year (BUG-020, §6a) | apply.ts `buildFlaggedRowHolds(…, {dates, sheetYear})` | With `2026-01-31` settled, the `2025-01-31` typo group raises NO held row; a different, un-arbitrated out-of-year date still raises one. |

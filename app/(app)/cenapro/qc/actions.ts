@@ -26,6 +26,7 @@ import {
     METRIC_SHORT,
     isIsoDate,
     parseMetricValue,
+    isBaggingMachine,
     parseWeightKg,
     sampleGroupKey,
     type AddPartnerDrawArgs,
@@ -342,13 +343,19 @@ export async function saveQcWeights(
 // operator reads.
 // ─────────────────────────────────────────────────────────────────────────────────
 
-/** One line of the partner's slip, as typed. Raw text in, parsing done here. */
+/** One line of the partner's slip — or one bagging entry — as typed. Raw text in. */
 export interface AddQcDrawInput {
     /** `YYYY-MM-DD` — the receipt date at CCC. */
     recvDate: string;
     /** TNK 1–4 · W6 · W7 · FLEC. DVO is refused by the RPC (`unsupported_source`). */
     sourceLocationCode: string;
-    /** C1–C4 (crusher) or RK1–RK4 (kiln). This ALONE decides the disposition. */
+    /**
+     * The machine cell. `C1`–`C4` (crusher) or `RK1`–`RK4` (kiln) for a partner draw,
+     * or `FLEC` / `BAG` / `BAGGING` / `FLEC BAGGING` / `FLEC_BAGGING` for a **bagging
+     * entry** — charcoal CI put INTO a warehouse (2026-08-26). This ALONE decides the
+     * disposition, and `isBaggingMachine` is the one predicate that reads it. Blank is
+     * `wrong_surface`.
+     */
     partnerEquipmentCode: string;
     gradeCode: string;
     shiftCode: string;
@@ -365,11 +372,15 @@ export interface AddQcDrawInput {
      */
     plant?: string | null;
     prodDate?: string | null;
-    /** FLEC source ONLY — required there, refused anywhere else. */
+    /**
+     * Bag-bearing rows ONLY — a FLEC-**sourced** draw (bags out) or a FLEC-**machine**
+     * bagging entry (bags in). REQUIRED on both, refused anywhere else. A flec-count
+     * warehouse: WHSE 1/2/5/7, never WHSE 3.
+     */
     warehouseCode?: string | null;
-    /** FLEC source ONLY — required there, refused anywhere else. Whole bags. */
+    /** Bag-bearing rows ONLY — required on both, refused anywhere else. Whole bags. */
     flecCountRaw?: string | null;
-    /** FLEC source only, and optional there — but see the `notice` on the verdict. */
+    /** Bag-bearing rows only, and optional there — but see the `notice` on the verdict. */
     whseSide?: string | null;
     notes?: string | null;
     /** Only ever true on the operator's explicit re-send after a `duplicate_warning`. */
@@ -465,7 +476,7 @@ function refuse(outcome: AddQcDrawOutcome, message: string): AddQcDrawResult {
 function parseFlecCount(raw: string): { count: number | null; error: string | null } {
     const cleaned = raw.replace(/[,\s_]/g, '');
     if (cleaned === '') {
-        return { count: null, error: 'A FLEC draw takes bags out of a warehouse — enter how many.' };
+        return { count: null, error: 'This row moves bags in or out of a warehouse — enter how many.' };
     }
     if (!/^\d+$/.test(cleaned)) {
         return { count: null, error: 'The bag count must be a whole number of flecs.' };
@@ -473,19 +484,24 @@ function parseFlecCount(raw: string): { count: number | null; error: string | nu
     return { count: Number(cleaned), error: null };
 }
 
-const BAGGING_CODES = new Set(['FLEC', 'BAG', 'BAGGING', 'FLEC_BAGGING']);
-
 function clean(value: string | null | undefined): string {
     return (value ?? '').trim();
 }
 
 /**
- * Add one partner draw.
+ * Add one QC-ledger row — a partner DRAW, or (since 2026-08-26) a FLEC BAGGING entry.
  *
  * Returns the RPC's verdict rather than throwing on a refusal: four of the seven
  * outcomes are things the operator can act on (confirm a duplicate, open the row that
- * already exists, go to the Production ledger, retype a value), and a thrown error
- * would flatten all of them into "it failed".
+ * already exists, fix the machine cell, retype a value), and a thrown error would
+ * flatten all of them into "it failed".
+ *
+ * THE ENTRY KIND IS DECIDED BY THE MACHINE CELL, and `isBaggingMachine` is the ONE
+ * predicate that reads it — computed once below and used in all three places that
+ * branch on it. It used to be three separate `source === 'FLEC'` tests, which was
+ * safe only while bagging could not be entered here at all: bagging requires the bag
+ * fields but does NOT come from the FLEC source, so a per-site copy would let one
+ * site say "bags apply" while another silently dropped them from the payload.
  */
 export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawResult> {
     const recvDate = clean(input.recvDate);
@@ -504,11 +520,17 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
     const side = clean(input.whseSide).toUpperCase();
     const notes = clean(input.notes);
 
-    // ── The surface boundary, restated where it is cheapest to notice ─────────────
-    if (!machine || BAGGING_CODES.has(machine)) {
+    // ── What KIND of row is this? ────────────────────────────────────────────────
+    // A BLANK machine is the only refusal left here (2026-08-26). `FLEC` no longer
+    // means "wrong screen" — it files a bagging entry, an inventory IN, through the
+    // same RPC. What a blank cell still means is a row that says neither "the partner
+    // drew this" nor "we bagged this", which describes no event at all.
+    const isBagging = isBaggingMachine(machine);
+
+    if (!machine) {
         return refuse(
             'wrong_surface',
-            'A draw needs the partner machine it went into (C1–C4 or RK1–RK4). Flec bagging is reported on a different sheet — enter it in the Production ledger.',
+            'An entry needs its machine cell: the crusher or kiln the partner drew into (C1–C4 or RK1–RK4), or FLEC if CI bagged it into a warehouse.',
         );
     }
 
@@ -554,18 +576,34 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
         );
     }
 
-    // ── Source-conditional bag fields ─────────────────────────────────────────────
-    // A FLEC draw is bags leaving a warehouse, so the warehouse and the count are part
-    // of what happened. Any other source consumes no bags at all, and the RPC refuses
-    // the fields by name rather than dropping them quietly — so neither does this.
-    const isFlec = source === 'FLEC';
+    // ── FLEC out of FLEC is a self-loop, and it is refused ────────────────────────
+    // Named here purely so the round trip is not spent on it; the RPC refuses it too
+    // and its sentence is the authority. Said in fewer words, NOT paraphrased into a
+    // different explanation — two different accounts of one refusal is worse than one.
+    if (isBagging && source === 'FLEC') {
+        return refuse(
+            'invalid',
+            'This row says the charcoal came out of the flec warehouse and was bagged into it at the same time. Name the tank or plant it was bagged from, or name the crusher or kiln to make it a draw.',
+        );
+    }
+
+    // ── Bag fields follow the DIRECTION, not the source ───────────────────────────
+    // Two shapes of row touch bag inventory and they are mirror images: a draw whose
+    // SOURCE is FLEC takes bags OUT, and an entry whose MACHINE is FLEC puts bags IN.
+    // `cenapro.flec_ledger` counts either one only when the warehouse and the count
+    // are there, so both require them — the same `v_needs_bags` predicate the RPC
+    // uses. Any other row consumes no bags at all, and the RPC refuses the fields by
+    // name rather than dropping them quietly, so neither does this.
+    const needsBagFields = isBagging || source === 'FLEC';
     let flecCount: number | null = null;
 
-    if (isFlec) {
+    if (needsBagFields) {
         if (!warehouse) {
             return refuse(
                 'invalid',
-                'A FLEC draw takes bags out of a specific warehouse — choose which one.',
+                isBagging
+                    ? 'A bagging entry puts bags into a specific warehouse — choose which one.'
+                    : 'A FLEC draw takes bags out of a specific warehouse — choose which one.',
             );
         }
         const parsed = parseFlecCount(flecCountRaw);
@@ -593,7 +631,12 @@ export async function addPartnerDraw(input: AddQcDrawInput): Promise<AddQcDrawRe
     // already used, so the derive path stays byte-for-byte the one that was proven live.
     if (plant) args.p_plant = plant;
     if (prodDate) args.p_prod_date = prodDate;
-    if (isFlec) {
+    // The SAME predicate the validation above used. Reading `source === 'FLEC'` here
+    // instead would send a bagging entry with the warehouse and the count OMITTED —
+    // the operator fills them in, the app silently drops them, and the DATABASE
+    // refuses the row for fields that were never sent. A refusal in the app's own
+    // voice is recoverable; a refusal for a field the app threw away is not.
+    if (needsBagFields) {
         args.p_warehouse_code = warehouse;
         if (flecCount != null) args.p_flec_count = flecCount;
         if (side) args.p_whse_side = side;

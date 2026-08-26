@@ -49,9 +49,16 @@ export type OpeningBalanceHistoryRow =
 // The grid sends only the cells the operator actually edited. `effectiveDate` is the
 // page's START date — every save inserts a NEW opening row dated that day (append-only,
 // never an overwrite). See `saveOpeningBalances` in inventory/actions.ts.
+//
+// `grade` is a plain `string`, NOT the `GradeCode` union (widened 2026-08-26). The
+// STARTING grid's rows come from the live `public.cenapro_grades` dimension now that
+// grades are addable in-app, so a grade added today is by definition a code this file's
+// seed-mirror constant has never heard of. `cenapro_set_opening_balance` takes a plain
+// text `p_grade_code` and FK-checks it, so the narrowing bought nothing at the write
+// boundary and would have made a newly added grade unsaveable.
 export interface OpeningBalanceCellChange {
     warehouse: string;
-    grade: GradeCode;
+    grade: string;
     side: WhseSide;
     effectiveDate: string;
     count: number;

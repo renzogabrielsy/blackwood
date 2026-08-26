@@ -64,9 +64,11 @@ import { Check, Info, Loader2, TriangleAlert, X } from 'lucide-react';
 import { SelectCell } from '@/components/shared/grid/SelectCell';
 import { cn } from '@/lib/utils';
 import {
+    BAGGING_MACHINE_CODE,
     METRICS,
     METRIC_SHORT,
     canonToken,
+    isBaggingMachine,
     parseMetricValue,
     parseQcDate,
     sampleGroupKey,
@@ -328,11 +330,45 @@ export function draftBlocker(d: DraftDraw, contextYear: number): string | null {
     if (!d.grade.trim()) return 'needs a grade';
     if (!d.shift.trim()) return 'needs a shift';
     if (!d.wt.trim()) return 'needs a weight';
-    if (d.src.trim().toUpperCase() === 'FLEC') {
-        if (!d.whse.trim()) return 'a FLEC draw needs a warehouse';
-        if (!d.bags.trim()) return 'a FLEC draw needs a bag count';
+
+    // ── The DIRECTION of the row, and the two rules that follow from it ───────────
+    //
+    // Since 2026-08-26 the MACH cell decides what KIND of row this is: a crusher or a
+    // kiln makes it a DRAW (bags out, when the source is FLEC), and `FLEC` makes it a
+    // BAGGING entry (bags in). `isBaggingMachine` is the ONE predicate — shared with
+    // `actions.ts` and with the RPC — so a spelling this screen accepts and a spelling
+    // the server accepts cannot drift apart.
+    const src = d.src.trim().toUpperCase();
+    const bagging = isBaggingMachine(d.mach);
+
+    // Out of FLEC and into FLEC at once is a self-loop. Named here only to save the
+    // round trip; the RPC refuses it too and ITS sentence is the authority, so this one
+    // is deliberately shorter rather than a second, differently-worded explanation.
+    if (bagging && src === 'FLEC') {
+        return 'a bagging entry cannot also come out of FLEC — name the tank or plant it was bagged from';
+    }
+
+    // Bag fields follow the DIRECTION, not the source: a FLEC-sourced draw takes bags
+    // OUT and a FLEC-machine entry puts them IN, and `cenapro.flec_ledger` counts either
+    // only when the warehouse and the count are both there. Same `needsBagFields`
+    // predicate `addPartnerDraw` uses, one layer up.
+    //
+    // SIDE is deliberately NOT required in either direction — 183 of the 372 historic
+    // bagging rows carry none, so demanding one would refuse a shape the ledger has
+    // always had. The server returns a non-blocking `notice` instead, and that notice is
+    // rendered on the row's status line.
+    const needsBags = bagging || src === 'FLEC';
+    if (needsBags) {
+        if (!d.whse.trim()) {
+            return bagging
+                ? 'a bagging entry needs the warehouse the bags went into'
+                : 'a FLEC draw needs a warehouse';
+        }
+        if (!d.bags.trim()) {
+            return bagging ? 'a bagging entry needs a bag count' : 'a FLEC draw needs a bag count';
+        }
     } else if (d.whse.trim() || d.bags.trim() || d.side.trim()) {
-        return `a ${d.src.trim().toUpperCase()} draw carries no warehouse, bags or side`;
+        return `a ${src} draw carries no warehouse, bags or side`;
     }
     for (const metric of METRICS) {
         const { error } = parseMetricValue(metric, d.metrics[metric] ?? '');
@@ -559,8 +595,16 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
     const setMetric = (metric: MetricKey, value: string) =>
         onChange(draft.id, { metrics: { ...draft.metrics, [metric]: value } });
     const busy = draft.status === 'saving';
+    // Crushers · kilns · and the ONE bagging token (2026-08-26). `FLEC` goes LAST, not
+    // first: it is the rarer entry and every operator's muscle memory reaches for C1–C4
+    // and RK1–RK4, so prepending it would shift the whole list under them.
+    //
+    // Exactly one bagging spelling is OFFERED even though the RPC ACCEPTS five —
+    // `BAGGING_MACHINE_CODE` vs `BAGGING_MACHINE_CODES`. A picker listing all five would
+    // ask the operator to choose between synonyms; the accept list exists for text that
+    // is already typed (a paste out of the production ledger), not for a menu.
     const machines = React.useMemo(
-        () => [...options.crushers, ...options.kilns],
+        () => [...options.crushers, ...options.kilns, BAGGING_MACHINE_CODE],
         [options.crushers, options.kilns],
     );
     // The plant that would be STORED, and whether the operator put it there. A derived
@@ -737,7 +781,7 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
                     options={options.warehouses}
                     listId={`qc-whse-${draft.id}`}
                     upper
-                    title="Warehouse the bags came out of — required on a FLEC draw, refused on any other source"
+                    title="The warehouse the bags moved through — required when SRC is FLEC (bags out) or MACH is FLEC (bags in), refused on any other row. Flec-count warehouses only; never WHSE 3."
                 />
                 <DraftCell
                     value={draft.side}
@@ -746,14 +790,14 @@ export function DraftRow({ draft, options, contextYear, conflict, onChange, onRe
                     options={options.sides}
                     listId={`qc-sides-${draft.id}`}
                     upper
-                    title="Warehouse side (LS / RS) — FLEC draws only, and optional there, but the flec ledger only counts sided rows"
+                    title="Warehouse side (LS / RS) — optional in both directions, but the flec ledger EXCLUDES a sideless row entirely rather than counting it sideless"
                 />
                 <DraftCell
                     value={draft.bags}
                     onChange={(v) => set({ bags: v })}
                     disabled={busy}
                     numeric
-                    title="Whole flec bags — required on a FLEC draw, refused on any other source"
+                    title="Whole flec bags — required when SRC is FLEC (bags out) or MACH is FLEC (bags in), refused on any other row"
                 />
                 <DraftCell
                     value={draft.src}

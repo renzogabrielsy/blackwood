@@ -118,6 +118,8 @@ import { cn } from '@/lib/utils';
 import type { MetricKey } from '@/lib/cenapro/ccc-analysis';
 import type { QcAggregate } from '@/lib/cenapro/ccc-analysis-view';
 
+import { BADGE_BASE, cccFlecBadgeClass, plantBadgeClass } from '../badges';
+
 import { addQcDraws, saveQcSamples, saveQcWeights } from './actions';
 import type { QcGroup, QcLedgerDay, QcDrawOptions } from './data';
 import {
@@ -278,6 +280,35 @@ function editSeams(field: QcField): Partial<ColumnSpec<QcRow, Ctx>> {
 
 const dash = <span className="text-muted-foreground/40">—</span>;
 
+// ─── CELL PAINT — the production ledger's, lane for lane (2026-08-26) ─────────────
+//
+// Renzo, after driving the rearranged sheet: the two screens had the same COLUMNS in the
+// same order and did not look remotely alike, because the arrangement pass moved the
+// columns and left the paint behind. A value rendered as plain text where the other sheet
+// renders a coloured badge is the same muscle-memory failure the arrangement existed to
+// fix, one layer up: the eye finds a machine code by its colour long before it reads it.
+//
+// So the display treatment below is `production-grid-v2-shared.tsx`'s, taken lane for
+// lane through the lane mapping the arrangement already established (`recv`⇄`date`,
+// `source`⇄`src`, `ccc`⇄`mach`, `flec`⇄`bags`):
+//
+//   • PLANT  → `plantBadgeClass`     (W6 blue · W7 teal · W6/W7 indigo · DVO slate)
+//   • MACH   → `cccFlecBadgeClass`   (FLEC emerald · C1–C4 amber · RK1–RK4 rose)
+//   • everything else → the ledger's `font-mono text-xs font-bold`, with PROD and BAGS
+//     muted exactly as the production ledger mutes `prod` and `flec`.
+//
+// **The colour maps are IMPORTED from `../badges`, never re-typed.** That module exists
+// precisely so a second consumer can have the same colours without dragging a
+// 1,500-line client component in behind them, and the QC PLANT dropdown has been reading
+// it since 2026-08-04 — this is the same import, now reaching the sheet as well.
+//
+// **DISPLAY ONLY.** The edit `<input>` is the module's own and is never wrapped, so
+// typing and paste are untouched — the idiom `badges.ts` documents in its own header. A
+// blank value gets the dash and NO badge: a coloured chip around nothing would say a
+// value is present when it is not.
+const MONO = 'font-mono text-xs font-bold';
+const MONO_MUTED = `${MONO} text-muted-foreground`;
+
 /**
  * A text cell.
  *
@@ -288,8 +319,13 @@ const dash = <span className="text-muted-foreground/40">—</span>;
  * element child picks up `[&>*]:text-ellipsis` from `cell-classes.ts`; the bare string
  * cannot.
  */
-function txt(v: string | null | undefined): React.ReactNode {
-    return v ? <span>{v}</span> : dash;
+function txt(v: string | null | undefined, className: string = MONO): React.ReactNode {
+    return v ? <span className={className}>{v}</span> : dash;
+}
+
+/** A closed-domain code as a COLOURED badge — the production ledger's own treatment. */
+function badge(v: string | null | undefined, classOf: (raw: string) => string): React.ReactNode {
+    return v ? <span className={cn(BADGE_BASE, classOf(v))}>{v}</span> : dash;
 }
 
 function num(v: number | null | undefined): number | null {
@@ -300,20 +336,29 @@ function num(v: number | null | undefined): number | null {
 function wtText(v: number | null | undefined): React.ReactNode {
     const n = num(v);
     if (n === null) return dash;
-    return n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+    return (
+        <span className={`${MONO} tabular-nums`}>
+            {n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+        </span>
+    );
 }
 
 /** A lab metric — two decimals. BD carries three in the RC IN spec; QC uses two. */
 function metricText(v: number | null | undefined): React.ReactNode {
     const n = num(v);
     if (n === null) return dash;
-    return n.toFixed(2);
+    return <span className={`${MONO} tabular-nums`}>{n.toFixed(2)}</span>;
 }
 
+/** The flec bag count — the production ledger mutes its `flec` lane; so does this one. */
 function intText(v: number | null | undefined): React.ReactNode {
     const n = num(v);
     if (n === null) return dash;
-    return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return (
+        <span className={`${MONO_MUTED} tabular-nums`}>
+            {n.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+        </span>
+    );
 }
 
 /** Clipboard form: a bare number, never grouped — Excel must be able to parse it. */
@@ -378,6 +423,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         // still declared so `storedText` answers the ordinal rather than a blank, which is
         // what the production ledger's `productionStoredText` does for the same column.
         rowCopy: false,
+        cellClass: importedCellClass,
         format: (r) => (
             <span className="w-full text-center font-mono text-[10px] font-bold text-muted-foreground">
                 {r.num}
@@ -421,7 +467,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         cellKind: 'date',
         title: 'Production date of the material drawn',
         ...editSeams('prod'),
-        format: (r) => txt(r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : null),
+        format: (r) => txt(r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : null, MONO_MUTED),
         clipboardValue: (r) => (r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : ''),
     },
     /**
@@ -453,6 +499,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         selectable: false,
         // A lane that is empty by construction has nothing to contribute to "Copy row".
         rowCopy: false,
+        cellClass: importedCellClass,
         format: () => dash,
     },
     shift: {
@@ -484,7 +531,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         cellKind: 'select',
         title: 'Plant — derived from SRC, overridable when the partner slip says otherwise',
         ...editSeams('plant'),
-        format: (r) => txt(r.draw.plant),
+        format: (r) => badge(r.draw.plant, plantBadgeClass),
         clipboardValue: (r) => r.draw.plant ?? '',
     },
     whse: {
@@ -547,7 +594,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         cellKind: 'select',
         title: 'Partner machine — C1–C4 (crusher) or RK1–RK4 (kiln)',
         ...editSeams('mach'),
-        format: (r) => txt(r.draw.equip),
+        format: (r) => badge(r.draw.equip, cccFlecBadgeClass),
         clipboardValue: (r) => r.draw.equip ?? '',
     },
     wt: {
@@ -634,6 +681,37 @@ function slotFor(colKey: string, isFirst: boolean): CellSlot | null {
 function draftSlotFor(colKey: string): CellSlot | null {
     if (isImportedColumn(colKey)) return importedSlot(colKey);
     return { field: colKey, editable: true };
+}
+
+/**
+ * THE FIX FOR THE 2026-08-25 REGRESSION — an imported lane must SAY it is not an input,
+ * and on a blank row nothing else can say it.
+ *
+ * Renzo, driving the rearranged sheet: *"there are some columns I can't seem to
+ * manipulate/edit (specifically the empty ones below where we add entries)."* Those
+ * columns are `#` and `BATCH`, and the reason they read as broken rather than as
+ * reference is a rendering rule one layer down: **the platform calls `format` only where
+ * there is row data** (`components/shared/table/Row.tsx` — `exists && data !== null ?
+ * col.format(...) : null`), and a draft row HAS no data. So on a stored row those two
+ * paint an ordinal and a dash and obviously mean "not yours to type"; on a blank row they
+ * paint absolutely nothing and are pixel-identical to the fifteen empty cells beside
+ * them — two of which sit FIRST and FOURTH, exactly where a new line is started.
+ *
+ * `cellClass` is the ONE seam the module gives a consumer on a draft row: it is called
+ * with `row === null` there (its own contract says so), and it is merged UNDER the cached
+ * class string, so `selected` / `active` / `invalid` / `dirty` still win and the operator
+ * never loses the states they navigate by.
+ *
+ * The wash is applied to the BLANK rows only, deliberately. On a stored row the content
+ * already carries the message, and dimming a row ordinal that is genuinely useful to read
+ * would trade one legibility problem for another. The `—` is drawn as a pseudo-element
+ * rather than by `format` because `format` structurally cannot run here; on a stored row
+ * it would double the dash the lane already renders, which is precisely why it is gated.
+ */
+function importedCellClass(row: QcRow | null): string | undefined {
+    return row === null
+        ? "bg-muted/40 before:text-muted-foreground/30 before:content-['—']"
+        : undefined;
 }
 
 export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
