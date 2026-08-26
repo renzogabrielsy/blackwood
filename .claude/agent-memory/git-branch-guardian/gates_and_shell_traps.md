@@ -194,3 +194,26 @@ root `.dockerignore` is read by **Docker only** — not by Vercel, not by git. S
 `npm run build` and root `npx tsc --noEmit` were skipped, and the honest reason is "no file in
 the diff is compiled by Next.js", not "the brief said it was green". Same discipline as the
 worker-only case above; state the reason in the report.
+
+## An AGENT WORKTREE has NO `node_modules` — the gate binaries live in the main repo
+
+Confirmed 2026-08-26 (promotion 52, `feat/cenapro-deliveries-v2-default` in
+`.claude/worktrees/agent-<id>/`). `ls node_modules` in the worktree = *No such file or
+directory*, so a bare `npx tsc` / `npm run …` there resolves nothing. Two working forms,
+both verified on the merge commit:
+
+- **`tsc`:** call the main repo's binary and point `-p` at the WORKTREE tsconfig —
+  `/Users/renzosy/blackwood/node_modules/.bin/tsc --noEmit -p <worktree>/tsconfig.json`.
+  Type resolution still works because the worktree lives *under* the repo root, so Node's
+  upward `node_modules` walk finds the root install. Exit 0 is the gate.
+- **`scripts/verify-*.ts`:** there is **no local `tsx` binary** (`node_modules/.bin/tsx`
+  does not exist — the repo's own invocation is `npx tsx …`, which fetches it). Run
+  `npx --yes tsx scripts/verify-table-core.ts` with the Bash **cwd already inside the
+  worktree** (this agent's cwd is the worktree, so no `cd` is needed) — the script's paths
+  are cwd-relative.
+
+This is the SAFE way to gate a merge when the main repo's tree is mid-flight with other
+sessions' uncommitted work: `main` is not checked out in any worktree, so the agent
+worktree can `git checkout main`, merge, gate, push, and `git checkout <feat>` back —
+without the main repo's working tree or branch ref being touched at all. Verify with
+`git worktree list` before the checkout, and again after restoring.

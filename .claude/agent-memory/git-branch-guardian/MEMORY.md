@@ -3,7 +3,7 @@
 ## Index
 
 - [Main promotion playbook](main_promotion_playbook.md) — branch model, the `feat/*`→`main` `--no-ff` recipe, merge-base tree conflict test, authorized direct-to-main cases.
-- [Gates and shell traps](gates_and_shell_traps.md) — build/test/parity/lint gates before `main`; the zsh `$PIPESTATUS` trap and the NUL-grep trap that flags every file.
+- [Gates and shell traps](gates_and_shell_traps.md) — gates before `main`; the zsh `$PIPESTATUS`/NUL traps; gating from an agent worktree (it has no `node_modules`).
 - [Staging exclusions](staging_exclusions.md) — what to unstage after the mandatory `git add .`; triaging untracked source files; content-level secret scan.
 - [Commit splitting under `git add .`](feedback_commit_splitting.md) — split one staged changeset into several commits via `git commit -- <pathspec>`, no per-file staging.
 - [Commit-message fidelity](commit_message_fidelity.md) — how much of a SUPPLIED message may change: the three decided cases and the misdescribes-contents test.
