@@ -33,9 +33,10 @@
 // So the order is no longer this sheet's own ("when · what · where it came out of ·
 // what source · into which machine · how much · what the lab said") — it is
 // `production-grid-v2-shared.tsx`'s `COLS`, column for column, with QC's four lab
-// lanes appended where the production ledger runs out:
+// lanes appended where the production ledger runs out — and, since 2026-08-26, without
+// its leading `#`:
 //
-//   #  ·  DATE  ·  PROD  ·  BATCH  ·  SH  ·  GRADE  ·  PLANT  ·  WHSE  ·  SRC  ·
+//   DATE  ·  PROD  ·  BATCH  ·  SH  ·  GRADE  ·  PLANT  ·  WHSE  ·  SRC  ·
 //   WT KG  ·  MACH  ·  BAGS  ·  SIDE   ‖   BD  ·  ASH  ·  GRIT  ·  MC
 //
 // **The order lives in `QC_COLUMNS` (the pure save module) and this file MAPS it**, so
@@ -44,14 +45,34 @@
 // and asserts the two still line up under the four names the screens spell differently
 // (`recv`⇄`date`, `source`⇄`src`, `ccc`⇄`mach`, `flec`⇄`bags`).
 //
-// TWO COLUMNS ARE IMPORTED AND CANNOT BE TYPED. `#` is the row's position in the view
-// (derived here, painted, never a coordinate — the production ledger's own treatment);
-// `BATCH` is the production label, which QC's read does not select and which
-// `cenapro_add_partner_draw` derives SERVER-SIDE from the receipt date. Both keep their
-// visual slot with `addressable: false`, so **Tab steps over them** while a block copied
-// out of the production ledger still lands column-for-column (the paste maps positionally
-// and drops a cell with no editable slot IN PLACE). Neither is a `QcField`, so no `parse`
-// exists for them: typing into one is impossible rather than merely unsaved.
+// ── `#` IS GONE, AND THE PASTE PAYS FOR IT (2026-08-26) ────────────────────────
+//
+// Renzo: *"I dont think row number is necessary to display. Wasted space."* The ordinal
+// was carried over from the production ledger by the arrangement pass and never earned
+// its 36 frozen pixels here — a QC row is identified by its date, its source and its
+// machine, and nothing on this sheet, in the save model or in any RPC has ever read it.
+//
+// The deviation is DECLARED rather than silent: `QC_COLUMNS`' own comment names it and
+// the verify script drops exactly that one key from the production table before comparing,
+// so a column moved or added over there still fails here.
+//
+// **What it costs, stated rather than papered over:** a block copied out of the production
+// ledger begins with an ordinal cell, and the module's paste maps positionally — it drops
+// a cell with no editable slot IN PLACE (which is how BATCH stays aligned) but it cannot
+// invent a slot for a column that no longer exists. So such a paste now lands ONE COLUMN
+// TO THE LEFT: the ordinal goes into DATE, the recv date into PROD, and so on. No magic is
+// built for this. Detecting "this block came from the production ledger" would mean
+// guessing from the shape of the first cell, and a paste that silently re-aims itself on a
+// guess is a worse failure than one that visibly lands wrong and is undone with Ctrl+Z.
+// Copy the block WITHOUT the `#` column, or paste starting one column to the right.
+//
+// ONE COLUMN IS IMPORTED AND CANNOT BE TYPED. `BATCH` is the production label:
+// `cenapro_add_partner_draw` derives it SERVER-SIDE from the receipt date and no QC RPC
+// accepts one. It keeps its visual slot with `addressable: false`, so **Tab steps over
+// it**; it is not a `QcField`, so no `parse` exists for it and typing into it is impossible
+// rather than merely unsaved. It DOES now show the real batch — `data.ts`'s `EVENT_COLUMNS`
+// selects `batch` + `batch_year` since 2026-08-26, which is the whole of why the lane used
+// to render a dash forever.
 //
 // The four lab lanes go at the END, after SIDE, because the production arrangement has
 // nothing to interleave them with and a trailing lane is where this sheet's own eye
@@ -66,9 +87,9 @@
 // four metric cells on the group's FIRST draw only. So two row families share the
 // column table and disagree about four of its columns:
 //
-//   • `draw-first` occupies all seventeen (`#` and BATCH un-addressable).
-//   • `draw`       occupies thirteen, and returns NULL for BD / ASH / GRIT / MC.
-//   • `draft`      (2026-08-21) occupies all seventeen, and the fifteen typeable ones
+//   • `draw-first` occupies all sixteen (BATCH un-addressable).
+//   • `draw`       occupies twelve, and returns NULL for BD / ASH / GRIT / MC.
+//   • `draft`      (2026-08-21) occupies all sixteen, and the fifteen typeable ones
 //                  are EDITABLE — a new draw carries its own date, source, machine,
 //                  grade, shift, plant, warehouse, side and bags, because that is
 //                  exactly what `cenapro_add_partner_draw` takes. On a STORED row those
@@ -87,21 +108,40 @@
 // unreachable at the cost of dead space; `'fill'` removes the slack instead, inside
 // `useTableColumns`, so ONE set of numbers describes both the layout and the sticky
 // arithmetic and the frozen block stays pinned at any viewport width. That still holds
-// with FOUR pinned columns rather than one: `distributeFill` skips every column carrying
-// a `pin`, so all four keep their declared widths, and `pinnedOffsets` is a prefix sum of
-// the widths ACTUALLY rendered either way (0 · 36 · 128 · 220).
+// with THREE pinned columns rather than one: `distributeFill` skips every column carrying
+// a `pin`, so all three keep their declared widths, and `pinnedOffsets` is a prefix sum of
+// the widths ACTUALLY rendered either way (0 · 96 · 192).
 //
-// ── WIDTHS ARE NOT THE LIVE SHEET'S, AND THE REASON IS ONE NUMBER ───────────────
-// This grid copied `qc-ledger-client.tsx`'s pixel widths column for column, and four of
-// them were WRONG here for a reason invisible in the diff: the live sheet's identity
-// widths are floored by a `px-1` cell, while the module's cell is `px-2` and reserves a
-// 1px selection-box gutter on every side. **A cell's usable width here is `declared − 18`,
-// not `declared − 8`** — a ten-pixel tax on every column, which is exactly the size of one
-// character at `text-xs`. So a column measured to fit its longest value in the live sheet
-// clips its last character here. DATE, PROD, WHSE and SIDE are widened below, each against
-// its longest REAL value (`2026-08-01` = 71.03px, `WHSE 3` = 46.88px — MEASURED in the
-// browser against the cell's own computed font, not estimated) rather than against its
-// label.
+// ── WIDTHS: TWO TAXES, AND THE SECOND ONE IS WHY HEADERS WERE CLIPPING ──────────
+//
+// **The cell's tax.** This grid copied `qc-ledger-client.tsx`'s pixel widths column for
+// column, and several were WRONG here for a reason invisible in the diff: the live sheet's
+// widths are floored by a `px-1` cell, while the module's cell is `px-2` and paints a 1px
+// selection border on every side. **A cell's usable width is `declared − 18`.**
+//
+// **The header's tax, and it is 40px larger (found 2026-08-26).** Renzo sent a screenshot
+// with `GRADE` reading `GR…`, `MACH` reading `M…`, `BAGS` reading `BA` and `SIDE` reading
+// `SID`. None of those columns was too narrow for its VALUES — they were too narrow for
+// their own NAMES, and the reason is not in this file at all: this sheet runs
+// `scope="focus"`, which turns the platform's built-in **sort and filter controls** on, and
+// `HeaderCell` lays them out as flex siblings of the label. They are `opacity-0` until the
+// header is hovered, so they are invisible AND they still occupy layout — two 16px buttons
+// plus two 4px gaps. Add the header's own `px-2` and the `border-r`:
+//
+//   header label width  =  declared − 16 (px-2) − 40 (sort + filter + gaps) − 1 (border)
+//   header label width  =  declared − 17          …on a `cellKind: 'derived'` column,
+//                                                  which offers neither control
+//
+// So the floor for a normal column is `label + 57`, and `SIDE` (25.8px at the header's
+// own 11px/500/`tracking-wide` Geist) needed **84px** to render four characters. Every
+// width below is `max(label + 57, longest value + 18)`, MEASURED against the real computed
+// fonts in a browser — never estimated, and never against the value alone, which is the
+// mistake that shipped on 2026-08-25. All sixteen clear their header with ≥3.2px to spare.
+// Σ declared = 1,628px (was 1,366 with a clipping header row and a `#` column).
+//
+// The measured longest values: `2026-08-01` 71.4px · `FEBRUARY` + `2026` 110px ·
+// `WHSE 3` 46.4px · `TNK 12` 42.3px · `123,456.7` 59.1px · the `FLEC` badge 53px ·
+// `W6/W7` badge 68px.
 // ─────────────────────────────────────────────────────────────────────────────────
 
 import * as React from 'react';
@@ -217,14 +257,15 @@ export interface QcLedgerGridV2Props {
 }
 
 /**
- * One rendered row: a draw, the group it belongs to, whether it leads that group — and
- * its position in the view, which is what the imported `#` column paints.
+ * One rendered row: a draw, the group it belongs to, and whether it leads that group.
  *
- * `num` is added HERE rather than in `QcSaveRow`, because it is a fact about the sheet and
- * not about the database: nothing in the save model may ever read it, and the save model's
- * own type staying free of it is what guarantees that.
+ * It carried a `num` (the row's 1-based position in the view) for the imported `#` column
+ * until 2026-08-26. That column is gone — Renzo: *"I dont think row number is necessary to
+ * display. Wasted space."* — and the field went with it rather than lingering as a value
+ * nothing reads. The alias stays so the React adapter keeps a name of its own for the row
+ * shape, and so re-adding a sheet-only fact later has an obvious place to go.
  */
-type QcRow = QcSaveRow & { num: number };
+type QcRow = QcSaveRow;
 
 interface Ctx {
     readonly month: string;
@@ -375,6 +416,10 @@ function metricSpec(metric: MetricKey): ColumnSpec<QcRow, Ctx> {
     return {
         key: metric,
         label: metric.toUpperCase(),
+        // 124, unchanged and comfortably clear on both taxes: the widest of the four labels
+        // is `GRIT` at 25.4 (needs 82) and the widest reading `100.00` is 41 (needs 59).
+        // These are the only lanes the 2026-08-26 header audit found with real slack, and
+        // they keep it — `sizing="fill"` hands the container's surplus here first.
         width: 124,
         align: 'right',
         cellKind: 'number',
@@ -393,56 +438,22 @@ function metricSpec(metric: MetricKey): ColumnSpec<QcRow, Ctx> {
 // map at the bottom of this block is what produces the rendered table. See the file
 // header — the arrangement is the production ledger's, and a test reads both.
 //
-// Widths are QC's own and stay as measured: this module's cell is `px-2` with a 1px
-// selection gutter each side, so a cell's usable width is `declared − 18` and four of the
-// live sheet's numbers were a character short here. The two IMPORTED columns take the
-// production ledger's `#` width verbatim (36) and a narrowed BATCH (72 rather than its
-// 120), because QC's BATCH renders a dash forever and 120px of frozen dead space is a real
-// cost on a narrow viewport while the header still needs ~58.
+// Every width is `max(header label + 57, longest real value + 18)` — see the file header
+// for where those two taxes come from and why the second one (the invisible sort/filter
+// chrome) is what made four headers clip on 2026-08-25. DATE, PROD and BATCH take the
+// production ledger's own 96 / 96 / 120 verbatim, which the formula clears comfortably and
+// which keeps the frozen identity block the same size on both screens.
 const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
-    /**
-     * IMPORTED — the row's 1-based position in the CURRENT VIEW, exactly as the production
-     * ledger paints it. It RENDERS and the caret steps over it (`addressable: false` on
-     * every family), and it is not selectable: a row ordinal has no arithmetic meaning and
-     * is not a coordinate at all.
-     */
-    num: {
-        key: 'num',
-        label: '#',
-        width: 36,
-        pin: 'start',
-        align: 'left',
-        cellKind: 'derived',
-        title: 'Row number in this view',
-        resizable: false,
-        hideable: false,
-        selectable: false,
-        // Not part of "Copy row": a row ordinal is a fact about the SHEET, not about the
-        // record, and pasting a copied row into Excel with a leading `7` is precisely the
-        // decoration `rowCopy` was added for (RC IN's STATE column). `clipboardValue` is
-        // still declared so `storedText` answers the ordinal rather than a blank, which is
-        // what the production ledger's `productionStoredText` does for the same column.
-        rowCopy: false,
-        cellClass: importedCellClass,
-        format: (r) => (
-            <span className="w-full text-center font-mono text-[10px] font-bold text-muted-foreground">
-                {r.num}
-            </span>
-        ),
-        clipboardValue: (r) => String(r.num),
-    },
     date: {
         key: 'date',
         label: 'DATE',
-        // 92, not the live ledger's 62. The live sheet pads its cells `px-1`; the module
-        // pads `px-2` and reserves a 1px selection-box gutter on all four sides, so a
-        // cell's usable width here is `declared − 18`.
+        // 96 — the production ledger's own `Recv` width, and it clears both taxes.
         //
         // MEASURED IN THE BROWSER, not estimated: `2026-08-01` in this cell's own computed
-        // font is **71.03px**, so the column needs 90. At 62 it had 44px of room and the
-        // date was cut mid-value — and before the platform pass it did not even clip, it
-        // painted straight over PROD, which is exactly the screenshot Renzo sent.
-        width: 92,
+        // font is **71.4px** against 96 − 18 = 78 of cell room, and the `DATE` label is
+        // 27.6px against 96 − 57 = 39 of header room. At the live ledger's 62 the value was
+        // cut mid-date; at 92 the value fitted and the label was 3.4px from clipping.
+        width: 96,
         pin: 'start',
         align: 'left',
         cellKind: 'date',
@@ -456,12 +467,14 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     prod: {
         key: 'prod',
         label: 'PROD',
-        // Same value, same measurement, same width as DATE — see above.
-        width: 92,
-        // PINNED since 2026-08-25, with `#` and BATCH: the production ledger's identity
-        // block is `# · Recv · Prod · Batch`, and matching it is the whole point of the
-        // rearrangement. `distributeFill` skips a pinned column, so all four keep their
-        // declared widths and every sticky offset stays a prefix sum of what is painted.
+        // Same value, same measurement, same width as DATE — see above. (`PROD` is the
+        // longer label of the two at 31.5px, so it is the one that floors the pair.)
+        width: 96,
+        // PINNED since 2026-08-25, with BATCH: the production ledger's identity block is
+        // `Recv · Prod · Batch` once its `#` is dropped, and matching it is the whole point
+        // of the rearrangement. `distributeFill` skips a pinned column, so all three keep
+        // their declared widths and every sticky offset stays a prefix sum of what is
+        // painted.
         pin: 'start',
         align: 'left',
         cellKind: 'date',
@@ -471,41 +484,64 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         clipboardValue: (r) => (r.draw.prodDate ? String(r.draw.prodDate).slice(0, 10) : ''),
     },
     /**
-     * IMPORTED — the production label, and QC can neither read nor write it.
+     * IMPORTED — the production label. QC READS it and can never WRITE it.
      *
-     * `data.ts`'s `EVENT_COLUMNS` does not select `batch`, so a stored draw has nothing to
-     * show; and `cenapro_add_partner_draw` resolves the batch SERVER-SIDE from the receipt
-     * date — *"`batch` from whichever label was actually running at `recv_date`"* — so a
-     * draft has nothing to type. A stored row therefore renders the dash and a blank row
-     * renders nothing at all (the renderer calls `format` only where there is row data),
-     * and the caret steps over both.
+     * **It shows the real batch since 2026-08-26.** Renzo: the lane rendered a dash on
+     * every stored row, and the cause was one omission with no argument behind it —
+     * `data.ts`'s `EVENT_COLUMNS` simply never selected `batch`, so the row model had
+     * nothing to paint. It selects `batch` + `batch_year` now, and this cell renders them
+     * exactly as `production-grid-v2-shared.tsx` does: the label truncating, the year
+     * beside it small and muted, the whole thing `title`d so a truncated label is readable
+     * on hover. Same lane mapping discipline as the badges — the production ledger's
+     * treatment, taken rather than re-invented.
      *
-     * It is here for the two things the arrangement is for: the operator's eye finds the
-     * identity block ending where the production ledger's does, and a block copied out of
-     * that sheet still lands column-for-column, because the paste drops a cell with no
-     * editable slot IN PLACE rather than shifting the rest of the row left.
+     * **Still un-typeable, and for the ORIGINAL reason, which reading it does not touch:**
+     * `cenapro_add_partner_draw` resolves the batch SERVER-SIDE from the receipt date —
+     * *"`batch` from whichever label was actually running at `recv_date`"* — and no QC RPC
+     * accepts one. So a draft has nothing to type into it, `batch` is deliberately not a
+     * `QcField` (no `parse` can exist), and the caret steps over it on every family. A
+     * BLANK row still gets `importedCellClass`'s muted wash + `—`, because `format` cannot
+     * run where there is no row data.
      */
     batch: {
         key: 'batch',
         label: 'BATCH',
-        // 72, not the production ledger's 120. The lane is a dash forever and it is
-        // FROZEN, so its width is dead space on a narrow viewport; 72 still clears the
-        // `BATCH` header (~58 with its `px-2`).
-        width: 72,
+        // 120 — the production ledger's own Batch width, now that this lane carries the
+        // production ledger's own value. `FEBRUARY` + the `2026` suffix + the gap measures
+        // 110px against 120 of cell room; the header needs only 54 (a `derived` column
+        // offers no sort or filter control, so it pays 17px of chrome rather than 57).
+        width: 120,
         pin: 'start',
         align: 'left',
         cellKind: 'derived',
         title: 'Production batch — resolved by the database from the receipt date; not entered here',
         selectable: false,
-        // A lane that is empty by construction has nothing to contribute to "Copy row".
-        rowCopy: false,
         cellClass: importedCellClass,
-        format: () => dash,
+        format: (r) => (
+            <span
+                className="flex w-full min-w-0 items-center gap-1"
+                title={r.draw.batch || undefined}
+            >
+                <span className={`truncate ${MONO}`}>{r.draw.batch || dash}</span>
+                {r.draw.batchYear ? (
+                    <span className="shrink-0 font-mono text-[10px] font-bold text-muted-foreground/60">
+                        {r.draw.batchYear}
+                    </span>
+                ) : null}
+            </span>
+        ),
+        // The batch IS part of "Copy row" now that there is one: a copied QC row and a
+        // copied production row then carry the same identity, which is the whole argument
+        // for the shared arrangement. (It was `rowCopy: false` while the lane was empty by
+        // construction.) The clipboard form is the label alone — the year is a rendering.
+        clipboardValue: (r) => r.draw.batch ?? '',
     },
     shift: {
         key: 'shift',
         label: 'SH',
-        width: 40,
+        // Floored ENTIRELY by its own two-character header: the widest value is `M`, but
+        // `SH` + the invisible sort/filter chrome needs 15.7 + 57 = 73.
+        width: 76,
         align: 'left',
         cellKind: 'select',
         title: 'Shift',
@@ -516,9 +552,12 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     grade: {
         key: 'grade',
         label: 'GRADE',
-        width: 62,
+        // `GRADE` is the widest header on the sheet (38.5px) — this is the column Renzo's
+        // screenshot showed as `GR…`. 38.5 + 57 = 96.
+        width: 100,
         align: 'left',
         cellKind: 'select',
+        title: 'Grade',
         ...editSeams('grade'),
         format: (r) => txt(r.draw.grade),
         clipboardValue: (r) => r.draw.grade ?? '',
@@ -526,7 +565,8 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     plant: {
         key: 'plant',
         label: 'PLANT',
-        width: 88,
+        // Header 36.2 + 57 = 94; the `W6/W7` badge is 68 + 18 = 86. The header wins.
+        width: 98,
         align: 'left',
         cellKind: 'select',
         title: 'Plant — derived from SRC, overridable when the partner slip says otherwise',
@@ -538,10 +578,9 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
         key: 'whse',
         label: 'WHSE',
         // The values are `WHSE 1` / `WHSE 2` / `WHSE 5` / `WHSE 7` — and `WHSE 3`, the DVO
-        // warehouse — never the bare number the header suggests. Six characters plus a
-        // space is ~45px, so 62 (44 usable) was one character short and the cell WRAPPED
-        // inside a 28px row before the platform pass made cells clip.
-        width: 76,
+        // warehouse — never the bare number the header suggests. `WHSE 3` measures 46.4, so
+        // the cell needs 65; the `WHSE` header needs 33.2 + 57 = 91, and wins.
+        width: 94,
         align: 'left',
         cellKind: 'select',
         title: 'Warehouse (or plant, when unplaced)',
@@ -552,9 +591,11 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     side: {
         key: 'side',
         label: 'SIDE',
-        // Floored by its own HEADER, not by `LS`/`RS`: `SIDE` at `text-[11px]` uppercase
-        // with `tracking-wide` is ~31px, and the header's `px-2` leaves 44 − 17 = 27.
-        width: 52,
+        // Floored by its own HEADER, not by `LS`/`RS` — and the 2026-08-25 number was floored
+        // against the WRONG budget. `SIDE` measures 25.8px at the header's own font, but a
+        // header pays 57px of chrome here, not 17: at 52 the label had NO room at all and
+        // rendered `SID`, which is exactly what Renzo's screenshot shows. 25.8 + 57 = 83.
+        width: 86,
         align: 'left',
         cellKind: 'select',
         title: 'Warehouse side (LS / RS) — FLEC draws only',
@@ -565,7 +606,9 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     bags: {
         key: 'bags',
         label: 'BAGS',
-        width: 52,
+        // Header 30.7 + 57 = 88; `1,234` is only 33 + 18. This is the column Renzo's
+        // screenshot showed as `BA`.
+        width: 92,
         align: 'right',
         cellKind: 'number',
         title: 'Flec bag count — FLEC draws only',
@@ -578,7 +621,8 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     src: {
         key: 'src',
         label: 'SRC',
-        width: 62,
+        // Header 23.3 + 57 = 80; the widest value is `TNK 12` at 42 + 18 = 60.
+        width: 84,
         align: 'left',
         cellKind: 'select',
         title: 'Source location',
@@ -589,10 +633,14 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     mach: {
         key: 'mach',
         label: 'MACH',
-        width: 58,
+        // Header 33.7 + 57 = 91 — the column Renzo's screenshot showed as `M…`. The CELL
+        // was short too and nobody had noticed: since flec bagging reached this sheet the
+        // widest badge is `FLEC` (53px with its chip padding + border), which needed 71
+        // against the old 58.
+        width: 94,
         align: 'left',
         cellKind: 'select',
-        title: 'Partner machine — C1–C4 (crusher) or RK1–RK4 (kiln)',
+        title: 'Partner machine — C1–C4 (crusher), RK1–RK4 (kiln), or FLEC for bagging',
         ...editSeams('mach'),
         format: (r) => badge(r.draw.equip, cccFlecBadgeClass),
         clipboardValue: (r) => r.draw.equip ?? '',
@@ -600,7 +648,8 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
     wt: {
         key: 'wt',
         label: 'WT KG',
-        width: 88,
+        // Header 35.6 + 57 = 93; the widest realistic weight `123,456.7` is 59 + 18 = 77.
+        width: 96,
         align: 'right',
         cellKind: 'number',
         title: 'Weight (kg) — per individual draw; a weight never carries to the group',
@@ -628,7 +677,7 @@ const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>> = {
  */
 const SPECS: readonly ColumnSpec<QcRow, Ctx>[] = QC_COLUMNS.map((key) => SPEC_BY_KEY[key]);
 
-/** `#` → SRC: the columns the day total rules off across, before the WT figure. */
+/** DATE → SRC: the columns the day total rules off across, before the WT figure. */
 const LABEL_SPAN = SPECS.findIndex((c) => c.key === 'wt');
 
 const ROW_H = 28;
@@ -643,13 +692,13 @@ const CHROME_H = 24;
 const BLANK_BATCH = 10;
 
 /**
- * The two IMPORTED columns' slot, and it is the same on every family.
+ * The IMPORTED column's slot, and it is the same on every family.
  *
- * A slot, not `null`, because these lanes RENDER (the ordinal, the dash) and the renderer
- * only calls `format` where a slot exists. `addressable: false` is the middle answer
- * `CellSlot` was split for: the cell paints and copies, and the keyboard walks straight
- * past it — which is exactly what keeps the Tab run through the shared lanes identical to
- * the production ledger's while neither column can be typed into.
+ * A slot, not `null`, because the lane RENDERS (the batch label, or the dash) and the
+ * renderer only calls `format` where a slot exists. `addressable: false` is the middle
+ * answer `CellSlot` was split for: the cell paints and copies, and the keyboard walks
+ * straight past it — which is exactly what keeps the Tab run through the shared lanes
+ * identical to the production ledger's while the column cannot be typed into.
  */
 const IMPORTED_SLOT: CellSlot = { field: '', editable: false, addressable: false };
 
@@ -671,12 +720,13 @@ function slotFor(colKey: string, isFirst: boolean): CellSlot | null {
 }
 
 /**
- * A BLANK row's slots — the fifteen typeable lanes live, the two imported ones inert.
+ * A BLANK row's slots — the fifteen typeable lanes live, the imported one inert.
  *
- * BATCH is inert on a draft for the same reason it is blank on a stored row: the RPC
- * resolves it server-side from the receipt date, so there is nothing an operator could
+ * BATCH is inert on a draft for the same reason it cannot be edited on a stored row: the
+ * RPC resolves it server-side from the receipt date, so there is nothing an operator could
  * type that would be kept. A cell that accepts text and then discards it is worse than a
- * cell the caret never stops on.
+ * cell the caret never stops on. (A stored row DOES show the resolved label since
+ * 2026-08-26 — reading it and writing it are different questions.)
  */
 function draftSlotFor(colKey: string): CellSlot | null {
     if (isImportedColumn(colKey)) return importedSlot(colKey);
@@ -688,14 +738,14 @@ function draftSlotFor(colKey: string): CellSlot | null {
  * and on a blank row nothing else can say it.
  *
  * Renzo, driving the rearranged sheet: *"there are some columns I can't seem to
- * manipulate/edit (specifically the empty ones below where we add entries)."* Those
- * columns are `#` and `BATCH`, and the reason they read as broken rather than as
- * reference is a rendering rule one layer down: **the platform calls `format` only where
- * there is row data** (`components/shared/table/Row.tsx` — `exists && data !== null ?
- * col.format(...) : null`), and a draft row HAS no data. So on a stored row those two
- * paint an ordinal and a dash and obviously mean "not yours to type"; on a blank row they
- * paint absolutely nothing and are pixel-identical to the fifteen empty cells beside
- * them — two of which sit FIRST and FOURTH, exactly where a new line is started.
+ * manipulate/edit (specifically the empty ones below where we add entries)."* The columns
+ * were `#` and `BATCH` (`#` has since been removed), and the reason they read as broken
+ * rather than as reference is a rendering rule one layer down: **the platform calls
+ * `format` only where there is row data** (`components/shared/table/Row.tsx` — `exists &&
+ * data !== null ? col.format(...) : null`), and a draft row HAS no data. So on a stored row
+ * the lane paints its label and obviously means "not yours to type"; on a blank row it
+ * paints absolutely nothing and is pixel-identical to the fifteen empty cells beside it —
+ * and it sits THIRD, right where a new line is being started.
  *
  * `cellClass` is the ONE seam the module gives a consumer on a draft row: it is called
  * with `row === null` there (its own contract says so), and it is merged UNDER the cached
@@ -703,10 +753,10 @@ function draftSlotFor(colKey: string): CellSlot | null {
  * never loses the states they navigate by.
  *
  * The wash is applied to the BLANK rows only, deliberately. On a stored row the content
- * already carries the message, and dimming a row ordinal that is genuinely useful to read
- * would trade one legibility problem for another. The `—` is drawn as a pseudo-element
- * rather than by `format` because `format` structurally cannot run here; on a stored row
- * it would double the dash the lane already renders, which is precisely why it is gated.
+ * already carries the message — since 2026-08-26 that is the real batch label rather than a
+ * dash — and the `—` here is drawn as a pseudo-element rather than by `format` because
+ * `format` structurally cannot run on a draft. Ungated it would paint a dash over a stored
+ * row's genuine value, which is precisely why it is gated.
  */
 function importedCellClass(row: QcRow | null): string | undefined {
     return row === null
@@ -821,26 +871,22 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
     );
 
     /**
-     * The draws, built ONCE — numbered, and indexed by id off the SAME objects.
+     * The draws, built ONCE and indexed by id off the SAME objects.
      *
-     * The `#` column paints `row.num`, so the ordinal has to be assigned somewhere; doing
-     * it here rather than inside the flatten keeps a single walk producing both the row
-     * objects and the id index, so the number a cell shows and the row a save resolves can
-     * never come from two different traversals. It also means `items[i].data` and
-     * `byId.get(id)` are the same reference, which is what the cell memo compares.
-     *
-     * It depends on `orderedDays` alone — adding a blank row must not renumber the sheet.
+     * One walk produces both the row objects and the id index, so `items[i].data` and
+     * `byId.get(id)` are the same reference — which is what the cell memo compares, and
+     * what stops a cell's rendering and a save's resolution coming from two different
+     * traversals. (It also assigned the `#` ordinal until that column was removed on
+     * 2026-08-26; the walk is unchanged apart from that.)
      */
     const { dayBlocks, byId } = React.useMemo(() => {
         const blocks: { date: string; agg: QcAggregate; rows: QcRow[] }[] = [];
         const index = new Map<string, QcRow>();
-        let ordinal = 0;
         for (const day of orderedDays) {
             const rows: QcRow[] = [];
             for (const group of day.groups) {
                 group.draws.forEach((draw, i) => {
-                    ordinal += 1;
-                    const row: QcRow = { draw, group, isFirstOfGroup: i === 0, num: ordinal };
+                    const row: QcRow = { draw, group, isFirstOfGroup: i === 0 };
                     rows.push(row);
                     index.set(String(draw.id), row);
                 });
@@ -1248,9 +1294,10 @@ export function QcLedgerGridV2(props: QcLedgerGridV2Props) {
               * `useTableColumns`' own resolution and the table is rendered at exactly the
               * resulting pixel width, so `table-fixed` has nothing left to scale into and
               * every offset is a prefix sum of the widths ACTUALLY painted. The frozen
-              * identity block therefore pins correctly at any width — `# · DATE · PROD ·
-              * BATCH` since 2026-08-25, and `distributeFill` skips a pinned column, so
-              * the same reasoning covers four of them — and the dead space is gone.
+              * identity block therefore pins correctly at any width — `DATE · PROD ·
+              * BATCH` (`#` was dropped on 2026-08-26), and `distributeFill` skips a
+              * pinned column, so the same reasoning covers all three — and the dead
+              * space is gone.
               */}
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="h-full overflow-hidden">

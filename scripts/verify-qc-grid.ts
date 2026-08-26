@@ -72,6 +72,15 @@ const GRID = join(ROOT, 'app/(app)/cenapro/qc/qc-ledger-grid-v2.tsx')
 const SAVE = join(ROOT, 'app/(app)/cenapro/qc/qc-grid-v2-save.ts')
 const ACTIONS = join(ROOT, 'app/(app)/cenapro/qc/actions.ts')
 /**
+ * The QC READ. Scanned for exactly one thing: that `EVENT_COLUMNS` still selects `batch`
+ * and `batch_year`.
+ *
+ * That belongs in a test rather than in a comment because the BATCH column rendering a dash
+ * forever was caused by their absence here, in a file the grid's own reviewer had no reason
+ * to open — and the absence had by then been written up in the grid as if it were a design.
+ */
+const QC_DATA = join(ROOT, 'app/(app)/cenapro/qc/data.ts')
+/**
  * The production ledger's own column table — READ, never edited, and never re-typed here.
  *
  * The QC sheet's arrangement is supposed to BE this one (Renzo, 2026-08-25: *"exact the
@@ -127,6 +136,10 @@ function draw(id: string, over: Partial<QcDraw> = {}): QcDraw {
     grade: '3X50',
     plant: 'W6',
     weightKg: 9583.5,
+    // Read-only reference lanes (2026-08-26): selected by `data.ts`, painted by the v2
+    // sheet's BATCH column, and writable by nothing on this side of the wire.
+    batch: 'AUGUST',
+    batchYear: 2026,
     equip: 'C1',
     flecCount: null,
     side: null,
@@ -859,9 +872,33 @@ const PROD_TO_QC: Readonly<Record<string, string>> = {
   flec: 'bags',
 }
 
-check('the QC arrangement IS the production ledger\'s, column for column', () => {
+/**
+ * THE ONE SANCTIONED DEVIATION, named here so the alignment check stays load-bearing.
+ *
+ * Renzo, 2026-08-26: *"I dont think row number is necessary to display. Wasted space."*
+ * So the QC arrangement is the production ledger's order MINUS its leading `num`. That is
+ * expressed as a DROP LIST applied to the production keys — never by loosening the
+ * comparison — because the whole value of reading `COLS` off disk is that a column moved,
+ * added or renamed over there fails here. Adding a key to this list is a deliberate,
+ * reviewable act; a weakened `deepEqual` would not be.
+ */
+const QC_DROPS_FROM_PRODUCTION = ['num'] as const
+
+check('the QC arrangement IS the production ledger\'s, minus `num`, column for column', () => {
   const prod = productionColumnKeys()
-  const expected = prod.map((k) => PROD_TO_QC[k] ?? k)
+  // The deviation must be REAL — a drop list naming a column the production ledger does
+  // not have would silently stop deviating from anything.
+  for (const dropped of QC_DROPS_FROM_PRODUCTION) {
+    assert.ok(prod.includes(dropped), `${dropped} must still exist on the production side`)
+    assert.equal(
+      QC_COLUMNS.includes(dropped as never),
+      false,
+      `${dropped} is dropped from the QC arrangement and must not reappear`,
+    )
+  }
+  const expected = prod
+    .filter((k) => !QC_DROPS_FROM_PRODUCTION.includes(k as never))
+    .map((k) => PROD_TO_QC[k] ?? k)
   assert.deepEqual(
     [...QC_COLUMNS].slice(0, expected.length),
     expected,
@@ -869,9 +906,12 @@ check('the QC arrangement IS the production ledger\'s, column for column', () =>
   )
   // And the four lab lanes are what QC adds where the production ledger runs out.
   assert.deepEqual([...QC_COLUMNS].slice(expected.length), [...METRICS])
+  // Exactly one column fewer than the production ledger plus the metrics — so a column
+  // quietly disappearing from QC_COLUMNS cannot pass by shortening both sides together.
+  assert.equal(QC_COLUMNS.length, prod.length - QC_DROPS_FROM_PRODUCTION.length + METRICS.length)
 })
 
-check('every QC column is either a typeable field or one of the two IMPORTED lanes', () => {
+check('every QC column is either a typeable field or one of the IMPORTED lanes', () => {
   for (const key of QC_COLUMNS) {
     if (isImportedColumn(key)) {
       // THE rule for an imported lane: it must not accept text, and the way that is made
@@ -881,7 +921,7 @@ check('every QC column is either a typeable field or one of the two IMPORTED lan
     }
     assert.equal(isQcField(key), true, `${key} must be a field the save model knows`)
   }
-  assert.deepEqual([...QC_IMPORTED_COLUMNS], ['num', 'batch'])
+  assert.deepEqual([...QC_IMPORTED_COLUMNS], ['batch'])
   // The arrangement carries every typeable field exactly once — nothing was dropped in
   // the reorder, and nothing was added that the save model cannot answer for.
   const typeable = QC_COLUMNS.filter((k) => !isImportedColumn(k))
@@ -989,17 +1029,74 @@ check('the grid RENDERS from QC_COLUMNS — the arrangement is not a description
   )
   assert.match(src, /const SPEC_BY_KEY: Record<QcColumnKey, ColumnSpec<QcRow, Ctx>>/)
 
-  // The frozen identity block is the production ledger's: four start-pinned columns.
-  // (`SIDE` is deliberately NOT end-pinned here — an end-pinned run must be the table's
-  // trailing columns, and QC's four lab lanes sit to its right.)
+  // The frozen identity block is the production ledger's MINUS the dropped `#`: three
+  // start-pinned columns to its four. (`SIDE` is deliberately NOT end-pinned here — an
+  // end-pinned run must be the table's trailing columns, and QC's four lab lanes sit to
+  // its right.)
   const prodSrc = readFileSync(PROD_SHARED, 'utf8')
   const prodBlock = /const COLS: readonly ProdCol\[\] = \[([\s\S]*?)\n\];/.exec(prodSrc)
   assert.ok(prodBlock, 'the production ledger column table must still be findable')
   const prodStartPins = [...prodBlock[1].matchAll(/pin: 'start'/g)].length
   const qcStartPins = [...src.matchAll(/pin: 'start'/g)].length
   assert.equal(prodStartPins, 4, 'the production ledger pins # · Recv · Prod · Batch')
-  assert.equal(qcStartPins, prodStartPins, 'QC must freeze the same identity block')
+  assert.equal(
+    qcStartPins,
+    prodStartPins - QC_DROPS_FROM_PRODUCTION.length,
+    'QC freezes the same identity block, less the columns it drops',
+  )
+  // …and it is the RIGHT three: the pinned run must be a prefix of the arrangement, so a
+  // pin cannot wander onto a scrolling column and still satisfy the count above.
+  assert.deepEqual([...QC_COLUMNS].slice(0, qcStartPins), ['date', 'prod', 'batch'])
   assert.equal(src.includes("pin: 'end'"), false, 'nothing may be end-pinned ahead of the lab lanes')
+})
+
+// ═══ 9b · The two column changes Renzo asked for on 2026-08-26 ═════════════════
+//
+// 1. *"BATCH shows a dash on every row"* — and the cause was one omission, in a file the
+//    arrangement pass had declared out of bounds: `data.ts`'s `EVENT_COLUMNS` never
+//    selected the column. There was no argument behind that, only an absence, and the
+//    comment explaining the dash had hardened it into a design.
+// 2. *"I dont think row number is necessary to display. Wasted space."*
+//
+// Both are pinned as SOURCE facts, because neither is reachable from the save model: one
+// lives in the read's column list and one in a rendering.
+
+check('BATCH renders the STORED batch — the read actually asks for it', () => {
+  const data = stripComments(readFileSync(QC_DATA, 'utf8'))
+  assert.ok(data.includes('EVENT_COLUMNS'), 'the scan target must still exist')
+  // The two columns, in the SELECT and on the row model. A `format` reading `r.draw.batch`
+  // over a read that never selected it is exactly the bug being fixed, and it is invisible
+  // from the grid alone — hence a scan of the other file.
+  assert.match(data, /const EVENT_COLUMNS =[\s\S]{0,400}?\bbatch\b/, 'the read must select `batch`')
+  assert.match(
+    data,
+    /const EVENT_COLUMNS =[\s\S]{0,400}?\bbatch_year\b/,
+    'the read must select `batch_year`',
+  )
+  assert.match(data, /batch: row\.batch,/, 'the row model must carry the label through')
+  assert.match(data, /batchYear: row\.batch_year,/, 'the row model must carry the year through')
+
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  assert.match(src, /r\.draw\.batch/, 'the BATCH column must paint the stored label')
+  assert.match(src, /r\.draw\.batchYear/, 'and the year beside it, as the production ledger does')
+
+  // UN-TYPEABLE is unchanged, and that is the point of asserting it here: reading a lane
+  // and writing it are different questions, and the fix answered only the first.
+  assert.equal(isQcField('batch'), false, '`batch` must never become a QcField')
+  assert.equal(isImportedColumn('batch'), true)
+  assert.match(src, /key: 'batch',[\s\S]{0,600}?selectable: false,/)
+})
+
+check('the `#` column is GONE — from the arrangement, the specs and the row model', () => {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  // Not merely absent from `QC_COLUMNS` (a `Record<QcColumnKey, …>` would already refuse a
+  // surplus spec) — absent from the ROW MODEL too, so the ordinal is not still being
+  // computed for a column nobody renders.
+  assert.equal(QC_COLUMNS.includes('num' as never), false)
+  assert.equal(isImportedColumn('num'), false, '`num` is no longer an imported lane')
+  assert.equal(/\bkey: 'num'\b/.test(src), false, 'no spec may remain for the removed column')
+  assert.equal(/\bnum: ordinal\b/.test(src), false, 'the flatten must not still number rows')
+  assert.match(src, /type QcRow = QcSaveRow;/, 'the row model carries no sheet-only ordinal')
 })
 
 check('the grid refuses the WHOLE batch when any dirty row is illegal', () => {
@@ -1085,15 +1182,15 @@ check('there is no save-time reason dialog, because no EDIT path takes a comment
 // manipulate/edit (specifically the empty ones below where we add entries)."*
 //
 // Measured in a browser against the real component: the fifteen typeable lanes all open
-// an editor on a blank row, and the two IMPORTED ones refuse — which is the contract. The
-// two that read as broken are `#` and `BATCH`, and the reason is a RENDERING rule rather
-// than a verdict one: the module calls `format` only where there is row data, so on a
-// blank row those two paint NOTHING and are pixel-identical to the empty cells beside
-// them, while a click parked a caret on them and every keystroke then did nothing.
+// an editor on a blank row, and the IMPORTED ones refuse — which is the contract. The two
+// that read as broken were `#` (removed 2026-08-26) and `BATCH`, and the reason is a
+// RENDERING rule rather than a verdict one: the module calls `format` only where there is
+// row data, so on a blank row they paint NOTHING and are pixel-identical to the empty cells
+// beside them, while a click parked a caret on them and every keystroke then did nothing.
 //
 // Three things are pinned here, because each of them is a way the fix silently rots.
 
-check('a BLANK row is editable in every lane except the two imported ones', () => {
+check('a BLANK row is editable in every lane except the imported one', () => {
   const src = stripComments(readFileSync(GRID, 'utf8'))
   assert.ok(src.includes('draftSlotFor'), 'the scan target must still exist')
 
@@ -1133,7 +1230,7 @@ check('a BLANK row is editable in every lane except the two imported ones', () =
   assert.equal(carried.size, 15, 'every typeable lane reaches DraftDraw')
 })
 
-check('the two IMPORTED lanes SAY they are not inputs, on a blank row too', () => {
+check('the IMPORTED lane SAYS it is not an input, on a blank row too', () => {
   const src = stripComments(readFileSync(GRID, 'utf8'))
   assert.ok(src.includes('importedCellClass'), 'the scan target must still exist')
 
@@ -1210,6 +1307,109 @@ check('QC badges exactly the lanes the production ledger badges', () => {
   // `equip` is what QC's row model calls the partner machine; `mach` is its column key.
   assert.deepEqual([...qcBadged].sort(), ['equip', 'plant'])
   assert.deepEqual([...badged].map((k) => LANE[k]).sort(), ['mach', 'plant'])
+})
+
+// ═══ 12 · EVERY HEADER MUST BE READABLE (2026-08-26) ══════════════════════════
+//
+// Renzo sent a screenshot of the rearranged sheet with `GRADE` reading `GR…`, `MACH`
+// reading `M…`, `BAGS` reading `BA` and `SIDE` reading `SID`. Ten of the sixteen columns
+// were clipping their own NAME, and the 2026-08-25 widths were not careless — they were
+// measured against the wrong budget.
+//
+// **The budget, and why it is 40px larger than anyone reading this file would guess.** The
+// sheet runs `scope="focus"`, which turns the platform's built-in SORT and FILTER controls
+// on for every column that is not `cellKind: 'derived'`. `HeaderCell` lays them out as flex
+// SIBLINGS of the label, and they are `opacity-0` until the header is hovered — invisible,
+// and still occupying layout. Two 16px buttons plus two 4px gaps, on top of the header's
+// own `px-2` and its `border-r`:
+//
+//     usable label width = declared − 16 − 40 − 1     (a normal column)
+//     usable label width = declared − 16 − 1          (a `derived` column: no controls)
+//
+// The numbers below are MEASURED, in a browser, against the real computed fonts — the
+// header at Geist 11px/500 `uppercase tracking-wide`, the cell at Geist 12px/700 with
+// `tabular-nums`, a badge with its `px-1.5` + border. They are recorded here rather than
+// left in a comment because a width narrowed back to "what looks about right" is exactly
+// how this regressed the first time, and nothing else in the repo can catch it: Node has no
+// font engine, so the measurement cannot be re-derived here — only ENFORCED.
+const HEADER_PX: Readonly<Record<string, number>> = {
+  date: 27.6, prod: 31.5, batch: 36.7, shift: 15.7, grade: 38.5, plant: 36.2,
+  whse: 33.2, src: 23.3, wt: 35.6, mach: 33.7, bags: 30.7, side: 25.8,
+  bd: 15.7, ash: 23.2, grit: 25.4, mc: 18.0,
+}
+/** The widest REAL value each lane can hold, plus the cell's own `px-2` + border (18px). */
+const CELL_MIN_PX: Readonly<Record<string, number>> = {
+  date: 89.4, prod: 89.4, batch: 110, shift: 29, grade: 49, plant: 86,
+  whse: 64.4, src: 60.3, wt: 77.1, mach: 71, bags: 51, side: 33,
+  bd: 59, ash: 59, grit: 59, mc: 59,
+}
+/** Columns that offer neither control, so they pay 17px of header chrome and not 57. */
+const NO_HEADER_CONTROLS = new Set(['batch'])
+
+/** Each column's declared width, parsed off the grid's own spec table. */
+function declaredWidths(): Map<string, number> {
+  const src = stripComments(readFileSync(GRID, 'utf8'))
+  const out = new Map<string, number>()
+  for (const key of QC_COLUMNS) {
+    const pattern = isMetricField(key)
+      ? /key: metric,\s*\n\s*label: metric\.toUpperCase\(\),\s*\n\s*width: (\d+),/
+      : new RegExp(`key: '${key}',[\\s\\S]{0,240}?width: (\\d+),`)
+    const m = pattern.exec(src)
+    assert.ok(m, `the declared width of ${key} must be findable`)
+    out.set(key, Number(m[1]))
+  }
+  assert.equal(out.size, QC_COLUMNS.length, 'an empty extraction is a FAILURE, never a vacuous pass')
+  return out
+}
+
+check('every column is wide enough for its own HEADER at the header\'s font', () => {
+  const widths = declaredWidths()
+  for (const key of QC_COLUMNS) {
+    const label = HEADER_PX[key]
+    assert.ok(label !== undefined, `${key} has no measured header width on file`)
+    const chrome = NO_HEADER_CONTROLS.has(key) ? 17 : 57
+    const floor = label + chrome
+    const declared = widths.get(key)!
+    assert.ok(
+      declared >= floor,
+      `${key}: declared ${declared}px but the header needs ${floor.toFixed(1)}px ` +
+        `(label ${label} + ${chrome} of chrome) — it would render truncated`,
+    )
+  }
+})
+
+check('every column is wide enough for its widest REAL value', () => {
+  // The 2026-08-25 pass measured only this half, which is why the four headers clipped —
+  // and it still missed one VALUE too: `MACH` was 58px while the `FLEC` badge that flec
+  // bagging brought to this sheet needs 71.
+  const widths = declaredWidths()
+  for (const key of QC_COLUMNS) {
+    const floor = CELL_MIN_PX[key]
+    assert.ok(floor !== undefined, `${key} has no measured value width on file`)
+    const declared = widths.get(key)!
+    assert.ok(declared >= floor, `${key}: declared ${declared}px but its widest value needs ${floor}px`)
+  }
+})
+
+check('the header budget is stated against the platform that produces it', () => {
+  // The 40px is not a constant this repo owns — it is two `HeaderCell` buttons and their
+  // gaps. If that markup changes, the budget above is wrong and every width below it is
+  // wrong with it, so the shape is pinned where it lives.
+  const header = readFileSync(join(ROOT, 'components/shared/table/HeaderCell.tsx'), 'utf8')
+  assert.match(header, /className="flex h-full items-center gap-1 px-2 py-1"/, 'the header pads px-2 and gaps 1')
+  assert.equal(
+    (header.match(/'shrink-0 rounded-sm p-0\.5 transition-colors duration-150 hover:text-foreground',/g) ?? []).length,
+    2,
+    'exactly two chrome buttons (sort + filter) sit beside the label',
+  )
+  assert.match(header, /<ListFilter className="size-3" \/>/, 'their icons are size-3 (12px), so each button is 16px')
+  // …and they are laid out even while invisible, which is the whole trap.
+  assert.match(header, /opacity-0 group-hover\/th:opacity-100/)
+  // The sheet really does turn them on: `scope="focus"` is what enables both.
+  const grid = stripComments(readFileSync(GRID, 'utf8'))
+  assert.match(grid, /scope="focus"/)
+  assert.equal(grid.includes('enableSort'), false, 'nothing opts out — so every non-derived column pays the chrome')
+  assert.equal(grid.includes('enableFilter'), false)
 })
 
 check('every metric key the sheet knows is covered above', () => {

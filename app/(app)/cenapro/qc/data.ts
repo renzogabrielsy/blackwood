@@ -56,6 +56,19 @@ export interface QcDraw {
     grade: string | null;
     plant: string | null;
     weightKg: number;
+    /**
+     * The PRODUCTION label the database resolved for this receipt — `FEBRUARY`, `JULY`, …
+     *
+     * Read-only here in every sense: `cenapro_add_partner_draw` derives it SERVER-SIDE from
+     * `recv_date` (*"whichever label was actually running"*), and no QC RPC accepts one, so
+     * nothing on this side may type or write it. It is selected purely so the v2 sheet's
+     * BATCH lane can show what the Production ledger shows for the same row — until
+     * 2026-08-26 that column rendered a dash forever because the read simply never asked
+     * for the column.
+     */
+    batch: string | null;
+    /** The batch's year, painted beside it exactly as the Production ledger paints it. */
+    batchYear: number | null;
     equip: string | null;
     /** FLEC draws only — bags taken out of the warehouse. NULL on every other source. */
     flecCount: number | null;
@@ -130,8 +143,11 @@ const DAILY_COLUMNS =
 const GROUP_COLUMNS =
     'sample_date, source_location_code, whse_key, source_group, is_dvo, draw_count, total_kg, bd, ash, grit, mc, is_sampled, is_complete, missing_metric_count, sample_row_version';
 
+// `batch` / `batch_year` are SELECTED, never written: the v2 sheet's BATCH lane renders
+// them (2026-08-26) and every QC write path resolves the label server-side from the
+// receipt date. Their absence here is why that column rendered a dash forever.
 const EVENT_COLUMNS =
-    'id, recv_date, prod_date, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, partner_equipment_code, flec_count, whse_side';
+    'id, recv_date, prod_date, batch, batch_year, shift_code, grade_code, plant_code, warehouse_code, source_location_code, weight_kg, partner_equipment_code, flec_count, whse_side';
 
 function describe(what: string, message: string): string {
     return `Failed to load ${what}: ${message}`;
@@ -272,6 +288,8 @@ export async function loadQcLedgerData(
             id: row.id,
             recvDate: row.recv_date,
             prodDate: row.prod_date,
+            batch: row.batch,
+            batchYear: row.batch_year,
             shift: row.shift_code,
             grade: row.grade_code,
             plant: row.plant_code,

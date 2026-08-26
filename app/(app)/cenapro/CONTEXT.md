@@ -953,8 +953,8 @@ from that date on; only **QC** still has a v2.
 
 | File | Role |
 |---|---|
-| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. **SEVENTEEN columns since 2026-08-25, in the Cenapro PRODUCTION ledger's arrangement** — see "QC ledger v2 — the production arrangement" below. (It carried the live `qc-ledger-client.tsx`'s own fifteen, in that file's order, until then; four widths always differed — see the `px-2` note.) **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". Since 2026-08-26 it also carries the production ledger's own CELL PAINT (`../badges`) and the imported lanes' blank-row affordance — see "QC ledger v2 — the blank rows, and the paint" below. |
-| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences — **plus, since 2026-08-25, `QC_COLUMNS` (THE column arrangement, which the grid renders by mapping), `QC_IMPORTED_COLUMNS` and `isImportedColumn`.** Asserted by `scripts/verify-qc-grid.ts` (**54 assertions**) with no browser and no database. |
+| `qc/qc-ledger-grid-v2.tsx` | The QC ledger on `<BlackwoodTable>`. **SIXTEEN columns since 2026-08-26, in the Cenapro PRODUCTION ledger's arrangement MINUS its `#`** — see "QC ledger v2 — the production arrangement" and "BATCH, `#` and the header budget" below. (It carried the live `qc-ledger-client.tsx`'s own fifteen, in that file's order, until 2026-08-25; four widths always differed — see the `px-2` note.) **EDITABLE since 2026-08-21** — see "QC ledger v2 — the editing pass". Since 2026-08-26 it also carries the production ledger's own CELL PAINT (`../badges`), the imported lane's blank-row affordance, the REAL batch label, and widths measured against the header's own budget. |
+| `qc/qc-grid-v2-save.ts` | **NEW (2026-08-21).** The v2 grid's PURE edit + save model — no React, no Supabase, no action call (type-only imports from `./actions`). Owns `parseQcField` / `normalizeQcField` / `cleanPastedQcCell` (the ONE cell verdict, shared by every `ColumnSpec.parse` and by the save), `routeQcEdits` (WHICH row an edit is a save to), `overlayMetrics` (the reading merge), `buildQcSavePlan`, `forgettableRowIds`, `draftFromEdits` (this grid's column keys → the composer's `DraftDraw`), `countQcUnsaved` / `describeQcUnsaved`, the three labels and the three outcome sentences — **plus, since 2026-08-25, `QC_COLUMNS` (THE column arrangement, which the grid renders by mapping), `QC_IMPORTED_COLUMNS` and `isImportedColumn`.** Asserted by `scripts/verify-qc-grid.ts` (**59 assertions**) with no browser and no database. |
 | ~~`inventory/flec-inventory-grid-v2.tsx`~~ | **RETIRED 2026-08-20 — deleted.** See below. |
 
 ### RETIRED 2026-08-20 — Flec Inventory (`/cenapro/inventory`) leaves the v2 track
@@ -1195,6 +1195,11 @@ to land.
 
 ### QC ledger v2 — the PRODUCTION arrangement (2026-08-25)
 
+> **Partly superseded 2026-08-26** — see "QC ledger v2 — BATCH, `#` and the header budget"
+> at the end of this file. `#` is gone, BATCH shows the real batch, and every width was
+> re-measured. The mapping, the `QC_COLUMNS`-as-the-arrangement rule and the read-the-
+> production-table-off-disk discipline below are all unchanged.
+
 Renzo: *"I'd like for the new table columns to be exact the same arrangement as the current
 prod ledger for cenapro as well. This way, it's the same tab feel and flow inputting in qc
 ledger rather than prod ledger. The goal is to eventually just type everything in qc ledger
@@ -1272,6 +1277,11 @@ scan that keeps `QC_COLUMNS` load-bearing (`SPECS` must be it, mapped) and the p
 57 passed.
 
 ### QC ledger v2 — the blank rows, and the paint (2026-08-26)
+
+> **Partly superseded later the same day** — see "QC ledger v2 — BATCH, `#` and the header
+> budget" at the end of this file. `#` has since been removed, so "the two imported lanes"
+> below is now one (`BATCH`), and that one shows the real batch on a stored row. The
+> `cellClass`-on-a-draft-row fix and the platform caret fix are unchanged and still in force.
 
 Two things Renzo reported after a day of live use on the rearranged sheet. They are
 unrelated symptoms of the SAME omission: the 2026-08-25 pass moved the columns and left
@@ -1470,3 +1480,140 @@ grade failure only otherwise (it costs one that still has a seeded floor).
 (unchanged) · `verify-table-core` 80 · `verify-qc-grid` 54 · `verify-qc-draw-cells` 45.
 **Not driven in a browser** — `/cenapro/inventory` needs a real login, the same limitation
 recorded for every QC pass above.
+
+### QC ledger v2 — BATCH, `#`, and the header budget (2026-08-26)
+
+Three pieces of feedback from Renzo after a day on the rearranged sheet. They look like
+three cosmetic notes and are really one omission and one mis-measurement.
+
+Only `qc/qc-ledger-grid-v2.tsx`, `qc/qc-grid-v2-save.ts`, `qc/data.ts` and
+`scripts/verify-qc-grid.ts` changed. **No SQL, no migration, no server action, no new RPC,
+and nothing under `lib/table/**` or `components/shared/table/**`.** Classic QC
+(`qc-ledger-client.tsx`), `qc/actions.ts`, `qc/draw-entry-rows.tsx` and every production
+ledger file are byte-identical.
+
+#### 1. BATCH shows the real batch — the read simply never asked for it
+
+The lane rendered a dash on every stored row, and there was **no argument behind that, only
+an absence**: `qc/data.ts`'s `EVENT_COLUMNS` did not select `batch`. The 2026-08-25 pass
+then wrote that absence up as though it were the design (*"QC's read does not select it,
+and that file is not the migration's to change"*) — which is how a missing line becomes a
+documented rule. `cenapro_production_events` has exposed `batch` and `batch_year` the whole
+time; the Production ledger has rendered them the whole time.
+
+`EVENT_COLUMNS` now selects both, `QcDraw` carries `batch` / `batchYear`, and the cell is
+**the Production ledger's own rendering, taken not re-invented** — the label truncating in
+`font-mono text-xs font-bold`, the year beside it `text-[10px]` and muted, the pair `title`d
+so a truncated label is readable on hover. Same lane-mapping discipline as the badges.
+
+**Reading it and writing it are different questions, and only the first was answered.**
+`cenapro_add_partner_draw` resolves the batch SERVER-SIDE from `recv_date` and no QC RPC
+accepts one, so BATCH stays `addressable: false` / `selectable: false` on every family, stays
+out of `QcField` (so no `parse` can exist for it), and a BLANK row still gets
+`importedCellClass`'s muted wash + `—`. That gate is now asserted **in the same check** as
+the new rendering, so a future pass cannot read the fix as permission to make the lane
+typeable. The one thing that did change: `rowCopy` is no longer `false` — a lane that was
+empty by construction had nothing to contribute to "Copy row", and one carrying the batch
+does. The clipboard form is the label alone; the year is a rendering.
+
+Real values are month names — `FEBRUARY`, `DECEMBER`, `MAY` — plus the year, which is why
+BATCH is back to the Production ledger's own **120px** rather than the 72 it was narrowed to
+*because* it rendered a dash forever.
+
+#### 2. `#` is gone, and the paste pays for it — stated, not papered over
+
+Renzo: *"I dont think row number is necessary to display. Wasted space."* The ordinal came
+over with the arrangement and never earned its 36 frozen pixels here: a QC row is identified
+by its date, source and machine, and nothing in the sheet, the save model or any RPC ever
+read it. Removed from `QC_COLUMNS`, from `SPEC_BY_KEY`, from `QC_IMPORTED_COLUMNS` (now
+`['batch']`) — **and from the row model**, so `QcRow` is plain `QcSaveRow` and the flatten no
+longer numbers anything. A field kept for a column nobody renders is the next reviewer's
+puzzle.
+
+**The alignment check stays load-bearing, restated rather than loosened.**
+`scripts/verify-qc-grid.ts` still reads `production-grid-v2-shared.tsx`'s `COLS` **off disk**;
+it now applies a named `QC_DROPS_FROM_PRODUCTION = ['num']` to those keys before comparing,
+asserts that the dropped key really does still exist over there (a drop list naming a
+phantom deviates from nothing), asserts it has not reappeared here, and pins the total at
+`prod − drops + metrics` so a column vanishing from QC cannot pass by shortening both sides
+together. Adding to that list is a deliberate, reviewable act; a weakened `deepEqual` would
+not be. The pin assertion is restated the same way — three start-pins to production's four,
+**and** `QC_COLUMNS.slice(0, 3)` must be exactly `date · prod · batch`, so a pin cannot
+wander onto a scrolling column and still satisfy a count.
+
+**What it costs.** A block copied out of the Production ledger begins with an ordinal cell.
+The module's paste maps POSITIONALLY: it drops a cell with no editable slot **in place**
+(which is how BATCH stays aligned) but it cannot invent a slot for a column that no longer
+exists. **So such a paste now lands one column to the left** — the ordinal into DATE, the
+recv date into PROD, and so on down the row. No magic was built for it: detecting "this
+block came from the Production ledger" means guessing from the shape of the first cell, and
+a paste that silently re-aims itself on a guess is a worse failure than one that visibly
+lands wrong and is undone with Ctrl+Z. **Copy the block without the `#` column, or paste
+starting one column to the right.**
+
+#### 3. Every header is readable — and the budget is 40px bigger than it looks
+
+Renzo's screenshot: `GRADE` → `GR…`, `MACH` → `M…`, `BAGS` → `BA`, `SIDE` → `SID`. Measured
+against the real component, **ten of the sixteen columns were clipping their own NAME**
+(also SH, PLANT, WHSE, SRC, WT KG). The 2026-08-25 widths were not careless — they were
+measured against the **wrong budget**, and the missing 40px is not in this module at all:
+
+The sheet runs `scope="focus"`, which turns the platform's built-in **sort and filter**
+controls on for every column that is not `cellKind: 'derived'`. `HeaderCell` lays them out as
+flex SIBLINGS of the label, and they are `opacity-0` until the header is hovered — **invisible
+and still occupying layout**. Two 16px buttons plus two 4px gaps, on top of the header's own
+`px-2` and its `border-r`:
+
+```
+usable label width = declared − 16 − 40 − 1     a normal column
+usable label width = declared − 16 −  1         a `derived` column (BATCH): no controls
+```
+
+So the floor is `label + 57`, and `SIDE` — 25.8px of text — needed **84px** to render four
+characters. Every width is now `max(label + chrome, longest real value + 18)`, **measured in
+a browser against the real computed fonts** (header Geist 11px/500 `uppercase tracking-wide`;
+cell Geist 12px/700 `tabular-nums`; a badge with its `px-1.5` + border), never estimated and
+never against the value alone — which is precisely the mistake that shipped.
+
+| lane | 08-25 | now | floored by |
+|---|---|---|---|
+| `DATE` · `PROD` | 92 | **96** | header (`PROD` 31.5 + 57 = 89) — production's own `Recv`/`Prod` width |
+| `BATCH` | 72 | **120** | the value (`FEBRUARY` + `2026` = 110) — production's own width |
+| `SH` | 40 | **76** | header alone (15.7 + 57); the widest value is `M` |
+| `GRADE` | 62 | **100** | header (38.5 + 57) — the widest label on the sheet |
+| `PLANT` | 88 | **98** | header (36.2 + 57); the `W6/W7` badge needs 86 |
+| `WHSE` | 76 | **94** | header (33.2 + 57); `WHSE 3` needs 64 |
+| `SRC` | 62 | **84** | header (23.3 + 57); `TNK 12` needs 60 |
+| `WT KG` | 88 | **96** | header (35.6 + 57); `123,456.7` needs 77 |
+| `MACH` | 58 | **94** | header (33.7 + 57) — **and the cell was short too** |
+| `BAGS` | 52 | **92** | header (30.7 + 57); `1,234` needs 51 |
+| `SIDE` | 52 | **86** | header (25.8 + 57); `LS` needs 33 |
+| `BD` · `ASH` · `GRIT` · `MC` | 124 | **124** | unchanged — the only lanes with real slack, and `sizing="fill"` hands the container's surplus here first |
+
+**The one the header audit caught that nobody was looking for: `MACH`'s CELL was too narrow
+as well.** Since flec bagging reached this sheet (2026-08-26, earlier the same day) the
+widest badge is `FLEC` — 53px with its chip padding and border — against 58 − 18 = 40 of
+room. It had been clipping a real value, not just a label.
+
+**Geometry.** Σ declared = **1,628px** (was 1,366 with a clipping header row and a `#`
+column). Frozen identity block `DATE · PROD · BATCH`, sticky offsets **0 · 96 · 192**, 312px
+wide (was 292 across four columns). `sizing="fill"` is unchanged, `distributeFill` still
+skips every pinned column, and "never crush, always scroll" is satisfied the honest way —
+the sheet is wider and scrolls sooner rather than shrinking a lane below its content.
+
+**And the measurement is now ENFORCED, not just recorded.** Node has no font engine, so the
+numbers cannot be re-derived in a verify script — only defended. `verify-qc-grid.ts` carries
+the measured `HEADER_PX` / `CELL_MIN_PX` tables, parses each column's declared width **off
+the grid's own spec table**, and fails any column that drops below either floor. A third
+check pins the SHAPE the 40px comes from — `HeaderCell`'s `px-2 gap-1` row, its exactly-two
+`size-3` chrome buttons, their `opacity-0 group-hover` reveal — and that this sheet really
+does enable them (`scope="focus"`, with no `enableSort` / `enableFilter` opt-out). If that
+markup changes, the budget is wrong and the check says so.
+
+**Gates:** `tsc --noEmit` clean · `npm run build` clean (`✓ Compiled successfully`) ·
+`npm run lint` **167/28** (unchanged) · `verify-qc-grid` **59** (was 54) ·
+`verify-qc-draw-cells` 46 · `verify-table-core` 80. Header and cell fit re-measured in a
+browser against the widths parsed back off disk: **16 of 16 readable, 0 problems.**
+**Not driven in the real app** — `/cenapro/qc` needs a real login, the same limitation
+recorded for every QC pass above; the widths were verified against a faithful DOM replica of
+`HeaderCell` and the module's cell, at the app's own Geist faces.
