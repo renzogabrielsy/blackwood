@@ -13,7 +13,7 @@
 //
 // ═══ THE SHEET HAS TWO LANES, AND THEY SAVE TO DIFFERENT ROWS ═══════════════════
 //
-// One rendered row is one DRAW (`cenapro.production_event`). But of the seventeen
+// One rendered row is one DRAW (`cenapro.production_event`). But of the sixteen
 // columns, only two lanes are writable at all, and they do not write to the same
 // thing:
 //
@@ -179,33 +179,50 @@ export type QcField = QcRowField | MetricKey;
 // ledger's own column table off disk and asserts the two still line up, so a column added
 // there is a failing assertion here rather than a silent divergence.
 //
-// `num` and `batch` carry no `QcField`: they are IMPORTED lanes with no QC write path
-// (see `QC_IMPORTED_COLUMNS`), which is why `isQcField` still answers false for both.
+// `batch` carries no `QcField`: it is an IMPORTED lane with no QC write path (see
+// `QC_IMPORTED_COLUMNS`), which is why `isQcField` still answers false for it.
+//
+// ── THE ONE SANCTIONED DEVIATION: `num` IS DROPPED (2026-08-26) ─────────────────
+//
+// Renzo, on the rearranged sheet: *"I dont think row number is necessary to display.
+// Wasted space."* So the arrangement is the production ledger's order MINUS its leading
+// `num`, with the four lab lanes still appended. It is stated here, and asserted in
+// `scripts/verify-qc-grid.ts` as a deviation with a name rather than as a weakened check:
+// the alignment test still reads the production ledger's `COLS` off disk, drops exactly
+// one known key from it, and requires the rest to line up column for column. A column
+// moved or added over there still fails here.
+//
+// One consequence is deliberately NOT papered over: a block copied out of the production
+// ledger carries a leading ordinal cell that this sheet no longer has a slot for, so a
+// positional paste lands one column to the left. See the file header of
+// `qc-ledger-grid-v2.tsx`.
 export const QC_COLUMNS = [
-    'num', 'date', 'prod', 'batch',
+    'date', 'prod', 'batch',
     'shift', 'grade', 'plant', 'whse', 'src', 'wt', 'mach', 'bags', 'side',
     'bd', 'ash', 'grit', 'mc',
 ] as const;
 export type QcColumnKey = (typeof QC_COLUMNS)[number];
 
 /**
- * The two columns imported from the production ledger that QC can never SAVE.
+ * The column imported from the production ledger that QC can never SAVE.
  *
- * `num` is the row's 1-based position in the current view — derived, and painted; `batch`
- * is the production label, which QC's read does not select (`data.ts`'s `EVENT_COLUMNS`)
- * and which `cenapro_add_partner_draw` derives SERVER-SIDE from `recv_date`, so there is
- * nothing for an operator to type into it on a draft either.
+ * `batch` is the production label. `data.ts` now SELECTS it (2026-08-26) so a stored row
+ * shows the real batch rather than a dash forever — but it stays un-typeable, because
+ * `cenapro_add_partner_draw` derives it SERVER-SIDE from `recv_date` and no QC RPC accepts
+ * one, so there is nothing an operator could type that would be kept.
  *
- * Both keep their visual slot, and both are `addressable: false` in every row family — so
- * Tab steps straight over them while a block pasted out of the production ledger still
- * lines up column for column (the paste maps positionally and drops a cell with no
- * editable slot IN PLACE, rather than shifting the rest of the row left).
+ * It keeps its visual slot and is `addressable: false` in every row family — so Tab steps
+ * straight over it while the lane still reads as the production ledger's.
  *
- * **Neither is a `QcField`**, which is what makes "it must not accept text" structural: no
- * `parse` can be built for a key `parseQcField` has no case for, so nothing typed into
- * either could ever be silently discarded at save.
+ * **It is not a `QcField`**, which is what makes "it must not accept text" structural: no
+ * `parse` can be built for a key `parseQcField` has no case for, so nothing typed into it
+ * could ever be silently discarded at save.
+ *
+ * It is a LIST of one rather than a scalar on purpose: `num` was here until 2026-08-26 and
+ * the next production column QC cannot write would join it, so every consumer already
+ * iterates.
  */
-export const QC_IMPORTED_COLUMNS = ['num', 'batch'] as const;
+export const QC_IMPORTED_COLUMNS = ['batch'] as const;
 export type QcImportedColumn = (typeof QC_IMPORTED_COLUMNS)[number];
 
 const METRIC_SET: ReadonlySet<string> = new Set<string>(METRICS as readonly string[]);
@@ -218,7 +235,7 @@ export function isMetricField(key: string): key is MetricKey {
 const IMPORTED_SET: ReadonlySet<string> = new Set<string>(QC_IMPORTED_COLUMNS);
 
 /**
- * Is this column one of the two imported from the production ledger?
+ * Is this column one of the ones imported from the production ledger?
  *
  * THE one definition, so the column table, both row families and the verify script all
  * answer it the same way. An imported column is painted and skipped: it has a slot (so
