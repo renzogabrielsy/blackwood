@@ -214,7 +214,7 @@ Worker side: `workers/sync/specs/production.md` §6a.
 > comment) is in `graveyard.prod_schedule_ddl_20260827` and in
 > **`_archived/prod-schedule-v1/db/RESTORE.sql`**, which also carries the restore ORDER.
 > Migration `20260828012428_archive_production_schedule.sql` took the copy and is APPLIED;
-> `20260828013000_drop_production_schedule.sql` does the removal and lands only after the
+> `20260828020411_drop_production_schedule.sql` did the removal (APPLIED 2026-08-28 after both deploys) — it landed only after the
 > app AND the Fly sync worker have both been deployed without their schedule code.
 >
 > **The one live thing that changed:** `view_digest_stream_status.missed_working_days` no

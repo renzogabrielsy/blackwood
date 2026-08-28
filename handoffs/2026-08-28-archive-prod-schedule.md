@@ -51,7 +51,7 @@ not designed.
 1. `20260828012428_archive_production_schedule.sql` — APPLIED (self-refusing if counts/DDL blank).
 2. Merge → Vercel deploy AND `cd workers/sync && npm run deploy` (FLY_ACCESS_TOKEN from
    ~/.fly/config.yml in the same command — sandbox quirk).
-3. `20260828013000_drop_production_schedule.sql` — apply ONLY after both deploys.
+3. `20260828020411_drop_production_schedule.sql` — apply ONLY after both deploys.
 4. `npx tsx scripts/verify-worker-view-grants.ts` must report **4 views, zero findings**
    (view_production_schedule_state leaving the derived list IS the proof the worker shipped).
 5. `supabase gen types typescript --linked > types/supabase.ts` — only after the drop; second

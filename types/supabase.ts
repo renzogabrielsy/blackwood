@@ -1068,74 +1068,6 @@ export type Database = {
           },
         ]
       }
-      production_schedule: {
-        Row: {
-          dow: string | null
-          grades: Json | null
-          human_edited_at: string | null
-          human_edited_by: string | null
-          month: number
-          owner: string
-          pending_upstream: Json | null
-          plan_date: string
-          projected_tons: number | null
-          remarks: string | null
-          row_version: number
-          setup: string | null
-          shifts: number
-          source: string
-          source_rev: string | null
-          updated_at: string
-          year: number
-        }
-        Insert: {
-          dow?: string | null
-          grades?: Json | null
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          month: number
-          owner?: string
-          pending_upstream?: Json | null
-          plan_date: string
-          projected_tons?: number | null
-          remarks?: string | null
-          row_version?: number
-          setup?: string | null
-          shifts?: number
-          source?: string
-          source_rev?: string | null
-          updated_at?: string
-          year: number
-        }
-        Update: {
-          dow?: string | null
-          grades?: Json | null
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          month?: number
-          owner?: string
-          pending_upstream?: Json | null
-          plan_date?: string
-          projected_tons?: number | null
-          remarks?: string | null
-          row_version?: number
-          setup?: string | null
-          shifts?: number
-          source?: string
-          source_rev?: string | null
-          updated_at?: string
-          year?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "production_schedule_human_edited_by_fkey"
-            columns: ["human_edited_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       production_setups: {
         Row: {
           active: boolean
@@ -3470,139 +3402,6 @@ export type Database = {
         }
         Relationships: []
       }
-      view_production_schedule_conflicts: {
-        Row: {
-          changed_fields: Json | null
-          current_values: Json | null
-          human_edited_at: string | null
-          human_edited_by: string | null
-          observed_at: string | null
-          owner: string | null
-          pending_source_rev: string | null
-          plan_date: string | null
-          proposed: Json | null
-          row_version: number | null
-          updated_at: string | null
-        }
-        Insert: {
-          changed_fields?: never
-          current_values?: never
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          observed_at?: never
-          owner?: string | null
-          pending_source_rev?: never
-          plan_date?: string | null
-          proposed?: never
-          row_version?: number | null
-          updated_at?: string | null
-        }
-        Update: {
-          changed_fields?: never
-          current_values?: never
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          observed_at?: never
-          owner?: string | null
-          pending_source_rev?: never
-          plan_date?: string | null
-          proposed?: never
-          row_version?: number | null
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "production_schedule_human_edited_by_fkey"
-            columns: ["human_edited_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      view_production_schedule_state: {
-        Row: {
-          dow: string | null
-          effective_owner: string | null
-          grades: Json | null
-          has_pending_upstream: boolean | null
-          human_edit_after_report: boolean | null
-          human_edited_at: string | null
-          human_edited_by: string | null
-          is_reported: boolean | null
-          month: number | null
-          owner: string | null
-          pending_source_rev: string | null
-          pending_upstream: Json | null
-          plan_date: string | null
-          projected_tons: number | null
-          remarks: string | null
-          row_version: number | null
-          setup: string | null
-          shifts: number | null
-          source: string | null
-          source_rev: string | null
-          updated_at: string | null
-          year: number | null
-        }
-        Insert: {
-          dow?: string | null
-          effective_owner?: never
-          grades?: Json | null
-          has_pending_upstream?: never
-          human_edit_after_report?: never
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          is_reported?: never
-          month?: number | null
-          owner?: string | null
-          pending_source_rev?: never
-          pending_upstream?: Json | null
-          plan_date?: string | null
-          projected_tons?: number | null
-          remarks?: string | null
-          row_version?: number | null
-          setup?: string | null
-          shifts?: number | null
-          source?: string | null
-          source_rev?: string | null
-          updated_at?: string | null
-          year?: number | null
-        }
-        Update: {
-          dow?: string | null
-          effective_owner?: never
-          grades?: Json | null
-          has_pending_upstream?: never
-          human_edit_after_report?: never
-          human_edited_at?: string | null
-          human_edited_by?: string | null
-          is_reported?: never
-          month?: number | null
-          owner?: string | null
-          pending_source_rev?: never
-          pending_upstream?: Json | null
-          plan_date?: string | null
-          projected_tons?: number | null
-          remarks?: string | null
-          row_version?: number | null
-          setup?: string | null
-          shifts?: number | null
-          source?: string | null
-          source_rev?: string | null
-          updated_at?: string | null
-          year?: number | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "production_schedule_human_edited_by_fkey"
-            columns: ["human_edited_by"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       view_rc_in_master: {
         Row: {
           batch_code: string | null
@@ -4422,7 +4221,6 @@ export type Database = {
       }
       fn_apply_delivery_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_apply_production_upstream: { Args: { p_ops?: Json }; Returns: Json }
-      fn_apply_schedule_upstream: { Args: { p_ops?: Json }; Returns: Json }
       fn_archive_and_delete_delivery: {
         Args: {
           p_archive_batch_id?: string
@@ -4494,25 +4292,12 @@ export type Database = {
         Args: { p_ids: string[]; p_table: string }
         Returns: Json
       }
-      fn_release_schedule_day: {
-        Args: { p_expected_row_version: number; p_plan_date: string }
-        Returns: Json
-      }
       fn_restore_archive_batch: {
         Args: { p_archive_batch_id: string }
         Returns: Json
       }
       fn_restore_archived_delivery: {
         Args: { p_archive_id: string }
-        Returns: Json
-      }
-      fn_save_schedule_day: {
-        Args: {
-          p_clear_pending?: boolean
-          p_expected_row_version: number
-          p_patch?: Json
-          p_plan_date: string
-        }
         Returns: Json
       }
       is_admin: { Args: { user_id: string }; Returns: boolean }
