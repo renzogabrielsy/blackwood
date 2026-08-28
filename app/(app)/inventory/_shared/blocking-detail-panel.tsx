@@ -1,10 +1,35 @@
 'use client';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Blocking detail slide-over — shell-agnostic, shared by Blocking, RC Movement
+// (matrix + grid-v2), the inventory tab shell and the home digest's Open Blocks
+// band.
+//
+// TWO OPENING CONTRACTS, and the second one is the pattern to spread:
+//
+//  • FETCH-FIRST (original, still the default): the host resolves `blockData`
+//    and only then sets `locKey`. The drawer opens already full — but the click
+//    does nothing at all until the round-trip returns.
+//
+//  • OPTIMISTIC (opt-in via `loading` / `error`, added 2026-08-28): the host
+//    sets `locKey` on the CLICK FRAME with no data. The drawer slides out
+//    immediately over a layout-matched skeleton, the fetch runs concurrently,
+//    and the real content fades in over the same DOM nodes when it lands. A
+//    failure keeps the drawer open with a persistent, copyable inline banner
+//    plus Retry — never a silently empty panel.
+//
+// The two are decided per call site: with `loading` and `error` both falsy the
+// optimistic branch is unreachable, so a fetch-first host renders byte-for-byte
+// what it always did. See the `loading` prop doc for the adoption recipe and
+// `components/digest/open-blocks.tsx` for the reference implementation.
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { X, Loader2, Pencil, Check, XIcon, StickyNote, ExternalLink, Printer, Sigma } from 'lucide-react';
+import { X, Loader2, Pencil, Check, XIcon, StickyNote, ExternalLink, Printer, Sigma, AlertTriangle, RotateCw, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { errorToast } from '@/lib/toast';
+import { DetailDrawerSkeletonBody } from '@/components/shared/detail-drawer-skeleton';
 import { TrueWeightPopover } from './true-weight-popover';
 import type { BlockData, BlockingDetailData, DeliveryHistoryRecord } from '../blocking/types';
 import { fetchBlockingDetail, updateBlockNotes, fetchSingleDelivery } from '../blocking/actions';
@@ -310,6 +335,42 @@ interface BlockingDetailPanelProps {
   blockData?: BlockData | null;
   canViewPrices: boolean;
   /**
+   * ── OPTIMISTIC OPEN (opt-in; default OFF — every existing call site is unchanged) ──
+   *
+   * The panel's ORIGINAL contract is "fetch first, then open": a host resolves
+   * `blockData` and only then sets `locKey`, so the drawer never slides open
+   * empty. That costs a full round-trip of dead time on every click.
+   *
+   * The optimistic contract inverts it: set `locKey` on the CLICK FRAME with
+   * `blockData` still null, pass `loading`, and the drawer slides out at once
+   * showing a layout-matched skeleton (`DetailDrawerSkeletonBody`) while the
+   * fetch runs. When `blockData` lands the real content fades in
+   * (`animate-fade-in`, 150ms) over the same DOM nodes — no jump, no height
+   * change, no second slide.
+   *
+   * HOW A CALL SITE ADOPTS IT (see `components/digest/open-blocks.tsx`):
+   *   1. On click: set the locKey AND `loading` immediately; clear any previous
+   *      `blockData` so the drawer can never flash the last block's numbers.
+   *   2. Guard the response against staleness (a request token / batch-id
+   *      compare) — a second click must win over the first one's late reply.
+   *   3. On failure pass `error` (+ `onRetry`); the drawer stays OPEN with a
+   *      persistent, copyable inline banner. Never leave it silently empty.
+   *
+   * Leaving `loading`/`error` unset keeps the original fetch-first behaviour
+   * EXACTLY: with both falsy the optimistic branch is unreachable and a
+   * `locKey` without `blockData` renders the same empty closed shell as before.
+   */
+  loading?: boolean;
+  /**
+   * Human-readable failure text for the in-flight fetch. Truthy ⇒ the open
+   * drawer renders a persistent inline error banner (with Copy, per the project
+   * HARD RULE on error surfaces) instead of the skeleton. Ignored once
+   * `blockData` is present.
+   */
+  error?: string | null;
+  /** Retry affordance rendered inside the error banner. Omit for no button. */
+  onRetry?: () => void;
+  /**
    * Optional host hook fired by the "Edit All" buttons, BEFORE the panel pushes the
    * `/inventory?...` URL. Lets a host that lives inside the client tab shell flip the
    * active tab so the deep-link lands on the right view. The panel imports NOTHING from
@@ -319,7 +380,17 @@ interface BlockingDetailPanelProps {
   onNavigateToBatch?: (target: BlockingDetailNavTarget) => void;
 }
 
-export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDataProp, canViewPrices, onNavigateToBatch }: BlockingDetailPanelProps) {
+export function BlockingDetailPanel({
+  locKey,
+  onClose,
+  data,
+  blockData: blockDataProp,
+  canViewPrices,
+  loading,
+  error,
+  onRetry,
+  onNavigateToBatch,
+}: BlockingDetailPanelProps) {
   const isOpen = locKey !== null;
   // Explicit blockData prop wins; otherwise fall back to the grid map lookup.
   const blockData: BlockData | undefined =
@@ -328,6 +399,16 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
 
   const [detailData, setDetailData] = useState<BlockingDetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Is this host driving the drawer optimistically? Derived PURELY from the
+  // props — a host that opted in always passes a boolean `loading` (true while
+  // fetching, false after), while a fetch-first host passes neither prop, so
+  // `loading !== undefined` is the whole test. Deliberately NOT tracked in state:
+  // "did we show a skeleton this cycle" would need a setState inside an effect,
+  // i.e. a cascading render on every open, to answer a question the props
+  // already answer. A fetch-first host gets `undefined` here and therefore no
+  // extra class anywhere — its markup is byte-identical to before.
+  const isOptimisticHost = loading !== undefined || error !== undefined;
 
   // Notes state
   const [notesEditing, setNotesEditing] = useState(false);
@@ -518,6 +599,44 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
     }
   }
 
+  // ── Optimistic open: the drawer is OUT but its data is not in yet ──
+  // Reachable ONLY when a host opted in with `loading` / `error` (see the props
+  // doc above); every fetch-first call site skips straight past it. The fragment
+  // deliberately emits the SAME two children in the SAME positions as the other
+  // two branches (backdrop div, panel div) so React reconciles them as the same
+  // DOM nodes — the slide keeps running through the swap instead of restarting.
+  if (locKey && !blockData && (loading || error)) {
+    return (
+      <>
+        {/* Backdrop */}
+        <div
+          className={cn(
+            'fixed inset-0 z-40 bg-black/40 transition-opacity duration-250',
+            isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
+          )}
+          onClick={onClose}
+        />
+        {/* Panel */}
+        <div
+          aria-busy={!error}
+          className={cn(
+            'fixed top-0 right-0 h-dvh w-full sm:w-[520px] z-50 bg-background border-l border-border',
+            'safe-t safe-r safe-b',
+            'transition-transform duration-250 [transition-timing-function:cubic-bezier(0.16,1,0.3,1)]',
+            'overflow-hidden shadow-2xl flex flex-col',
+            isOpen ? 'translate-x-0' : 'translate-x-full',
+          )}
+        >
+          {error ? (
+            <PanelErrorState locKey={locKey} message={error} onRetry={onRetry} onClose={onClose} />
+          ) : (
+            <DetailDrawerSkeletonBody title={locKey} onClose={onClose} />
+          )}
+        </div>
+      </>
+    );
+  }
+
   if (!blockData || !locKey) {
     return (
       <>
@@ -542,6 +661,15 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
       </>
     );
   }
+
+  // Skeleton → data handoff. `animate-fade-in` is 150ms opacity-only (compositor
+  // safe, neutralized under prefers-reduced-motion) and is applied to the four
+  // section wrappers, which React has just reused from the skeleton — so the
+  // placeholder is replaced by content that fades in place rather than popping.
+  // It is a constant string for an optimistic host, so it fires once per MOUNT
+  // of those sections (i.e. once per open) and never re-fires on a re-render.
+  // `undefined` for every fetch-first host ⇒ their markup is unchanged.
+  const contentEnter = isOptimisticHost ? 'animate-fade-in' : undefined;
 
   const loc = parseLocKey(locKey);
   const totalIn = blockData.total_in;
@@ -581,7 +709,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         )}
       >
         {/* ── Sticky Header ── */}
-        <div className="shrink-0 bg-background/95 backdrop-blur-md border-b border-border px-4 py-3">
+        <div className={cn('shrink-0 bg-background/95 backdrop-blur-md border-b border-border px-4 py-3', contentEnter)}>
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-2">
               {/* Loc badge */}
@@ -656,7 +784,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         </div>
 
         {/* ── Metrics (Delivery-Card Style) ── */}
-        <div className="shrink-0 px-4 pt-3 pb-2 space-y-2">
+        <div className={cn('shrink-0 px-4 pt-3 pb-2 space-y-2', contentEnter)}>
           {/* Row 1: Balance | PHP/KG | Est. Value */}
           <div className={cn(
             'grid gap-2',
@@ -740,7 +868,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         </div>
 
         {/* ── Notes (Inline) ── */}
-        <div className="shrink-0 px-4 pb-2">
+        <div className={cn('shrink-0 px-4 pb-2', contentEnter)}>
           {detailLoading ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StickyNote className="h-3 w-3" />
@@ -812,7 +940,7 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
         </div>
 
         {/* ── Scrollable Content Area ── */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-3">
+        <div className={cn('flex-1 min-h-0 overflow-y-auto px-4 pb-3', contentEnter)}>
           {/* ── Delivery History (RC IN) ── */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -1045,6 +1173,105 @@ export function BlockingDetailPanel({ locKey, onClose, data, blockData: blockDat
           }
         }}
       />
+    </>
+  );
+}
+
+// ─── Optimistic-open failure state ──────────────────────────────────────────
+
+/**
+ * The drawer stayed OPEN and the fetch failed. Per the project HARD RULE on
+ * error surfaces this banner is PERSISTENT (nothing auto-dismisses it) and
+ * carries a **Copy** button that puts the full text on the clipboard, exactly
+ * like `errorToast()` — an inline banner satisfies the rule in place of a toast
+ * because the drawer is where the user is looking. A Retry re-runs the host's
+ * fetch when it supplied one; the alternative — a silently blank panel — is the
+ * one outcome this whole state exists to prevent.
+ */
+function PanelErrorState({
+  locKey,
+  message,
+  onRetry,
+  onClose,
+}: {
+  locKey: string;
+  message: string;
+  onRetry?: () => void;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const fullText = `Could not load block ${locKey}\n\n${message}`;
+
+  function handleCopy() {
+    void navigator.clipboard.writeText(fullText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <>
+      {/* Header — same chrome as the loading/populated states so the drawer keeps
+          its identity (and its close button) through the failure. */}
+      <div className="shrink-0 bg-background/95 backdrop-blur-md border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="inline-flex items-center px-2 py-0.5 rounded-md border border-border bg-muted font-mono font-bold text-sm text-muted-foreground">
+            {locKey}
+          </span>
+          <button
+            onClick={onClose}
+            className="flex items-center justify-center w-7 h-7 rounded-md border border-border
+                       text-muted-foreground hover:text-foreground hover:bg-muted
+                       transition-all duration-150 cursor-pointer"
+            title="Close (Esc)"
+            aria-label="Close"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="text-xs text-muted-foreground">Block details</div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4">
+        <div
+          role="alert"
+          className="animate-fade-in rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2.5"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold text-foreground">
+                Could not load block {locKey}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground break-words whitespace-pre-wrap">
+                {message}
+              </p>
+              <div className="mt-2 flex items-center gap-1.5">
+                {onRetry && (
+                  <button
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px]
+                               bg-primary text-primary-foreground hover:bg-primary/90
+                               transition-all duration-150 cursor-pointer"
+                  >
+                    <RotateCw className="h-2.5 w-2.5" />
+                    Retry
+                  </button>
+                )}
+                <button
+                  onClick={handleCopy}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px]
+                             text-muted-foreground hover:text-foreground hover:bg-muted
+                             border border-border transition-all duration-150 cursor-pointer"
+                >
+                  <Copy className="h-2.5 w-2.5" />
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </>
   );
 }

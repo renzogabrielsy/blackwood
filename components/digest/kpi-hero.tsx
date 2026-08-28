@@ -21,6 +21,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   fmtByUnit,
@@ -30,6 +31,9 @@ import {
   fmtReportsDue,
   fmtShortDate,
 } from "./format";
+import { useDrilldown } from "./drilldown/use-drilldown";
+import { RcInDrilldownModal } from "./drilldown/rc-in-drilldown";
+import { getRcInDrilldown } from "@/app/(app)/drilldown-actions";
 import { STATE_CHIP, STATE_LABEL, STATE_RAIL } from "./status-tokens";
 import type { DigestKpi } from "@/lib/digest/types";
 import {
@@ -500,8 +504,58 @@ function MobileKpiCard({
   );
 }
 
+/** Which KPI tiles open a drill-down. RC IN is the prototype; the chassis is
+ *  deliberately generic, so adding a tile here is one entry plus a fetcher. */
+const DRILLDOWN_KPI = "rc_in";
+
+/**
+ * THE DRILL-DOWN AFFORDANCE. Wraps an EXISTING KPI card in a real `<button>`
+ * without touching a pixel of the card itself, so the tile's look is unchanged
+ * and only the interaction is added: pointer cursor, a soft ring on hover, a
+ * focus ring for keyboards, and a small expand glyph that fades in on
+ * hover/focus so the capability is discoverable without being loud.
+ *
+ * Opacity + ring only — no layout property animates (CLAUDE.md motion rules),
+ * and the card's own `hover-lift` keeps running underneath.
+ */
+function ExpandableTile({
+  label,
+  onOpen,
+  children,
+}: {
+  label: string;
+  onOpen: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`${label} — open detailed chart`}
+      className={cn(
+        "group relative block w-full rounded-xl text-left",
+        "cursor-pointer transition-shadow duration-150",
+        "hover:ring-2 hover:ring-primary/30",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      )}
+    >
+      {children}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute bottom-2 right-2 inline-flex items-center justify-center rounded-md bg-card/85 p-1 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        <Maximize2 className="size-3.5" />
+      </span>
+    </button>
+  );
+}
+
 export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
   const [openKey, setOpenKey] = React.useState<string | null>(null);
+  // Open-first drill-down for the RC IN tile — the modal appears on the click
+  // frame with a chart-shaped skeleton and the fetch runs concurrently. Adding
+  // the next tile is one more `useDrilldown(...)` + one more modal.
+  const rcInDrilldown = useDrilldown(getRcInDrilldown);
 
   if (!kpis.length) {
     return (
@@ -526,10 +580,24 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
       <div className="hidden gap-3 stagger-children sm:grid sm:grid-cols-3 lg:grid-cols-5">
         {kpis.map((kpi) => {
           const status = statusFor(kpi);
-          return status.state === "reported" ? (
-            <KpiCard key={kpi.key} kpi={kpi} status={status} />
+          const card =
+            status.state === "reported" ? (
+              <KpiCard kpi={kpi} status={status} />
+            ) : (
+              <StateCard kpi={kpi} status={status} />
+            );
+          // Only the prototype tile is interactive this pass; every other card
+          // renders EXACTLY as before.
+          return kpi.key === DRILLDOWN_KPI ? (
+            <ExpandableTile
+              key={kpi.key}
+              label={kpi.label}
+              onOpen={rcInDrilldown.open}
+            >
+              {card}
+            </ExpandableTile>
           ) : (
-            <StateCard key={kpi.key} kpi={kpi} status={status} />
+            <React.Fragment key={kpi.key}>{card}</React.Fragment>
           );
         })}
       </div>
@@ -580,11 +648,34 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
                     month-end, not day-to-day. This is informational, not an alert.
                   </p>
                 )}
+                {/* Phone route into the drill-down. The KPI sheet CLOSES first —
+                    two stacked Radix dialogs fight over the focus trap, and the
+                    drill-down is the surface the user asked for. */}
+                {openKpi.key === DRILLDOWN_KPI && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenKey(null);
+                      rcInDrilldown.open();
+                    }}
+                    className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card/60 px-3 py-2 text-xs font-medium transition-colors duration-150 hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Maximize2 className="size-3.5" />
+                    Open detailed chart
+                  </button>
+                )}
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
+
+      {/* The RC IN drill-down. Mounted once for both the desktop tile and the
+          phone sheet's button — one controller, one modal, no duplicate state. */}
+      <RcInDrilldownModal
+        {...rcInDrilldown.modalProps}
+        data={rcInDrilldown.data}
+      />
     </>
   );
 }

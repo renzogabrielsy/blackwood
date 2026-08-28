@@ -38,6 +38,20 @@ widget grid. The backend contract is fixed; the UI only shapes already-computed
 values into views.
 
 ## Files
+- `drilldown-actions.ts` — **`'use server'`. The drill-down adapter**, and the
+  ONLY server-action file at the `(app)` group root. Two read-only actions —
+  `getRcInDrilldown(range)` and `getRcInPriceDrilldown(range)` — called from the
+  digest's client bands when a KPI tile or a chart card is expanded. They fill
+  `lib/digest/drilldown-types.ts` (the port); the modal never learns which view
+  answered. Rules, all inherited from `lib/digest/queries.ts`: EXISTING relations
+  only (no view, no migration, no RPC); every read WINDOWED or explicitly
+  `.limit()`ed (PostgREST's 1000-row cap); ₱ gated by `canViewPrices()` BEFORE
+  the payload is built, with `restricted: true` for a denied role. The one
+  deliberate departure from the SQL-aggregation HARD RULE is the RC IN kg
+  bucketing + supplier ranking — see `components/digest/CONTEXT.md` →
+  "Drill-downs" for why (a 120-day-windowed view can't reach YTD, and PostgREST
+  aggregates are disabled), and for the measurement showing the rollup
+  reproduces `view_digest_daily_flow`'s definition exactly.
 - `loading.tsx` — route-level skeleton for `/`, band-for-band matching `page.tsx`
   (same `SHELL_CLS` container + band order), so it collapses into the real digest
   without a jump. Static pulses only — no stagger, no row animation (CLAUDE.md).
@@ -112,6 +126,9 @@ values into views.
   plus a qualifier line ("2 days ago" / amber "1 report due"); an overdue one
   becomes a red `StateCard` that still shows the last real reading and
   "N working days behind". See `components/digest/CONTEXT.md`.
+  **The RC IN tile is CLICKABLE (2026-08-28)** — and only that one — opening the
+  RC IN drill-down modal on the click frame. See `components/digest/CONTEXT.md`
+  → "Drill-downs".
   Uses `stagger-children` + `hover-lift`; empty state only when `kpis` is empty.
   **Sparkline zero-skip** still applies to `reported` cards: the four operational
   spark SERIES drop zero-value days so a 0 day doesn't plunge the area chart —
@@ -137,7 +154,9 @@ values into views.
   0.5)]`, rounded to whole ₱ — so the lowest price floats in the lower third of
   the chart instead of sitting on the axis floor and *looking* like zero), **Production by
   grade** (stacked bar — pivots long `GradePoint[]` to wide rows). `ChartCard`
-  gained an optional `legend` slot for the flow chart's custom band swatches.
+  gained an optional `legend` slot for the flow chart's custom band swatches,
+  and an optional **`onExpand`** slot (2026-08-28) that turns its header button
+  into an all-sizes drill-down trigger — passed only by the **RC In price** card.
   All colors are `var(--chart-1..5)` tokens (dark-mode safe). Glass tooltip via
   theme tokens.
 - `components/digest/production-hours-chart.tsx` — **Client component**. A stacked
@@ -178,13 +197,18 @@ values into views.
   since 2026-08-28 the band spans the full width, so the same grid simply gets
   more room and stacks 1-up when narrow).
   **Each card is a clickable `<button>` control** (keyboard-accessible, focus
-  ring, hover border): activating it calls `fetchBlockDataForBatch(batchId)`
-  (`@/app/(app)/inventory/blocking/actions`) and opens the ESTABLISHED Blocking
-  slide-over **`BlockingDetailPanel`** (`_shared/blocking-detail-panel`, lazy via
-  `next/dynamic` `ssr:false`) with the full balance / quality / delivery + usage
-  history — the exact click→fetch→panel pattern the RC Movement matrix uses. One
-  panel open at a time (`selected` state; `onClose` clears it); the panel's
-  loading state shows until the fetch resolves; `onNavigateToBatch` is OMITTED
+  ring, hover border): activating it opens the ESTABLISHED Blocking slide-over
+  **`BlockingDetailPanel`** (`_shared/blocking-detail-panel`, lazy via
+  `React.lazy` + `Suspense`) **on the click frame** and calls
+  `fetchBlockDataForBatch(batchId)`
+  (`@/app/(app)/inventory/blocking/actions`) concurrently — the drawer shows a
+  layout-matched skeleton, fades the real balance / quality / delivery + usage
+  history in when it lands, and stays open with a copyable inline banner +
+  Retry if the fetch fails. **This band is the reference implementation of the
+  app's optimistic-drawer pattern** — full rationale (request-token race guard,
+  why `React.lazy` and not `next/dynamic`, why the card lost its pending pulse)
+  in `components/digest/CONTEXT.md` → "Optimistic drawers". One panel open at a
+  time (`selected` state; `onClose` clears it); `onNavigateToBatch` is OMITTED
   (the panel's internal fallback owns "Edit All"). The former **embedded
   per-block deliveries ledger was REMOVED** (it crammed the half-width column) —
   that detail now lives entirely in the slide-over. Each card, top→bottom:
