@@ -68,6 +68,19 @@ import type {
   RcInSupplierSlice,
   PriceDrilldown,
   PricePointDrill,
+  VolumePoint,
+  VolumeSummary,
+  RcOutDrilldown,
+  RcOutBatchSlice,
+  RcOutRecentRow,
+  ProductionDrilldown,
+  ProductionGradeSlice,
+  ProductionRecentRow,
+  PowerDrilldown,
+  PowerMeterSlice,
+  PowerRecentRow,
+  FlowDrilldown,
+  FlowPointDrill,
 } from "@/lib/digest/drilldown-types";
 
 /** Hard cap on either row read. YTD measured 635 delivery rows / 470 supplier-
@@ -200,6 +213,82 @@ async function resolveOperationalDate(
   const value = (data as { operational_date: string | null } | null)
     ?.operational_date;
   return value ?? toISODate(Date.now());
+}
+
+/** A stream's latest REPORTED day, straight from
+ *  `view_digest_stream_status.through_date` — the SAME scalar the KPI card's
+ *  `AsOfChip` renders, so a card and its drill-down can never disagree about
+ *  which day the number belongs to.
+ *
+ *  Read it, never derive it: "the latest day with a row" is a ROW-SET fact and
+ *  the project rule puts those in SQL (see `lib/digest/day-status.ts` — "do not
+ *  reintroduce a TS scan of the daily series to find the latest day with
+ *  data"). Returns null rather than guessing when the view has no row for the
+ *  stream; the UI then simply omits the as-of. */
+async function resolveStreamAsOf(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  stream: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("view_digest_stream_status")
+    .select("through_date")
+    .eq("stream", stream)
+    .maybeSingle();
+  return (data as { through_date: string | null } | null)?.through_date ?? null;
+}
+
+/** Zero-filled bucket axis + trailing rolling mean + the four summary figures,
+ *  from a bucket→total map. ONE definition, shared by RC OUT / PRODUCTION /
+ *  POWER, so their charts and stat strips cannot drift apart.
+ *
+ *  This is a presentational rollup of ALREADY-AGGREGATED SQL output (each
+ *  source view groups in the database); nothing here re-defines what a kg, a
+ *  kWh or a bucket IS. */
+function buildVolumeSeries(
+  totals: Map<string, number>,
+  startDate: string,
+  endDate: string,
+  granularity: DrilldownGranularity
+): { series: VolumePoint[]; summary: VolumeSummary } {
+  const buckets =
+    granularity === "month"
+      ? monthBuckets(startDate, endDate)
+      : dayBuckets(startDate, endDate);
+  const values = buckets.map((b) => round(totals.get(b) ?? 0));
+  const window = ROLLING_BUCKETS[granularity];
+
+  const series: VolumePoint[] = buckets.map((bucket, i) => ({
+    bucket,
+    label: granularity === "month" ? monthLabel(bucket) : dayLabel(bucket),
+    value: values[i],
+    avg: rollingMean(values, i, window),
+  }));
+
+  const active = series.filter((p) => p.value > 0);
+  const peak = active.reduce<VolumePoint | null>(
+    (best, p) => (best === null || p.value > best.value ? p : best),
+    null
+  );
+
+  return {
+    series,
+    summary: {
+      total: round(active.reduce((a, p) => a + p.value, 0)),
+      avgPerActiveBucket:
+        active.length > 0
+          ? round(active.reduce((a, p) => a + p.value, 0) / active.length)
+          : null,
+      peak: peak
+        ? { bucket: peak.bucket, label: peak.label, value: peak.value }
+        : null,
+      activeBuckets: active.length,
+    },
+  };
+}
+
+/** Fold a (date × dimension) view read into per-bucket totals. */
+function bucketOf(date: string, granularity: DrilldownGranularity): string {
+  return granularity === "month" ? date.slice(0, 7) : date;
 }
 
 // =====================================================================
@@ -573,5 +662,617 @@ export async function getRcInPriceDrilldown(
       biggestSwing,
     },
     populationNote: granularity === "month" ? MONTHLY_POPULATION_NOTE : null,
+  };
+}
+
+// =====================================================================
+// RC OUT — kg fed
+// =====================================================================
+
+/** One row of `view_digest_rcout_batch_daily` (migration 20260828074001):
+ *  (transaction_date × batch_code × block_loc × destination) → kg + feedings.
+ *  Carries no ₱ column, so this read needs no price gate. */
+interface RcOutBatchDayRow {
+  transaction_date: string | null;
+  batch_code: string | null;
+  block_loc: string | null;
+  destination: string | null;
+  kg: number | string | null;
+  feeding_count: number | string | null;
+}
+
+/** The `rc_out` rows behind the "recent feedings" table. `batches` is the
+ *  embedded parent — PostgREST returns it as an object (or, defensively, a
+ *  one-element array), which is why it is flattened below rather than typed as
+ *  a single shape. */
+interface RcOutRecentQueryRow {
+  id: string;
+  transaction_date: string | null;
+  block_loc: string | null;
+  destination: string | null;
+  weight_kg: number | string | null;
+  batches: { batch_code: string | null } | { batch_code: string | null }[] | null;
+}
+
+/** The destination that means "the plant" and therefore says nothing when
+ *  printed. Compared case-insensitively; anything else (a SUNDRY move) IS
+ *  worth showing, which is the only reason `destination` is carried at all. */
+const DEFAULT_DESTINATION = "MAIN";
+
+export async function getRcOutDrilldown(
+  range: DrilldownRange
+): Promise<RcOutDrilldown> {
+  const supabase = await createClient();
+  const operationalDate = await resolveOperationalDate(supabase);
+  const { startDate, endDate, granularity } = resolveWindow(
+    range,
+    operationalDate
+  );
+
+  // Three reads in parallel:
+  //   1. the batch-day view — it drives BOTH the kg series and the by-batch
+  //      ranking. Ordered DESC so a capped read keeps the MOST RECENT buckets:
+  //      the right-hand edge of the chart is where the reader is looking, and
+  //      the truncation banner says outright that the figures are a floor.
+  //   2. the last few underlying `rc_out` rows, with the batch code joined in.
+  //   3. the stream's latest reported day, for the as-of in the header.
+  const [viewRes, recentRes, asOf] = await Promise.all([
+    supabase
+      .from("view_digest_rcout_batch_daily")
+      .select("transaction_date, batch_code, block_loc, destination, kg, feeding_count")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .limit(ROW_CAP),
+    supabase
+      .from("rc_out")
+      .select("id, transaction_date, block_loc, destination, weight_kg, batches(batch_code)")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(RECENT_ROWS),
+    resolveStreamAsOf(supabase, "rc_out"),
+  ]);
+
+  if (viewRes.error) {
+    throw new Error(`RC OUT drill-down query failed: ${viewRes.error.message}`);
+  }
+  if (recentRes.error) {
+    // NOT swallowed — an empty table rendered as "no feedings" is
+    // indistinguishable from a genuinely quiet window (the L-044 failure mode).
+    throw new Error(
+      `RC OUT drill-down recent-rows query failed: ${recentRes.error.message}`
+    );
+  }
+
+  const rows = (viewRes.data as RcOutBatchDayRow[] | null) ?? [];
+  // THE CAP GENUINELY BITES HERE. This grain runs ~4.2 rows per operating day
+  // (1,255 rows / 400 days, 830 for 2026 YTD), so a late-in-year "This year"
+  // read can reach PostgREST's own 1000-row ceiling. Never raise ROW_CAP to
+  // "fix" it — the server truncates at 1000 first, and the flag would go inert.
+  const truncated = rows.length >= ROW_CAP;
+
+  const kgByBucket = new Map<string, number>();
+  const byBatch = new Map<
+    string,
+    {
+      kg: number;
+      feedings: number;
+      /** block → kg, so the rail can name the HEAVIEST block rather than an
+       *  arbitrary one, and say how many blocks a batch was fed from. */
+      blocks: Map<string, number>;
+      destinations: Set<string>;
+    }
+  >();
+  let totalKg = 0;
+  let feedingCount = 0;
+
+  for (const r of rows) {
+    if (!r.transaction_date) continue;
+    const kg = n(r.kg);
+    const bucket = bucketOf(r.transaction_date, granularity);
+    kgByBucket.set(bucket, (kgByBucket.get(bucket) ?? 0) + kg);
+    totalKg += kg;
+    feedingCount += n(r.feeding_count);
+
+    const code = (r.batch_code ?? "").trim() || "—";
+    const agg =
+      byBatch.get(code) ??
+      { kg: 0, feedings: 0, blocks: new Map<string, number>(), destinations: new Set<string>() };
+    agg.kg += kg;
+    agg.feedings += n(r.feeding_count);
+    // block_loc is NULL when rc_out stored a BLANK — "unrecorded", not "".
+    if (r.block_loc) {
+      agg.blocks.set(r.block_loc, (agg.blocks.get(r.block_loc) ?? 0) + kg);
+    }
+    if (r.destination) agg.destinations.add(r.destination);
+    byBatch.set(code, agg);
+  }
+
+  const { series, summary } = buildVolumeSeries(
+    kgByBucket,
+    startDate,
+    endDate,
+    granularity
+  );
+
+  const batches: RcOutBatchSlice[] = Array.from(byBatch.entries())
+    .map(([batchCode, agg]) => {
+      const heaviestBlock = Array.from(agg.blocks.entries()).sort(
+        (a, b) => b[1] - a[1]
+      )[0];
+      return {
+        batchCode,
+        blockLoc: heaviestBlock?.[0] ?? null,
+        blockCount: agg.blocks.size,
+        otherDestinations: Array.from(agg.destinations)
+          .filter((d) => d.trim().toUpperCase() !== DEFAULT_DESTINATION)
+          .sort(),
+        kg: round(agg.kg),
+        sharePct: totalKg > 0 ? round((agg.kg / totalKg) * 100, 1) : 0,
+        feedings: agg.feedings,
+      };
+    })
+    .sort((a, b) => b.kg - a.kg);
+
+  const recent: RcOutRecentRow[] = (
+    (recentRes.data as RcOutRecentQueryRow[] | null) ?? []
+  ).map((r) => {
+    const parent = Array.isArray(r.batches) ? r.batches[0] : r.batches;
+    return {
+      id: r.id,
+      date: r.transaction_date ?? "",
+      batchCode: (parent?.batch_code ?? "").trim() || "—",
+      blockLoc: r.block_loc?.trim() ? r.block_loc : null,
+      destination: (r.destination ?? "").trim() || "—",
+      weightKg: round(n(r.weight_kg)),
+    };
+  });
+
+  return {
+    kind: "rc_out",
+    range,
+    granularity,
+    startDate,
+    endDate,
+    asOf,
+    series,
+    summary: { ...summary, feedingCount, batchCount: batches.length },
+    batches,
+    recent,
+    truncated,
+  };
+}
+
+// =====================================================================
+// PRODUCTION — kg produced
+// =====================================================================
+
+/** One row of `view_digest_production_grade_daily` (migration 20260828074001):
+ *  (transaction_date × grade) → kg, run_count, shift_count, sacks,
+ *  runs_with_sacks. `sacks` is NULLABLE and never 0-filled. */
+interface ProductionGradeDayRow {
+  transaction_date: string | null;
+  grade: string | null;
+  kg: number | string | null;
+  run_count: number | string | null;
+  sacks: number | string | null;
+  runs_with_sacks: number | string | null;
+}
+
+/** The recent runs are read from the SHIFT side, not the run side: a run's
+ *  date lives on its parent, and PostgREST cannot ORDER a parent read by an
+ *  embedded column. Ordering the shifts and flattening their runs gets a real
+ *  newest-first list; ordering runs by an embedded date would not. */
+interface ProductionShiftQueryRow {
+  id: string;
+  transaction_date: string | null;
+  shift: string | null;
+  production_runs:
+    | {
+        id: string;
+        grade: string | null;
+        ttl_kg: number | string | null;
+        sacks_bags: number | string | null;
+      }[]
+    | null;
+}
+
+/** Shifts pulled for the recent-runs list. Each shift carries 1–3 runs, so a
+ *  dozen shifts comfortably covers RECENT_ROWS runs without a second query. */
+const RECENT_SHIFTS = 12;
+
+export async function getProductionDrilldown(
+  range: DrilldownRange
+): Promise<ProductionDrilldown> {
+  const supabase = await createClient();
+  const operationalDate = await resolveOperationalDate(supabase);
+  const { startDate, endDate, granularity } = resolveWindow(
+    range,
+    operationalDate
+  );
+
+  const [viewRes, shiftRes, asOf] = await Promise.all([
+    supabase
+      .from("view_digest_production_grade_daily")
+      .select("transaction_date, grade, kg, run_count, sacks, runs_with_sacks")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .limit(ROW_CAP),
+    supabase
+      .from("production_shifts")
+      .select("id, transaction_date, shift, production_runs(id, grade, ttl_kg, sacks_bags)")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(RECENT_SHIFTS),
+    resolveStreamAsOf(supabase, "production"),
+  ]);
+
+  if (viewRes.error) {
+    throw new Error(
+      `Production drill-down query failed: ${viewRes.error.message}`
+    );
+  }
+  if (shiftRes.error) {
+    throw new Error(
+      `Production drill-down recent-runs query failed: ${shiftRes.error.message}`
+    );
+  }
+
+  const rows = (viewRes.data as ProductionGradeDayRow[] | null) ?? [];
+  const truncated = rows.length >= ROW_CAP;
+
+  const kgByBucket = new Map<string, number>();
+  const byGrade = new Map<
+    string,
+    { kg: number; runs: number; sacks: number; runsWithSacks: number }
+  >();
+  let totalKg = 0;
+  let runCount = 0;
+  let totalSacks = 0;
+  let totalRunsWithSacks = 0;
+
+  for (const r of rows) {
+    if (!r.transaction_date) continue;
+    const kg = n(r.kg);
+    const bucket = bucketOf(r.transaction_date, granularity);
+    kgByBucket.set(bucket, (kgByBucket.get(bucket) ?? 0) + kg);
+    totalKg += kg;
+    runCount += n(r.run_count);
+    // `sacks` is NULL when no run of that grade/day recorded one. n() folds
+    // null to 0 for the SUM, which is correct arithmetic — the honesty lives in
+    // `runsWithSacks`, which is what decides whether a total is shown at all.
+    totalSacks += n(r.sacks);
+    totalRunsWithSacks += n(r.runs_with_sacks);
+
+    const grade = (r.grade ?? "").trim() || "—";
+    const agg =
+      byGrade.get(grade) ?? { kg: 0, runs: 0, sacks: 0, runsWithSacks: 0 };
+    agg.kg += kg;
+    agg.runs += n(r.run_count);
+    agg.sacks += n(r.sacks);
+    agg.runsWithSacks += n(r.runs_with_sacks);
+    byGrade.set(grade, agg);
+  }
+
+  const { series, summary } = buildVolumeSeries(
+    kgByBucket,
+    startDate,
+    endDate,
+    granularity
+  );
+
+  const grades: ProductionGradeSlice[] = Array.from(byGrade.entries())
+    .map(([grade, agg]) => ({
+      grade,
+      kg: round(agg.kg),
+      sharePct: totalKg > 0 ? round((agg.kg / totalKg) * 100, 1) : 0,
+      runs: agg.runs,
+      // NULL, not 0, when nothing was ever recorded — "not recorded" and
+      // "zero bags" are different facts and the UI says so.
+      sacks: agg.runsWithSacks > 0 ? agg.sacks : null,
+      runsWithSacks: agg.runsWithSacks,
+    }))
+    .sort((a, b) => b.kg - a.kg);
+
+  const recent: ProductionRecentRow[] = (
+    (shiftRes.data as ProductionShiftQueryRow[] | null) ?? []
+  )
+    .flatMap((s) =>
+      (s.production_runs ?? []).map((run) => ({
+        id: run.id,
+        date: s.transaction_date ?? "",
+        shift: s.shift?.trim() ? s.shift : null,
+        grade: (run.grade ?? "").trim() || "—",
+        kg: round(n(run.ttl_kg)),
+        sacks: run.sacks_bags == null ? null : n(run.sacks_bags),
+      }))
+    )
+    .slice(0, RECENT_ROWS);
+
+  return {
+    kind: "production",
+    range,
+    granularity,
+    startDate,
+    endDate,
+    asOf,
+    series,
+    summary: {
+      ...summary,
+      runCount,
+      gradeCount: grades.length,
+      sacks: totalRunsWithSacks > 0 ? totalSacks : null,
+      runsWithSacks: totalRunsWithSacks,
+    },
+    grades,
+    recent,
+    truncated,
+  };
+}
+
+// =====================================================================
+// FLOW — received vs fed, and the net between them
+// =====================================================================
+// ONE fetcher behind BOTH the NET FLOW tile and the Feed In vs Out card. No
+// view backs it: it is RC IN daily minus RC OUT daily, from the two breakdown
+// views summed per day. Measured against `view_digest_daily_flow` over its
+// whole 121-day window — in 121/121, out 121/121, net 121/121.
+//
+// Deriving it here rather than reading `view_digest_daily_flow` is the same
+// trade the RC IN buckets make: that view is windowed to 120 days in SQL and
+// cannot reach "this year". Same definition, wider window — not a second one.
+
+interface FlowInRow {
+  transaction_date: string | null;
+  kg: number | string | null;
+}
+
+export async function getFlowDrilldown(
+  range: DrilldownRange
+): Promise<FlowDrilldown> {
+  const supabase = await createClient();
+  const operationalDate = await resolveOperationalDate(supabase);
+  const { startDate, endDate, granularity } = resolveWindow(
+    range,
+    operationalDate
+  );
+
+  // Neither view carries a ₱ column, so this payload has no price surface.
+  const [inRes, outRes] = await Promise.all([
+    supabase
+      .from("view_digest_rcin_supplier_daily")
+      .select("transaction_date, kg")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .limit(ROW_CAP),
+    supabase
+      .from("view_digest_rcout_batch_daily")
+      .select("transaction_date, kg")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .limit(ROW_CAP),
+  ]);
+
+  if (inRes.error) {
+    throw new Error(`Flow drill-down RC IN query failed: ${inRes.error.message}`);
+  }
+  if (outRes.error) {
+    throw new Error(
+      `Flow drill-down RC OUT query failed: ${outRes.error.message}`
+    );
+  }
+
+  const inRows = (inRes.data as FlowInRow[] | null) ?? [];
+  const outRows = (outRes.data as FlowInRow[] | null) ?? [];
+  // EITHER side hitting the cap makes the NET a floor too — and worse than a
+  // floor, a net computed from one truncated side and one complete side would
+  // be actively wrong. So the flag covers both and the modal says so.
+  const truncated = inRows.length >= ROW_CAP || outRows.length >= ROW_CAP;
+
+  const inByBucket = new Map<string, number>();
+  const outByBucket = new Map<string, number>();
+  let inKg = 0;
+  let outKg = 0;
+
+  for (const r of inRows) {
+    if (!r.transaction_date) continue;
+    const kg = n(r.kg);
+    const bucket = bucketOf(r.transaction_date, granularity);
+    inByBucket.set(bucket, (inByBucket.get(bucket) ?? 0) + kg);
+    inKg += kg;
+  }
+  for (const r of outRows) {
+    if (!r.transaction_date) continue;
+    const kg = n(r.kg);
+    const bucket = bucketOf(r.transaction_date, granularity);
+    outByBucket.set(bucket, (outByBucket.get(bucket) ?? 0) + kg);
+    outKg += kg;
+  }
+
+  const buckets =
+    granularity === "month"
+      ? monthBuckets(startDate, endDate)
+      : dayBuckets(startDate, endDate);
+
+  const series: FlowPointDrill[] = buckets.map((bucket) => {
+    const bIn = round(inByBucket.get(bucket) ?? 0);
+    const bOut = round(outByBucket.get(bucket) ?? 0);
+    return {
+      bucket,
+      label: granularity === "month" ? monthLabel(bucket) : dayLabel(bucket),
+      inKg: bIn,
+      outKg: bOut,
+      netKg: round(bIn - bOut),
+    };
+  });
+
+  // "Active" = either side moved. A bucket where NOTHING happened is not a
+  // zero-net day worth averaging in — it is a day the plant was closed.
+  const active = series.filter((p) => p.inKg > 0 || p.outKg > 0);
+
+  let biggestSurplus: FlowDrilldown["summary"]["biggestSurplus"] = null;
+  let biggestDeficit: FlowDrilldown["summary"]["biggestDeficit"] = null;
+  for (const p of active) {
+    if (p.netKg > 0 && (biggestSurplus === null || p.netKg > biggestSurplus.netKg)) {
+      biggestSurplus = { bucket: p.bucket, label: p.label, netKg: p.netKg };
+    }
+    if (p.netKg < 0 && (biggestDeficit === null || p.netKg < biggestDeficit.netKg)) {
+      biggestDeficit = { bucket: p.bucket, label: p.label, netKg: p.netKg };
+    }
+  }
+
+  return {
+    kind: "flow",
+    range,
+    granularity,
+    startDate,
+    endDate,
+    series,
+    summary: {
+      inKg: round(inKg),
+      outKg: round(outKg),
+      netKg: round(inKg - outKg),
+      avgNetPerBucket:
+        active.length > 0
+          ? round(active.reduce((a, p) => a + p.netKg, 0) / active.length)
+          : null,
+      biggestSurplus,
+      biggestDeficit,
+      activeBuckets: active.length,
+    },
+    truncated,
+  };
+}
+
+// =====================================================================
+// POWER — kWh consumed
+// =====================================================================
+
+/** One row of `view_digest_power_meter_daily` (migration 20260828074001):
+ *  (reading_date × meter) → kwh. `kwh` is `sum(consumption_kwh)`, the exact
+ *  column the POWER tile sums, so the modal total always equals the tile. */
+interface PowerMeterDayRow {
+  reading_date: string | null;
+  meter: string | null;
+  kwh: number | string | null;
+  reading_count: number | string | null;
+}
+
+interface PowerReadingQueryRow {
+  id: string;
+  reading_date: string | null;
+  meter: string | null;
+  consumption_kwh: number | string | null;
+}
+
+export async function getPowerDrilldown(
+  range: DrilldownRange
+): Promise<PowerDrilldown> {
+  const supabase = await createClient();
+  const operationalDate = await resolveOperationalDate(supabase);
+  const { startDate, endDate, granularity } = resolveWindow(
+    range,
+    operationalDate
+  );
+
+  const [viewRes, recentRes, asOf] = await Promise.all([
+    supabase
+      .from("view_digest_power_meter_daily")
+      .select("reading_date, meter, kwh, reading_count")
+      .gte("reading_date", startDate)
+      .lte("reading_date", endDate)
+      .order("reading_date", { ascending: false })
+      .limit(ROW_CAP),
+    supabase
+      .from("electricity_readings")
+      .select("id, reading_date, meter, consumption_kwh")
+      .gte("reading_date", startDate)
+      .lte("reading_date", endDate)
+      .order("reading_date", { ascending: false })
+      .order("meter", { ascending: true })
+      .limit(RECENT_ROWS),
+    resolveStreamAsOf(supabase, "electricity"),
+  ]);
+
+  if (viewRes.error) {
+    throw new Error(`Power drill-down query failed: ${viewRes.error.message}`);
+  }
+  if (recentRes.error) {
+    throw new Error(
+      `Power drill-down recent-readings query failed: ${recentRes.error.message}`
+    );
+  }
+
+  const rows = (viewRes.data as PowerMeterDayRow[] | null) ?? [];
+  const truncated = rows.length >= ROW_CAP;
+
+  const kwhByBucket = new Map<string, number>();
+  const byMeter = new Map<string, { kwh: number; readings: number }>();
+  let totalKwh = 0;
+  let readingCount = 0;
+
+  for (const r of rows) {
+    if (!r.reading_date) continue;
+    const kwh = n(r.kwh);
+    const bucket = bucketOf(r.reading_date, granularity);
+    kwhByBucket.set(bucket, (kwhByBucket.get(bucket) ?? 0) + kwh);
+    totalKwh += kwh;
+    readingCount += n(r.reading_count);
+
+    const meter = (r.meter ?? "").trim() || "—";
+    const agg = byMeter.get(meter) ?? { kwh: 0, readings: 0 };
+    agg.kwh += kwh;
+    agg.readings += n(r.reading_count);
+    byMeter.set(meter, agg);
+  }
+
+  const { series, summary } = buildVolumeSeries(
+    kwhByBucket,
+    startDate,
+    endDate,
+    granularity
+  );
+
+  // A ONE-ENTRY RAIL IS CORRECT DATA HERE, not an empty state: BUNKHOUSE and
+  // PUMP were last reported 2025-12-12, so any 30d/90d window legitimately
+  // contains MAIN alone. The UI renders whatever this returns, plainly.
+  const meters: PowerMeterSlice[] = Array.from(byMeter.entries())
+    .map(([meter, agg]) => ({
+      meter,
+      kwh: round(agg.kwh),
+      sharePct: totalKwh > 0 ? round((agg.kwh / totalKwh) * 100, 1) : 0,
+      readings: agg.readings,
+    }))
+    .sort((a, b) => b.kwh - a.kwh);
+
+  const recent: PowerRecentRow[] = (
+    (recentRes.data as PowerReadingQueryRow[] | null) ?? []
+  ).map((r) => ({
+    id: r.id,
+    date: r.reading_date ?? "",
+    meter: (r.meter ?? "").trim() || "—",
+    // consumption_kwh is nullable in the source table — kept null, never 0.
+    kwh: r.consumption_kwh == null ? null : round(n(r.consumption_kwh)),
+  }));
+
+  return {
+    kind: "power",
+    range,
+    granularity,
+    startDate,
+    endDate,
+    asOf,
+    series,
+    summary: { ...summary, readingCount, meterCount: meters.length },
+    meters,
+    recent,
+    truncated,
   };
 }

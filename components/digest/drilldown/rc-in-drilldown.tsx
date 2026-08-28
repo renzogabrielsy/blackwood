@@ -13,43 +13,26 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as React from "react";
-import {
-  Bar,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip as RTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { fmtKg } from "../format";
 import {
-  DRILLDOWN_AXIS_TICK,
   DrilldownChartSkeleton,
   DrilldownModal,
   DrilldownSection,
   DrilldownStat,
-  drilldownTooltipChrome,
 } from "./drilldown-modal";
+import {
+  BreakdownRail,
+  TruncatedNotice,
+  VolumeSeriesChart,
+  bucketNoun,
+  type RailItem,
+} from "./series-parts";
 import type { DrilldownModalState } from "./use-drilldown";
 import {
   RANGE_LABEL,
   type RcInDrilldown,
+  type VolumePoint,
 } from "@/lib/digest/drilldown-types";
-
-/** "7-day avg" / "3-month avg" — the rolling window, named for the granularity. */
-export function rollingLabel(granularity: RcInDrilldown["granularity"]): string {
-  return granularity === "month" ? "3-month avg" : "7-day avg";
-}
-
-const BUCKET_NOUN: Record<RcInDrilldown["granularity"], string> = {
-  day: "day",
-  month: "month",
-};
 
 /**
  * The wired modal — the ONE thing a caller mounts. Spread a
@@ -79,25 +62,43 @@ export function RcInDrilldownModal({
 }
 
 export function RcInDrilldownBody({ data }: { data: RcInDrilldown }) {
-  const tip = drilldownTooltipChrome();
   const { summary, granularity } = data;
-  const noun = BUCKET_NOUN[granularity];
-  const avgLabel = rollingLabel(granularity);
+  const noun = bucketNoun(granularity);
+
+  // `RcInPoint.kg` predates the shared `VolumePoint.value` contract and is not
+  // renamed: this payload is stable and five other fields read `kg`. Mapping is
+  // the cheap side of the trade — the CHART then has one definition instead of
+  // four near-copies.
+  const chartSeries = React.useMemo<VolumePoint[]>(
+    () =>
+      data.series.map((p) => ({
+        bucket: p.bucket,
+        label: p.label,
+        value: p.kg,
+        avg: p.avg,
+      })),
+    [data.series]
+  );
+
+  const railItems = React.useMemo<RailItem[]>(
+    () =>
+      data.suppliers.map((s) => ({
+        key: s.supplier,
+        label: s.supplier,
+        value: fmtKg(s.kg),
+        unit: "kg",
+        sharePct: s.sharePct,
+        title: `${s.supplier} · ${s.deliveries} deliveries · ${s.sacks.toLocaleString(
+          "en-US"
+        )} sacks`,
+      })),
+    [data.suppliers]
+  );
 
   return (
     <div className="flex flex-col gap-4">
       {data.truncated && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
-        >
-          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
-            This window has more deliveries than one read returns, so every
-            figure below is a <strong className="font-semibold">floor</strong>,
-            not a total. Open RC IN for the complete ledger.
-          </p>
-        </div>
+        <TruncatedNotice noun="deliveries" module="RC IN" />
       )}
 
       {/* ── Summary strip ── */}
@@ -145,71 +146,13 @@ export function RcInDrilldownBody({ data }: { data: RcInDrilldown }) {
           subtitle={`by ${noun} · kg`}
           bodyClassName="p-2 pb-1"
         >
-          <div className="h-[240px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                data={data.series}
-                margin={{ top: 6, right: 8, bottom: 0, left: 0 }}
-              >
-                <CartesianGrid
-                  stroke="var(--border)"
-                  strokeOpacity={0.4}
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="label"
-                  tick={DRILLDOWN_AXIS_TICK}
-                  tickLine={false}
-                  axisLine={{ stroke: "var(--border)" }}
-                  minTickGap={granularity === "month" ? 8 : 24}
-                />
-                <YAxis
-                  tick={DRILLDOWN_AXIS_TICK}
-                  tickLine={false}
-                  axisLine={false}
-                  width={48}
-                  tickFormatter={(v: number) => fmtKg(v)}
-                />
-                <RTooltip
-                  {...tip}
-                  formatter={(value, name) => [
-                    value == null ? "—" : `${fmtKg(Number(value))} kg`,
-                    name === "avg" ? avgLabel : "Received",
-                  ]}
-                  labelFormatter={(_label, payload) =>
-                    payload?.[0]?.payload?.bucket ?? _label
-                  }
-                />
-                <Legend
-                  wrapperStyle={{ fontSize: "11px", paddingTop: 4 }}
-                  formatter={(v) => (v === "avg" ? avgLabel : "Received")}
-                />
-                {/* A 0 bar simply is not drawn — an honest gap on a bar chart,
-                    and unlike a line it never "plunges" to the floor (the
-                    convention digest-charts' FlowChart states for its lines). */}
-                <Bar
-                  dataKey="kg"
-                  name="kg"
-                  fill="var(--chart-2)"
-                  radius={[3, 3, 0, 0]}
-                  maxBarSize={granularity === "month" ? 44 : 22}
-                  isAnimationActive={false}
-                />
-                {/* The rolling mean DOES include zero days — that is what makes
-                    it an average of the period rather than of the busy days. */}
-                <Line
-                  type="monotone"
-                  dataKey="avg"
-                  name="avg"
-                  stroke="var(--chart-4)"
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                  connectNulls={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
+          <VolumeSeriesChart
+            data={chartSeries}
+            granularity={granularity}
+            valueName="Received"
+            fmt={fmtKg}
+            unit="kg"
+          />
         </DrilldownSection>
 
         <DrilldownSection
@@ -217,51 +160,10 @@ export function RcInDrilldownBody({ data }: { data: RcInDrilldown }) {
           subtitle={`${data.suppliers.length} in range`}
           bodyClassName="p-0"
         >
-          {data.suppliers.length === 0 ? (
-            <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-              No deliveries in this window.
-            </p>
-          ) : (
-            <ol className="max-h-[240px] overflow-y-auto px-3 py-2">
-              {data.suppliers.map((s, i) => (
-                <li key={s.supplier} className="py-1">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span
-                      className="min-w-0 truncate text-xs"
-                      title={`${s.supplier} · ${s.deliveries} deliveries · ${s.sacks.toLocaleString(
-                        "en-US"
-                      )} sacks`}
-                    >
-                      <span className="mr-1.5 font-mono text-[10px] text-muted-foreground tabular-nums">
-                        {i + 1}
-                      </span>
-                      {s.supplier}
-                    </span>
-                    <span className="shrink-0 font-mono text-xs tabular-nums">
-                      {fmtKg(s.kg)}
-                      <span className="ml-1 text-[10px] text-muted-foreground">
-                        kg
-                      </span>
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-2">
-                    <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className={cn(
-                          "h-full origin-left rounded-full",
-                          i === 0 ? "bg-[var(--chart-2)]" : "bg-[var(--chart-2)]/55"
-                        )}
-                        style={{ width: `${Math.min(100, s.sharePct)}%` }}
-                      />
-                    </div>
-                    <span className="w-10 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-                      {s.sharePct.toFixed(1)}%
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
+          <BreakdownRail
+            items={railItems}
+            emptyText="No deliveries in this window."
+          />
         </DrilldownSection>
       </div>
 

@@ -33,7 +33,17 @@ import {
 } from "./format";
 import { useDrilldown } from "./drilldown/use-drilldown";
 import { RcInDrilldownModal } from "./drilldown/rc-in-drilldown";
-import { getRcInDrilldown } from "@/app/(app)/drilldown-actions";
+import { RcOutDrilldownModal } from "./drilldown/rc-out-drilldown";
+import { ProductionDrilldownModal } from "./drilldown/production-drilldown";
+import { PowerDrilldownModal } from "./drilldown/power-drilldown";
+import { FlowDrilldownModal } from "./drilldown/flow-drilldown";
+import {
+  getRcInDrilldown,
+  getRcOutDrilldown,
+  getProductionDrilldown,
+  getPowerDrilldown,
+  getFlowDrilldown,
+} from "@/app/(app)/drilldown-actions";
 import { STATE_CHIP, STATE_LABEL, STATE_RAIL } from "./status-tokens";
 import type { DigestKpi } from "@/lib/digest/types";
 import {
@@ -318,7 +328,20 @@ function StateCard({ kpi, status }: { kpi: DigestKpi; status: KpiDayStatus }) {
   );
 }
 
-function KpiCard({ kpi, status }: { kpi: DigestKpi; status: KpiDayStatus }) {
+function KpiCard({
+  kpi,
+  status,
+  /** TRUE when this card is wrapped in an `ExpandableTile`. It only affects the
+   *  net-flow card's tooltip wrapper, which otherwise forces `cursor-help` over
+   *  a control that is now genuinely clickable — the cursor would say "read
+   *  this" on a button. The tooltip itself is KEPT: the drift explanation is
+   *  worth more than a cursor. */
+  interactive = false,
+}: {
+  kpi: DigestKpi;
+  status: KpiDayStatus;
+  interactive?: boolean;
+}) {
   const neutral = isNeutralKpi(kpi.key);
   const valueStr = fmtByUnit(kpi.value, kpi.unit);
   const note = lagNote(status);
@@ -395,7 +418,7 @@ function KpiCard({ kpi, status }: { kpi: DigestKpi; status: KpiDayStatus }) {
       <TooltipProvider delayDuration={150}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="cursor-help">{card}</div>
+            <div className={interactive ? undefined : "cursor-help"}>{card}</div>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="max-w-[220px] text-xs">
             Continuous-flow drift is expected — the feed tank balances at
@@ -504,9 +527,21 @@ function MobileKpiCard({
   );
 }
 
-/** Which KPI tiles open a drill-down. RC IN is the prototype; the chassis is
- *  deliberately generic, so adding a tile here is one entry plus a fetcher. */
-const DRILLDOWN_KPI = "rc_in";
+/** Which KPI tiles open a drill-down — ALL FIVE, since 2026-08-28. RC IN was
+ *  the prototype and the chassis is deliberately generic, so each of the other
+ *  four is one `useDrilldown(...)` + one wired modal below.
+ *
+ *  It is a Set rather than a per-card boolean because THREE call sites branch
+ *  on it (the desktop tile, the phone detail dialog's button, and the phone
+ *  dialog's own layout), and three inlined comparisons would be three places to
+ *  forget the next tile. */
+const DRILLDOWN_KPIS = new Set([
+  "rc_in",
+  "rc_out",
+  "production",
+  "net_flow",
+  "power",
+]);
 
 /**
  * THE DRILL-DOWN AFFORDANCE. Wraps an EXISTING KPI card in a real `<button>`
@@ -552,10 +587,40 @@ function ExpandableTile({
 
 export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
   const [openKey, setOpenKey] = React.useState<string | null>(null);
-  // Open-first drill-down for the RC IN tile — the modal appears on the click
-  // frame with a chart-shaped skeleton and the fetch runs concurrently. Adding
-  // the next tile is one more `useDrilldown(...)` + one more modal.
+  // Open-first drill-downs — the modal appears on the CLICK FRAME with a
+  // chart-shaped skeleton and the fetch runs concurrently (see
+  // `use-drilldown.ts`). One controller per tile: they must not share state,
+  // because each owns its own range selection and its own in-flight token.
+  //
+  // Hooks are called unconditionally and in a fixed order, which is why this is
+  // five named calls rather than a map built from `kpis` — the card list comes
+  // from the server and a data-driven hook count would break the rules of hooks
+  // the first time a stream drops out of the payload.
   const rcInDrilldown = useDrilldown(getRcInDrilldown);
+  const rcOutDrilldown = useDrilldown(getRcOutDrilldown);
+  const productionDrilldown = useDrilldown(getProductionDrilldown);
+  const netFlowDrilldown = useDrilldown(getFlowDrilldown);
+  const powerDrilldown = useDrilldown(getPowerDrilldown);
+
+  /** kpi.key → the opener for its drill-down. Undefined for a tile with none,
+   *  which is what `DRILLDOWN_KPIS` and this map agreeing means. */
+  const openDrilldown = React.useCallback(
+    (key: string): (() => void) | undefined =>
+      ({
+        rc_in: rcInDrilldown.open,
+        rc_out: rcOutDrilldown.open,
+        production: productionDrilldown.open,
+        net_flow: netFlowDrilldown.open,
+        power: powerDrilldown.open,
+      })[key],
+    [
+      rcInDrilldown.open,
+      rcOutDrilldown.open,
+      productionDrilldown.open,
+      netFlowDrilldown.open,
+      powerDrilldown.open,
+    ]
+  );
 
   if (!kpis.length) {
     return (
@@ -580,20 +645,23 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
       <div className="hidden gap-3 stagger-children sm:grid sm:grid-cols-3 lg:grid-cols-5">
         {kpis.map((kpi) => {
           const status = statusFor(kpi);
+          const onOpen = openDrilldown(kpi.key);
+          // A card whose stream has not reported is still expandable: the
+          // drill-down's own range covers 30 days at minimum, so it has plenty
+          // to show even when TODAY is blank — and "why is this empty" is
+          // exactly the moment a reader wants the history.
           const card =
             status.state === "reported" ? (
-              <KpiCard kpi={kpi} status={status} />
+              <KpiCard
+                kpi={kpi}
+                status={status}
+                interactive={onOpen !== undefined}
+              />
             ) : (
               <StateCard kpi={kpi} status={status} />
             );
-          // Only the prototype tile is interactive this pass; every other card
-          // renders EXACTLY as before.
-          return kpi.key === DRILLDOWN_KPI ? (
-            <ExpandableTile
-              key={kpi.key}
-              label={kpi.label}
-              onOpen={rcInDrilldown.open}
-            >
+          return onOpen ? (
+            <ExpandableTile key={kpi.key} label={kpi.label} onOpen={onOpen}>
               {card}
             </ExpandableTile>
           ) : (
@@ -651,12 +719,13 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
                 {/* Phone route into the drill-down. The KPI sheet CLOSES first —
                     two stacked Radix dialogs fight over the focus trap, and the
                     drill-down is the surface the user asked for. */}
-                {openKpi.key === DRILLDOWN_KPI && (
+                {DRILLDOWN_KPIS.has(openKpi.key) && (
                   <button
                     type="button"
                     onClick={() => {
+                      const open = openDrilldown(openKpi.key);
                       setOpenKey(null);
-                      rcInDrilldown.open();
+                      open?.();
                     }}
                     className="mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border bg-card/60 px-3 py-2 text-xs font-medium transition-colors duration-150 hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
@@ -670,11 +739,32 @@ export function KpiHero({ kpis, dayStatus }: KpiHeroProps) {
         </DialogContent>
       </Dialog>
 
-      {/* The RC IN drill-down. Mounted once for both the desktop tile and the
-          phone sheet's button — one controller, one modal, no duplicate state. */}
+      {/* The drill-downs. Each is mounted ONCE and serves both the desktop tile
+          and the phone sheet's button — one controller, one modal, no duplicate
+          state. Radix keeps a closed Dialog's content unmounted, so five
+          modals here cost five closed portals, not five charts. */}
       <RcInDrilldownModal
         {...rcInDrilldown.modalProps}
         data={rcInDrilldown.data}
+      />
+      <RcOutDrilldownModal
+        {...rcOutDrilldown.modalProps}
+        data={rcOutDrilldown.data}
+      />
+      <ProductionDrilldownModal
+        {...productionDrilldown.modalProps}
+        data={productionDrilldown.data}
+      />
+      {/* NET FLOW and the Feed In vs Out chart card share ONE modal component
+          (see flow-drilldown.tsx) — the tile leads with the net bars. */}
+      <FlowDrilldownModal
+        {...netFlowDrilldown.modalProps}
+        data={netFlowDrilldown.data}
+        emphasis="net"
+      />
+      <PowerDrilldownModal
+        {...powerDrilldown.modalProps}
+        data={powerDrilldown.data}
       />
     </>
   );
