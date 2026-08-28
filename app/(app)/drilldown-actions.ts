@@ -22,26 +22,39 @@
 //     `cost_basis` at all, so it has no price surface to gate.
 //
 //   • AGGREGATION. The project HARD RULE puts weighted averages, balances
-//     and running totals in SQL. Two things follow, and the split is
+//     and running totals in SQL. Three things follow, and the split is
 //     deliberate:
 //       - the PRICE series is a weighted average, so it is read from SQL
 //         at BOTH granularities (`view_digest_daily_price` /
 //         `view_delivery_monthly_analytics.avg_price`) and never computed
 //         here;
-//       - RC IN is a plain SUM of kg. Its buckets are rolled up in this
+//       - the BY-SUPPLIER ranking is grouped in SQL by
+//         `view_digest_rcin_supplier_daily`, because supplier IDENTITY is
+//         a definition, not arithmetic — see the block below;
+//       - RC IN's kg BUCKETS are a plain SUM of kg, rolled up in this
 //         module from the range's delivery rows because the canonical
 //         daily view (`view_digest_daily_flow`) is windowed to 120 days
-//         and cannot reach "this year", and because the by-supplier
-//         ranking has no SQL home at all (there is no per-supplier daily
-//         view, and PostgREST aggregate functions are DISABLED on this
-//         project — a `weight_kg.sum()` select returns PGRST123). The
-//         rollup REPRODUCES `view_digest_daily_flow`'s definition exactly
-//         (`sum(weight_kg) GROUP BY transaction_date` over `deliveries`,
-//         unfiltered), so it is the same definition applied to a wider
-//         window, not a second one. MEASURED 2026-08-28: over the 90 days
-//         to the operational date the two agree on 90 of 90 days, zero
-//         mismatches. If this ever grows a second consumer, promote it to
-//         a windowed SQL view instead of copying the rollup.
+//         and cannot reach "this year". The rollup REPRODUCES that view's
+//         definition exactly (`sum(weight_kg) GROUP BY transaction_date`
+//         over `deliveries`, unfiltered), so it is the same definition
+//         applied to a wider window, not a second one. MEASURED
+//         2026-08-28: over the 90 days to the operational date the two
+//         agree on 90 of 90 days, zero mismatches. If this ever grows a
+//         second consumer, promote it to a windowed SQL view instead of
+//         copying the rollup.
+//
+//   • SUPPLIER IDENTITY LIVES IN SQL — `public.canonical_supplier(text)`
+//     is the ONE definition and this module must never re-implement it.
+//     Until 2026-08-28 the ranking grouped RAW `deliveries.supplier`
+//     strings here, so "Ornales" (405 rows) and "ORNALES" (22 rows, June
+//     2026) ranked as two suppliers and the joint-vendor misdeclares
+//     ("Mercado / Ornales", "Compra/Paquibot", …) folded into nothing.
+//     It now reads `view_digest_rcin_supplier_daily`, which groups by
+//     `canonical_supplier(supplier)` in SQL — the same function every
+//     Summaries by-supplier view uses, so the digest rail and Summaries
+//     can never disagree about who a supplier is. Porting those ILIKE
+//     clauses into TypeScript would create a second definition that
+//     drifts the first time a spelling is added to the function.
 // =====================================================================
 
 import { createClient } from "@/lib/supabase/server";
@@ -57,10 +70,18 @@ import type {
   PricePointDrill,
 } from "@/lib/digest/drilldown-types";
 
-/** Hard cap on the row read. YTD measured 635 delivery rows (2026); the cap is
- *  a guard against an unexpected year, not an expected boundary. Hitting it
- *  sets `truncated`, and the modal then presents every figure as a FLOOR. */
-const ROW_CAP = 1500;
+/** Hard cap on either row read. YTD measured 635 delivery rows / 470 supplier-
+ *  day rows (2026), and the widest full year on record is 719 / 609 (2025) —
+ *  the cap is a guard against an unexpected year, not an expected boundary.
+ *  Hitting it sets `truncated`, and the modal then presents every figure as a
+ *  FLOOR.
+ *
+ *  IT IS 1000 BECAUSE POSTGREST'S OWN CAP IS 1000 (verified live: a
+ *  `?limit=1500` on `deliveries` returns exactly 1000 rows). A larger constant
+ *  here would make the flag INERT — the server would truncate first, the read
+ *  would come back short of the cap, and the modal would report a floor as if
+ *  it were a total. A truncation flag that cannot fire is worse than none. */
+const ROW_CAP = 1000;
 
 /** Trailing rolling-mean window, per granularity. */
 const ROLLING_BUCKETS: Record<DrilldownGranularity, number> = {
@@ -194,6 +215,17 @@ interface DeliveryRow {
   weight_kg: number | string | null;
 }
 
+/** One row of `view_digest_rcin_supplier_daily` (migration 20260828032427):
+ *  (transaction_date × canonical supplier), already grouped in SQL. Carries no
+ *  ₱ column — kg, sacks and counts only — so this read needs no price gate. */
+interface SupplierDayRow {
+  transaction_date: string | null;
+  supplier_canonical: string | null;
+  kg: number | string | null;
+  delivery_count: number | string | null;
+  sack_count: number | string | null;
+}
+
 export async function getRcInDrilldown(
   range: DrilldownRange
 ): Promise<RcInDrilldown> {
@@ -204,32 +236,54 @@ export async function getRcInDrilldown(
     operationalDate
   );
 
-  // ONE windowed, explicitly-capped row read. DESC so a truncated read keeps
-  // the MOST RECENT rows (the ones the recent-rows table shows) rather than an
-  // arbitrary head. No `cost_basis` in the select — this payload carries no ₱.
-  const { data, error } = await supabase
-    .from("deliveries")
-    .select("id, transaction_date, supplier, truck_plate, sacks, weight_kg")
-    .gte("transaction_date", startDate)
-    .lte("transaction_date", endDate)
-    .order("transaction_date", { ascending: false })
-    .order("id", { ascending: false })
-    .limit(ROW_CAP);
+  // Two windowed, explicitly-capped reads, in parallel.
+  //
+  //   1. the raw delivery rows — they drive the kg BUCKETS and the recent-rows
+  //      table. DESC so a truncated read keeps the MOST RECENT rows (the ones
+  //      the table shows) rather than an arbitrary head.
+  //   2. the supplier-day view — it drives the by-supplier RANKING, already
+  //      folded to canonical supplier identity in SQL (module header).
+  //
+  // Neither select touches `cost_basis`, and the view has no ₱ column at all,
+  // so this payload carries no price surface to gate.
+  const [deliveryRes, supplierRes] = await Promise.all([
+    supabase
+      .from("deliveries")
+      .select("id, transaction_date, supplier, truck_plate, sacks, weight_kg")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .order("transaction_date", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(ROW_CAP),
+    supabase
+      .from("view_digest_rcin_supplier_daily")
+      .select("transaction_date, supplier_canonical, kg, delivery_count, sack_count")
+      .gte("transaction_date", startDate)
+      .lte("transaction_date", endDate)
+      .limit(ROW_CAP),
+  ]);
 
-  if (error) {
-    throw new Error(`RC IN drill-down query failed: ${error.message}`);
+  if (deliveryRes.error) {
+    throw new Error(`RC IN drill-down query failed: ${deliveryRes.error.message}`);
+  }
+  if (supplierRes.error) {
+    // NOT swallowed. A supplier read that fails silently would render an empty
+    // rail as "no suppliers delivered", which is indistinguishable from a real
+    // quiet window — the L-044 failure mode. Fail loudly instead.
+    throw new Error(
+      `RC IN drill-down supplier query failed: ${supplierRes.error.message}`
+    );
   }
 
-  const rows = (data as DeliveryRow[] | null) ?? [];
-  const truncated = rows.length >= ROW_CAP;
+  const rows = (deliveryRes.data as DeliveryRow[] | null) ?? [];
+  const supplierRows = (supplierRes.data as SupplierDayRow[] | null) ?? [];
+  // EITHER read hitting the cap makes every figure below a floor.
+  const truncated =
+    rows.length >= ROW_CAP || supplierRows.length >= ROW_CAP;
 
   // ---- bucket the rows (see the module header: this reproduces
   //      view_digest_daily_flow's definition, it is not a second one) ----
   const kgByBucket = new Map<string, number>();
-  const supplierAgg = new Map<
-    string,
-    { kg: number; deliveries: number; sacks: number }
-  >();
   let totalKg = 0;
 
   for (const r of rows) {
@@ -241,17 +295,29 @@ export async function getRcInDrilldown(
         : r.transaction_date;
     kgByBucket.set(bucket, (kgByBucket.get(bucket) ?? 0) + kg);
     totalKg += kg;
+  }
 
-    const supplier = (r.supplier ?? "").trim() || "Unattributed";
-    const agg = supplierAgg.get(supplier) ?? {
-      kg: 0,
-      deliveries: 0,
-      sacks: 0,
-    };
+  // ---- roll the per-DAY supplier rows up to per-SUPPLIER totals ----
+  // Plain addition of already-grouped SQL output, the same class as the daily
+  // bucketing above and as `rollingMean` — the DEFINITION (who is one supplier,
+  // and what a delivery/sack/kg count is) was settled in the view. Nothing here
+  // inspects a supplier string; renaming or re-folding happens only in
+  // `canonical_supplier()`.
+  const supplierAgg = new Map<
+    string,
+    { kg: number; deliveries: number; sacks: number }
+  >();
+  let supplierTotalKg = 0;
+
+  for (const r of supplierRows) {
+    const supplier = r.supplier_canonical ?? "UNKNOWN";
+    const kg = n(r.kg);
+    const agg = supplierAgg.get(supplier) ?? { kg: 0, deliveries: 0, sacks: 0 };
     agg.kg += kg;
-    agg.deliveries += 1;
-    agg.sacks += n(r.sacks);
+    agg.deliveries += n(r.delivery_count);
+    agg.sacks += n(r.sack_count);
     supplierAgg.set(supplier, agg);
+    supplierTotalKg += kg;
   }
 
   const buckets =
@@ -274,17 +340,35 @@ export async function getRcInDrilldown(
     null
   );
 
+  // `supplier` is rendered exactly as SQL returns it — `canonical_supplier()`
+  // emits UPPER, and every other supplier surface in the app shows that same
+  // casing. Title-casing it here would be a second presentation rule with
+  // nothing to keep it in step.
+  //
+  // The share is taken against the SUPPLIER read's own total, not the raw
+  // delivery read's: the two totals are equal by construction (both are
+  // unfiltered sums of `weight_kg` over the same range — measured 0.00 kg apart
+  // across the whole 121-day flow window on 2026-08-28), but if one read were
+  // ever truncated and the other not, dividing across them would print shares
+  // that do not sum to 100%.
   const suppliers: RcInSupplierSlice[] = Array.from(supplierAgg.entries())
     .map(([supplier, agg]) => ({
       supplier,
       kg: round(agg.kg),
-      sharePct: totalKg > 0 ? round((agg.kg / totalKg) * 100, 1) : 0,
+      sharePct:
+        supplierTotalKg > 0 ? round((agg.kg / supplierTotalKg) * 100, 1) : 0,
       deliveries: agg.deliveries,
       sacks: agg.sacks,
     }))
     .sort((a, b) => b.kg - a.kg);
 
   // `rows` is already newest-first, so the head IS the recent list.
+  //
+  // These deliberately show the RAW STORED SPELLING of `supplier`, not the
+  // canonical name the rail ranks by. This table is the underlying RECORDS —
+  // what is actually in the row someone would open in RC IN — so showing a
+  // folded name here would misreport the data. The rail answers "who supplied
+  // us"; this answers "what does the row say". Do not "fix" the mismatch.
   const recent: RcInRecentRow[] = rows.slice(0, RECENT_ROWS).map((r) => ({
     id: r.id,
     date: r.transaction_date ?? "",

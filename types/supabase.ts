@@ -3230,6 +3230,16 @@ export type Database = {
         }
         Relationships: []
       }
+      view_digest_rcin_supplier_daily: {
+        Row: {
+          delivery_count: number | null
+          kg: number | null
+          sack_count: number | null
+          supplier_canonical: string | null
+          transaction_date: string | null
+        }
+        Relationships: []
+      }
       view_digest_stream_freshness: {
         Row: {
           label: string | null
